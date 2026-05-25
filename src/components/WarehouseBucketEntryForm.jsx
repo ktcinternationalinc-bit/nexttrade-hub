@@ -38,12 +38,16 @@ export default function WarehouseBucketEntryForm(props) {
   //   userId, isSuperAdmin
   //   canManageCategories: bool — controls whether "+ Add new subcategory" appears
   //   toast: { success, error }
+  //   lang: 'ar' | 'en' (v55.83-A.6.27.71 HOTFIX 3, Max May 24 2026)
   var bucket = props.bucket || {};
   var spent = Number(props.spent || 0);
   var onCreated = props.onCreated || function () {};
   var userId = props.userId;
   var canManageCategories = !!props.canManageCategories;
   var toast = props.toast || { success: function(){}, error: function(){} };
+  var lang = props.lang === 'en' ? 'en' : 'ar';
+  var ar = lang === 'ar';
+  var dir = ar ? 'rtl' : 'ltr';
 
   var remaining = Number(bucket.amount || 0) - spent;
 
@@ -123,9 +127,9 @@ export default function WarehouseBucketEntryForm(props) {
   async function handleSave() {
     setError(null);
     var amt = Number(amount);
-    if (!amt || amt <= 0) { setError('Amount must be positive.'); return; }
-    if (!category.trim()) { setError('Category is required.'); return; }
-    if (!entryDate) { setError('Date is required.'); return; }
+    if (!amt || amt <= 0) { setError(ar ? 'يجب أن يكون المبلغ موجبًا.' : 'Amount must be positive.'); return; }
+    if (!category.trim()) { setError(ar ? 'الفئة مطلوبة.' : 'Category is required.'); return; }
+    if (!entryDate) { setError(ar ? 'التاريخ مطلوب.' : 'Date is required.'); return; }
 
     // If user is adding a new subcategory inline, use the new text as the value
     var finalSubcat = addingNewSubcat ? newSubcatText.trim() : subcategory.trim();
@@ -158,11 +162,11 @@ export default function WarehouseBucketEntryForm(props) {
         return;
       }
       if (!res.ok) {
-        setError(res.error || 'Unknown error');
+        setError(res.error || (ar ? 'خطأ غير معروف' : 'Unknown error'));
         setBusy(false);
         return;
       }
-      toast.success('Entry added: ' + fmtMoney(amt, bucket.currency));
+      toast.success((ar ? 'تمت إضافة الإدخال: ' : 'Entry added: ') + fmtMoney(amt, bucket.currency));
       resetForm();
       onCreated();
     } catch (err) {
@@ -177,7 +181,7 @@ export default function WarehouseBucketEntryForm(props) {
     if (!overspendInfo) return;
     var newAmount = overspendInfo.remaining;
     if (newAmount <= 0) {
-      setError('Bucket has no remaining capacity. Use Split or Cancel instead.');
+      setError(ar ? 'الدلو ليس لديه سعة متبقية. استخدم التقسيم أو الإلغاء.' : 'Bucket has no remaining capacity. Use Split or Cancel instead.');
       setOverspendInfo(null);
       return;
     }
@@ -193,12 +197,12 @@ export default function WarehouseBucketEntryForm(props) {
         userId: userId,
       });
       if (!res.ok) {
-        setError(res.error || 'Reduce failed');
+        setError(res.error || (ar ? 'فشل التخفيض' : 'Reduce failed'));
         setOverspendInfo(null);
         setBusy(false);
         return;
       }
-      toast.success('Entry added (reduced to ' + fmtMoney(newAmount, bucket.currency) + ')');
+      toast.success((ar ? 'تمت الإضافة (تم تخفيضها إلى ' : 'Entry added (reduced to ') + fmtMoney(newAmount, bucket.currency) + ')');
       setOverspendInfo(null);
       resetForm();
       onCreated();
@@ -220,7 +224,7 @@ export default function WarehouseBucketEntryForm(props) {
       var firstLegAmount = overspendInfo.remaining;
       var secondLegAmount = overspendInfo.byAmount;
       if (firstLegAmount <= 0) {
-        setError('No remaining capacity on this bucket — pick "Cancel" and create a new bucket directly.');
+        setError(ar ? 'لا توجد سعة متبقية في هذا الدلو — اختر "إلغاء" وأنشئ دلوًا جديدًا مباشرة.' : 'No remaining capacity on this bucket — pick "Cancel" and create a new bucket directly.');
         setSplitBusy(false);
         return;
       }
@@ -228,7 +232,7 @@ export default function WarehouseBucketEntryForm(props) {
       var destBucketId = splitDestBucketId;
       if (splitNewBucketMode) {
         if (!splitNewBucketName.trim() || !splitNewBucketRef.trim()) {
-          setError('Provide name + reference for the new bucket.');
+          setError(ar ? 'أدخل الاسم والمرجع للدلو الجديد.' : 'Provide name + reference for the new bucket.');
           setSplitBusy(false);
           return;
         }
@@ -239,18 +243,18 @@ export default function WarehouseBucketEntryForm(props) {
           issueDate: todayIso(),
           amount: secondLegAmount,  // exactly the overage amount
           currency: bucket.currency,
-          notes: 'Auto-created from split overspend of ' + (bucket.reference_slug || bucket.id),
+          notes: (ar ? 'تم الإنشاء تلقائيًا من تقسيم الإنفاق الزائد لـ ' : 'Auto-created from split overspend of ') + (bucket.reference_slug || bucket.id),
           userId: userId,
         });
         if (!newBucketRes.ok) {
-          setError('Could not create destination bucket: ' + newBucketRes.error);
+          setError((ar ? 'تعذر إنشاء الدلو الوجهة: ' : 'Could not create destination bucket: ') + newBucketRes.error);
           setSplitBusy(false);
           return;
         }
         destBucketId = newBucketRes.bucket.id;
       }
       if (!destBucketId) {
-        setError('Pick a destination bucket OR check "Create new bucket" to absorb the overage.');
+        setError(ar ? 'اختر دلوًا وجهة أو حدد "إنشاء دلو جديد" لاستيعاب الفائض.' : 'Pick a destination bucket OR check "Create new bucket" to absorb the overage.');
         setSplitBusy(false);
         return;
       }
@@ -262,12 +266,12 @@ export default function WarehouseBucketEntryForm(props) {
         amount: firstLegAmount,
         category: category.trim(),
         subcategory: addingNewSubcat ? newSubcatText.trim() : subcategory.trim() || null,
-        description: (description.trim() || category.trim()) + ' (split 1 of 2)',
+        description: (description.trim() || category.trim()) + (ar ? ' (تقسيم 1 من 2)' : ' (split 1 of 2)'),
         userId: userId,
         isSplitPart: true,
       });
       if (!firstLegRes.ok) {
-        setError('First leg failed: ' + firstLegRes.error);
+        setError((ar ? 'فشلت الجزء الأول: ' : 'First leg failed: ') + firstLegRes.error);
         setSplitBusy(false);
         return;
       }
@@ -279,7 +283,7 @@ export default function WarehouseBucketEntryForm(props) {
         amount: secondLegAmount,
         category: category.trim(),
         subcategory: addingNewSubcat ? newSubcatText.trim() : subcategory.trim() || null,
-        description: (description.trim() || category.trim()) + ' (split 2 of 2)',
+        description: (description.trim() || category.trim()) + (ar ? ' (تقسيم 2 من 2)' : ' (split 2 of 2)'),
         userId: userId,
         isSplitPart: true,
         splitPairId: firstLegRes.entry && firstLegRes.entry.id,
@@ -288,15 +292,15 @@ export default function WarehouseBucketEntryForm(props) {
         // Best-effort: delete the first leg (rollback). If that fails, surface a clear warning.
         try {
           await supabase.from('warehouse_bucket_entries').delete().eq('id', firstLegRes.entry.id);
-          setError('Second leg failed (' + secondLegRes.error + '). First leg was rolled back; please retry.');
+          setError((ar ? 'فشلت الجزء الثاني (' : 'Second leg failed (') + secondLegRes.error + (ar ? '). تم التراجع عن الجزء الأول؛ يرجى المحاولة مرة أخرى.' : '). First leg was rolled back; please retry.'));
         } catch (rb) {
-          setError('Second leg failed AND rollback failed. The first leg amount ' + fmtMoney(firstLegAmount, bucket.currency) + ' is sitting in this bucket — delete it manually before retrying. Error: ' + secondLegRes.error);
+          setError((ar ? 'فشلت الجزء الثاني وفشل التراجع. مبلغ الجزء الأول ' : 'Second leg failed AND rollback failed. The first leg amount ') + fmtMoney(firstLegAmount, bucket.currency) + (ar ? ' موجود في هذا الدلو — احذفه يدويًا قبل المحاولة مرة أخرى. الخطأ: ' : ' is sitting in this bucket — delete it manually before retrying. Error: ') + secondLegRes.error);
         }
         setSplitBusy(false);
         return;
       }
 
-      toast.success('Split saved: ' + fmtMoney(firstLegAmount, bucket.currency) + ' here + ' + fmtMoney(secondLegAmount, bucket.currency) + ' on the other bucket.');
+      toast.success((ar ? 'تم حفظ التقسيم: ' : 'Split saved: ') + fmtMoney(firstLegAmount, bucket.currency) + (ar ? ' هنا + ' : ' here + ') + fmtMoney(secondLegAmount, bucket.currency) + (ar ? ' في الدلو الآخر.' : ' on the other bucket.'));
       setOverspendInfo(null);
       resetForm();
       onCreated();
@@ -310,15 +314,15 @@ export default function WarehouseBucketEntryForm(props) {
   // ─── Render: locked-out states ───
   if (bucket.status === 'closed' || bucket.status === 'cancelled') {
     return (
-      <div className="bg-slate-50 border-2 border-slate-200 rounded p-3 text-sm text-slate-600">
-        This bucket is {bucket.status} — entries cannot be added or edited.
+      <div className="bg-slate-50 border-2 border-slate-200 rounded p-3 text-sm text-slate-600" dir={dir}>
+        {ar ? 'هذا الدلو ' : 'This bucket is '}{bucket.status === 'closed' ? (ar ? 'مُغلق' : 'closed') : (ar ? 'مُلغى' : 'cancelled')}{ar ? ' — لا يمكن إضافة أو تعديل الإدخالات.' : ' — entries cannot be added or edited.'}
       </div>
     );
   }
   if (bucket.status === 'pending_approval') {
     return (
-      <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 text-sm text-amber-900">
-        ⏳ Awaiting approval — entries are locked until the bucket is approved or reopened.
+      <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 text-sm text-amber-900" dir={dir}>
+        ⏳ {ar ? 'في انتظار الموافقة — الإدخالات مقفلة حتى تتم الموافقة على الدلو أو إعادة فتحه.' : 'Awaiting approval — entries are locked until the bucket is approved or reopened.'}
       </div>
     );
   }
@@ -326,33 +330,34 @@ export default function WarehouseBucketEntryForm(props) {
   // ─── Render: form ───
   return (
     <>
-      <div className="bg-white rounded-lg border-2 border-amber-300 p-3">
+      <div className="bg-white rounded-lg border-2 border-amber-300 p-3" dir={dir}>
         <div className="flex items-center justify-between mb-2">
-          <h4 className="text-sm font-extrabold text-slate-900">+ Add Spend Entry</h4>
-          <span className="text-[11px] text-slate-600">Remaining: <strong className={remaining < 0 ? 'text-red-700' : remaining === 0 ? 'text-emerald-700' : 'text-slate-900'}>{fmtMoney(remaining, bucket.currency)}</strong></span>
+          <h4 className="text-sm font-extrabold text-slate-900">+ {ar ? 'إضافة إدخال إنفاق' : 'Add Spend Entry'}</h4>
+          <span className="text-[11px] text-slate-600">{ar ? 'المتبقي: ' : 'Remaining: '}<strong className={remaining < 0 ? 'text-red-700' : remaining === 0 ? 'text-emerald-700' : 'text-slate-900'}>{fmtMoney(remaining, bucket.currency)}</strong></span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
           {/* Date */}
           <div className="sm:col-span-1">
-            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">Date</label>
+            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'التاريخ' : 'Date'}</label>
             <input type="date" value={entryDate} onChange={function (e) { setEntryDate(e.target.value); }} disabled={busy}
               className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
           </div>
           {/* Amount */}
           <div className="sm:col-span-1">
-            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">Amount {bucket.currency}</label>
+            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'المبلغ ' : 'Amount '}{bucket.currency}</label>
             <input type="number" step="0.01" min="0.01" value={amount} onChange={function (e) { setAmount(e.target.value); }} disabled={busy}
               placeholder="0.00"
+              dir="ltr"
               className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
           </div>
           {/* Category */}
           <div className="sm:col-span-1">
-            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">Category</label>
+            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'الفئة' : 'Category'}</label>
             <input type="text" value={category}
               onChange={function (e) { setCategory(e.target.value); setSubcategory(''); setAddingNewSubcat(false); }}
               disabled={busy}
               list="bucket-category-list"
-              placeholder="e.g. Logistics"
+              placeholder={ar ? 'مثال: لوجستيات' : 'e.g. Logistics'}
               className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
             <datalist id="bucket-category-list">
               {allCategories.map(function (c) { return <option key={c} value={c} />; })}
@@ -360,7 +365,7 @@ export default function WarehouseBucketEntryForm(props) {
           </div>
           {/* Subcategory */}
           <div className="sm:col-span-1">
-            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">Subcategory</label>
+            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'الفئة الفرعية' : 'Subcategory'}</label>
             {!addingNewSubcat ? (
               <div className="flex gap-1">
                 <select value={subcategory} onChange={function (e) {
@@ -372,17 +377,17 @@ export default function WarehouseBucketEntryForm(props) {
                   }
                 }} disabled={busy || !category}
                   className="flex-1 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900">
-                  <option value="">— pick one —</option>
+                  <option value="">{ar ? '— اختر —' : '— pick one —'}</option>
                   {subcatOptions.map(function (s) { return <option key={s} value={s}>{s}</option>; })}
                   {canManageCategories && category && (
-                    <option value="__add_new__">+ Add new subcategory…</option>
+                    <option value="__add_new__">+ {ar ? 'إضافة فئة فرعية جديدة...' : 'Add new subcategory…'}</option>
                   )}
                 </select>
               </div>
             ) : (
               <div className="flex gap-1">
                 <input type="text" value={newSubcatText} onChange={function (e) { setNewSubcatText(e.target.value); }}
-                  disabled={busy} placeholder="New subcategory"
+                  disabled={busy} placeholder={ar ? 'فئة فرعية جديدة' : 'New subcategory'}
                   className="flex-1 px-2 py-1.5 border-2 border-emerald-300 rounded text-sm bg-emerald-50 text-slate-900" autoFocus />
                 <button type="button" onClick={function () { setAddingNewSubcat(false); setNewSubcatText(''); }} disabled={busy}
                   className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold rounded">×</button>
@@ -391,9 +396,9 @@ export default function WarehouseBucketEntryForm(props) {
           </div>
           {/* Description */}
           <div className="sm:col-span-1">
-            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">Description</label>
+            <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'الوصف' : 'Description'}</label>
             <input type="text" value={description} onChange={function (e) { setDescription(e.target.value); }} disabled={busy}
-              placeholder="optional"
+              placeholder={ar ? 'اختياري' : 'optional'}
               className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
           </div>
         </div>
@@ -403,91 +408,97 @@ export default function WarehouseBucketEntryForm(props) {
         <div className="mt-2 flex justify-end">
           <button onClick={handleSave} disabled={busy || !amount || !category}
             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold rounded shadow disabled:opacity-50 disabled:cursor-not-allowed">
-            {busy ? 'Adding...' : '+ Add Entry'}
+            {busy ? (ar ? 'جاري الإضافة...' : 'Adding...') : '+ ' + (ar ? 'إضافة إدخال' : 'Add Entry')}
           </button>
         </div>
       </div>
 
       {/* ─── OVERSPEND RESOLUTION MODAL ─── */}
       {overspendInfo && (
-        <div className="fixed inset-0 z-[220] bg-black/80 flex items-start justify-center pt-10 px-4 overflow-y-auto" onClick={function () { if (!splitBusy) setOverspendInfo(null); }}>
+        <div className="fixed inset-0 z-[220] bg-black/80 flex items-start justify-center pt-10 px-4 overflow-y-auto" onClick={function () { if (!splitBusy) setOverspendInfo(null); }} dir={dir}>
           <div className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-lg" onClick={function (e) { e.stopPropagation(); }}>
             <div className="bg-gradient-to-r from-red-700 to-orange-700 text-white rounded-t-2xl px-5 py-3">
-              <div className="text-lg font-extrabold">⚠️ Overspend Detected</div>
-              <div className="text-[11px] text-red-100 mt-0.5">This entry would push the bucket over its limit.</div>
+              <div className="text-lg font-extrabold">⚠️ {ar ? 'تم اكتشاف إنفاق زائد' : 'Overspend Detected'}</div>
+              <div className="text-[11px] text-red-100 mt-0.5">{ar ? 'هذا الإدخال سيتجاوز حد الدلو.' : 'This entry would push the bucket over its limit.'}</div>
             </div>
             <div className="p-5 space-y-3">
               {/* Overspend summary */}
               <div className="bg-slate-50 border border-slate-200 rounded p-3 grid grid-cols-2 gap-2 text-xs">
-                <div className="col-span-2 font-extrabold text-slate-900 text-sm pb-1 border-b border-slate-200">{bucket.reference_slug}</div>
-                <div>Bucket total:</div>
-                <div className="text-right font-mono font-bold">{fmtMoney(overspendInfo.bucketAmount, bucket.currency)}</div>
-                <div>Already spent:</div>
-                <div className="text-right font-mono">{fmtMoney(overspendInfo.spent, bucket.currency)}</div>
-                <div className="text-emerald-700">Remaining:</div>
-                <div className="text-right font-mono font-bold text-emerald-700">{fmtMoney(overspendInfo.remaining, bucket.currency)}</div>
-                <div>This entry:</div>
-                <div className="text-right font-mono">{fmtMoney(overspendInfo.attemptAmount, bucket.currency)}</div>
-                <div className="text-red-700 font-extrabold">Over by:</div>
-                <div className="text-right font-mono font-extrabold text-red-700">{fmtMoney(overspendInfo.byAmount, bucket.currency)}</div>
+                <div className="col-span-2 font-extrabold text-slate-900 text-sm pb-1 border-b border-slate-200" dir="ltr">{bucket.reference_slug}</div>
+                <div>{ar ? 'إجمالي الدلو:' : 'Bucket total:'}</div>
+                <div className={(ar ? 'text-left' : 'text-right') + ' font-mono font-bold'}>{fmtMoney(overspendInfo.bucketAmount, bucket.currency)}</div>
+                <div>{ar ? 'تم إنفاقه بالفعل:' : 'Already spent:'}</div>
+                <div className={(ar ? 'text-left' : 'text-right') + ' font-mono'}>{fmtMoney(overspendInfo.spent, bucket.currency)}</div>
+                <div className="text-emerald-700">{ar ? 'المتبقي:' : 'Remaining:'}</div>
+                <div className={(ar ? 'text-left' : 'text-right') + ' font-mono font-bold text-emerald-700'}>{fmtMoney(overspendInfo.remaining, bucket.currency)}</div>
+                <div>{ar ? 'هذا الإدخال:' : 'This entry:'}</div>
+                <div className={(ar ? 'text-left' : 'text-right') + ' font-mono'}>{fmtMoney(overspendInfo.attemptAmount, bucket.currency)}</div>
+                <div className="text-red-700 font-extrabold">{ar ? 'الزيادة:' : 'Over by:'}</div>
+                <div className={(ar ? 'text-left' : 'text-right') + ' font-mono font-extrabold text-red-700'}>{fmtMoney(overspendInfo.byAmount, bucket.currency)}</div>
               </div>
 
               {/* Resolution options */}
               <div className="space-y-2">
                 {/* Option A — Reduce */}
                 <button type="button" onClick={handleReduce} disabled={splitBusy}
-                  className="w-full text-left bg-amber-50 hover:bg-amber-100 border-2 border-amber-300 rounded p-3 disabled:opacity-50">
-                  <div className="font-extrabold text-amber-900 text-sm">↓ Reduce This Entry</div>
-                  <div className="text-[11px] text-amber-800 mt-0.5">Clamp this entry to {fmtMoney(overspendInfo.remaining, bucket.currency)} (fills the remaining capacity exactly).</div>
+                  className={'w-full ' + (ar ? 'text-right' : 'text-left') + ' bg-amber-50 hover:bg-amber-100 border-2 border-amber-300 rounded p-3 disabled:opacity-50'}>
+                  <div className="font-extrabold text-amber-900 text-sm">{ar ? '↓ تخفيض هذا الإدخال' : '↓ Reduce This Entry'}</div>
+                  <div className="text-[11px] text-amber-800 mt-0.5">
+                    {ar
+                      ? <>تقييد هذا الإدخال إلى {fmtMoney(overspendInfo.remaining, bucket.currency)} (يملأ السعة المتبقية تمامًا).</>
+                      : <>Clamp this entry to {fmtMoney(overspendInfo.remaining, bucket.currency)} (fills the remaining capacity exactly).</>}
+                  </div>
                 </button>
 
                 {/* Option B — Split */}
                 <div className="bg-blue-50 border-2 border-blue-300 rounded p-3">
-                  <div className="font-extrabold text-blue-900 text-sm mb-1">⇄ Split Entry</div>
+                  <div className="font-extrabold text-blue-900 text-sm mb-1">{ar ? '⇄ تقسيم الإدخال' : '⇄ Split Entry'}</div>
                   <div className="text-[11px] text-blue-800 mb-2">
-                    Save {fmtMoney(overspendInfo.remaining, bucket.currency)} here, push {fmtMoney(overspendInfo.byAmount, bucket.currency)} to another bucket.
+                    {ar
+                      ? <>حفظ {fmtMoney(overspendInfo.remaining, bucket.currency)} هنا، ودفع {fmtMoney(overspendInfo.byAmount, bucket.currency)} إلى دلو آخر.</>
+                      : <>Save {fmtMoney(overspendInfo.remaining, bucket.currency)} here, push {fmtMoney(overspendInfo.byAmount, bucket.currency)} to another bucket.</>}
                   </div>
                   {!splitNewBucketMode ? (
                     <>
-                      <label className="block text-[10px] font-extrabold text-blue-900 mb-0.5">Destination bucket (same currency, open status):</label>
+                      <label className="block text-[10px] font-extrabold text-blue-900 mb-0.5">{ar ? 'الدلو الوجهة (نفس العملة، حالة مفتوحة):' : 'Destination bucket (same currency, open status):'}</label>
                       <select value={splitDestBucketId} onChange={function (e) { setSplitDestBucketId(e.target.value); }} disabled={splitBusy}
                         className="w-full px-2 py-1.5 border border-blue-300 rounded text-sm bg-white text-slate-900">
-                        <option value="">— pick a bucket —</option>
+                        <option value="">{ar ? '— اختر دلوًا —' : '— pick a bucket —'}</option>
                         {otherOpenBuckets.map(function (b) {
                           return <option key={b.id} value={b.id}>{b.recipient_name} · {b.reference_slug} ({fmtMoney(b.amount, b.currency)})</option>;
                         })}
                       </select>
                       <button type="button" onClick={function () { setSplitNewBucketMode(true); setSplitDestBucketId(''); }} disabled={splitBusy}
                         className="mt-2 text-[11px] font-bold text-blue-700 hover:text-blue-900 underline">
-                        + Or create a new bucket to absorb the overage
+                        + {ar ? 'أو أنشئ دلوًا جديدًا لاستيعاب الزيادة' : 'Or create a new bucket to absorb the overage'}
                       </button>
                     </>
                   ) : (
                     <div className="bg-white border-2 border-emerald-300 rounded p-2 space-y-1.5">
-                      <div className="text-[10px] font-extrabold text-emerald-900">Create new bucket for the overage ({fmtMoney(overspendInfo.byAmount, bucket.currency)}):</div>
+                      <div className="text-[10px] font-extrabold text-emerald-900">{ar ? 'إنشاء دلو جديد للزيادة (' : 'Create new bucket for the overage ('}{fmtMoney(overspendInfo.byAmount, bucket.currency)}):</div>
                       <input type="text" value={splitNewBucketName} onChange={function (e) { setSplitNewBucketName(e.target.value); }} disabled={splitBusy}
-                        placeholder="Recipient name"
+                        placeholder={ar ? 'اسم المستلم' : 'Recipient name'}
                         className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-white text-slate-900" />
                       <input type="text" value={splitNewBucketRef} onChange={function (e) { setSplitNewBucketRef(e.target.value); }} disabled={splitBusy}
-                        placeholder={'Reference (e.g. continued from ' + (bucket.reference || '') + ')'}
+                        placeholder={(ar ? 'المرجع (مثال: استمرارًا من ' : 'Reference (e.g. continued from ') + (bucket.reference || '') + ')'}
                         className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-white text-slate-900" />
                       <button type="button" onClick={function () { setSplitNewBucketMode(false); setSplitNewBucketName(bucket.recipient_name || ''); setSplitNewBucketRef(''); }} disabled={splitBusy}
                         className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline">
-                        ← Use existing bucket instead
+                        ← {ar ? 'استخدم دلوًا موجودًا بدلاً من ذلك' : 'Use existing bucket instead'}
                       </button>
                     </div>
                   )}
                   <button type="button" onClick={handleSplit} disabled={splitBusy || (!splitDestBucketId && !splitNewBucketMode)}
                     className="mt-2 w-full px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold rounded shadow disabled:opacity-50 disabled:cursor-not-allowed">
-                    {splitBusy ? 'Splitting…' : '⇄ Save Split'}
+                    {splitBusy ? (ar ? 'جاري التقسيم...' : 'Splitting…') : (ar ? '⇄ حفظ التقسيم' : '⇄ Save Split')}
                   </button>
                 </div>
 
                 {/* Option C — Cancel */}
                 <button type="button" onClick={function () { if (!splitBusy) setOverspendInfo(null); }} disabled={splitBusy}
                   className="w-full bg-slate-100 hover:bg-slate-200 border-2 border-slate-300 rounded p-2 disabled:opacity-50">
-                  <div className="font-extrabold text-slate-800 text-sm">✗ Cancel — Go Back</div>
-                  <div className="text-[11px] text-slate-600">Return to the form. No entry is saved.</div>
+                  <div className="font-extrabold text-slate-800 text-sm">{ar ? '✗ إلغاء — العودة' : '✗ Cancel — Go Back'}</div>
+                  <div className="text-[11px] text-slate-600">{ar ? 'العودة إلى النموذج. لن يتم حفظ أي إدخال.' : 'Return to the form. No entry is saved.'}</div>
                 </button>
               </div>
             </div>

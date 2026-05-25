@@ -35,9 +35,12 @@ export const BUILD_HISTORY = [
   {
     version: 'v55.83-A.6.27.71',
     date: '2026-05-23',
-    label: 'Warehouse Buckets — Phase 4 (History & Analytics) + dead code cleanup [HOTFIX 1]',
+    label: 'Warehouse Buckets — Phase 4 (History & Analytics) + dead code cleanup [HOTFIX 3]',
     items: [
-      '**🩹 HOTFIX 1 (May 23 2026, post-deploy):** Initial .71 deploy crashed with "Application error: a client-side exception has occurred" because the bucket-create modal in page.jsx was referencing an undefined variable `users` instead of the correct `teamUsers`. Fixed. If you deployed the first .71 zip, REDEPLOY with the hotfix zip immediately.',
+      '**🌐 HOTFIX 3 (May 24 2026 — ARABIC TRANSLATION):** The entire bucket workflow UI now follows the system language toggle. Labels, validation messages, tooltips, action buttons, overspend modal (Reduce / Split / Cancel), Cancel & Reopen confirmation modals, History & Analytics tables — all switch between Arabic and English based on the language toggle in the top bar. Critical for Arabic-only warehouse workers.',
+      '**🩹 HOTFIX 2 (May 24 2026):** Create Bucket failed with "treasury_source_check" constraint violation. Removed the `source: warehouse_bucket` and `source: warehouse_bucket_cancel` fields from the lib/warehouse-buckets.js inserts — the `bucket_id` + `bucket_role` + `category` columns are enough to identify these rows. Bucket creation + cancel-refund both work now.',
+      '**🩹 HOTFIX 1 (May 23 2026):** Initial .71 deploy crashed with "Application error: a client-side exception has occurred" because the bucket-create modal in page.jsx was referencing an undefined variable `users` instead of the correct `teamUsers`. Fixed.',
+      '**🩹 SQL FIX (May 24 2026):** New tables created in Phase 1 needed RLS policies — KTC\'s Supabase project blocks reads by default until policies exist. Without policies, the feature flag read silently fell through to "false" so the button never appeared. RLS policies for app_feature_flags + warehouse_buckets + warehouse_bucket_entries now documented in the build notes.',
       '**Buckets History & Analytics section** now appears in the Warehouse tab below the live bucket list. Multi-year warehouse-only lens — totally separate from your company expense reports.',
       '**What you can see at a glance:**',
       '   • **Summary cards per currency** — Total Advanced / Reconciled / Pending / Cancelled. No mixed-currency totals (USD and EGP shown on separate rows so you never see "200,000" that\'s really $100k + EGP 100k mashed together).',

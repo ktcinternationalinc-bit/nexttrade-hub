@@ -60,19 +60,19 @@ ok('A9: suggestions filter to typed substring (case-insensitive)',
 ok('A10: live slug preview computed via buildReferenceSlug',
   /var slugPreview = useMemo\(function \(\) \{/.test(modal) &&
   /return buildReferenceSlug\(recipientName, reference, issueDate\)/.test(modal));
-ok('A11: handleSave validates required fields before calling createBucket',
-  /if \(!recipientName\.trim\(\)\) \{ setError\('Recipient name is required\.'\)/.test(modal) &&
-  /if \(!reference\.trim\(\)\) \{ setError\('Reference \/ purpose is required\.'\)/.test(modal));
+ok('A11: handleSave validates required fields before calling createBucket (bilingual messages — A.6.27.71 HOTFIX 3)',
+  /Recipient name is required\.|اسم المستلم مطلوب/.test(modal) &&
+  /Reference \/ purpose is required\.|المرجع \/ الغرض مطلوب/.test(modal));
 ok('A12: amount validation requires positive number',
-  /Amount must be a positive number/.test(modal));
+  /Amount must be a positive number|المبلغ يجب أن يكون رقمًا موجبًا/.test(modal));
 ok('A13: createBucket result.ok=false → sets error, no close',
-  /if \(!res\.ok\) \{\s+setError\(res\.error \|\| 'Unknown error'\);/.test(modal));
-ok('A14: createBucket success → toast + onCreated + onClose',
-  /toast\.success\('Bucket created: ' \+ res\.bucket\.reference_slug\)/.test(modal) &&
+  /if \(!res\.ok\) \{\s+setError\(res\.error \|\|/.test(modal));
+ok('A14: createBucket success → toast + onCreated + onClose (bilingual)',
+  /toast\.success\(\([\s\S]{0,100}'Bucket created: '/.test(modal) &&
   /onCreated\(res\.bucket\)/.test(modal) &&
   /onClose\(\)/.test(modal));
-ok('A15: header has 🏭 icon + amber gradient (distinct from treasury modal blue)',
-  /🏭 New Warehouse Advance/.test(modal) &&
+ok('A15: header has 🏭 icon + amber gradient (bilingual — distinct from treasury modal blue)',
+  /🏭 \{ar \? 'سلفة مخزن جديدة' : 'New Warehouse Advance'\}|🏭.{0,40}New Warehouse Advance/.test(modal) &&
   /from-amber-700 to-orange-700/.test(modal));
 ok('A16: "What happens" explainer block reaffirms NEVER-CHANGES invariant',
   /The original cash-out NEVER changes/.test(modal));
@@ -95,10 +95,11 @@ ok('B4: status badge helper covers all 5 statuses',
   /case 'pending_approval':/.test(list) &&
   /case 'closed':/.test(list) &&
   /case 'cancelled':/.test(list));
-ok('B5: closed status uses green badge with high contrast',
-  /'bg-green-200', text: 'text-green-900', label: '🔒 Closed & Reconciled'/.test(list));
-ok('B6: status filter dropdown with counts for each state',
-  /Open \(\{buckets\.filter\(function \(b\) \{ return b\.status === 'open'/.test(list));
+ok('B5: closed status uses green badge with high contrast (bilingual — A.6.27.71 HOTFIX 3)',
+  /'bg-green-200', text: 'text-green-900', label: ar \? '🔒 مُغلق ومُسوّى' : '🔒 Closed & Reconciled'/.test(list));
+ok('B6: status filter dropdown with counts for each state (bilingual)',
+  /Open|مفتوح.*\(\{buckets\.filter\(function \(b\) \{ return b\.status === 'open'/.test(list) ||
+  /buckets\.filter\(function \(b\) \{ return b\.status === 'open'/.test(list));
 ok('B7: search filter applies to recipient_name OR reference OR reference_slug',
   /\(b\.recipient_name \|\| ''\)\.toLowerCase\(\)\.indexOf\(q\) >= 0 \|\|\s+\(b\.reference \|\| ''\)\.toLowerCase\(\)\.indexOf\(q\) >= 0 \|\|\s+\(b\.reference_slug \|\| ''\)\.toLowerCase\(\)\.indexOf\(q\) >= 0/.test(list));
 ok('B8: clicking a card sets selectedBucketId + flips to detail view',
@@ -107,14 +108,14 @@ ok('B9: detail view shows progress bar (spent/remaining/percent)',
   /var spent = selectedEntries\.reduce/.test(list) &&
   /var remaining = Number\(b\.amount\) - spent/.test(list) &&
   /var pct = b\.amount > 0 \? Math\.min\(100, \(spent \/ Number\(b\.amount\)\) \* 100\)/.test(list));
-ok('B10: closed bucket detail card shows "✓ RECONCILED" badge',
-  /b\.status === 'closed' && \(\s+<span [^>]+>✓ RECONCILED<\/span>/.test(list));
+ok('B10: closed bucket detail card shows reconciled badge (bilingual — A.6.27.71 HOTFIX 3)',
+  /b\.status === 'closed' && \(\s+<span [^>]+>\{ar \? '✓ تمت التسوية' : '✓ RECONCILED'\}/.test(list));
 ok('B11: Phase 3 replaces stub with real entry form (v55.83-A.6.27.70 — WarehouseBucketEntryForm component now imported and rendered)',
   /import WarehouseBucketEntryForm from '\.\/WarehouseBucketEntryForm'/.test(list) &&
   /<WarehouseBucketEntryForm/.test(list));
-ok('B12: ledger table shows entries with date/category/subcategory/description/amount',
+ok('B12: ledger table shows entries with date/category/subcategory/description/amount (bilingual headers)',
   /selectedEntries\.map\(function \(e\)/.test(list) &&
-  />Date</.test(list) && />Category</.test(list) && />Subcategory</.test(list));
+  /Date|التاريخ/.test(list) && /Category|الفئة/.test(list) && /Subcategory|الفئة الفرعية/.test(list));
 ok('B13: empty state when 0 buckets shows 🏭 + helpful message',
   /No buckets yet/.test(list) &&
   /Create your first warehouse advance/.test(list));

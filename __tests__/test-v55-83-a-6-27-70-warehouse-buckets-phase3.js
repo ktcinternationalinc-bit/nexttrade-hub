@@ -77,12 +77,12 @@ ok('B1: default export WarehouseBucketActions',
   /export default function WarehouseBucketActions\(props\)/.test(ac));
 ok('B2: imports all 4 lifecycle helpers',
   /import \{\s+submitBucketForApproval,\s+approveAndCloseBucket,\s+reopenBucket,\s+cancelBucket,\s+\} from '\.\.\/lib\/warehouse-buckets'/.test(ac));
-ok('B3: handleSubmit blocks overspent buckets',
-  /if \(overspent\) \{\s+toast\.error\('Cannot submit — bucket is overspent\./.test(ac));
-ok('B4: handleSubmitAndApprove blocks self-approve for non-super-admin',
-  /if \(isCreator && !isSuperAdmin\) \{\s+toast\.error\('You created this bucket — someone else must approve it/.test(ac));
-ok('B5: super-admin self-approve gets confirm dialog',
-  /if \(isCreator && isSuperAdmin\) \{\s+if \(!confirm\('You created this bucket\. As super-admin you can self-approve/.test(ac));
+ok('B3: handleSubmit blocks overspent buckets (bilingual — A.6.27.71 HOTFIX 3)',
+  /if \(overspent\) \{\s+toast\.error\(ar \? '[\s\S]{0,120}' : 'Cannot submit — bucket is overspent/.test(ac));
+ok('B4: handleSubmitAndApprove blocks self-approve for non-super-admin (bilingual)',
+  /if \(isCreator && !isSuperAdmin\) \{\s+toast\.error\(ar \? '[\s\S]{0,150}' : 'You created this bucket — someone else must approve it/.test(ac));
+ok('B5: super-admin self-approve gets confirm dialog (bilingual)',
+  /if \(isCreator && isSuperAdmin\) \{\s+if \(!confirm\(ar \? '[\s\S]{0,160}' : 'You created this bucket\. As super-admin you can self-approve/.test(ac));
 ok('B6: standalone Approve button hidden for creator unless super-admin',
   /st === 'pending_approval' && canApprove/.test(ac) &&
   /if \(!isCreator \|\| isSuperAdmin\)/.test(ac));
@@ -91,13 +91,13 @@ ok('B7: Reopen button only shown for closed buckets + canReopen permission',
 ok('B8: Cancel button shown in pre-close states',
   /st === 'open' \|\| st === 'fully_spent' \|\| st === 'pending_approval'/.test(ac) &&
   /canManage \|\| isSuperAdmin/.test(ac));
-ok('B9: Cancel modal requires reason text',
-  /Provide a reason — this creates a refund credit and is audit-logged\./.test(ac));
-ok('B10: Reopen modal requires reason text',
-  /Provide a reason — this is audit-logged\./.test(ac));
-ok('B11: one-click "Submit & Approve" rendered when canManage AND canApprove AND not creator',
+ok('B9: Cancel modal requires reason text (bilingual)',
+  /Provide a reason — this creates a refund credit and is audit-logged\.|أدخل سببًا — هذا يُنشئ ائتمان استرداد/.test(ac));
+ok('B10: Reopen modal requires reason text (bilingual)',
+  /Provide a reason — this is audit-logged\.|أدخل سببًا — هذا يُسجَّل في سجل التدقيق/.test(ac));
+ok('B11: one-click "Submit & Approve" rendered when canManage AND canApprove AND not creator (bilingual)',
   /canDoOneClick && !isCreator/.test(ac) &&
-  /✓ Submit & Approve/.test(ac));
+  /Submit & Approve|تقديم وموافقة/.test(ac));
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — Wired into WarehouseBucketList detail view

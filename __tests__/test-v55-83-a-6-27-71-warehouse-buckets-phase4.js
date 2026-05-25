@@ -146,6 +146,48 @@ ok('F2: no other dangling `users={users}` references in page.jsx (only `teamUser
   !/users=\{users\}/.test(page));
 
 // ══════════════════════════════════════════════════════════════════
+// PART G — HOTFIX 3: Arabic bilingual UI (Max May 24 2026)
+// ══════════════════════════════════════════════════════════════════
+var create = read('src/components/WarehouseBucketCreate.jsx');
+var listC  = read('src/components/WarehouseBucketList.jsx');
+var ef     = read('src/components/WarehouseBucketEntryForm.jsx');
+var ac     = read('src/components/WarehouseBucketActions.jsx');
+var histC  = read('src/components/WarehouseBucketsHistory.jsx');
+
+ok('G1: WarehouseBucketCreate accepts lang prop + has ar/dir variables',
+  /var lang = props\.lang === 'en' \? 'en' : 'ar'/.test(create) &&
+  /var ar = lang === 'ar'/.test(create) &&
+  /var dir = ar \? 'rtl' : 'ltr'/.test(create));
+ok('G2: WarehouseBucketList accepts lang prop + has ar/dir variables',
+  /var lang = props\.lang === 'en' \? 'en' : 'ar'/.test(listC) &&
+  /var ar = lang === 'ar'/.test(listC));
+ok('G3: WarehouseBucketEntryForm accepts lang prop',
+  /var lang = props\.lang === 'en' \? 'en' : 'ar'/.test(ef));
+ok('G4: WarehouseBucketActions accepts lang prop',
+  /var lang = props\.lang === 'en' \? 'en' : 'ar'/.test(ac));
+ok('G5: WarehouseBucketsHistory accepts lang prop',
+  /var lang = props\.lang === 'en' \? 'en' : 'ar'/.test(histC));
+ok('G6: page.jsx passes lang={lang} to WarehouseBucketCreate',
+  /<WarehouseBucketCreate[\s\S]{0,800}lang=\{lang\}/.test(page));
+ok('G7: page.jsx passes lang={lang} to WarehouseBucketList',
+  /<WarehouseBucketList[\s\S]{0,1200}lang=\{lang\}/.test(page));
+ok('G8: page.jsx passes lang={lang} to WarehouseBucketsHistory',
+  /<WarehouseBucketsHistory[\s\S]{0,600}lang=\{lang\}/.test(page));
+ok('G9: WarehouseBucketList passes lang prop down to child Actions + EntryForm',
+  /<WarehouseBucketActions[\s\S]{0,600}lang=\{lang\}/.test(listC) &&
+  /<WarehouseBucketEntryForm[\s\S]{0,600}lang=\{lang\}/.test(listC));
+ok('G10: status badge helper accepts (status, ar) args (bilingual labels)',
+  /function statusBadge\(status, ar\)/.test(listC));
+ok('G11: critical Arabic strings present in entry form (overspend modal)',
+  /تم اكتشاف إنفاق زائد/.test(ef) &&
+  /تخفيض هذا الإدخال/.test(ef) &&
+  /تقسيم الإدخال/.test(ef));
+ok('G12: critical Arabic strings present in actions (Submit/Approve/Cancel/Reopen)',
+  /تقديم وموافقة|موافقة وإغلاق/.test(ac) &&
+  /إلغاء الدلو/.test(ac) &&
+  /إعادة فتح الدلو/.test(ac));
+
+// ══════════════════════════════════════════════════════════════════
 // FINAL
 // ══════════════════════════════════════════════════════════════════
 console.log('');

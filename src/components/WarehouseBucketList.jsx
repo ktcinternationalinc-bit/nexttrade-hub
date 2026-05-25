@@ -24,18 +24,19 @@ function fmtDate(d) {
 }
 
 // Status visual treatment — colors picked for clear contrast (Permanent Rule 8)
-function statusBadge(status) {
+// v55.83-A.6.27.71 HOTFIX 3 (Max May 24 2026): Arabic labels added.
+function statusBadge(status, ar) {
   switch (status) {
     case 'open':
-      return { bg: 'bg-blue-100', text: 'text-blue-900', label: '📭 Open', tooltip: 'Accepting spend entries' };
+      return { bg: 'bg-blue-100', text: 'text-blue-900', label: ar ? '📭 مفتوح' : '📭 Open', tooltip: ar ? 'يقبل إدخالات الإنفاق' : 'Accepting spend entries' };
     case 'fully_spent':
-      return { bg: 'bg-emerald-100', text: 'text-emerald-900', label: '✓ Fully Spent', tooltip: 'All amount accounted — ready to submit for approval' };
+      return { bg: 'bg-emerald-100', text: 'text-emerald-900', label: ar ? '✓ أُنفق بالكامل' : '✓ Fully Spent', tooltip: ar ? 'تم إنفاق المبلغ كاملاً — جاهز للتقديم للموافقة' : 'All amount accounted — ready to submit for approval' };
     case 'pending_approval':
-      return { bg: 'bg-amber-100', text: 'text-amber-900', label: '⏳ Pending Approval', tooltip: 'Waiting for approver' };
+      return { bg: 'bg-amber-100', text: 'text-amber-900', label: ar ? '⏳ في انتظار الموافقة' : '⏳ Pending Approval', tooltip: ar ? 'في انتظار الموافِق' : 'Waiting for approver' };
     case 'closed':
-      return { bg: 'bg-green-200', text: 'text-green-900', label: '🔒 Closed & Reconciled', tooltip: 'Approved & expense report updated' };
+      return { bg: 'bg-green-200', text: 'text-green-900', label: ar ? '🔒 مُغلق ومُسوّى' : '🔒 Closed & Reconciled', tooltip: ar ? 'تمت الموافقة وتحديث تقرير المصروفات' : 'Approved & expense report updated' };
     case 'cancelled':
-      return { bg: 'bg-slate-200', text: 'text-slate-700', label: '✗ Cancelled', tooltip: 'Refunded back to treasury' };
+      return { bg: 'bg-slate-200', text: 'text-slate-700', label: ar ? '✗ مُلغى' : '✗ Cancelled', tooltip: ar ? 'تم رد المبلغ إلى الخزنة' : 'Refunded back to treasury' };
     default:
       return { bg: 'bg-slate-100', text: 'text-slate-900', label: status, tooltip: '' };
   }
@@ -46,6 +47,7 @@ export default function WarehouseBucketList(props) {
   //   userId, isSuperAdmin, canCreate, canApprove, toast
   //   onRequestCreate: () => void  — open the create modal
   //   reloadToken: number  — bump to force a reload (caller increments after creating)
+  //   lang: 'ar' | 'en' — for bilingual UI (v55.83-A.6.27.71 HOTFIX 3)
 
   var userId = props.userId;
   var isSuperAdmin = !!props.isSuperAdmin;
@@ -53,6 +55,9 @@ export default function WarehouseBucketList(props) {
   var onRequestCreate = props.onRequestCreate || function () {};
   var reloadToken = props.reloadToken || 0;
   var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
+  var lang = props.lang === 'en' ? 'en' : 'ar';
+  var ar = lang === 'ar';
+  var dir = ar ? 'rtl' : 'ltr';
 
   var [view, setView] = useState('list');   // 'list' | 'detail'
   var [buckets, setBuckets] = useState([]);
@@ -123,14 +128,14 @@ export default function WarehouseBucketList(props) {
   if (view === 'detail' && selectedBucketId) {
     if (detailLoading) {
       return (
-        <div className="p-6 text-center text-slate-500 italic">Loading bucket...</div>
+        <div className="p-6 text-center text-slate-500 italic" dir={dir}>{ar ? 'جاري تحميل الدلو...' : 'Loading bucket...'}</div>
       );
     }
     if (!selectedBucket) {
       return (
-        <div className="p-6">
-          <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm mb-3">← Back to buckets</button>
-          <div className="bg-amber-50 border-2 border-amber-400 rounded p-4 text-amber-900">Bucket not found or could not be loaded.</div>
+        <div className="p-6" dir={dir}>
+          <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm mb-3">{ar ? '→ العودة للدلاء' : '← Back to buckets'}</button>
+          <div className="bg-amber-50 border-2 border-amber-400 rounded p-4 text-amber-900">{ar ? 'لم يتم العثور على الدلو أو تعذر تحميله.' : 'Bucket not found or could not be loaded.'}</div>
         </div>
       );
     }
@@ -138,10 +143,10 @@ export default function WarehouseBucketList(props) {
     var spent = selectedEntries.reduce(function (a, e) { return a + Number(e.amount || 0); }, 0);
     var remaining = Number(b.amount) - spent;
     var pct = b.amount > 0 ? Math.min(100, (spent / Number(b.amount)) * 100) : 0;
-    var badge = statusBadge(b.status);
+    var badge = statusBadge(b.status, ar);
     return (
-      <div className="space-y-3">
-        <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm">← Back to buckets</button>
+      <div className="space-y-3" dir={dir}>
+        <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm">{ar ? '→ العودة للدلاء' : '← Back to buckets'}</button>
 
         {/* Bucket summary card */}
         <div className={'rounded-lg border-2 p-4 ' + (b.status === 'closed' ? 'bg-emerald-50 border-emerald-400' : b.status === 'cancelled' ? 'bg-slate-100 border-slate-300' : 'bg-amber-50 border-amber-400')}>
@@ -152,19 +157,19 @@ export default function WarehouseBucketList(props) {
                 <h3 className="text-lg font-extrabold text-slate-900">{b.recipient_name}</h3>
                 <span className={'px-2 py-0.5 rounded text-[10px] font-extrabold ' + badge.bg + ' ' + badge.text} title={badge.tooltip}>{badge.label}</span>
                 {b.status === 'closed' && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-green-300 text-green-950" title={'Reconciled on ' + fmtDate(b.closed_at)}>✓ RECONCILED</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-green-300 text-green-950" title={(ar ? 'تمت التسوية في ' : 'Reconciled on ') + fmtDate(b.closed_at)}>{ar ? '✓ تمت التسوية' : '✓ RECONCILED'}</span>
                 )}
               </div>
-              <div className="font-mono text-sm text-slate-700">{b.reference_slug}</div>
+              <div className="font-mono text-sm text-slate-700" dir="ltr">{b.reference_slug}</div>
               <div className="text-xs text-slate-600 mt-1">
-                Issued <strong>{fmtDate(b.issue_date)}</strong> · Reference: <strong>{b.reference}</strong>
-                {b.closed_at && <> · Closed <strong>{fmtDate(b.closed_at)}</strong></>}
-                {b.cancelled_at && <> · Cancelled <strong>{fmtDate(b.cancelled_at)}</strong></>}
+                {ar ? 'تم الإصدار في ' : 'Issued '}<strong>{fmtDate(b.issue_date)}</strong> · {ar ? 'المرجع:' : 'Reference:'} <strong>{b.reference}</strong>
+                {b.closed_at && <> · {ar ? 'مُغلق في ' : 'Closed '}<strong>{fmtDate(b.closed_at)}</strong></>}
+                {b.cancelled_at && <> · {ar ? 'مُلغى في ' : 'Cancelled '}<strong>{fmtDate(b.cancelled_at)}</strong></>}
               </div>
               {b.notes && <div className="text-xs text-slate-600 italic mt-1">"{b.notes}"</div>}
             </div>
-            <div className="text-right">
-              <div className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">Advance</div>
+            <div className={ar ? 'text-left' : 'text-right'}>
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">{ar ? 'السلفة' : 'Advance'}</div>
               <div className="text-2xl font-mono font-extrabold text-slate-900">{fmtMoney(b.amount, b.currency)}</div>
             </div>
           </div>
@@ -172,15 +177,15 @@ export default function WarehouseBucketList(props) {
           {/* Progress bar */}
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
             <div className="bg-white rounded p-2 border border-slate-200">
-              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Spent</div>
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">{ar ? 'تم إنفاقه' : 'Spent'}</div>
               <div className="font-mono font-bold text-blue-900">{fmtMoney(spent, b.currency)}</div>
             </div>
             <div className="bg-white rounded p-2 border border-slate-200">
-              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Remaining</div>
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">{ar ? 'متبقي' : 'Remaining'}</div>
               <div className={'font-mono font-bold ' + (remaining < 0 ? 'text-red-700' : remaining === 0 ? 'text-emerald-700' : 'text-slate-900')}>{fmtMoney(remaining, b.currency)}</div>
             </div>
             <div className="bg-white rounded p-2 border border-slate-200">
-              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Entries</div>
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">{ar ? 'الإدخالات' : 'Entries'}</div>
               <div className="font-mono font-bold text-slate-900">{selectedEntries.length}</div>
             </div>
           </div>
@@ -202,6 +207,7 @@ export default function WarehouseBucketList(props) {
               canManage={!!props.canManage || isSuperAdmin}
               canApprove={!!props.canApprove || isSuperAdmin}
               canReopen={!!props.canReopen || isSuperAdmin}
+              lang={lang}
               onChanged={function () {
                 // Reload this detail view AND the parent list
                 getBucketWithEntries(selectedBucketId).then(function (res) {
@@ -223,6 +229,7 @@ export default function WarehouseBucketList(props) {
             userId={userId}
             isSuperAdmin={isSuperAdmin}
             canManageCategories={!!props.canManageCategories || isSuperAdmin}
+            lang={lang}
             onCreated={function () {
               getBucketWithEntries(selectedBucketId).then(function (res) {
                 setSelectedBucket(res.bucket);
@@ -237,20 +244,20 @@ export default function WarehouseBucketList(props) {
         {/* Entries table (read-only in Phase 2) */}
         <div className="bg-white rounded-lg border-2 border-slate-200 overflow-hidden">
           <div className="bg-slate-100 px-3 py-2 font-extrabold text-sm text-slate-900 border-b border-slate-200">
-            Ledger — {selectedEntries.length} {selectedEntries.length === 1 ? 'entry' : 'entries'}
+            {ar ? 'دفتر القيود — ' : 'Ledger — '}{selectedEntries.length} {ar ? (selectedEntries.length === 1 ? 'إدخال' : 'إدخالات') : (selectedEntries.length === 1 ? 'entry' : 'entries')}
           </div>
           {selectedEntries.length === 0 ? (
-            <div className="p-6 text-center text-slate-500 italic text-sm">No spend entries yet.</div>
+            <div className="p-6 text-center text-slate-500 italic text-sm">{ar ? 'لا توجد إدخالات إنفاق بعد.' : 'No spend entries yet.'}</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Date</th>
-                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Category</th>
-                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Subcategory</th>
-                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Description</th>
-                    <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Amount</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'التاريخ' : 'Date'}</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الفئة' : 'Category'}</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الفئة الفرعية' : 'Subcategory'}</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الوصف' : 'Description'}</th>
+                    <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'المبلغ' : 'Amount'}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -268,7 +275,7 @@ export default function WarehouseBucketList(props) {
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-100 border-t-2 border-slate-300 font-extrabold">
-                    <td colSpan={4} className="px-3 py-2 text-right text-slate-900">Total Spent</td>
+                    <td colSpan={4} className="px-3 py-2 text-right text-slate-900">{ar ? 'إجمالي ما تم إنفاقه' : 'Total Spent'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-900">{fmtMoney(spent, b.currency)}</td>
                   </tr>
                 </tfoot>
@@ -282,19 +289,19 @@ export default function WarehouseBucketList(props) {
 
   // ─── LIST VIEW ───────────────────────────────────────────────────
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" dir={dir}>
       {/* Header + create button */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h3 className="text-base font-extrabold text-slate-900">🏭 Warehouse Buckets / دلاء المخزن</h3>
-          <div className="text-[11px] text-slate-600">{buckets.length} total · click any bucket to see its ledger</div>
+          <h3 className="text-base font-extrabold text-slate-900">🏭 {ar ? 'دلاء المخزن' : 'Warehouse Buckets'} / {ar ? 'Warehouse Buckets' : 'دلاء المخزن'}</h3>
+          <div className="text-[11px] text-slate-600">{buckets.length} {ar ? 'إجمالي · اضغط على أي دلو لرؤية دفتر قيوده' : 'total · click any bucket to see its ledger'}</div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="text"
             value={searchTerm}
             onChange={function (e) { setSearchTerm(e.target.value); }}
-            placeholder="Search recipient or reference..."
+            placeholder={ar ? 'بحث عن مستلم أو مرجع...' : 'Search recipient or reference...'}
             className="px-2 py-1 border-2 border-slate-300 rounded text-xs bg-white text-slate-900"
           />
           <select
@@ -302,19 +309,19 @@ export default function WarehouseBucketList(props) {
             onChange={function (e) { setStatusFilter(e.target.value); }}
             className="px-2 py-1 border-2 border-slate-300 rounded text-xs bg-white text-slate-900 font-extrabold"
           >
-            <option value="all">All ({buckets.length})</option>
-            <option value="open">Open ({buckets.filter(function (b) { return b.status === 'open'; }).length})</option>
-            <option value="fully_spent">Fully Spent ({buckets.filter(function (b) { return b.status === 'fully_spent'; }).length})</option>
-            <option value="pending_approval">Pending Approval ({buckets.filter(function (b) { return b.status === 'pending_approval'; }).length})</option>
-            <option value="closed">Closed ({buckets.filter(function (b) { return b.status === 'closed'; }).length})</option>
-            <option value="cancelled">Cancelled ({buckets.filter(function (b) { return b.status === 'cancelled'; }).length})</option>
+            <option value="all">{ar ? 'الكل' : 'All'} ({buckets.length})</option>
+            <option value="open">{ar ? 'مفتوح' : 'Open'} ({buckets.filter(function (b) { return b.status === 'open'; }).length})</option>
+            <option value="fully_spent">{ar ? 'أُنفق بالكامل' : 'Fully Spent'} ({buckets.filter(function (b) { return b.status === 'fully_spent'; }).length})</option>
+            <option value="pending_approval">{ar ? 'في انتظار الموافقة' : 'Pending Approval'} ({buckets.filter(function (b) { return b.status === 'pending_approval'; }).length})</option>
+            <option value="closed">{ar ? 'مُغلق' : 'Closed'} ({buckets.filter(function (b) { return b.status === 'closed'; }).length})</option>
+            <option value="cancelled">{ar ? 'مُلغى' : 'Cancelled'} ({buckets.filter(function (b) { return b.status === 'cancelled'; }).length})</option>
           </select>
           {canCreate && (
             <button
               onClick={onRequestCreate}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold rounded shadow"
             >
-              + Create Bucket
+              + {ar ? 'إنشاء دلو' : 'Create Bucket'}
             </button>
           )}
         </div>
@@ -322,23 +329,23 @@ export default function WarehouseBucketList(props) {
 
       {/* List */}
       {loading ? (
-        <div className="p-6 text-center text-slate-500 italic">Loading buckets...</div>
+        <div className="p-6 text-center text-slate-500 italic">{ar ? 'جاري تحميل الدلاء...' : 'Loading buckets...'}</div>
       ) : filtered.length === 0 ? (
         <div className="p-6 text-center bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg text-slate-600">
           {buckets.length === 0 ? (
             <>
               <div className="text-4xl mb-2">🏭</div>
-              <div className="font-extrabold text-slate-900 mb-1">No buckets yet</div>
-              <div className="text-xs">Create your first warehouse advance from the Treasury tab or click "+ Create Bucket" above.</div>
+              <div className="font-extrabold text-slate-900 mb-1">{ar ? 'لا توجد دلاء بعد' : 'No buckets yet'}</div>
+              <div className="text-xs">{ar ? 'أنشئ أول سلفة مخزن من تبويب الخزنة أو اضغط "+ إنشاء دلو" أعلاه.' : 'Create your first warehouse advance from the Treasury tab or click "+ Create Bucket" above.'}</div>
             </>
           ) : (
-            <div className="text-sm">No buckets match your filter.</div>
+            <div className="text-sm">{ar ? 'لا توجد دلاء مطابقة للفلتر.' : 'No buckets match your filter.'}</div>
           )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filtered.map(function (b) {
-            var badge = statusBadge(b.status);
+            var badge = statusBadge(b.status, ar);
             // We don't have spent total in the list query — show amount and status
             // Detail view does the real math. For card we just show the headline.
             return (

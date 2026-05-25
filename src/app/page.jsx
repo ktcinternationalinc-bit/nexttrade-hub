@@ -9352,6 +9352,7 @@ export default function App() {
           userId={userProfile?.id}
           users={teamUsers}
           toast={toast}
+          lang={lang}
         />
 
         {showAddTreasury && !pendingTreasuryRecord && !duplicateConfirm && (
@@ -13618,6 +13619,7 @@ export default function App() {
                   reloadToken={bucketReloadToken}
                   onBucketChanged={() => { setBucketReloadToken(t => t + 1); try { loadAllData && loadAllData(); } catch (_) {} }}
                   toast={toast}
+                  lang={lang}
                 />
                 {/* v55.83-A.6.27.71 (Phase 4) — History & Analytics below the
                     live list. Read-only multi-year lens; reads from buckets
@@ -13627,6 +13629,7 @@ export default function App() {
                   isSuperAdmin={isSuperAdmin}
                   reloadToken={bucketReloadToken}
                   toast={toast}
+                  lang={lang}
                 />
               </div>
             )}

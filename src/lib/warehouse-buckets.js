@@ -114,7 +114,11 @@ export async function createBucket(params) {
   }
 
   // 2. Insert the treasury placeholder row (separate code path from
-  //    transaction modal — direct dbInsert with explicit bucket fields)
+  //    transaction modal — direct dbInsert with explicit bucket fields).
+  // v55.83-A.6.27.71 HOTFIX 2 (Max May 24 2026): removed `source` field
+  // because treasury_source_check CHECK constraint rejected unknown values.
+  // The bucket_id + bucket_role columns are sufficient to identify these
+  // rows; source is redundant here.
   var treasuryDesc = p.treasuryDescription || ('Warehouse Advance: ' + slug + ' — ' + name);
   var treasuryPayload = {
     transaction_date: p.issueDate,
@@ -126,7 +130,6 @@ export async function createBucket(params) {
     currency: cur,
     category: 'Warehouse Bucket',
     subcategory: null,
-    source: 'warehouse_bucket',
     bucket_id: bucketRow.id,
     bucket_role: 'placeholder',
     created_by: p.userId || null,
@@ -342,7 +345,9 @@ export async function cancelBucket(params) {
     return { ok: false, error: 'Cannot cancel a ' + b.status + ' bucket' };
   }
 
-  // 1. Create the credit-back treasury row
+  // 1. Create the credit-back treasury row.
+  // v55.83-A.6.27.71 HOTFIX 2: no `source` field (treasury_source_check
+  // constraint rejects unknown values). Category + bucket_id identify it.
   var creditPayload = {
     transaction_date: new Date().toISOString().substring(0, 10),
     description: 'Refund of cancelled bucket: ' + b.reference_slug,
@@ -353,7 +358,6 @@ export async function cancelBucket(params) {
     currency: b.currency,
     category: 'Warehouse Bucket Refund',
     subcategory: null,
-    source: 'warehouse_bucket_cancel',
     bucket_id: b.id,
     bucket_role: null,  // not a placeholder — it's a refund credit
     created_by: p.userId || null,

@@ -38,8 +38,11 @@ function daysBetween(d1, d2) {
 }
 
 export default function WarehouseBucketsHistory(props) {
-  // Props: userId, isSuperAdmin, toast, reloadToken
+  // Props: userId, isSuperAdmin, toast, reloadToken, lang
   var reloadToken = props.reloadToken || 0;
+  var lang = props.lang === 'en' ? 'en' : 'ar';
+  var ar = lang === 'ar';
+  var dir = ar ? 'rtl' : 'ltr';
 
   var [buckets, setBuckets] = useState([]);
   var [allEntries, setAllEntries] = useState([]);  // entries across ALL buckets
@@ -323,7 +326,7 @@ export default function WarehouseBucketsHistory(props) {
   }
 
   if (loading) {
-    return <div className="p-4 text-center text-slate-500 italic">Loading buckets history...</div>;
+    return <div className="p-4 text-center text-slate-500 italic" dir={dir}>{ar ? 'جاري تحميل سجل الدلاء...' : 'Loading buckets history...'}</div>;
   }
 
   if (buckets.length === 0) {
@@ -331,32 +334,32 @@ export default function WarehouseBucketsHistory(props) {
   }
 
   return (
-    <div className="space-y-3 mt-4">
+    <div className="space-y-3 mt-4" dir={dir}>
       {/* Header + filters */}
       <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white rounded-lg p-3 flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h3 className="text-base font-extrabold">📊 Buckets History & Analytics</h3>
-          <div className="text-[11px] text-slate-200">Multi-year warehouse-only lens — separate from company expense reports</div>
+          <h3 className="text-base font-extrabold">📊 {ar ? 'سجل الدلاء والتحليلات' : 'Buckets History & Analytics'}</h3>
+          <div className="text-[11px] text-slate-200">{ar ? 'عدسة المخزن متعددة السنوات — منفصلة عن تقارير المصروفات للشركة' : 'Multi-year warehouse-only lens — separate from company expense reports'}</div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <select value={yearFilter} onChange={function (e) { setYearFilter(e.target.value); }}
             className="px-2 py-1 border border-slate-400 bg-white text-slate-900 rounded text-xs font-extrabold">
-            <option value="all">All Years</option>
+            <option value="all">{ar ? 'كل السنوات' : 'All Years'}</option>
             {years.map(function (y) { return <option key={y} value={y}>{y}</option>; })}
           </select>
           <select value={recipientFilter} onChange={function (e) { setRecipientFilter(e.target.value); }}
             className="px-2 py-1 border border-slate-400 bg-white text-slate-900 rounded text-xs max-w-[180px]">
-            <option value="all">All Recipients</option>
+            <option value="all">{ar ? 'كل المستلمين' : 'All Recipients'}</option>
             {recipients.map(function (r) { return <option key={r} value={r}>{r}</option>; })}
           </select>
           <select value={currencyFilter} onChange={function (e) { setCurrencyFilter(e.target.value); }}
             className="px-2 py-1 border border-slate-400 bg-white text-slate-900 rounded text-xs font-extrabold">
-            <option value="all">All Currencies</option>
+            <option value="all">{ar ? 'كل العملات' : 'All Currencies'}</option>
             {currencies.map(function (c) { return <option key={c} value={c}>{c}</option>; })}
           </select>
           <button onClick={exportExcel}
             className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded shadow"
-            title="Download all data as Excel (4 sheets)">
+            title={ar ? 'تنزيل جميع البيانات كملف Excel (4 صفحات)' : 'Download all data as Excel (4 sheets)'}>
             📥 Excel
           </button>
         </div>
@@ -367,28 +370,28 @@ export default function WarehouseBucketsHistory(props) {
         return (
           <div key={s.currency} className="grid grid-cols-2 md:grid-cols-5 gap-2">
             <div className="bg-slate-800 text-white rounded p-2">
-              <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-80">Currency</div>
+              <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-80">{ar ? 'العملة' : 'Currency'}</div>
               <div className="text-lg font-mono font-extrabold">{s.currency}</div>
             </div>
             <div className="bg-blue-100 border border-blue-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider">Total Advanced</div>
+              <div className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider">{ar ? 'إجمالي المُقدَّم' : 'Total Advanced'}</div>
               <div className="text-base font-mono font-extrabold text-blue-900">{fmtMoney(s.totalAdvanced)}</div>
-              <div className="text-[10px] text-blue-700">{s.open + s.fullySpent + s.pendingApproval + s.closed + s.cancelled} buckets</div>
+              <div className="text-[10px] text-blue-700">{s.open + s.fullySpent + s.pendingApproval + s.closed + s.cancelled} {ar ? 'دلو' : 'buckets'}</div>
             </div>
             <div className="bg-emerald-100 border border-emerald-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wider">Reconciled</div>
+              <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wider">{ar ? 'تمت التسوية' : 'Reconciled'}</div>
               <div className="text-base font-mono font-extrabold text-emerald-900">{fmtMoney(s.totalReconciled)}</div>
-              <div className="text-[10px] text-emerald-700">{s.closed} closed</div>
+              <div className="text-[10px] text-emerald-700">{s.closed} {ar ? 'مُغلق' : 'closed'}</div>
             </div>
             <div className="bg-amber-100 border border-amber-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider">Pending</div>
+              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider">{ar ? 'قيد الانتظار' : 'Pending'}</div>
               <div className="text-base font-mono font-extrabold text-amber-900">{fmtMoney(s.openAmount + s.pendingAmount)}</div>
-              <div className="text-[10px] text-amber-700">{s.open + s.fullySpent + s.pendingApproval} open</div>
+              <div className="text-[10px] text-amber-700">{s.open + s.fullySpent + s.pendingApproval} {ar ? 'مفتوح' : 'open'}</div>
             </div>
             <div className="bg-slate-100 border border-slate-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider">Cancelled</div>
+              <div className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider">{ar ? 'مُلغى' : 'Cancelled'}</div>
               <div className="text-base font-mono font-extrabold text-slate-700">{fmtMoney(s.cancelledAmount)}</div>
-              <div className="text-[10px] text-slate-600">{s.cancelled} cancelled</div>
+              <div className="text-[10px] text-slate-600">{s.cancelled} {ar ? 'مُلغى' : 'cancelled'}</div>
             </div>
           </div>
         );
@@ -398,20 +401,20 @@ export default function WarehouseBucketsHistory(props) {
       {perRecipient.length > 0 && (
         <div className="bg-white rounded-lg border-2 border-slate-200 overflow-hidden">
           <div className="bg-slate-100 px-3 py-2 font-extrabold text-sm text-slate-900 border-b border-slate-200">
-            By Recipient ({perRecipient.length})
+            {ar ? 'حسب المستلم' : 'By Recipient'} ({perRecipient.length})
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Recipient</th>
-                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Cur</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Total Advanced</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Reconciled</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Open</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Closed</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Cancelled</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Avg Days</th>
+                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'المستلم' : 'Recipient'}</th>
+                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'عملة' : 'Cur'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'إجمالي المُقدَّم' : 'Total Advanced'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'تمت التسوية' : 'Reconciled'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'مفتوح' : 'Open'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'مُغلق' : 'Closed'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'مُلغى' : 'Cancelled'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'متوسط الأيام' : 'Avg Days'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -439,17 +442,17 @@ export default function WarehouseBucketsHistory(props) {
       {perSubcategory.length > 0 && (
         <div className="bg-white rounded-lg border-2 border-slate-200 overflow-hidden">
           <div className="bg-slate-100 px-3 py-2 font-extrabold text-sm text-slate-900 border-b border-slate-200">
-            By Subcategory (closed buckets only — {perSubcategory.length} rows)
+            {ar ? 'حسب الفئة الفرعية (الدلاء المغلقة فقط — ' : 'By Subcategory (closed buckets only — '}{perSubcategory.length} {ar ? 'سجل)' : 'rows)'}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Cur</th>
-                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Category</th>
-                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Subcategory</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Total</th>
-                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider"># Entries</th>
+                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'عملة' : 'Cur'}</th>
+                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الفئة' : 'Category'}</th>
+                  <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الفئة الفرعية' : 'Subcategory'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الإجمالي' : 'Total'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider"># {ar ? 'إدخالات' : 'Entries'}</th>
                 </tr>
               </thead>
               <tbody>

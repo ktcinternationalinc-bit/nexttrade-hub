@@ -39,12 +39,16 @@ export default function WarehouseBucketCreate(props) {
   //   userId: current user's UUID
   //   users: array of {id, name} for the combobox
   //   toast: { success, error, warning, info }
+  //   lang: 'ar' | 'en' — for bilingual labels (v55.83-A.6.27.71 HOTFIX 3, Max May 24 2026)
   var open = !!props.open;
   var onClose = props.onClose || function () {};
   var onCreated = props.onCreated || function () {};
   var userId = props.userId;
   var users = props.users || [];
   var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
+  var lang = props.lang === 'en' ? 'en' : 'ar';
+  var ar = lang === 'ar';
+  var dir = ar ? 'rtl' : 'ltr';
 
   var [recipientName, setRecipientName] = useState('');
   var [showRecipientDropdown, setShowRecipientDropdown] = useState(false);
@@ -115,11 +119,11 @@ export default function WarehouseBucketCreate(props) {
   async function handleSave() {
     setError(null);
     // Client-side validation
-    if (!recipientName.trim()) { setError('Recipient name is required.'); return; }
-    if (!reference.trim()) { setError('Reference / purpose is required.'); return; }
-    if (!issueDate) { setError('Issue date is required.'); return; }
+    if (!recipientName.trim()) { setError(ar ? 'اسم المستلم مطلوب.' : 'Recipient name is required.'); return; }
+    if (!reference.trim()) { setError(ar ? 'المرجع / الغرض مطلوب.' : 'Reference / purpose is required.'); return; }
+    if (!issueDate) { setError(ar ? 'التاريخ مطلوب.' : 'Issue date is required.'); return; }
     var amt = Number(amount);
-    if (!amt || amt <= 0) { setError('Amount must be a positive number.'); return; }
+    if (!amt || amt <= 0) { setError(ar ? 'المبلغ يجب أن يكون رقمًا موجبًا.' : 'Amount must be a positive number.'); return; }
 
     setBusy(true);
     try {
@@ -133,11 +137,11 @@ export default function WarehouseBucketCreate(props) {
         userId: userId,
       });
       if (!res.ok) {
-        setError(res.error || 'Unknown error');
+        setError(res.error || (ar ? 'خطأ غير معروف' : 'Unknown error'));
         setBusy(false);
         return;
       }
-      toast.success('Bucket created: ' + res.bucket.reference_slug);
+      toast.success((ar ? 'تم إنشاء الدلو: ' : 'Bucket created: ') + res.bucket.reference_slug);
       onCreated(res.bucket);
       onClose();
     } catch (err) {
@@ -152,6 +156,7 @@ export default function WarehouseBucketCreate(props) {
     <div
       className="fixed inset-0 z-[210] bg-black/70 flex items-start justify-center pt-10 px-4 overflow-y-auto"
       onClick={function () { if (!busy) onClose(); }}
+      dir={dir}
     >
       <div
         className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-lg"
@@ -160,14 +165,18 @@ export default function WarehouseBucketCreate(props) {
         {/* Header — amber theme makes this visually distinct from regular treasury modal */}
         <div className="bg-gradient-to-r from-amber-700 to-orange-700 text-white rounded-t-2xl px-5 py-3 flex items-center justify-between">
           <div>
-            <div className="text-lg font-extrabold">🏭 New Warehouse Advance</div>
-            <div className="text-[11px] text-amber-100 mt-0.5">Creates a treasury cash-out + opens a reconciliation bucket.</div>
+            <div className="text-lg font-extrabold">🏭 {ar ? 'سلفة مخزن جديدة' : 'New Warehouse Advance'}</div>
+            <div className="text-[11px] text-amber-100 mt-0.5">
+              {ar
+                ? 'تنشئ خصمًا نقديًا في الخزنة وتفتح دلو مطابقة.'
+                : 'Creates a treasury cash-out + opens a reconciliation bucket.'}
+            </div>
           </div>
           <button
             onClick={function () { if (!busy) onClose(); }}
             disabled={busy}
             className="text-2xl text-white hover:text-amber-100 leading-none disabled:opacity-50"
-            title="Close"
+            title={ar ? 'إغلاق' : 'Close'}
           >
             ×
           </button>
@@ -177,8 +186,10 @@ export default function WarehouseBucketCreate(props) {
           {/* Recipient combobox */}
           <div className="relative">
             <label className="block text-xs font-extrabold text-slate-900 mb-1">
-              Recipient Name <span className="text-red-600">*</span>
-              <span className="ml-1 text-[10px] font-semibold text-slate-500">(team member or warehouse worker)</span>
+              {ar ? 'اسم المستلم' : 'Recipient Name'} <span className="text-red-600">*</span>
+              <span className="mx-1 text-[10px] font-semibold text-slate-500">
+                {ar ? '(عضو فريق أو عامل مخزن)' : '(team member or warehouse worker)'}
+              </span>
             </label>
             <input
               type="text"
@@ -187,7 +198,7 @@ export default function WarehouseBucketCreate(props) {
               onFocus={function () { setShowRecipientDropdown(true); }}
               onBlur={function () { setTimeout(function () { setShowRecipientDropdown(false); }, 180); }}
               disabled={busy}
-              placeholder="e.g. Abdelnassar Hassan"
+              placeholder={ar ? 'مثال: عبد الناصر حسن' : 'e.g. Abdelnassar Hassan'}
               className="w-full px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900"
               autoComplete="off"
             />
@@ -206,13 +217,15 @@ export default function WarehouseBucketCreate(props) {
                     >
                       <span className="text-slate-900">{s.name}</span>
                       <span className={'text-[10px] font-semibold ' + (s.source === 'user' ? 'text-blue-600' : 'text-slate-500')}>
-                        {s.source === 'user' ? '👤 Team' : '🕘 Past'}
+                        {s.source === 'user'
+                          ? (ar ? '👤 فريق' : '👤 Team')
+                          : (ar ? '🕘 سابق' : '🕘 Past')}
                       </span>
                     </div>
                   );
                 })}
                 <div className="px-3 py-1.5 text-[10px] text-slate-500 italic border-t border-slate-200 bg-slate-50">
-                  Or just keep typing for a new recipient
+                  {ar ? 'أو واصل الكتابة لمستلم جديد' : 'Or just keep typing for a new recipient'}
                 </div>
               </div>
             )}
@@ -221,15 +234,17 @@ export default function WarehouseBucketCreate(props) {
           {/* Reference */}
           <div>
             <label className="block text-xs font-extrabold text-slate-900 mb-1">
-              Reference / Purpose <span className="text-red-600">*</span>
-              <span className="ml-1 text-[10px] font-semibold text-slate-500">(e.g. "america 101", "container ABC-7821")</span>
+              {ar ? 'المرجع / الغرض' : 'Reference / Purpose'} <span className="text-red-600">*</span>
+              <span className="mx-1 text-[10px] font-semibold text-slate-500">
+                {ar ? '(مثال: "أمريكا 101", "حاوية ABC-7821")' : '(e.g. "america 101", "container ABC-7821")'}
+              </span>
             </label>
             <input
               type="text"
               value={reference}
               onChange={function (e) { setReference(e.target.value); }}
               disabled={busy}
-              placeholder="e.g. america 101"
+              placeholder={ar ? 'مثال: أمريكا 101' : 'e.g. america 101'}
               className="w-full px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900"
               autoComplete="off"
             />
@@ -238,7 +253,7 @@ export default function WarehouseBucketCreate(props) {
           {/* Date + Amount + Currency row */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
-              <label className="block text-xs font-extrabold text-slate-900 mb-1">Date <span className="text-red-600">*</span></label>
+              <label className="block text-xs font-extrabold text-slate-900 mb-1">{ar ? 'التاريخ' : 'Date'} <span className="text-red-600">*</span></label>
               <input
                 type="date"
                 value={issueDate}
@@ -248,7 +263,7 @@ export default function WarehouseBucketCreate(props) {
               />
             </div>
             <div>
-              <label className="block text-xs font-extrabold text-slate-900 mb-1">Amount <span className="text-red-600">*</span></label>
+              <label className="block text-xs font-extrabold text-slate-900 mb-1">{ar ? 'المبلغ' : 'Amount'} <span className="text-red-600">*</span></label>
               <input
                 type="number"
                 step="0.01"
@@ -258,10 +273,11 @@ export default function WarehouseBucketCreate(props) {
                 disabled={busy}
                 placeholder="5000.00"
                 className="w-full px-2 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono"
+                dir="ltr"
               />
             </div>
             <div>
-              <label className="block text-xs font-extrabold text-slate-900 mb-1">Currency <span className="text-red-600">*</span></label>
+              <label className="block text-xs font-extrabold text-slate-900 mb-1">{ar ? 'العملة' : 'Currency'} <span className="text-red-600">*</span></label>
               <select
                 value={currency}
                 onChange={function (e) { setCurrency(e.target.value); }}
@@ -276,36 +292,62 @@ export default function WarehouseBucketCreate(props) {
 
           {/* Auto-slug preview */}
           {slugPreview && (
-            <div className="bg-amber-50 border-2 border-amber-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider mb-0.5">Auto-Generated Reference</div>
+            <div className="bg-amber-50 border-2 border-amber-300 rounded p-2" dir="ltr">
+              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider mb-0.5">
+                {ar ? 'المرجع التلقائي' : 'Auto-Generated Reference'}
+              </div>
               <div className="font-mono text-sm font-bold text-amber-900">{slugPreview}</div>
-              <div className="text-[10px] text-amber-700 mt-0.5">This identifier appears in Treasury, the bucket card, and audit logs.</div>
+              <div className="text-[10px] text-amber-700 mt-0.5" dir={dir}>
+                {ar
+                  ? 'يظهر هذا المعرف في الخزنة وعلى بطاقة الدلو وفي سجلات التدقيق.'
+                  : 'This identifier appears in Treasury, the bucket card, and audit logs.'}
+              </div>
             </div>
           )}
 
           {/* Notes */}
           <div>
             <label className="block text-xs font-extrabold text-slate-900 mb-1">
-              Notes <span className="text-[10px] font-semibold text-slate-500">(optional)</span>
+              {ar ? 'ملاحظات' : 'Notes'} <span className="text-[10px] font-semibold text-slate-500">{ar ? '(اختياري)' : '(optional)'}</span>
             </label>
             <textarea
               value={notes}
               onChange={function (e) { setNotes(e.target.value); }}
               disabled={busy}
               rows={2}
-              placeholder="Any context for the recipient or accountant..."
+              placeholder={ar ? 'أي سياق للمستلم أو المحاسب...' : 'Any context for the recipient or accountant...'}
               className="w-full px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900"
             />
           </div>
 
           {/* What happens explainer */}
           <div className="bg-slate-50 border border-slate-200 rounded p-2 text-[11px] text-slate-700">
-            <div className="font-extrabold text-slate-900 mb-1">What happens when I save?</div>
-            <ul className="list-disc list-inside space-y-0.5">
-              <li>Treasury gets a <span className="font-bold">{currency} cash-out</span> tagged "Warehouse Bucket"</li>
-              <li>A bucket card appears in the Warehouse tab for the accountant to log spending against</li>
-              <li>Once spending fully accounts for the amount, the bucket can be submitted for approval and reconciled into proper expense categories</li>
-              <li><span className="font-extrabold text-slate-900">The original cash-out NEVER changes — only how it's categorized in Expense Reports does.</span></li>
+            <div className="font-extrabold text-slate-900 mb-1">
+              {ar ? 'ماذا يحدث عند الحفظ؟' : 'What happens when I save?'}
+            </div>
+            <ul className="list-disc list-inside space-y-0.5" style={{ paddingInlineStart: ar ? '0' : undefined }}>
+              <li>
+                {ar
+                  ? <>تحصل الخزنة على <span className="font-bold">خصم نقدي {currency}</span> موسوم بـ "Warehouse Bucket"</>
+                  : <>Treasury gets a <span className="font-bold">{currency} cash-out</span> tagged "Warehouse Bucket"</>}
+              </li>
+              <li>
+                {ar
+                  ? 'تظهر بطاقة دلو في تبويب المخزن للمحاسب لتسجيل الإنفاق'
+                  : 'A bucket card appears in the Warehouse tab for the accountant to log spending against'}
+              </li>
+              <li>
+                {ar
+                  ? 'بمجرد أن يغطي الإنفاق كامل المبلغ، يمكن تقديم الدلو للموافقة وإعادة تصنيفه إلى فئات المصروفات الصحيحة'
+                  : 'Once spending fully accounts for the amount, the bucket can be submitted for approval and reconciled into proper expense categories'}
+              </li>
+              <li>
+                <span className="font-extrabold text-slate-900">
+                  {ar
+                    ? 'الخصم النقدي الأصلي لا يتغير أبدًا — فقط طريقة تصنيفه في تقارير المصروفات.'
+                    : 'The original cash-out NEVER changes — only how it\'s categorized in Expense Reports does.'}
+                </span>
+              </li>
             </ul>
           </div>
 
@@ -324,14 +366,16 @@ export default function WarehouseBucketCreate(props) {
             disabled={busy}
             className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded disabled:opacity-50"
           >
-            Cancel
+            {ar ? 'إلغاء' : 'Cancel'}
           </button>
           <button
             onClick={handleSave}
             disabled={busy || !recipientName.trim() || !reference.trim() || !issueDate || !Number(amount)}
             className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {busy ? 'Creating...' : '🏭 Create Bucket'}
+            {busy
+              ? (ar ? 'جاري الإنشاء...' : 'Creating...')
+              : (ar ? '🏭 إنشاء الدلو' : '🏭 Create Bucket')}
           </button>
         </div>
       </div>
