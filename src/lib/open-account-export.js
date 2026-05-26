@@ -85,6 +85,10 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
   opts = opts || {};
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var simulation = opts.simulation || null;
+  // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from printed statement.
+  // The auto-offset cascade settles opposite-side balances; the invoice/bill rows
+  // show "✓ paid" without two confusing offset lines. Audit trail still in DB.
+  entries = (entries || []).filter(function (e) { return e.transaction_type !== 'offset'; });
   var win;
   try { win = window.open('', '_blank', 'width=900,height=700'); }
   catch (e) { alert('Could not open print window. Please allow popups for this site.'); return; }
@@ -387,6 +391,8 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
 // ──────────────────────────────────────────────────────────────────
 export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   if (!account) return;
+  // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from Excel export to match screen view.
+  entries = (entries || []).filter(function (e) { return e.transaction_type !== 'offset'; });
 
   var rows = [];
   // Entity header block

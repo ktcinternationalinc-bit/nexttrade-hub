@@ -139,8 +139,8 @@ ok('9.2: id stays "importstock" for backward compat',
 // ══════════════════════════════════════════════════════════════════
 // ITEM 10 — Rename "Variants" → "Products" everywhere user-facing
 // ══════════════════════════════════════════════════════════════════
-ok('10.1: filter dropdown option says "Products only (actual SKUs, no template blueprints)" (v72 HOTFIX 8 relabel)',
-  /<option value="variants">Products only \(actual SKUs, no template blueprints\)<\/option>/.test(ipm));
+ok('10.1: filter dropdown shows "Products only (actual SKUs) — default" (HOTFIX 12 shortened label)',
+  /Products only \(actual SKUs\) — default/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('10.2: filter dropdown "Template blueprints only" option (v72 HOTFIX 8 relabel)',
   /<option value="templates">Template blueprints only \(for creating Products\)<\/option>/.test(ipm));
 ok('10.3: "+ Variant" button renamed to "+ Product"',

@@ -19,9 +19,8 @@ var pm = fs.readFileSync(path.join(__dirname, '..', 'src/components/InventoryPro
 
 console.log('\n── HOTFIX 8 — default filter no longer hides manually-added products ──');
 
-ok('A1: typeFilter default is "all" (was "variants" — hid manually-added products)',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm) &&
-  !/var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(pm));
+ok('A1: typeFilter default is "variants" — HOTFIX 12 reverted HOTFIX 8 per Max; manually-added products still show because variants filter now excludes templates (not non-variants)',
+  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(pm));
 
 ok('A2: HOTFIX 8 explanation comment present',
   /HOTFIX 8[\s\S]{0,200}Max created two products manually[\s\S]{0,300}did NOT appear in/.test(pm));
@@ -34,11 +33,11 @@ ok('A3: "variants" filter no longer requires variant_suffix (now means "not a te
 ok('A4: HOTFIX 8 comment explains the filter semantics fix',
   /HOTFIX 8 — "Products" filter now means "anything that[\s\S]{0,300}variant_suffix/.test(pm));
 
-ok('A5: Dropdown option for "all" labeled as default',
-  /<option value="all">All \(Products \+ Template blueprints\) — default<\/option>/.test(pm));
+ok('A5: Dropdown option for "variants" labeled as default (HOTFIX 12)',
+  /Products only \(actual SKUs\) — default/.test(pm));
 
-ok('A6: Dropdown option for "variants" describes "actual SKUs, no template blueprints"',
-  /<option value="variants">Products only \(actual SKUs, no template blueprints\)<\/option>/.test(pm));
+ok('A6: Dropdown option for "variants" describes "actual SKUs" (HOTFIX 12 shortened label)',
+  /<option value="variants">Products only \(actual SKUs\) — default<\/option>/.test(pm));
 
 console.log('\n── End-to-end: simulate the filter on Max\'s actual products ──');
 

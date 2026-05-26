@@ -144,8 +144,8 @@ ok('G3: empty state shown when grandTotals.currencies.length === 0',
   /grandTotals\.currencies\.length === 0 && \([\s\S]{0,300}No entries yet — add ledger entries to see currency totals/.test(oa));
 ok('G4: per-currency rows: one grid-cols-3 row per currency for Credit/Debit/Balance',
   /grandTotals\.currencies\.map\(function \(cur\) \{[\s\S]{0,500}<div key=\{cur\} className="grid grid-cols-3 gap-2">/.test(oa));
-ok('G5: per-currency Credit tile uses bg-emerald-700 with currency suffix',
-  /\{cur\} Total Credit \(money in\)[\s\S]{0,300}\{fmtNum\(t\.credit\)\} \{cur\}/.test(oa));
+ok('G5: per-currency Open AR tile uses bg-emerald-700 with theyOweUs FIFO value (HOTFIX 11 final: replaces double-counted Credit/Debit)',
+  /\{cur\} Total Open AR[\s\S]{0,300}\{fmtNum\(t\.theyOweUs\)\} \{cur\}/.test(oa));
 ok('G6: per-currency Balance tile shows "they owe us"/"we owe them"/"settled" based on sign',
   /t\.balance > 0 \? 'they owe us' : t\.balance < 0 \? 'we owe them' : 'settled'/.test(oa));
 

@@ -50,8 +50,8 @@ ok('R1: A.6.27.40 — toggleFeatured function still exists',
   /async function toggleFeatured\(p\)/.test(pm));
 ok('R2: A.6.27.40 — featuredOnly filter still present',
   /var \[featuredOnly, setFeaturedOnly\] = useState\(false\)/.test(pm));
-ok('R3: A.6.27.40 — typeFilter still present (default changed to "variants" in .55)',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
+ok('R3: A.6.27.40 — typeFilter still present (default = "variants" per HOTFIX 12)',
+  /useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R4: A.6.27.40 — smart search still uses split on whitespace',
   /var keywords = search\.trim\(\)\.toLowerCase\(\)\.split\(\/\\s\+\/\)/.test(pm));
 ok('R5: A.6.27.40 — Edit button still present after star',

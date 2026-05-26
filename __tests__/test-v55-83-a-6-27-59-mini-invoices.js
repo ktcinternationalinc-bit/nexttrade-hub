@@ -312,8 +312,8 @@ ok('R3: 58 — entry modal currency dropdown preserved',
   /<option value="USD">USD<\/option>\s+<option value="EGP">EGP<\/option>\s+<option value="EUR">EUR<\/option>/.test(oa));
 ok('R4: 58 — Currency column + per-currency Running Balance CUR columns preserved (v72 HOTFIX 11 final)',
   />Currency</.test(oa) && /Running Balance \{cur\}/.test(oa));
-ok('R5: 58 — per-currency grand-total tiles preserved',
-  /\{cur\} Total Credit \(money in\)/.test(oa));
+ok('R5: 58 — per-currency grand-total tiles preserved (HOTFIX 11 final: now Open AR/AP instead of double-counted Credit/Debit)',
+  /\{cur\} Total Open AR/.test(oa) && /\{cur\} Total Open AP/.test(oa));
 ok('R6: 57 — Shipping rate save instrumentation preserved',
   /console\.log\('\[shipping-rates\] save attempt:'/.test(read('src/components/ShippingRatesTab.jsx')));
 ok('R7: 56 — Inbound Shipments 3-region modal preserved',

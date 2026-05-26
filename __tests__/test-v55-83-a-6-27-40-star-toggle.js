@@ -65,16 +65,14 @@ ok('C4: use_count display when > 0',
 
 ok('D1: featuredOnly state declared',
   /var \[featuredOnly, setFeaturedOnly\] = useState\(false\)/.test(pm));
-ok('D2: typeFilter state declared (default changed to "variants" in .55 — templates pollute product list)',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
+ok('D2: typeFilter state declared (default = "variants" — HOTFIX 12 restored this default per Max)',
+  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 
 ok('D3: Featured-only checkbox rendered',
   /⭐ Starred only/.test(pm) &&
   /<input type="checkbox" checked=\{featuredOnly\} onChange=\{function \(e\) \{ setFeaturedOnly\(e\.target\.checked\); \}\} \/>/.test(pm));
-ok('D4: Type filter select with 3 options (v72 HOTFIX 8: All=default, Products only, Template blueprints only)',
-  /<option value="all">All \(Products \+ Template blueprints\) — default<\/option>/.test(pm) &&
-  /<option value="variants">Products only/.test(pm) &&
-  /<option value="templates">Template blueprints only/.test(pm));
+ok('D4: Type filter select 3 options (HOTFIX 12: Products only=default, All, Templates only)',
+  /Products only \(actual SKUs\) — default[\s\S]{0,200}All \(Products \+ Template blueprints\)[\s\S]{0,200}Template blueprints only/.test(read('src/components/InventoryProductMaster.jsx')));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Filter logic + smart multi-keyword search + featured sort

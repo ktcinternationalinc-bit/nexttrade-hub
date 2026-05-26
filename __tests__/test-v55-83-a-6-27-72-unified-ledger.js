@@ -118,9 +118,8 @@ ok('C12: Paid/Remaining cells use computePaidRemaining',
   /var pr = computePaidRemaining\(entry, simResult\)/.test(oa));
 ok('C13: Running Balance per-currency column header (HOTFIX 11 final spec)',
   /Running Balance \{cur\}/.test(oa));
-ok('C14: 🔄 Offset button in toolbar, disabled when no candidate',
-  /🔄 Offset/.test(oa) &&
-  /disabled=\{!offsetCandidate\}/.test(oa));
+ok('C14: manual Offset button REMOVED in HOTFIX 12 — auto-offset cascade handles it silently',
+  !/🔄 Offset/.test(oa) && /autoOffsetCascade/.test(oa));
 ok('C15: handleOffset function — uses findOffsetCandidate + buildOffsetEntries, rollback on second insert failure',
   /async function handleOffset\(accountId\)/.test(oa) &&
   /var pair = buildOffsetEntries\(cand, today, userProfile && userProfile\.id\)/.test(oa) &&

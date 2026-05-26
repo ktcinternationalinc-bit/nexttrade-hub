@@ -124,7 +124,9 @@ export default function InventoryProductMaster(props) {
   //   p.variant_suffix to be truthy. Manually-added products don't have a
   //   variant_suffix (only ones created via the template/variant flow do),
   //   so they got silently filtered out. Default is now 'all'.
-  var [typeFilter, setTypeFilter] = useState('all');
+  // v55.83-A.6.27.72 HOTFIX 12 — default to "Products only" per Max's preference.
+  // Template blueprints clutter the main list day-to-day; show actual SKUs by default.
+  var [typeFilter, setTypeFilter] = useState('variants');
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
@@ -1020,8 +1022,8 @@ export default function InventoryProductMaster(props) {
           onChange={function (e) { setTypeFilter(e.target.value); }}
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
-          <option value="all">All (Products + Template blueprints) — default</option>
-          <option value="variants">Products only (actual SKUs, no template blueprints)</option>
+          <option value="variants">Products only (actual SKUs) — default</option>
+          <option value="all">All (Products + Template blueprints)</option>
           <option value="templates">Template blueprints only (for creating Products)</option>
         </select>
         {canEdit && (

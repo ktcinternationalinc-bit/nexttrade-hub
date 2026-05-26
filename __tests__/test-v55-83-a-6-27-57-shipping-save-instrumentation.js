@@ -105,8 +105,8 @@ ok('R2: 56 — Region 2 scrollable middle preserved',
   /Region 2: scrollable middle/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R3: 55 — openaccounts in FINANCE sidebar preserved',
   /\{ group: 'FINANCE', items: \['sales', 'treasury', 'checks', 'debts', 'openaccounts'/.test(page));
-ok('R4: 55 — Product List default = variants',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(read('src/components/InventoryProductMaster.jsx')));
+ok('R4: 55 — Product List default = variants (restored per HOTFIX 12)',
+  /useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R5: 55 — TEMPLATE rename preserved',
   /TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
   !/>FAMILY</.test(read('src/components/InventoryProductMaster.jsx')));

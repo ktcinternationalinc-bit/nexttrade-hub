@@ -654,6 +654,18 @@ export default function OpenAccountsTab(props) {
         await dbInsert('open_account_entries', payload, userProfile && userProfile.id);
         toast.success('Entry added');
       }
+      // v55.83-A.6.27.72 HOTFIX 12 — Auto-offset cascade.
+      // Whenever a save creates a state with simultaneous open AR + open AP in the same
+      // currency for this counterparty, silently post offsets to settle the smaller side.
+      // Cascade: keep offsetting until no pair is left (handles multi-invoice scenarios).
+      // The offset rows are written to the DB for audit, but the table view hides them so
+      // the user just sees "✓ paid" on the closed invoice/bill — no confusing extra lines.
+      var offsetsPosted = await autoOffsetCascade(entryDraft.account_id);
+      if (offsetsPosted > 0) {
+        toast.success(offsetsPosted === 1
+          ? 'Auto-settled 1 pair against opposite-side balance'
+          : 'Auto-settled ' + offsetsPosted + ' pairs against opposite-side balances');
+      }
       setEntryModalOpen(false);
       setEntryDraft(null);
       await reload();
@@ -690,9 +702,10 @@ export default function OpenAccountsTab(props) {
                  (e.offset_invoice_id === entry.id || e.offset_bill_id === entry.id);
         });
         if (refByOffset) {
-          var proceed = confirm('WARNING: This entry is referenced by an offset entry. Deleting it ' +
-            'will leave the offset partially broken (one side will silently fail to apply).\n\n' +
-            'Recommended: delete the offset pair FIRST (find the row marked 🔄 Offset), then delete this entry.\n\n' +
+          var proceed = confirm('WARNING: This entry is referenced by an auto-posted offset. ' +
+            'Deleting it will leave the offset partially broken.\n\n' +
+            'Recommended: delete the linked invoice or bill first (which removes the offset cascade), ' +
+            'then delete this entry.\n\n' +
             'Delete anyway?');
           if (!proceed) { setBusy(false); return; }
         }
@@ -706,6 +719,58 @@ export default function OpenAccountsTab(props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // v55.83-A.6.27.72 HOTFIX 12 — Auto-offset cascade.
+  // Called after any entry insert/update. Re-fetches that account's entries from the DB,
+  // then repeatedly posts offsets until no opposite-side pair remains. Each offset is a
+  // pair of rows linked by offset_pair_id; the FIFO simulator credits both invoice+bill
+  // remaining. The table view filters out transaction_type==='offset' rows so the user
+  // never sees them — the invoice/bill simply shows "✓ paid".
+  //
+  // Returns the number of offset pairs posted.
+  // Safety: caps at 50 iterations to prevent infinite loops on malformed data.
+  async function autoOffsetCascade(accountId) {
+    if (!accountId) return 0;
+    var posted = 0;
+    var safety = 50;
+    while (safety-- > 0) {
+      // Re-fetch entries fresh from DB (state hasn't reloaded yet inside this fn)
+      var res = await supabase
+        .from('open_account_entries')
+        .select('*')
+        .eq('account_id', accountId)
+        .order('entry_date', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (res.error) {
+        console.warn('[auto-offset] failed to fetch entries:', res.error);
+        break;
+      }
+      var freshEntries = res.data || [];
+      var cand = findOffsetCandidate(freshEntries);
+      if (!cand) break;
+      // Build + insert the two halves
+      var today = new Date().toISOString().substring(0, 10);
+      var pair = buildOffsetEntries(cand, today, userProfile && userProfile.id);
+      try {
+        var firstHalf = await dbInsert('open_account_entries', pair[0], userProfile && userProfile.id);
+        try {
+          await dbInsert('open_account_entries', pair[1], userProfile && userProfile.id);
+          posted += 1;
+        } catch (e2) {
+          // Rollback first half on partial failure to keep the ledger consistent
+          if (firstHalf && firstHalf.id) {
+            try { await supabase.from('open_account_entries').delete().eq('id', firstHalf.id); } catch (rb) {}
+          }
+          console.error('[auto-offset] pair half-2 insert failed, rolled back:', e2);
+          break;
+        }
+      } catch (e) {
+        console.error('[auto-offset] pair half-1 insert failed:', e);
+        break;
+      }
+    }
+    return posted;
   }
 
   // v55.83-A.6.27.72 — One-click Offset handler.
@@ -1036,6 +1101,13 @@ export default function OpenAccountsTab(props) {
       }
 
       toast.success(invoiceDraft.id ? 'Invoice updated' : 'Invoice saved + linked to ledger');
+      // v55.83-A.6.27.72 HOTFIX 12 — auto-offset cascade after invoice save too.
+      var offsetsPosted = await autoOffsetCascade(invoiceDraft.account_id);
+      if (offsetsPosted > 0) {
+        toast.success(offsetsPosted === 1
+          ? 'Auto-settled 1 pair against opposite-side balance'
+          : 'Auto-settled ' + offsetsPosted + ' pairs against opposite-side balances');
+      }
       setInvoiceModalOpen(false);
       setInvoiceDraft(null);
       await reload();
@@ -1273,23 +1345,40 @@ export default function OpenAccountsTab(props) {
         </div>
       )}
 
+      {/* v55.83-A.6.27.72 HOTFIX 11 (polish) — Grand-total cards per currency.
+          REWIRED to FIFO values that reconcile algebraically:
+            Total Open AR (theyOweUs) − Total Open AP (weOweThem) (+/− prepaid) = Net Balance
+          Previously these were "Total Credit (money in)" / "Total Debit (money out)" using
+          raw credit_amount / debit_amount sums — which double-counted because an invoice
+          AND its payment both contributed to credit (or debit). 72,788 − 15,527 ≠ 763 — the
+          math broke. Now Open AR − Open AP = Net Balance exactly, with prepaid called out
+          inline if any. */}
       {grandTotals.currencies.map(function (cur) {
         var t = grandTotals.byCurrency[cur];
+        var hasPrepaid = (t.theirPrepaid > 0.005 || t.ourPrepaid > 0.005);
         return (
           <div key={cur} className="grid grid-cols-3 gap-2">
             <div className="bg-emerald-700 text-white rounded p-2 shadow">
-              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Credit (money in)</div>
-              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.credit)} {cur}</div>
+              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Open AR</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.theyOweUs)} {cur}</div>
+              <div className="text-[10px] font-semibold opacity-80">they still owe us</div>
             </div>
             <div className="bg-red-700 text-white rounded p-2 shadow">
-              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Debit (money out)</div>
-              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.debit)} {cur}</div>
+              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Open AP</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.weOweThem)} {cur}</div>
+              <div className="text-[10px] font-semibold opacity-80">we still owe them</div>
             </div>
             <div className={(t.balance >= 0 ? 'bg-emerald-800' : 'bg-red-800') + ' text-white rounded p-2 shadow'}>
               <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Net Balance</div>
               <div className="text-xl font-extrabold mt-0.5">{fmtSigned(t.balance)} {cur}</div>
               <div className="text-[10px] font-semibold opacity-90">
                 {t.balance > 0 ? 'they owe us' : t.balance < 0 ? 'we owe them' : 'settled'}
+              </div>
+              {/* Inline math so the user can verify reconciliation at a glance */}
+              <div className="text-[9px] font-mono opacity-80 mt-0.5 leading-tight">
+                {hasPrepaid
+                  ? '= AR − AP ' + (t.theirPrepaid > 0.005 ? '+ their prepaid ' : '') + (t.ourPrepaid > 0.005 ? '− our prepaid ' : '')
+                  : '= ' + fmtNum(t.theyOweUs) + ' − ' + fmtNum(t.weOweThem)}
               </div>
             </div>
           </div>
@@ -1371,22 +1460,12 @@ export default function OpenAccountsTab(props) {
                   <div className="flex gap-1 flex-wrap">
                     <button onClick={function () { openNewEntry(a.id); }} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow">+ Entry</button>
                     <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
-                    {/* v55.83-A.6.27.72 — One-click Offset button. Auto-picks oldest open
-                        invoice + oldest open bill in same currency, nets the smaller amount.
-                        Disabled if no offsettable pair exists. */}
-                    <button
-                      onClick={function () { handleOffset(a.id); }}
-                      disabled={!offsetCandidate}
-                      className={'px-2 py-1 text-[10px] font-extrabold rounded shadow ' +
-                        (offsetCandidate
-                          ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                          : 'bg-slate-300 text-slate-500 cursor-not-allowed')}
-                      title={offsetCandidate
-                        ? 'Offset ' + offsetCandidate.currency + ' ' + offsetCandidate.offsetAmount.toFixed(2) +
-                          ' — auto-applies oldest open sales invoice against oldest open vendor bill'
-                        : 'No offsettable pair found. You need at least one open sales invoice + one open vendor bill in the same currency.'}>
-                      🔄 Offset
-                    </button>
+                    {/* v55.83-A.6.27.72 HOTFIX 12 — Manual Offset button REMOVED.
+                        Auto-cascade now handles offsetting silently after any save (invoice,
+                        bill, payment). When a state arises with simultaneous open AR + open AP
+                        in the same currency, the system posts offsets automatically so the
+                        smaller side is fully settled. The user sees "✓ paid" on the closed
+                        invoice/bill without any visible Offset rows in the ledger. */}
                     <button onClick={function () { handlePrintLedger(a, 'internal'); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print our internal view as PDF">🖨️ Print (Internal)</button>
                     <button onClick={function () { handlePrintLedger(a, 'customer'); }} className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow" title="Print customer statement (their perspective) as PDF — for sending to the counterparty">🖨️ Customer Statement</button>
                     <button onClick={function () { handleExportExcel(a); }} className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow" title="Download Excel file">📊 Excel</button>
@@ -1485,7 +1564,15 @@ export default function OpenAccountsTab(props) {
                       </tr>
                     </thead>
                     <tbody>
-                      {accEntries.map(function (entry) {
+                      {accEntries
+                        .filter(function (entry) {
+                          // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from the visible ledger.
+                          // The auto-offset cascade silently settles opposite-side balances; the
+                          // result is that the invoice/bill rows display "✓ paid" without two
+                          // extra "Offset" rows cluttering the view. Audit trail is still in DB.
+                          return entry.transaction_type !== 'offset';
+                        })
+                        .map(function (entry) {
                         var entryCur = entry._currency;
                         // v55.83-A.6.27.72 — derive transaction type info
                         var txnType = entry.transaction_type;

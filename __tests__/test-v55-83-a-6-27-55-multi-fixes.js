@@ -57,8 +57,8 @@ ok('B4: success on delete uses try/catch around toast',
 // PART C — Item 3: Default typeFilter = variants
 // ══════════════════════════════════════════════════════════════════
 
-ok('C1: typeFilter default useState("variants") (was "all")',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
+ok('C1: typeFilter default useState("variants") — restored per HOTFIX 12',
+  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('C2: comment explains the Max directive about templates not polluting Product List',
   /default of product list should be the variants/.test(pm));
 
