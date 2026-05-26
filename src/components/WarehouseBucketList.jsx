@@ -224,29 +224,50 @@ export default function WarehouseBucketList(props) {
         </div>
 
         {/* v55.83-A.6.27.70 (Phase 3) — Lifecycle action bar.
-            Submit / Approve / Cancel / Reopen buttons based on bucket status
-            and user permissions. Self-approve protection built in. */}
+            v55.83-A.6.27.72 HOTFIX 2 — Panel was bg-slate-50 → action buttons
+            were invisible against it. Now bg-slate-100 with a visible header
+            so users can see + find the controls (was "hiding in the middle"). */}
         {props.canManage || props.canApprove || props.canReopen || isSuperAdmin ? (
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-            <WarehouseBucketActions
-              bucket={b}
-              spent={spent}
-              userId={userId}
-              isSuperAdmin={isSuperAdmin}
-              canManage={!!props.canManage || isSuperAdmin}
-              canApprove={!!props.canApprove || isSuperAdmin}
-              canReopen={!!props.canReopen || isSuperAdmin}
-              lang={lang}
-              onChanged={function () {
-                // Reload this detail view AND the parent list
-                getBucketWithEntries(selectedBucketId).then(function (res) {
-                  setSelectedBucket(res.bucket);
-                  setSelectedEntries(res.entries || []);
-                });
-                if (props.onBucketChanged) props.onBucketChanged();
-              }}
-              toast={toast}
-            />
+          <div className="bg-slate-100 border-2 border-slate-300 rounded-lg overflow-hidden shadow-sm">
+            <div className="bg-slate-700 text-white px-4 py-2 flex items-center gap-2">
+              <span className="text-base">⚙️</span>
+              <span className="text-sm font-extrabold uppercase tracking-wide">{lang === 'ar' ? 'إجراءات الدلو' : 'Bucket Actions'}</span>
+              <span className="text-[10px] text-slate-300 font-semibold ml-auto rtl:ml-0 rtl:mr-auto">
+                {b.status === 'open' && (lang === 'ar' ? 'مفتوح — يمكن إضافة الإدخالات' : 'Open — add entries')}
+                {b.status === 'fully_spent' && (lang === 'ar' ? 'أُنفق بالكامل — جاهز للتقديم' : 'Fully spent — ready to submit')}
+                {b.status === 'pending_approval' && (lang === 'ar' ? 'بانتظار الموافقة' : 'Pending approval')}
+                {b.status === 'closed' && (lang === 'ar' ? 'مُغلق — يمكن إعادة الفتح' : 'Closed — can be reopened')}
+                {b.status === 'cancelled' && (lang === 'ar' ? 'مُلغى' : 'Cancelled')}
+              </span>
+            </div>
+            <div className="p-3">
+              <WarehouseBucketActions
+                bucket={b}
+                spent={spent}
+                userId={userId}
+                isSuperAdmin={isSuperAdmin}
+                canManage={!!props.canManage || isSuperAdmin}
+                canApprove={!!props.canApprove || isSuperAdmin}
+                canReopen={!!props.canReopen || isSuperAdmin}
+                lang={lang}
+                onChanged={function () {
+                  // Reload this detail view AND the parent list
+                  getBucketWithEntries(selectedBucketId).then(function (res) {
+                    setSelectedBucket(res.bucket);
+                    setSelectedEntries(res.entries || []);
+                  });
+                  if (props.onBucketChanged) props.onBucketChanged();
+                }}
+                onDeleted={function () {
+                  // After super-admin delete, bucket no longer exists — go back to list
+                  setSelectedBucket(null);
+                  setSelectedEntries([]);
+                  setSelectedBucketId(null);
+                  if (props.onBucketChanged) props.onBucketChanged();
+                }}
+                toast={toast}
+              />
+            </div>
           </div>
         ) : null}
 

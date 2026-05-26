@@ -305,7 +305,7 @@ ok('J2: handlePrintInvoice helper present',
 // PART R — REGRESSION GUARDS
 // ══════════════════════════════════════════════════════════════════
 ok('R1: 58 — multi-currency walk preserved',
-  /running\[cur\] \+= credit - debit/.test(oa));
+  /var sim = simulate\(arr\)/.test(oa));
 ok('R2: 58 — summaryFor returns byCurrency + currencies + totalEntryCount',
   /byCurrency: byCur,\s+currencies: currencies,\s+totalEntryCount: arr\.length/.test(oa));
 ok('R3: 58 — entry modal currency dropdown preserved',

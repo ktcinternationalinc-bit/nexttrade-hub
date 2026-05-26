@@ -229,7 +229,7 @@ ok('R2: 59 — mini-invoice SQL still in sql/ folder',
 ok('R3: 59 — OpenAccountsTab still has + Invoice button',
   /\+ Invoice/.test(read('src/components/OpenAccountsTab.jsx')));
 ok('R4: 58 — multi-currency walk preserved',
-  /running\[cur\] \+= credit - debit/.test(read('src/components/OpenAccountsTab.jsx')));
+  /var sim = simulate\(arr\)/.test(read('src/components/OpenAccountsTab.jsx')));
 ok('R5: 57 — Shipping rate save instrumentation preserved',
   /console\.log\('\[shipping-rates\] save attempt:'/.test(read('src/components/ShippingRatesTab.jsx')));
 ok('R6: 56 — Inbound Shipments 3-region modal preserved',

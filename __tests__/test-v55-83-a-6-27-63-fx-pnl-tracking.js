@@ -245,7 +245,7 @@ ok('R9: 60 — Product Overview history modal preserved',
 ok('R10: 59 — mini-invoice + Invoice button preserved',
   /\+ Invoice/.test(read('src/components/OpenAccountsTab.jsx')));
 ok('R11: 58 — multi-currency walk preserved',
-  /running\[cur\] \+= credit - debit/.test(read('src/components/OpenAccountsTab.jsx')));
+  /var sim = simulate\(arr\)/.test(read('src/components/OpenAccountsTab.jsx')));
 ok('R12: 55 — openaccounts in FINANCE sidebar preserved',
   /\{ group: 'FINANCE', items: \['sales', 'treasury', 'checks', 'debts', 'openaccounts'/.test(page));
 ok('R13: 54 — amber header version pill preserved',

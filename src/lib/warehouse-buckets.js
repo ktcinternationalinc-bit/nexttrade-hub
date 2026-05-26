@@ -523,6 +523,76 @@ export async function cancelBucket(params) {
   }
 }
 
+// v55.83-A.6.27.72 HOTFIX 2 — Super-admin destructive delete.
+// Fully removes a bucket, ALL its entries, and the linked treasury rows
+// (both the original placeholder cash-out AND any refund-credit row from
+// a prior cancel). This is the nuclear option — for typo/test cleanup
+// where audit-trail-via-cancel isn't enough.
+//
+// Sequence:
+//   1. Verify bucket exists.
+//   2. DELETE warehouse_bucket_entries WHERE bucket_id = X  (cascade-safe)
+//   3. DELETE treasury WHERE bucket_id = X  (placeholder + refund + any cancel reversal)
+//   4. DELETE warehouse_buckets WHERE id = X
+// Each step is best-effort; we log + continue on partial failures so a stuck
+// FK won't leave the bucket alive but its entries gone.
+export async function deleteBucket(bucketId, userId) {
+  if (!bucketId) return { ok: false, error: 'bucketId required' };
+  var bRes = await supabase.from('warehouse_buckets').select('id, reference_slug, amount, currency').eq('id', bucketId).maybeSingle();
+  if (bRes.error || !bRes.data) return { ok: false, error: 'Bucket not found' };
+  var b = bRes.data;
+  var errors = [];
+
+  // 1. Delete entries first (FK cleanup)
+  try {
+    var delEntries = await supabase.from('warehouse_bucket_entries').delete().eq('bucket_id', bucketId);
+    if (delEntries.error) {
+      errors.push('entries: ' + delEntries.error.message);
+      console.error('[buckets] delete entries failed:', delEntries.error);
+    }
+  } catch (err) {
+    errors.push('entries: ' + ((err && err.message) || String(err)));
+  }
+
+  // 2. Delete treasury rows linked to this bucket (placeholder + any refund/reversal)
+  try {
+    var delTreasury = await supabase.from('treasury').delete().eq('bucket_id', bucketId);
+    if (delTreasury.error) {
+      errors.push('treasury: ' + delTreasury.error.message);
+      console.error('[buckets] delete treasury rows failed:', delTreasury.error);
+    }
+  } catch (err) {
+    errors.push('treasury: ' + ((err && err.message) || String(err)));
+  }
+
+  // 3. Delete the bucket itself
+  try {
+    var delBucket = await supabase.from('warehouse_buckets').delete().eq('id', bucketId);
+    if (delBucket.error) {
+      return { ok: false, error: 'Bucket delete blocked: ' + delBucket.error.message + (errors.length ? ' (partial cleanup errors: ' + errors.join('; ') + ')' : '') };
+    }
+  } catch (err) {
+    return { ok: false, error: 'Bucket delete threw: ' + ((err && err.message) || String(err)) };
+  }
+
+  // Best-effort audit log entry (table is optional)
+  try {
+    await dbInsert('audit_log', {
+      table_name: 'warehouse_buckets',
+      record_id: bucketId,
+      action: 'DELETE',
+      changes: JSON.stringify({ ref: b.reference_slug, amt: b.amount, cur: b.currency }),
+      user_id: userId || null,
+    }, userId);
+  } catch (_) { /* audit_log may not exist; ignore */ }
+
+  return {
+    ok: true,
+    reference_slug: b.reference_slug,
+    partialErrors: errors.length ? errors : null,
+  };
+}
+
 // ─── READS ─────────────────────────────────────────────────────────
 
 // Get all buckets, optionally filtered.

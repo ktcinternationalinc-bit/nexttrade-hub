@@ -63,32 +63,31 @@ ok('A8: SQL includes backout block (commented)',
 // PART B — Per-currency running balance walk
 // ══════════════════════════════════════════════════════════════════
 
-ok('B1: entriesByAccount comment documents per-currency walk',
-  /Per-currency running balance/.test(oa));
+ok('B1: entriesByAccount uses FIFO simulation as source of truth (v72 HOTFIX 3)',
+  /entriesByAccount[\s\S]{0,300}HOTFIX 3 — Per-entry running balance now comes from the\s+\/\/ FIFO simulation trail/.test(oa));
 ok('B2: each entry gets normalized _currency (uppercase, default USD)',
   /var cur = String\(entry\.currency \|\| 'USD'\)\.toUpperCase\(\)\.trim\(\) \|\| 'USD';\s+entry\._currency = cur/.test(oa));
-ok('B3: running is keyed by currency, initialized lazily',
-  /var running = \{\}; \/\/ currency code → running balance/.test(oa) &&
-  /if \(!\(cur in running\)\) running\[cur\] = 0/.test(oa));
-ok('B4: per-currency add: running[cur] += credit - debit',
-  /running\[cur\] \+= credit - debit/.test(oa));
-ok('B5: each entry gets _running_by_currency snapshot (deep copy)',
-  /entry\._running_by_currency = Object\.assign\(\{\}, running\)/.test(oa));
+ok('B3: per-account simulation runs once via simulate(arr)',
+  /var sim = simulate\(arr\)/.test(oa));
+ok('B4: snapshot from FIFO trail, not credit-debit running sum',
+  /var snap = t\.snapshotAfter[\s\S]{0,400}netForThisCur = \(snap\.theirOpenInvoices - snap\.theirPrepaid\) - \(snap\.ourOpenBills - snap\.ourPrepaid\)/.test(oa));
+ok('B5: each entry gets _running_by_currency snapshot keyed by currency',
+  /entry\._running_by_currency = nets/.test(oa));
 ok('B6: back-compat _running_balance kept for legacy consumers',
-  /Back-compat: legacy code referenced _running_balance singular[\s\S]{0,200}entry\._running_balance = running\[cur\]/.test(oa));
+  /entry\._running_balance = netForThisCur/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — summaryFor returns per-currency shape
 // ══════════════════════════════════════════════════════════════════
 
-ok('C1: summaryFor accumulates into byCur keyed by currency',
-  /if \(!byCur\[cur\]\) byCur\[cur\] = \{ credit: 0, debit: 0, balance: 0, count: 0 \}/.test(oa));
+ok('C1: summaryFor seeds byCur from FIFO simulate result',
+  /sim\.currencies\.forEach\(function \(cur\) \{[\s\S]{0,500}balance: b\.netBalance/.test(oa));
 ok('C2: summaryFor sorts currencies USD-first then alphabetical',
   /if \(a === 'USD' && b !== 'USD'\) return -1;\s+if \(b === 'USD' && a !== 'USD'\) return 1;\s+return a\.localeCompare\(b\)/.test(oa));
 ok('C3: summaryFor returns byCurrency + currencies + totalEntryCount',
   /return \{\s+byCurrency: byCur,\s+currencies: currencies,\s+totalEntryCount: arr\.length/.test(oa));
-ok('C4: summaryFor preserves legacy totalCredit/totalDebit/balance for back-compat',
-  /\/\/ Legacy fields — back-compat only\s+totalCredit: legacyCredit,\s+totalDebit: legacyDebit,\s+balance: legacyCredit - legacyDebit/.test(oa));
+ok('C4: summaryFor preserves legacy totalCredit/totalDebit for back-compat',
+  /\/\/ Legacy fields — back-compat only\s+totalCredit: legacyCredit,\s+totalDebit: legacyDebit/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — grandTotals per-currency

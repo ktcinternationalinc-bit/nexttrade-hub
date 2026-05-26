@@ -148,55 +148,91 @@ export default function OpenAccountsTab(props) {
       if (!byAcc[e.account_id]) byAcc[e.account_id] = [];
       byAcc[e.account_id].push(e);
     });
-    // v55.83-A.6.27.58 — Per-currency running balance.
-    // Walk each account's entries (already sorted by date asc then created_at
-    // asc from the DB query). For each entry, track a separate running balance
-    // per currency. Each entry gets:
-    //   entry._currency           — its own currency (normalized, defaults USD)
-    //   entry._running_by_currency — full map of all running balances after this entry
-    //                                (so the ledger table can show parallel running
-    //                                columns for every currency in this account)
+    // v55.83-A.6.27.72 HOTFIX 3 — Per-entry running balance now comes from the
+    // FIFO simulation trail (not credit−debit running sum). The legacy
+    // _running_balance / _running_by_currency fields previously showed
+    // simple cumulative debit/credit, which CONTRADICTED the 4-pot strip.
+    // Now both come from the same simulate() source → numbers always agree.
     Object.keys(byAcc).forEach(function (accId) {
       var arr = byAcc[accId];
-      var running = {}; // currency code → running balance
+      // Run the FIFO simulation once per account
+      var sim = simulate(arr);
+      // Build a quick lookup: entry id → snapshotAfter (from trail)
+      var trailMap = {};
+      sim.trail.forEach(function (t) {
+        if (t.entry && t.entry.id) trailMap[t.entry.id] = t;
+      });
       arr.forEach(function (entry) {
         var cur = String(entry.currency || 'USD').toUpperCase().trim() || 'USD';
         entry._currency = cur;
-        var credit = Number(entry.credit_amount || 0);
-        var debit = Number(entry.debit_amount || 0);
-        if (!(cur in running)) running[cur] = 0;
-        running[cur] += credit - debit;
-        // Snapshot all running balances after this entry (deep copy)
-        entry._running_by_currency = Object.assign({}, running);
-        // Back-compat: legacy code referenced _running_balance singular — keep
-        // a "for this entry's currency only" value for any old consumer.
-        entry._running_balance = running[cur];
+        var t = trailMap[entry.id];
+        if (t) {
+          // FIFO snapshot: { theirOpenInvoices, ourOpenBills, theirPrepaid, ourPrepaid }
+          // Net for this currency = (theirOpenInvoices - theirPrepaid) - (ourOpenBills - ourPrepaid)
+          // Positive = in our favor; negative = against us.
+          var snap = t.snapshotAfter;
+          var netForThisCur = (snap.theirOpenInvoices - snap.theirPrepaid) - (snap.ourOpenBills - snap.ourPrepaid);
+          // _running_by_currency: for each currency that has had activity by this row,
+          // snapshot the net at this point in time. But the FIFO trail only carries
+          // the CURRENT row's currency snapshot — we need to reconstruct full map.
+          // Walk the entire trail up to and including this row, accumulating per-cur nets.
+          var nets = {};
+          for (var i = 0; i < sim.trail.length; i++) {
+            var ti = sim.trail[i];
+            var snapI = ti.snapshotAfter;
+            var ciCur = ti.currency;
+            nets[ciCur] = (snapI.theirOpenInvoices - snapI.theirPrepaid) - (snapI.ourOpenBills - snapI.ourPrepaid);
+            if (ti.entry && ti.entry.id === entry.id) break;
+          }
+          entry._running_by_currency = nets;
+          entry._running_balance = netForThisCur;
+        } else {
+          // Fallback if entry isn't in trail (shouldn't happen)
+          entry._running_by_currency = {};
+          entry._running_balance = 0;
+        }
       });
     });
     return byAcc;
   }, [accounts, entries]);
 
-  // v55.83-A.6.27.58 — Per-currency summary.
-  // Returns { byCurrency: { USD: {credit, debit, balance, count}, EGP: {...} },
-  //           currencies: ['USD', 'EGP'],   // sorted, only currencies present
-  //           totalEntryCount: N }
-  // Back-compat fields totalCredit/totalDebit/balance are kept as the SUM ACROSS
-  // ALL CURRENCIES (which is meaningless for display — UI should not show this —
-  // but old code that hasn't been migrated still calls them).
+  // v55.83-A.6.27.72 HOTFIX 3 — summaryFor now returns FIFO-derived balance fields:
+  //   byCurrency[cur].balance       — FIFO net (in our favor positive, against us negative)
+  //   byCurrency[cur].theyOweUs     — open sales invoice total (FIFO)
+  //   byCurrency[cur].weOweThem     — open vendor bill total (FIFO)
+  //   byCurrency[cur].theirPrepaid  — their unapplied payment credits with us
+  //   byCurrency[cur].ourPrepaid    — our unapplied payment credits with them
+  //   byCurrency[cur].credit        — raw sum (back-compat, for Totals row display)
+  //   byCurrency[cur].debit         — raw sum (back-compat)
+  //   byCurrency[cur].count         — entry count for this currency
+  // Single source of truth — same simulate() that drives the 4-pot strip.
   function summaryFor(accountId) {
     var arr = entriesByAccount[accountId] || [];
+    var sim = simulate(arr);
     var byCur = {};
+    // Initialize per-currency from simulate + count raw credit/debit alongside
+    sim.currencies.forEach(function (cur) {
+      var b = sim.byCurrency[cur];
+      byCur[cur] = {
+        credit: 0,
+        debit: 0,
+        count: 0,
+        balance: b.netBalance,   // FIFO net (THE source of truth)
+        theyOweUs: b.theirOpenInvoices,
+        weOweThem: b.ourOpenBills,
+        theirPrepaid: b.theirPrepaid,
+        ourPrepaid: b.ourPrepaid,
+      };
+    });
+    // Walk entries to fill raw credit/debit/count (for the totals row display)
     arr.forEach(function (e) {
       var cur = e._currency || String(e.currency || 'USD').toUpperCase().trim() || 'USD';
-      if (!byCur[cur]) byCur[cur] = { credit: 0, debit: 0, balance: 0, count: 0 };
-      var credit = Number(e.credit_amount || 0);
-      var debit = Number(e.debit_amount || 0);
-      byCur[cur].credit += credit;
-      byCur[cur].debit += debit;
+      if (!byCur[cur]) {
+        byCur[cur] = { credit: 0, debit: 0, count: 0, balance: 0, theyOweUs: 0, weOweThem: 0, theirPrepaid: 0, ourPrepaid: 0 };
+      }
+      byCur[cur].credit += Number(e.credit_amount || 0);
+      byCur[cur].debit += Number(e.debit_amount || 0);
       byCur[cur].count += 1;
-    });
-    Object.keys(byCur).forEach(function (cur) {
-      byCur[cur].balance = byCur[cur].credit - byCur[cur].debit;
     });
     // Sort currencies — USD first if present (most common), then alphabetical
     var currencies = Object.keys(byCur).sort(function (a, b) {
@@ -204,11 +240,12 @@ export default function OpenAccountsTab(props) {
       if (b === 'USD' && a !== 'USD') return 1;
       return a.localeCompare(b);
     });
-    // Back-compat aggregates (DO NOT use for display — sums different currencies)
-    var legacyCredit = 0, legacyDebit = 0;
+    // Legacy aggregates kept for back-compat (do NOT use for display — sums across currencies)
+    var legacyCredit = 0, legacyDebit = 0, legacyBalance = 0;
     currencies.forEach(function (cur) {
       legacyCredit += byCur[cur].credit;
       legacyDebit += byCur[cur].debit;
+      legacyBalance += byCur[cur].balance;
     });
     return {
       byCurrency: byCur,
@@ -217,7 +254,7 @@ export default function OpenAccountsTab(props) {
       // Legacy fields — back-compat only
       totalCredit: legacyCredit,
       totalDebit: legacyDebit,
-      balance: legacyCredit - legacyDebit,
+      balance: legacyBalance,
       entryCount: arr.length,
     };
   }

@@ -225,7 +225,7 @@ ok('R7: 60 — Import Shipment label preserved (id stays importstock)',
 ok('R8: 59 — mini-invoice + Invoice button preserved',
   /\+ Invoice/.test(oa) && /printOpenAccountInvoice/.test(oa));
 ok('R9: 58 — multi-currency walk preserved',
-  /running\[cur\] \+= credit - debit/.test(oa));
+  /var sim = simulate\(arr\)/.test(oa));
 ok('R10: 55 — openaccounts in FINANCE sidebar preserved',
   /\{ group: 'FINANCE', items: \['sales', 'treasury', 'checks', 'debts', 'openaccounts'/.test(page));
 ok('R11: 54 — amber header version pill preserved',

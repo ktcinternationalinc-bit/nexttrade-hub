@@ -89,11 +89,13 @@ ok('C2: detects "table does not exist" error and tells user to run the migration
   /relation.*open_accounts.*does not exist[\s\S]{0,300}Run SQL migration v55\.83-A\.6\.27\.52/.test(oa));
 ok('C3: entriesByAccount memo groups by account_id',
   /var entriesByAccount = useMemo[\s\S]{0,500}byAcc\[e\.account_id\]/.test(oa));
-ok('C4: running balance walks per-currency (credit adds, debit subtracts, keyed by currency in .58)',
-  /var running = \{\};[\s\S]{0,500}running\[cur\] \+= credit - debit/.test(oa));
-ok('C5: summaryFor returns per-currency shape + back-compat legacy fields (.58)',
-  /function summaryFor\(accountId\) \{[\s\S]{0,2000}byCurrency: byCur,\s+currencies: currencies/.test(oa) &&
-  /totalCredit: legacyCredit,\s+totalDebit: legacyDebit,\s+balance: legacyCredit - legacyDebit,\s+entryCount: arr\.length/.test(oa));
+ok('C4: running balance walks per-currency via FIFO simulate (v72 HOTFIX 3 replaces credit-debit running)',
+  /var sim = simulate\(arr\)/.test(oa) &&
+  /entry\._running_by_currency = nets/.test(oa));
+ok('C5: summaryFor returns per-currency shape with FIFO balance + back-compat legacy fields',
+  /function summaryFor\(accountId\) \{[\s\S]{0,2500}byCurrency: byCur,\s+currencies: currencies/.test(oa) &&
+  /balance: b\.netBalance/.test(oa) &&
+  /totalCredit: legacyCredit,\s+totalDebit: legacyDebit/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Save / delete logic

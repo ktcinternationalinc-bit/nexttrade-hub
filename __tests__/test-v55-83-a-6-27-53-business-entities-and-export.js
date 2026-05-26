@@ -183,11 +183,12 @@ ok('R1: 52 — open_accounts SQL still loads (table referenced in load query)',
   /supabase\.from\('open_accounts'\)\.select\('\*'\)\.order\('account_name'\)/.test(oa));
 ok('R2: 52 — open_account_entries still ordered by entry_date asc then created_at asc',
   /supabase\.from\('open_account_entries'\)\.select\('\*'\)\.order\('entry_date', \{ ascending: true \}\)\.order\('created_at', \{ ascending: true \}\)/.test(oa));
-ok('R3: 52 — running balance computation preserved (credit adds, debit subtracts) — now per-currency in .58',
-  /running\[cur\] \+= credit - debit/.test(oa) &&
-  /entry\._running_balance = running\[cur\]/.test(oa));
-ok('R4: 52 — summaryFor still returns balance + entryCount (back-compat legacy fields preserved in .58)',
-  /balance: legacyCredit - legacyDebit,\s+entryCount: arr\.length/.test(oa));
+ok('R3: 52 — running balance now uses FIFO simulation (v72 HOTFIX 3 supersedes .58 credit-debit walk)',
+  /var sim = simulate\(arr\)/.test(oa) &&
+  /entry\._running_balance = netForThisCur/.test(oa));
+ok('R4: 52 — summaryFor still returns balance + entryCount (FIFO-derived balance in HOTFIX 3)',
+  /balance: legacyBalance,\s+entryCount: arr\.length/.test(oa) &&
+  /balance: b\.netBalance/.test(oa));
 ok('R5: 52 — 5-type transaction picker (v55.83-A.6.27.72 replaces CREDIT/DEBIT radio)',
   /Sales Invoice/.test(oa) && /Vendor Bill/.test(oa) && /Payment Received/.test(oa) && /Payment Sent/.test(oa));
 ok('R6: 52 — entry modal validates description + date + positive amount',

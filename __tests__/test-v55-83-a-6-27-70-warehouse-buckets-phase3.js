@@ -75,8 +75,8 @@ ok('A15: form locks out closed / cancelled / pending_approval buckets',
 // ══════════════════════════════════════════════════════════════════
 ok('B1: default export WarehouseBucketActions',
   /export default function WarehouseBucketActions\(props\)/.test(ac));
-ok('B2: imports all 4 lifecycle helpers',
-  /import \{\s+submitBucketForApproval,\s+approveAndCloseBucket,\s+reopenBucket,\s+cancelBucket,\s+\} from '\.\.\/lib\/warehouse-buckets'/.test(ac));
+ok('B2: imports all 4 lifecycle helpers (+ optional deleteBucket from HOTFIX 2)',
+  /import \{\s+submitBucketForApproval,\s+approveAndCloseBucket,\s+reopenBucket,\s+cancelBucket,(\s+deleteBucket,)?\s+\} from '\.\.\/lib\/warehouse-buckets'/.test(ac));
 ok('B3: handleSubmit blocks overspent buckets (bilingual — A.6.27.71 HOTFIX 3)',
   /if \(overspent\) \{\s+toast\.error\(ar \? '[\s\S]{0,120}' : 'Cannot submit — bucket is overspent/.test(ac));
 ok('B4: handleSubmitAndApprove blocks self-approve for non-super-admin (bilingual)',
