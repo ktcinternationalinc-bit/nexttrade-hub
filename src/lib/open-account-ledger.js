@@ -30,41 +30,52 @@
 //   Recomputed from scratch every time entries change.
 
 export var TRANSACTION_TYPES = {
+  // v55.83-A.6.27.72 HOTFIX 12 — Color-coding spec from Max:
+  //   AR-affecting rows (sales_invoice + payment_received): BLUE description + amount
+  //   AP-affecting rows (vendor_bill + payment_sent):       ORANGE description + amount
+  // descCls = color class applied to the description text on the row
+  // amountCls = color class applied to the AR Side / AP Side numeric cells
   sales_invoice: {
     label: 'Sales Invoice', labelAr: 'فاتورة بيع',
     sublabel: 'We billed them', sublabelAr: 'فوترناهم',
     icon: '📤', side: 'credit', cashFlow: null,
-    pillCls: 'bg-blue-100 text-blue-900', rowCls: 'bg-blue-50',
+    pillCls: 'bg-blue-100 text-blue-900', rowCls: 'bg-blue-50/40',
+    descCls: 'text-blue-900', amountCls: 'text-blue-800',
   },
   vendor_bill: {
     label: 'Vendor Bill', labelAr: 'فاتورة مورد',
     sublabel: 'They billed us', sublabelAr: 'فوترونا',
     icon: '📥', side: 'debit', cashFlow: null,
-    pillCls: 'bg-amber-100 text-amber-900', rowCls: 'bg-amber-50',
+    pillCls: 'bg-orange-100 text-orange-900', rowCls: 'bg-orange-50/40',
+    descCls: 'text-orange-900', amountCls: 'text-orange-800',
   },
   payment_received: {
     label: 'Payment Received', labelAr: 'دفعة مستلمة',
     sublabel: 'They paid us', sublabelAr: 'دفعوا لنا',
     icon: '💰', side: 'credit', cashFlow: 'in',
-    pillCls: 'bg-emerald-100 text-emerald-900', rowCls: null,
+    pillCls: 'bg-blue-100 text-blue-900', rowCls: 'bg-blue-50/20',
+    descCls: 'text-blue-900', amountCls: 'text-blue-800',
   },
   payment_sent: {
     label: 'Payment Sent', labelAr: 'دفعة مرسلة',
     sublabel: 'We paid them', sublabelAr: 'دفعنا لهم',
     icon: '💸', side: 'debit', cashFlow: 'out',
-    pillCls: 'bg-red-100 text-red-900', rowCls: null,
+    pillCls: 'bg-orange-100 text-orange-900', rowCls: 'bg-orange-50/20',
+    descCls: 'text-orange-900', amountCls: 'text-orange-800',
   },
   credit_adjustment: {
     label: 'Credit/Adjustment', labelAr: 'تعديل',
     sublabel: 'Manual adjustment', sublabelAr: 'تعديل يدوي',
     icon: '⚖️', side: null, cashFlow: null,
     pillCls: 'bg-slate-200 text-slate-800', rowCls: null,
+    descCls: 'text-slate-800', amountCls: 'text-slate-800',
   },
   offset: {
     label: 'Offset', labelAr: 'مقاصة',
     sublabel: 'Balance offset', sublabelAr: 'مقاصة رصيد',
     icon: '🔄', side: null, cashFlow: null,
     pillCls: 'bg-purple-100 text-purple-900', rowCls: 'bg-purple-50',
+    descCls: 'text-purple-900', amountCls: 'text-purple-800',
   },
 };
 

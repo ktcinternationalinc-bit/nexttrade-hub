@@ -224,8 +224,8 @@ ok('K8: Delete button rendered in row (red-700 bg + white text)',
   /onClick=\{function \(\) \{ deleteProduct\(p\); \}\}[\s\S]{0,500}bg-red-700 hover:bg-red-800 text-white/.test(pm));
 ok('K9: Deactivate button uses high-contrast amber-600 + white (was bg-red-100 + text-red-900)',
   /bg-amber-600 hover:bg-amber-700 text-white/.test(pm));
-ok('K10: Edit + Copy buttons upgraded to solid dark + white',
-  /bg-indigo-700 hover:bg-indigo-800 text-white/.test(pm) &&
+ok('K10: Edit button upgraded to amber-400 with dark text + ring (HOTFIX 12: high-contrast); Copy button stays solid blue',
+  /bg-amber-400 hover:bg-amber-500 text-slate-900[\s\S]{0,200}ring-1 ring-amber-700/.test(pm) &&
   /bg-blue-700 hover:bg-blue-800 text-white/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════

@@ -1243,9 +1243,10 @@ export default function InventoryProductMaster(props) {
                   {canEdit && (
                     <button
                       onClick={function () { openEdit(p); }}
-                      className="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-800 text-white rounded font-extrabold shadow"
+                      className="px-3 py-1.5 text-[11px] bg-amber-400 hover:bg-amber-500 text-slate-900 rounded font-extrabold shadow ring-1 ring-amber-700"
+                      title="Edit this product"
                     >
-                      Edit
+                      ✏️ Edit
                     </button>
                   )}
                   {/* v55.83-A.6.27.42 — Create Variant button (only on family templates).
@@ -1254,7 +1255,7 @@ export default function InventoryProductMaster(props) {
                   {canEdit && p.is_family_template === true && (
                     <button
                       onClick={function () { openCloneTemplate(p); }}
-                      className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-extrabold shadow"
+                      className="px-3 py-1.5 text-[11px] bg-purple-600 hover:bg-purple-700 text-white rounded font-extrabold shadow"
                       title="Create an actual Product from this Template blueprint (independent — edits/deletes to template won't affect it)"
                     >
                       + Product
@@ -1263,25 +1264,25 @@ export default function InventoryProductMaster(props) {
                   {canEdit && (
                     <button
                       onClick={function () { openDuplicate(p); }}
-                      className="px-2 py-1 text-[10px] bg-blue-700 hover:bg-blue-800 text-white rounded font-extrabold shadow"
+                      className="px-3 py-1.5 text-[11px] bg-blue-700 hover:bg-blue-800 text-white rounded font-extrabold shadow"
                       title="Duplicate this product as a starting point for a similar one"
                     >
-                      Copy
+                      📋 Copy
                     </button>
                   )}
                   {canEdit && (
                     <button
                       onClick={function () { deleteProduct(p); }}
-                      className="px-2 py-1 text-[10px] bg-red-700 hover:bg-red-800 text-white rounded font-extrabold shadow"
+                      className="px-3 py-1.5 text-[11px] bg-red-700 hover:bg-red-800 text-white rounded font-extrabold shadow"
                       title="Permanently delete this product. Only allowed if it has zero references anywhere."
                     >
-                      Delete
+                      🗑️ Delete
                     </button>
                   )}
                   {canEdit && (
                     <button
                       onClick={function () { toggleActive(p); }}
-                      className={'px-2 py-1 text-[10px] rounded font-extrabold shadow ' + (p.active ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white')}
+                      className={'px-3 py-1.5 text-[11px] rounded font-extrabold shadow ' + (p.active ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white')}
                     >
                       {p.active ? 'Deactivate' : 'Reactivate'}
                     </button>

@@ -1367,17 +1367,17 @@ export default function OpenAccountsTab(props) {
         var hasPrepaid = (t.theirPrepaid > 0.005 || t.ourPrepaid > 0.005);
         return (
           <div key={cur} className="grid grid-cols-3 gap-2">
-            <div className="bg-emerald-700 text-white rounded p-2 shadow">
+            <div className="bg-blue-700 text-white rounded p-2 shadow">
               <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Open AR</div>
               <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.theyOweUs)} {cur}</div>
               <div className="text-[10px] font-semibold opacity-80">they still owe us</div>
             </div>
-            <div className="bg-red-700 text-white rounded p-2 shadow">
+            <div className="bg-orange-700 text-white rounded p-2 shadow">
               <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Open AP</div>
               <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.weOweThem)} {cur}</div>
               <div className="text-[10px] font-semibold opacity-80">we still owe them</div>
             </div>
-            <div className={(t.balance >= 0 ? 'bg-emerald-800' : 'bg-red-800') + ' text-white rounded p-2 shadow'}>
+            <div className={(t.balance >= 0 ? 'bg-blue-800' : 'bg-orange-800') + ' text-white rounded p-2 shadow'}>
               <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Net Balance</div>
               <div className="text-xl font-extrabold mt-0.5">{fmtSigned(t.balance)} {cur}</div>
               <div className="text-[10px] font-semibold opacity-90">
@@ -1556,13 +1556,12 @@ export default function OpenAccountsTab(props) {
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Description</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Reference</th>
                         <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Currency</th>
-                        {/* v55.83-A.6.27.72 HOTFIX 11 — Standard accounting layout: AR Side / AP Side.
-                            Groups each row by which ledger account it affects (NOT by cash-flow direction).
-                            All values positive. Type column tells you whether the row INCREASES the side
-                            (Sales Invoice / Vendor Bill) or REDUCES it (Payment Received / Payment Sent). */}
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Activity on the Accounts Receivable side — sales invoices billed to them and payments they sent us">AR Side</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Activity on the Accounts Payable side — vendor bills they billed us and payments we sent them">AP Side</th>
-                        {/* Single Remaining column — fills only on invoice/bill rows with unsettled balance. */}
+                        {/* v55.83-A.6.27.72 HOTFIX 12 — AR/AP color: blue / orange per Max's spec.
+                            Standard accounting layout: AR Side / AP Side / Open Balance.
+                            Groups each row by which ledger account it affects. */}
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-blue-900 border-b-2 border-slate-300 bg-blue-50" title="Accounts Receivable activity — sales invoices billed to them, payments they sent us">AR Side</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-orange-900 border-b-2 border-slate-300 bg-orange-50" title="Accounts Payable activity — vendor bills they billed us, payments we sent them">AP Side</th>
+                        {/* Single Open Balance column — fills only on invoice/bill rows. */}
                         <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance — the unpaid portion of an invoice or bill">Open Balance</th>
                         {/* v55.83-A.6.27.72 HOTFIX 11 — "Net" renamed to "Running Balance" (these are
                             cumulative running balances after each row, NOT per-row nets). */}
@@ -1606,11 +1605,11 @@ export default function OpenAccountsTab(props) {
                                 <span>{typeMeta.label}</span>
                               </span>
                             </td>
-                            <td className="px-3 py-1.5 text-slate-900">
+                            <td className="px-3 py-1.5">
                               {entry.linked_open_invoice_id ? (
                                 <button
                                   onClick={function () { openInvoiceFromEntry(entry); }}
-                                  className="text-left hover:underline focus:underline w-full"
+                                  className={'text-left hover:underline focus:underline w-full ' + (typeMeta.descCls || 'text-slate-900')}
                                   title="This entry was auto-created from an invoice. Click to open the invoice."
                                 >
                                   <div className="font-bold flex items-center gap-1">
@@ -1619,30 +1618,27 @@ export default function OpenAccountsTab(props) {
                                   </div>
                                 </button>
                               ) : (
-                                <div className="font-bold">{entry.description}</div>
+                                <div className={'font-bold ' + (typeMeta.descCls || 'text-slate-900')}>{entry.description}</div>
                               )}
                               {entry.notes && <div className="text-[10px] text-slate-600 italic">{entry.notes}</div>}
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
                             <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
-                            {/* v55.83-A.6.27.72 HOTFIX 11 — Standard accounting two-column display.
-                                AR Side (emerald): all activity affecting Accounts Receivable.
-                                AP Side (red): all activity affecting Accounts Payable.
-                                All values positive — direction (increase vs decrease) is shown by Type. */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-emerald-800 bg-emerald-50/30">
+                            {/* v55.83-A.6.27.72 HOTFIX 12 — AR Side: blue per Max's spec (was emerald) */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-blue-800 bg-blue-50/40">
                               {(function () {
                                 var s = arApSide(entry);
                                 return s.ar > 0.005 ? fmtNum(s.ar) : <span className="text-slate-300">—</span>;
                               })()}
                             </td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-red-700 bg-red-50/30">
+                            {/* v55.83-A.6.27.72 HOTFIX 12 — AP Side: orange per Max's spec (was red) */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-orange-800 bg-orange-50/40">
                               {(function () {
                                 var s = arApSide(entry);
                                 return s.ap > 0.005 ? fmtNum(s.ap) : <span className="text-slate-300">—</span>;
                               })()}
                             </td>
-                            {/* Remaining — single column, fills only on invoice/bill rows with unsettled balance.
-                                Color matches the side (emerald for AR, red for AP) so direction is still clear. */}
+                            {/* Open Balance — single column, colored by side (blue=AR, orange=AP) */}
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50">
                               {(function () {
                                 if (txnType !== 'sales_invoice' && txnType !== 'vendor_bill') {
@@ -1651,7 +1647,7 @@ export default function OpenAccountsTab(props) {
                                 if (pr.remaining < 0.005) {
                                   return <span className="text-emerald-600 text-[10px]" title="Fully settled">✓ paid</span>;
                                 }
-                                var cls = txnType === 'sales_invoice' ? 'text-emerald-900' : 'text-red-900';
+                                var cls = txnType === 'sales_invoice' ? 'text-blue-900' : 'text-orange-900';
                                 return <span className={cls}>{fmtNum(pr.remaining)}</span>;
                               })()}
                             </td>
@@ -1712,7 +1708,7 @@ export default function OpenAccountsTab(props) {
                           }
                         });
                         var net = totalAR - totalAP;
-                        var netCls = net > 0.005 ? 'text-emerald-300' : net < -0.005 ? 'text-red-300' : 'text-slate-200';
+                        var netCls = net > 0.005 ? 'text-blue-300' : net < -0.005 ? 'text-orange-300' : 'text-slate-200';
                         // colSpan calculation: 4 left text cols + 3 money cols + N currency cols + actions
                         var totalCols = 4 + 3 + s.currencies.length + (canEdit ? 1 : 0);
                         // First currency block has a heavier top border; subsequent blocks have a subtle one
@@ -1734,7 +1730,7 @@ export default function OpenAccountsTab(props) {
                           // Total AR row — value sits in AR Side column for visual alignment
                           <tr key={cur + '-ar'} className="bg-slate-800 text-white">
                             <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AR (They Owe Us)</td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-emerald-900/40 text-emerald-100">
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-blue-900/40 text-blue-100">
                               {totalAR > 0.005 ? fmtNum(totalAR) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
                             <td colSpan={2 + s.currencies.length + (canEdit ? 1 : 0)}></td>
@@ -1743,7 +1739,7 @@ export default function OpenAccountsTab(props) {
                           <tr key={cur + '-ap'} className="bg-slate-800 text-white">
                             <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AP (We Owe Them)</td>
                             <td className="px-3 py-1.5"></td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-red-900/40 text-red-100">
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-orange-900/40 text-orange-100">
                               {totalAP > 0.005 ? fmtNum(totalAP) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
                             <td colSpan={1 + s.currencies.length + (canEdit ? 1 : 0)}></td>
