@@ -1,15 +1,20 @@
-/* v72 HOTFIX 11 — Standard accounting two-column layout + segregated totals + FX-unified card.
+/* v72 HOTFIX 11 FINAL — Standard accounting layout per the prescriptive spec.
  *
- * Max pasted feedback from Grok pointing out the previous signed-Amount layout was
- * hostile to accounting intuition and that the Totals row was summing assets + liabilities
- * as positive magnitudes (mathematically meaningless).
+ * Table columns:
+ *   Date | Type | Description | Reference | Currency | AR Side | AP Side | Remaining | Running Balance USD | Running Balance EGP | Actions
  *
- * Fix per the prescription:
- *   1. Single Amount column → two columns "Amount In" / "Amount Out", all positive values
- *   2. Totals row: segregate Open AR (sales invoices) from Open AP (vendor bills); NO blind sums
- *   3. "Net USD/EGP" columns → "Running USD/EGP" (they're cumulative balances, not row-level nets)
- *   4. New Global Net Position card converts all currencies to base USD via fx_rates table
- */
+ * Per-row routing:
+ *   Sales Invoice    → AR Side  (increases AR)
+ *   Payment Received → AR Side  (reduces AR)
+ *   Vendor Bill      → AP Side  (increases AP)
+ *   Payment Sent     → AP Side  (reduces AP)
+ *
+ * All values positive; the Type column tells you whether the row INCREASES or REDUCES the side.
+ *
+ * Totals: per-currency Summary block (Total AR / Total AP / Net Position rows).
+ * Net Position row spells out arithmetic + "in our favor" / "against us" sub-label.
+ *
+ * Global Net Position card: converts all currencies to USD via fx_rates. */
 var path = require('path');
 var fs = require('fs');
 
@@ -21,171 +26,152 @@ function ok(name, cond) {
 var oa = fs.readFileSync(path.join(__dirname, '..', 'src/components/OpenAccountsTab.jsx'), 'utf8');
 var exp = fs.readFileSync(path.join(__dirname, '..', 'src/lib/open-account-export.js'), 'utf8');
 
-console.log('\n── HOTFIX 11 — Helpers ──');
+console.log('\n── HOTFIX 11 — arApSide helper ──');
 
-ok('A1: inOutAmount() helper returns positive {in, out} per direction',
-  /function inOutAmount\(entry\)[\s\S]{0,1500}return \{ in: credit, out: 0 \}[\s\S]{0,1500}return \{ in: 0, out: debit \}/.test(oa));
+ok('A1: arApSide() returns {ar, ap} routed by transaction_type',
+  /function arApSide\(entry\)/.test(oa));
 
-ok('A2: sales_invoice routes to In side',
-  /case 'sales_invoice':\s+return \{ in: credit, out: 0 \}/.test(oa));
+ok('A2: sales_invoice routes to AR Side',
+  /case 'sales_invoice':\s+return \{ ar: credit, ap: 0 \}/.test(oa));
 
-ok('A3: payment_received routes to In side (was negative red in old signed layout — hostile UX)',
-  /case 'payment_received': return \{ in: credit, out: 0 \}/.test(oa));
+ok('A3: payment_received routes to AR Side (reduces AR, shown positive)',
+  /case 'payment_received': return \{ ar: credit, ap: 0 \}/.test(oa));
 
-ok('A4: vendor_bill routes to Out side',
-  /case 'vendor_bill':\s+return \{ in: 0, out: debit \}/.test(oa));
+ok('A4: vendor_bill routes to AP Side',
+  /case 'vendor_bill':\s+return \{ ar: 0, ap: debit \}/.test(oa));
 
-ok('A5: payment_sent routes to Out side',
-  /case 'payment_sent':\s+return \{ in: 0, out: debit \}/.test(oa));
+ok('A5: payment_sent routes to AP Side (reduces AP, shown positive)',
+  /case 'payment_sent':\s+return \{ ar: 0, ap: debit \}/.test(oa));
 
-ok('A6: isAR() helper — true only for sales_invoice',
-  /function isAR\(entry\)[\s\S]{0,200}entry\.transaction_type === 'sales_invoice'/.test(oa));
+console.log('\n── Column headers per spec ──');
 
-ok('A7: isAP() helper — true only for vendor_bill',
-  /function isAP\(entry\)[\s\S]{0,200}entry\.transaction_type === 'vendor_bill'/.test(oa));
+ok('B1: Header "AR Side" with emerald bg',
+  />AR Side</.test(oa) && /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa));
 
-console.log('\n── Column headers: standard accounting layout ──');
+ok('B2: Header "AP Side" with red bg',
+  />AP Side</.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa));
 
-ok('B1: Header "Amount In" with emerald bg',
-  />Amount In</.test(oa) && /bg-emerald-50[\s\S]{0,200}Amount In/.test(oa));
+ok('B3: Single Remaining column with amber bg',
+  />Remaining</.test(oa) && /bg-amber-50[\s\S]{0,300}Remaining/.test(oa));
 
-ok('B2: Header "Amount Out" with red bg',
-  />Amount Out</.test(oa) && /bg-red-50[\s\S]{0,200}Amount Out/.test(oa));
+ok('B4: NO Paid column on screen (spec dropped it)',
+  !/>Paid<\/th>/.test(oa));
 
-ok('B3: Header "Paid" preserved (auto-FIFO applied)',
-  />Paid</.test(oa));
+ok('B5: NO separate Open AR / Open AP columns (merged to single Remaining)',
+  !/>Open AR</.test(oa) && !/>Open AP</.test(oa));
 
-ok('B4: Header "Open AR" — sales invoices receivable column',
-  />Open AR</.test(oa) && /Open AR[\s\S]{0,200}bg-emerald-50/.test(oa));
+ok('B6: Running Balance CUR header (per spec)',
+  /Running Balance \{cur\}/.test(oa));
 
-ok('B5: Header "Open AP" — vendor bills payable column',
-  />Open AP</.test(oa) && /Open AP[\s\S]{0,200}bg-red-50/.test(oa));
+ok('B7: Currency column (full word, not "Cur")',
+  />Currency</.test(oa));
 
-ok('B6: Headers renamed "Net USD/EGP" → "Running USD/EGP" (was misleading: they are running balances)',
-  /Running \{cur\}/.test(oa) && !/>Net \{cur\}</.test(oa));
+console.log('\n── Per-row cells ──');
 
-console.log('\n── Per-row cells use new layout ──');
+ok('C1: AR Side cell uses arApSide + fmtNum positive',
+  /var s = arApSide\(entry\)[\s\S]{0,400}s\.ar > 0\.005[\s\S]{0,200}fmtNum\(s\.ar\)/.test(oa));
 
-ok('C1: Per-row Amount In cell uses inOutAmount + emerald color',
-  /var io = inOutAmount\(entry\)[\s\S]{0,300}io\.in > 0\.005[\s\S]{0,200}fmtNum\(io\.in\)/.test(oa));
+ok('C2: AP Side cell uses arApSide + fmtNum positive',
+  /var s = arApSide\(entry\)[\s\S]{0,400}s\.ap > 0\.005[\s\S]{0,200}fmtNum\(s\.ap\)/.test(oa));
 
-ok('C2: Per-row Amount Out cell uses inOutAmount + red color',
-  /var io = inOutAmount\(entry\)[\s\S]{0,300}io\.out > 0\.005[\s\S]{0,200}fmtNum\(io\.out\)/.test(oa));
+ok('C3: Remaining fills only for invoice/bill rows',
+  /txnType !== 'sales_invoice' && txnType !== 'vendor_bill'/.test(oa));
 
-ok('C3: Per-row Open AR only fills for sales_invoice rows',
-  /txnType === 'sales_invoice'[\s\S]{0,400}fmtNum\(pr\.remaining\)/.test(oa));
+ok('C4: Remaining colored emerald for AR, red for AP',
+  /txnType === 'sales_invoice' \? 'text-emerald-900' : 'text-red-900'/.test(oa));
 
-ok('C4: Per-row Open AP only fills for vendor_bill rows',
-  /txnType === 'vendor_bill'[\s\S]{0,400}fmtNum\(pr\.remaining\)/.test(oa));
-
-ok('C5: Settled invoices/bills show "✓ paid" indicator',
+ok('C5: Settled invoices show "✓ paid"',
   /✓ paid/.test(oa));
 
-console.log('\n── Totals row segregated (NO blind sums of mixed direction) ──');
+console.log('\n── Per-currency Summary block ──');
 
-ok('D1: Totals row tracks totalIn separately',
-  /var totalIn = 0/.test(oa) && /totalIn \+= io\.in/.test(oa));
+ok('D1: Summary tracks totalAR (sales_invoice remaining only)',
+  /totalAR \+= prT\.remaining/.test(oa));
 
-ok('D2: Totals row tracks totalOut separately',
-  /var totalOut = 0/.test(oa) && /totalOut \+= io\.out/.test(oa));
+ok('D2: Summary tracks totalAP (vendor_bill remaining only)',
+  /totalAP \+= prT\.remaining/.test(oa));
 
-ok('D3: Totals row tracks totalOpenAR (sales_invoice remaining ONLY)',
-  /var totalOpenAR = 0/.test(oa) && /if \(e\.transaction_type === 'sales_invoice'\) totalOpenAR \+= prT\.remaining/.test(oa));
+ok('D3: Summary header "{cur} Summary"',
+  /\{cur\} Summary/.test(oa));
 
-ok('D4: Totals row tracks totalOpenAP (vendor_bill remaining ONLY)',
-  /var totalOpenAP = 0/.test(oa) && /else totalOpenAP \+= prT\.remaining/.test(oa));
+ok('D4: Total AR row labeled "Total AR (They Owe Us)"',
+  /Total AR \(They Owe Us\)/.test(oa));
 
-ok('D5: Totals row DOES NOT sum AR + AP into one column',
-  !/totalOpenAR \+ totalOpenAP/.test(oa) &&
+ok('D5: Total AP row labeled "Total AP (We Owe Them)"',
+  /Total AP \(We Owe Them\)/.test(oa));
+
+ok('D6: Net Position row labeled "Net CUR Position"',
+  /Net \{cur\} Position/.test(oa));
+
+ok('D7: Net Position arithmetic: totalAR − totalAP',
+  /var net = totalAR - totalAP/.test(oa));
+
+ok('D8: Sub-label "in our favor" / "against us"',
+  /in our favor/.test(oa) && /against us/.test(oa));
+
+ok('D9: AR and AP NEVER summed together blindly',
   !/totalAR \+ totalAP/.test(oa));
 
-ok('D6: Net Position row shows AR − AP = net explicitly (not a blind sum)',
-  /Net Position[\s\S]{0,500}Open AR − Open AP/.test(oa));
+console.log('\n── Global FX-unified Net Position card ──');
 
-ok('D7: Net Position row computes net = tAR - tAP',
-  /var net = tAR - tAP/.test(oa));
+ok('E1: lookupFxRate finds direct or inverse rate',
+  /function lookupFxRate\(fxRates, from, to\)/.test(oa));
 
-console.log('\n── FX-unified Global Net Position card ──');
-
-ok('E1: lookupFxRate helper finds direct or inverse rate by date',
-  /function lookupFxRate\(fxRates, from, to\)/.test(oa) &&
-  /r\.from_currency === to && r\.to_currency === from/.test(oa));
-
-ok('E2: convertToBaseCurrency helper aggregates per-currency balances to base',
+ok('E2: convertToBaseCurrency aggregates to base USD',
   /function convertToBaseCurrency\(byCurrency, baseCur, fxRates\)/.test(oa));
 
-ok('E3: Helper flags missing rates so the user knows which to add',
-  /missingRates\.push\(cur\)/.test(oa));
-
-ok('E4: fxRates state loaded from fx_rates table',
+ok('E3: fxRates state loaded from fx_rates table',
   /var \[fxRates, setFxRates\] = useState\(\[\]\)/.test(oa) &&
   /supabase\.from\('fx_rates'\)\.select/.test(oa));
 
-ok('E5: Global Net Position card rendered when more than 1 currency in play',
-  /grandTotals\.currencies\.length > 1 && \(function \(\) \{/.test(oa));
+ok('E4: Card shown when more than 1 currency',
+  /grandTotals\.currencies\.length > 1/.test(oa));
 
-ok('E6: Card shows base currency total prominently',
-  /Global Net Position[\s\S]{0,2000}Base currency: USD/.test(oa));
+ok('E5: Card shows per-currency rate × value = base equiv',
+  /b\.rate[\s\S]{0,500}b\.baseEquiv/.test(oa));
 
-ok('E7: Card shows per-currency contribution with rate × value = base equiv',
-  /b\.rate[\s\S]{0,400}b\.baseEquiv/.test(oa));
-
-ok('E8: Card warns about missing FX rates (no silent omission)',
+ok('E6: Card flags missing FX rates with amber warning',
   /Missing FX rates for/.test(oa));
 
-console.log('\n── Print export mirrors new layout ──');
+console.log('\n── Print export mirrors spec ──');
 
-ok('F1: PRINT headers include Amount In + Amount Out + Open AR + Open AP',
-  /Amount In/.test(exp) && /Amount Out/.test(exp) && /Open AR/.test(exp) && /Open AP/.test(exp));
+ok('F1: PRINT headers AR Side / AP Side / Remaining / Running Balance CUR',
+  />AR Side</.test(exp) && />AP Side</.test(exp) && />Remaining</.test(exp) && /Running Balance ' \+ escapeHtml\(cur\)/.test(exp));
 
-ok('F2: PRINT headers renamed Running CUR (was "Running Net")',
-  /Running ' \+ escapeHtml\(cur\)/.test(exp));
+ok('F2: PRINT per-row uses arSide / apSide',
+  /var arSide = 0[\s\S]{0,300}var apSide = 0/.test(exp));
 
-ok('F3: PRINT per-row uses positive In/Out cells (not signed)',
-  /var inAmt = 0[\s\S]{0,300}var outAmt = 0/.test(exp) &&
-  /inCellHtml = inAmt > 0\.005/.test(exp) &&
-  /outCellHtml = outAmt > 0\.005/.test(exp));
+ok('F3: PRINT Summary: Total AR + Total AP + Net Position',
+  /Total AR \(They Owe Us\)/.test(exp) && /Total AP \(We Owe Them\)/.test(exp));
 
-ok('F4: PRINT totals row segregated (totIn, totOut, totAR, totAP)',
-  /var totIn = 0, totOut = 0, totPaid = 0, totAR = 0, totAP = 0/.test(exp));
+ok('F4: PRINT Net Position spells out AR − AP = net with sub-label',
+  /in our favor/.test(exp) && /against us/.test(exp));
 
-ok('F5: PRINT adds Net Position row (AR − AP = net) below totals',
-  /Net Position[\s\S]{0,1000}Open AR − Open AP/.test(exp));
+ok('F5: PRINT customer perspective swaps AR/AP',
+  /if \(perspective === 'customer'\) \{ var tmp = arSide; arSide = apSide; apSide = tmp; \}/.test(exp));
 
-ok('F6: PRINT customer perspective swaps In/Out + AR/AP correctly',
-  /if \(perspective === 'customer'\) \{ var tmp = ia; ia = oa; oa = tmp; \}/.test(exp));
+console.log('\n── Excel export mirrors spec ──');
 
-console.log('\n── Excel export mirrors new layout ──');
+ok('G1: EXCEL headers AR Side + AP Side + Remaining + Running Balance CUR',
+  /'AR Side', 'AP Side', 'Remaining'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
 
-ok('G1: EXCEL headers Amount In + Amount Out + Paid + Open AR + Open AP + Running CUR',
-  /'Amount In', 'Amount Out', 'Paid', 'Open AR', 'Open AP'/.test(exp) &&
-  /'Running ' \+ cur/.test(exp));
+ok('G2: EXCEL per-row writes positive arSide / apSide numerics',
+  /arSide > 0\.005 \? arSide : ''/.test(exp) && /apSide > 0\.005 \? apSide : ''/.test(exp));
 
-ok('G2: EXCEL per-row writes positive In/Out + segregated AR/AP numerics',
-  /inAmt > 0\.005 \? inAmt : ''/.test(exp) &&
-  /outAmt > 0\.005 \? outAmt : ''/.test(exp) &&
-  /openAR > 0\.005 \? openAR : ''/.test(exp) &&
-  /openAP > 0\.005 \? openAP : ''/.test(exp));
+ok('G3: EXCEL Summary block: Total AR / Total AP / Net Position per currency',
+  /cur \+ ' Summary:'/.test(exp) && /Total AR \(They Owe Us\)/.test(exp) && /Total AP \(We Owe Them\)/.test(exp) && /'Net ' \+ cur \+ ' Position:'/.test(exp));
 
-ok('G3: EXCEL totals row writes segregated totals (numeric for SUM verification)',
-  /totalsRow = \['', '', cur \+ ' TOTALS', '', cur,\s+totIn > 0\.005 \? totIn : ''[\s\S]{0,400}totAR > 0\.005 \? totAR : ''[\s\S]{0,200}totAP > 0\.005 \? totAP : ''/.test(exp));
+console.log('\n── End-to-end: Max\'s TEST account scenario from screenshot ──');
 
-ok('G4: EXCEL adds NET POSITION row (AR − AP) per currency below totals',
-  /var netP = totAR - totAP/.test(exp) &&
-  /'NET POSITION \(' \+ cur \+ '\)'/.test(exp));
-
-console.log('\n── End-to-end: Max\'s TEST account screenshot data reconciles ──');
-
-// Replay Max's screenshot exactly
-function inOut(e) {
+function arApRoute(e) {
   var cr = Number(e.credit_amount || 0);
   var dr = Number(e.debit_amount || 0);
   switch (e.transaction_type) {
-    case 'sales_invoice':    return { in: cr, out: 0 };
-    case 'payment_received': return { in: cr, out: 0 };
-    case 'vendor_bill':      return { in: 0, out: dr };
-    case 'payment_sent':     return { in: 0, out: dr };
-    default: return { in: cr, out: dr };
+    case 'sales_invoice':    return { ar: cr, ap: 0 };
+    case 'payment_received': return { ar: cr, ap: 0 };
+    case 'vendor_bill':      return { ar: 0, ap: dr };
+    case 'payment_sent':     return { ar: 0, ap: dr };
+    default: return { ar: cr, ap: dr };
   }
 }
 
@@ -242,12 +228,25 @@ var testData = [
 
 var sim = applyFIFO(testData);
 
-function totalsFor(cur) {
-  var totIn = 0, totOut = 0, totAR = 0, totAP = 0;
+console.log('\n  ── Per-row AR Side / AP Side routing ──');
+var expectations = [
+  { id: '1', type: 'payment_sent USD 1000', expectAR: 0, expectAP: 1000 },
+  { id: '2', type: 'payment_sent EGP 4500', expectAR: 0, expectAP: 4500 },
+  { id: '3', type: 'vendor_bill USD 10888', expectAR: 0, expectAP: 10888 },
+  { id: '4', type: 'vendor_bill EGP 25000', expectAR: 0, expectAP: 25000 },
+  { id: '5', type: 'sales_invoice USD 39900', expectAR: 39900, expectAP: 0 },
+  { id: '6', type: 'payment_received USD 32888', expectAR: 32888, expectAP: 0 },
+];
+expectations.forEach(function (ex) {
+  var row = testData.find(function (r) { return r.id === ex.id; });
+  var routed = arApRoute(row);
+  ok('  H' + ex.id + ': ' + ex.type + ' → AR: ' + ex.expectAR + ' AP: ' + ex.expectAP,
+    Math.abs(routed.ar - ex.expectAR) < 0.01 && Math.abs(routed.ap - ex.expectAP) < 0.01);
+});
+
+function summaryFor(cur) {
+  var totAR = 0, totAP = 0;
   testData.filter(function(e) { return e.currency === cur; }).forEach(function(e) {
-    var io = inOut(e);
-    totIn += io.in;
-    totOut += io.out;
     if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
       var paidMag = sim.applied[e.id] || 0;
       var fa = Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
@@ -256,54 +255,38 @@ function totalsFor(cur) {
       else totAP += rem;
     }
   });
-  return { in: totIn, out: totOut, openAR: totAR, openAP: totAP, net: totAR - totAP };
+  return { totAR: totAR, totAP: totAP, net: totAR - totAP };
 }
 
-var usdT = totalsFor('USD');
-ok('H1: USD Amount In total = 39,900 (Sales Invoice) + 32,888 (Payment Received) = 72,788',
-  Math.abs(usdT.in - 72788) < 0.01);
-ok('H2: USD Amount Out total = 1,000 (Payment Sent) + 10,888 (Vendor Bill) = 11,888',
-  Math.abs(usdT.out - 11888) < 0.01);
-ok('H3: USD Open AR total = 7,012 (only the unsettled sales invoice remaining)',
-  Math.abs(usdT.openAR - 7012) < 0.01);
-ok('H4: USD Open AP total = 9,888 (only the unsettled vendor bill remaining)',
-  Math.abs(usdT.openAP - 9888) < 0.01);
-ok('H5: USD Net Position = 7,012 − 9,888 = −2,876 (matches the 4-pot strip and Running USD)',
-  Math.abs(usdT.net - (-2876)) < 0.01);
+console.log('\n  ── USD Summary (matches screenshot) ──');
+var usd = summaryFor('USD');
+ok('  I1: Total AR (They Owe Us): 7,012.00 USD',
+  Math.abs(usd.totAR - 7012) < 0.01);
+ok('  I2: Total AP (We Owe Them): 9,888.00 USD',
+  Math.abs(usd.totAP - 9888) < 0.01);
+ok('  I3: Net USD Position: 7,012 − 9,888 = -2,876.00',
+  Math.abs(usd.net - (-2876)) < 0.01);
+ok('  I4: USD sub-label: "against us" (Net is negative)',
+  usd.net < 0);
 
-var egpT = totalsFor('EGP');
-ok('H6: EGP Amount In total = 0 (no inflows in EGP)',
-  Math.abs(egpT.in - 0) < 0.01);
-ok('H7: EGP Amount Out total = 4,500 (Payment Sent) + 25,000 (Vendor Bill) = 29,500',
-  Math.abs(egpT.out - 29500) < 0.01);
-ok('H8: EGP Net Position = 0 − 20,500 = −20,500',
-  Math.abs(egpT.net - (-20500)) < 0.01);
+console.log('\n  ── EGP Summary (matches screenshot) ──');
+var egp = summaryFor('EGP');
+ok('  J1: Total AR (They Owe Us): 0.00 EGP',
+  Math.abs(egp.totAR - 0) < 0.01);
+ok('  J2: Total AP (We Owe Them): 20,500.00 EGP',
+  Math.abs(egp.totAP - 20500) < 0.01);
+ok('  J3: Net EGP Position: -20,500.00',
+  Math.abs(egp.net - (-20500)) < 0.01);
 
-ok('H9: PROOF the old broken layout had NO meaningful relationship — Open AR + Open AP = 16,900 (asset + liability, nonsense)',
-  (usdT.openAR + usdT.openAP) === 16900 && (usdT.openAR + usdT.openAP) !== -2876);
-
-console.log('\n── FX-unified conversion math ──');
-
-function convert(byCur, base, rates) {
-  var total = 0;
-  Object.keys(byCur).forEach(function(c) {
-    if (c === base) { total += byCur[c]; return; }
-    // direct rate
-    for (var i = 0; i < rates.length; i++) {
-      if (rates[i].from === c && rates[i].to === base) { total += byCur[c] * rates[i].rate; return; }
-      if (rates[i].from === base && rates[i].to === c) { total += byCur[c] / rates[i].rate; return; }
-    }
-  });
-  return total;
-}
-
-// Mock: 1 USD = 49 EGP (so 1 EGP = 0.0204 USD)
-var rates = [{ from: 'EGP', to: 'USD', rate: 1/49 }];
-var combined = convert({ USD: -2876, EGP: -20500 }, 'USD', rates);
-ok('I1: Mock USD/EGP=49 — EGP −20,500 ≈ −418.37 USD; combined with USD −2876 ≈ −3,294 USD equiv',
-  combined < -3290 && combined > -3300);
+console.log('\n  ── FX-unified Global Net Position (spec example math) ──');
+var rate = 50;
+var globalNet = usd.net + (egp.net / rate);
+ok('  K1: EGP −20,500 / 50 = −410 USD',
+  Math.abs((egp.net / rate) - (-410)) < 0.01);
+ok('  K2: Global Net USD = −2,876 + −410 = −3,286 (matches spec example exactly)',
+  Math.abs(globalNet - (-3286)) < 0.01);
 
 console.log('\n══════════════════════════════════════════════');
 if (process.exitCode) console.log('FAILED');
-else console.log('✅ HOTFIX 11 — Standard accounting layout: In/Out columns, segregated totals, FX-unified Net Position');
+else console.log('✅ HOTFIX 11 FINAL — standard accounting spec compliant');
 console.log('══════════════════════════════════════════════');

@@ -36,47 +36,47 @@ ok('A3: Helper returns paid and remaining signed',
 
 console.log('\n── Per-row Paid and Remaining cells ──');
 
-ok('B1: Per-row Paid cell uses computePaidRemaining (HOTFIX 11 — paid shown as gross magnitude, direction conveyed by In/Out columns)',
-  /pr\.paid > 0\.005[\s\S]{0,300}fmtNum\(pr\.paid\)/.test(oa));
+ok('B1: Per-row AR Side / AP Side cells use arApSide helper (HOTFIX 11 final — no Paid column on screen, single Remaining)',
+  /var s = arApSide\(entry\)/.test(oa));
 
-ok('B2: Per-row Open AR cell only fills for sales_invoice rows (HOTFIX 11)',
-  /txnType === 'sales_invoice'[\s\S]{0,400}fmtNum\(pr\.remaining\)/.test(oa));
+ok('B2: Per-row Remaining cell fills for invoice/bill rows only (HOTFIX 11 final — single Remaining col, color by side)',
+  /txnType !== 'sales_invoice' && txnType !== 'vendor_bill'/.test(oa));
 
-ok('B3: Per-row Open AP cell only fills for vendor_bill rows (HOTFIX 11)',
-  /txnType === 'vendor_bill'[\s\S]{0,400}fmtNum\(pr\.remaining\)/.test(oa));
+ok('B3: Per-row Remaining cell colored emerald for AR rows, red for AP rows (HOTFIX 11 final)',
+  /txnType === 'sales_invoice' \? 'text-emerald-900' : 'text-red-900'/.test(oa));
 
 console.log('\n── Totals row signed sums ──');
 
-ok('C1: Totals row tracks totalOpenAR + totalOpenAP segregated (HOTFIX 11 supersedes signed paid)',
-  /totalOpenAR \+= prT\.remaining/.test(oa) && /totalOpenAP \+= prT\.remaining/.test(oa));
+ok('C1: Per-currency Summary block tracks totalAR + totalAP SEPARATELY (HOTFIX 11 final)',
+  /totalAR \+= prT\.remaining/.test(oa) && /totalAP \+= prT\.remaining/.test(oa));
 
-ok('C2: Totals row tracks totalIn + totalOut + totalPaid (HOTFIX 11 — gross magnitudes by direction)',
-  /totalIn \+= io\.in/.test(oa) && /totalOut \+= io\.out/.test(oa));
+ok('C2: Net Position row computes net = totalAR − totalAP (HOTFIX 11 final spelled-out arithmetic)',
+  /var net = totalAR - totalAP/.test(oa));
 
-ok('C3: Totals Open AR cell displays via fmtNum (HOTFIX 11 positive magnitude)',
-  /fmtNum\(totalOpenAR\)/.test(oa));
+ok('C3: Net Position row sub-label "in our favor" / "against us" (HOTFIX 11 final spec)',
+  /in our favor[\s\S]{0,300}against us|against us[\s\S]{0,300}in our favor/.test(oa));
 
-ok('C4: Totals Open AP cell displays via fmtNum (HOTFIX 11 positive magnitude)',
-  /fmtNum\(totalOpenAP\)/.test(oa));
+ok('C4: Summary block label "Net <CUR> Position" per the spec format (HOTFIX 11 final)',
+  /Net \{cur\} Position/.test(oa));
 
 console.log('\n── Print export signed Paid/Remaining (HOTFIX 10 sweep) ──');
 
-ok('D1: PRINT per-row uses In/Out columns (HOTFIX 11 — positive magnitudes by direction)',
-  /var inAmt = 0[\s\S]{0,300}var outAmt = 0/.test(exp) && /inCellHtml/.test(exp) && /outCellHtml/.test(exp));
+ok('D1: PRINT per-row uses AR Side / AP Side columns (HOTFIX 11 final — positive magnitudes)',
+  /var arSide = 0[\s\S]{0,300}var apSide = 0/.test(exp) && /arCellHtml/.test(exp) && /apCellHtml/.test(exp));
 
-ok('D2: PRINT totals row uses totIn + totOut + totAR + totAP (HOTFIX 11 segregated)',
-  /totIn \+= ia/.test(exp) && /totOut \+= oa/.test(exp) && /totAR \+= rem/.test(exp) && /totAP \+= rem/.test(exp));
+ok('D2: PRINT Summary block uses totAR + totAP per currency (HOTFIX 11 final)',
+  /totAR \+= rem/.test(exp) && /totAP \+= rem/.test(exp));
 
-ok('D3: PRINT customer perspective swaps In/Out and AR/AP correctly (HOTFIX 11)',
-  /if \(perspective === 'customer'\) \{ var tmp = ia; ia = oa; oa = tmp; \}/.test(exp) && /isAREffective[\s\S]{0,300}isAPEffective/.test(exp));
+ok('D3: PRINT customer perspective swaps AR/AP correctly (HOTFIX 11 final)',
+  /if \(perspective === 'customer'\) \{ var tmp = arSide; arSide = apSide; apSide = tmp; \}/.test(exp));
 
 console.log('\n── Excel export signed Paid/Remaining (HOTFIX 10 sweep) ──');
 
-ok('E1: EXCEL per-row writes positive In/Out + segregated AR/AP (HOTFIX 11 — numeric for SUM)',
-  /inAmt > 0\.005 \? inAmt : ''/.test(exp) && /outAmt > 0\.005 \? outAmt : ''/.test(exp) && /openAR > 0\.005 \? openAR : ''/.test(exp) && /openAP > 0\.005 \? openAP : ''/.test(exp));
+ok('E1: EXCEL per-row writes positive AR Side / AP Side numerics + single Remaining (HOTFIX 11 final)',
+  /arSide > 0\.005 \? arSide : ''/.test(exp) && /apSide > 0\.005 \? apSide : ''/.test(exp));
 
-ok('E2: EXCEL totals row writes segregated In/Out/AR/AP totals (HOTFIX 11 numeric)',
-  /totIn > 0\.005 \? totIn : ''/.test(exp) && /totOut > 0\.005 \? totOut : ''/.test(exp) && /totAR > 0\.005 \? totAR : ''/.test(exp) && /totAP > 0\.005 \? totAP : ''/.test(exp));
+ok('E2: EXCEL Summary block writes Total AR + Total AP + Net Position numerics (HOTFIX 11 final)',
+  /Total AR \(They Owe Us\)/.test(exp) && /Total AP \(We Owe Them\)/.test(exp) && /Net ' \+ cur \+ ' Position/.test(exp));
 
 console.log('\n── End-to-end: Max\'s screenshot scenario reconciles ──');
 

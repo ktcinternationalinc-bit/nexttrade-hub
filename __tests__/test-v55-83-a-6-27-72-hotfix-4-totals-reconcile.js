@@ -18,25 +18,25 @@ ok('A1: totals row no longer uses "Cr: " / "Dr: " labels (the misleading raw sum
   !/<td[^>]*>\s*Cr: \{fmtNum\(cs\.credit\)\}/.test(oa) &&
   !/<td[^>]*>\s*Dr: \{fmtNum\(cs\.debit\)\}/.test(oa));
 
-ok('A2: totals row computes per-currency segregated In/Out (HOTFIX 11 supersedes signed)',
-  /totalIn \+= io\.in/.test(oa) && /totalOut \+= io\.out/.test(oa));
+ok('A2: totals row Summary block: per-currency Total AR + Total AP rows (HOTFIX 11 final)',
+  /Total AR \(They Owe Us\)/.test(oa) && /Total AP \(We Owe Them\)/.test(oa));
 
-ok('A3: totals row computes Open AR total (sales_invoice remaining only — HOTFIX 11)',
-  /totalOpenAR \+= prT\.remaining/.test(oa));
+ok('A3: totals row tracks totalAR per currency (sales_invoice remaining only)',
+  /totalAR \+= prT\.remaining/.test(oa));
 
-ok('A4: totals row computes Open AP total (vendor_bill remaining only — HOTFIX 11)',
-  /totalOpenAP \+= prT\.remaining/.test(oa));
+ok('A4: totals row tracks totalAP per currency (vendor_bill remaining only)',
+  /totalAP \+= prT\.remaining/.test(oa));
 
-ok('A5: totals row Amount In + Amount Out displayed via fmtNum (HOTFIX 11 supersedes signed)',
-  /totalIn > 0\.005 \? fmtNum\(totalIn\)/.test(oa) && /totalOut > 0\.005 \? fmtNum\(totalOut\)/.test(oa));
+ok('A5: Net Position row shows AR − AP = net with sub-label (HOTFIX 11 final)',
+  /Total AR − Total AP/.test(oa) && /in our favor[\s\S]{0,300}against us|against us[\s\S]{0,300}in our favor/.test(oa));
 
-ok('A6: totals row Open AR shows totalOpenAR in emerald-50 bg (HOTFIX 11)',
-  /bg-emerald-50[\s\S]{0,400}fmtNum\(totalOpenAR\)/.test(oa));
+ok('A6: Total AR row uses emerald accent for assets (HOTFIX 11 final)',
+  /bg-emerald-900\/30/.test(oa));
 
-ok('A7: totals row Open AP shows totalOpenAP in red-50 bg (HOTFIX 11)',
-  /bg-red-50[\s\S]{0,400}fmtNum\(totalOpenAP\)/.test(oa));
+ok('A7: Total AP row uses red accent for liabilities (HOTFIX 11 final)',
+  /bg-red-900\/30/.test(oa));
 
-ok('A8: totals row Running per currency uses cs.balance via fmtSigned (FIFO from HOTFIX 3, kept signed for running balance)',
+ok('A8: Net Position row uses cs.balance via fmtSigned for Running Balance column',
   /fmtSigned\(cs\.balance\)/.test(oa));
 
 console.log('\n── End-to-end: numbers reconcile in Max\'s screenshot scenario ──');

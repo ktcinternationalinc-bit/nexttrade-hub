@@ -137,14 +137,14 @@ ok('E4: per-account summary pill shows Bal per currency (Cr/Dr removed in v72 HO
   !/Dr: <span className="text-red-700">\{fmtNum\(cs\.debit\)\}/.test(oa));
 ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
   /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
-ok('E6: ledger table columns now Date/Type/Description/Reference/Cur/Amount In/Amount Out/Paid/Open AR/Open AP/Running per cur (v72 HOTFIX 11)',
-  />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Cur</.test(oa) && />Amount In</.test(oa) && />Amount Out</.test(oa) && />Paid</.test(oa) && />Open AR</.test(oa) && />Open AP</.test(oa) && /Running \{cur\}/.test(oa));
-ok('E7: Open AR column has emerald bg, Open AP column has red bg (v72 HOTFIX 11 — segregated AR vs AP)',
-  /Open AR[\s\S]{0,200}bg-emerald-50/.test(oa) && /Open AP[\s\S]{0,200}bg-red-50/.test(oa));
+ok('E6: ledger table columns Date/Type/Description/Reference/Currency/AR Side/AP Side/Remaining/Running Balance per cur (v72 HOTFIX 11 final)',
+  />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Currency</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Remaining</.test(oa) && /Running Balance \{cur\}/.test(oa));
+ok('E7: AR Side column emerald bg, AP Side column red bg, Remaining column amber bg (v72 HOTFIX 11 final)',
+  /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa) && /bg-amber-50[\s\S]{0,300}Remaining/.test(oa));
 ok('E8: running balance color-coded (now per-currency in .58: rbForCur instead of rb)',
   /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-500'/.test(oa));
-ok('E9: totals row at bottom of each account table — one row per currency, spans 5 cols (v55.83-A.6.27.72)',
-  /<tr key=\{cur\} className="bg-slate-100 font-extrabold">[\s\S]{0,1200}Totals/.test(oa));
+ok('E9: per-currency Summary block (header + Total AR + Total AP + Net Position rows) per spec',
+  /<CUR> Summary|cur \+ '-sumhead|cur \+ ' Summary|Total AR \(They Owe Us\)|Total AP \(We Owe Them\)/.test(oa));
 ok('E10: entry modal has 5-type picker (v55.83-A.6.27.72 — supersedes 2-way credit/debit toggle)',
   /transaction_type === 'sales_invoice'/.test(oa) &&
   /transaction_type === 'vendor_bill'/.test(oa) &&

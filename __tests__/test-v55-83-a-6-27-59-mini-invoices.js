@@ -310,8 +310,8 @@ ok('R2: 58 — summaryFor returns byCurrency + currencies + totalEntryCount',
   /byCurrency: byCur,\s+currencies: currencies,\s+totalEntryCount: arr\.length/.test(oa));
 ok('R3: 58 — entry modal currency dropdown preserved',
   /<option value="USD">USD<\/option>\s+<option value="EGP">EGP<\/option>\s+<option value="EUR">EUR<\/option>/.test(oa));
-ok('R4: 58 — Cur column + per-currency Running CUR columns preserved (v72 HOTFIX 11 — Net→Running)',
-  />Cur</.test(oa) && /Running \{cur\}/.test(oa));
+ok('R4: 58 — Currency column + per-currency Running Balance CUR columns preserved (v72 HOTFIX 11 final)',
+  />Currency</.test(oa) && /Running Balance \{cur\}/.test(oa));
 ok('R5: 58 — per-currency grand-total tiles preserved',
   /\{cur\} Total Credit \(money in\)/.test(oa));
 ok('R6: 57 — Shipping rate save instrumentation preserved',
