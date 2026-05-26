@@ -245,7 +245,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       + '<th style="width:85px">Reference</th>'
       + '<th class="num" style="width:80px; background:#f0fdf4">AR Side</th>'
       + '<th class="num" style="width:80px; background:#fef2f2">AP Side</th>'
-      + '<th class="num" style="width:80px; background:#fffbeb">Remaining</th>'
+      + '<th class="num" style="width:80px; background:#fffbeb">Open Balance</th>'
       + '<th class="num" style="width:110px">Running Balance ' + escapeHtml(cur) + '</th>'
       + '</tr></thead>'
       + '<tbody>' + rowsHtml + '</tbody>'
@@ -411,7 +411,7 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   // v55.83-A.6.27.72 HOTFIX 11 — Excel column headers match the spec's two-column layout:
   // Date, Type, Description, Reference, Currency, AR Side, AP Side, Remaining,
   // then one "Running Balance CUR" column per currency.
-  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'AR Side', 'AP Side', 'Remaining'];
+  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'AR Side', 'AP Side', 'Open Balance'];
   currencies.forEach(function (cur) { colHeaders.push('Running Balance ' + cur); });
   rows.push(colHeaders);
 

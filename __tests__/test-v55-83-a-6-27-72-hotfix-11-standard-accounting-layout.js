@@ -51,8 +51,8 @@ ok('B1: Header "AR Side" with emerald bg',
 ok('B2: Header "AP Side" with red bg',
   />AP Side</.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa));
 
-ok('B3: Single Remaining column with amber bg',
-  />Remaining</.test(oa) && /bg-amber-50[\s\S]{0,300}Remaining/.test(oa));
+ok('B3: Single Open Balance column with amber bg (renamed from Remaining per polish)',
+  />Open Balance</.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
 
 ok('B4: NO Paid column on screen (spec dropped it)',
   !/>Paid<\/th>/.test(oa));
@@ -124,19 +124,19 @@ ok('E3: fxRates state loaded from fx_rates table',
   /var \[fxRates, setFxRates\] = useState\(\[\]\)/.test(oa) &&
   /supabase\.from\('fx_rates'\)\.select/.test(oa));
 
-ok('E4: Card shown when more than 1 currency',
-  /grandTotals\.currencies\.length > 1/.test(oa));
+ok('E4: Card shown when there is any activity (polish — was multi-cur only, now single-cur too)',
+  /grandTotals\.currencies\.length > 0/.test(oa));
 
 ok('E5: Card shows per-currency rate × value = base equiv',
   /b\.rate[\s\S]{0,500}b\.baseEquiv/.test(oa));
 
-ok('E6: Card flags missing FX rates with amber warning',
-  /Missing FX rates for/.test(oa));
+ok('E6: Card flags missing FX rate with warning (polish: singular "rate" + open FX panel hint)',
+  /Missing FX rate for/.test(oa));
 
 console.log('\n── Print export mirrors spec ──');
 
-ok('F1: PRINT headers AR Side / AP Side / Remaining / Running Balance CUR',
-  />AR Side</.test(exp) && />AP Side</.test(exp) && />Remaining</.test(exp) && /Running Balance ' \+ escapeHtml\(cur\)/.test(exp));
+ok('F1: PRINT headers AR Side / AP Side / Open Balance / Running Balance CUR (polish)',
+  />AR Side</.test(exp) && />AP Side</.test(exp) && />Open Balance</.test(exp) && /Running Balance ' \+ escapeHtml\(cur\)/.test(exp));
 
 ok('F2: PRINT per-row uses arSide / apSide',
   /var arSide = 0[\s\S]{0,300}var apSide = 0/.test(exp));
@@ -152,8 +152,8 @@ ok('F5: PRINT customer perspective swaps AR/AP',
 
 console.log('\n── Excel export mirrors spec ──');
 
-ok('G1: EXCEL headers AR Side + AP Side + Remaining + Running Balance CUR',
-  /'AR Side', 'AP Side', 'Remaining'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
+ok('G1: EXCEL headers AR Side + AP Side + Open Balance + Running Balance CUR (polish)',
+  /'AR Side', 'AP Side', 'Open Balance'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
 
 ok('G2: EXCEL per-row writes positive arSide / apSide numerics',
   /arSide > 0\.005 \? arSide : ''/.test(exp) && /apSide > 0\.005 \? apSide : ''/.test(exp));

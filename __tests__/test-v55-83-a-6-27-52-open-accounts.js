@@ -137,10 +137,10 @@ ok('E4: per-account summary pill shows Bal per currency (Cr/Dr removed in v72 HO
   !/Dr: <span className="text-red-700">\{fmtNum\(cs\.debit\)\}/.test(oa));
 ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
   /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
-ok('E6: ledger table columns Date/Type/Description/Reference/Currency/AR Side/AP Side/Remaining/Running Balance per cur (v72 HOTFIX 11 final)',
-  />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Currency</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Remaining</.test(oa) && /Running Balance \{cur\}/.test(oa));
-ok('E7: AR Side column emerald bg, AP Side column red bg, Remaining column amber bg (v72 HOTFIX 11 final)',
-  /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa) && /bg-amber-50[\s\S]{0,300}Remaining/.test(oa));
+ok('E6: ledger columns Date/Type/Description/Reference/Currency/AR Side/AP Side/Open Balance/Running Balance per cur (v72 HOTFIX 11 polish)',
+  />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Currency</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Open Balance</.test(oa) && /Running Balance \{cur\}/.test(oa));
+ok('E7: AR Side emerald bg, AP Side red bg, Open Balance amber bg (v72 HOTFIX 11 polish)',
+  /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
 ok('E8: running balance color-coded (now per-currency in .58: rbForCur instead of rb)',
   /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-500'/.test(oa));
 ok('E9: per-currency Summary block (header + Total AR + Total AP + Net Position rows) per spec',

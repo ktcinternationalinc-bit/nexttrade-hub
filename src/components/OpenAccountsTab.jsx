@@ -1168,34 +1168,58 @@ export default function OpenAccountsTab(props) {
       </div>
 
       {/* v55.83-A.6.27.72 HOTFIX 11 — Global Net Position card.
-          Collapses all currencies into a single base-currency (USD) liquidity number
-          using the most recent rates from fx_rates. Shows per-currency contribution
-          and flags any missing rates so the user knows which pairs to add. */}
-      {grandTotals.currencies.length > 1 && (function () {
+          Always renders if there's any activity, even single currency.
+          Pulls the most recent rate from the same fx_rates table the rest of the portal
+          uses (FxRatesPanel, FxPnLReport, etc.) — so what you maintain in Inventory →
+          FX Rates feeds directly into here. If a non-base currency's rate isn't found,
+          the card calls it out and excludes that balance from the consolidated total. */}
+      {grandTotals.currencies.length > 0 && (function () {
         var unified = convertToBaseCurrency(grandTotals.byCurrency, 'USD', fxRates);
         var hasAnyMissing = unified.missingRates.length > 0;
         var totCls = unified.total > 0.005 ? 'bg-emerald-700' : unified.total < -0.005 ? 'bg-red-700' : 'bg-slate-700';
+        // Build an explicit math line in the format the spec requested:
+        //   "Net USD: −2,876 + (EGP −20,500 / 49.5 = −414) = −3,290 USD"
+        var mathParts = [];
+        unified.breakdown.forEach(function (b) {
+          if (b.cur === unified.base) {
+            mathParts.push(fmtSigned(b.amount) + ' ' + b.cur);
+          } else if (b.hasRate) {
+            // Show as "(CUR amount / rate = USD equiv)" for clarity (divide form is more intuitive).
+            // Note: lookupFxRate returns "from→to" rate. If from=EGP, to=USD, rate is small (e.g. 0.02).
+            // To show "EGP / 49.5 = USD", invert: divisor = 1 / b.rate.
+            var divisor = b.rate > 0 ? (1 / b.rate) : 0;
+            mathParts.push('(' + fmtSigned(b.amount) + ' ' + b.cur +
+              ' / ' + divisor.toLocaleString(undefined, { maximumFractionDigits: 4 }) +
+              ' = ' + fmtSigned(b.baseEquiv) + ' USD)');
+          }
+        });
+        var mathLine = mathParts.join(' + ') + ' = ' + fmtSigned(unified.total) + ' USD';
         return (
           <div className={totCls + ' text-white rounded-lg p-3 shadow-xl border-2 border-amber-400'}>
             <div className="flex items-center justify-between mb-2">
               <div>
-                <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-90">Global Net Position</div>
-                <div className="text-[10px] opacity-80">Base currency: USD · all counterparties combined</div>
+                <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-90">Net Position — Base Currency (USD)</div>
+                <div className="text-[10px] opacity-80">Consolidated across all counterparties &amp; currencies · rates from FX Rates panel</div>
               </div>
               <div className="text-right">
                 <div className="text-3xl font-extrabold font-mono">{fmtSigned(unified.total)} USD</div>
                 <div className="text-[10px] opacity-90 font-semibold">
-                  {unified.total > 0.005 ? '↑ Net in our favor' : unified.total < -0.005 ? '↓ Net against us' : 'Settled'}
+                  {unified.total > 0.005 ? '↑ In our favor' : unified.total < -0.005 ? '↓ Against us' : 'Settled'}
                 </div>
               </div>
             </div>
+            {/* Explicit spec-format math line so the user sees how the consolidated number was built. */}
+            <div className="mt-2 bg-slate-900/40 rounded px-2 py-1.5 font-mono text-[11px] font-semibold">
+              {mathLine}
+            </div>
+            {/* Per-currency contribution chips for quick scanning */}
             <div className="flex flex-wrap gap-2 mt-2 text-[10px] font-semibold">
               {unified.breakdown.map(function (b) {
                 if (!b.hasRate) {
                   return (
-                    <div key={b.cur} className="bg-amber-500 text-slate-900 rounded px-2 py-1" title="No FX rate available — add one in the FX Rates panel">
+                    <div key={b.cur} className="bg-amber-500 text-slate-900 rounded px-2 py-1" title="No FX rate available — add one in Inventory → FX Rates">
                       <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
-                      <span className="ml-1 opacity-90">→ rate missing</span>
+                      <span className="ml-1 opacity-90">→ rate missing (excluded)</span>
                     </div>
                   );
                 }
@@ -1203,21 +1227,22 @@ export default function OpenAccountsTab(props) {
                   return (
                     <div key={b.cur} className="bg-slate-900/40 rounded px-2 py-1">
                       <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
-                      <span className="ml-1 opacity-90">(base)</span>
+                      <span className="ml-1 opacity-90">(base · no conversion)</span>
                     </div>
                   );
                 }
+                var divisor = b.rate > 0 ? (1 / b.rate) : 0;
                 return (
                   <div key={b.cur} className="bg-slate-900/40 rounded px-2 py-1">
                     <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
-                    <span className="ml-1 opacity-90">× {Number(b.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} = {fmtSigned(b.baseEquiv)} USD</span>
+                    <span className="ml-1 opacity-90">÷ {divisor.toLocaleString(undefined, { maximumFractionDigits: 4 })} = {fmtSigned(b.baseEquiv)} USD</span>
                   </div>
                 );
               })}
             </div>
             {hasAnyMissing && (
               <div className="mt-2 bg-amber-100 text-amber-900 text-[11px] font-bold rounded px-2 py-1.5 border border-amber-300">
-                ⚠ Missing FX rates for: {unified.missingRates.join(', ')} — add them in Inventory → FX Rates so this card includes those balances.
+                ⚠ Missing FX rate for: {unified.missingRates.join(', ')}. Open Inventory → FX Rates to add the {unified.missingRates[0]}/USD rate (or vice versa) so this card includes that balance.
               </div>
             )}
           </div>
@@ -1450,7 +1475,7 @@ export default function OpenAccountsTab(props) {
                         <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Activity on the Accounts Receivable side — sales invoices billed to them and payments they sent us">AR Side</th>
                         <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Activity on the Accounts Payable side — vendor bills they billed us and payments we sent them">AP Side</th>
                         {/* Single Remaining column — fills only on invoice/bill rows with unsettled balance. */}
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance still unsettled on this row (only applies to sales invoices and vendor bills)">Remaining</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance — the unpaid portion of an invoice or bill">Open Balance</th>
                         {/* v55.83-A.6.27.72 HOTFIX 11 — "Net" renamed to "Running Balance" (these are
                             cumulative running balances after each row, NOT per-row nets). */}
                         {s.currencies.map(function (cur) {
@@ -1575,7 +1600,7 @@ export default function OpenAccountsTab(props) {
                               Total AP (We Owe Them): Y
                               Net <CUR> Position: X − Y
                           Each currency gets its own 3-line block. AR and AP are NEVER mixed. */}
-                      {s.currencies.map(function (cur) {
+                      {s.currencies.map(function (cur, sumIdx) {
                         var cs = s.byCurrency[cur];
                         var curEntries = (accEntries || []).filter(function (e) {
                           var ec = String(e.currency || 'USD').toUpperCase().trim();
@@ -1592,56 +1617,63 @@ export default function OpenAccountsTab(props) {
                         });
                         var net = totalAR - totalAP;
                         var netCls = net > 0.005 ? 'text-emerald-300' : net < -0.005 ? 'text-red-300' : 'text-slate-200';
-                        var netSubLabel = net > 0.005 ? 'in our favor' : net < -0.005 ? 'against us' : 'settled';
                         // colSpan calculation: 4 left text cols + 3 money cols + N currency cols + actions
                         var totalCols = 4 + 3 + s.currencies.length + (canEdit ? 1 : 0);
+                        // First currency block has a heavier top border; subsequent blocks have a subtle one
+                        var headerBorder = sumIdx === 0 ? 'border-t-4 border-amber-400' : 'border-t-2 border-slate-700';
                         return [
-                          // Header row
-                          <tr key={cur + '-sumhead'} className="bg-slate-900 text-white">
-                            <td colSpan={totalCols} className="px-3 py-1.5 text-left text-[11px] font-extrabold uppercase tracking-widest border-t-2 border-slate-600">
+                          // Spacer row between consecutive Summary blocks (visual breathing room)
+                          sumIdx > 0 ? (
+                            <tr key={cur + '-spacer'} className="bg-slate-100">
+                              <td colSpan={totalCols} className="py-1"></td>
+                            </tr>
+                          ) : null,
+                          // Header row — currency badge + label
+                          <tr key={cur + '-sumhead'} className={'bg-slate-900 text-white ' + headerBorder}>
+                            <td colSpan={totalCols} className="px-3 py-2 text-left text-[11px] font-extrabold uppercase tracking-widest">
+                              <span className="inline-block bg-amber-500 text-slate-900 rounded px-2 py-0.5 mr-2 text-[10px]">{cur}</span>
                               {cur} Summary
                             </td>
                           </tr>,
-                          // Total AR row
+                          // Total AR row — value sits in AR Side column for visual alignment
                           <tr key={cur + '-ar'} className="bg-slate-800 text-white">
-                            <td colSpan={4} className="px-3 py-1 text-right text-xs text-slate-200">Total AR (They Owe Us)</td>
-                            <td className="px-3 py-1 text-right font-mono font-extrabold bg-emerald-900/30">
+                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AR (They Owe Us)</td>
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-emerald-900/40 text-emerald-100">
                               {totalAR > 0.005 ? fmtNum(totalAR) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
                             <td colSpan={2 + s.currencies.length + (canEdit ? 1 : 0)}></td>
                           </tr>,
-                          // Total AP row
+                          // Total AP row — value sits in AP Side column for visual alignment
                           <tr key={cur + '-ap'} className="bg-slate-800 text-white">
-                            <td colSpan={4} className="px-3 py-1 text-right text-xs text-slate-200">Total AP (We Owe Them)</td>
-                            <td className="px-3 py-1"></td>
-                            <td className="px-3 py-1 text-right font-mono font-extrabold bg-red-900/30">
+                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AP (We Owe Them)</td>
+                            <td className="px-3 py-1.5"></td>
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-red-900/40 text-red-100">
                               {totalAP > 0.005 ? fmtNum(totalAP) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
                             <td colSpan={1 + s.currencies.length + (canEdit ? 1 : 0)}></td>
                           </tr>,
-                          // Net Position row — the spelled-out arithmetic
+                          // Net Position row — the spelled-out arithmetic with clear sub-label
                           <tr key={cur + '-net'} className="bg-slate-950 text-white">
-                            <td colSpan={4} className="px-3 py-2 text-right text-xs font-extrabold uppercase tracking-wider">
+                            <td colSpan={4} className="px-3 py-2.5 text-right text-xs font-extrabold uppercase tracking-wider">
                               Net {cur} Position — Total AR − Total AP →
                             </td>
-                            <td colSpan={3} className={'px-3 py-2 text-right font-mono font-extrabold text-base ' + netCls}>
-                              {fmtNum(totalAR)} − {fmtNum(totalAP)} = <span className="ml-1">{fmtSigned(net)} {cur}</span>
-                              <div className="text-[10px] font-bold opacity-80 mt-0.5">
-                                {net > 0.005 ? '↑ in our favor' : net < -0.005 ? '↓ against us' : 'settled'}
+                            <td colSpan={3} className={'px-3 py-2.5 text-right font-mono font-extrabold text-base ' + netCls}>
+                              <div>{fmtNum(totalAR)} − {fmtNum(totalAP)} = <span className="ml-1">{fmtSigned(net)} {cur}</span></div>
+                              <div className="text-[10px] font-bold opacity-90 mt-1 uppercase tracking-wider">
+                                {net > 0.005 ? '↑ In our favor' : net < -0.005 ? '↓ Against us' : 'Settled'}
                               </div>
                             </td>
-                            {/* Running balance final value in its currency column */}
                             {s.currencies.map(function (col, colI) {
                               if (col !== cur) return <td key={col + '-nf-' + colI}></td>;
                               return (
-                                <td key={col + '-nf-' + colI} className={'px-3 py-2 text-right font-mono font-extrabold ' + netCls}>
+                                <td key={col + '-nf-' + colI} className={'px-3 py-2.5 text-right font-mono font-extrabold ' + netCls}>
                                   {fmtSigned(cs.balance)}
                                 </td>
                               );
                             })}
                             {canEdit && <td></td>}
                           </tr>,
-                        ];
+                        ].filter(Boolean);
                       })}
                     </tbody>
                   </table>

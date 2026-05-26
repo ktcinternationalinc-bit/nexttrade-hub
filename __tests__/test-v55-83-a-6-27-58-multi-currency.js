@@ -163,8 +163,8 @@ ok('H4: each entry row renders per-currency running cells from _running_by_curre
   /var rbForCur = \(entry\._running_by_currency && entry\._running_by_currency\[cur\]\) \|\| 0/.test(oa));
 ok('H5: entry\'s own currency cell highlighted (bg-slate-100), others dimmed (text-slate-400)',
   /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,400}\(isThisEntryCur \? 'bg-slate-100 ' : 'text-slate-400 '\)/.test(oa));
-ok('H6: per-currency Summary block split per currency (one block per cur, v72 HOTFIX 11 multi-row)',
-  /s\.currencies\.map\(function \(cur\) \{[\s\S]{0,4000}Net \{cur\} Position/.test(oa));
+ok('H6: per-currency Summary block split (one block per cur, v72 HOTFIX 11 polish — with spacer rows)',
+  /s\.currencies\.map\(function \(cur, sumIdx\)/.test(oa) && /Net \{cur\} Position/.test(oa));
 ok('H7: totals row places per-currency balance in correct running column',
   /s\.currencies\.map\(function \(col, colI\) \{\s+if \(col !== cur\) return <td/.test(oa));
 
@@ -191,8 +191,8 @@ ok('I7: each section has its own Summary block in tfoot (v72 HOTFIX 11 final)',
 // PART J — Excel export (per-currency totals + running cols)
 // ══════════════════════════════════════════════════════════════════
 
-ok('J1: Excel headers Type/AR Side/AP Side/Remaining + one Running Balance CUR per currency (v72 HOTFIX 11 final)',
-  /'Date', 'Type', 'Description', 'Reference', 'Currency', 'AR Side', 'AP Side', 'Remaining'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
+ok('J1: Excel headers Type/AR Side/AP Side/Open Balance + one Running Balance CUR per cur (v72 HOTFIX 11 polish)',
+  /'AR Side', 'AP Side', 'Open Balance'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
 ok('J2: Excel walks entries with per-currency rolling running map (v72 HOTFIX 6 — now uses signedAmount)',
   /var running = \{\};[\s\S]{0,5000}running\[entryCur\] \+= signed/.test(exp));
 ok('J3: Excel row pushes Type + Amount + Paid + Remaining + per-currency running values (v55.83-A.6.27.72)',

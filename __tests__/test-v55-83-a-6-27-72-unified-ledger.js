@@ -110,8 +110,8 @@ ok('C9: per-currency tile strip (They owe us / We owe them / Their prepaid / Our
   /They owe us/.test(oa) && /We owe them/.test(oa) &&
   /Their credit \(prepaid\)/.test(oa) && /Our credit \(prepaid\)/.test(oa) &&
   /Net balance/.test(oa));
-ok('C10: ledger table has Type + AR Side + AP Side + Remaining columns (HOTFIX 11 final spec)',
-  />Type</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Remaining</.test(oa));
+ok('C10: ledger has Type + AR Side + AP Side + Open Balance columns (HOTFIX 11 polish)',
+  />Type</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Open Balance</.test(oa));
 ok('C11: Type pill rendered from TRANSACTION_TYPES registry',
   /var typeMeta = TRANSACTION_TYPES\[txnType\] \|\| TRANSACTION_TYPES\.credit_adjustment/.test(oa));
 ok('C12: Paid/Remaining cells use computePaidRemaining',
@@ -139,16 +139,16 @@ ok('D1: printAccountLedger accepts opts (perspective + simulation)',
 ok('D2: print supports customer perspective with mirrored labels',
   /perspective === 'customer'/.test(exp) &&
   /TYPE_LABEL/.test(exp));
-ok('D3: print displays type column + AR Side/AP Side/Remaining in PDF table (HOTFIX 11 final)',
-  /AR Side/.test(exp) && /AP Side/.test(exp) && />Remaining</.test(exp));
+ok('D3: print displays type + AR Side/AP Side/Open Balance in PDF table (HOTFIX 11 polish)',
+  /AR Side/.test(exp) && /AP Side/.test(exp) && />Open Balance</.test(exp));
 ok('D4: 4-pot tile summary at top of each currency section',
   /potTilesHtml/.test(exp) &&
   /simCur\.theirOpenInvoices/.test(exp) &&
   /simCur\.ourOpenBills/.test(exp) &&
   /simCur\.theirPrepaid/.test(exp) &&
   /simCur\.ourPrepaid/.test(exp));
-ok('D5: Excel export has Type column + AR Side/AP Side/Remaining columns (HOTFIX 11 final)',
-  /'Type'/.test(exp) && /'AR Side'/.test(exp) && /'AP Side'/.test(exp) && /'Remaining'/.test(exp));
+ok('D5: Excel has Type + AR Side/AP Side/Open Balance columns (HOTFIX 11 polish)',
+  /'Type'/.test(exp) && /'AR Side'/.test(exp) && /'AP Side'/.test(exp) && /'Open Balance'/.test(exp));
 ok('D6: Excel runs inline FIFO sim to compute Paid/Remaining per row',
   /var simApplied = \{\}/.test(exp) &&
   /var simState = \{\}/.test(exp));
