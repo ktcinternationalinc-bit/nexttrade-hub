@@ -35,21 +35,20 @@ ok('A4: fmtSigned helper exists (formats with − prefix for negatives)',
   /function fmtSigned\(n\)/.test(oa) &&
   /return v < 0 \? '−' \+ abs : abs/.test(oa));
 
-ok('B1: per-row Amount cell now uses signedAmount + color by sign',
-  /var signed = signedAmount\(entry\)[\s\S]{0,300}signed > 0\.005 \? 'text-emerald-800' : signed < -0\.005 \? 'text-red-700'/.test(oa));
+ok('B1: signedAmount helper still exists for running-balance computation (HOTFIX 11 uses In/Out columns for display, but signedAmount still drives the running balance arithmetic)',
+  /function signedAmount\(entry\)/.test(oa));
 
-ok('B2: per-row Amount displays via fmtSigned (− prefix for negatives)',
-  /return <span className=\{cls\}>\{fmtSigned\(signed\)\}<\/span>/.test(oa));
+ok('B2: per-row Amount In/Out cells display positive magnitudes via fmtNum (HOTFIX 11 — direction conveyed by column, not by sign)',
+  /var io = inOutAmount\(entry\)[\s\S]{0,400}fmtNum\(io\.in\)/.test(oa) && /var io = inOutAmount\(entry\)[\s\S]{0,400}fmtNum\(io\.out\)/.test(oa));
 
-ok('C1: Totals row Amount uses signed sum (totalSigned), not unsigned',
-  /totalSigned \+= signedAmount\(e\)/.test(oa));
+ok('C1: Totals row uses SEGREGATED In/Out + Open AR/AP sums (HOTFIX 11 — no signed unified Amount, no blind mixing)',
+  /totalIn \+= io\.in/.test(oa) && /totalOut \+= io\.out/.test(oa) && /totalOpenAR \+= prT\.remaining/.test(oa) && /totalOpenAP \+= prT\.remaining/.test(oa));
 
-ok('C2: Totals row Amount displays via fmtSigned with color by sign',
-  /var amtCls = totalSigned > 0\.005 \? 'text-emerald-900' : totalSigned < -0\.005 \? 'text-red-900'/.test(oa) &&
-  /fmtSigned\(totalSigned\)/.test(oa));
+ok('C2: Totals row Amount In/Out displays via fmtNum, Running displays signed (HOTFIX 11)',
+  /fmtNum\(totalIn\)/.test(oa) && /fmtNum\(totalOut\)/.test(oa) && /fmtSigned\(cs\.balance\)/.test(oa));
 
-ok('C3: Paid/Remaining still unsigned (they describe sub-quantities)',
-  /fmtNum\(totalPaid\)/.test(oa) && /fmtNum\(totalRemaining\)/.test(oa));
+ok('C3: Totals row shows Open AR and Open AP as SEGREGATED columns (HOTFIX 11 supersedes HOTFIX 10 — pure accounting standard)',
+  /totalOpenAR > 0\.005 \? fmtNum\(totalOpenAR\)/.test(oa) && /totalOpenAP > 0\.005 \? fmtNum\(totalOpenAP\)/.test(oa));
 
 ok('C4: per-row Net column also uses fmtSigned (consistent with Amount)',
   /\{fmtSigned\(rbForCur\)\}/.test(oa));
@@ -204,30 +203,28 @@ ok('H2: PRINT export: per-row running walks signed cumulative (FIFO net), NOT cr
 ok('H3: PRINT export: customer perspective negates signed amount',
   /if \(perspective === 'customer'\) signed = -signed/.test(exp));
 
-ok('H4: PRINT export: per-row Amount cell uses fmtSignedMoney with color by sign',
-  /signed > 0 \? '#15803d' : '#b91c1c'[\s\S]{0,200}fmtSignedMoney\(signed\)/.test(exp));
+ok('H4: PRINT export: per-row Amount In/Out cells display positive magnitudes via fmtMoney (HOTFIX 11)',
+  /inCellHtml = inAmt > 0\.005[\s\S]{0,200}fmtMoney\(inAmt\)/.test(exp) && /outCellHtml = outAmt > 0\.005[\s\S]{0,200}fmtMoney\(outAmt\)/.test(exp));
 
 ok('H5: PRINT export: totals row no longer uses "Cr: / Dr:" labels',
   !/'<td class="num">Cr: ' \+ fmtMoney\(cs\.credit\)/.test(exp));
 
-ok('H6: PRINT export: totals row shows signed Amount + Paid + Remaining + Net',
-  /totSigned \+= sa/.test(exp) &&
-  /totPaid \+= pp/.test(exp) &&
-  /totRemaining \+= Math\.max\(0, fa - pp\)/.test(exp));
+ok('H6: PRINT export totals: segregated In/Out + Open AR + Open AP (HOTFIX 11 supersedes signed)',
+  /totIn \+= ia/.test(exp) && /totOut \+= oa/.test(exp) && /totAR \+= rem/.test(exp) && /totAP \+= rem/.test(exp));
 
 ok('I1: EXCEL export: per-row running walks signed (FIFO net), NOT credit-debit',
   /running\[entryCur\] \+= signed/.test(exp) &&
   !/running\[entryCur\] \+= credit - debit/.test(exp));
 
-ok('I2: EXCEL export: Amount column writes SIGNED numeric (so SUM in Excel reconciles to Net)',
-  /Math\.abs\(signed\) > 0\.005 \? signed : ''/.test(exp));
+ok('I2: EXCEL export: Amount In/Out write positive numerics by column (HOTFIX 11 — Excel SUM still works per column)',
+  /inAmt > 0\.005 \? inAmt : ''/.test(exp) && /outAmt > 0\.005 \? outAmt : ''/.test(exp));
 
 ok('I3: EXCEL export: totals row no longer uses "Cr: / Dr:" labels',
   !/'Cr: ' \+ \(cs\.credit \|\| 0\)/.test(exp) &&
   !/'Dr: ' \+ \(cs\.debit \|\| 0\)/.test(exp));
 
-ok('I4: EXCEL export: totals row writes signed Amount + Paid + Remaining (numeric)',
-  /totalsRow = \['', '', cur \+ ' TOTALS', '', cur, totSigned, totPaid \|\| '', totRemaining \|\| ''\]/.test(exp));
+ok('I4: EXCEL export totals: segregated In/Out + Open AR + Open AP numerics (HOTFIX 11)',
+  /totalsRow = \['', '', cur \+ ' TOTALS', '', cur,\s+totIn > 0\.005 \? totIn : '',\s+totOut > 0\.005 \? totOut : ''/.test(exp));
 
 console.log('\n── Account header: Cr/Dr removed (HOTFIX 6) ──');
 

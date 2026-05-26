@@ -142,38 +142,73 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       anyRows = true;
       var credit = Number(e.credit_amount || 0);
       var debit  = Number(e.debit_amount  || 0);
-      // For customer perspective, credit/debit swap meaning
-      var dispCredit = perspective === 'customer' ? debit : credit;
-      var dispDebit  = perspective === 'customer' ? credit : debit;
-      // v55.83-A.6.27.72 HOTFIX 6 — Amount column is now SIGNED based on direction.
-      // For customer perspective, negate (mirrors the perspective swap).
+      // v55.83-A.6.27.72 HOTFIX 6 — Running net walks signed amounts (matches Net column).
       var signed = signedAmount(e);
       if (perspective === 'customer') signed = -signed;
       running += signed;
       var paid = applications[e.id] || 0;
       var remaining = 0;
       var faceAmt = credit || debit;
-      if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
+      var isInvoiceOrBill = (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill');
+      if (isInvoiceOrBill) {
         remaining = Math.max(0, faceAmt - paid);
       }
       var typeLabel = TYPE_LABEL[e.transaction_type] || 'Entry';
-      var amtCellHtml = (Math.abs(signed) > 0.005)
-        ? '<span style="color:' + (signed > 0 ? '#15803d' : '#b91c1c') + '">' + escapeHtml(fmtSignedMoney(signed)) + '</span>'
-        : '';
+      // v55.83-A.6.27.72 HOTFIX 11 — Two-column In/Out display (standard accounting).
+      // Direction in customer perspective is mirrored: their Inflows are our Outflows.
+      var inAmt = 0;
+      var outAmt = 0;
+      switch (e.transaction_type) {
+        case 'sales_invoice':    inAmt = credit; break;
+        case 'payment_received': inAmt = credit; break;
+        case 'vendor_bill':      outAmt = debit; break;
+        case 'payment_sent':     outAmt = debit; break;
+        case 'credit_adjustment': inAmt = credit; outAmt = debit; break;
+        case 'offset':           inAmt = credit; outAmt = debit; break;
+        default: inAmt = credit; outAmt = debit;
+      }
+      if (perspective === 'customer') { var tmp = inAmt; inAmt = outAmt; outAmt = tmp; }
+      var inCellHtml = inAmt > 0.005
+        ? '<span style="color:#15803d">' + escapeHtml(fmtMoney(inAmt)) + '</span>' : '';
+      var outCellHtml = outAmt > 0.005
+        ? '<span style="color:#b91c1c">' + escapeHtml(fmtMoney(outAmt)) + '</span>' : '';
+      var paidCellHtml = (isInvoiceOrBill && paid > 0.005)
+        ? escapeHtml(fmtMoney(paid)) : '';
+      // Open AR / AP: customer perspective mirrors (their AR = our AP and vice versa).
+      var arCellHtml = '';
+      var apCellHtml = '';
+      var isAREffective = perspective === 'customer'
+        ? (e.transaction_type === 'vendor_bill')
+        : (e.transaction_type === 'sales_invoice');
+      var isAPEffective = perspective === 'customer'
+        ? (e.transaction_type === 'sales_invoice')
+        : (e.transaction_type === 'vendor_bill');
+      if (isAREffective) {
+        arCellHtml = remaining > 0.005
+          ? '<span style="color:#15803d">' + escapeHtml(fmtMoney(remaining)) + '</span>'
+          : '<span style="color:#15803d; font-size:10px">✓ paid</span>';
+      }
+      if (isAPEffective) {
+        apCellHtml = remaining > 0.005
+          ? '<span style="color:#b91c1c">' + escapeHtml(fmtMoney(remaining)) + '</span>'
+          : '<span style="color:#15803d; font-size:10px">✓ paid</span>';
+      }
       var runCellHtml = '<span style="color:' + (running > 0.005 ? '#15803d' : running < -0.005 ? '#b91c1c' : '#475569') + '">' + escapeHtml(fmtSignedMoney(running)) + '</span>';
       rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
         + '<td style="font-size:10px"><strong>' + escapeHtml(typeLabel) + '</strong></td>'
         + '<td>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
-        + '<td class="num">' + amtCellHtml + '</td>'
-        + '<td class="num" style="background:#f0fdf4">' + (paid > 0 && (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') ? fmtMoney(paid) : '') + '</td>'
-        + '<td class="num" style="background:#fffbeb">' + (remaining > 0.01 ? fmtMoney(remaining) : (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill' ? '✓' : '')) + '</td>'
+        + '<td class="num" style="background:#f0fdf4">' + inCellHtml + '</td>'
+        + '<td class="num" style="background:#fef2f2">' + outCellHtml + '</td>'
+        + '<td class="num" style="background:#f8fafc">' + paidCellHtml + '</td>'
+        + '<td class="num" style="background:#f0fdf4">' + arCellHtml + '</td>'
+        + '<td class="num" style="background:#fef2f2">' + apCellHtml + '</td>'
         + '<td class="num">' + runCellHtml + '</td>'
         + '</tr>';
     });
     if (!anyRows) {
-      rowsHtml = '<tr><td colspan="8" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
+      rowsHtml = '<tr><td colspan="10" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
     }
     var balanceLabel = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us')
                      : cs.balance < 0 ? (perspective === 'customer' ? 'We owe you' : 'We owe them')
@@ -211,44 +246,76 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       + potTilesHtml
       + '<table>'
       + '<thead><tr>'
-      + '<th style="width:75px">Date</th>'
-      + '<th style="width:130px">Type</th>'
+      + '<th style="width:70px">Date</th>'
+      + '<th style="width:110px">Type</th>'
       + '<th>Description</th>'
-      + '<th style="width:90px">Reference</th>'
-      + '<th class="num" style="width:80px">Amount</th>'
-      + '<th class="num" style="width:75px">Paid</th>'
-      + '<th class="num" style="width:80px">Remaining</th>'
-      + '<th class="num" style="width:95px">Running Net</th>'
+      + '<th style="width:85px">Reference</th>'
+      + '<th class="num" style="width:75px; background:#f0fdf4">Amount In</th>'
+      + '<th class="num" style="width:75px; background:#fef2f2">Amount Out</th>'
+      + '<th class="num" style="width:70px; background:#f8fafc">Paid</th>'
+      + '<th class="num" style="width:75px; background:#f0fdf4">Open AR</th>'
+      + '<th class="num" style="width:75px; background:#fef2f2">Open AP</th>'
+      + '<th class="num" style="width:90px">Running ' + escapeHtml(cur) + '</th>'
       + '</tr></thead>'
       + '<tbody>' + rowsHtml + '</tbody>'
       + (cs.count > 0
           ? (function () {
-              // v55.83-A.6.27.72 HOTFIX 6 — totals row uses signed sums (reconciles to Net).
-              // Compute per-currency signed total + paid + remaining for this section.
-              var totSigned = 0, totPaid = 0, totRemaining = 0;
+              // v55.83-A.6.27.72 HOTFIX 11 — Segregated totals (no blind sums of mixed direction).
+              // Inflows / Outflows are gross magnitudes; Open AR and Open AP are kept SEPARATE.
+              // Net Position is shown as AR − AP (matches the FIFO Running balance).
+              var totIn = 0, totOut = 0, totPaid = 0, totAR = 0, totAP = 0;
               entries.forEach(function (e) {
                 var eCur = e._currency || String(e.currency || 'USD').toUpperCase();
                 if (eCur !== cur) return;
-                var sa = signedAmount(e);
-                if (perspective === 'customer') sa = -sa;
-                totSigned += sa;
+                var credit = Number(e.credit_amount || 0);
+                var debit = Number(e.debit_amount || 0);
+                var ia = 0, oa = 0;
+                switch (e.transaction_type) {
+                  case 'sales_invoice':    ia = credit; break;
+                  case 'payment_received': ia = credit; break;
+                  case 'vendor_bill':      oa = debit; break;
+                  case 'payment_sent':     oa = debit; break;
+                  case 'credit_adjustment': ia = credit; oa = debit; break;
+                  case 'offset':           ia = credit; oa = debit; break;
+                  default: ia = credit; oa = debit;
+                }
+                if (perspective === 'customer') { var tmp = ia; ia = oa; oa = tmp; }
+                totIn += ia; totOut += oa;
                 if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
                   var pp = applications[e.id] || 0;
+                  var fa = credit || debit;
                   totPaid += pp;
-                  var fa = Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
-                  totRemaining += Math.max(0, fa - pp);
+                  var rem = Math.max(0, fa - pp);
+                  // AR/AP swap in customer perspective
+                  var asAR = perspective === 'customer'
+                    ? (e.transaction_type === 'vendor_bill')
+                    : (e.transaction_type === 'sales_invoice');
+                  if (asAR) totAR += rem; else totAP += rem;
                 }
               });
-              var sumColor = totSigned > 0.005 ? '#15803d' : totSigned < -0.005 ? '#b91c1c' : '#475569';
-              var netColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
-              var netVal = perspective === 'customer' ? -cs.balance : cs.balance;
-              return '<tfoot><tr class="totals">'
+              var netVal = totAR - totAP;
+              var netColor = netVal > 0.005 ? '#15803d' : netVal < -0.005 ? '#b91c1c' : '#475569';
+              var runColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
+              var runVal = perspective === 'customer' ? -cs.balance : cs.balance;
+              return '<tfoot>'
+                + '<tr class="totals">'
                 + '<td colspan="4" style="text-align:right; text-transform:uppercase; font-size:10px">' + escapeHtml(cur) + ' Totals</td>'
-                + '<td class="num" style="color:' + sumColor + '">' + escapeHtml(fmtSignedMoney(totSigned)) + '</td>'
-                + '<td class="num">' + (totPaid > 0.01 ? fmtMoney(totPaid) : '') + '</td>'
-                + '<td class="num">' + (totRemaining > 0.01 ? fmtMoney(totRemaining) : '') + '</td>'
-                + '<td class="num" style="color:' + netColor + '">' + escapeHtml(fmtSignedMoney(netVal)) + '</td>'
-                + '</tr></tfoot>';
+                + '<td class="num" style="background:#f0fdf4; color:#15803d">' + (totIn > 0.005 ? escapeHtml(fmtMoney(totIn)) : '') + '</td>'
+                + '<td class="num" style="background:#fef2f2; color:#b91c1c">' + (totOut > 0.005 ? escapeHtml(fmtMoney(totOut)) : '') + '</td>'
+                + '<td class="num" style="background:#f8fafc">' + (totPaid > 0.005 ? escapeHtml(fmtMoney(totPaid)) : '') + '</td>'
+                + '<td class="num" style="background:#f0fdf4; color:#15803d">' + (totAR > 0.005 ? escapeHtml(fmtMoney(totAR)) : '') + '</td>'
+                + '<td class="num" style="background:#fef2f2; color:#b91c1c">' + (totAP > 0.005 ? escapeHtml(fmtMoney(totAP)) : '') + '</td>'
+                + '<td class="num" style="color:' + runColor + '">' + escapeHtml(fmtSignedMoney(runVal)) + '</td>'
+                + '</tr>'
+                + '<tr class="totals" style="background:#1e293b; color:#fff">'
+                + '<td colspan="6" style="text-align:right; text-transform:uppercase; font-size:10px; color:#fff">'
+                + 'Net Position (' + escapeHtml(cur) + ') — Open AR − Open AP =</td>'
+                + '<td class="num" colspan="3" style="color:' + (netVal > 0 ? '#86efac' : netVal < 0 ? '#fca5a5' : '#fff') + '">'
+                + escapeHtml(fmtMoney(totAR)) + ' − ' + escapeHtml(fmtMoney(totAP)) + ' = ' + escapeHtml(fmtSignedMoney(netVal))
+                + '</td>'
+                + '<td></td>'
+                + '</tr>'
+                + '</tfoot>';
             })()
           : '')
       + '</table>'
@@ -370,10 +437,11 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   if (currencies.length > 0) rows.push(['Currencies:', currencies.join(', '), '', '', '', '', '']);
   rows.push(['', '', '', '', '', '', '']);
 
-  // v55.83-A.6.27.72 — Column headers: Date, Type, Description, Reference, Currency,
-  // Amount, Paid, Remaining, then one "Net CUR" column per currency.
-  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'];
-  currencies.forEach(function (cur) { colHeaders.push('Net ' + cur); });
+  // v55.83-A.6.27.72 HOTFIX 11 — Excel column headers match the new two-column layout:
+  // Date, Type, Description, Reference, Currency, Amount In, Amount Out, Paid, Open AR, Open AP,
+  // then one "Running CUR" column per currency.
+  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount In', 'Amount Out', 'Paid', 'Open AR', 'Open AP'];
+  currencies.forEach(function (cur) { colHeaders.push('Running ' + cur); });
   rows.push(colHeaders);
 
   // Per-currency running totals (rolling)
@@ -451,8 +519,7 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     var credit = Number(e.credit_amount || 0);
     var debit  = Number(e.debit_amount  || 0);
     if (!(entryCur in running)) running[entryCur] = 0;
-    // v55.83-A.6.27.72 HOTFIX 6 — running net now walks SIGNED amounts (FIFO net).
-    // Old: running += credit - debit (didn't match the 4-pot strip / screen Net).
+    // Running net walks signed amounts (matches Running column in screen)
     var signed = signedAmount(e);
     running[entryCur] += signed;
     var paid = simApplied[e.id] || 0;
@@ -460,15 +527,30 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     var isInvoiceOrBill = e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill';
     var faceAmt = credit || debit;
     if (isInvoiceOrBill) remaining = Math.max(0, faceAmt - paid);
+    // v55.83-A.6.27.72 HOTFIX 11 — Two-column In/Out + segregated Open AR/AP for Excel.
+    var inAmt = 0, outAmt = 0;
+    switch (e.transaction_type) {
+      case 'sales_invoice':    inAmt = credit; break;
+      case 'payment_received': inAmt = credit; break;
+      case 'vendor_bill':      outAmt = debit; break;
+      case 'payment_sent':     outAmt = debit; break;
+      case 'credit_adjustment': inAmt = credit; outAmt = debit; break;
+      case 'offset':           inAmt = credit; outAmt = debit; break;
+      default: inAmt = credit; outAmt = debit;
+    }
+    var openAR = (e.transaction_type === 'sales_invoice') ? remaining : 0;
+    var openAP = (e.transaction_type === 'vendor_bill') ? remaining : 0;
     var row = [
       fmtDate(e.entry_date),
       TYPE_LABEL[e.transaction_type] || '',
       (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
       e.reference_number || '',
       entryCur,
-      Math.abs(signed) > 0.005 ? signed : '',   // SIGNED Amount cell (Excel keeps it numeric for SUM)
-      isInvoiceOrBill && paid > 0 ? paid : '',
-      isInvoiceOrBill ? remaining : '',
+      inAmt > 0.005 ? inAmt : '',                                  // Amount In
+      outAmt > 0.005 ? outAmt : '',                                // Amount Out
+      isInvoiceOrBill && paid > 0.005 ? paid : '',                 // Paid (gross magnitude)
+      openAR > 0.005 ? openAR : '',                                // Open AR
+      openAP > 0.005 ? openAP : '',                                // Open AP
     ];
     currencies.forEach(function (cur) {
       row.push(running[cur] !== undefined ? running[cur] : 0);
@@ -476,38 +558,65 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     rows.push(row);
   });
 
-  // v55.83-A.6.27.72 HOTFIX 6 — Per-currency totals rows with SIGNED Amount sum + Paid + Remaining.
-  // Was: Cr/Dr raw sums (didn't reconcile with Net). Now: signed sum reconciles algebraically.
-  rows.push(['', '', '', '', '', '', '', '']);
-  rows.push(['─── Totals by Currency ───', '', '', '', '', '', '', '']);
+  // v55.83-A.6.27.72 HOTFIX 11 — Per-currency totals rows with SEGREGATED columns.
+  // No blind sums of mixed-direction obligations; Open AR and Open AP stay separate.
+  // Net Position row computed as AR − AP (matches Running balance when no prepaid).
+  rows.push(['', '', '', '', '', '', '', '', '', '']);
+  rows.push(['─── Totals by Currency ───', '', '', '', '', '', '', '', '', '']);
   var byCurrency = (summary && summary.byCurrency) || {};
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { balance: 0 };
-    // Compute per-currency signed total + paid + remaining
-    var totSigned = 0, totPaid = 0, totRemaining = 0;
+    var totIn = 0, totOut = 0, totPaid = 0, totAR = 0, totAP = 0;
     entries.forEach(function (e) {
       var eCur = e._currency || String(e.currency || 'USD').toUpperCase();
       if (eCur !== cur) return;
-      totSigned += signedAmount(e);
+      var c2 = Number(e.credit_amount || 0);
+      var d2 = Number(e.debit_amount || 0);
+      var ia = 0, oa = 0;
+      switch (e.transaction_type) {
+        case 'sales_invoice':    ia = c2; break;
+        case 'payment_received': ia = c2; break;
+        case 'vendor_bill':      oa = d2; break;
+        case 'payment_sent':     oa = d2; break;
+        case 'credit_adjustment': ia = c2; oa = d2; break;
+        case 'offset':           ia = c2; oa = d2; break;
+        default: ia = c2; oa = d2;
+      }
+      totIn += ia; totOut += oa;
       if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
         var pp = simApplied[e.id] || 0;
+        var fa = c2 || d2;
         totPaid += pp;
-        var fa = Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
-        totRemaining += Math.max(0, fa - pp);
+        var rem = Math.max(0, fa - pp);
+        if (e.transaction_type === 'sales_invoice') totAR += rem; else totAP += rem;
       }
     });
-    var totalsRow = ['', '', cur + ' TOTALS', '', cur, totSigned, totPaid || '', totRemaining || ''];
+    var totalsRow = ['', '', cur + ' TOTALS', '', cur,
+      totIn > 0.005 ? totIn : '',
+      totOut > 0.005 ? totOut : '',
+      totPaid > 0.005 ? totPaid : '',
+      totAR > 0.005 ? totAR : '',
+      totAP > 0.005 ? totAP : ''];
     currencies.forEach(function (col) {
       totalsRow.push(col === cur ? cs.balance : '');
     });
     rows.push(totalsRow);
+    // Net Position row — shows AR − AP = net (no blind sum)
+    var netP = totAR - totAP;
+    var netRow = ['', '', 'NET POSITION (' + cur + ')', '', cur, '', '', '',
+      totAR > 0.005 ? totAR : '',
+      totAP > 0.005 ? totAP : ''];
+    currencies.forEach(function (col) {
+      netRow.push(col === cur ? netP : '');
+    });
+    rows.push(netRow);
   });
 
-  rows.push(['', '', '', '', '', '', '', '']);
+  rows.push(['', '', '', '', '', '', '', '', '', '']);
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { balance: 0 };
     var label = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
-    rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '', '']);
+    rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '', '', '', '']);
   });
 
   // Build sheet
@@ -518,9 +627,11 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     { wch: 38 },  // Description
     { wch: 16 },  // Reference
     { wch: 10 },  // Currency
-    { wch: 12 },  // Amount
+    { wch: 12 },  // Amount In
+    { wch: 12 },  // Amount Out
     { wch: 12 },  // Paid
-    { wch: 12 },  // Remaining
+    { wch: 12 },  // Open AR
+    { wch: 12 },  // Open AP
   ];
   currencies.forEach(function () { ws['!cols'].push({ wch: 18 }); });  // one per currency running
 

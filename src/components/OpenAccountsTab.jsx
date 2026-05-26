@@ -34,6 +34,85 @@ function fmtDate(s) {
   try { return new Date(s).toISOString().substring(0, 10); } catch (e) { return s; }
 }
 
+// v55.83-A.6.27.72 HOTFIX 11 — Two-column accounting layout.
+// Returns { in: positive amount on the In side, out: positive amount on Out side }.
+// Conveys direction via which column is non-zero, all values positive (no signed mess).
+//   sales_invoice:    in = credit  (they will owe us — increases AR)
+//   payment_received: in = credit  (cash received — money came IN)
+//   vendor_bill:      out = debit  (we will owe them — increases AP)
+//   payment_sent:     out = debit  (cash paid — money went OUT)
+//   credit_adjustment: in/out by which side has the value
+//   offset:           internal — both halves treated as in/out per their side
+function inOutAmount(entry) {
+  if (!entry) return { in: 0, out: 0 };
+  var credit = Number(entry.credit_amount || 0);
+  var debit = Number(entry.debit_amount || 0);
+  switch (entry.transaction_type) {
+    case 'sales_invoice':    return { in: credit, out: 0 };
+    case 'payment_received': return { in: credit, out: 0 };
+    case 'vendor_bill':      return { in: 0, out: debit };
+    case 'payment_sent':     return { in: 0, out: debit };
+    case 'credit_adjustment': return { in: credit, out: debit };
+    case 'offset':           return { in: credit, out: debit };
+    default: return { in: credit, out: debit };
+  }
+}
+
+// True if the entry contributes to Accounts Receivable (sales invoice → they owe us).
+function isAR(entry) { return entry && entry.transaction_type === 'sales_invoice'; }
+// True if the entry contributes to Accounts Payable (vendor bill → we owe them).
+function isAP(entry) { return entry && entry.transaction_type === 'vendor_bill'; }
+
+// v55.83-A.6.27.72 HOTFIX 11 — FX rate lookup for the Global Net Position card.
+// Given a list of fx_rates rows ({ from_currency, to_currency, rate, rate_date }),
+// finds the most recent rate to convert FROM `from` INTO `to`. If the direct pair
+// isn't present but the inverse is, returns 1 / inverse rate. Returns null when
+// neither direction is available.
+function lookupFxRate(fxRates, from, to) {
+  if (from === to) return 1;
+  if (!Array.isArray(fxRates) || fxRates.length === 0) return null;
+  // Most-recent direct rate
+  var direct = null;
+  var inverse = null;
+  fxRates.forEach(function (r) {
+    if (r.from_currency === from && r.to_currency === to) {
+      if (!direct || (r.rate_date > direct.rate_date)) direct = r;
+    } else if (r.from_currency === to && r.to_currency === from) {
+      if (!inverse || (r.rate_date > inverse.rate_date)) inverse = r;
+    }
+  });
+  if (direct && Number(direct.rate) > 0) return Number(direct.rate);
+  if (inverse && Number(inverse.rate) > 0) return 1 / Number(inverse.rate);
+  return null;
+}
+
+// Convert a list of per-currency balances into a single base-currency total.
+// Returns { total, base, breakdown: [{ cur, amount, rate, baseEquiv, hasRate }], missingRates: [cur,...] }.
+function convertToBaseCurrency(byCurrency, baseCur, fxRates) {
+  baseCur = baseCur || 'USD';
+  var breakdown = [];
+  var total = 0;
+  var missingRates = [];
+  Object.keys(byCurrency).forEach(function (cur) {
+    var amount = Number((byCurrency[cur] && byCurrency[cur].balance) || 0);
+    if (cur === baseCur) {
+      breakdown.push({ cur: cur, amount: amount, rate: 1, baseEquiv: amount, hasRate: true });
+      total += amount;
+    } else {
+      var rate = lookupFxRate(fxRates, cur, baseCur);
+      if (rate != null) {
+        var baseEquiv = amount * rate;
+        breakdown.push({ cur: cur, amount: amount, rate: rate, baseEquiv: baseEquiv, hasRate: true });
+        total += baseEquiv;
+      } else {
+        breakdown.push({ cur: cur, amount: amount, rate: null, baseEquiv: null, hasRate: false });
+        missingRates.push(cur);
+      }
+    }
+  });
+  return { total: total, base: baseCur, breakdown: breakdown, missingRates: missingRates };
+}
+
 // v55.83-A.6.27.72 HOTFIX 6 — signed amount per transaction type.
 // Returns the entry's net-effect contribution (positive = improves our position,
 // negative = worsens). Makes the Amount column algebraically sum to the Net.
@@ -66,6 +145,28 @@ function signedAmount(entry) {
       // Unknown type: fall back to credit − debit (sensible default)
       return credit - debit;
   }
+}
+
+// v55.83-A.6.27.72 HOTFIX 10 — signed Paid/Remaining for invoices/bills.
+// Sign follows the parent Amount direction so per-row math works:
+//   Amount = Paid + Remaining (all signed)
+// And totals reconcile:
+//   Sum(VB+SI Amount) = Sum(Paid) + Sum(Remaining)  (signed)
+//   Sum(Remaining, signed) = Net  (when no prepaid pots — the most common case)
+//
+// Sales Invoice (Amount +): Paid +, Remaining +
+// Vendor Bill (Amount −):  Paid −, Remaining −
+// Payment rows have no Paid/Remaining (returns 0/0).
+function signedPaidRemaining(entry, simResult) {
+  if (!entry) return { paid: 0, remaining: 0 };
+  if (entry.transaction_type !== 'sales_invoice' && entry.transaction_type !== 'vendor_bill') {
+    return { paid: 0, remaining: 0 };
+  }
+  var amount = entry.transaction_type === 'sales_invoice' ? Number(entry.credit_amount || 0) : Number(entry.debit_amount || 0);
+  var paidMag = (simResult && simResult.applications && simResult.applications[entry.id]) || 0;
+  var remainingMag = Math.max(0, amount - paidMag);
+  var sign = entry.transaction_type === 'sales_invoice' ? 1 : -1;
+  return { paid: sign * paidMag, remaining: sign * remainingMag };
 }
 
 // Format a signed amount for display: shows "−" prefix for negatives, no prefix for positives.
@@ -134,6 +235,10 @@ export default function OpenAccountsTab(props) {
   var [busy, setBusy] = useState(false);
   var [search, setSearch] = useState('');
   // v55.83-A.6.27.66 (Issue 2) — account-level attachments modal: stores
+  // v55.83-A.6.27.72 HOTFIX 11 — FX rates table loaded for the Global Net Position card.
+  // Lets us collapse all non-base currencies into a single base-currency liquidity number.
+  // Schema: { from_currency, to_currency, rate, rate_date }. Base currency = USD by convention.
+  var [fxRates, setFxRates] = useState([]);
   // which account the 📎 Files button was clicked on; null when closed.
   var [attachAccountId, setAttachAccountId] = useState(null);
 
@@ -144,25 +249,28 @@ export default function OpenAccountsTab(props) {
       setLoading(true);
       setError(null);
       try {
-        var [accRes, entRes, bizRes, invRes, itmRes] = await Promise.all([
+        var [accRes, entRes, bizRes, invRes, itmRes, fxRes] = await Promise.all([
           supabase.from('open_accounts').select('*').order('account_name'),
           supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
           supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
-          // v55.83-A.6.27.59 — invoices + items. Errors gracefully if migration not run.
           supabase.from('open_account_invoices').select('*').order('invoice_date', { ascending: false }),
           supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
+          // v55.83-A.6.27.72 HOTFIX 11 — FX rates for the Global Net Position card.
+          // Errors gracefully if fx_rates table isn't populated yet.
+          supabase.from('fx_rates').select('*').order('rate_date', { ascending: false }).limit(500),
         ]);
         if (cancelled) return;
         if (accRes.error) throw accRes.error;
         if (entRes.error) throw entRes.error;
-        // bizRes errors gracefully — if migration .53 hasn't been run, we just have no entities
         if (bizRes && !bizRes.error) setEntities(bizRes.data || []);
         else if (bizRes && bizRes.error) console.warn('[open-accounts] business_entities not loaded:', bizRes.error.message);
-        // v55.83-A.6.27.59 — invoices/items error gracefully if .59 SQL not run yet
         if (invRes && !invRes.error) setInvoices(invRes.data || []);
         else if (invRes && invRes.error) console.warn('[open-accounts] open_account_invoices not loaded — run sql/v55-83-a-6-27-59 in Supabase:', invRes.error.message);
         if (itmRes && !itmRes.error) setInvoiceItems(itmRes.data || []);
         else if (itmRes && itmRes.error) console.warn('[open-accounts] open_account_invoice_items not loaded:', itmRes.error.message);
+        // FX rates load is best-effort — card falls back to "rate not available" if missing.
+        if (fxRes && !fxRes.error) setFxRates(fxRes.data || []);
+        else if (fxRes && fxRes.error) console.warn('[open-accounts] fx_rates not loaded (Global Net Position card will show fallback):', fxRes.error.message);
         setAccounts(accRes.data || []);
         setEntries(entRes.data || []);
       } catch (e) {
@@ -1052,6 +1160,63 @@ export default function OpenAccountsTab(props) {
         />
       </div>
 
+      {/* v55.83-A.6.27.72 HOTFIX 11 — Global Net Position card.
+          Collapses all currencies into a single base-currency (USD) liquidity number
+          using the most recent rates from fx_rates. Shows per-currency contribution
+          and flags any missing rates so the user knows which pairs to add. */}
+      {grandTotals.currencies.length > 1 && (function () {
+        var unified = convertToBaseCurrency(grandTotals.byCurrency, 'USD', fxRates);
+        var hasAnyMissing = unified.missingRates.length > 0;
+        var totCls = unified.total > 0.005 ? 'bg-emerald-700' : unified.total < -0.005 ? 'bg-red-700' : 'bg-slate-700';
+        return (
+          <div className={totCls + ' text-white rounded-lg p-3 shadow-xl border-2 border-amber-400'}>
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-90">Global Net Position</div>
+                <div className="text-[10px] opacity-80">Base currency: USD · all counterparties combined</div>
+              </div>
+              <div className="text-right">
+                <div className="text-3xl font-extrabold font-mono">{fmtSigned(unified.total)} USD</div>
+                <div className="text-[10px] opacity-90 font-semibold">
+                  {unified.total > 0.005 ? '↑ Net in our favor' : unified.total < -0.005 ? '↓ Net against us' : 'Settled'}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2 text-[10px] font-semibold">
+              {unified.breakdown.map(function (b) {
+                if (!b.hasRate) {
+                  return (
+                    <div key={b.cur} className="bg-amber-500 text-slate-900 rounded px-2 py-1" title="No FX rate available — add one in the FX Rates panel">
+                      <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
+                      <span className="ml-1 opacity-90">→ rate missing</span>
+                    </div>
+                  );
+                }
+                if (b.cur === unified.base) {
+                  return (
+                    <div key={b.cur} className="bg-slate-900/40 rounded px-2 py-1">
+                      <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
+                      <span className="ml-1 opacity-90">(base)</span>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={b.cur} className="bg-slate-900/40 rounded px-2 py-1">
+                    <span className="font-extrabold">{fmtSigned(b.amount)} {b.cur}</span>
+                    <span className="ml-1 opacity-90">× {Number(b.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} = {fmtSigned(b.baseEquiv)} USD</span>
+                  </div>
+                );
+              })}
+            </div>
+            {hasAnyMissing && (
+              <div className="mt-2 bg-amber-100 text-amber-900 text-[11px] font-bold rounded px-2 py-1.5 border border-amber-300">
+                ⚠ Missing FX rates for: {unified.missingRates.join(', ')} — add them in Inventory → FX Rates so this card includes those balances.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* v55.83-A.6.27.58 — Grand totals broken out PER CURRENCY.
           Previously mixed USD and EGP into one number, which was meaningless.
           Now: one row per currency with Credit / Debit / Balance for that currency.
@@ -1271,13 +1436,23 @@ export default function OpenAccountsTab(props) {
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Description</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Reference</th>
                         <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Cur</th>
-                        {/* v55.83-A.6.27.72 — Amount / Paid / Remaining columns for invoices+bills.
-                            For payments/adjustments, these are blank or show the cash flow. */}
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Amount</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Amount paid against this invoice/bill (auto-FIFO)">Paid</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Remaining unsettled amount">Remaining</th>
+                        {/* v55.83-A.6.27.72 HOTFIX 11 — Standard accounting two-column money display:
+                            "Amount In" (cash received OR sales invoice — increases what they owe us)
+                            "Amount Out" (cash paid OR vendor bill — increases what we owe them)
+                            All values positive; direction conveyed by which column is filled.
+                            Replaces the single signed Amount column which was counterintuitive
+                            (Payment Received showed as large red −number even though money came IN). */}
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Money received OR sales invoices billed to them — anything that increases what they owe us">Amount In</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Money paid OR vendor bills they billed us — anything that increases what we owe them">Amount Out</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-700 border-b-2 border-slate-300 bg-slate-50" title="Amount auto-applied against this invoice/bill via FIFO matching">Paid</th>
+                        {/* v55.83-A.6.27.72 HOTFIX 11 — Split Open Balance into AR and AP so the totals
+                            row segregates assets from liabilities (instead of summing them blindly). */}
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Open Accounts Receivable — sales invoices still owed to us by this counterparty">Open AR</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Open Accounts Payable — vendor bills we still owe this counterparty">Open AP</th>
+                        {/* v55.83-A.6.27.72 HOTFIX 11 — Rename "Net" → "Running" (the values were
+                            running cumulative balances, NOT the net impact of each row). */}
                         {s.currencies.map(function (cur) {
-                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100">Net {cur}</th>;
+                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100" title="Cumulative running balance in this currency after this row">Running {cur}</th>;
                         })}
                         {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                       </tr>
@@ -1327,32 +1502,47 @@ export default function OpenAccountsTab(props) {
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
                             <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
-                            {/* v55.83-A.6.27.72 HOTFIX 6 — Amount is now SIGNED based on the
-                                transaction's effect on our net position with this counterparty:
-                                  + (emerald) for Payment Sent / Sales Invoice (improves our position)
-                                  − (red)     for Payment Received / Vendor Bill (worsens our position)
-                                This makes the column algebraically sum to the Net column at the bottom. */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
+                            {/* v55.83-A.6.27.72 HOTFIX 11 — Standard accounting two-column display.
+                                Amount In column (emerald): values when money/obligation flows TO us.
+                                Amount Out column (red): values when money/obligation flows FROM us.
+                                Both shown as positive magnitudes; the column placement conveys
+                                direction. Matches every other accounting system. */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-emerald-800 bg-emerald-50/30">
                               {(function () {
-                                var signed = signedAmount(entry);
-                                var cls = signed > 0.005 ? 'text-emerald-800' : signed < -0.005 ? 'text-red-700' : 'text-slate-500';
-                                if (Math.abs(signed) < 0.005) return <span className="text-slate-400">—</span>;
-                                return <span className={cls}>{fmtSigned(signed)}</span>;
+                                var io = inOutAmount(entry);
+                                return io.in > 0.005 ? fmtNum(io.in) : <span className="text-slate-300">—</span>;
                               })()}
                             </td>
-                            {/* Paid — only meaningful for invoices/bills. Sum of FIFO-applied payments */}
-                            <td className="px-3 py-1.5 text-right font-mono font-bold bg-emerald-50">
-                              {(txnType === 'sales_invoice' || txnType === 'vendor_bill')
-                                ? <span className={pr.paid > 0 ? 'text-emerald-800' : 'text-slate-400'}>{fmtNum(pr.paid)}</span>
-                                : <span className="text-slate-400">—</span>}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-red-700 bg-red-50/30">
+                              {(function () {
+                                var io = inOutAmount(entry);
+                                return io.out > 0.005 ? fmtNum(io.out) : <span className="text-slate-300">—</span>;
+                              })()}
                             </td>
-                            {/* Remaining — invoice amount minus paid */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50">
+                            {/* Paid — only meaningful for invoices/bills. Sum of FIFO-applied amounts.
+                                Always positive magnitude (the column is gross paid, not signed). */}
+                            <td className="px-3 py-1.5 text-right font-mono font-bold text-slate-700 bg-slate-50">
                               {(txnType === 'sales_invoice' || txnType === 'vendor_bill')
-                                ? (pr.remaining > 0.001
-                                    ? <span className="text-amber-900">{fmtNum(pr.remaining)}</span>
-                                    : <span className="text-emerald-700" title="Fully settled">✓ 0.00</span>)
-                                : <span className="text-slate-400">—</span>}
+                                ? (pr.paid > 0.005
+                                    ? <span className="text-slate-800">{fmtNum(pr.paid)}</span>
+                                    : <span className="text-slate-300">—</span>)
+                                : <span className="text-slate-300">—</span>}
+                            </td>
+                            {/* Open AR — fills only on sales_invoice rows with unsettled remaining. */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-emerald-900 bg-emerald-50">
+                              {(txnType === 'sales_invoice')
+                                ? (pr.remaining > 0.005
+                                    ? <span>{fmtNum(pr.remaining)}</span>
+                                    : <span className="text-emerald-600 text-[10px]" title="Fully settled">✓ paid</span>)
+                                : <span className="text-slate-300">—</span>}
+                            </td>
+                            {/* Open AP — fills only on vendor_bill rows with unsettled remaining. */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-red-900 bg-red-50">
+                              {(txnType === 'vendor_bill')
+                                ? (pr.remaining > 0.005
+                                    ? <span>{fmtNum(pr.remaining)}</span>
+                                    : <span className="text-emerald-600 text-[10px]" title="Fully settled">✓ paid</span>)
+                                : <span className="text-slate-300">—</span>}
                             </td>
                             {/* Net per currency — running net balance from the simulation */}
                             {s.currencies.map(function (cur) {
@@ -1388,57 +1578,108 @@ export default function OpenAccountsTab(props) {
                           </tr>
                         );
                       })}
-                      {/* v55.83-A.6.27.72 HOTFIX 6 — Totals row uses SIGNED Amount sums so the
-                          column reconciles to Net algebraically:
-                            Total Amount (signed) = Net (FIFO)
-                          Previous HOTFIX 4 made Paid/Remaining tie out but Amount was still an
-                          unsigned magnitude sum — meaningless when payments and bills are mixed.
-                          Now: Payment Sent +amount, Vendor Bill −amount. They cancel out
-                          algebraically just like the FIFO simulation does. */}
+                      {/* v55.83-A.6.27.72 HOTFIX 11 — Totals row uses STRICT SEGREGATION:
+                          Inflows total       = sum of Amount In column (gross)
+                          Outflows total      = sum of Amount Out column (gross)
+                          Paid total          = gross paid magnitudes (just informational)
+                          Open AR total       = sum of sales_invoice remaining (assets)
+                          Open AP total       = sum of vendor_bill remaining (liabilities)
+                          Running USD/EGP     = ending FIFO net for that currency (matches the 4-pot)
+                          THE FIX: Open AR and Open AP are NEVER summed together. The relationship
+                          (Open AR − Open AP) = Net Position is shown by the Running column.
+                          NO BLIND SUMS that mix assets with liabilities. */}
                       {s.currencies.map(function (cur, ci) {
                         var cs = s.byCurrency[cur];
-                        // Compute per-currency signed totals from the entries for this currency
+                        // Compute per-currency segregated totals from entries for this currency
                         var curEntries = (accEntries || []).filter(function (e) {
                           var ec = String(e.currency || 'USD').toUpperCase().trim();
                           return ec === cur;
                         });
-                        var totalSigned = 0;
-                        var totalPaid = 0;
-                        var totalRemaining = 0;
+                        var totalIn = 0;
+                        var totalOut = 0;
+                        var totalPaid = 0;        // gross magnitude (informational)
+                        var totalOpenAR = 0;      // sales_invoice remaining only
+                        var totalOpenAP = 0;      // vendor_bill remaining only
                         curEntries.forEach(function (e) {
-                          totalSigned += signedAmount(e);
+                          var io = inOutAmount(e);
+                          totalIn += io.in;
+                          totalOut += io.out;
                           if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
                             var prT = computePaidRemaining(e, simResult);
                             totalPaid += prT.paid;
-                            totalRemaining += prT.remaining;
+                            if (e.transaction_type === 'sales_invoice') totalOpenAR += prT.remaining;
+                            else totalOpenAP += prT.remaining;
                           }
                         });
-                        var amtCls = totalSigned > 0.005 ? 'text-emerald-900' : totalSigned < -0.005 ? 'text-red-900' : 'text-slate-900';
+                        var runCls = cs.balance > 0.005 ? 'text-emerald-900' : cs.balance < -0.005 ? 'text-red-900' : 'text-slate-900';
                         return (
                           <tr key={cur} className="bg-slate-100 font-extrabold">
                             <td colSpan={5} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
                               {ci === 0 ? 'Totals (' + cur + ') →' : '(' + cur + ') →'}
                             </td>
-                            {/* AMOUNT total — SIGNED sum, reconciles to Net algebraically */}
-                            <td className={'px-3 py-2 text-right font-mono ' + amtCls} title="Algebraic sum of signed amounts (payments+invoices−bills−payments_received). Equals Net.">
-                              {fmtSigned(totalSigned)}
+                            {/* AMOUNT IN total — gross inflow magnitude */}
+                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50/30" title="Gross sum of all inflows (sales invoices billed + cash received) in this currency">
+                              {totalIn > 0.005 ? fmtNum(totalIn) : '—'}
                             </td>
-                            {/* PAID total (auto-applied via FIFO) — unsigned magnitude */}
-                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Sum of payments auto-applied to invoices/bills via FIFO">
-                              {totalPaid > 0.01 ? fmtNum(totalPaid) : '—'}
+                            {/* AMOUNT OUT total — gross outflow magnitude */}
+                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-50/30" title="Gross sum of all outflows (vendor bills + cash paid) in this currency">
+                              {totalOut > 0.005 ? fmtNum(totalOut) : '—'}
                             </td>
-                            {/* REMAINING total (open obligations) — unsigned magnitude */}
-                            <td className="px-3 py-2 text-right font-mono text-amber-900 bg-amber-50" title="Sum of open invoice/bill amounts still unsettled">
-                              {totalRemaining > 0.01 ? fmtNum(totalRemaining) : '—'}
+                            {/* PAID total — gross magnitude of FIFO auto-applications */}
+                            <td className="px-3 py-2 text-right font-mono text-slate-700 bg-slate-50" title="Gross sum of FIFO auto-applied amounts (informational)">
+                              {totalPaid > 0.005 ? fmtNum(totalPaid) : '—'}
                             </td>
-                            {/* Net per currency — match this cur column */}
+                            {/* OPEN AR total — sales invoices still owed to us (asset) */}
+                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Total Accounts Receivable still owed to us by this counterparty in this currency">
+                              {totalOpenAR > 0.005 ? fmtNum(totalOpenAR) : '—'}
+                            </td>
+                            {/* OPEN AP total — vendor bills we still owe (liability) */}
+                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-50" title="Total Accounts Payable we still owe to this counterparty in this currency">
+                              {totalOpenAP > 0.005 ? fmtNum(totalOpenAP) : '—'}
+                            </td>
+                            {/* Running per currency — ending FIFO net = OpenAR − OpenAP (when no prepaid) */}
                             {s.currencies.map(function (col, colI) {
                               if (col !== cur) return <td key={col + '-' + colI}></td>;
                               return (
-                                <td key={col + '-' + colI} className={'px-3 py-2 text-right font-mono ' + (cs.balance > 0 ? 'text-emerald-900' : cs.balance < 0 ? 'text-red-900' : 'text-slate-900')}>
+                                <td key={col + '-' + colI} className={'px-3 py-2 text-right font-mono ' + runCls} title="Ending FIFO net balance for this currency. Equals Open AR − Open AP when there are no prepaid balances.">
                                   {fmtSigned(cs.balance)}
                                 </td>
                               );
+                            })}
+                            {canEdit && <td></td>}
+                          </tr>
+                        );
+                      })}
+                      {/* v55.83-A.6.27.72 HOTFIX 11 — Net Position row per currency.
+                          Spans the Open AR + Open AP columns to make the relationship explicit:
+                          AR − AP = Net Position (the actual liability or asset). */}
+                      {s.currencies.map(function (cur) {
+                        var cs = s.byCurrency[cur];
+                        var curEntries = (accEntries || []).filter(function (e) {
+                          var ec = String(e.currency || 'USD').toUpperCase().trim();
+                          return ec === cur;
+                        });
+                        var tAR = 0, tAP = 0;
+                        curEntries.forEach(function (e) {
+                          if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
+                            var prT = computePaidRemaining(e, simResult);
+                            if (e.transaction_type === 'sales_invoice') tAR += prT.remaining;
+                            else tAP += prT.remaining;
+                          }
+                        });
+                        var net = tAR - tAP;
+                        var netCls = net > 0.005 ? 'text-emerald-900' : net < -0.005 ? 'text-red-900' : 'text-slate-900';
+                        return (
+                          <tr key={'np-' + cur} className="bg-slate-900 text-white">
+                            <td colSpan={5} className="px-3 py-1.5 text-right text-[10px] uppercase tracking-wider opacity-90">
+                              Net Position ({cur}) — Open AR − Open AP →
+                            </td>
+                            <td colSpan={3}></td>
+                            <td colSpan={2} className={'px-3 py-1.5 text-right font-mono font-extrabold ' + netCls.replace('text-slate-900','text-white').replace('text-emerald-900','text-emerald-300').replace('text-red-900','text-red-300')}>
+                              {fmtNum(tAR)} − {fmtNum(tAP)} = <span className="ml-1">{fmtSigned(net)}</span>
+                            </td>
+                            {s.currencies.map(function (col, colI) {
+                              return <td key={col + '-np-' + colI}></td>;
                             })}
                             {canEdit && <td></td>}
                           </tr>

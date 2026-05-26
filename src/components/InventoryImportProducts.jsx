@@ -150,13 +150,44 @@ export default function InventoryImportProducts(props) {
   function findProductByQuickCode(code, variantSuffix) {
     // v55.83-A.6.27.39 — Match by composite (quick_code, variant_suffix).
     // Two products can share the same quick_code if they have different suffixes.
+    // v55.83-A.6.27.72 HOTFIX 9 — now includes INACTIVE products too (so reactivating
+    // a deactivated quick_code is detected and reported clearly, not silently re-inserted).
     if (isBlank(code)) return null;
     var k = String(code).trim().toLowerCase();
     var v = String(variantSuffix || '').trim();
     return products.find(function (p) {
       var pv = String(p.variant_suffix || '').trim();
-      return p.active && (p.quick_code || '').toLowerCase() === k && pv === v;
+      return (p.quick_code || '').toLowerCase() === k && pv === v;
     }) || null;
+  }
+
+  // v55.83-A.6.27.72 HOTFIX 9 — Comprehensive duplicate-detection helpers.
+  // Mirrors the HOTFIX 7 single-product flow: detect collisions on name_en, name_ar,
+  // classification_slug (in addition to quick_code) — both within the imported file
+  // AND against the existing products table. Always name the conflicting product.
+  function findProductByNameEn(name) {
+    if (isBlank(name)) return null;
+    var k = String(name).trim().toLowerCase();
+    return products.find(function (p) {
+      return (p.name_en || '').trim().toLowerCase() === k;
+    }) || null;
+  }
+  function findProductByNameAr(name) {
+    if (isBlank(name)) return null;
+    var k = String(name).trim().toLowerCase();
+    return products.find(function (p) {
+      return (p.name_ar || '').trim().toLowerCase() === k;
+    }) || null;
+  }
+  function findProductBySlug(slug) {
+    if (isBlank(slug)) return null;
+    return products.find(function (p) { return p.classification_slug === slug; }) || null;
+  }
+  function describeConflict(p) {
+    var lbl = (p.name_en || p.name_ar || '(unnamed)') + (p.name_ar && p.name_en !== p.name_ar ? ' / ' + p.name_ar : '');
+    var code = p.quick_code ? p.quick_code : '(no quick code)';
+    var status = p.active ? 'ACTIVE' : 'INACTIVE';
+    return '"' + lbl + '" — Quick Code: ' + code + ' — Status: ' + status + ' — ID: ' + p.id;
   }
 
   function familyValidForChild(childOpt, familyOpt) {
@@ -364,7 +395,14 @@ export default function InventoryImportProducts(props) {
     var enrich = [];     // rows that will enrich existing products
     var skipped = [];    // rows skipped because nothing new vs existing
     var errors = [];     // rows with validation errors
-    var seenQuickCodes = {};   // detect duplicates within the file
+    // v55.83-A.6.27.72 HOTFIX 9 — Track all 4 dup types within-file.
+    // Mirrors HOTFIX 7 single-product flow: detect collisions on quick_code+suffix,
+    // classification_slug, name_en, name_ar so duplicates inside one file are caught
+    // before any DB call (and named clearly so the user can fix the right row).
+    var seenQuickCodes = {};   // key: quick_code|variant_suffix → first rowNum seen
+    var seenSlugs = {};        // key: slug → first rowNum seen
+    var seenNameEn = {};       // key: name_en lowercased → first rowNum seen
+    var seenNameAr = {};       // key: name_ar lowercased → first rowNum seen
 
     rows.forEach(function (raw, idx) {
       var rowNum = idx + 2; // +2 because header is row 1 and arrays are 0-indexed
@@ -432,13 +470,32 @@ export default function InventoryImportProducts(props) {
         var variantSfx = String(raw.variant_suffix || '').trim();
         var qk = quickCode.toLowerCase() + '|' + variantSfx;
         if (seenQuickCodes[qk]) {
-          errs.push('quick_code "' + quickCode + '"' +
+          errs.push('DUPLICATE within file — quick_code "' + quickCode + '"' +
             (variantSfx ? ' with variant_suffix "' + variantSfx + '"' : '') +
-            ' appears more than once in this file (also on row ' + seenQuickCodes[qk] + ')');
+            ' already appears on row ' + seenQuickCodes[qk] + '. No duplicates allowed.');
         } else {
           seenQuickCodes[qk] = rowNum;
         }
       }
+
+      // v55.83-A.6.27.72 HOTFIX 9 — within-file duplicate checks for name_en, name_ar, slug.
+      if (nameEn) {
+        var enKey = nameEn.toLowerCase();
+        if (seenNameEn[enKey]) {
+          errs.push('DUPLICATE within file — English name "' + nameEn + '" already appears on row ' + seenNameEn[enKey] + '. No duplicates allowed.');
+        } else {
+          seenNameEn[enKey] = rowNum;
+        }
+      }
+      if (nameAr) {
+        var arKey = nameAr.toLowerCase();
+        if (seenNameAr[arKey]) {
+          errs.push('DUPLICATE within file — Arabic name "' + nameAr + '" already appears on row ' + seenNameAr[arKey] + '. No duplicates allowed.');
+        } else {
+          seenNameAr[arKey] = rowNum;
+        }
+      }
+      // Slug check happens after slug is built (below, after the cascade check passes).
 
       if (errs.length) {
         errors.push({ rowNum: rowNum, raw: raw, errors: errs, unknownCodes: unknownCodes });
@@ -489,6 +546,44 @@ export default function InventoryImportProducts(props) {
       };
 
       // Duplicate against DB (v55.83-A.6.27.39: composite key with variant_suffix)
+      // v55.83-A.6.27.72 HOTFIX 9 — also check classification_slug + name_en + name_ar
+      // against the DB. Each conflict is NAMED so the user can see exactly which product
+      // their import row would collide with. No duplicates allowed (mirrors single-product
+      // HOTFIX 7 from the same release).
+
+      // Within-file slug check (slug is built above this section)
+      if (slug) {
+        if (seenSlugs[slug]) {
+          errors.push({ rowNum: rowNum, raw: raw, errors: ['DUPLICATE within file — classification slug "' + slug + '" already appears on row ' + seenSlugs[slug] + '. Same exact Family/Category/Grade/etc. combination. No duplicates allowed.'], unknownCodes: unknownCodes });
+          return;
+        } else {
+          seenSlugs[slug] = rowNum;
+        }
+      }
+
+      // DB classification_slug conflict
+      var dupSlug = findProductBySlug(slug);
+      if (dupSlug) {
+        errors.push({ rowNum: rowNum, raw: raw, errors: ['DUPLICATE in database — classification slug "' + slug + '" already used by ' + describeConflict(dupSlug) + '. No duplicates allowed. Change at least one level code, or edit the existing product.'], unknownCodes: unknownCodes });
+        return;
+      }
+
+      // DB name_en conflict
+      var dupEn = findProductByNameEn(nameEn);
+      if (dupEn) {
+        errors.push({ rowNum: rowNum, raw: raw, errors: ['DUPLICATE in database — English name "' + nameEn + '" already used by ' + describeConflict(dupEn) + '. No duplicates allowed. Adjust the name slightly, or edit the existing product.'], unknownCodes: unknownCodes });
+        return;
+      }
+
+      // DB name_ar conflict
+      var dupAr = findProductByNameAr(nameAr);
+      if (dupAr) {
+        errors.push({ rowNum: rowNum, raw: raw, errors: ['DUPLICATE in database — Arabic name "' + nameAr + '" already used by ' + describeConflict(dupAr) + '. No duplicates allowed. Adjust the name slightly, or edit the existing product.'], unknownCodes: unknownCodes });
+        return;
+      }
+
+      // DB quick_code conflict (existing enrich/skip logic — kept since enrichment is a
+      // useful import feature that fills in missing fields without overwriting).
       if (quickCode) {
         var existing = findProductByQuickCode(quickCode, payload.variant_suffix);
         if (existing) {
@@ -511,9 +606,9 @@ export default function InventoryImportProducts(props) {
             }
           });
           if (enrichedFields.length > 0) {
-            enrich.push({ rowNum: rowNum, raw: raw, existing: existing, patch: enrichPatch, enrichedFields: enrichedFields });
+            enrich.push({ rowNum: rowNum, raw: raw, existing: existing, patch: enrichPatch, enrichedFields: enrichedFields, conflictDesc: describeConflict(existing) });
           } else {
-            skipped.push({ rowNum: rowNum, raw: raw, existing: existing, reason: 'product already exists with same quick_code and no new info' });
+            skipped.push({ rowNum: rowNum, raw: raw, existing: existing, reason: 'Already exists: ' + describeConflict(existing) + ' — no new info to enrich' });
           }
           return;
         }

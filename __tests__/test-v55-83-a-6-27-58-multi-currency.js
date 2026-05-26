@@ -155,8 +155,8 @@ ok('G6: per-currency Balance tile shows "they owe us"/"we owe them"/"settled" ba
 
 ok('H1: ledger table header has Currency (Cur) column',
   /<th[^>]*>Cur<\/th>/.test(oa));
-ok('H2: ledger table has one Net CUR column per currency in this account (v55.83-A.6.27.72 renamed Running→Net)',
-  /s\.currencies\.map\(function \(cur\) \{\s+return <th key=\{cur\}[\s\S]{0,300}Net \{cur\}/.test(oa));
+ok('H2: ledger table has Running CUR columns per currency (v72 HOTFIX 11 — renamed back from Net since it is a cumulative running balance)',
+  /Running \{cur\}/.test(oa));
 ok('H3: each entry row shows its own _currency in the Cur column',
   /<td className="px-3 py-1\.5 text-center font-mono font-bold text-slate-800 text-\[11px\]">\{entryCur\}<\/td>/.test(oa));
 ok('H4: each entry row renders per-currency running cells from _running_by_currency',
@@ -164,7 +164,7 @@ ok('H4: each entry row renders per-currency running cells from _running_by_curre
 ok('H5: entry\'s own currency cell highlighted (bg-slate-100), others dimmed (text-slate-400)',
   /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,400}\(isThisEntryCur \? 'bg-slate-100 ' : 'text-slate-400 '\)/.test(oa));
 ok('H6: totals row split per currency (one row per currency)',
-  /s\.currencies\.map\(function \(cur, ci\) \{[\s\S]{0,1500}<tr key=\{cur\} className="bg-slate-100 font-extrabold">/.test(oa));
+  /s\.currencies\.map\(function \(cur, ci\) \{[\s\S]{0,2500}<tr key=\{cur\} className="bg-slate-100 font-extrabold">/.test(oa));
 ok('H7: totals row places per-currency balance in correct running column',
   /s\.currencies\.map\(function \(col, colI\) \{\s+if \(col !== cur\) return <td/.test(oa));
 
@@ -184,21 +184,21 @@ ok('I5: multi-currency note shown when currencies.length > 1',
   /currencies\.length > 1\s+\? '<div class="multi-currency-note"><strong>Multi-currency account/.test(exp));
 ok('I6: balance box shows abs(balance) + currency code',
   /fmtMoney\(Math\.abs\(cs\.balance\)\) \+ ' ' \+ escapeHtml\(cur\)/.test(exp));
-ok('I7: each section has its own totals row in tfoot',
-  /<tfoot><tr class="totals">[\s\S]{0,500}\+ escapeHtml\(cur\) \+ ' Totals/.test(exp));
+ok('I7: each section has its own totals row + Net Position row in tfoot (v72 HOTFIX 11)',
+  /<tfoot>[\s\S]{0,3000}Net Position/.test(exp));
 
 // ══════════════════════════════════════════════════════════════════
 // PART J — Excel export (per-currency totals + running cols)
 // ══════════════════════════════════════════════════════════════════
 
-ok('J1: Excel column headers include Type/Amount/Paid/Remaining + one Net CUR per currency (v55.83-A.6.27.72)',
-  /var colHeaders = \['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'\];\s+currencies\.forEach\(function \(cur\) \{ colHeaders\.push\('Net ' \+ cur\)/.test(exp));
+ok('J1: Excel headers Type/Amount In/Amount Out/Paid/Open AR/Open AP + one Running CUR per currency (v72 HOTFIX 11)',
+  /'Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount In', 'Amount Out', 'Paid', 'Open AR', 'Open AP'/.test(exp) && /'Running ' \+ cur/.test(exp));
 ok('J2: Excel walks entries with per-currency rolling running map (v72 HOTFIX 6 — now uses signedAmount)',
   /var running = \{\};[\s\S]{0,5000}running\[entryCur\] \+= signed/.test(exp));
 ok('J3: Excel row pushes Type + Amount + Paid + Remaining + per-currency running values (v55.83-A.6.27.72)',
   /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,1000}TYPE_LABEL\[e\.transaction_type\]/.test(exp));
-ok('J4: Excel adds per-currency totals rows at bottom with signed Amount sum (v72 HOTFIX 6)',
-  /Totals by Currency[\s\S]{0,2000}currencies\.forEach\(function \(cur\) \{[\s\S]{0,800}totSigned \+= signedAmount\(e\)[\s\S]{0,800}rows\.push\(totalsRow\)/.test(exp));
+ok('J4: Excel adds per-currency totals rows with segregated In/Out/AR/AP (v72 HOTFIX 11)',
+  /cur \+ ' TOTALS'[\s\S]{0,500}totIn > 0\.005 \? totIn : ''/.test(exp));
 ok('J5: Excel adds plain-English balance lines per currency',
   /var label = cs\.balance > 0 \? 'They owe us' : cs\.balance < 0 \? 'We owe them' : 'Settled'/.test(exp));
 ok('J6: Excel col widths include base 6 + one per currency',

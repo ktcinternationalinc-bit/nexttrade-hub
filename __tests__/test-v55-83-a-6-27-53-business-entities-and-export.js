@@ -92,9 +92,8 @@ ok('B9: print fn handles missing entity gracefully (No business entity selected)
   /No business entity selected for this account/.test(exp));
 ok('B10: print fn includes convention explanation footer',
   /Convention: <strong>Credit<\/strong> = money paid to us/.test(exp));
-ok('B11: Excel fn writes numeric SIGNED values (v72 HOTFIX 6 — signed Amount cell so totals reconcile to Net)',
-  /Math\.abs\(signed\) > 0\.005 \? signed : ''/.test(exp) &&
-  /running\[entryCur\] \+= signed/.test(exp));
+ok('B11: Excel fn writes positive In/Out amounts (v72 HOTFIX 11 — two-column accounting layout supersedes signed Amount)',
+  /inAmt > 0\.005 \? inAmt : ''/.test(exp) && /outAmt > 0\.005 \? outAmt : ''/.test(exp));
 ok('B12: Excel filename sanitized + dated',
   /OpenAccount-' \+ sanitizeFilename\(account\.account_name\) \+ '-' \+ dateStr \+ '\.xlsx'/.test(exp));
 ok('B13: Excel uses XLSX.utils.aoa_to_sheet + book_new + writeFile',

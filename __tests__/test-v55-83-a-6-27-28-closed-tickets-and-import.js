@@ -101,8 +101,9 @@ ok('B3g: default_currency validated against VALID_CURRENCY list',
   /if \(currency && VALID_CURRENCY\.indexOf\(currency\) < 0\) errs\.push\('default_currency must be one of:/.test(imp));
 ok('B3h: numeric fields validated as numbers',
   /n === 'INVALID'\) errs\.push\(k \+ ' must be a number/.test(imp));
-ok('B3i: quick_code uniqueness within file enforced (composite with variant_suffix)',
-  /quick_code "' \+ quickCode \+ '"[\s\S]{0,200}appears more than once in this file/.test(imp));
+ok('B3i: quick_code uniqueness within file enforced + duplicate naming (HOTFIX 9 — adds slug + name_en + name_ar)',
+  /DUPLICATE within file — quick_code "' \+ quickCode \+ '"[\s\S]{0,300}already appears on row/.test(imp) &&
+  /No duplicates allowed/.test(imp));
 
 // ── B4. Duplicate handling: skip-if-no-new-info OR enrich ─────────
 ok('B4a: existing-product detection on quick_code',
@@ -111,8 +112,8 @@ ok('B4b: enrich-only pattern — only fills existing null/empty fields',
   /if \(\(existingVal === null \|\| existingVal === undefined \|\| existingVal === ''\) && newVal !== null && newVal !== ''\)/.test(imp));
 ok('B4c: enrich never overwrites identity fields (quick_code, names, slug, classification FKs)',
   /if \(\['quick_code','name_en','name_ar','classification_slug'[\s\S]{0,300}'spec_class_list_id'\]\.indexOf\(k\) >= 0\) return/.test(imp));
-ok('B4d: skipped row when existing product and no new info',
-  /skipped\.push\(\{[\s\S]{0,200}reason: 'product already exists with same quick_code and no new info'/.test(imp));
+ok('B4d: skipped row names the existing product (HOTFIX 9 — was generic message)',
+  /skipped\.push\(\{[\s\S]{0,200}reason: 'Already exists: ' \+ describeConflict\(existing\)/.test(imp));
 
 // ── B5. Commit logic ───────────────────────────────────────────────
 ok('B5a: commitImport iterates parsedRows.valid and calls dbInsert',

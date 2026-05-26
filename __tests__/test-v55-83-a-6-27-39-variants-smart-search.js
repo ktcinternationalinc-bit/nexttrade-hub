@@ -75,8 +75,8 @@ ok('B5: in-file duplicate check uses composite key (quick_code + variant_suffix)
   /var qk = quickCode\.toLowerCase\(\) \+ '\|' \+ variantSfx/.test(imp));
 ok('B6: findProductByQuickCode accepts variantSuffix arg',
   /function findProductByQuickCode\(code, variantSuffix\)/.test(imp));
-ok('B7: findProductByQuickCode compares both quick_code and variant_suffix',
-  /var pv = String\(p\.variant_suffix \|\| ''\)\.trim\(\);\s+return p\.active && \(p\.quick_code \|\| ''\)\.toLowerCase\(\) === k && pv === v/.test(imp));
+ok('B7: findProductByQuickCode compares both quick_code and variant_suffix (HOTFIX 9 also matches INACTIVE products so reactivations are detected)',
+  /var pv = String\(p\.variant_suffix \|\| ''\)\.trim\(\);\s+return \(p\.quick_code \|\| ''\)\.toLowerCase\(\) === k && pv === v/.test(imp));
 ok('B8: DB dedup call site passes payload.variant_suffix',
   /findProductByQuickCode\(quickCode, payload\.variant_suffix\)/.test(imp));
 

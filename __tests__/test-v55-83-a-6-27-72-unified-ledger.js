@@ -110,14 +110,14 @@ ok('C9: per-currency tile strip (They owe us / We owe them / Their prepaid / Our
   /They owe us/.test(oa) && /We owe them/.test(oa) &&
   /Their credit \(prepaid\)/.test(oa) && /Our credit \(prepaid\)/.test(oa) &&
   /Net balance/.test(oa));
-ok('C10: ledger table has Type / Amount / Paid / Remaining columns',
-  />Type</.test(oa) && />Amount</.test(oa) && />Paid</.test(oa) && />Remaining</.test(oa));
+ok('C10: ledger table has Type + Amount In + Amount Out + Paid + Open AR + Open AP columns (HOTFIX 11 supersedes Amount/Paid/Remaining)',
+  />Type</.test(oa) && />Amount In</.test(oa) && />Amount Out</.test(oa) && />Paid</.test(oa) && />Open AR</.test(oa) && />Open AP</.test(oa));
 ok('C11: Type pill rendered from TRANSACTION_TYPES registry',
   /var typeMeta = TRANSACTION_TYPES\[txnType\] \|\| TRANSACTION_TYPES\.credit_adjustment/.test(oa));
 ok('C12: Paid/Remaining cells use computePaidRemaining',
   /var pr = computePaidRemaining\(entry, simResult\)/.test(oa));
-ok('C13: Net per-currency column header (renamed from "Running")',
-  /Net \{cur\}/.test(oa));
+ok('C13: Running per-currency column header (HOTFIX 11 renamed back from Net since it is a cumulative balance)',
+  /Running \{cur\}/.test(oa));
 ok('C14: 🔄 Offset button in toolbar, disabled when no candidate',
   /🔄 Offset/.test(oa) &&
   /disabled=\{!offsetCandidate\}/.test(oa));
@@ -139,19 +139,16 @@ ok('D1: printAccountLedger accepts opts (perspective + simulation)',
 ok('D2: print supports customer perspective with mirrored labels',
   /perspective === 'customer'/.test(exp) &&
   /TYPE_LABEL/.test(exp));
-ok('D3: print displays type column + Amount/Paid/Remaining in PDF table',
-  />Type<\/th>/.test(exp) &&
-  />Amount<\/th>/.test(exp) &&
-  />Paid<\/th>/.test(exp) &&
-  />Remaining<\/th>/.test(exp));
+ok('D3: print displays type column + Amount In/Amount Out/Paid/Open AR/Open AP in PDF table (HOTFIX 11)',
+  /Amount In/.test(exp) && /Amount Out/.test(exp) && />Paid</.test(exp) && /Open AR/.test(exp) && /Open AP/.test(exp));
 ok('D4: 4-pot tile summary at top of each currency section',
   /potTilesHtml/.test(exp) &&
   /simCur\.theirOpenInvoices/.test(exp) &&
   /simCur\.ourOpenBills/.test(exp) &&
   /simCur\.theirPrepaid/.test(exp) &&
   /simCur\.ourPrepaid/.test(exp));
-ok('D5: Excel export has Type column + Amount/Paid/Remaining columns',
-  /var colHeaders = \['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'\]/.test(exp));
+ok('D5: Excel export has Type column + Amount In/Amount Out/Paid/Open AR/Open AP columns (HOTFIX 11)',
+  /'Type'/.test(exp) && /'Amount In'/.test(exp) && /'Amount Out'/.test(exp) && /'Paid'/.test(exp) && /'Open AR'/.test(exp) && /'Open AP'/.test(exp));
 ok('D6: Excel runs inline FIFO sim to compute Paid/Remaining per row',
   /var simApplied = \{\}/.test(exp) &&
   /var simState = \{\}/.test(exp));
