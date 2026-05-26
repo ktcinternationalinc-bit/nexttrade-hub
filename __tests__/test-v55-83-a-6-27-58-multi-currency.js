@@ -178,8 +178,8 @@ ok('I2: sectionHtml function renders one currency section per currency',
   /function sectionHtml\(cur\) \{[\s\S]{0,300}var cs = byCurrency\[cur\]/.test(exp));
 ok('I3: section walks entries filtered by currency with own running balance',
   /entries\.forEach\(function \(e\) \{\s+var entryCur = e\._currency \|\| String\(e\.currency \|\| 'USD'\)\.toUpperCase\(\);\s+if \(entryCur !== cur\) return/.test(exp));
-ok('I4: section CSS uses page-break-inside:avoid for clean PDF',
-  /\.currency-section \{ page-break-inside: avoid/.test(exp));
+ok('I4: PDF section CSS uses tr-level page-break-inside:avoid (HOTFIX 12: was section-level which forced blank first page)',
+  /\.currency-section tr \{ page-break-inside: avoid/.test(exp));
 ok('I5: multi-currency note shown when currencies.length > 1',
   /currencies\.length > 1\s+\? '<div class="multi-currency-note"><strong>Multi-currency account/.test(exp));
 ok('I6: balance box shows abs(balance) + currency code',

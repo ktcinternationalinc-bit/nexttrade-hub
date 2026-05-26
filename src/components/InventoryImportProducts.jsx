@@ -321,7 +321,12 @@ export default function InventoryImportProducts(props) {
       ['HOW TO USE:'],
       ['1. Fill in the "Products" sheet — one row per product.'],
       ['2. All 8 classification code columns are REQUIRED (family_code through spec_class_code).'],
-      ['3. name_en, name_ar required. quick_code, design_sku optional.'],
+      ['3. name_en, name_ar: AUTO-BUILT from your level selections if left blank — recipe per Family:'],
+      ['     • Textile (TEX*) → Category + Grade + Color + Backing'],
+      ['     • Leather (LEA*) → Family + Grade + Color + Backing'],
+      ['     • PVC (PVC*)    → Family + Grade + Color + Pattern + SpecClass'],
+      ['     • Other         → Family + Grade + Color + Backing (default)'],
+      ['     Type your own names to override the auto-build. quick_code, design_sku optional.'],
       ['4. Default tech specs (UOM, thickness, width, GSM, etc.) are all optional.'],
       ['5. Default operational fields (supplier, cost, currency, rack) all optional.'],
       ['6. Delete the example row before uploading.'],
@@ -413,8 +418,20 @@ export default function InventoryImportProducts(props) {
       var quickCode = String(raw.quick_code || '').trim();
       var designSku = String(raw.design_sku || '').trim();
 
-      if (!nameEn) errs.push('name_en required');
-      if (!nameAr) errs.push('name_ar required');
+      // v55.83-A.6.27.72 HOTFIX 12 — Auto-build name_en/name_ar from level selections
+      // if the row leaves them blank. Mirrors the single-product Add form's recipe:
+      //   TEX  → Category Grade Color Backing
+      //   LEA  → Family Grade Color Backing
+      //   PVC  → Family Grade Color Pattern SpecClass
+      //   default → Family Grade Color Backing
+      // Names are auto-filled BEFORE the empty-name check below so consistent naming
+      // doesn't require the user to type every name manually.
+      // (Resolution of levels happens just below; we'll re-fill nameEn/Ar after we
+      // have resolvedLevels populated.)
+
+      // v55.83-A.6.27.72 HOTFIX 12 — Defer empty-name check until AFTER level resolution
+      // so we can auto-fill from levels. (Original blocking errs moved to after the
+      // level-resolution block below.)
 
       // Resolve all 9 classification codes
       // v55.83-A.6.27.38 — Only Levels 1/3/6/9 (Family/Grade/Color/Origin) are REQUIRED.
@@ -450,6 +467,44 @@ export default function InventoryImportProducts(props) {
           }
         });
       }
+
+      // v55.83-A.6.27.72 HOTFIX 12 — Auto-fill name_en / name_ar from resolved levels
+      // when the user left them blank in the import file. Uses the same family-specific
+      // recipes as the manual Add Product form so naming is consistent end-to-end.
+      // Only fills when blank — if user typed something, we respect it.
+      if ((!nameEn || !nameAr) && resolvedLevels[1]) {
+        var familyCode = String(resolvedLevels[1].code || '').toUpperCase().trim();
+        // Recipes match the single-product form (NAMING_RECIPES in InventoryProductMaster.jsx)
+        var IMPORT_RECIPES = {
+          'TEX':     [2, 3, 6, 5],   // Textile: Category Grade Color Backing
+          'TEXTILE': [2, 3, 6, 5],
+          'LEA':     [1, 3, 6, 5],   // Leather: Family Grade Color Backing
+          'LEATHER': [1, 3, 6, 5],
+          'PVC':     [1, 3, 6, 7, 8], // PVC: Family Grade Color Pattern SpecClass
+          'PVCPOOL': [1, 3, 6, 7, 8],
+          'PVCBD':   [1, 3, 6, 7, 8],
+        };
+        var recipe = IMPORT_RECIPES[familyCode];
+        if (!recipe) {
+          var prefixKey = Object.keys(IMPORT_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
+          if (prefixKey) recipe = IMPORT_RECIPES[prefixKey];
+        }
+        if (!recipe) recipe = [1, 3, 6, 5]; // default
+        var enParts = [];
+        var arParts = [];
+        recipe.forEach(function (lvl) {
+          var lvlOpt = resolvedLevels[lvl];
+          if (!lvlOpt) return;
+          if (lvlOpt.label_en) enParts.push(String(lvlOpt.label_en).trim());
+          if (lvlOpt.label_ar) arParts.push(String(lvlOpt.label_ar).trim());
+        });
+        if (!nameEn && enParts.length > 0) nameEn = enParts.join(' ');
+        if (!nameAr && arParts.length > 0) nameAr = arParts.join(' ');
+      }
+
+      // NOW check empty names (after auto-fill attempt)
+      if (!nameEn) errs.push('name_en is required (auto-fill failed — Family + recipe levels need to be filled in)');
+      if (!nameAr) errs.push('name_ar is required (auto-fill failed — Family + recipe levels need to be filled in)');
 
       // UOM / currency / numbers
       var uom = String(raw.default_uom || '').trim().toLowerCase();

@@ -54,11 +54,10 @@ ok('5a: change is annotated with v55.83-A.6.27.27 comment',
   /v55\.83-A\.6\.27\.27 — Max requested Arabic description and/.test(pm));
 
 // ── 6. Edit modal NOT TOUCHED — only the table row changed ─────────
-ok('6a: modal form still uses original label-input styling',
-  /Product Name \(Arabic\) \*/.test(pm) &&
-  /placeholder="مثال: موزاييك جديد بريميوم أزرق غامق"/.test(pm));
-ok('6b: modal Arabic name input still direction:rtl',
-  /value=\{form\.name_ar\}[\s\S]{0,500}direction: 'rtl'/.test(pm));
+ok('6a: modal form uses label-input styling (HOTFIX 12 added auto-name banner but labels preserved)',
+  /text-\[11px\] font-extrabold[\s\S]{0,200}Product Name \(English\)/.test(read('src/components/InventoryProductMaster.jsx')));
+ok('6b: modal Arabic name input still direction:rtl (HOTFIX 12 preserved)',
+  /name_ar[\s\S]{0,2000}direction: 'rtl'/.test(read('src/components/InventoryProductMaster.jsx')));
 
 // ── 7. Regression guards on prior builds ──────────────────────────
 ok('7a: Build 2 cascading-dropdown logic still intact',

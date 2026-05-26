@@ -459,19 +459,28 @@ export default function OpenAccountsTab(props) {
   }, [accounts, search]);
 
   // v55.83-A.6.27.58 — Grand totals broken out per currency.
-  // { byCurrency: {USD: {credit, debit, balance, accountsWithCurrency}, EGP: ...},
-  //   currencies: ['USD', 'EGP'], accountCount }
+  // v55.83-A.6.27.72 HOTFIX 12 — also aggregates FIFO open AR / open AP / prepaid pots
+  // so the bottom summary cards bind to real numbers (was binding to undefined → '—').
+  // The 3 cards reconcile: Total Open AR − Total Open AP = Net Balance (when no prepaid).
   var grandTotals = useMemo(function () {
     var byCur = {};
     filteredAccounts.forEach(function (a) {
       var s = summaryFor(a.id);
       s.currencies.forEach(function (cur) {
         var cs = s.byCurrency[cur];
-        if (!byCur[cur]) byCur[cur] = { credit: 0, debit: 0, balance: 0, accountsWithCurrency: 0 };
+        if (!byCur[cur]) byCur[cur] = {
+          credit: 0, debit: 0, balance: 0, accountsWithCurrency: 0,
+          theyOweUs: 0, weOweThem: 0, theirPrepaid: 0, ourPrepaid: 0,
+        };
         byCur[cur].credit += cs.credit;
         byCur[cur].debit += cs.debit;
         byCur[cur].balance += cs.balance;
         byCur[cur].accountsWithCurrency += 1;
+        // HOTFIX 12 — sum the FIFO pots across all accounts so the global cards have real data
+        byCur[cur].theyOweUs += Number(cs.theyOweUs || 0);
+        byCur[cur].weOweThem += Number(cs.weOweThem || 0);
+        byCur[cur].theirPrepaid += Number(cs.theirPrepaid || 0);
+        byCur[cur].ourPrepaid += Number(cs.ourPrepaid || 0);
       });
     });
     var currencies = Object.keys(byCur).sort(function (a, b) {

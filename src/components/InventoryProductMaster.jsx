@@ -60,6 +60,78 @@ var LEVEL_LABELS = {
   9: { en: 'Country',          ar: 'البلد' },
 };
 
+// v55.83-A.6.27.72 HOTFIX 12 — Auto-naming convention per product family.
+// Per Max's spec: name is built by concatenating the level labels in a fixed order,
+// in English AND Arabic, derived from the dropdown selections. Name fields stay
+// locked (auto-populated, not editable) until ALL required levels are entered;
+// after that the user can override manually.
+//
+// Recipe keys are matched against the FAMILY's `code` (e.g. "TEX", "LEA", "PVC")
+// — using uppercase comparison so casing in the DB doesn't matter. Each recipe is
+// a list of level numbers (same numbers as LEVEL_FIELD_MAP keys).
+//
+// To add a new family rule: add a key like 'NEWFAM': [1, 3, 6] and the system
+// builds "<family> <grade> <color>" automatically in both languages.
+var NAMING_RECIPES = {
+  // Textile: Category > Grade > Color > Backing
+  'TEX':     [2, 3, 6, 5],
+  'TEXTILE': [2, 3, 6, 5],
+  // Leather: Family > Grade > Color > Backing
+  'LEA':     [1, 3, 6, 5],
+  'LEATHER': [1, 3, 6, 5],
+  // PVC pools / boardecking: Family > Grade > Color > Pattern > Spec Class
+  'PVC':     [1, 3, 6, 7, 8],
+  'PVCPOOL': [1, 3, 6, 7, 8],
+  'PVCBD':   [1, 3, 6, 7, 8],
+};
+
+// Build a product name (en + ar) from the form's level selections, looking up
+// each list value to get its label_en / label_ar.
+// Returns { name_en, name_ar, recipe, missing: [levels still unfilled] }.
+// If the family code has no recipe, falls back to: Family > Category > Grade > Color
+// (a sensible default; doesn't lock the user out of saving).
+function buildAutoName(form, lists) {
+  if (!form || !lists) return { name_en: '', name_ar: '', recipe: null, missing: [] };
+  // Find the family list entry to read its code
+  var familyId = form.family_list_id;
+  if (!familyId) return { name_en: '', name_ar: '', recipe: null, missing: [1] };
+  var familyEntry = lists.find(function (l) { return l.id === familyId; });
+  if (!familyEntry) return { name_en: '', name_ar: '', recipe: null, missing: [1] };
+  var familyCode = String(familyEntry.code || '').toUpperCase().trim();
+  // Resolve recipe — match on exact code first, then prefix (e.g. 'PVCPOOL01' starts with 'PVC')
+  var recipe = NAMING_RECIPES[familyCode] || null;
+  if (!recipe) {
+    var prefixKey = Object.keys(NAMING_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
+    if (prefixKey) recipe = NAMING_RECIPES[prefixKey];
+  }
+  // Default recipe — Family > Grade > Color > Backing — when no family-specific rule
+  if (!recipe) recipe = [1, 3, 6, 5];
+  // Walk the recipe; collect labels; record any unfilled level for the UI to gate Save
+  var enParts = [];
+  var arParts = [];
+  var missing = [];
+  for (var i = 0; i < recipe.length; i++) {
+    var lvl = recipe[i];
+    var fieldName = LEVEL_FIELD_MAP[lvl];
+    var id = form[fieldName];
+    if (!id) {
+      missing.push(lvl);
+      continue;
+    }
+    var entry = lists.find(function (l) { return l.id === id; });
+    if (!entry) continue;
+    if (entry.label_en) enParts.push(String(entry.label_en).trim());
+    if (entry.label_ar) arParts.push(String(entry.label_ar).trim());
+  }
+  return {
+    name_en: enParts.join(' '),
+    name_ar: arParts.join(' '),
+    recipe: recipe,
+    missing: missing,
+    familyCode: familyCode,
+  };
+}
+
 // Build the empty form
 function emptyForm() {
   return {
@@ -574,8 +646,21 @@ export default function InventoryProductMaster(props) {
     var newForm = Object.assign({}, form);
     newForm[LEVEL_FIELD_MAP[level]] = newValue;
     newForm = resetInvalidChildren(newForm, level);
+    // v55.83-A.6.27.72 HOTFIX 12 — Auto-populate name_en + name_ar from level selections.
+    // Only overwrites the name if the user hasn't manually edited it yet (tracked via
+    // _name_manually_edited flag). Once all required levels are filled, the user can
+    // unlock the name fields and type custom names.
+    var auto = buildAutoName(newForm, lists);
+    if (!newForm._name_manually_edited) {
+      newForm.name_en = auto.name_en;
+      newForm.name_ar = auto.name_ar;
+    }
     setForm(newForm);
   }
+
+  // v55.83-A.6.27.72 HOTFIX 12 — Derived: is the name still auto-driven or has user overridden?
+  // And how many levels are still missing per the recipe?
+  // (Computed at render via buildAutoName(form, lists), no separate state needed.)
 
   async function save() {
     // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026 — URGENT):
@@ -1266,23 +1351,83 @@ export default function InventoryProductMaster(props) {
               {/* Section 1: Identity */}
               <div className="mb-4">
                 <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">IDENTITY / الهوية</div>
+                {/* v55.83-A.6.27.72 HOTFIX 12 — Auto-naming convention banner.
+                    Computes name from selected levels per the family's recipe and shows
+                    which levels are still required. Locks the name fields until all are
+                    filled OR user explicitly chooses to override. */}
+                {(function () {
+                  var auto = buildAutoName(form, lists);
+                  var nameLocked = !form._name_manually_edited && auto.missing.length > 0;
+                  var recipeLabels = (auto.recipe || []).map(function (lvl) { return LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'L' + lvl; }).join(' › ');
+                  if (!auto.recipe) return null;
+                  return (
+                    <div className={'mb-3 p-2 rounded text-[11px] ' + (nameLocked ? 'bg-amber-50 border border-amber-300' : 'bg-emerald-50 border border-emerald-300')}>
+                      <div className="font-extrabold text-slate-800">
+                        Naming convention {auto.familyCode ? '(' + auto.familyCode + ')' : ''}: <span className="font-mono">{recipeLabels}</span>
+                      </div>
+                      {nameLocked ? (
+                        <div className="text-amber-900 mt-1">
+                          🔒 Name auto-builds from these levels. Still need: <strong>{auto.missing.map(function (lvl) { return LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'L' + lvl; }).join(', ')}</strong>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between mt-1">
+                          <div className="text-emerald-900">✓ All levels picked — name auto-generated.</div>
+                          {!form._name_manually_edited && (
+                            <button
+                              type="button"
+                              onClick={function () { setForm(Object.assign({}, form, { _name_manually_edited: true })); }}
+                              className="px-2 py-0.5 bg-slate-700 hover:bg-slate-800 text-white rounded text-[10px] font-bold"
+                              title="Allow manual override of the auto-generated name"
+                            >
+                              ✏️ Unlock to edit manually
+                            </button>
+                          )}
+                          {form._name_manually_edited && (
+                            <button
+                              type="button"
+                              onClick={function () {
+                                setForm(Object.assign({}, form, {
+                                  _name_manually_edited: false,
+                                  name_en: auto.name_en,
+                                  name_ar: auto.name_ar,
+                                }));
+                              }}
+                              className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-bold"
+                              title="Discard manual edits and restore the auto-generated name"
+                            >
+                              🔄 Restore auto-name
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-[11px] font-extrabold text-slate-700">Product Name (English) *
                     <input
                       type="text"
                       value={form.name_en}
-                      onChange={function (e) { setForm(Object.assign({}, form, { name_en: e.target.value })); }}
-                      placeholder="e.g. Premium New Mosaic Dark Blue"
-                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                      onChange={function (e) { setForm(Object.assign({}, form, { name_en: e.target.value, _name_manually_edited: true })); }}
+                      placeholder="Auto-builds from level selections"
+                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
+                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                          ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
+                          : 'bg-white')}
                     />
                   </label>
                   <label className="text-[11px] font-extrabold text-slate-700">Product Name (Arabic) *
                     <input
                       type="text"
                       value={form.name_ar}
-                      onChange={function (e) { setForm(Object.assign({}, form, { name_ar: e.target.value })); }}
-                      placeholder="مثال: موزاييك جديد بريميوم أزرق غامق"
-                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                      onChange={function (e) { setForm(Object.assign({}, form, { name_ar: e.target.value, _name_manually_edited: true })); }}
+                      placeholder="يُبنى تلقائياً من المستويات"
+                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
+                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                          ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
+                          : 'bg-white')}
                       style={{ direction: 'rtl' }}
                     />
                   </label>

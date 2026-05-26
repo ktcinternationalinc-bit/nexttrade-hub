@@ -86,9 +86,8 @@ ok('B2g: template filename stamped with ISO date',
 // ── B3. Validation logic ───────────────────────────────────────────
 ok('B3a: validateRows returns valid/enrich/skipped/errors buckets',
   /return \{ valid: valid, enrich: enrich, skipped: skipped, errors: errors \}/.test(imp));
-ok('B3b: name_en + name_ar required',
-  /if \(!nameEn\) errs\.push\('name_en required'\)/.test(imp) &&
-  /if \(!nameAr\) errs\.push\('name_ar required'\)/.test(imp));
+ok('B3b: name_en + name_ar required if auto-fill fails (HOTFIX 12 — auto-builds from family recipe first)',
+  /name_en is required \(auto-fill failed/.test(imp) && /name_ar is required \(auto-fill failed/.test(imp));
 ok('B3c: every L1-L8 code required',
   /errs\.push\('L' \+ lvl \+ ' \(' \+ col \+ '\) is required'\)/.test(imp));
 ok('B3d: unknown classification codes rejected with row#',

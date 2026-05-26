@@ -108,8 +108,12 @@ ok('C8: variant modal JSX removed (no variantModalOpen && variantTemplate && pat
 ok('C9: cleanup note left for audit traceability',
   /Removed dead variant modal state/.test(ipm) &&
   /Removed openCreateVariant \+ closeVariantModal/.test(ipm));
-ok('C10: file size reasonable (HOTFIX 7 added duplicate-detection logic; still under previous baseline of 1507)',
-  ipm.split('\n').length < 1500);
+ok('C10: file size reasonable (HOTFIX 12 added auto-naming UI; still well under 2000 lines)',
+  function () {
+    var contents = read('src/components/InventoryProductMaster.jsx');
+    var lines = contents.split('\n').length;
+    return lines < 2000;
+  }());
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Bucket workflow now COMPLETE

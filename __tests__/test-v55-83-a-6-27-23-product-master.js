@@ -116,8 +116,8 @@ ok('2t: modal header uses inline color styles (defensive readability)',
   /background: '#3730a3'/.test(pm) && /color: '#ffffff'/.test(pm));
 ok('2u: modal close X is 36-40px round button (visible)',
   /aria-label="Close"[\s\S]{0,400}width: 36/.test(pm));
-ok('2v: Arabic name input has direction:rtl',
-  /name_ar[\s\S]{0,500}direction: 'rtl'/.test(pm));
+ok('2v: Arabic name input has direction:rtl (after HOTFIX 12 auto-name UI was added)',
+  /name_ar[\s\S]{0,2000}direction: 'rtl'/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('2w: LEVEL_FIELD_MAP maps all 8 levels to form fields',
   /1: 'family_list_id'[\s\S]{0,200}2: 'category_list_id'[\s\S]{0,200}3: 'grade_list_id'[\s\S]{0,200}4: 'construction_list_id'[\s\S]{0,200}5: 'backing_list_id'[\s\S]{0,200}6: 'color_list_id'[\s\S]{0,200}7: 'pattern_list_id'[\s\S]{0,200}8: 'spec_class_list_id'/.test(pm));
 ok('2x: dropdown shows code · EN / AR format',

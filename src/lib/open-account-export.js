@@ -322,7 +322,14 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + '.recipient { background: #f1f5f9; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }'
     + '.recipient-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #555; }'
     + '.recipient-name { font-size: 14px; font-weight: 700; margin-top: 2px; }'
-    + '.currency-section { page-break-inside: avoid; margin-bottom: 28px; }'
+    // v55.83-A.6.27.72 HOTFIX 12 — Replaced strict `page-break-inside: avoid` which forced
+    // the ENTIRE first currency section onto a new page (leaving page 1 blank) whenever the
+    // section was taller than the remaining space after the header. Now we just keep the
+    // section header + first few rows together, but the table body can break naturally.
+    + '.currency-section { margin-bottom: 28px; }'
+    + '.currency-section > h2 { page-break-after: avoid; break-after: avoid; }'
+    + '.currency-section thead { display: table-header-group; }'
+    + '.currency-section tr { page-break-inside: avoid; break-inside: avoid; }'
     + 'table { width: 100%; border-collapse: collapse; margin-top: 8px; }'
     + 'th { background: #1e293b; color: white; padding: 8px 6px; text-align: left; font-size: 11px; font-weight: 700; }'
     + 'th.num { text-align: right; }'
