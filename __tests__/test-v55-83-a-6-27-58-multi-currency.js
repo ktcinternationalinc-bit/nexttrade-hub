@@ -164,7 +164,7 @@ ok('H4: each entry row renders per-currency running cells from _running_by_curre
 ok('H5: entry\'s own currency cell highlighted (bg-slate-100), others dimmed (text-slate-400)',
   /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,400}\(isThisEntryCur \? 'bg-slate-100 ' : 'text-slate-400 '\)/.test(oa));
 ok('H6: totals row split per currency (one row per currency)',
-  /s\.currencies\.map\(function \(cur, ci\) \{[\s\S]{0,200}<tr key=\{cur\} className="bg-slate-100 font-extrabold">/.test(oa));
+  /s\.currencies\.map\(function \(cur, ci\) \{[\s\S]{0,1500}<tr key=\{cur\} className="bg-slate-100 font-extrabold">/.test(oa));
 ok('H7: totals row places per-currency balance in correct running column',
   /s\.currencies\.map\(function \(col, colI\) \{\s+if \(col !== cur\) return <td/.test(oa));
 

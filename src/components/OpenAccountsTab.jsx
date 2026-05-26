@@ -1335,27 +1335,50 @@ export default function OpenAccountsTab(props) {
                           </tr>
                         );
                       })}
-                      {/* v55.83-A.6.27.72 — Totals row per currency.
-                          Columns: Date | Type | Description | Reference | Cur | Amount | Paid | Remaining | Net*N | Actions.
-                          We span the first 5 (Date through Cur), show total credits in the Paid column slot,
-                          total debits next to it, and the net in the running-balance column for that currency. */}
+                      {/* v55.83-A.6.27.72 HOTFIX 4 — Totals row per currency.
+                          PREVIOUS BUG: showed "Cr: 0 / Dr: 11,888" (raw sums from old credit-debit model)
+                          alongside Net: -9,888 (FIFO). The user did Cr−Dr = −11,888 ≠ −9,888 → looked
+                          broken. Now mirrors the per-row column structure:
+                            AMOUNT   = sum of all transaction amounts in this currency
+                            PAID     = sum of auto-applied (FIFO-matched) on invoices/bills in this currency
+                            REMAINING = sum of open obligations still owed
+                            NET cur  = final FIFO net (matches 4-pot strip)
+                          Reconciles end-to-end: Invoice amounts = Paid + Remaining; Net = derived from pots. */}
                       {s.currencies.map(function (cur, ci) {
                         var cs = s.byCurrency[cur];
+                        // Compute per-currency totals from the entries for this currency
+                        var curEntries = (accEntries || []).filter(function (e) {
+                          var ec = String(e.currency || 'USD').toUpperCase().trim();
+                          return ec === cur;
+                        });
+                        var totalAmount = 0;
+                        var totalPaid = 0;
+                        var totalRemaining = 0;
+                        curEntries.forEach(function (e) {
+                          totalAmount += Number(e.credit_amount || 0) + Number(e.debit_amount || 0);
+                          if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
+                            var prT = computePaidRemaining(e, simResult);
+                            totalPaid += prT.paid;
+                            totalRemaining += prT.remaining;
+                          }
+                        });
                         return (
                           <tr key={cur} className="bg-slate-100 font-extrabold">
                             <td colSpan={5} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
                               {ci === 0 ? 'Totals (' + cur + ') →' : '(' + cur + ') →'}
                             </td>
-                            {/* Amount: sum of credits */}
-                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Total credits (money in + sales invoices)">
-                              Cr: {fmtNum(cs.credit)}
+                            {/* AMOUNT total */}
+                            <td className="px-3 py-2 text-right font-mono text-slate-900" title="Sum of all transaction amounts in this currency">
+                              {fmtNum(totalAmount)}
                             </td>
-                            {/* Paid: sum of debits, repurposed */}
-                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-50" title="Total debits (money out + vendor bills)">
-                              Dr: {fmtNum(cs.debit)}
+                            {/* PAID total (auto-applied via FIFO) */}
+                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Sum of payments auto-applied to invoices/bills via FIFO">
+                              {totalPaid > 0.01 ? fmtNum(totalPaid) : '—'}
                             </td>
-                            {/* Remaining: blank in totals row */}
-                            <td className="px-3 py-2"></td>
+                            {/* REMAINING total (open obligations) */}
+                            <td className="px-3 py-2 text-right font-mono text-amber-900 bg-amber-50" title="Sum of open invoice/bill amounts still unsettled">
+                              {totalRemaining > 0.01 ? fmtNum(totalRemaining) : '—'}
+                            </td>
                             {/* Net per currency — match this cur column */}
                             {s.currencies.map(function (col, colI) {
                               if (col !== cur) return <td key={col + '-' + colI}></td>;
