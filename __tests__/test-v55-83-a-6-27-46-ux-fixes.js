@@ -162,9 +162,10 @@ ok('R14: Copy button still calls openDuplicate',
   /onClick=\{function \(\) \{ openDuplicate\(p\); \}\}/.test(pm));
 ok('R15: can_delete_product RPC still called in deleteProduct (templates always-OK, variants checked)',
   /supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm));
-ok('R16: save() validates English + Arabic name required (v55.83-A.6.27.66 Issue 11 — now uses fail() helper which calls BOTH toast.error AND alert() so user always sees feedback)',
-  /(toast\.error|fail)\('English name is required'\)/.test(pm) &&
-  /(toast\.error|fail)\('Arabic name is required'\)/.test(pm));
+ok('R16: save() validates English + Arabic name required (HOTFIX 7 — collects all missing fields, shows in one message via alert+toast)',
+  /missing\.push\('• English name/.test(pm) &&
+  /missing\.push\('• Arabic name/.test(pm) &&
+  /Cannot save — please fill in these required fields/.test(pm));
 ok('R17: save() validates all 8 classification levels',
   /for \(var lvl = 1; lvl <= 8; lvl\+\+\) \{/.test(pm));
 ok('R18: closed-tickets fetch still has NO .limit(100)',

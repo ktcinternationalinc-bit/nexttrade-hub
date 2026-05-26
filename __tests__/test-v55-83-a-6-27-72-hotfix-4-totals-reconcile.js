@@ -18,8 +18,8 @@ ok('A1: totals row no longer uses "Cr: " / "Dr: " labels (the misleading raw sum
   !/<td[^>]*>\s*Cr: \{fmtNum\(cs\.credit\)\}/.test(oa) &&
   !/<td[^>]*>\s*Dr: \{fmtNum\(cs\.debit\)\}/.test(oa));
 
-ok('A2: totals row computes per-currency totalAmount from credit_amount + debit_amount',
-  /totalAmount \+= Number\(e\.credit_amount \|\| 0\) \+ Number\(e\.debit_amount \|\| 0\)/.test(oa));
+ok('A2: totals row computes per-currency signed total (HOTFIX 6 supersedes A2 from HOTFIX 4)',
+  /totalSigned \+= signedAmount\(e\)/.test(oa));
 
 ok('A3: totals row computes totalPaid via computePaidRemaining for invoices/bills',
   /if \(e\.transaction_type === 'sales_invoice' \|\| e\.transaction_type === 'vendor_bill'\)[\s\S]{0,300}totalPaid \+= prT\.paid/.test(oa));
@@ -27,8 +27,8 @@ ok('A3: totals row computes totalPaid via computePaidRemaining for invoices/bill
 ok('A4: totals row computes totalRemaining via computePaidRemaining',
   /totalRemaining \+= prT\.remaining/.test(oa));
 
-ok('A5: totals row Amount column shows totalAmount (no Cr: prefix)',
-  /fmtNum\(totalAmount\)/.test(oa));
+ok('A5: totals row Amount column shows totalSigned via fmtSigned (HOTFIX 6 supersedes A5)',
+  /fmtSigned\(totalSigned\)/.test(oa));
 
 ok('A6: totals row Paid column shows totalPaid in emerald-50 bg',
   /bg-emerald-50[\s\S]{0,200}fmtNum\(totalPaid\)/.test(oa));
@@ -36,8 +36,8 @@ ok('A6: totals row Paid column shows totalPaid in emerald-50 bg',
 ok('A7: totals row Remaining column shows totalRemaining in amber-50 bg',
   /bg-amber-50[\s\S]{0,200}fmtNum\(totalRemaining\)/.test(oa));
 
-ok('A8: totals row Net per currency still uses cs.balance (FIFO from HOTFIX 3)',
-  /\(cs\.balance > 0 \? 'text-emerald-900' : cs\.balance < 0 \? 'text-red-900' : 'text-slate-900'\)[\s\S]{0,100}fmtNum\(cs\.balance\)/.test(oa));
+ok('A8: totals row Net per currency uses cs.balance via fmtSigned (FIFO from HOTFIX 3, signed in HOTFIX 6)',
+  /\(cs\.balance > 0 \? 'text-emerald-900' : cs\.balance < 0 \? 'text-red-900' : 'text-slate-900'\)[\s\S]{0,100}fmtSigned\(cs\.balance\)/.test(oa));
 
 console.log('\n── End-to-end: numbers reconcile in Max\'s screenshot scenario ──');
 

@@ -108,8 +108,8 @@ ok('F2: Level 9 marked optional in the form label',
 ok('F3: computeSlug requires L1-L8 + appends L9 if picked',
   /for \(var lvl = 1; lvl <= 8; lvl\+\+\)/.test(pm) &&
   /var l9Id = formData\[LEVEL_FIELD_MAP\[9\]\]/.test(pm));
-ok('F4: save() validation requires L1-L8 only',
-  /for \(var lvl = 1; lvl <= 8; lvl\+\+\)[\s\S]{0,500}fail\('Please select Level '/.test(pm));
+ok('F4: save() validation requires L1-L8 (HOTFIX 7 — pushes each missing into list, shows all at once)',
+  /for \(var lvl = 1; lvl <= 8; lvl\+\+\)[\s\S]{0,500}missing\.push\('• Level '/.test(pm));
 ok('F5: save() has [product-master.save] console breadcrumbs',
   /\[product-master\.save\]/.test(pm) &&
   /console\.log\(DEBUG, 'START/.test(pm) &&

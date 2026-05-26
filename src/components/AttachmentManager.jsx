@@ -189,6 +189,14 @@ export function AttachmentManager(props) {
         if (/bucket.*not found|bucket.*does not exist/i.test(em)) {
           throw new Error('Storage bucket "attachments" does not exist. Create it in Supabase Dashboard → Storage → New bucket (public, 100 MB).');
         }
+        // v55.83-A.6.27.72 HOTFIX 5 — clearer hint when storage.objects RLS blocks upload
+        if (/row-level security|row level security|new row violates/i.test(em)) {
+          throw new Error(
+            'Upload blocked by Supabase storage policy. The "attachments" storage bucket needs RLS policies for authenticated users.\n\n' +
+            'Fix: run the SQL block at the bottom of /sql/v55-83-a-6-27-61-attachments.sql in Supabase SQL Editor. ' +
+            'It creates 4 policies on storage.objects (INSERT/SELECT/UPDATE/DELETE) scoped to bucket_id=\'attachments\'.'
+          );
+        }
         throw uploadRes.error;
       }
 

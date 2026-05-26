@@ -79,8 +79,9 @@ ok('B4: print fn auto-fires window.print() via setTimeout',
   /setTimeout\(function\(\)\{ try \{ window\.print\(\); \} catch \(e\) \{\} \}, 350\)/.test(exp));
 ok('B5: print fn shows entity name + address + phone in header',
   /entity\.entity_name/.test(exp) && /entity\.address_line1/.test(exp) && /entity\.phone/.test(exp));
-ok('B6: print fn computes running balance from displayed credit/debit (mirrors for customer perspective in v55.83-A.6.27.72)',
-  /running \+= dispCredit - dispDebit/.test(exp));
+ok('B6: print fn running net walks via signedAmount cumulative (v72 HOTFIX 6 — FIFO net, was credit-debit walk)',
+  /running \+= signed/.test(exp) &&
+  /var signed = signedAmount\(e\)/.test(exp));
 ok('B7: print fn shows plain-English balance label (they owe us / we owe them / settled)',
   /'They owe us'/.test(exp) &&
   /'We owe them'/.test(exp) &&
@@ -91,8 +92,9 @@ ok('B9: print fn handles missing entity gracefully (No business entity selected)
   /No business entity selected for this account/.test(exp));
 ok('B10: print fn includes convention explanation footer',
   /Convention: <strong>Credit<\/strong> = money paid to us/.test(exp));
-ok('B11: Excel fn writes numeric values (not strings) for SUM() to work (v55.83-A.6.27.72 now uses amt/paid/remaining)',
-  /amt > 0 \? amt : ''/.test(exp) && /isInvoiceOrBill && paid > 0 \? paid : ''/.test(exp));
+ok('B11: Excel fn writes numeric SIGNED values (v72 HOTFIX 6 — signed Amount cell so totals reconcile to Net)',
+  /Math\.abs\(signed\) > 0\.005 \? signed : ''/.test(exp) &&
+  /running\[entryCur\] \+= signed/.test(exp));
 ok('B12: Excel filename sanitized + dated',
   /OpenAccount-' \+ sanitizeFilename\(account\.account_name\) \+ '-' \+ dateStr \+ '\.xlsx'/.test(exp));
 ok('B13: Excel uses XLSX.utils.aoa_to_sheet + book_new + writeFile',

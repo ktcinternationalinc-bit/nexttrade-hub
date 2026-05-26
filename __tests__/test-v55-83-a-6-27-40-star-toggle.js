@@ -66,15 +66,15 @@ ok('C4: use_count display when > 0',
 ok('D1: featuredOnly state declared',
   /var \[featuredOnly, setFeaturedOnly\] = useState\(false\)/.test(pm));
 ok('D2: typeFilter state declared (default changed to "variants" in .55 — templates pollute product list)',
-  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(pm));
+  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
 
 ok('D3: Featured-only checkbox rendered',
   /⭐ Starred only/.test(pm) &&
   /<input type="checkbox" checked=\{featuredOnly\} onChange=\{function \(e\) \{ setFeaturedOnly\(e\.target\.checked\); \}\} \/>/.test(pm));
-ok('D4: Type filter select with 3 options (Variants/Products rename — Variants first as default; Template Products + All)',
-  /<option value="variants">(Variants|Products)/.test(pm) &&
-  /<option value="all">All/.test(pm) &&
-  /<option value="templates">Template Products only/.test(pm));
+ok('D4: Type filter select with 3 options (v72 HOTFIX 8: All=default, Products only, Template blueprints only)',
+  /<option value="all">All \(Products \+ Template blueprints\) — default<\/option>/.test(pm) &&
+  /<option value="variants">Products only/.test(pm) &&
+  /<option value="templates">Template blueprints only/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Filter logic + smart multi-keyword search + featured sort
@@ -84,8 +84,8 @@ ok('E1: featuredOnly filters list to p.featured === true',
   /if \(featuredOnly\) \{\s+list = list\.filter\(function \(p\) \{ return p\.featured === true; \}\)/.test(pm));
 ok('E2: typeFilter "templates" path filters to is_family_template === true',
   /if \(typeFilter === 'templates'\) \{\s+list = list\.filter\(function \(p\) \{ return p\.is_family_template === true; \}\)/.test(pm));
-ok('E3: typeFilter "variants" path filters to !template AND variant_suffix',
-  /typeFilter === 'variants'[\s\S]{0,500}return p\.is_family_template === false && p\.variant_suffix/.test(pm));
+ok('E3: typeFilter "variants" path filters to NOT a template (v72 HOTFIX 8 — was: AND variant_suffix, which hid manually-added products)',
+  /typeFilter === 'variants'[\s\S]{0,1500}return p\.is_family_template !== true/.test(pm));
 
 ok('E4: search splits on whitespace into keywords array',
   /var keywords = search\.trim\(\)\.toLowerCase\(\)\.split\(\/\\s\+\/\)/.test(pm));

@@ -116,7 +116,15 @@ export default function InventoryProductMaster(props) {
   // "default of product list should be the variants. Family products should not
   //  display on the main overview as product lists; only there for user to use
   //  to create products." User can switch to 'all' or 'templates' explicitly.
-  var [typeFilter, setTypeFilter] = useState('variants');
+  // v55.83-A.6.27.72 HOTFIX 8 (Max May 26 2026):
+  //   Max created two products manually via "+ New Product", they saved
+  //   correctly to inventory_products (verified in DB), but did NOT appear in
+  //   the front-end list — leading to "I saved it and nothing happened".
+  //   Root cause: this filter defaulted to 'variants' which requires
+  //   p.variant_suffix to be truthy. Manually-added products don't have a
+  //   variant_suffix (only ones created via the template/variant flow do),
+  //   so they got silently filtered out. Default is now 'all'.
+  var [typeFilter, setTypeFilter] = useState('all');
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
@@ -349,7 +357,13 @@ export default function InventoryProductMaster(props) {
     if (typeFilter === 'templates') {
       list = list.filter(function (p) { return p.is_family_template === true; });
     } else if (typeFilter === 'variants') {
-      list = list.filter(function (p) { return p.is_family_template === false && p.variant_suffix; });
+      // v55.83-A.6.27.72 HOTFIX 8 — "Products" filter now means "anything that
+      // is NOT a family template", regardless of whether it has a variant_suffix.
+      // Previously required p.variant_suffix which silently excluded all
+      // manually-added products (the "+ New Product" flow doesn't set
+      // variant_suffix — only the template/variant flow does). This caused
+      // Max's two test products to be invisible despite being saved correctly.
+      list = list.filter(function (p) { return p.is_family_template !== true; });
     }
     // v55.83-A.6.27.40 — smart multi-keyword search (multi-word, any-order, substring)
     if (search.trim()) {
@@ -567,6 +581,13 @@ export default function InventoryProductMaster(props) {
     //    all the levels and data and nothing happened when i clicked on save.
     //    it just remained in the current pop box."
     //
+    // v55.83-A.6.27.72 HOTFIX 7 (Max May 26 2026):
+    //   "if there is any error it should tell the user that they need to fill
+    //    out something they missed ...regular ui conformity and regulations
+    //    that should be there in teh first place. also if there is a duplicate
+    //    created you must say that this is a duplicate with another and name
+    //    it....no duplicates allowed."
+    //
     // Hardened against ALL silent-failure modes:
     //   1. console.log breadcrumbs at every step so we can see in DevTools
     //      exactly where it stops
@@ -576,6 +597,12 @@ export default function InventoryProductMaster(props) {
     //      payload AND included in slug — was missing before, causing inserts
     //      to fail or origin data to be silently dropped
     //   4. Audit-log failure no longer swallowed silently
+    //   5. HOTFIX 7 — Collect ALL missing fields and list them in ONE message
+    //      (not one-at-a-time). Tells user every single thing they missed.
+    //   6. HOTFIX 7 — Comprehensive duplicate detection: checks quick_code,
+    //      classification_slug, name_en, AND name_ar against ALL products
+    //      (active + inactive). Names the specific conflicting product so the
+    //      user knows exactly what's clashing.
     var DEBUG = '[product-master.save]';
     console.log(DEBUG, 'START — modalMode:', modalMode, 'form:', form);
 
@@ -587,22 +614,30 @@ export default function InventoryProductMaster(props) {
       try { alert(msg); } catch (_) {}
     }
 
-    // Validation
+    // v55.83-A.6.27.72 HOTFIX 7 — Collect ALL validation errors first, report once.
+    // Previous behavior: stopped at the FIRST missing field, told user that one
+    // thing, then they fixed it and got another error, and another. Now: one
+    // message lists EVERY field they missed.
+    var missing = [];
     var nameEn = (form.name_en || '').trim();
     var nameAr = (form.name_ar || '').trim();
-    if (!nameEn) { fail('English name is required'); return; }
-    if (!nameAr) { fail('Arabic name is required'); return; }
+    if (!nameEn) missing.push('• English name (name_en)');
+    if (!nameAr) missing.push('• Arabic name (name_ar)');
 
     // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
     // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
     // most installs have no L9 options to pick. If/when L9 options exist
     // and the user picks one, it's included in the slug and payload.
-    // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026).
     for (var lvl = 1; lvl <= 8; lvl++) {
       if (!form[LEVEL_FIELD_MAP[lvl]]) {
-        fail('Please select Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
-        return;
+        missing.push('• Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
       }
+    }
+
+    if (missing.length > 0) {
+      fail('Cannot save — please fill in these required fields:\n\n' + missing.join('\n') +
+           '\n\n(' + missing.length + ' field' + (missing.length === 1 ? '' : 's') + ' missing)');
+      return;
     }
 
     var slug = computeSlug(form);
@@ -614,12 +649,67 @@ export default function InventoryProductMaster(props) {
       fail('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
       return;
     }
+
+    // v55.83-A.6.27.72 HOTFIX 7 — Comprehensive duplicate detection.
+    // Checks quick_code, classification_slug, name_en, AND name_ar against
+    // ALL products (active + inactive). NAMES the conflicting product.
+    // No duplicates allowed.
+    function describeConflict(p, conflictField) {
+      var label = (p.name_en || p.name_ar || '(unnamed)') + (p.name_ar && p.name_en !== p.name_ar ? ' / ' + p.name_ar : '');
+      var code = p.quick_code ? p.quick_code : '(no quick code)';
+      var status = p.active ? 'ACTIVE' : 'INACTIVE (deactivated)';
+      return '"' + label + '" — Quick Code: ' + code + ' — Status: ' + status + ' — ID: ' + p.id;
+    }
+
+    // 1) Quick code conflict (only if user typed one)
     if (quickCode) {
-      var dup = products.find(function (p) {
+      var dupCode = products.find(function (p) {
         if (modalMode === 'edit' && p.id === modalProductId) return false;
-        return p.active && (p.quick_code || '').trim().toLowerCase() === quickCode.toLowerCase();
+        return (p.quick_code || '').trim().toLowerCase() === quickCode.toLowerCase();
       });
-      if (dup) { fail('Quick code "' + quickCode + '" is already used by another active product'); return; }
+      if (dupCode) {
+        fail('DUPLICATE QUICK CODE — cannot save.\n\nThe code "' + quickCode + '" is already used by:\n' +
+             describeConflict(dupCode, 'quick_code') +
+             '\n\nNo duplicates allowed. Use a different Quick Code, or open the existing product and edit it.');
+        return;
+      }
+    }
+
+    // 2) Classification slug conflict (same exact combo of Family/Category/Grade/...etc)
+    var dupSlug = products.find(function (p) {
+      if (modalMode === 'edit' && p.id === modalProductId) return false;
+      return p.classification_slug === slug;
+    });
+    if (dupSlug) {
+      fail('DUPLICATE CLASSIFICATION — cannot save.\n\nA product with the EXACT same Family/Category/Grade/Construction/Backing/Color/Pattern/Spec' + (form.origin_list_id ? '/Country' : '') + ' combination already exists:\n' +
+           describeConflict(dupSlug, 'classification_slug') +
+           '\n\nClassification slug: ' + slug +
+           '\n\nNo duplicates allowed. Change at least one of your level selections, or open the existing product and edit it.');
+      return;
+    }
+
+    // 3) English name conflict (case-insensitive, trimmed)
+    var dupNameEn = products.find(function (p) {
+      if (modalMode === 'edit' && p.id === modalProductId) return false;
+      return (p.name_en || '').trim().toLowerCase() === nameEn.toLowerCase();
+    });
+    if (dupNameEn) {
+      fail('DUPLICATE ENGLISH NAME — cannot save.\n\nA product named "' + nameEn + '" already exists:\n' +
+           describeConflict(dupNameEn, 'name_en') +
+           '\n\nNo duplicates allowed. Adjust the name slightly to differentiate (e.g. add a thickness, color shade, or roll-length suffix), or open the existing product and edit it.');
+      return;
+    }
+
+    // 4) Arabic name conflict
+    var dupNameAr = products.find(function (p) {
+      if (modalMode === 'edit' && p.id === modalProductId) return false;
+      return (p.name_ar || '').trim().toLowerCase() === nameAr.toLowerCase();
+    });
+    if (dupNameAr) {
+      fail('DUPLICATE ARABIC NAME — cannot save.\n\nA product with the Arabic name "' + nameAr + '" already exists:\n' +
+           describeConflict(dupNameAr, 'name_ar') +
+           '\n\nNo duplicates allowed. Adjust the Arabic name slightly to differentiate, or open the existing product and edit it.');
+      return;
     }
 
     console.log(DEBUG, 'validation passed — proceeding to insert');
@@ -923,15 +1013,16 @@ export default function InventoryProductMaster(props) {
           <input type="checkbox" checked={featuredOnly} onChange={function (e) { setFeaturedOnly(e.target.checked); }} />
           ⭐ Starred only
         </label>
-        {/* v55.83-A.6.27.40 — Type filter: all / templates / variants */}
+        {/* v55.83-A.6.27.72 HOTFIX 8 — relabel options to match fixed semantics.
+            "Products" now correctly includes both variants AND manually-added products. */}
         <select
           value={typeFilter}
           onChange={function (e) { setTypeFilter(e.target.value); }}
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
-          <option value="variants">Products (default — actual SKUs)</option>
-          <option value="all">All (Products + Template blueprints)</option>
-          <option value="templates">Template Products only (blueprints — for creating Products)</option>
+          <option value="all">All (Products + Template blueprints) — default</option>
+          <option value="variants">Products only (actual SKUs, no template blueprints)</option>
+          <option value="templates">Template blueprints only (for creating Products)</option>
         </select>
         {canEdit && (
           <button

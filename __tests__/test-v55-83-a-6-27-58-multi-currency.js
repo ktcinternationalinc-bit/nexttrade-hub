@@ -125,8 +125,8 @@ ok('E7: currency dropdown has all 7 options (USD/EGP/EUR/GBP/AED/SAR/CNY)',
 
 ok('F1: account card header maps s.currencies to per-currency pill rows',
   /s\.currencies\.length === 0 \? \([\s\S]{0,200}No entries yet[\s\S]{0,400}s\.currencies\.map\(function \(cur\)/.test(oa));
-ok('F2: each currency row shows code badge + Cr + Dr + Bal pill',
-  /<span className="px-1\.5 py-0\.5 bg-slate-200 text-slate-900 text-\[10px\] font-mono font-extrabold rounded">\{cur\}<\/span>[\s\S]{0,500}Cr: <span[\s\S]{0,200}Dr: <span[\s\S]{0,500}Bal: \{fmtNum\(cs\.balance\)\} \{cur\}/.test(oa));
+ok('F2: each currency row shows code badge + Bal pill (Cr/Dr removed in v72 HOTFIX 6 — caused reconciliation confusion)',
+  /<span className="px-1\.5 py-0\.5 bg-slate-200 text-slate-900 text-\[10px\] font-mono font-extrabold rounded">\{cur\}<\/span>[\s\S]{0,800}Bal: \{fmtSigned\(cs\.balance\)\} \{cur\}/.test(oa));
 ok('F3: balance pill colored green if positive, red if negative, slate if zero',
   /\(cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500 text-white'\)/.test(oa));
 ok('F4: total entry count displayed at bottom (s.totalEntryCount)',
@@ -193,12 +193,12 @@ ok('I7: each section has its own totals row in tfoot',
 
 ok('J1: Excel column headers include Type/Amount/Paid/Remaining + one Net CUR per currency (v55.83-A.6.27.72)',
   /var colHeaders = \['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'\];\s+currencies\.forEach\(function \(cur\) \{ colHeaders\.push\('Net ' \+ cur\)/.test(exp));
-ok('J2: Excel walks entries with per-currency rolling running map',
-  /var running = \{\};[\s\S]{0,4000}running\[entryCur\] \+= credit - debit/.test(exp));
+ok('J2: Excel walks entries with per-currency rolling running map (v72 HOTFIX 6 — now uses signedAmount)',
+  /var running = \{\};[\s\S]{0,5000}running\[entryCur\] \+= signed/.test(exp));
 ok('J3: Excel row pushes Type + Amount + Paid + Remaining + per-currency running values (v55.83-A.6.27.72)',
   /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,1000}TYPE_LABEL\[e\.transaction_type\]/.test(exp));
-ok('J4: Excel adds per-currency totals rows at bottom',
-  /Totals by Currency[\s\S]{0,500}currencies\.forEach\(function \(cur\) \{\s+var cs = byCurrency\[cur\][\s\S]{0,400}rows\.push\(totalsRow\)/.test(exp));
+ok('J4: Excel adds per-currency totals rows at bottom with signed Amount sum (v72 HOTFIX 6)',
+  /Totals by Currency[\s\S]{0,2000}currencies\.forEach\(function \(cur\) \{[\s\S]{0,800}totSigned \+= signedAmount\(e\)[\s\S]{0,800}rows\.push\(totalsRow\)/.test(exp));
 ok('J5: Excel adds plain-English balance lines per currency',
   /var label = cs\.balance > 0 \? 'They owe us' : cs\.balance < 0 \? 'We owe them' : 'Settled'/.test(exp));
 ok('J6: Excel col widths include base 6 + one per currency',

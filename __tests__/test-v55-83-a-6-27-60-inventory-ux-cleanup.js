@@ -139,10 +139,10 @@ ok('9.2: id stays "importstock" for backward compat',
 // ══════════════════════════════════════════════════════════════════
 // ITEM 10 — Rename "Variants" → "Products" everywhere user-facing
 // ══════════════════════════════════════════════════════════════════
-ok('10.1: filter dropdown option says "Products (default — actual SKUs)"',
-  /<option value="variants">Products \(default — actual SKUs\)<\/option>/.test(ipm));
-ok('10.2: filter dropdown "Template Products only" option',
-  /<option value="templates">Template Products only \(blueprints — for creating Products\)<\/option>/.test(ipm));
+ok('10.1: filter dropdown option says "Products only (actual SKUs, no template blueprints)" (v72 HOTFIX 8 relabel)',
+  /<option value="variants">Products only \(actual SKUs, no template blueprints\)<\/option>/.test(ipm));
+ok('10.2: filter dropdown "Template blueprints only" option (v72 HOTFIX 8 relabel)',
+  /<option value="templates">Template blueprints only \(for creating Products\)<\/option>/.test(ipm));
 ok('10.3: "+ Variant" button renamed to "+ Product"',
   /\+ Product\s*<\/button>/.test(ipm));
 ok('10.4: + Product button tooltip clarifies independence',

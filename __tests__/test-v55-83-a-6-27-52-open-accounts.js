@@ -130,10 +130,11 @@ ok('E2: ▶/▼ chevron indicates collapsed state',
 ok('E3: Expand All + Collapse All buttons',
   /onClick=\{expandAll\}[\s\S]{0,200}Expand All/.test(oa) &&
   /onClick=\{collapseAll\}[\s\S]{0,200}Collapse All/.test(oa));
-ok('E4: per-account summary pills now PER-CURRENCY (Cr / Dr / Bal per currency in .58)',
-  /Cr: <span className="text-emerald-800">/.test(oa) &&
-  /Dr: <span className="text-red-700">/.test(oa) &&
-  /Bal: \{fmtNum\(cs\.balance\)\} \{cur\}/.test(oa));
+ok('E4: per-account summary pill shows Bal per currency (Cr/Dr removed in v72 HOTFIX 6 — caused reconciliation confusion)',
+  /Bal: \{fmtSigned\(cs\.balance\)\} \{cur\}/.test(oa) &&
+  // Cr/Dr labels should NO LONGER appear in the header label area (they made the math look broken)
+  !/Cr: <span className="text-emerald-800">\{fmtNum\(cs\.credit\)\}/.test(oa) &&
+  !/Dr: <span className="text-red-700">\{fmtNum\(cs\.debit\)\}/.test(oa));
 ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
   /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
 ok('E6: ledger table columns now Date / Type / Description / Reference / Cur / Amount / Paid / Remaining / Net per cur (v55.83-A.6.27.72)',

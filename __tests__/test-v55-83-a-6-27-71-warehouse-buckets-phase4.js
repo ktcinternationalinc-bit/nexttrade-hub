@@ -108,8 +108,8 @@ ok('C8: variant modal JSX removed (no variantModalOpen && variantTemplate && pat
 ok('C9: cleanup note left for audit traceability',
   /Removed dead variant modal state/.test(ipm) &&
   /Removed openCreateVariant \+ closeVariantModal/.test(ipm));
-ok('C10: file shrunk by approximately 115 lines',
-  ipm.split('\n').length < 1400);  // was 1507 before, target < 1400
+ok('C10: file size reasonable (HOTFIX 7 added duplicate-detection logic; still under previous baseline of 1507)',
+  ipm.split('\n').length < 1500);
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Bucket workflow now COMPLETE

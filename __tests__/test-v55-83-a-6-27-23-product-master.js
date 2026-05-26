@@ -80,8 +80,9 @@ ok('2d: Access restricted screen for non-canView users',
   /if \(!canView\) \{[\s\S]{0,500}Access restricted/.test(pm));
 ok('2e: edit buttons only shown when canEdit (uses {canEdit && ...} pattern)',
   /\{canEdit && \(\s*<button\s+onClick=\{function \(\) \{ openEdit/.test(pm));
-ok('2f: 8 levels validated on save',
-  /Please select Level ' \+ lvl \+ ' — '/.test(pm));
+ok('2f: 8 levels validated on save (HOTFIX 7 lists all missing fields in one message)',
+  /missing\.push\('• Level ' \+ lvl \+ ' — '/.test(pm) &&
+  /Cannot save — please fill in these required fields/.test(pm));
 ok('2g: computeSlug returns null if any of 8 levels missing',
   /function computeSlug\(formData\) \{[\s\S]{0,500}if \(!selectedId\) return null/.test(pm));
 ok('2h: optionsForLevel respects parent rules — universal pattern',
@@ -92,10 +93,11 @@ ok('2i: handleLevelChange resets invalid downstream selections',
 ok('2j: live slug preview in modal',
   /var liveSlug = computeSlug\(form\)/.test(pm) &&
   /LIVE SLUG/.test(pm));
-ok('2k: quick code uniqueness checked client-side (excludes self when editing)',
-  /Quick code "' \+ quickCode \+ '" is already used/.test(pm));
-ok('2l: both English and Arabic name required',
-  /English name is required/.test(pm) && /Arabic name is required/.test(pm));
+ok('2k: quick code uniqueness checked client-side, NAMES conflicting product (HOTFIX 7)',
+  /DUPLICATE QUICK CODE — cannot save/.test(pm) &&
+  /describeConflict\(dupCode/.test(pm));
+ok('2l: both English and Arabic name required (HOTFIX 7 lists all missing)',
+  /missing\.push\('• English name/.test(pm) && /missing\.push\('• Arabic name/.test(pm));
 ok('2m: UOM dropdown includes all 7 options',
   /UOM_OPTIONS = \[[\s\S]{0,500}'kg'[\s\S]{0,500}'sqm'/.test(pm));
 ok('2n: currency dropdown EGP/USD/EUR',

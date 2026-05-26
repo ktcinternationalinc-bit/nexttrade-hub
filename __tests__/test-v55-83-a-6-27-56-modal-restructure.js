@@ -116,7 +116,7 @@ ok('R1: 55 — openaccounts still in FINANCE sidebar',
 ok('R2: 60 — deleteProduct permissive fallback when can_delete_product RPC unavailable',
   /can_delete_product unavailable, proceeding permissive/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R3: 55 — typeFilter default = variants',
-  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
+  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R4: 55 — TEMPLATE rename preserved (not FAMILY)',
   /TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
   !/>FAMILY</.test(read('src/components/InventoryProductMaster.jsx')));

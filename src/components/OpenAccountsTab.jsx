@@ -34,6 +34,50 @@ function fmtDate(s) {
   try { return new Date(s).toISOString().substring(0, 10); } catch (e) { return s; }
 }
 
+// v55.83-A.6.27.72 HOTFIX 6 — signed amount per transaction type.
+// Returns the entry's net-effect contribution (positive = improves our position,
+// negative = worsens). Makes the Amount column algebraically sum to the Net.
+//
+// Sign rules (matching how simulate() routes each type through the 4 pots):
+//   payment_sent       → +amount  (becomes ourPrepaid or settles ourOpenBills → in our favor)
+//   sales_invoice      → +amount  (becomes theirOpenInvoices → in our favor)
+//   payment_received   → −amount  (becomes theirPrepaid or settles theirOpenInvoices → against us)
+//   vendor_bill        → −amount  (becomes ourOpenBills → against us)
+//   credit_adjustment  → +debit − credit  (debit goes to ourPrepaid, credit goes to theirPrepaid)
+//   offset             → ±side  (internal — the two halves cancel out)
+function signedAmount(entry) {
+  if (!entry) return 0;
+  var credit = Number(entry.credit_amount || 0);
+  var debit = Number(entry.debit_amount || 0);
+  switch (entry.transaction_type) {
+    case 'payment_sent':     return +debit;
+    case 'sales_invoice':    return +credit;
+    case 'payment_received': return -credit;
+    case 'vendor_bill':      return -debit;
+    case 'credit_adjustment': return debit - credit;
+    case 'offset':
+      // Offset has two halves stamped with offset_invoice_id or offset_bill_id.
+      // credit + offset_bill_id → reduces ourOpenBills (in our favor) → +
+      // debit + offset_invoice_id → reduces theirOpenInvoices (against us) → −
+      if (credit > 0 && entry.offset_bill_id) return +credit;
+      if (debit > 0 && entry.offset_invoice_id) return -debit;
+      return 0;
+    default:
+      // Unknown type: fall back to credit − debit (sensible default)
+      return credit - debit;
+  }
+}
+
+// Format a signed amount for display: shows "−" prefix for negatives, no prefix for positives.
+// Color callback handles emerald (positive) / red (negative) / slate (zero).
+function fmtSigned(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  var v = Number(n);
+  if (Math.abs(v) < 0.005) return '0.00';
+  var abs = Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return v < 0 ? '−' + abs : abs;
+}
+
 export default function OpenAccountsTab(props) {
   var userProfile = props.userProfile;
   var modulePerms = props.modulePerms || {};
@@ -1046,7 +1090,7 @@ export default function OpenAccountsTab(props) {
             </div>
             <div className={(t.balance >= 0 ? 'bg-emerald-800' : 'bg-red-800') + ' text-white rounded p-2 shadow'}>
               <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Net Balance</div>
-              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.balance)} {cur}</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtSigned(t.balance)} {cur}</div>
               <div className="text-[10px] font-semibold opacity-90">
                 {t.balance > 0 ? 'they owe us' : t.balance < 0 ? 'we owe them' : 'settled'}
               </div>
@@ -1109,10 +1153,13 @@ export default function OpenAccountsTab(props) {
                       return (
                         <div key={cur} className="flex items-center gap-2 flex-wrap">
                           <span className="px-1.5 py-0.5 bg-slate-200 text-slate-900 text-[10px] font-mono font-extrabold rounded">{cur}</span>
-                          <span>Cr: <span className="text-emerald-800">{fmtNum(cs.credit)}</span></span>
-                          <span>Dr: <span className="text-red-700">{fmtNum(cs.debit)}</span></span>
+                          {/* v55.83-A.6.27.72 HOTFIX 6 — REMOVED Cr/Dr raw sums from header.
+                              They caused the same reconciliation confusion as the Totals row
+                              (e.g. "Cr 0 / Dr 11,888" alongside "Bal -9,888" looked like
+                              broken math because raw sums don't match FIFO net). The Bal
+                              label alone carries the meaningful number. */}
                           <span className={'px-2 py-0.5 rounded font-extrabold ' + (cs.balance > 0 ? 'bg-emerald-700 text-white' : cs.balance < 0 ? 'bg-red-700 text-white' : 'bg-slate-500 text-white')}>
-                            Bal: {fmtNum(cs.balance)} {cur}
+                            Bal: {fmtSigned(cs.balance)} {cur}
                             <span className="ml-1 text-[10px] opacity-90">
                               {cs.balance > 0 ? '(they owe us)' : cs.balance < 0 ? '(we owe them)' : '(settled)'}
                             </span>
@@ -1199,7 +1246,7 @@ export default function OpenAccountsTab(props) {
                              b.netBalance < 0 ? 'bg-red-600 border-red-700 text-white' :
                              'bg-slate-500 border-slate-600 text-white')}>
                             <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-90">Net balance</div>
-                            <div className="text-base font-mono font-extrabold">{fmtNum(b.netBalance)}</div>
+                            <div className="text-base font-mono font-extrabold">{fmtSigned(b.netBalance)}</div>
                             <div className="text-[9px] opacity-90">
                               {b.netBalance > 0.001 ? 'in our favor' : b.netBalance < -0.001 ? 'against us' : 'settled'}
                             </div>
@@ -1280,11 +1327,17 @@ export default function OpenAccountsTab(props) {
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
                             <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
-                            {/* Amount — for invoices+bills shows face value; for payments shows the cash amount */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-slate-900">
+                            {/* v55.83-A.6.27.72 HOTFIX 6 — Amount is now SIGNED based on the
+                                transaction's effect on our net position with this counterparty:
+                                  + (emerald) for Payment Sent / Sales Invoice (improves our position)
+                                  − (red)     for Payment Received / Vendor Bill (worsens our position)
+                                This makes the column algebraically sum to the Net column at the bottom. */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
                               {(function () {
-                                var displayAmt = Number(entry.credit_amount || 0) || Number(entry.debit_amount || 0);
-                                return displayAmt > 0 ? fmtNum(displayAmt) : '—';
+                                var signed = signedAmount(entry);
+                                var cls = signed > 0.005 ? 'text-emerald-800' : signed < -0.005 ? 'text-red-700' : 'text-slate-500';
+                                if (Math.abs(signed) < 0.005) return <span className="text-slate-400">—</span>;
+                                return <span className={cls}>{fmtSigned(signed)}</span>;
                               })()}
                             </td>
                             {/* Paid — only meaningful for invoices/bills. Sum of FIFO-applied payments */}
@@ -1312,7 +1365,7 @@ export default function OpenAccountsTab(props) {
                                     (isThisEntryCur ? 'bg-slate-100 ' : 'text-slate-400 ') +
                                     (rbForCur > 0 ? 'text-emerald-800' : rbForCur < 0 ? 'text-red-700' : 'text-slate-500')}
                                 >
-                                  {fmtNum(rbForCur)}
+                                  {fmtSigned(rbForCur)}
                                 </td>
                               );
                             })}
@@ -1335,47 +1388,46 @@ export default function OpenAccountsTab(props) {
                           </tr>
                         );
                       })}
-                      {/* v55.83-A.6.27.72 HOTFIX 4 — Totals row per currency.
-                          PREVIOUS BUG: showed "Cr: 0 / Dr: 11,888" (raw sums from old credit-debit model)
-                          alongside Net: -9,888 (FIFO). The user did Cr−Dr = −11,888 ≠ −9,888 → looked
-                          broken. Now mirrors the per-row column structure:
-                            AMOUNT   = sum of all transaction amounts in this currency
-                            PAID     = sum of auto-applied (FIFO-matched) on invoices/bills in this currency
-                            REMAINING = sum of open obligations still owed
-                            NET cur  = final FIFO net (matches 4-pot strip)
-                          Reconciles end-to-end: Invoice amounts = Paid + Remaining; Net = derived from pots. */}
+                      {/* v55.83-A.6.27.72 HOTFIX 6 — Totals row uses SIGNED Amount sums so the
+                          column reconciles to Net algebraically:
+                            Total Amount (signed) = Net (FIFO)
+                          Previous HOTFIX 4 made Paid/Remaining tie out but Amount was still an
+                          unsigned magnitude sum — meaningless when payments and bills are mixed.
+                          Now: Payment Sent +amount, Vendor Bill −amount. They cancel out
+                          algebraically just like the FIFO simulation does. */}
                       {s.currencies.map(function (cur, ci) {
                         var cs = s.byCurrency[cur];
-                        // Compute per-currency totals from the entries for this currency
+                        // Compute per-currency signed totals from the entries for this currency
                         var curEntries = (accEntries || []).filter(function (e) {
                           var ec = String(e.currency || 'USD').toUpperCase().trim();
                           return ec === cur;
                         });
-                        var totalAmount = 0;
+                        var totalSigned = 0;
                         var totalPaid = 0;
                         var totalRemaining = 0;
                         curEntries.forEach(function (e) {
-                          totalAmount += Number(e.credit_amount || 0) + Number(e.debit_amount || 0);
+                          totalSigned += signedAmount(e);
                           if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
                             var prT = computePaidRemaining(e, simResult);
                             totalPaid += prT.paid;
                             totalRemaining += prT.remaining;
                           }
                         });
+                        var amtCls = totalSigned > 0.005 ? 'text-emerald-900' : totalSigned < -0.005 ? 'text-red-900' : 'text-slate-900';
                         return (
                           <tr key={cur} className="bg-slate-100 font-extrabold">
                             <td colSpan={5} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
                               {ci === 0 ? 'Totals (' + cur + ') →' : '(' + cur + ') →'}
                             </td>
-                            {/* AMOUNT total */}
-                            <td className="px-3 py-2 text-right font-mono text-slate-900" title="Sum of all transaction amounts in this currency">
-                              {fmtNum(totalAmount)}
+                            {/* AMOUNT total — SIGNED sum, reconciles to Net algebraically */}
+                            <td className={'px-3 py-2 text-right font-mono ' + amtCls} title="Algebraic sum of signed amounts (payments+invoices−bills−payments_received). Equals Net.">
+                              {fmtSigned(totalSigned)}
                             </td>
-                            {/* PAID total (auto-applied via FIFO) */}
+                            {/* PAID total (auto-applied via FIFO) — unsigned magnitude */}
                             <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Sum of payments auto-applied to invoices/bills via FIFO">
                               {totalPaid > 0.01 ? fmtNum(totalPaid) : '—'}
                             </td>
-                            {/* REMAINING total (open obligations) */}
+                            {/* REMAINING total (open obligations) — unsigned magnitude */}
                             <td className="px-3 py-2 text-right font-mono text-amber-900 bg-amber-50" title="Sum of open invoice/bill amounts still unsettled">
                               {totalRemaining > 0.01 ? fmtNum(totalRemaining) : '—'}
                             </td>
@@ -1384,7 +1436,7 @@ export default function OpenAccountsTab(props) {
                               if (col !== cur) return <td key={col + '-' + colI}></td>;
                               return (
                                 <td key={col + '-' + colI} className={'px-3 py-2 text-right font-mono ' + (cs.balance > 0 ? 'text-emerald-900' : cs.balance < 0 ? 'text-red-900' : 'text-slate-900')}>
-                                  {fmtNum(cs.balance)}
+                                  {fmtSigned(cs.balance)}
                                 </td>
                               );
                             })}

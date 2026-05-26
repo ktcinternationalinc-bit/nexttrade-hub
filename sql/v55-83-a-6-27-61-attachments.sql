@@ -80,6 +80,39 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 -- ──────────────────────────────────────────────────────────────────
+-- v55.83-A.6.27.72 HOTFIX 5 (May 26 2026) — STORAGE BUCKET POLICIES.
+-- Max hit "new row violates row-level security policy" on upload.
+-- The attachments TABLE has the right policy, but storage.objects
+-- (the actual file storage layer) needs its own policies. Without
+-- these, ANY upload to the bucket gets rejected by RLS regardless
+-- of the table's permissive policy.
+-- ──────────────────────────────────────────────────────────────────
+DROP POLICY IF EXISTS "auth users upload to attachments" ON storage.objects;
+CREATE POLICY "auth users upload to attachments"
+  ON storage.objects FOR INSERT
+  TO authenticated
+  WITH CHECK (bucket_id = 'attachments');
+
+DROP POLICY IF EXISTS "auth users read attachments" ON storage.objects;
+CREATE POLICY "auth users read attachments"
+  ON storage.objects FOR SELECT
+  TO authenticated
+  USING (bucket_id = 'attachments');
+
+DROP POLICY IF EXISTS "auth users update attachments" ON storage.objects;
+CREATE POLICY "auth users update attachments"
+  ON storage.objects FOR UPDATE
+  TO authenticated
+  USING (bucket_id = 'attachments')
+  WITH CHECK (bucket_id = 'attachments');
+
+DROP POLICY IF EXISTS "auth users delete attachments" ON storage.objects;
+CREATE POLICY "auth users delete attachments"
+  ON storage.objects FOR DELETE
+  TO authenticated
+  USING (bucket_id = 'attachments');
+
+-- ──────────────────────────────────────────────────────────────────
 -- VERIFY (run after migration)
 -- ──────────────────────────────────────────────────────────────────
 -- 1) Table exists with all columns:

@@ -58,7 +58,7 @@ ok('B4: success on delete uses try/catch around toast',
 // ══════════════════════════════════════════════════════════════════
 
 ok('C1: typeFilter default useState("variants") (was "all")',
-  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(pm));
+  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
 ok('C2: comment explains the Max directive about templates not polluting Product List',
   /default of product list should be the variants/.test(pm));
 
@@ -67,9 +67,9 @@ ok('C2: comment explains the Max directive about templates not polluting Product
 // (D1-D4 loosened in .60: "Variants" further renamed to "Products" per Max May 22)
 // ══════════════════════════════════════════════════════════════════
 
-ok('D1: dropdown labels use "Template Products" and a default-Products option (renamed in .60)',
-  /<option value="variants">(Variants|Products)/.test(pm) &&
-  /<option value="templates">Template Products only/.test(pm));
+ok('D1: dropdown labels updated in v72 HOTFIX 8 (Template blueprints / Products only / All)',
+  /<option value="variants">Products only/.test(pm) &&
+  /<option value="templates">Template blueprints only/.test(pm));
 ok('D2: FAMILY badge → TEMPLATE badge in Product List rows',
   /TEMPLATE</.test(pm) && !/>FAMILY</.test(pm));
 ok('D3: + Variant/Product button title mentions template or blueprint',
