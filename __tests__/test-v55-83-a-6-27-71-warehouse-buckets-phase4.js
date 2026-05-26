@@ -188,6 +188,67 @@ ok('G12: critical Arabic strings present in actions (Submit/Approve/Cancel/Reope
   /إعادة فتح الدلو/.test(ac));
 
 // ══════════════════════════════════════════════════════════════════
+// PART H — HOTFIX 4: Edit/Delete entries + Add new category from bucket
+// ══════════════════════════════════════════════════════════════════
+var libBuckets = read('src/lib/warehouse-buckets.js');
+var rowComp = read('src/components/WarehouseBucketEntryRow.jsx');
+
+ok('H1: lib exports updateBucketEntry helper',
+  /export async function updateBucketEntry\(params\)/.test(libBuckets));
+ok('H2: lib exports deleteBucketEntry helper',
+  /export async function deleteBucketEntry\(params\)/.test(libBuckets));
+ok('H3: updateBucketEntry imports dbDelete (via dbUpdate path) and dbUpdate',
+  /import \{ supabase, dbInsert, dbUpdate, dbDelete \} from '\.\/supabase'/.test(libBuckets));
+ok('H4: updateBucketEntry rejects locked statuses (closed/cancelled/pending_approval)',
+  /Cannot edit entries in a/.test(libBuckets) &&
+  /Bucket is pending approval — reopen for edits/.test(libBuckets));
+ok('H5: updateBucketEntry returns overspend object on overspend (same shape as add)',
+  /if \(newAmount > remaining \+ 0\.001\) \{\s+return \{\s+ok: false,\s+overspend: \{/.test(libBuckets));
+ok('H6: updateBucketEntry computes spent EXCLUDING the edited entry',
+  /spentExcludingThis/.test(libBuckets) &&
+  /\.filter\(function \(e\) \{ return e\.id !== p\.entryId; \}\)/.test(libBuckets));
+ok('H7: updateBucketEntry flips bucket open→fully_spent and fully_spent→open as needed',
+  /if \(fullySpentNow && bucket\.status === 'open'\)/.test(libBuckets) &&
+  /else if \(!fullySpentNow && bucket\.status === 'fully_spent'\)/.test(libBuckets));
+ok('H8: deleteBucketEntry rejects locked statuses',
+  /Cannot delete entries from a/.test(libBuckets));
+ok('H9: deleteBucketEntry flips fully_spent → open when total drops below amount',
+  /if \(bucket\.status === 'fully_spent'\) \{[\s\S]{0,400}if \(newSpent < Number\(bucket\.amount\) - 0\.001\)/.test(libBuckets));
+ok('H10: WarehouseBucketEntryRow component exists with editing state',
+  /export default function WarehouseBucketEntryRow\(props\)/.test(rowComp) &&
+  /var \[editing, setEditing\] = useState\(false\)/.test(rowComp));
+ok('H11: row component renders edit + delete buttons when canEdit && !locked',
+  /canEdit && !locked/.test(rowComp) &&
+  /handleDelete/.test(rowComp));
+ok('H12: row component shows 🔒 lock indicator when bucket is locked',
+  /locked && canEdit/.test(rowComp) &&
+  /🔒/.test(rowComp));
+ok('H13: row delete uses confirm() before calling deleteBucketEntry',
+  /if \(!confirm\(msg\)\) return;/.test(rowComp) &&
+  /await deleteBucketEntry\(\{ entryId: entry\.id, userId: userId \}\)/.test(rowComp));
+ok('H14: row save uses updateBucketEntry with all 5 editable fields',
+  /await updateBucketEntry\(\{\s+entryId: entry\.id,\s+entryDate: editDate,\s+amount: amt,\s+category: editCategory\.trim\(\),\s+subcategory: editSubcategory\.trim\(\) \|\| null,\s+description: editDescription\.trim\(\) \|\| null/.test(rowComp));
+ok('H15: row component has bilingual labels (Arabic + English)',
+  /'تعديل' : 'Edit'/.test(rowComp) &&
+  /'حذف' : 'Delete'|'تعديل هذا الإدخال' : 'Edit this entry'/.test(rowComp));
+ok('H16: list imports WarehouseBucketEntryRow and uses it in the entries table',
+  /import WarehouseBucketEntryRow from '\.\/WarehouseBucketEntryRow'/.test(listC) &&
+  /<WarehouseBucketEntryRow/.test(listC));
+ok('H17: list loads allCategories + allSubcategories from treasury for row autocomplete',
+  /var \[allCategories, setAllCategories\] = useState\(\[\]\)/.test(listC) &&
+  /supabase\.from\('treasury'\)\.select\('category, subcategory'\)/.test(listC) &&
+  /setAllCategories\(Object\.keys\(cats\)\.sort\(\)\)/.test(listC));
+ok('H18: list passes onBucketChanged through onChanged so status flips trigger parent refresh',
+  /onChanged=\{function \(\) \{[\s\S]{0,400}if \(props\.onBucketChanged\) props\.onBucketChanged\(\);/.test(listC));
+ok('H19: entry form has "+ Add new category" pattern matching subcategory pattern',
+  /addingNewCategory/.test(ef) &&
+  /'إضافة فئة جديدة\.\.\.' : 'Add new category…'/.test(ef));
+ok('H20: entry form "+ Add new category" is gated by canManageCategories',
+  /\{canManageCategories && \(\s+<option value="__add_new__">\+ \{ar \? 'إضافة فئة جديدة/.test(ef));
+ok('H21: entry form resetForm clears the new-category state too',
+  /setAddingNewCategory\(false\);\s+setNewCategoryText\(''\);/.test(ef));
+
+// ══════════════════════════════════════════════════════════════════
 // FINAL
 // ══════════════════════════════════════════════════════════════════
 console.log('');

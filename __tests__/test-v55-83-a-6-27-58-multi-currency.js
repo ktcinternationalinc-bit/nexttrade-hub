@@ -108,7 +108,7 @@ ok('D3: grandTotals sorts currencies USD-first',
 ok('E1: openNewEntry computes defaultCur from entity default_currency',
   /var defaultCur = \(ent && ent\.default_currency\) \|\| 'USD'/.test(oa));
 ok('E2: openNewEntry stores currency in entryDraft',
-  /currency: defaultCur,    \/\/ v55\.83-A\.6\.27\.58/.test(oa));
+  /currency: defaultCur,/.test(oa));
 ok('E3: openEditEntry preserves entry.currency (uppercased)',
   /currency: String\(entry\.currency \|\| 'USD'\)\.toUpperCase\(\)/.test(oa));
 ok('E4: saveEntry validates currency length >= 2',
@@ -156,8 +156,8 @@ ok('G6: per-currency Balance tile shows "they owe us"/"we owe them"/"settled" ba
 
 ok('H1: ledger table header has Currency (Cur) column',
   /<th[^>]*>Cur<\/th>/.test(oa));
-ok('H2: ledger table has one Running CUR column per currency in this account',
-  /s\.currencies\.map\(function \(cur\) \{\s+return <th key=\{cur\}[\s\S]{0,300}Running \{cur\}/.test(oa));
+ok('H2: ledger table has one Net CUR column per currency in this account (v55.83-A.6.27.72 renamed Running→Net)',
+  /s\.currencies\.map\(function \(cur\) \{\s+return <th key=\{cur\}[\s\S]{0,300}Net \{cur\}/.test(oa));
 ok('H3: each entry row shows its own _currency in the Cur column',
   /<td className="px-3 py-1\.5 text-center font-mono font-bold text-slate-800 text-\[11px\]">\{entryCur\}<\/td>/.test(oa));
 ok('H4: each entry row renders per-currency running cells from _running_by_currency',
@@ -192,12 +192,12 @@ ok('I7: each section has its own totals row in tfoot',
 // PART J — Excel export (per-currency totals + running cols)
 // ══════════════════════════════════════════════════════════════════
 
-ok('J1: Excel column headers include Currency + one Running CUR per currency',
-  /var colHeaders = \['Date', 'Description', 'Reference', 'Currency', 'Credit', 'Debit'\];\s+currencies\.forEach\(function \(cur\) \{ colHeaders\.push\('Running ' \+ cur\)/.test(exp));
+ok('J1: Excel column headers include Type/Amount/Paid/Remaining + one Net CUR per currency (v55.83-A.6.27.72)',
+  /var colHeaders = \['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'\];\s+currencies\.forEach\(function \(cur\) \{ colHeaders\.push\('Net ' \+ cur\)/.test(exp));
 ok('J2: Excel walks entries with per-currency rolling running map',
-  /var running = \{\};[\s\S]{0,500}running\[entryCur\] \+= credit - debit/.test(exp));
-ok('J3: Excel row pushes Currency + Credit + Debit + per-currency running values',
-  /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,500}entryCur,\s+credit > 0 \? credit : '',\s+debit  > 0 \? debit  : ''/.test(exp));
+  /var running = \{\};[\s\S]{0,4000}running\[entryCur\] \+= credit - debit/.test(exp));
+ok('J3: Excel row pushes Type + Amount + Paid + Remaining + per-currency running values (v55.83-A.6.27.72)',
+  /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,1000}TYPE_LABEL\[e\.transaction_type\]/.test(exp));
 ok('J4: Excel adds per-currency totals rows at bottom',
   /Totals by Currency[\s\S]{0,500}currencies\.forEach\(function \(cur\) \{\s+var cs = byCurrency\[cur\][\s\S]{0,400}rows\.push\(totalsRow\)/.test(exp));
 ok('J5: Excel adds plain-English balance lines per currency',
@@ -230,8 +230,9 @@ ok('R9: 53 — Print + Excel buttons on account card preserved',
   /🖨️ Print/.test(oa) && /📊 Excel/.test(oa));
 ok('R10: 52 — Open Accounts tab registered',
   /\{ id: 'openaccounts', label: 'Open Accounts \/ حسابات', icon: '📒' \}/.test(page));
-ok('R11: 52 — CREDIT vs DEBIT radio panels preserved',
-  /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa));
+ok('R11: 52 — 5-type transaction picker (v55.83-A.6.27.72 supersedes 2-way credit/debit toggle)',
+  /transaction_type === 'sales_invoice'/.test(oa) && /transaction_type === 'vendor_bill'/.test(oa) &&
+  /transaction_type === 'payment_received'/.test(oa) && /transaction_type === 'payment_sent'/.test(oa));
 ok('R12: closed-tickets fetch still has NO .limit(100)',
   !/\.eq\('status', 'Closed'\)[\s\S]{0,200}\.limit\(100\)/.test(page));
 ok('R13: 44c — consume_invoice_item_inventory RPC still wired',

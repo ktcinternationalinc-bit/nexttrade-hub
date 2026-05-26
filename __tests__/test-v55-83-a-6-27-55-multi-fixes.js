@@ -158,9 +158,11 @@ ok('R3: 53 — Open Accounts entity picker still wired',
 ok('R4: 53 — Print + Excel buttons still on account card',
   /🖨️ Print/.test(read('src/components/OpenAccountsTab.jsx')) &&
   /📊 Excel/.test(read('src/components/OpenAccountsTab.jsx')));
-ok('R5: 52 — CREDIT vs DEBIT radio panels preserved',
-  /CREDIT — money IN/.test(read('src/components/OpenAccountsTab.jsx')) &&
-  /DEBIT — money OUT/.test(read('src/components/OpenAccountsTab.jsx')));
+ok('R5: 52 — 5-type transaction picker (v55.83-A.6.27.72 replaces CREDIT/DEBIT radio)',
+  /Sales Invoice/.test(read('src/components/OpenAccountsTab.jsx')) &&
+  /Vendor Bill/.test(read('src/components/OpenAccountsTab.jsx')) &&
+  /Payment Received/.test(read('src/components/OpenAccountsTab.jsx')) &&
+  /Payment Sent/.test(read('src/components/OpenAccountsTab.jsx')));
 ok('R6: 51 — InventoryOverview default export preserved',
   /export default function InventoryOverview/.test(ov));
 ok('R7: 51 — Inventory tab default subtab = overview',

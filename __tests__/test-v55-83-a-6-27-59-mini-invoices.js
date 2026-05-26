@@ -310,8 +310,8 @@ ok('R2: 58 — summaryFor returns byCurrency + currencies + totalEntryCount',
   /byCurrency: byCur,\s+currencies: currencies,\s+totalEntryCount: arr\.length/.test(oa));
 ok('R3: 58 — entry modal currency dropdown preserved',
   /<option value="USD">USD<\/option>\s+<option value="EGP">EGP<\/option>\s+<option value="EUR">EUR<\/option>/.test(oa));
-ok('R4: 58 — Cur column + per-currency Running CUR columns preserved',
-  />Cur</.test(oa) && /Running \{cur\}/.test(oa));
+ok('R4: 58 — Cur column + per-currency Net CUR columns preserved (v55.83-A.6.27.72 renamed Running→Net)',
+  />Cur</.test(oa) && /Net \{cur\}/.test(oa));
 ok('R5: 58 — per-currency grand-total tiles preserved',
   /\{cur\} Total Credit \(money in\)/.test(oa));
 ok('R6: 57 — Shipping rate save instrumentation preserved',
@@ -326,11 +326,12 @@ ok('R10: 53 — Business Entities picker preserved',
   /Our Entity for this Account \* \/ كياننا/.test(oa));
 ok('R11: 52 — Open Accounts tab registered',
   /\{ id: 'openaccounts', label: 'Open Accounts \/ حسابات', icon: '📒' \}/.test(page));
-ok('R12: 52 — CREDIT/DEBIT radio panels on Entry modal preserved',
-  /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa));
-ok('R13: 52 — manual ledger entries STILL work (Q5)',
+ok('R12: 52 — 5-type transaction picker on Entry modal (v55.83-A.6.27.72 replaces CREDIT/DEBIT radio)',
+  /transaction_type === 'sales_invoice'/.test(oa) && /transaction_type === 'vendor_bill'/.test(oa) &&
+  /transaction_type === 'payment_received'/.test(oa) && /transaction_type === 'payment_sent'/.test(oa));
+ok('R13: 52 — manual ledger entries STILL work (Q5) (v55.83-A.6.27.72: side now derived from transaction_type)',
   /async function saveEntry\(\)/.test(oa) &&
-  /credit_amount: entryDraft\.side === 'credit' \? amt : null,\s+debit_amount: entryDraft\.side === 'debit' \? amt : null/.test(oa));
+  /credit_amount: isCredit \? amt : null,\s+debit_amount: isCredit \? null : amt/.test(oa));
 ok('R14: closed-tickets fetch has NO .limit(100)',
   !/\.eq\('status', 'Closed'\)[\s\S]{0,200}\.limit\(100\)/.test(page));
 ok('R15: account card row has both + Entry AND + Invoice',

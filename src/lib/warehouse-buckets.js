@@ -22,7 +22,7 @@
 //         and substitutes bucket entries for the placeholder when closed)
 //   No treasury row inserts, updates, or deletes happen during close.
 
-import { supabase, dbInsert, dbUpdate } from './supabase';
+import { supabase, dbInsert, dbUpdate, dbDelete } from './supabase';
 
 // ─── Slug helpers ──────────────────────────────────────────────────
 
@@ -234,6 +234,147 @@ export async function addBucketEntry(params) {
   } catch (err) {
     return { ok: false, error: 'Entry insert failed: ' + ((err && err.message) || err) };
   }
+}
+
+// ─── EDIT EXISTING ENTRY ─────────────────────────────────────────────
+// v55.83-A.6.27.71 HOTFIX 4 (Max May 24 2026): edit/delete capability.
+//
+// Updates an existing bucket entry. Behaves like addBucketEntry: respects
+// the bucket's locked states, checks for overspend if amount is changing,
+// and auto-flips bucket status open↔fully_spent based on the new total.
+//
+// Cannot edit entries in closed/cancelled/pending_approval buckets — must
+// reopen first.
+export async function updateBucketEntry(params) {
+  var p = params || {};
+  if (!p.entryId) return { ok: false, error: 'entryId required' };
+
+  // 1. Load entry + its parent bucket
+  var eRes = await supabase.from('warehouse_bucket_entries').select('*').eq('id', p.entryId).maybeSingle();
+  if (eRes.error || !eRes.data) return { ok: false, error: 'Entry not found' };
+  var oldEntry = eRes.data;
+
+  var bRes = await supabase.from('warehouse_buckets').select('*').eq('id', oldEntry.bucket_id).maybeSingle();
+  if (bRes.error || !bRes.data) return { ok: false, error: 'Parent bucket not found' };
+  var bucket = bRes.data;
+  if (bucket.status === 'closed' || bucket.status === 'cancelled') {
+    return { ok: false, error: 'Cannot edit entries in a ' + bucket.status + ' bucket' };
+  }
+  if (bucket.status === 'pending_approval') {
+    return { ok: false, error: 'Bucket is pending approval — reopen for edits' };
+  }
+
+  // 2. Compute spent total EXCLUDING this entry (so we can decide overspend
+  //    against the proposed new amount)
+  var allRes = await supabase.from('warehouse_bucket_entries').select('id, amount').eq('bucket_id', oldEntry.bucket_id);
+  if (allRes.error) return { ok: false, error: 'Could not reload entries: ' + allRes.error.message };
+  var spentExcludingThis = (allRes.data || [])
+    .filter(function (e) { return e.id !== p.entryId; })
+    .reduce(function (a, e) { return a + Number(e.amount || 0); }, 0);
+
+  // 3. Build patch — only update fields the caller actually provided
+  var patch = {};
+  var newAmount = oldEntry.amount;
+  if (p.amount != null) {
+    var amt = Number(p.amount);
+    if (!amt || amt <= 0) return { ok: false, error: 'Amount must be > 0' };
+    patch.amount = amt;
+    newAmount = amt;
+  }
+  if (p.category != null) {
+    if (!String(p.category).trim()) return { ok: false, error: 'Category cannot be empty' };
+    patch.category = String(p.category).trim();
+  }
+  if (p.subcategory !== undefined) {
+    patch.subcategory = p.subcategory ? String(p.subcategory).trim() : null;
+  }
+  if (p.description !== undefined) {
+    patch.description = p.description ? String(p.description).trim() : null;
+  }
+  if (p.entryDate != null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p.entryDate)) return { ok: false, error: 'Entry date must be YYYY-MM-DD' };
+    patch.entry_date = p.entryDate;
+  }
+  if (Object.keys(patch).length === 0) return { ok: false, error: 'No fields to update' };
+
+  // 4. Overspend check — same epsilon as add path
+  var remaining = Number(bucket.amount) - spentExcludingThis;
+  if (newAmount > remaining + 0.001) {
+    return {
+      ok: false,
+      overspend: {
+        bucketAmount: Number(bucket.amount),
+        spent: spentExcludingThis,
+        remaining: Math.max(0, remaining),
+        attemptAmount: newAmount,
+        byAmount: newAmount - Math.max(0, remaining),
+      },
+    };
+  }
+
+  // 5. Apply the patch
+  try {
+    await dbUpdate('warehouse_bucket_entries', p.entryId, patch, p.userId);
+  } catch (err) {
+    return { ok: false, error: 'Entry update failed: ' + ((err && err.message) || err) };
+  }
+
+  // 6. Recompute bucket status open↔fully_spent
+  var newTotalSpent = spentExcludingThis + newAmount;
+  var fullySpentNow = newTotalSpent >= Number(bucket.amount) - 0.001;
+  if (fullySpentNow && bucket.status === 'open') {
+    try { await dbUpdate('warehouse_buckets', bucket.id, { status: 'fully_spent' }, p.userId); }
+    catch (e) { console.warn('[buckets] post-update status flip to fully_spent failed:', e); }
+  } else if (!fullySpentNow && bucket.status === 'fully_spent') {
+    try { await dbUpdate('warehouse_buckets', bucket.id, { status: 'open' }, p.userId); }
+    catch (e) { console.warn('[buckets] post-update status flip to open failed:', e); }
+  }
+
+  return { ok: true, newSpent: newTotalSpent, remaining: Number(bucket.amount) - newTotalSpent };
+}
+
+// ─── DELETE ENTRY ────────────────────────────────────────────────────
+// Same locked-state rules as edit. If deletion drops the bucket below its
+// full amount, status flips fully_spent → open. If the deleted entry was
+// part of a split (is_split_part), we leave the OTHER leg alone — the user
+// has to delete it separately if they want both legs gone.
+export async function deleteBucketEntry(params) {
+  var p = params || {};
+  if (!p.entryId) return { ok: false, error: 'entryId required' };
+
+  var eRes = await supabase.from('warehouse_bucket_entries').select('*').eq('id', p.entryId).maybeSingle();
+  if (eRes.error || !eRes.data) return { ok: false, error: 'Entry not found' };
+  var entry = eRes.data;
+
+  var bRes = await supabase.from('warehouse_buckets').select('*').eq('id', entry.bucket_id).maybeSingle();
+  if (bRes.error || !bRes.data) return { ok: false, error: 'Parent bucket not found' };
+  var bucket = bRes.data;
+  if (bucket.status === 'closed' || bucket.status === 'cancelled') {
+    return { ok: false, error: 'Cannot delete entries from a ' + bucket.status + ' bucket' };
+  }
+  if (bucket.status === 'pending_approval') {
+    return { ok: false, error: 'Bucket is pending approval — reopen before deleting entries' };
+  }
+
+  try {
+    await dbDelete('warehouse_bucket_entries', p.entryId, p.userId);
+  } catch (err) {
+    return { ok: false, error: 'Entry delete failed: ' + ((err && err.message) || err) };
+  }
+
+  // Recompute status — if bucket was fully_spent and now isn't, drop to open
+  if (bucket.status === 'fully_spent') {
+    var afterRes = await supabase.from('warehouse_bucket_entries').select('amount').eq('bucket_id', bucket.id);
+    if (!afterRes.error) {
+      var newSpent = (afterRes.data || []).reduce(function (a, e) { return a + Number(e.amount || 0); }, 0);
+      if (newSpent < Number(bucket.amount) - 0.001) {
+        try { await dbUpdate('warehouse_buckets', bucket.id, { status: 'open' }, p.userId); }
+        catch (e) { console.warn('[buckets] post-delete status flip to open failed:', e); }
+      }
+    }
+  }
+
+  return { ok: true };
 }
 
 // ─── BUCKET LIFECYCLE TRANSITIONS ──────────────────────────────────

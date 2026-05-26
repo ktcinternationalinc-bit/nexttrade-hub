@@ -46,8 +46,15 @@ function escapeHtml(s) {
 // Layout: entity header → statement-for box → ONE section per currency
 //   (each section has its own running-balance walk + totals + balance box).
 // ──────────────────────────────────────────────────────────────────
-export function printAccountLedger(account, entity, entries, summary) {
+// v55.83-A.6.27.72 — Print accepts `opts` with:
+//   perspective: 'internal' (default) shows OUR view, or 'customer' shows their mirror
+//   simulation: optional simulation result from open-account-ledger.simulate(), used to
+//               render the 4-pot summary at the top of each currency section
+export function printAccountLedger(account, entity, entries, summary, opts) {
   if (!account) return;
+  opts = opts || {};
+  var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
+  var simulation = opts.simulation || null;
   var win;
   try { win = window.open('', '_blank', 'width=900,height=700'); }
   catch (e) { alert('Could not open print window. Please allow popups for this site.'); return; }
@@ -85,6 +92,17 @@ export function printAccountLedger(account, entity, entries, summary) {
 
   function sectionHtml(cur) {
     var cs = byCurrency[cur] || { credit: 0, debit: 0, balance: 0, count: 0 };
+    var simCur = (simulation && simulation.byCurrency && simulation.byCurrency[cur]) || null;
+    var applications = (simulation && simulation.applications) || {};
+    // v55.83-A.6.27.72 — labels are mirrored for customer perspective
+    var TYPE_LABEL = {
+      sales_invoice:    perspective === 'customer' ? 'Vendor Bill (you billed us)' : 'Sales Invoice (we billed them)',
+      vendor_bill:      perspective === 'customer' ? 'Sales Invoice (we billed you)' : 'Vendor Bill (they billed us)',
+      payment_received: perspective === 'customer' ? 'Payment Sent (you paid us)'   : 'Payment Received (they paid us)',
+      payment_sent:     perspective === 'customer' ? 'Payment Received (we paid you)' : 'Payment Sent (we paid them)',
+      credit_adjustment:'Adjustment',
+      offset:           'Offset',
+    };
     var rowsHtml = '';
     var running = 0;
     var anyRows = false;
@@ -94,41 +112,83 @@ export function printAccountLedger(account, entity, entries, summary) {
       anyRows = true;
       var credit = Number(e.credit_amount || 0);
       var debit  = Number(e.debit_amount  || 0);
-      running += credit - debit;
+      // For customer perspective, credit/debit swap meaning
+      var dispCredit = perspective === 'customer' ? debit : credit;
+      var dispDebit  = perspective === 'customer' ? credit : debit;
+      running += dispCredit - dispDebit;
+      var amt = credit || debit;
+      var paid = applications[e.id] || 0;
+      var remaining = 0;
+      if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
+        remaining = Math.max(0, amt - paid);
+      }
+      var typeLabel = TYPE_LABEL[e.transaction_type] || 'Entry';
       rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
+        + '<td style="font-size:10px"><strong>' + escapeHtml(typeLabel) + '</strong></td>'
         + '<td>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
-        + '<td class="num credit">' + (credit > 0 ? fmtMoney(credit) : '') + '</td>'
-        + '<td class="num debit">'  + (debit  > 0 ? fmtMoney(debit)  : '') + '</td>'
+        + '<td class="num">' + (amt > 0 ? fmtMoney(amt) : '') + '</td>'
+        + '<td class="num" style="background:#f0fdf4">' + (paid > 0 && (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') ? fmtMoney(paid) : '') + '</td>'
+        + '<td class="num" style="background:#fffbeb">' + (remaining > 0.01 ? fmtMoney(remaining) : (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill' ? '✓' : '')) + '</td>'
         + '<td class="num">' + fmtMoney(running) + '</td>'
         + '</tr>';
     });
     if (!anyRows) {
-      rowsHtml = '<tr><td colspan="6" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
+      rowsHtml = '<tr><td colspan="8" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
     }
-    var balanceLabel = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
+    var balanceLabel = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us')
+                     : cs.balance < 0 ? (perspective === 'customer' ? 'We owe you' : 'We owe them')
+                     : 'Settled';
     var balanceColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
     var bgColor = cs.balance >= 0 ? '#f0fdf4' : '#fef2f2';
+
+    // 4-pot summary tiles for this currency
+    var potTilesHtml = '';
+    if (simCur) {
+      potTilesHtml = ''
+        + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'
+        + '<div style="flex:1;min-width:90px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:6px 8px">'
+        + '<div style="font-size:9px;color:#1e3a8a;font-weight:700;text-transform:uppercase">'
+        + (perspective === 'customer' ? 'We owe you' : 'They owe us')
+        + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#1e3a8a">' + fmtMoney(simCur.theirOpenInvoices) + '</div></div>'
+        + '<div style="flex:1;min-width:90px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:6px 8px">'
+        + '<div style="font-size:9px;color:#78350f;font-weight:700;text-transform:uppercase">'
+        + (perspective === 'customer' ? 'You owe us' : 'We owe them')
+        + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#78350f">' + fmtMoney(simCur.ourOpenBills) + '</div></div>'
+        + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:4px;padding:6px 8px">'
+        + '<div style="font-size:9px;color:#14532d;font-weight:700;text-transform:uppercase">'
+        + (perspective === 'customer' ? 'Your credit (prepaid)' : 'Their credit (prepaid)')
+        + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#14532d">' + fmtMoney(simCur.theirPrepaid) + '</div></div>'
+        + '<div style="flex:1;min-width:90px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:6px 8px">'
+        + '<div style="font-size:9px;color:#7f1d1d;font-weight:700;text-transform:uppercase">'
+        + (perspective === 'customer' ? 'Our credit (prepaid)' : 'Our credit (prepaid)')
+        + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#7f1d1d">' + fmtMoney(simCur.ourPrepaid) + '</div></div>'
+        + '</div>';
+    }
 
     return ''
       + '<div class="currency-section">'
       + '<h2>' + escapeHtml(cur) + ' Ledger</h2>'
+      + potTilesHtml
       + '<table>'
       + '<thead><tr>'
-      + '<th style="width:80px">Date</th>'
+      + '<th style="width:75px">Date</th>'
+      + '<th style="width:130px">Type</th>'
       + '<th>Description</th>'
-      + '<th style="width:110px">Reference</th>'
-      + '<th class="num" style="width:90px">Credit</th>'
-      + '<th class="num" style="width:90px">Debit</th>'
-      + '<th class="num" style="width:120px">Running Balance</th>'
+      + '<th style="width:90px">Reference</th>'
+      + '<th class="num" style="width:80px">Amount</th>'
+      + '<th class="num" style="width:75px">Paid</th>'
+      + '<th class="num" style="width:80px">Remaining</th>'
+      + '<th class="num" style="width:95px">Running Net</th>'
       + '</tr></thead>'
       + '<tbody>' + rowsHtml + '</tbody>'
       + (cs.count > 0
           ? '<tfoot><tr class="totals">'
-            + '<td colspan="3" style="text-align:right; text-transform:uppercase; font-size:10px">' + escapeHtml(cur) + ' Totals</td>'
-            + '<td class="num credit">' + fmtMoney(cs.credit) + '</td>'
-            + '<td class="num debit">'  + fmtMoney(cs.debit)  + '</td>'
+            + '<td colspan="4" style="text-align:right; text-transform:uppercase; font-size:10px">' + escapeHtml(cur) + ' Totals</td>'
+            + '<td class="num">Cr: ' + fmtMoney(cs.credit) + '<br>Dr: ' + fmtMoney(cs.debit) + '</td>'
+            + '<td></td>'
+            + '<td></td>'
             + '<td class="num">' + fmtMoney(cs.balance) + '</td>'
             + '</tr></tfoot>'
           : '')
@@ -194,10 +254,11 @@ export function printAccountLedger(account, entity, entries, summary) {
     + '<div class="entity-lines">' + entityLines.slice(2).join('<br>') + '</div>'
     + '</div>'
     + '<div class="statement-block">'
-    + '<div class="statement-title">Statement</div>'
+    + '<div class="statement-title">' + (perspective === 'customer' ? 'Customer Statement' : 'Statement') + '</div>'
     + '<div class="meta">Generated: ' + escapeHtml(generatedAt) + '</div>'
     + (firstDate ? '<div class="meta">Period: ' + escapeHtml(firstDate) + ' to ' + escapeHtml(lastDate) + '</div>' : '')
     + (currencies.length > 1 ? '<div class="meta">Currencies: ' + currencies.map(escapeHtml).join(', ') + '</div>' : '')
+    + (perspective === 'customer' ? '<div class="meta" style="color:#7c2d12;font-weight:700">Your perspective</div>' : '')
     + '</div></div>'
     + '<div class="recipient">'
     + '<div class="recipient-label">Statement For / كشف حساب</div>'
@@ -250,15 +311,81 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   if (currencies.length > 0) rows.push(['Currencies:', currencies.join(', '), '', '', '', '', '']);
   rows.push(['', '', '', '', '', '', '']);
 
-  // v55.83-A.6.27.58 — Column headers: Date, Description, Reference, Currency,
-  // Credit, Debit, then one "Running CUR" column per currency.
-  var colHeaders = ['Date', 'Description', 'Reference', 'Currency', 'Credit', 'Debit'];
-  currencies.forEach(function (cur) { colHeaders.push('Running ' + cur); });
+  // v55.83-A.6.27.72 — Column headers: Date, Type, Description, Reference, Currency,
+  // Amount, Paid, Remaining, then one "Net CUR" column per currency.
+  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Paid', 'Remaining'];
+  currencies.forEach(function (cur) { colHeaders.push('Net ' + cur); });
   rows.push(colHeaders);
 
   // Per-currency running totals (rolling)
   var running = {}; // cur → running balance
   currencies.forEach(function (c) { running[c] = 0; });
+
+  // v55.83-A.6.27.72 — Type label map for display in Excel
+  var TYPE_LABEL = {
+    sales_invoice: 'Sales Invoice',
+    vendor_bill: 'Vendor Bill',
+    payment_received: 'Payment Received',
+    payment_sent: 'Payment Sent',
+    credit_adjustment: 'Adjustment',
+    offset: 'Offset',
+  };
+
+  // v55.83-A.6.27.72 — compute paid amounts via FIFO simulation
+  // We need the applications map. Caller didn't pass simulation here, so we
+  // inline a minimal sim — but to keep this file self-contained, just defer
+  // to the entry's reported credit/debit for Amount and leave Paid/Remaining
+  // blank for non-invoice rows. For invoices/bills, compute remaining from
+  // FIFO by summing same-direction payments after the row's date.
+  // Lightweight approach: re-run a mini-simulation here.
+  function entryAmount(e) {
+    return Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
+  }
+  var sortedForSim = entries.slice().sort(function (a, b) {
+    var da = String(a.entry_date || '');
+    var db = String(b.entry_date || '');
+    if (da !== db) return da < db ? -1 : 1;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+  var simApplied = {};
+  var simState = {};
+  function s(cur) {
+    if (!simState[cur]) simState[cur] = { theirPrepaid: 0, ourPrepaid: 0, openInvoices: [], openBills: [] };
+    return simState[cur];
+  }
+  sortedForSim.forEach(function (e) {
+    var cur = String(e.currency || 'USD').toUpperCase();
+    var st = s(cur);
+    var type = e.transaction_type;
+    var amt = entryAmount(e);
+    if (type === 'sales_invoice') {
+      var f = Math.min(st.theirPrepaid, amt); st.theirPrepaid -= f;
+      simApplied[e.id] = f;
+      if (amt - f > 0.001) st.openInvoices.push({ id: e.id, remaining: amt - f });
+    } else if (type === 'vendor_bill') {
+      var f2 = Math.min(st.ourPrepaid, amt); st.ourPrepaid -= f2;
+      simApplied[e.id] = f2;
+      if (amt - f2 > 0.001) st.openBills.push({ id: e.id, remaining: amt - f2 });
+    } else if (type === 'payment_received') {
+      var c = amt;
+      while (c > 0.001 && st.openInvoices.length > 0) {
+        var inv = st.openInvoices[0];
+        var ap = Math.min(inv.remaining, c);
+        inv.remaining -= ap; simApplied[inv.id] = (simApplied[inv.id] || 0) + ap; c -= ap;
+        if (inv.remaining < 0.001) st.openInvoices.shift();
+      }
+      if (c > 0.001) st.theirPrepaid += c;
+    } else if (type === 'payment_sent') {
+      var c2 = amt;
+      while (c2 > 0.001 && st.openBills.length > 0) {
+        var bill = st.openBills[0];
+        var ap2 = Math.min(bill.remaining, c2);
+        bill.remaining -= ap2; simApplied[bill.id] = (simApplied[bill.id] || 0) + ap2; c2 -= ap2;
+        if (bill.remaining < 0.001) st.openBills.shift();
+      }
+      if (c2 > 0.001) st.ourPrepaid += c2;
+    }
+  });
 
   entries.forEach(function (e) {
     var entryCur = e._currency || String(e.currency || 'USD').toUpperCase();
@@ -266,51 +393,58 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     var debit  = Number(e.debit_amount  || 0);
     if (!(entryCur in running)) running[entryCur] = 0;
     running[entryCur] += credit - debit;
+    var amt = credit || debit;
+    var paid = simApplied[e.id] || 0;
+    var remaining = 0;
+    var isInvoiceOrBill = e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill';
+    if (isInvoiceOrBill) remaining = Math.max(0, amt - paid);
     var row = [
       fmtDate(e.entry_date),
+      TYPE_LABEL[e.transaction_type] || '',
       (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
       e.reference_number || '',
       entryCur,
-      credit > 0 ? credit : '',
-      debit  > 0 ? debit  : '',
+      amt > 0 ? amt : '',
+      isInvoiceOrBill && paid > 0 ? paid : '',
+      isInvoiceOrBill ? remaining : '',
     ];
-    // One column per currency: show the running balance after this entry
     currencies.forEach(function (cur) {
       row.push(running[cur] !== undefined ? running[cur] : 0);
     });
     rows.push(row);
   });
 
-  // v55.83-A.6.27.58 — Per-currency totals rows
-  rows.push(['', '', '', '', '', '', '']);
-  rows.push(['─── Totals by Currency ───', '', '', '', '', '', '']);
+  // v55.83-A.6.27.72 — Per-currency totals rows (column count = 8 + per-currency)
+  rows.push(['', '', '', '', '', '', '', '']);
+  rows.push(['─── Totals by Currency ───', '', '', '', '', '', '', '']);
   var byCurrency = (summary && summary.byCurrency) || {};
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { credit: 0, debit: 0, balance: 0 };
-    var totalsRow = ['', '', cur + ' TOTALS', cur, cs.credit, cs.debit];
+    var totalsRow = ['', '', cur + ' TOTALS', '', cur, '', 'Cr: ' + (cs.credit || 0), 'Dr: ' + (cs.debit || 0)];
     currencies.forEach(function (col) {
       totalsRow.push(col === cur ? cs.balance : '');
     });
     rows.push(totalsRow);
   });
 
-  // Plain-English per-currency balance lines
-  rows.push(['', '', '', '', '', '', '']);
+  rows.push(['', '', '', '', '', '', '', '']);
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { balance: 0 };
     var label = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
-    rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '']);
+    rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '', '']);
   });
 
   // Build sheet
   var ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [
     { wch: 14 },  // Date
-    { wch: 42 },  // Description
+    { wch: 18 },  // Type
+    { wch: 38 },  // Description
     { wch: 16 },  // Reference
     { wch: 10 },  // Currency
-    { wch: 14 },  // Credit
-    { wch: 14 },  // Debit
+    { wch: 12 },  // Amount
+    { wch: 12 },  // Paid
+    { wch: 12 },  // Remaining
   ];
   currencies.forEach(function () { ws['!cols'].push({ wch: 18 }); });  // one per currency running
 

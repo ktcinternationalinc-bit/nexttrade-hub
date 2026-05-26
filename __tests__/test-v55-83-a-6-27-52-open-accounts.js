@@ -110,13 +110,14 @@ ok('D4: saveEntry validates description, date, and positive amount',
   /if \(!desc\) \{ alert\('Description is required/.test(oa) &&
   /if \(!entryDraft\.entry_date\) \{ alert\('Date is required/.test(oa) &&
   /if \(isNaN\(amt\) \|\| amt <= 0\) \{ alert\('Amount must be a positive number/.test(oa));
-ok('D5: saveEntry converts side+amount to credit_amount or debit_amount (exactly one)',
-  /credit_amount: entryDraft\.side === 'credit' \? amt : null,\s+debit_amount: entryDraft\.side === 'debit' \? amt : null/.test(oa));
+ok('D5: saveEntry derives credit_amount or debit_amount from transaction_type (v55.83-A.6.27.72 — supersedes side-based)',
+  /var creditTypes = \['sales_invoice', 'payment_received'\]/.test(oa) &&
+  /credit_amount: isCredit \? amt : null,\s+debit_amount: isCredit \? null : amt/.test(oa));
 ok('D6: deleteEntry confirms before deleting',
   /Delete this entry\? This cannot be undone/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
-// PART E — UI: accordion + running balance column + radio side selector
+// PART E — UI: accordion + running balance column + 5-type picker (v55.83-A.6.27.72)
 // ══════════════════════════════════════════════════════════════════
 
 ok('E1: account cards collapsible (toggleAccount + collapsedAccounts state)',
@@ -133,23 +134,25 @@ ok('E4: per-account summary pills now PER-CURRENCY (Cr / Dr / Bal per currency i
   /Bal: \{fmtNum\(cs\.balance\)\} \{cur\}/.test(oa));
 ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
   /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
-ok('E6: ledger table columns: Date / Description / Reference / Cur / Credit / Debit / Running CUR per currency (.58 added Cur + per-currency Running cols)',
-  />Date</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) &&
-  />Cur</.test(oa) &&
-  />Credit</.test(oa) && />Debit</.test(oa) &&
-  /Running \{cur\}/.test(oa));
-ok('E7: Credit column has emerald background, Debit column has red background',
-  /text-emerald-900 border-b-2 border-slate-300 bg-emerald-50/.test(oa) &&
-  /text-red-900 border-b-2 border-slate-300 bg-red-50/.test(oa));
+ok('E6: ledger table columns now Date / Type / Description / Reference / Cur / Amount / Paid / Remaining / Net per cur (v55.83-A.6.27.72)',
+  />Date</.test(oa) && />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) &&
+  />Cur</.test(oa) && />Amount</.test(oa) && />Paid</.test(oa) && />Remaining</.test(oa) &&
+  /Net \{cur\}/.test(oa));
+ok('E7: Paid column has emerald background, Remaining column has amber background (v55.83-A.6.27.72)',
+  /bg-emerald-50.*Paid|Paid.*bg-emerald-50/.test(oa) &&
+  /bg-amber-50.*Remaining|Remaining.*bg-amber-50/.test(oa));
 ok('E8: running balance color-coded (now per-currency in .58: rbForCur instead of rb)',
   /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-500'/.test(oa));
-ok('E9: totals row at bottom of each account table (now one row per currency in .58)',
-  /<tr key=\{cur\} className="bg-slate-100 font-extrabold">[\s\S]{0,800}Totals →/.test(oa));
-ok('E10: entry modal has CREDIT vs DEBIT radio selector with side panels',
-  /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa) &&
-  /type="radio" name="side"/.test(oa));
-ok('E11: header banner explains convention (CREDIT=in, DEBIT=out)',
-  /CREDIT[\s\S]{0,200}money in to us[\s\S]{0,300}DEBIT[\s\S]{0,200}money out from us/.test(oa));
+ok('E9: totals row at bottom of each account table — one row per currency, spans 5 cols (v55.83-A.6.27.72)',
+  /<tr key=\{cur\} className="bg-slate-100 font-extrabold">[\s\S]{0,1200}Totals/.test(oa));
+ok('E10: entry modal has 5-type picker (v55.83-A.6.27.72 — supersedes 2-way credit/debit toggle)',
+  /transaction_type === 'sales_invoice'/.test(oa) &&
+  /transaction_type === 'vendor_bill'/.test(oa) &&
+  /transaction_type === 'payment_received'/.test(oa) &&
+  /transaction_type === 'payment_sent'/.test(oa) &&
+  /transaction_type === 'credit_adjustment'/.test(oa));
+ok('E11: header banner explains transaction-type model (v55.83-A.6.27.72)',
+  /Pick the transaction type first|transaction type/i.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART F — page.jsx wiring (import + tab + render branch)

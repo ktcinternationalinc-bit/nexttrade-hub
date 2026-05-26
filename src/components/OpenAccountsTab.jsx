@@ -20,6 +20,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { printAccountLedger, exportAccountLedgerToExcel } from '../lib/open-account-export';
 import { printOpenAccountInvoice } from '../lib/open-account-invoice-print';
+// v55.83-A.6.27.72 — Unified Counterparty Ledger model (FIFO auto-apply + 4 pots per currency).
+import { TRANSACTION_TYPES, simulate, computePaidRemaining, findOffsetCandidate, validateOffsetable, buildOffsetEntries } from '../lib/open-account-ledger';
 // v55.83-A.6.27.61 — Attachments wire-up
 import AttachmentManager from './AttachmentManager';
 
@@ -230,11 +232,12 @@ export default function OpenAccountsTab(props) {
     if (!account || !account.business_entity_code) return null;
     return entitiesByCode[account.business_entity_code] || null;
   }
-  function handlePrintLedger(account) {
+  function handlePrintLedger(account, perspective) {
     var ent = entityFor(account);
     var rows = entriesByAccount[account.id] || [];
     var s = summaryFor(account.id);
-    printAccountLedger(account, ent, rows, s);
+    var sim = simulate(rows);
+    printAccountLedger(account, ent, rows, s, { perspective: perspective || 'internal', simulation: sim });
   }
   function handleExportExcel(account) {
     try {
@@ -370,7 +373,6 @@ export default function OpenAccountsTab(props) {
   // ── Entry modal ─────────────────────────────────────────────────
   function openNewEntry(accountId) {
     var today = new Date().toISOString().substring(0, 10);
-    // v55.83-A.6.27.58 — default currency from the account's entity
     var acc = accounts.find(function (a) { return a.id === accountId; });
     var ent = acc ? entityFor(acc) : null;
     var defaultCur = (ent && ent.default_currency) || 'USD';
@@ -379,23 +381,37 @@ export default function OpenAccountsTab(props) {
       entry_date: today,
       description: '',
       reference_number: '',
-      side: 'credit',          // 'credit' or 'debit' — UI choice
-      amount: '',              // user enters amount in one box
-      currency: defaultCur,    // v55.83-A.6.27.58 — per-entry currency
+      // v55.83-A.6.27.72 — transaction_type drives credit/debit + cash flow.
+      // Defaults to payment_received (most common starting case).
+      transaction_type: 'payment_received',
+      amount: '',
+      currency: defaultCur,
       notes: '',
     });
     setEntryModalOpen(true);
   }
   function openEditEntry(entry) {
+    // Derive transaction_type from existing data if not set on the row.
+    // Fallback: credit_amount + linked invoice → sales_invoice; debit + linked → vendor_bill;
+    //          plain credit → payment_received; plain debit → payment_sent.
+    var derivedType = entry.transaction_type;
+    if (!derivedType) {
+      var hasCredit = Number(entry.credit_amount || 0) > 0;
+      var hasInvoice = !!entry.linked_open_invoice_id;
+      if (hasCredit && hasInvoice) derivedType = 'sales_invoice';
+      else if (!hasCredit && hasInvoice) derivedType = 'vendor_bill';
+      else if (hasCredit) derivedType = 'payment_received';
+      else derivedType = 'payment_sent';
+    }
     setEntryDraft({
       id: entry.id,
       account_id: entry.account_id,
       entry_date: entry.entry_date,
       description: entry.description || '',
       reference_number: entry.reference_number || '',
-      side: (Number(entry.credit_amount || 0) > 0) ? 'credit' : 'debit',
+      transaction_type: derivedType,
       amount: String(entry.credit_amount || entry.debit_amount || ''),
-      currency: String(entry.currency || 'USD').toUpperCase(),  // v55.83-A.6.27.58
+      currency: String(entry.currency || 'USD').toUpperCase(),
       notes: entry.notes || '',
     });
     setEntryModalOpen(true);
@@ -407,9 +423,20 @@ export default function OpenAccountsTab(props) {
     if (!entryDraft.entry_date) { alert('Date is required / التاريخ مطلوب'); return; }
     var amt = Number(entryDraft.amount);
     if (isNaN(amt) || amt <= 0) { alert('Amount must be a positive number / المبلغ يجب أن يكون رقم موجب'); return; }
-    // v55.83-A.6.27.58 — currency validation
     var cur = String(entryDraft.currency || 'USD').toUpperCase().trim();
+    // v55.83-A.6.27.72 HOTFIX 1 — Tighten currency to known codes to prevent
+    // typo'd phantom pots (e.g. "USS" creating a separate ledger for one typo).
+    var KNOWN_CURRENCIES = ['USD', 'EGP', 'EUR', 'GBP', 'CAD', 'SAR', 'AED', 'CHF', 'JPY', 'CNY'];
     if (cur.length < 2) { alert('Currency code is required / كود العملة مطلوب'); return; }
+    if (KNOWN_CURRENCIES.indexOf(cur) === -1) {
+      if (!confirm('Currency "' + cur + '" is not in the standard list (USD, EGP, EUR, GBP, CAD, SAR, AED, CHF, JPY, CNY). ' +
+        'A typo here will create a separate phantom balance pot.\n\nUse "' + cur + '" anyway?')) return;
+    }
+    if (!entryDraft.transaction_type) { alert('Transaction type is required / نوع المعاملة مطلوب'); return; }
+    // v55.83-A.6.27.72 — derive credit/debit side from transaction_type.
+    // Sales invoice + payment received = credit side. Vendor bill + payment sent = debit side.
+    var creditTypes = ['sales_invoice', 'payment_received'];
+    var isCredit = creditTypes.indexOf(entryDraft.transaction_type) !== -1;
     setBusy(true);
     try {
       var payload = {
@@ -417,8 +444,9 @@ export default function OpenAccountsTab(props) {
         entry_date: entryDraft.entry_date,
         description: desc,
         reference_number: (entryDraft.reference_number || '').trim() || null,
-        credit_amount: entryDraft.side === 'credit' ? amt : null,
-        debit_amount: entryDraft.side === 'debit' ? amt : null,
+        transaction_type: entryDraft.transaction_type,
+        credit_amount: isCredit ? amt : null,
+        debit_amount: isCredit ? null : amt,
         currency: cur,
         notes: (entryDraft.notes || '').trim() || null,
       };
@@ -441,15 +469,85 @@ export default function OpenAccountsTab(props) {
     }
   }
   async function deleteEntry(entry) {
-    if (!confirm('Delete this entry? This cannot be undone.\n\nحذف هذا الإدخال؟')) return;
+    // v55.83-A.6.27.72 HOTFIX 1 — If deleting one half of an offset, also delete the pair
+    // (otherwise the math becomes one-sided and corrupts the balances).
+    var isOffsetHalf = entry && entry.transaction_type === 'offset' && entry.offset_pair_id;
+    var msg = 'Delete this entry? This cannot be undone.\n\nحذف هذا الإدخال؟';
+    if (isOffsetHalf) {
+      msg = 'This entry is one half of an offset pair. Deleting it will ALSO delete the other half ' +
+            '(to keep the books balanced).\n\nهذا الإدخال جزء من مقاصة. سيتم حذف الجزء الآخر تلقائيًا.\n\n' +
+            'Proceed? / متابعة؟';
+    }
+    if (!confirm(msg)) return;
     setBusy(true);
     try {
-      await supabase.from('open_account_entries').delete().eq('id', entry.id);
-      toast.success('Entry deleted');
+      if (isOffsetHalf) {
+        // Delete both halves by pair_id
+        var delPair = await supabase.from('open_account_entries').delete().eq('offset_pair_id', entry.offset_pair_id);
+        if (delPair.error) throw delPair.error;
+        toast.success('Offset pair deleted (both halves)');
+      } else {
+        // Check: if this entry is REFERENCED by an offset (as invoice or bill being offset),
+        // warn the user that the offset will become stale.
+        var refByOffset = (entries || []).find(function (e) {
+          return e.transaction_type === 'offset' &&
+                 (e.offset_invoice_id === entry.id || e.offset_bill_id === entry.id);
+        });
+        if (refByOffset) {
+          var proceed = confirm('WARNING: This entry is referenced by an offset entry. Deleting it ' +
+            'will leave the offset partially broken (one side will silently fail to apply).\n\n' +
+            'Recommended: delete the offset pair FIRST (find the row marked 🔄 Offset), then delete this entry.\n\n' +
+            'Delete anyway?');
+          if (!proceed) { setBusy(false); return; }
+        }
+        await supabase.from('open_account_entries').delete().eq('id', entry.id);
+        toast.success('Entry deleted');
+      }
       await reload();
     } catch (e) {
       console.error('[open-accounts] deleteEntry failed:', e);
       toast.error('Failed to delete entry: ' + ((e && e.message) || String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // v55.83-A.6.27.72 — One-click Offset handler.
+  // Auto-picks oldest open sales_invoice + oldest open vendor_bill in same currency.
+  // Creates two linked entries (cross-referenced via offset_pair_id) that net the smaller amount.
+  // After insert, reloads — the FIFO simulation will automatically credit both invoice/bill remaining.
+  async function handleOffset(accountId) {
+    var entries = entriesByAccount[accountId] || [];
+    var cand = findOffsetCandidate(entries);
+    if (!cand) {
+      toast.error('No offsettable pair found. You need at least one open sales invoice + one open vendor bill in the same currency.');
+      return;
+    }
+    var prompt = 'Offset will net ' + cand.currency + ' ' + cand.offsetAmount.toFixed(2) + ':\n\n' +
+      '  Sales invoice: ' + (cand.invoice.reference_number || cand.invoice.description) + ' (remaining ' + cand.invoiceRemaining.toFixed(2) + ')\n' +
+      '  Vendor bill:   ' + (cand.bill.reference_number || cand.bill.description) + ' (remaining ' + cand.billRemaining.toFixed(2) + ')\n\n' +
+      'Proceed?';
+    if (!confirm(prompt)) return;
+    setBusy(true);
+    try {
+      var today = new Date().toISOString().substring(0, 10);
+      var pair = buildOffsetEntries(cand, today, userProfile && userProfile.id);
+      // Insert both halves. If second fails, attempt to roll back the first.
+      var first = await dbInsert('open_account_entries', pair[0], userProfile && userProfile.id);
+      try {
+        await dbInsert('open_account_entries', pair[1], userProfile && userProfile.id);
+        toast.success('Offset posted: ' + cand.currency + ' ' + cand.offsetAmount.toFixed(2));
+        await reload();
+      } catch (e2) {
+        // Rollback first entry
+        try {
+          if (first && first.id) await supabase.from('open_account_entries').delete().eq('id', first.id);
+        } catch (rb) { console.warn('[open-accounts] offset rollback failed:', rb); }
+        throw e2;
+      }
+    } catch (e) {
+      console.error('[open-accounts] handleOffset failed:', e);
+      toast.error('Offset failed: ' + ((e && e.message) || String(e)));
     } finally {
       setBusy(false);
     }
@@ -718,6 +816,11 @@ export default function OpenAccountsTab(props) {
         entry_date: invoiceDraft.invoice_date,
         description: 'Invoice ' + invNum + ' — ' + invoiceDraft.counterparty_name.trim(),
         reference_number: invNum,
+        // v55.83-A.6.27.72 — transaction_type lets the FIFO engine know which prepaid
+        // pot to consume + which open pot to add the remainder to.
+        //   direction === 'credit' → we billed them → sales_invoice (consumes theirPrepaid)
+        //   direction === 'debit'  → they billed us → vendor_bill   (consumes ourPrepaid)
+        transaction_type: invoiceDraft.direction === 'credit' ? 'sales_invoice' : 'vendor_bill',
         credit_amount: invoiceDraft.direction === 'credit' ? totals.total : null,
         debit_amount: invoiceDraft.direction === 'debit' ? totals.total : null,
         currency: cur,
@@ -934,6 +1037,13 @@ export default function OpenAccountsTab(props) {
         var s = summaryFor(a.id);
         var collapsed = !!collapsedAccounts[a.id];
         var accEntries = entriesByAccount[a.id] || [];
+        // v55.83-A.6.27.72 — Run FIFO simulation for this account to get:
+        //   • per-row Amount/Paid/Remaining (from sim.applications[entryId])
+        //   • per-currency final balances (theirOpenInvoices, ourOpenBills, theirPrepaid, ourPrepaid, net)
+        //   • offset candidate (if any) for the one-click offset button
+        var simResult = simulate(accEntries);
+        var offsetCandidate = findOffsetCandidate(accEntries);
+        var offsetableCurs = validateOffsetable(accEntries);
         return (
           <div key={a.id} className="bg-white border-2 border-slate-300 rounded-lg overflow-hidden">
             {/* Card header (clickable) */}
@@ -980,7 +1090,24 @@ export default function OpenAccountsTab(props) {
                   <div className="flex gap-1 flex-wrap">
                     <button onClick={function () { openNewEntry(a.id); }} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow">+ Entry</button>
                     <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
-                    <button onClick={function () { handlePrintLedger(a); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print or save as PDF">🖨️ Print</button>
+                    {/* v55.83-A.6.27.72 — One-click Offset button. Auto-picks oldest open
+                        invoice + oldest open bill in same currency, nets the smaller amount.
+                        Disabled if no offsettable pair exists. */}
+                    <button
+                      onClick={function () { handleOffset(a.id); }}
+                      disabled={!offsetCandidate}
+                      className={'px-2 py-1 text-[10px] font-extrabold rounded shadow ' +
+                        (offsetCandidate
+                          ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                          : 'bg-slate-300 text-slate-500 cursor-not-allowed')}
+                      title={offsetCandidate
+                        ? 'Offset ' + offsetCandidate.currency + ' ' + offsetCandidate.offsetAmount.toFixed(2) +
+                          ' — auto-applies oldest open sales invoice against oldest open vendor bill'
+                        : 'No offsettable pair found. You need at least one open sales invoice + one open vendor bill in the same currency.'}>
+                      🔄 Offset
+                    </button>
+                    <button onClick={function () { handlePrintLedger(a, 'internal'); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print our internal view as PDF">🖨️ Print (Internal)</button>
+                    <button onClick={function () { handlePrintLedger(a, 'customer'); }} className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow" title="Print customer statement (their perspective) as PDF — for sending to the counterparty">🖨️ Customer Statement</button>
                     <button onClick={function () { handleExportExcel(a); }} className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow" title="Download Excel file">📊 Excel</button>
                     {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — account-level
                         attachments. Stores files (contracts, master agreements,
@@ -1002,6 +1129,49 @@ export default function OpenAccountsTab(props) {
             {/* Card body — ledger table */}
             {!collapsed && (
               <div className="overflow-auto">
+                {/* v55.83-A.6.27.72 — Per-currency tile strip showing the 4-pot model:
+                    They owe us (open invoices) · We owe them (open bills) · Their prepaid · Our prepaid · Net.
+                    Each currency in the account gets its own strip. */}
+                {simResult.currencies.length > 0 && (
+                  <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 space-y-2">
+                    {simResult.currencies.map(function (cur) {
+                      var b = simResult.byCurrency[cur];
+                      return (
+                        <div key={cur} className="flex flex-wrap items-stretch gap-2">
+                          <div className="px-2 py-1 bg-slate-800 text-white rounded font-mono font-extrabold text-xs flex items-center">{cur}</div>
+                          <div className="flex-1 min-w-[120px] bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
+                            <div className="text-[9px] font-extrabold text-blue-900 uppercase tracking-wider">They owe us</div>
+                            <div className="text-sm font-mono font-extrabold text-blue-900">{fmtNum(b.theirOpenInvoices)}</div>
+                            <div className="text-[9px] text-blue-700">{b.openInvoices.length} open invoice{b.openInvoices.length === 1 ? '' : 's'}</div>
+                          </div>
+                          <div className="flex-1 min-w-[120px] bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                            <div className="text-[9px] font-extrabold text-amber-900 uppercase tracking-wider">We owe them</div>
+                            <div className="text-sm font-mono font-extrabold text-amber-900">{fmtNum(b.ourOpenBills)}</div>
+                            <div className="text-[9px] text-amber-700">{b.openBills.length} open bill{b.openBills.length === 1 ? '' : 's'}</div>
+                          </div>
+                          <div className="flex-1 min-w-[120px] bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5" title="Money they've paid us with no invoice to apply it to yet">
+                            <div className="text-[9px] font-extrabold text-emerald-900 uppercase tracking-wider">Their credit (prepaid)</div>
+                            <div className="text-sm font-mono font-extrabold text-emerald-900">{fmtNum(b.theirPrepaid)}</div>
+                          </div>
+                          <div className="flex-1 min-w-[120px] bg-red-50 border border-red-200 rounded px-2 py-1.5" title="Money we've paid them with no bill to apply it to yet">
+                            <div className="text-[9px] font-extrabold text-red-900 uppercase tracking-wider">Our credit (prepaid)</div>
+                            <div className="text-sm font-mono font-extrabold text-red-900">{fmtNum(b.ourPrepaid)}</div>
+                          </div>
+                          <div className={'flex-1 min-w-[140px] rounded px-2 py-1.5 border-2 ' +
+                            (b.netBalance > 0 ? 'bg-emerald-600 border-emerald-700 text-white' :
+                             b.netBalance < 0 ? 'bg-red-600 border-red-700 text-white' :
+                             'bg-slate-500 border-slate-600 text-white')}>
+                            <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-90">Net balance</div>
+                            <div className="text-base font-mono font-extrabold">{fmtNum(b.netBalance)}</div>
+                            <div className="text-[9px] opacity-90">
+                              {b.netBalance > 0.001 ? 'in our favor' : b.netBalance < -0.001 ? 'against us' : 'settled'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {accEntries.length === 0 ? (
                   <div className="p-6 text-center text-slate-600 text-sm">
                     No entries yet. Click <strong>+ Entry</strong> to add the first one.
@@ -1011,15 +1181,19 @@ export default function OpenAccountsTab(props) {
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Date</th>
+                        {/* v55.83-A.6.27.72 — Type column is the source of truth for what each row is.
+                            5 transaction types + offset. Color-coded pill in body. */}
+                        <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Type</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Description</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Reference</th>
                         <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Cur</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50">Credit</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50">Debit</th>
-                        {/* v55.83-A.6.27.58 — One Running Balance column PER currency in this account.
-                            User sees parallel running balances for USD and EGP side-by-side. */}
+                        {/* v55.83-A.6.27.72 — Amount / Paid / Remaining columns for invoices+bills.
+                            For payments/adjustments, these are blank or show the cash flow. */}
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Amount</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Amount paid against this invoice/bill (auto-FIFO)">Paid</th>
+                        <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Remaining unsettled amount">Remaining</th>
                         {s.currencies.map(function (cur) {
-                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100">Running {cur}</th>;
+                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100">Net {cur}</th>;
                         })}
                         {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                       </tr>
@@ -1027,9 +1201,29 @@ export default function OpenAccountsTab(props) {
                     <tbody>
                       {accEntries.map(function (entry) {
                         var entryCur = entry._currency;
+                        // v55.83-A.6.27.72 — derive transaction type info
+                        var txnType = entry.transaction_type;
+                        if (!txnType) {
+                          // Fallback for old rows without transaction_type set
+                          var hasCredit = Number(entry.credit_amount || 0) > 0;
+                          var hasInvoice = !!entry.linked_open_invoice_id;
+                          if (hasCredit && hasInvoice) txnType = 'sales_invoice';
+                          else if (!hasCredit && hasInvoice) txnType = 'vendor_bill';
+                          else if (hasCredit) txnType = 'payment_received';
+                          else txnType = 'payment_sent';
+                        }
+                        var typeMeta = TRANSACTION_TYPES[txnType] || TRANSACTION_TYPES.credit_adjustment;
+                        var pr = computePaidRemaining(entry, simResult);
+                        var rowTint = typeMeta.rowCls || '';
                         return (
-                          <tr key={entry.id} className="border-b border-slate-200 hover:bg-slate-50">
+                          <tr key={entry.id} className={'border-b border-slate-200 hover:bg-slate-50 ' + rowTint}>
                             <td className="px-3 py-1.5 font-mono text-slate-900">{fmtDate(entry.entry_date)}</td>
+                            <td className="px-3 py-1.5">
+                              <span className={'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap ' + typeMeta.pillCls}>
+                                <span>{typeMeta.icon}</span>
+                                <span>{typeMeta.label}</span>
+                              </span>
+                            </td>
                             <td className="px-3 py-1.5 text-slate-900">
                               {entry.linked_open_invoice_id ? (
                                 <button
@@ -1049,16 +1243,28 @@ export default function OpenAccountsTab(props) {
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
                             <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-emerald-800 bg-emerald-50">
-                              {entry.credit_amount ? fmtNum(entry.credit_amount) : ''}
+                            {/* Amount — for invoices+bills shows face value; for payments shows the cash amount */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-slate-900">
+                              {(function () {
+                                var displayAmt = Number(entry.credit_amount || 0) || Number(entry.debit_amount || 0);
+                                return displayAmt > 0 ? fmtNum(displayAmt) : '—';
+                              })()}
                             </td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold text-red-700 bg-red-50">
-                              {entry.debit_amount ? fmtNum(entry.debit_amount) : ''}
+                            {/* Paid — only meaningful for invoices/bills. Sum of FIFO-applied payments */}
+                            <td className="px-3 py-1.5 text-right font-mono font-bold bg-emerald-50">
+                              {(txnType === 'sales_invoice' || txnType === 'vendor_bill')
+                                ? <span className={pr.paid > 0 ? 'text-emerald-800' : 'text-slate-400'}>{fmtNum(pr.paid)}</span>
+                                : <span className="text-slate-400">—</span>}
                             </td>
-                            {/* v55.83-A.6.27.58 — parallel running balances. For currencies the entry
-                                does NOT affect, we still show the carried-forward running value
-                                (or 0 if no entry in that currency has happened yet). The entry's
-                                OWN currency cell is highlighted so you can see which line moved. */}
+                            {/* Remaining — invoice amount minus paid */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50">
+                              {(txnType === 'sales_invoice' || txnType === 'vendor_bill')
+                                ? (pr.remaining > 0.001
+                                    ? <span className="text-amber-900">{fmtNum(pr.remaining)}</span>
+                                    : <span className="text-emerald-700" title="Fully settled">✓ 0.00</span>)
+                                : <span className="text-slate-400">—</span>}
+                            </td>
+                            {/* Net per currency — running net balance from the simulation */}
                             {s.currencies.map(function (cur) {
                               var rbForCur = (entry._running_by_currency && entry._running_by_currency[cur]) || 0;
                               var isThisEntryCur = (cur === entryCur);
@@ -1092,19 +1298,28 @@ export default function OpenAccountsTab(props) {
                           </tr>
                         );
                       })}
-                      {/* v55.83-A.6.27.58 — Totals row: one row per currency for credit+debit,
-                          plus the final balance in each currency's running column. */}
+                      {/* v55.83-A.6.27.72 — Totals row per currency.
+                          Columns: Date | Type | Description | Reference | Cur | Amount | Paid | Remaining | Net*N | Actions.
+                          We span the first 5 (Date through Cur), show total credits in the Paid column slot,
+                          total debits next to it, and the net in the running-balance column for that currency. */}
                       {s.currencies.map(function (cur, ci) {
                         var cs = s.byCurrency[cur];
                         return (
                           <tr key={cur} className="bg-slate-100 font-extrabold">
-                            <td colSpan={2} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
-                              {ci === 0 ? 'Totals →' : ''}
+                            <td colSpan={5} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
+                              {ci === 0 ? 'Totals (' + cur + ') →' : '(' + cur + ') →'}
                             </td>
-                            <td className="px-3 py-2 text-center text-xs font-mono text-slate-900">{cur}</td>
-                            <td className="px-3 py-2 text-center font-mono text-slate-800 text-[11px]">{cur}</td>
-                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-100">{fmtNum(cs.credit)}</td>
-                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-100">{fmtNum(cs.debit)}</td>
+                            {/* Amount: sum of credits */}
+                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-50" title="Total credits (money in + sales invoices)">
+                              Cr: {fmtNum(cs.credit)}
+                            </td>
+                            {/* Paid: sum of debits, repurposed */}
+                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-50" title="Total debits (money out + vendor bills)">
+                              Dr: {fmtNum(cs.debit)}
+                            </td>
+                            {/* Remaining: blank in totals row */}
+                            <td className="px-3 py-2"></td>
+                            {/* Net per currency — match this cur column */}
                             {s.currencies.map(function (col, colI) {
                               if (col !== cur) return <td key={col + '-' + colI}></td>;
                               return (
@@ -1177,9 +1392,48 @@ export default function OpenAccountsTab(props) {
           <div className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-xl" onClick={function (e) { e.stopPropagation(); }}>
             <div className="bg-indigo-700 text-white rounded-t-2xl px-5 py-3">
               <div className="text-lg font-extrabold">{entryDraft.id ? '✏️ Edit Entry' : '+ New Ledger Entry'} / إدخال</div>
-              <div className="text-xs text-indigo-100 mt-0.5">Credit = money in (they paid us) · Debit = money out (we paid them)</div>
+              <div className="text-xs text-indigo-100 mt-0.5">v55.83-A.6.27.72 — Pick the transaction type first; the system handles the rest.</div>
             </div>
             <div className="p-5 space-y-3">
+              {/* v55.83-A.6.27.72 — Transaction type picker. 5 types, each with its own
+                  color + icon. The system uses this to know what to do with the row
+                  (sales invoice creates an obligation, payment received settles invoices
+                  oldest-first via FIFO, etc.) */}
+              <div>
+                <span className="text-xs font-extrabold text-slate-900 block mb-2">Transaction Type * / نوع المعاملة</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+                  <label className={'block border-2 rounded p-2 cursor-pointer text-center ' + (entryDraft.transaction_type === 'sales_invoice' ? 'border-blue-600 bg-blue-100' : 'border-slate-300 bg-white hover:bg-slate-50')}>
+                    <input type="radio" name="txn_type" checked={entryDraft.transaction_type === 'sales_invoice'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { transaction_type: 'sales_invoice' })); }} className="sr-only" />
+                    <div className="text-lg">📤</div>
+                    <div className="text-[11px] font-extrabold text-blue-900">Sales Invoice</div>
+                    <div className="text-[9px] text-slate-600">We billed them</div>
+                  </label>
+                  <label className={'block border-2 rounded p-2 cursor-pointer text-center ' + (entryDraft.transaction_type === 'vendor_bill' ? 'border-amber-600 bg-amber-100' : 'border-slate-300 bg-white hover:bg-slate-50')}>
+                    <input type="radio" name="txn_type" checked={entryDraft.transaction_type === 'vendor_bill'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { transaction_type: 'vendor_bill' })); }} className="sr-only" />
+                    <div className="text-lg">📥</div>
+                    <div className="text-[11px] font-extrabold text-amber-900">Vendor Bill</div>
+                    <div className="text-[9px] text-slate-600">They billed us</div>
+                  </label>
+                  <label className={'block border-2 rounded p-2 cursor-pointer text-center ' + (entryDraft.transaction_type === 'payment_received' ? 'border-emerald-600 bg-emerald-100' : 'border-slate-300 bg-white hover:bg-slate-50')}>
+                    <input type="radio" name="txn_type" checked={entryDraft.transaction_type === 'payment_received'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { transaction_type: 'payment_received' })); }} className="sr-only" />
+                    <div className="text-lg">💰</div>
+                    <div className="text-[11px] font-extrabold text-emerald-900">Payment Received</div>
+                    <div className="text-[9px] text-slate-600">They paid us</div>
+                  </label>
+                  <label className={'block border-2 rounded p-2 cursor-pointer text-center ' + (entryDraft.transaction_type === 'payment_sent' ? 'border-red-600 bg-red-100' : 'border-slate-300 bg-white hover:bg-slate-50')}>
+                    <input type="radio" name="txn_type" checked={entryDraft.transaction_type === 'payment_sent'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { transaction_type: 'payment_sent' })); }} className="sr-only" />
+                    <div className="text-lg">💸</div>
+                    <div className="text-[11px] font-extrabold text-red-900">Payment Sent</div>
+                    <div className="text-[9px] text-slate-600">We paid them</div>
+                  </label>
+                  <label className={'block border-2 rounded p-2 cursor-pointer text-center ' + (entryDraft.transaction_type === 'credit_adjustment' ? 'border-slate-600 bg-slate-200' : 'border-slate-300 bg-white hover:bg-slate-50')}>
+                    <input type="radio" name="txn_type" checked={entryDraft.transaction_type === 'credit_adjustment'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { transaction_type: 'credit_adjustment' })); }} className="sr-only" />
+                    <div className="text-lg">⚖️</div>
+                    <div className="text-[11px] font-extrabold text-slate-800">Adjustment</div>
+                    <div className="text-[9px] text-slate-600">Manual fix</div>
+                  </label>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-extrabold text-slate-900">Date * / التاريخ</span>
@@ -1194,18 +1448,6 @@ export default function OpenAccountsTab(props) {
                 <span className="text-xs font-extrabold text-slate-900">Description * / الوصف</span>
                 <input type="text" value={entryDraft.description} onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { description: e.target.value })); }} placeholder="e.g. Invoice for 50 rolls leather / Payment received via wire" className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-bold" />
               </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className={'block border-2 rounded p-3 cursor-pointer ' + (entryDraft.side === 'credit' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-slate-50')}>
-                  <input type="radio" name="side" checked={entryDraft.side === 'credit'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { side: 'credit' })); }} className="mr-2" />
-                  <span className="font-extrabold text-emerald-900">CREDIT — money IN</span>
-                  <div className="text-[10px] text-slate-700 mt-1">They paid us / we are owed less / they owe us less</div>
-                </label>
-                <label className={'block border-2 rounded p-3 cursor-pointer ' + (entryDraft.side === 'debit' ? 'border-red-500 bg-red-50' : 'border-slate-200 bg-slate-50')}>
-                  <input type="radio" name="side" checked={entryDraft.side === 'debit'} onChange={function () { setEntryDraft(Object.assign({}, entryDraft, { side: 'debit' })); }} className="mr-2" />
-                  <span className="font-extrabold text-red-900">DEBIT — money OUT</span>
-                  <div className="text-[10px] text-slate-700 mt-1">We paid them / we owe them more</div>
-                </label>
-              </div>
               <div className="grid grid-cols-3 gap-3">
                 <label className="block col-span-2">
                   <span className="text-xs font-extrabold text-slate-900">Amount * / المبلغ</span>

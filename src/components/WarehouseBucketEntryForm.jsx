@@ -65,6 +65,10 @@ export default function WarehouseBucketEntryForm(props) {
   // Pop-up state for adding a brand-new subcategory inline
   var [addingNewSubcat, setAddingNewSubcat] = useState(false);
   var [newSubcatText, setNewSubcatText] = useState('');
+  // v55.83-A.6.27.71 HOTFIX 4 — Add new category from within the bucket
+  // (mirrors subcategory pattern). Gated by canManageCategories perm.
+  var [addingNewCategory, setAddingNewCategory] = useState(false);
+  var [newCategoryText, setNewCategoryText] = useState('');
 
   // Overspend modal state
   var [overspendInfo, setOverspendInfo] = useState(null);
@@ -122,6 +126,8 @@ export default function WarehouseBucketEntryForm(props) {
     setError(null);
     setAddingNewSubcat(false);
     setNewSubcatText('');
+    setAddingNewCategory(false);
+    setNewCategoryText('');
   }
 
   async function handleSave() {
@@ -350,18 +356,47 @@ export default function WarehouseBucketEntryForm(props) {
               dir="ltr"
               className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
           </div>
-          {/* Category */}
+          {/* Category — v55.83-A.6.27.71 HOTFIX 4 (Max May 24 2026): mirrors
+              subcategory "+ Add new" pattern so users have a clear way to
+              create a new category from inside the bucket. */}
           <div className="sm:col-span-1">
             <label className="block text-[10px] font-extrabold text-slate-700 mb-0.5">{ar ? 'الفئة' : 'Category'}</label>
-            <input type="text" value={category}
-              onChange={function (e) { setCategory(e.target.value); setSubcategory(''); setAddingNewSubcat(false); }}
-              disabled={busy}
-              list="bucket-category-list"
-              placeholder={ar ? 'مثال: لوجستيات' : 'e.g. Logistics'}
-              className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
-            <datalist id="bucket-category-list">
-              {allCategories.map(function (c) { return <option key={c} value={c} />; })}
-            </datalist>
+            {!addingNewCategory ? (
+              <div className="flex gap-1">
+                <select value={category} onChange={function (e) {
+                  if (e.target.value === '__add_new__') {
+                    setAddingNewCategory(true);
+                    setNewCategoryText('');
+                  } else {
+                    setCategory(e.target.value);
+                    setSubcategory('');
+                    setAddingNewSubcat(false);
+                  }
+                }} disabled={busy}
+                  className="flex-1 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900">
+                  <option value="">{ar ? '— اختر —' : '— pick one —'}</option>
+                  {allCategories.map(function (c) { return <option key={c} value={c}>{c}</option>; })}
+                  {canManageCategories && (
+                    <option value="__add_new__">+ {ar ? 'إضافة فئة جديدة...' : 'Add new category…'}</option>
+                  )}
+                </select>
+              </div>
+            ) : (
+              <div className="flex gap-1">
+                <input type="text" value={newCategoryText} onChange={function (e) {
+                  setNewCategoryText(e.target.value);
+                  setCategory(e.target.value);  // keep category in sync so save works
+                }}
+                  disabled={busy} placeholder={ar ? 'فئة جديدة' : 'New category'}
+                  className="flex-1 px-2 py-1.5 border-2 border-emerald-300 rounded text-sm bg-emerald-50 text-slate-900" autoFocus />
+                <button type="button" onClick={function () {
+                  setAddingNewCategory(false);
+                  setNewCategoryText('');
+                  setCategory('');
+                }} disabled={busy}
+                  className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold rounded">×</button>
+              </div>
+            )}
           </div>
           {/* Subcategory */}
           <div className="sm:col-span-1">

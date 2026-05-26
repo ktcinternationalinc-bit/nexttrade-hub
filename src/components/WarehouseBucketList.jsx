@@ -10,9 +10,12 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { listBuckets, getBucketWithEntries } from '../lib/warehouse-buckets';
+import { supabase } from '../lib/supabase';
 // v55.83-A.6.27.70 — Phase 3: entry form + lifecycle actions
 import WarehouseBucketEntryForm from './WarehouseBucketEntryForm';
 import WarehouseBucketActions from './WarehouseBucketActions';
+// v55.83-A.6.27.71 HOTFIX 4 — Editable entry row (edit/delete in ledger)
+import WarehouseBucketEntryRow from './WarehouseBucketEntryRow';
 
 function fmtMoney(n, cur) {
   if (n == null || isNaN(Number(n))) return '0.00';
@@ -68,6 +71,32 @@ export default function WarehouseBucketList(props) {
   var [selectedBucket, setSelectedBucket] = useState(null);
   var [selectedEntries, setSelectedEntries] = useState([]);
   var [detailLoading, setDetailLoading] = useState(false);
+  // v55.83-A.6.27.71 HOTFIX 4 — Category lists for inline row edit autocomplete.
+  // Loaded once on mount; never changes during the session unless user re-mounts.
+  var [allCategories, setAllCategories] = useState([]);
+  var [allSubcategories, setAllSubcategories] = useState([]);
+  useEffect(function () {
+    var cancelled = false;
+    (async function () {
+      try {
+        var res = await supabase.from('treasury').select('category, subcategory').limit(2000);
+        if (cancelled || res.error) return;
+        var cats = {};
+        var subs = {};
+        (res.data || []).forEach(function (r) {
+          if (r.category && r.category !== 'Warehouse Bucket' && r.category !== 'Warehouse Bucket Refund') {
+            cats[r.category] = true;
+            if (r.subcategory) subs[r.category + '||' + r.subcategory] = true;
+          }
+        });
+        setAllCategories(Object.keys(cats).sort());
+        setAllSubcategories(Object.keys(subs).sort());
+      } catch (e) {
+        console.warn('[bucket-list] category load failed:', e);
+      }
+    })();
+    return function () { cancelled = true; };
+  }, []);
 
   // Load buckets on mount and whenever reloadToken changes
   useEffect(function () {
@@ -258,18 +287,33 @@ export default function WarehouseBucketList(props) {
                     <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الفئة الفرعية' : 'Subcategory'}</th>
                     <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'الوصف' : 'Description'}</th>
                     <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'المبلغ' : 'Amount'}</th>
+                    {/* v55.83-A.6.27.71 HOTFIX 4 — Actions column for edit/delete */}
+                    {(props.canManage || isSuperAdmin) && (
+                      <th className="px-2 py-2 text-center font-extrabold text-slate-800 uppercase tracking-wider w-24">{ar ? 'إجراءات' : 'Actions'}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {selectedEntries.map(function (e) {
                     return (
-                      <tr key={e.id} className="border-b border-slate-100 hover:bg-slate-50">
-                        <td className="px-3 py-1.5 font-mono text-slate-700">{fmtDate(e.entry_date)}</td>
-                        <td className="px-3 py-1.5 font-semibold text-slate-900">{e.category}</td>
-                        <td className="px-3 py-1.5 text-slate-700">{e.subcategory || <span className="text-slate-400">—</span>}</td>
-                        <td className="px-3 py-1.5 text-slate-700">{e.description || <span className="text-slate-400">—</span>}</td>
-                        <td className="px-3 py-1.5 text-right font-mono font-bold text-blue-900">{fmtMoney(e.amount, b.currency)}</td>
-                      </tr>
+                      <WarehouseBucketEntryRow
+                        key={e.id}
+                        entry={e}
+                        bucket={b}
+                        canEdit={!!props.canManage || isSuperAdmin}
+                        allCategories={allCategories}
+                        allSubcategories={allSubcategories}
+                        userId={userId}
+                        lang={lang}
+                        toast={toast}
+                        onChanged={function () {
+                          getBucketWithEntries(selectedBucketId).then(function (res) {
+                            setSelectedBucket(res.bucket);
+                            setSelectedEntries(res.entries || []);
+                          });
+                          if (props.onBucketChanged) props.onBucketChanged();
+                        }}
+                      />
                     );
                   })}
                 </tbody>
@@ -277,6 +321,7 @@ export default function WarehouseBucketList(props) {
                   <tr className="bg-slate-100 border-t-2 border-slate-300 font-extrabold">
                     <td colSpan={4} className="px-3 py-2 text-right text-slate-900">{ar ? 'إجمالي ما تم إنفاقه' : 'Total Spent'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-900">{fmtMoney(spent, b.currency)}</td>
+                    {(props.canManage || isSuperAdmin) && <td />}
                   </tr>
                 </tfoot>
               </table>

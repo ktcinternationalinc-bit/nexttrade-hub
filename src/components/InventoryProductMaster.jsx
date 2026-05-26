@@ -54,6 +54,10 @@ var LEVEL_LABELS = {
   6: { en: 'Color',            ar: 'اللون' },
   7: { en: 'Pattern',          ar: 'النمط' },
   8: { en: 'Spec Class',       ar: 'فئة المواصفات' },
+  // v55.83-A.6.27.71 HOTFIX 5 (Max May 25 2026): L9 was added in .66 but
+  // never registered in LEVEL_LABELS — line 1242 + 1249 threw "undefined
+  // is not an object" trying to render the level picker for L9.
+  9: { en: 'Country',          ar: 'البلد' },
 };
 
 // Build the empty form

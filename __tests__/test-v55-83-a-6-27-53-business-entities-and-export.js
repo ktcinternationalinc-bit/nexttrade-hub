@@ -69,8 +69,8 @@ ok('A16: backout SQL block present',
 // PART B — Export library (print + Excel helpers)
 // ══════════════════════════════════════════════════════════════════
 
-ok('B1: open-account-export.js exports printAccountLedger',
-  /export function printAccountLedger\(account, entity, entries, summary\)/.test(exp));
+ok('B1: open-account-export.js exports printAccountLedger (now accepts opts in v55.83-A.6.27.72)',
+  /export function printAccountLedger\(account, entity, entries, summary, opts\)/.test(exp));
 ok('B2: open-account-export.js exports exportAccountLedgerToExcel',
   /export function exportAccountLedgerToExcel\(account, entity, entries, summary\)/.test(exp));
 ok('B3: imports xlsx (SheetJS) — already installed',
@@ -79,11 +79,11 @@ ok('B4: print fn auto-fires window.print() via setTimeout',
   /setTimeout\(function\(\)\{ try \{ window\.print\(\); \} catch \(e\) \{\} \}, 350\)/.test(exp));
 ok('B5: print fn shows entity name + address + phone in header',
   /entity\.entity_name/.test(exp) && /entity\.address_line1/.test(exp) && /entity\.phone/.test(exp));
-ok('B6: print fn computes running balance from credit-debit',
-  /running \+= credit - debit/.test(exp));
+ok('B6: print fn computes running balance from displayed credit/debit (mirrors for customer perspective in v55.83-A.6.27.72)',
+  /running \+= dispCredit - dispDebit/.test(exp));
 ok('B7: print fn shows plain-English balance label (they owe us / we owe them / settled)',
-  /balance > 0 \? 'They owe us'/.test(exp) &&
-  /balance < 0 \? 'We owe them'/.test(exp) &&
+  /'They owe us'/.test(exp) &&
+  /'We owe them'/.test(exp) &&
   /'Settled'/.test(exp));
 ok('B8: print fn HTML-escapes values (XSS-safe)',
   /function escapeHtml\(s\)/.test(exp) && /escapeHtml\(account\.account_name\)/.test(exp));
@@ -91,8 +91,8 @@ ok('B9: print fn handles missing entity gracefully (No business entity selected)
   /No business entity selected for this account/.test(exp));
 ok('B10: print fn includes convention explanation footer',
   /Convention: <strong>Credit<\/strong> = money paid to us/.test(exp));
-ok('B11: Excel fn writes numeric values (not strings) for SUM() to work',
-  /credit > 0 \? credit : ''/.test(exp) && /debit  > 0 \? debit  : ''/.test(exp));
+ok('B11: Excel fn writes numeric values (not strings) for SUM() to work (v55.83-A.6.27.72 now uses amt/paid/remaining)',
+  /amt > 0 \? amt : ''/.test(exp) && /isInvoiceOrBill && paid > 0 \? paid : ''/.test(exp));
 ok('B12: Excel filename sanitized + dated',
   /OpenAccount-' \+ sanitizeFilename\(account\.account_name\) \+ '-' \+ dateStr \+ '\.xlsx'/.test(exp));
 ok('B13: Excel uses XLSX.utils.aoa_to_sheet + book_new + writeFile',
@@ -117,8 +117,8 @@ ok('C5: business_entities load tolerates missing-table error gracefully',
 ok('C6: entitiesByCode memo + entityFor(account) helper',
   /var entitiesByCode = useMemo[\s\S]{0,300}\{\}/.test(oa) &&
   /function entityFor\(account\)/.test(oa));
-ok('C7: handlePrintLedger + handleExportExcel functions',
-  /function handlePrintLedger\(account\)/.test(oa) &&
+ok('C7: handlePrintLedger + handleExportExcel functions (v55.83-A.6.27.72: handlePrintLedger now accepts perspective)',
+  /function handlePrintLedger\(account, perspective\)/.test(oa) &&
   /function handleExportExcel\(account\)/.test(oa));
 ok('C8: openNewAccount defaults business_entity_code to first entity (or ktc_intl)',
   /var defaultEntity = entities\.length > 0 \? entities\[0\]\.entity_code : 'ktc_intl'/.test(oa));
@@ -130,8 +130,9 @@ ok('C11: entity picker dropdown in account modal',
   /Our Entity for this Account \* \/ كياننا/.test(oa));
 ok('C12: dropdown shows fallback message when no entities loaded',
   /— No entities found \(run SQL migration \.53\) —/.test(oa));
-ok('C13: 🖨️ Print button on each account card calls handlePrintLedger',
-  /onClick=\{function \(\) \{ handlePrintLedger\(a\); \}\}[\s\S]{0,200}🖨️ Print/.test(oa));
+ok('C13: 🖨️ Print buttons on each account card — internal + customer (v55.83-A.6.27.72)',
+  /handlePrintLedger\(a, 'internal'\)[\s\S]{0,400}Print \(Internal\)/.test(oa) &&
+  /handlePrintLedger\(a, 'customer'\)[\s\S]{0,400}Customer Statement/.test(oa));
 ok('C14: 📊 Excel button on each account card calls handleExportExcel',
   /onClick=\{function \(\) \{ handleExportExcel\(a\); \}\}[\s\S]{0,200}📊 Excel/.test(oa));
 ok('C15: account header shows entity badge (🇺🇸 KTC Intl or 🇪🇬 KTC Egypt)',
@@ -187,8 +188,8 @@ ok('R3: 52 — running balance computation preserved (credit adds, debit subtrac
   /entry\._running_balance = running\[cur\]/.test(oa));
 ok('R4: 52 — summaryFor still returns balance + entryCount (back-compat legacy fields preserved in .58)',
   /balance: legacyCredit - legacyDebit,\s+entryCount: arr\.length/.test(oa));
-ok('R5: 52 — CREDIT/DEBIT radio side selector preserved',
-  /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa));
+ok('R5: 52 — 5-type transaction picker (v55.83-A.6.27.72 replaces CREDIT/DEBIT radio)',
+  /Sales Invoice/.test(oa) && /Vendor Bill/.test(oa) && /Payment Received/.test(oa) && /Payment Sent/.test(oa));
 ok('R6: 52 — entry modal validates description + date + positive amount',
   /Description is required/.test(oa) &&
   /Date is required/.test(oa) &&
