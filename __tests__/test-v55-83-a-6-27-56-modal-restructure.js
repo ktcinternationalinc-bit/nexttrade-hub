@@ -48,8 +48,8 @@ ok('A6: addLine auto-collapses header when going from 1+ lines (focus on lines)'
 // PART B — Region 1: Sticky top (Shipment Info form, collapsible)
 // ══════════════════════════════════════════════════════════════════
 
-ok('B1: Region 1 outer wrapper uses flexShrink:0 + borderBottom (sticky top)',
-  /<div style=\{\{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0' \}\}>/.test(rec));
+ok('B1: Region 1 outer wrapper uses flexShrink:0 + borderBottom + max-height cap (HOTFIX 21: capped at 45vh with internal scroll so it can never push the footer off)',
+  /padding: '20px 20px 0 20px'[\s\S]{0,300}flexShrink: 0[\s\S]{0,300}borderBottom: '1px solid #e2e8f0'[\s\S]{0,300}maxHeight: '45vh'[\s\S]{0,200}overflowY: 'auto'/.test(rec));
 ok('B2: Comment marks the 3-region layout explanation',
   /3-region modal layout/.test(rec) &&
   /Region 1[\s\S]{0,100}non-scrolling top/.test(rec) &&

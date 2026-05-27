@@ -1476,21 +1476,29 @@ export default function InventoryReceiving(props) {
       {/* New receipt modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center"
           onClick={closeModal}
           style={{ padding: 6 }}
         >
           <div
-            className="bg-white text-slate-900 rounded-2xl shadow-2xl mx-auto"
+            className="bg-white text-slate-900 rounded-2xl shadow-2xl"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ width: '99vw', maxWidth: 'none', height: 'calc(100vh - 12px)', maxHeight: 'calc(100vh - 12px)', display: 'flex', flexDirection: 'column' }}
+            style={{ width: '99vw', maxWidth: 'none', height: 'calc(100vh - 12px)', maxHeight: 'calc(100vh - 12px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {/* v55.83-A.6.27.60 — Modal now near-fullscreen (99vw × calc 100vh - 12px).
-                Previous 97vw/1900 cap made it look cramped on big monitors. Now the
-                whole form is visible end-to-end without compromise. */}
+            {/* v55.83-A.6.27.72 HOTFIX 21 — Max May 27 2026 screenshot: form
+                appearing short with bottom buttons scrolled off below the fold.
+                Root cause: outer overlay had `overflow-y-auto`, so when
+                Region 1's `flexShrink: 0` content got tall, the whole overlay
+                scrolled instead of clamping. Triple fix below:
+                  (1) outer overlay = `flex items-center` (no scroll)
+                  (2) inner box gets `overflow: hidden` + Region 1 max-height
+                  (3) footer (Region 3) gets `flexShrink: 0` so it can never
+                      be compressed off-screen.
+                Net effect: modal always fills the viewport; Region 2 (product
+                lines) is what scrolls; footer always visible. */}
             <div
               className="rounded-t-2xl flex justify-between items-center gap-2"
-              style={{ background: '#3730a3', padding: '14px 20px' }}
+              style={{ background: '#3730a3', padding: '14px 20px', flexShrink: 0 }}
             >
               <div>
                 <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>🚚 {editingReceiptNumber ? 'Edit Receipt ' + editingReceiptNumber : 'New Stock Receipt'}</div>
@@ -1514,8 +1522,13 @@ export default function InventoryReceiving(props) {
 
                 Why: previously the entire modal scrolled as one block, so the Shipment
                 Info form got pushed off-screen once you added 2-3 product lines. Now you
-                can keep adding lines without losing sight of the header or the Save button. */}
-            <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0' }}>
+                can keep adding lines without losing sight of the header or the Save button.
+
+                v55.83-A.6.27.72 HOTFIX 21 — Cap Region 1 max-height at 45vh so the
+                Expected Totals block + collapsible header can NEVER eat all the room.
+                If a user fully expands Shipment Info, Region 1 internally scrolls
+                instead of pushing the footer off-screen. */}
+            <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0', maxHeight: '45vh', overflowY: 'auto' }}>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields
                   v55.83-A.6.27.56 — collapsible header */}
               <div className="mb-3 bg-slate-50 rounded-lg border border-slate-200">
@@ -2177,8 +2190,12 @@ export default function InventoryReceiving(props) {
               );
             })()}
 
-            {/* Footer */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px' }}>
+            {/* Footer — v55.83-A.6.27.72 HOTFIX 21: explicit flexShrink:0 so
+                Cancel/Save/Submit stay pinned at the bottom no matter how
+                much content is above them. Combined with the parent flex-col
+                + Region 2 owning the scroll, this guarantees the buttons are
+                always visible without scrolling. */}
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px', flexShrink: 0 }}>
               <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-base font-bold rounded-lg">
                 Cancel
               </button>
