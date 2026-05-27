@@ -45,11 +45,11 @@ ok('A5: payment_sent routes to AP Side (reduces AP, shown positive)',
 
 console.log('\n── Column headers per spec ──');
 
-ok('B1: Header "AR Side" with BLUE bg (HOTFIX 12 color spec)',
-  />AR Side</.test(oa) && /bg-blue-50[\s\S]{0,200}AR Side/.test(oa));
+ok('B1: Header "AR Side" with emerald bg (HOTFIX 14 reverted color scheme to invoice-only)',
+  />AR Side</.test(oa) && /bg-emerald-50[\s\S]{0,200}AR Side/.test(oa));
 
-ok('B2: Header "AP Side" with ORANGE bg (HOTFIX 12 color spec)',
-  />AP Side</.test(oa) && /bg-orange-50[\s\S]{0,200}AP Side/.test(oa));
+ok('B2: Header "AP Side" with red bg (HOTFIX 14 reverted color scheme to invoice-only)',
+  />AP Side</.test(oa) && /bg-red-50[\s\S]{0,200}AP Side/.test(oa));
 
 ok('B3: Single Open Balance column with amber bg (renamed from Remaining per polish)',
   />Open Balance</.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
@@ -77,8 +77,8 @@ ok('C2: AP Side cell uses arApSide + fmtNum positive',
 ok('C3: Remaining fills only for invoice/bill rows',
   /txnType !== 'sales_invoice' && txnType !== 'vendor_bill'/.test(oa));
 
-ok('C4: Open Balance colored BLUE for AR, ORANGE for AP (HOTFIX 12 color spec)',
-  /txnType === 'sales_invoice' \? 'text-blue-900' : 'text-orange-900'/.test(oa));
+ok('C4: Open Balance uses typeMeta.amountCls — blue for invoices, orange for bills (HOTFIX 14)',
+  /typeMeta\.amountCls/.test(oa));
 
 ok('C5: Settled invoices show "✓ paid"',
   /✓ paid/.test(oa));
@@ -130,8 +130,8 @@ ok('E4: Card shown when there is any activity (polish — was multi-cur only, no
 ok('E5: Card shows per-currency rate × value = base equiv',
   /b\.rate[\s\S]{0,500}b\.baseEquiv/.test(oa));
 
-ok('E6: Card flags missing FX rate with warning (polish: singular "rate" + open FX panel hint)',
-  /Missing FX rate for/.test(oa));
+ok('E6: Card subtitle flags missing FX rate inline (HOTFIX 14: replaced the big amber banner with subtle inline message)',
+  /EGP excluded — add rate in Inventory → FX Rates/.test(oa));
 
 console.log('\n── Print export mirrors spec ──');
 

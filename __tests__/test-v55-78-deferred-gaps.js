@@ -115,10 +115,10 @@ check('#3.8 PortraitAvatar idle breathing animation',
   /setBreath\(1 \+ Math\.sin\(i \/ 8\) \* 0\.012\)/.test(pa));
 check('#3.9 AIGreeter imports PortraitAvatar',
   /import PortraitAvatar from '\.\/PortraitAvatar'/.test(ag));
-check('#3.10 AIGreeter uses PortraitAvatar for non-Nadia personas',
-  /<PortraitAvatar[\s\S]{0,400}photo=\{activeAgent\.photo\}[\s\S]{0,300}audioElement=\{currentAudio\}/.test(ag));
-check('#3.11 NadiaFace still used for Nadia (unchanged behavior)',
-  /activeAgentKey === 'nadia' \? \(\s*<NadiaFace/.test(ag));
+check('#3.10 AIGreeter uses AnimatedPortrait for ALL personas (HOTFIX 13 unified — was PortraitAvatar for non-Nadia)',
+  /<AnimatedPortrait[\s\S]{0,500}photo=\{activeAgent\.photo\}[\s\S]{0,400}audioElement=\{currentAudio\}/.test(ag));
+check('#3.11 AnimatedPortrait wired with faceAnchors (HOTFIX 13 — was conditional NadiaFace for Nadia)',
+  /<AnimatedPortrait[\s\S]{0,600}faceAnchors=\{activeAgent\.faceAnchors\}/.test(ag));
 
 // ============================================================
 // Gap #4 — Persona persistence across page reloads

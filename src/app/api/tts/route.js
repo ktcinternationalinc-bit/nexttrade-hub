@@ -79,9 +79,24 @@ export async function POST(request) {
       var n = Number(v);
       return Math.max(lo, Math.min(hi, n));
     };
-    var stability    = clamp(body.stability, 0, 1, 0.5);
-    var similarity   = clamp(body.similarity, 0, 1, 0.75);
-    var style        = clamp(body.style, 0, 1, 0.0);
+    // v55.83-A.6.27.72 HOTFIX 13 — More natural prosody:
+    // 1) Model: switched to eleven_turbo_v2_5 for English (much more natural human
+    //    cadence than multilingual_v2 — breathing, micro-pauses, intonation rise/fall).
+    //    Multilingual still used when the text contains Arabic so Arabic pronunciation
+    //    stays correct.
+    // 2) Default stability dropped from 0.5 → 0.35 — more expressive variation in tone,
+    //    less monotone. Callers can still pass their own stability value.
+    // 3) Default similarity raised from 0.75 → 0.82 — sticks closer to the reference
+    //    voice's natural personality.
+    // 4) Default style nudged from 0 → 0.15 — a tiny bit of speaking style energy
+    //    (the difference between someone reading aloud and someone actually talking
+    //    to you).
+    var hasArabic = /[\u0600-\u06FF]/.test(text);
+    var modelId = hasArabic ? 'eleven_multilingual_v2' : 'eleven_turbo_v2_5';
+
+    var stability    = clamp(body.stability, 0, 1, 0.35);
+    var similarity   = clamp(body.similarity, 0, 1, 0.82);
+    var style        = clamp(body.style, 0, 1, 0.15);
     var speakerBoost = body.speakerBoost === undefined ? true : !!body.speakerBoost;
 
     var url = 'https://api.elevenlabs.io/v1/text-to-speech/' + voiceId;
@@ -95,9 +110,9 @@ export async function POST(request) {
       },
       body: JSON.stringify({
         text: text.substring(0, 1000),
-        // v51.2 — multilingual model so Arabic input actually sounds Arabic.
-        // The old mono model was pronouncing Arabic transliterated into English.
-        model_id: 'eleven_multilingual_v2',
+        // v55.83-A.6.27.72 HOTFIX 13 — Turbo v2.5 for English (more natural prosody),
+        // Multilingual v2 for Arabic (correct pronunciation). See above for selection.
+        model_id: modelId,
         voice_settings: {
           stability: stability,
           similarity_boost: similarity,

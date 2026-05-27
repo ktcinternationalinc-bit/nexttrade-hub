@@ -4,6 +4,9 @@ import { supabase } from '../lib/supabase';
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
 import NadiaFace from './NadiaFace';
 import PortraitAvatar from './PortraitAvatar';
+// v55.83-A.6.27.72 HOTFIX 13 — AnimatedPortrait brings real photos to life with
+// audio-driven mouth, blinks, eyebrow lifts, and head sway. Used for all 3 personas.
+import AnimatedPortrait from './AnimatedPortrait';
 import MorningBriefing from './MorningBriefing';
 // v55.73 — Persona layer. AIGreeter remains the SAME engine (voice,
 // listening, recording, response, decisions). When a non-default persona
@@ -978,6 +981,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
     // the persona's voice — not a generic shared one.
     var personaVoiceId = getElevenLabsVoiceId(activeAgentKey);
     var resolvedVoiceId = voicePrefs.voice_id || personaVoiceId || undefined;
+    // v55.83-A.6.27.72 HOTFIX 13 — Use persona's tuned tts settings (stability /
+    // similarity / style) when the user hasn't explicitly overridden. Each persona
+    // has its own voice character (Nadia composed, Jenna warm, Sara energetic).
+    var personaTTS = (activeAgent && activeAgent.voice && activeAgent.voice.tts) || {};
+    var resolvedStability    = voicePrefs.stability    != null ? voicePrefs.stability    : personaTTS.stability;
+    var resolvedSimilarity   = voicePrefs.similarity   != null ? voicePrefs.similarity   : personaTTS.similarity;
+    var resolvedStyle        = voicePrefs.style        != null ? voicePrefs.style        : personaTTS.style;
+    var resolvedSpeakerBoost = voicePrefs.speaker_boost != null ? voicePrefs.speaker_boost : true;
     fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -985,10 +996,10 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
         text: text,
         language: useLang,
         voiceId:      resolvedVoiceId,
-        stability:    voicePrefs.stability,
-        similarity:   voicePrefs.similarity,
-        style:        voicePrefs.style,
-        speakerBoost: voicePrefs.speaker_boost
+        stability:    resolvedStability,
+        similarity:   resolvedSimilarity,
+        style:        resolvedStyle,
+        speakerBoost: resolvedSpeakerBoost
       })
     }).then(function(res) {
       if (!res.ok) throw new Error('TTS failed');
@@ -2384,41 +2395,25 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
 
   return (
     <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + uiColor + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
-      {/* Header
-          v55.73 — Persona-aware header. Nadia keeps her existing animated
-          NadiaFace SVG (with all its lip-sync logic). Jenna and Sara show
-          their photo with a speaking-state ring. The voice/listening/
-          recording engine below is unchanged — only the visual header swaps. */}
+      {/* Header — v55.83-A.6.27.72 HOTFIX 13.
+          All three personas now use AnimatedPortrait — real photo with audio-driven
+          lip-sync, periodic blinks, eyebrow lifts on emphasis, and a subtle head
+          sway. Each persona has its own gestureMode (composed / warm / bouncy)
+          driven by faceAnchors.gestures in agent-personalities.js, giving them
+          distinct body language alongside their distinct voices.
+          The voice / listening / recording engine below is unchanged. */}
       <div className="px-4 py-3 flex items-center gap-3" style={{ background: uiColor + '18', borderBottom: '1px solid ' + uiColor + '25' }}>
-        {activeAgentKey === 'nadia' ? (
-          <NadiaFace
-            speaking={speaking}
-            listening={listening}
-            loading={loading}
-            color={uiColor}
-            size={56}
-            audioElement={currentAudio}
-            lang={useLang}
-          />
-        ) : (
-          // v55.78 — Gap #3 — Audio-reactive PortraitAvatar replaces the
-          // static-photo + ring treatment that Jenna and Sara had before.
-          // Now both pulse with their actual voice, just like NadiaFace's
-          // lip sync. Photo subtly scales with audio amplitude, concentric
-          // rings ripple outward, listening shows a red breathing ring,
-          // loading shows thinking dots beneath. Same component for both
-          // — colors come from the active persona's palette.
-          <PortraitAvatar
-            photo={activeAgent.photo}
-            alt={activeAgent.name}
-            speaking={speaking}
-            listening={listening}
-            loading={loading}
-            color={uiColor}
-            size={56}
-            audioElement={currentAudio}
-          />
-        )}
+        <AnimatedPortrait
+          photo={activeAgent.photo}
+          alt={activeAgent.name}
+          speaking={speaking}
+          listening={listening}
+          loading={loading}
+          color={uiColor}
+          size={56}
+          audioElement={currentAudio}
+          faceAnchors={activeAgent.faceAnchors}
+        />
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">
             {activeAgent.name}

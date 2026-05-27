@@ -262,6 +262,21 @@ export default function AnimatedPortrait({
           src={photo}
           alt={alt}
           draggable={false}
+          // v55.83-A.6.27.72 HOTFIX 14 — If the portrait file is missing (404),
+          // show the persona's initial on a colored background so Max sees the
+          // problem immediately ("nothing changed" = portrait file isn't in /public).
+          onError={function (e) {
+            e.currentTarget.style.display = 'none';
+            var parent = e.currentTarget.parentNode;
+            if (parent && !parent.querySelector('.portrait-fallback')) {
+              var div = document.createElement('div');
+              div.className = 'portrait-fallback';
+              div.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:white;font-size:' + (size * 0.4) + 'px;font-weight:800;background:' + color + ';';
+              div.textContent = (alt || '?').charAt(0).toUpperCase();
+              div.title = 'Portrait file missing at ' + photo + '. Upload to /public/avatars/ to enable face animation.';
+              parent.appendChild(div);
+            }
+          }}
           style={{
             width: '100%',
             height: '100%',

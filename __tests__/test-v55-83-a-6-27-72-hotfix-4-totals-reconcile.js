@@ -30,11 +30,11 @@ ok('A4: totals row tracks totalAP per currency (vendor_bill remaining only)',
 ok('A5: Net Position row shows AR − AP = net with sub-label (HOTFIX 11 final)',
   /Total AR − Total AP/.test(oa) && /in our favor[\s\S]{0,300}against us|against us[\s\S]{0,300}in our favor/.test(oa));
 
-ok('A6: Total AR row uses BLUE accent (HOTFIX 12: bg-blue-900/40)',
-  /bg-blue-900\/40/.test(oa));
+ok('A6: Total AR row uses emerald accent (HOTFIX 14 reverted: bg-emerald-900/40)',
+  /bg-emerald-900\/40 text-emerald-100/.test(oa));
 
-ok('A7: Total AP row uses ORANGE accent (HOTFIX 12: bg-orange-900/40)',
-  /bg-orange-900\/40/.test(oa));
+ok('A7: Total AP row uses red accent (HOTFIX 14 reverted: bg-red-900/40)',
+  /bg-red-900\/40 text-red-100/.test(oa));
 
 ok('A8: Net Position row uses cs.balance via fmtSigned for Running Balance column',
   /fmtSigned\(cs\.balance\)/.test(oa));

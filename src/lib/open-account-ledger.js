@@ -30,52 +30,52 @@
 //   Recomputed from scratch every time entries change.
 
 export var TRANSACTION_TYPES = {
-  // v55.83-A.6.27.72 HOTFIX 12 — Color-coding spec from Max:
-  //   AR-affecting rows (sales_invoice + payment_received): BLUE description + amount
-  //   AP-affecting rows (vendor_bill + payment_sent):       ORANGE description + amount
-  // descCls = color class applied to the description text on the row
-  // amountCls = color class applied to the AR Side / AP Side numeric cells
+  // v55.83-A.6.27.72 HOTFIX 14 — Per Max May 26 2026: color-code ONLY invoices.
+  // Sales Invoice (we billed them) → BLUE description + amount
+  // Vendor Bill (they billed us)   → ORANGE description + amount
+  // ALL OTHER types (payments, offsets, adjustments) → neutral text, no special color.
+  // Previous HOTFIX 12 polish over-applied the color to payments too — reverted.
   sales_invoice: {
     label: 'Sales Invoice', labelAr: 'فاتورة بيع',
     sublabel: 'We billed them', sublabelAr: 'فوترناهم',
     icon: '📤', side: 'credit', cashFlow: null,
-    pillCls: 'bg-blue-100 text-blue-900', rowCls: 'bg-blue-50/40',
-    descCls: 'text-blue-900', amountCls: 'text-blue-800',
+    pillCls: 'bg-blue-100 text-blue-900', rowCls: null,
+    descCls: 'text-blue-700', amountCls: 'text-blue-700',
   },
   vendor_bill: {
     label: 'Vendor Bill', labelAr: 'فاتورة مورد',
     sublabel: 'They billed us', sublabelAr: 'فوترونا',
     icon: '📥', side: 'debit', cashFlow: null,
-    pillCls: 'bg-orange-100 text-orange-900', rowCls: 'bg-orange-50/40',
-    descCls: 'text-orange-900', amountCls: 'text-orange-800',
+    pillCls: 'bg-orange-100 text-orange-900', rowCls: null,
+    descCls: 'text-orange-700', amountCls: 'text-orange-700',
   },
   payment_received: {
     label: 'Payment Received', labelAr: 'دفعة مستلمة',
     sublabel: 'They paid us', sublabelAr: 'دفعوا لنا',
     icon: '💰', side: 'credit', cashFlow: 'in',
-    pillCls: 'bg-blue-100 text-blue-900', rowCls: 'bg-blue-50/20',
-    descCls: 'text-blue-900', amountCls: 'text-blue-800',
+    pillCls: 'bg-emerald-100 text-emerald-900', rowCls: null,
+    descCls: null, amountCls: null,
   },
   payment_sent: {
     label: 'Payment Sent', labelAr: 'دفعة مرسلة',
     sublabel: 'We paid them', sublabelAr: 'دفعنا لهم',
     icon: '💸', side: 'debit', cashFlow: 'out',
-    pillCls: 'bg-orange-100 text-orange-900', rowCls: 'bg-orange-50/20',
-    descCls: 'text-orange-900', amountCls: 'text-orange-800',
+    pillCls: 'bg-red-100 text-red-900', rowCls: null,
+    descCls: null, amountCls: null,
   },
   credit_adjustment: {
     label: 'Credit/Adjustment', labelAr: 'تعديل',
     sublabel: 'Manual adjustment', sublabelAr: 'تعديل يدوي',
     icon: '⚖️', side: null, cashFlow: null,
     pillCls: 'bg-slate-200 text-slate-800', rowCls: null,
-    descCls: 'text-slate-800', amountCls: 'text-slate-800',
+    descCls: null, amountCls: null,
   },
   offset: {
     label: 'Offset', labelAr: 'مقاصة',
     sublabel: 'Balance offset', sublabelAr: 'مقاصة رصيد',
     icon: '🔄', side: null, cashFlow: null,
     pillCls: 'bg-purple-100 text-purple-900', rowCls: 'bg-purple-50',
-    descCls: 'text-purple-900', amountCls: 'text-purple-800',
+    descCls: null, amountCls: null,
   },
 };
 

@@ -42,8 +42,8 @@ ok('B1: Per-row AR Side / AP Side cells use arApSide helper (HOTFIX 11 final —
 ok('B2: Per-row Remaining cell fills for invoice/bill rows only (HOTFIX 11 final — single Remaining col, color by side)',
   /txnType !== 'sales_invoice' && txnType !== 'vendor_bill'/.test(oa));
 
-ok('B3: Per-row Open Balance cell BLUE for AR rows, ORANGE for AP rows (HOTFIX 12)',
-  /txnType === 'sales_invoice' \? 'text-blue-900' : 'text-orange-900'/.test(oa));
+ok('B3: Per-row Open Balance cell uses typeMeta.amountCls — blue for invoices, orange for bills (HOTFIX 14)',
+  /typeMeta\.amountCls/.test(oa));
 
 console.log('\n── Totals row signed sums ──');
 

@@ -81,15 +81,14 @@ check('5.7 Idle breath oscillation when not speaking/listening',
 group('6. AIGreeter wires PortraitAvatar for non-Nadia personas');
 check('6.1 PortraitAvatar imported',
   /import PortraitAvatar from '\.\/PortraitAvatar'/.test(ag));
-check('6.2 Conditional render: Nadia → NadiaFace, others → PortraitAvatar',
-  /activeAgentKey === 'nadia' \? \(\s*<NadiaFace/.test(ag)
-  && /\) : \(\s*(?:\/\/[^\n]*\n\s*)*<PortraitAvatar/.test(ag));
-check('6.3 PortraitAvatar receives audioElement={currentAudio}',
-  /<PortraitAvatar[\s\S]{0,300}audioElement=\{currentAudio\}/.test(ag));
-check('6.4 PortraitAvatar receives uiColor from active persona',
-  /<PortraitAvatar[\s\S]{0,300}color=\{uiColor\}/.test(ag));
-check('6.5 PortraitAvatar receives speaking + listening + loading from same state',
-  /<PortraitAvatar[\s\S]{0,500}speaking=\{speaking\}[\s\S]{0,200}listening=\{listening\}[\s\S]{0,200}loading=\{loading\}/.test(ag));
+check('6.2 Conditional render: HOTFIX 13 unified to AnimatedPortrait for all 3 personas (real photo + lip-sync + blinks + sway)',
+  /<AnimatedPortrait\s/.test(ag));
+check('6.3 AnimatedPortrait receives audioElement={currentAudio} (HOTFIX 13)',
+  /<AnimatedPortrait[\s\S]{0,400}audioElement=\{currentAudio\}/.test(ag));
+check('6.4 AnimatedPortrait receives color={uiColor} from active persona (HOTFIX 13)',
+  /<AnimatedPortrait[\s\S]{0,400}color=\{uiColor\}/.test(ag));
+check('6.5 AnimatedPortrait receives speaking + listening + loading from same state (HOTFIX 13)',
+  /<AnimatedPortrait[\s\S]{0,600}speaking=\{speaking\}[\s\S]{0,200}listening=\{listening\}[\s\S]{0,200}loading=\{loading\}/.test(ag));
 
 console.log('\n--- SUMMARY ---');
 console.log('Passed: ' + passed);

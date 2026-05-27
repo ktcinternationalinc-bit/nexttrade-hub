@@ -46,12 +46,28 @@ export var AGENT_PERSONALITIES = {
       pitch: 1.0,
       speed: 1.0,
       style: 'professional-warm',
+      // v55.83-A.6.27.72 HOTFIX 13 — ElevenLabs synthesis settings per persona.
+      // Nadia is executive: composed, even, clear. Slightly higher stability so she
+      // sounds reliable and grounded, lower style so she stays professional.
+      tts: { stability: 0.45, similarity: 0.85, style: 0.10 },
       browserFallback: {
         lang: 'en-US',
         nameHints: ['Samantha', 'Karen', 'Microsoft Zira', 'Google US English'],
         rate: 1.0,
         pitch: 1.0,
       },
+    },
+    // v55.83-A.6.27.72 HOTFIX 13 — Face anchor coordinates (normalized 0-1 of photo).
+    // Used by AnimatedPortrait to place overlays for mouth movement + blinks.
+    // Tune these per actual portrait crop if a persona's face isn't centered.
+    //   mouth = (x, y) of center of lips; width = mouth width as fraction of photo
+    //   eyeL / eyeR = (x, y) of each eye center; width = single-eye span
+    //   gestures = persona's animation style preset
+    faceAnchors: {
+      mouth: { x: 0.50, y: 0.74, width: 0.18 },
+      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
+      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      gestures: 'composed',
     },
     personalityPrompt:
       "You are Nadia, the executive assistant for KTC International. You are sharp, calm, and operational. " +
@@ -107,12 +123,22 @@ export var AGENT_PERSONALITIES = {
       pitch: 1.05,
       speed: 0.98,
       style: 'warm-empathetic',
+      // v55.83-A.6.27.72 HOTFIX 13 — Jenna is HR: needs to sound warm and human.
+      // Lower stability for more expressive intonation (concerned vs cheerful etc).
+      // Higher style for genuine vocal warmth — not a robot reading HR policy.
+      tts: { stability: 0.30, similarity: 0.80, style: 0.25 },
       browserFallback: {
         lang: 'en-US',
         nameHints: ['Microsoft Aria', 'Google UK English Female', 'Tessa'],
         rate: 0.98,
         pitch: 1.1,
       },
+    },
+    faceAnchors: {
+      mouth: { x: 0.50, y: 0.74, width: 0.18 },
+      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
+      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      gestures: 'warm',
     },
     personalityPrompt:
       "You are Ms. Jenna, the HR representative for KTC International. You are warm, professional, and supportive. " +
@@ -190,12 +216,22 @@ export var AGENT_PERSONALITIES = {
       pitch: 1.02,
       speed: 1.05,
       style: 'energetic-coach',
+      // v55.83-A.6.27.72 HOTFIX 13 — Sara is the coach: energetic, dynamic, encouraging.
+      // Lowest stability for maximum dynamic range (excited! → reflective). Highest style
+      // so she sounds like a real cheerleader, not a flat motivational app.
+      tts: { stability: 0.25, similarity: 0.78, style: 0.35 },
       browserFallback: {
         lang: 'en-US',
         nameHints: ['Samantha', 'Microsoft Jenny', 'Google US English'],
         rate: 1.05,
         pitch: 1.05,
       },
+    },
+    faceAnchors: {
+      mouth: { x: 0.50, y: 0.74, width: 0.18 },
+      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
+      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      gestures: 'bouncy',
     },
     personalityPrompt:
       "You are Sara, the work coach for KTC International. You are energetic, encouraging, and growth-oriented. " +

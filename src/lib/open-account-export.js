@@ -174,32 +174,40 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       }
       // Customer perspective: AR ↔ AP swap (their receivable = our payable)
       if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
+      // v55.83-A.6.27.72 HOTFIX 14 — Per Max's exact spec: ONLY invoices get
+      // blue/orange description + amount. Payments + offsets stay neutral.
+      //   sales_invoice  → BLUE   (#1d4ed8)  — we're billing them
+      //   vendor_bill    → ORANGE (#c2410c)  — they're billing us
+      // Customer perspective swaps the interpretation (their AR is our AP).
+      var invoiceColor = null;
+      if (e.transaction_type === 'sales_invoice') {
+        invoiceColor = perspective === 'customer' ? '#c2410c' : '#1d4ed8';
+      } else if (e.transaction_type === 'vendor_bill') {
+        invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#c2410c';
+      }
       var arCellHtml = arSide > 0.005
-        ? '<span style="color:#1d4ed8">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+        ? '<span style="color:' + (invoiceColor || '#15803d') + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
-        ? '<span style="color:#c2410c">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
-      // Single Remaining column — fills only on invoice/bill rows, colored by side
+        ? '<span style="color:' + (invoiceColor || '#b91c1c') + '">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
+      // Single Remaining column — fills only on invoice/bill rows, colored by invoice color
       var remainingCellHtml = '';
       if (isInvoiceOrBill) {
         if (remaining > 0.005) {
-          // Color by which side this row affects (after any perspective swap)
-          var isAREffective = perspective === 'customer'
-            ? (e.transaction_type === 'vendor_bill')
-            : (e.transaction_type === 'sales_invoice');
-          var color = isAREffective ? '#1d4ed8' : '#c2410c';
-          remainingCellHtml = '<span style="color:' + color + '">' + escapeHtml(fmtMoney(remaining)) + '</span>';
+          remainingCellHtml = '<span style="color:' + invoiceColor + '">' + escapeHtml(fmtMoney(remaining)) + '</span>';
         } else {
-          remainingCellHtml = '<span style="color:#1d4ed8; font-size:10px">✓ paid</span>';
+          remainingCellHtml = '<span style="color:#15803d; font-size:10px">✓ paid</span>';
         }
       }
-      var runCellHtml = '<span style="color:' + (running > 0.005 ? '#1d4ed8' : running < -0.005 ? '#c2410c' : '#475569') + '">' + escapeHtml(fmtSignedMoney(running)) + '</span>';
+      var runCellHtml = '<span style="color:' + (running > 0.005 ? '#15803d' : running < -0.005 ? '#b91c1c' : '#475569') + '">' + escapeHtml(fmtSignedMoney(running)) + '</span>';
+      // Description colored when it's an invoice/bill; otherwise default
+      var descColorStyle = invoiceColor ? ' style="color:' + invoiceColor + '; font-weight:600"' : '';
       rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
         + '<td style="font-size:10px"><strong>' + escapeHtml(typeLabel) + '</strong></td>'
-        + '<td>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
+        + '<td' + descColorStyle + '>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
-        + '<td class="num" style="background:#eff6ff">' + arCellHtml + '</td>'
-        + '<td class="num" style="background:#fff7ed">' + apCellHtml + '</td>'
+        + '<td class="num" style="background:#f0fdf4">' + arCellHtml + '</td>'
+        + '<td class="num" style="background:#fef2f2">' + apCellHtml + '</td>'
         + '<td class="num" style="background:#fffbeb">' + remainingCellHtml + '</td>'
         + '<td class="num">' + runCellHtml + '</td>'
         + '</tr>';
@@ -210,7 +218,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     var balanceLabel = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us')
                      : cs.balance < 0 ? (perspective === 'customer' ? 'We owe you' : 'We owe them')
                      : 'Settled';
-    var balanceColor = cs.balance > 0 ? '#1d4ed8' : cs.balance < 0 ? '#c2410c' : '#475569';
+    var balanceColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
     var bgColor = cs.balance >= 0 ? '#f0fdf4' : '#fef2f2';
 
     // 4-pot summary tiles for this currency
@@ -218,7 +226,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     if (simCur) {
       potTilesHtml = ''
         + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'
-        + '<div style="flex:1;min-width:90px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:6px 8px">'
+        + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bfdbfe;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#1e3a8a;font-weight:700;text-transform:uppercase">'
         + (perspective === 'customer' ? 'We owe you' : 'They owe us')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#1e3a8a">' + fmtMoney(simCur.theirOpenInvoices) + '</div></div>'
@@ -226,11 +234,11 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         + '<div style="font-size:9px;color:#78350f;font-weight:700;text-transform:uppercase">'
         + (perspective === 'customer' ? 'You owe us' : 'We owe them')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#78350f">' + fmtMoney(simCur.ourOpenBills) + '</div></div>'
-        + '<div style="flex:1;min-width:90px;background:#eff6ff;border:1px solid #bbf7d0;border-radius:4px;padding:6px 8px">'
+        + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#14532d;font-weight:700;text-transform:uppercase">'
         + (perspective === 'customer' ? 'Your credit (prepaid)' : 'Their credit (prepaid)')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#14532d">' + fmtMoney(simCur.theirPrepaid) + '</div></div>'
-        + '<div style="flex:1;min-width:90px;background:#fff7ed;border:1px solid #fecaca;border-radius:4px;padding:6px 8px">'
+        + '<div style="flex:1;min-width:90px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#7f1d1d;font-weight:700;text-transform:uppercase">'
         + (perspective === 'customer' ? 'Our credit (prepaid)' : 'Our credit (prepaid)')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#7f1d1d">' + fmtMoney(simCur.ourPrepaid) + '</div></div>'
@@ -247,8 +255,8 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       + '<th style="width:110px">Type</th>'
       + '<th>Description</th>'
       + '<th style="width:85px">Reference</th>'
-      + '<th class="num" style="width:80px; background:#eff6ff">AR Side</th>'
-      + '<th class="num" style="width:80px; background:#fff7ed">AP Side</th>'
+      + '<th class="num" style="width:80px; background:#f0fdf4">AR Side</th>'
+      + '<th class="num" style="width:80px; background:#fef2f2">AP Side</th>'
       + '<th class="num" style="width:80px; background:#fffbeb">Open Balance</th>'
       + '<th class="num" style="width:110px">Running Balance ' + escapeHtml(cur) + '</th>'
       + '</tr></thead>'
@@ -276,12 +284,12 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
                 }
               });
               var netP = totAR - totAP;
-              var netColor = netP > 0.005 ? '#1d4ed8' : netP < -0.005 ? '#c2410c' : '#475569';
+              var netColor = netP > 0.005 ? '#15803d' : netP < -0.005 ? '#b91c1c' : '#475569';
               var subLabel = netP > 0.005 ? 'in our favor' : netP < -0.005 ? 'against us' : 'settled';
               return '<tfoot>'
                 + '<tr style="background:#1e293b; color:#fff"><td colspan="8" style="padding:8px 6px; text-align:left; text-transform:uppercase; font-size:10px; letter-spacing:1px; font-weight:800">' + escapeHtml(cur) + ' Summary</td></tr>'
-                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AR (They Owe Us):</td><td class="num" style="color:#93c5fd; background:rgba(34,197,94,0.15)">' + escapeHtml(fmtMoney(totAR)) + ' ' + escapeHtml(cur) + '</td><td colspan="3"></td></tr>'
-                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AP (We Owe Them):</td><td></td><td class="num" style="color:#fdba74; background:rgba(239,68,68,0.15)">' + escapeHtml(fmtMoney(totAP)) + ' ' + escapeHtml(cur) + '</td><td colspan="2"></td></tr>'
+                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AR (They Owe Us):</td><td class="num" style="color:#86efac; background:rgba(34,197,94,0.15)">' + escapeHtml(fmtMoney(totAR)) + ' ' + escapeHtml(cur) + '</td><td colspan="3"></td></tr>'
+                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AP (We Owe Them):</td><td></td><td class="num" style="color:#fca5a5; background:rgba(239,68,68,0.15)">' + escapeHtml(fmtMoney(totAP)) + ' ' + escapeHtml(cur) + '</td><td colspan="2"></td></tr>'
                 + '<tr style="background:#0f172a; color:#fff; font-weight:800">'
                 + '<td colspan="4" style="padding:8px 6px; text-align:right; text-transform:uppercase; font-size:11px">Net ' + escapeHtml(cur) + ' Position:</td>'
                 + '<td colspan="3" class="num" style="color:' + (netP > 0 ? '#86efac' : netP < 0 ? '#fca5a5' : '#fff') + '; font-size:14px">'
