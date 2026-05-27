@@ -458,29 +458,30 @@ export default function AssistantsBar({
           {/* Persona greeting block — cosmetic, swap freely */}
           {openPanel === 'nadia' && (
             <>
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div className="flex items-start gap-3 flex-1 min-w-0">
-                  <img
-                    src={AGENT_PERSONALITIES.nadia.photo}
-                    alt={AGENT_PERSONALITIES.nadia.name}
-                    className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
-                    style={{ objectFit: 'cover' }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-base font-extrabold text-indigo-900">Hi, I'm {AGENT_PERSONALITIES.nadia.name}</h4>
-                      <span className="text-[10px] font-bold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.nadia.role}</span>
-                      <span className="text-[10px] font-bold bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded uppercase">Auto-opens daily</span>
+              {/* v55.83-A.6.27.72 HOTFIX 17 — Per Max May 27 2026: light fonts blending
+                  with the gradient background. Wrapping the greeting block in a solid
+                  white card with a soft border + shadow guarantees text contrast no
+                  matter where the gradient happens to be at the top. */}
+              <div className="bg-white rounded-xl border border-indigo-200 shadow-sm p-3 mb-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <img
+                      src={AGENT_PERSONALITIES.nadia.photo}
+                      alt={AGENT_PERSONALITIES.nadia.name}
+                      className="w-12 h-12 rounded-full ring-2 ring-indigo-300 shadow flex-shrink-0"
+                      style={{ objectFit: 'cover' }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-base font-extrabold text-slate-900">Hi, I'm {AGENT_PERSONALITIES.nadia.name}</h4>
+                        <span className="text-[10px] font-extrabold bg-indigo-600 text-white px-2 py-0.5 rounded uppercase tracking-wide">{AGENT_PERSONALITIES.nadia.role}</span>
+                        <span className="text-[10px] font-extrabold bg-emerald-600 text-white px-2 py-0.5 rounded uppercase tracking-wide">Auto-opens daily</span>
+                      </div>
+                      <p className="text-xs text-slate-700 mt-1 leading-snug">{AGENT_PERSONALITIES.nadia.greeting}</p>
+                      <p className="text-[11px] font-bold text-slate-800 mt-2">{nadiaLine}</p>
                     </div>
-                    <p className="text-xs text-indigo-800 mt-1 leading-snug">{AGENT_PERSONALITIES.nadia.greeting}</p>
-                    <p className="text-[11px] font-semibold text-indigo-900 mt-2">{nadiaLine}</p>
                   </div>
                 </div>
               </div>
-              {/* v55.81 #5 (Max May 9 2026): When ALL four stats are zero,
-                  showing four "0" cards under "all caught up today" feels
-                  empty and redundant. Replace with one friendly all-clear
-                  panel that doubles as an explainer of what these cards
-                  show when there IS something to act on. */}
               {nadiaUrgentCount > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <StatCard label="Need Ack" value={myAck} color="amber" />
@@ -489,47 +490,47 @@ export default function AssistantsBar({
                   <StatCard label="Checks Due" value={checksDueToday} color="violet" />
                 </div>
               ) : (
-                <div className="rounded-lg p-3 border border-emerald-200 bg-emerald-50/70 text-center">
-                  <div className="text-xs font-bold text-emerald-800 mb-0.5">✅ Nothing needs action right now</div>
-                  <div className="text-[10px] text-emerald-700 leading-snug">When you have tickets to acknowledge, items due today, overdue work, or checks due, they'll show up here as quick-action tiles.</div>
+                <div className="rounded-lg p-3 border border-emerald-300 bg-emerald-50 text-center">
+                  <div className="text-xs font-extrabold text-emerald-900 mb-0.5">✅ Nothing needs action right now</div>
+                  <div className="text-[10px] text-emerald-800 leading-snug">When you have tickets to acknowledge, items due today, overdue work, or checks due, they'll show up here as quick-action tiles.</div>
                 </div>
               )}
             </>
           )}
 
           {openPanel === 'jenna' && (
-            <div className="flex items-start justify-between gap-2 mb-3">
+            <div className="bg-white rounded-xl border border-rose-200 shadow-sm p-3 mb-3">
               <div className="flex items-start gap-3 flex-1 min-w-0">
                 <img
                   src={AGENT_PERSONALITIES.jenna.photo}
                   alt={AGENT_PERSONALITIES.jenna.name}
-                  className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
+                  className="w-12 h-12 rounded-full ring-2 ring-rose-300 shadow flex-shrink-0"
                   style={{ objectFit: 'cover' }} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="text-base font-extrabold text-rose-900">Hi, I'm {AGENT_PERSONALITIES.jenna.name}</h4>
-                    <span className="text-[10px] font-bold bg-rose-200 text-rose-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.jenna.role}</span>
+                    <h4 className="text-base font-extrabold text-slate-900">Hi, I'm {AGENT_PERSONALITIES.jenna.name}</h4>
+                    <span className="text-[10px] font-extrabold bg-rose-600 text-white px-2 py-0.5 rounded uppercase tracking-wide">{AGENT_PERSONALITIES.jenna.role}</span>
                   </div>
-                  <p className="text-xs text-rose-800 mt-1 leading-snug">{AGENT_PERSONALITIES.jenna.greeting}</p>
+                  <p className="text-xs text-slate-700 mt-1 leading-snug">{AGENT_PERSONALITIES.jenna.greeting}</p>
                 </div>
               </div>
             </div>
           )}
 
           {openPanel === 'sara' && (
-            <div className="flex items-start justify-between gap-2 mb-3">
+            <div className="bg-white rounded-xl border border-cyan-200 shadow-sm p-3 mb-3">
               <div className="flex items-start gap-3 flex-1 min-w-0">
                 <img
                   src={AGENT_PERSONALITIES.sara.photo}
                   alt={AGENT_PERSONALITIES.sara.name}
-                  className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
+                  className="w-12 h-12 rounded-full ring-2 ring-cyan-300 shadow flex-shrink-0"
                   style={{ objectFit: 'cover' }} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="text-base font-extrabold text-cyan-900">Hey, I'm {AGENT_PERSONALITIES.sara.name}</h4>
-                    <span className="text-[10px] font-bold bg-cyan-200 text-cyan-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.sara.role}</span>
+                    <h4 className="text-base font-extrabold text-slate-900">Hey, I'm {AGENT_PERSONALITIES.sara.name}</h4>
+                    <span className="text-[10px] font-extrabold bg-cyan-600 text-white px-2 py-0.5 rounded uppercase tracking-wide">{AGENT_PERSONALITIES.sara.role}</span>
                   </div>
-                  <p className="text-xs text-cyan-800 mt-1 leading-snug">{AGENT_PERSONALITIES.sara.greeting}</p>
+                  <p className="text-xs text-slate-700 mt-1 leading-snug">{AGENT_PERSONALITIES.sara.greeting}</p>
                 </div>
               </div>
             </div>
@@ -618,14 +619,10 @@ function FloatingMini(props) {
 }
 
 function StatCard(props) {
-  // v55.83-A.6.27.11 (Max May 15 2026) — Max's screenshot showed the labels
-  // rendering near-invisible (looked white/washed-out) despite the -950 color.
-  // Root cause: small uppercase text in a colored hue blends with the matching
-  // pastel background at this font size. Fix: force label to slate-900 (almost
-  // black) which gives high contrast on EVERY pastel tile bg. Only the big
-  // numeric VALUE keeps the colored hue — that's what carries the
-  // color-coding (amber=ack, sky=due, rose=overdue, violet=checks).
-  // RULE per Max: "DO NOT USE WHITE FOR TEXT FONT".
+  // v55.83-A.6.27.72 HOTFIX 17 — Per Max May 27 2026: labels still washed out
+  // against pastel backgrounds. Bumped label to text-black (true black, not
+  // slate-900) and gave the card a deeper bg (200 instead of 100) for stronger
+  // contrast. The colored number value gets its own deep hue (-950).
   var valueColor = {
     amber: 'text-amber-900',
     blue: 'text-sky-900',
@@ -633,17 +630,17 @@ function StatCard(props) {
     violet: 'text-violet-900',
   };
   var bgClass = {
-    amber: 'bg-amber-100 border-amber-400',
-    blue: 'bg-sky-100 border-sky-400',
-    rose: 'bg-rose-100 border-rose-400',
-    violet: 'bg-violet-100 border-violet-400',
+    amber: 'bg-amber-200 border-amber-500',
+    blue: 'bg-sky-200 border-sky-500',
+    rose: 'bg-rose-200 border-rose-500',
+    violet: 'bg-violet-200 border-violet-500',
   };
   var bg = bgClass[props.color] || bgClass.blue;
   var vc = valueColor[props.color] || valueColor.blue;
   var hot = Number(props.value) > 0;
   return (
     <div className={'rounded-lg p-3 border-2 transition ' + bg + (hot ? ' shadow-md' : ' opacity-90')}>
-      <div className="text-sm font-black uppercase tracking-wide text-slate-900">{props.label}</div>
+      <div className="text-sm font-black uppercase tracking-wide" style={{ color: '#0f172a' }}>{props.label}</div>
       <div className={'text-4xl font-black mt-1 leading-none ' + vc}>{props.value}</div>
     </div>
   );

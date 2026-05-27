@@ -453,24 +453,32 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
             header above (see AssistantsBar). Two Jennas on the same screen
             was visually confusing. The HR Desk header is now compact:
             title + status counters only. */}
-        <div className="flex items-start justify-between mb-4 gap-4">
-          <div className="flex items-center gap-3 flex-1 min-w-0">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="font-extrabold text-lg text-slate-900">My HR Desk</div>
-                <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[9px] font-bold rounded uppercase">Direct line to {superAdminName}</span>
-                {hasUpdate && (
-                  <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded uppercase animate-pulse">✨ New update</span>
-                )}
-              </div>
-              <div className="text-xs text-slate-500">
-                File requests, raise concerns, and see responses below.
-              </div>
-              {/* Status counters */}
-              <div className="flex gap-3 mt-1.5 flex-wrap text-[10px]">
-                {pendingReq > 0 && <span className="text-amber-900 font-bold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
-                {pendingCmp > 0 && <span className="text-rose-800 font-bold">⏳ {pendingCmp} concern{pendingCmp === 1 ? '' : 's'} pending</span>}
-                {pendingReq === 0 && pendingCmp === 0 && myRecent.length === 0 && <span className="text-slate-500">No items filed yet</span>}
+        {/* v55.83-A.6.27.72 HOTFIX 17 — Per Max May 27 2026: title + counters
+            were getting washed out where the persona's gradient header bleeds
+            into the panel. Wrapping the entire header block in a solid white
+            card with light border + shadow guarantees dark text always has a
+            light, predictable surface to sit on, regardless of what color the
+            outer panel chose. */}
+        <div className="bg-white rounded-lg border border-rose-200 shadow-sm p-3 mb-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="font-extrabold text-lg text-slate-900">My HR Desk</div>
+                  <span className="px-2 py-0.5 bg-violet-600 text-white text-[10px] font-extrabold rounded uppercase tracking-wide">Direct line to {superAdminName}</span>
+                  {hasUpdate && (
+                    <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-extrabold rounded uppercase tracking-wide animate-pulse">✨ New update</span>
+                  )}
+                </div>
+                <div className="text-xs text-slate-700 font-semibold mt-0.5">
+                  File requests, raise concerns, and see responses below.
+                </div>
+                {/* Status counters */}
+                <div className="flex gap-3 mt-1.5 flex-wrap text-[11px]">
+                  {pendingReq > 0 && <span className="text-amber-900 font-extrabold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
+                  {pendingCmp > 0 && <span className="text-rose-900 font-extrabold">⏳ {pendingCmp} concern{pendingCmp === 1 ? '' : 's'} pending</span>}
+                  {pendingReq === 0 && pendingCmp === 0 && myRecent.length === 0 && <span className="text-slate-600 font-bold">No items filed yet</span>}
+                </div>
               </div>
             </div>
           </div>
@@ -519,24 +527,27 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
         {/* Recent submissions list */}
         {myRecent.length > 0 && (
           <div>
-            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Your recent submissions</div>
+            {/* v55.83-A.6.27.72 HOTFIX 17 — Section label darkened from slate-500 to slate-800
+                so the "YOUR RECENT SUBMISSIONS" header stays legible when the panel sits
+                on top of a colored gradient. */}
+            <div className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wide mb-2">Your recent submissions</div>
             <div className="space-y-1.5">
               {myRecent.map(function (r) {
                 var sc = STATUS_COLORS[r.status] || STATUS_COLORS.submitted;
                 var notes = r.kind === 'request' ? r.decision_notes : r.resolution_notes;
                 return (
-                  <div key={r.id} className={'rounded-lg p-2 border ' + (r.kind === 'complaint' ? 'border-rose-200 bg-rose-50/30' : 'border-amber-200 bg-amber-50/30')}>
+                  <div key={r.id} className={'rounded-lg p-2 border bg-white ' + (r.kind === 'complaint' ? 'border-rose-300' : 'border-amber-300')}>
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <span className="text-base flex-shrink-0">{r.kind === 'complaint' ? '🛡️' : '📝'}</span>
-                        <span className="text-[10px] font-mono text-slate-500">{r.number}</span>
-                        <span className="text-xs font-bold text-slate-800 truncate">{r.title}</span>
+                        <span className="text-[10px] font-mono font-bold text-slate-700">{r.number}</span>
+                        <span className="text-xs font-extrabold text-slate-900 truncate">{r.title}</span>
                       </div>
-                      <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + sc.bg + ' ' + sc.text}>{sc.label}</span>
+                      <span className={'px-2 py-0.5 rounded text-[10px] font-extrabold ' + sc.bg + ' ' + sc.text}>{sc.label}</span>
                     </div>
                     {notes && (
-                      <div className="mt-1.5 ml-6 p-1.5 rounded bg-white border-l-2 border-violet-300 text-[10px] text-slate-700 whitespace-pre-wrap">
-                        <span className="font-bold text-violet-700">{superAdminName} response:</span> {notes}
+                      <div className="mt-1.5 ml-6 p-1.5 rounded bg-slate-50 border-l-2 border-violet-400 text-[11px] text-slate-800 whitespace-pre-wrap">
+                        <span className="font-extrabold text-violet-800">{superAdminName} response:</span> {notes}
                       </div>
                     )}
                   </div>

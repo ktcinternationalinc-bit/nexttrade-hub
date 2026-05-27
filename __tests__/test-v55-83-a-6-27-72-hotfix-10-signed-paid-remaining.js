@@ -47,11 +47,12 @@ ok('B3: Per-row Open Balance cell uses typeMeta.amountCls — blue for invoices,
 
 console.log('\n── Totals row signed sums ──');
 
-ok('C1: Per-currency Summary block tracks totalAR + totalAP SEPARATELY (HOTFIX 11 final)',
-  /totalAR \+= prT\.remaining/.test(oa) && /totalAP \+= prT\.remaining/.test(oa));
+ok('C1: Per-currency Summary block tracks totalAR + totalAP SEPARATELY (HOTFIX 19: sourced from FIFO theyOweUs/weOweThem instead of summing remaining per row)',
+  /var totalAR = Number\(cs\.theyOweUs \|\| 0\)/.test(oa) &&
+  /var totalAP = Number\(cs\.weOweThem \|\| 0\)/.test(oa));
 
-ok('C2: Net Position row computes net = totalAR − totalAP (HOTFIX 11 final spelled-out arithmetic)',
-  /var net = totalAR - totalAP/.test(oa));
+ok('C2: Net Position row computes net = (AR − their credit) − (AP − our credit) (HOTFIX 19: includes prepaid for overpayment case)',
+  /var net = \(totalAR - theirPrepaid\) - \(totalAP - ourPrepaid\)/.test(oa));
 
 ok('C3: Net Position row sub-label "in our favor" / "against us" (HOTFIX 11 final spec)',
   /in our favor[\s\S]{0,300}against us|against us[\s\S]{0,300}in our favor/.test(oa));

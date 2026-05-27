@@ -85,11 +85,11 @@ ok('C5: Settled invoices show "✓ paid"',
 
 console.log('\n── Per-currency Summary block ──');
 
-ok('D1: Summary tracks totalAR (sales_invoice remaining only)',
-  /totalAR \+= prT\.remaining/.test(oa));
+ok('D1: Summary tracks totalAR (HOTFIX 19: now sourced from cs.theyOweUs — FIFO sum of unpaid sales invoices)',
+  /var totalAR = Number\(cs\.theyOweUs \|\| 0\)/.test(oa));
 
-ok('D2: Summary tracks totalAP (vendor_bill remaining only)',
-  /totalAP \+= prT\.remaining/.test(oa));
+ok('D2: Summary tracks totalAP (HOTFIX 19: now sourced from cs.weOweThem — FIFO sum of unpaid vendor bills)',
+  /var totalAP = Number\(cs\.weOweThem \|\| 0\)/.test(oa));
 
 ok('D3: Summary header "{cur} Summary"',
   /\{cur\} Summary/.test(oa));
@@ -103,8 +103,8 @@ ok('D5: Total AP row labeled "Total AP (We Owe Them)"',
 ok('D6: Net Position row labeled "Net CUR Position"',
   /Net \{cur\} Position/.test(oa));
 
-ok('D7: Net Position arithmetic: totalAR − totalAP',
-  /var net = totalAR - totalAP/.test(oa));
+ok('D7: Net Position arithmetic includes prepaid credits (HOTFIX 19: matches running balance formula)',
+  /var net = \(totalAR - theirPrepaid\) - \(totalAP - ourPrepaid\)/.test(oa));
 
 ok('D8: Sub-label "in our favor" / "against us"',
   /in our favor/.test(oa) && /against us/.test(oa));

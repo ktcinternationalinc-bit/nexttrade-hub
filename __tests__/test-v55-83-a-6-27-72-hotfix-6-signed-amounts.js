@@ -41,8 +41,8 @@ ok('B1: signedAmount helper still exists for running-balance computation (HOTFIX
 ok('B2: per-row AR Side / AP Side cells display positive magnitudes via fmtNum (HOTFIX 11 final)',
   /var s = arApSide\(entry\)[\s\S]{0,400}fmtNum\(s\.ar\)/.test(oa) && /var s = arApSide\(entry\)[\s\S]{0,400}fmtNum\(s\.ap\)/.test(oa));
 
-ok('C1: per-currency Summary block computes totalAR and totalAP SEPARATELY (HOTFIX 11 final — no blind mixing)',
-  /totalAR \+= prT\.remaining/.test(oa) && /totalAP \+= prT\.remaining/.test(oa));
+ok('C1: per-currency Summary block computes totalAR + totalAP SEPARATELY (HOTFIX 19: now from FIFO cs.theyOweUs/cs.weOweThem)',
+  /var totalAR = Number\(cs\.theyOweUs \|\| 0\)/.test(oa) && /var totalAP = Number\(cs\.weOweThem \|\| 0\)/.test(oa));
 
 ok('C2: Summary block displays Total AR + Total AP via fmtNum, Net Position via fmtSigned (HOTFIX 11 final)',
   /fmtNum\(totalAR\)/.test(oa) && /fmtNum\(totalAP\)/.test(oa) && /fmtSigned\(net\)/.test(oa));

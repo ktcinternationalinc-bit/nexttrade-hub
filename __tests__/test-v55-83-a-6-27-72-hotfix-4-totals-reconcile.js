@@ -21,11 +21,11 @@ ok('A1: totals row no longer uses "Cr: " / "Dr: " labels (the misleading raw sum
 ok('A2: totals row Summary block: per-currency Total AR + Total AP rows (HOTFIX 11 final)',
   /Total AR \(They Owe Us\)/.test(oa) && /Total AP \(We Owe Them\)/.test(oa));
 
-ok('A3: totals row tracks totalAR per currency (sales_invoice remaining only)',
-  /totalAR \+= prT\.remaining/.test(oa));
+ok('A3: totals row tracks totalAR per currency (HOTFIX 19: sourced from FIFO cs.theyOweUs)',
+  /var totalAR = Number\(cs\.theyOweUs \|\| 0\)/.test(oa));
 
-ok('A4: totals row tracks totalAP per currency (vendor_bill remaining only)',
-  /totalAP \+= prT\.remaining/.test(oa));
+ok('A4: totals row tracks totalAP per currency (HOTFIX 19: sourced from FIFO cs.weOweThem)',
+  /var totalAP = Number\(cs\.weOweThem \|\| 0\)/.test(oa));
 
 ok('A5: Net Position row shows AR − AP = net with sub-label (HOTFIX 11 final)',
   /Total AR − Total AP/.test(oa) && /in our favor[\s\S]{0,300}against us|against us[\s\S]{0,300}in our favor/.test(oa));

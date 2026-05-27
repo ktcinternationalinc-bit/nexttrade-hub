@@ -39,8 +39,8 @@ ok('1d: Post Reminder form wrapped in fixed centered modal',
   /showReminderForm && \(isAdmin \|\| modulePerms\?\.\['Post Reminders'\]\) && \(\s*<div className="fixed inset-0 bg-black\/60 z-\[300\]/.test(page));
 
 // ── 2. Stat tile labels readable (per Max "DO NOT USE WHITE") ────
-ok('2a: StatCard label text-sm (was text-xs)',
-  /<div className="text-sm font-black uppercase tracking-wide text-slate-900">\{props\.label\}<\/div>/.test(ab));
+ok('2a: StatCard label still text-sm (HOTFIX 17: kept the size, deepened the color and bg)',
+  /text-sm font-black uppercase tracking-wide[\s\S]{0,100}props\.label/.test(ab));
 ok('2b: StatCard value text-4xl (was text-3xl)',
   /text-4xl font-black mt-1 leading-none/.test(ab));
 ok('2c: Persona role badge has solid bg-white text-slate-900',

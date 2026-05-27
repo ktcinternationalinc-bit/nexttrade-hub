@@ -1403,7 +1403,8 @@ export default function OpenAccountsTab(props) {
               {/* Inline math so the user can verify reconciliation at a glance */}
               <div className="text-[9px] font-mono opacity-80 mt-0.5 leading-tight">
                 {hasPrepaid
-                  ? '= AR − AP ' + (t.theirPrepaid > 0.005 ? '+ their prepaid ' : '') + (t.ourPrepaid > 0.005 ? '− our prepaid ' : '')
+                  ? '= ' + fmtNum(t.theyOweUs) + (t.theirPrepaid > 0.005 ? ' − ' + fmtNum(t.theirPrepaid) + ' cust credit' : '')
+                    + ' − (' + fmtNum(t.weOweThem) + (t.ourPrepaid > 0.005 ? ' − ' + fmtNum(t.ourPrepaid) + ' vend credit' : '') + ')'
                   : '= ' + fmtNum(t.theyOweUs) + ' − ' + fmtNum(t.weOweThem)}
               </div>
             </div>
@@ -1715,16 +1716,30 @@ export default function OpenAccountsTab(props) {
                           var ec = String(e.currency || 'USD').toUpperCase().trim();
                           return ec === cur;
                         });
-                        var totalAR = 0;
-                        var totalAP = 0;
-                        curEntries.forEach(function (e) {
-                          if (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill') {
-                            var prT = computePaidRemaining(e, simResult);
-                            if (e.transaction_type === 'sales_invoice') totalAR += prT.remaining;
-                            else totalAP += prT.remaining;
-                          }
-                        });
-                        var net = totalAR - totalAP;
+                        // v55.83-A.6.27.72 HOTFIX 19 — Per Max May 27 2026:
+                        // Net Position was previously totalAR − totalAP, where AR/AP
+                        // only counted UNPAID invoice/bill rows. That ignored the
+                        // overpayment case: if you paid 11,200 USD to settle a 9,656
+                        // debt, you now hold a 1,544 vendor credit (ourPrepaid). The
+                        // running balance correctly shows +1,544 in your favor but
+                        // the Summary said "SETTLED". Fix: use the EXACT same formula
+                        // that drives the per-row running balance — which is FIFO with
+                        // prepaid credits subtracted from the same side that paid them:
+                        //
+                        //   net = (theirOpenInvoices − theirPrepaid)
+                        //       − (ourOpenBills      − ourPrepaid)
+                        //
+                        // theirPrepaid = customer paid us more than they owed — sitting
+                        //   as a credit they hold AGAINST us (reduces what they owe).
+                        // ourPrepaid = we paid them more than we owed — credit WE hold
+                        //   against them (reduces what we owe; if their bill is zero,
+                        //   it shifts the net IN OUR FAVOR).
+                        var totalAR = Number(cs.theyOweUs || 0);
+                        var totalAP = Number(cs.weOweThem || 0);
+                        var theirPrepaid = Number(cs.theirPrepaid || 0);
+                        var ourPrepaid = Number(cs.ourPrepaid || 0);
+                        var net = (totalAR - theirPrepaid) - (totalAP - ourPrepaid);
+                        var hasOverpayment = (theirPrepaid > 0.005) || (ourPrepaid > 0.005);
                         var netCls = net > 0.005 ? 'text-emerald-300' : net < -0.005 ? 'text-red-300' : 'text-slate-200';
                         // colSpan calculation: 4 left text cols + 3 money cols + N currency cols + actions
                         var totalCols = 4 + 3 + s.currencies.length + (canEdit ? 1 : 0);
@@ -1764,12 +1779,30 @@ export default function OpenAccountsTab(props) {
                           // Net Position row — the spelled-out arithmetic with clear sub-label
                           <tr key={cur + '-net'} className="bg-slate-950 text-white">
                             <td colSpan={4} className="px-3 py-2.5 text-right text-xs font-extrabold uppercase tracking-wider">
-                              Net {cur} Position — Total AR − Total AP →
+                              {hasOverpayment
+                                ? <span>Net {cur} Position — (AR − cust credit) − (AP − vend credit) →</span>
+                                : <span>Net {cur} Position — Total AR − Total AP →</span>}
                             </td>
                             <td colSpan={3} className={'px-3 py-2.5 text-right font-mono font-extrabold text-base ' + netCls}>
-                              <div>{fmtNum(totalAR)} − {fmtNum(totalAP)} = <span className="ml-1">{fmtSigned(net)} {cur}</span></div>
+                              {hasOverpayment ? (
+                                <div>
+                                  ({fmtNum(totalAR)} − {fmtNum(theirPrepaid)}) − ({fmtNum(totalAP)} − {fmtNum(ourPrepaid)}) = <span className="ml-1">{fmtSigned(net)} {cur}</span>
+                                </div>
+                              ) : (
+                                <div>{fmtNum(totalAR)} − {fmtNum(totalAP)} = <span className="ml-1">{fmtSigned(net)} {cur}</span></div>
+                              )}
                               <div className="text-[10px] font-bold opacity-90 mt-1 uppercase tracking-wider">
                                 {net > 0.005 ? '↑ In our favor' : net < -0.005 ? '↓ Against us' : 'Settled'}
+                                {ourPrepaid > 0.005 && (
+                                  <span className="ml-2 normal-case text-[10px] font-semibold text-amber-200">
+                                    · {fmtNum(ourPrepaid)} {cur} vendor credit (we overpaid by this)
+                                  </span>
+                                )}
+                                {theirPrepaid > 0.005 && (
+                                  <span className="ml-2 normal-case text-[10px] font-semibold text-amber-200">
+                                    · {fmtNum(theirPrepaid)} {cur} customer credit (they overpaid by this)
+                                  </span>
+                                )}
                               </div>
                             </td>
                             {s.currencies.map(function (col, colI) {

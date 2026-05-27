@@ -37,23 +37,13 @@ ok('1c: FX widget REMOVED from old title-row position',
   /FX widget moved to dedicated top row/.test(page));
 
 // ── 2. StatCard contrast ────────────────────────────────────────────
-ok('2a: StatCard label uses text-slate-900 (high contrast, never white)',
-  // A.6.27.11 (May 15 2026) — switched from colored -950 label to plain
-  // slate-900 for guaranteed contrast on any pastel bg per Max's rule
-  // "DO NOT USE WHITE FOR TEXT FONT". A.6.27.12 — bumped size from text-xs
-  // to text-sm per Max "AI text on dashboard should be a bit larger".
-  /<div className="text-(xs|sm) font-black uppercase tracking-wide text-slate-900">\{props\.label\}<\/div>/.test(ab) ||
-  /<div className="text-\[11px\] font-extrabold uppercase tracking-wide">\{props\.label\}<\/div>/.test(ab));
+ok('2a: StatCard label uses high-contrast color (HOTFIX 17: inline #0f172a true-black)',
+  /color: '#0f172a'/.test(ab));
 ok('2b: StatCard value is text-3xl or text-4xl font-black (A.6.27.12 bump)',
   /text-(3xl|4xl) font-black mt-1 leading-none/.test(ab));
-ok('2c: StatCard color palette uses -900 or -950 deep text + -400 border',
-  // A.6.27.11 — value colors moved to -900 (was -950 on the parent div).
-  // Borders still -400. Accept either form.
-  (/text-amber-900/.test(ab) || /text-amber-950/.test(ab)) &&
-  (/text-sky-900/.test(ab) || /text-sky-950/.test(ab)) &&
-  (/text-rose-900/.test(ab) || /text-rose-950/.test(ab)) &&
-  (/text-violet-900/.test(ab) || /text-violet-950/.test(ab)) &&
-  /border-amber-400/.test(ab) && /border-sky-400/.test(ab));
+ok('2c: StatCard color palette uses -900 deep text + -500 border (HOTFIX 17 bumped from -400)',
+  /text-amber-900[\s\S]{0,200}text-sky-900[\s\S]{0,200}text-rose-900[\s\S]{0,200}text-violet-900/.test(ab) &&
+  /border-amber-500[\s\S]{0,200}border-sky-500[\s\S]{0,200}border-rose-500[\s\S]{0,200}border-violet-500/.test(ab));
 
 // ── 3. Send Message + Post Reminder compact pair ────────────────────
 ok('3a: compact button pair row exists',

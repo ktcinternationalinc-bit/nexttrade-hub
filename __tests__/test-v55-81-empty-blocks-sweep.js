@@ -44,8 +44,8 @@ check('1.1 Nadia panel branches on nadiaUrgentCount before rendering grid',
 check('1.2 Empty-state panel exists with all-clear messaging',
   /Nothing needs action right now|all clear|all-clear/i.test(ab));
 
-check('1.3 Empty-state panel uses emerald palette (positive signal, not amber/rose)',
-  /border-emerald-200 bg-emerald-50[\s\S]{0,300}Nothing needs action/.test(ab));
+check('1.3 Empty-state panel uses emerald palette (HOTFIX 17 bumped border to -300 and dropped /70 alpha)',
+  /border-emerald-300 bg-emerald-50[\s\S]{0,300}Nothing needs action/.test(ab));
 
 check('1.4 Empty-state explains what will appear when there IS something to act on',
   /they'll show up here|will appear here|appear here as/i.test(ab));
@@ -56,8 +56,8 @@ check('1.5 The 4 StatCards still exist for the non-empty branch (regression: not
   /<StatCard label="Overdue"/.test(ab) &&
   /<StatCard label="Checks Due"/.test(ab));
 
-check('1.6 Comment marks this as v55.81 #5 work',
-  /v55\.81 #5/.test(ab));
+check('1.6 Empty-state has the all-clear message (HOTFIX 17: dropped v55.81 #5 comment marker to make room for HOTFIX 17 explanation)',
+  /Nothing needs action right now/.test(ab));
 
 // =========================================================================
 // 2. MyPerformance DailyLogBar: zero-working-days branch
