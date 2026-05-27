@@ -174,16 +174,15 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       }
       // Customer perspective: AR ↔ AP swap (their receivable = our payable)
       if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
-      // v55.83-A.6.27.72 HOTFIX 14 — Per Max's exact spec: ONLY invoices get
-      // blue/orange description + amount. Payments + offsets stay neutral.
-      //   sales_invoice  → BLUE   (#1d4ed8)  — we're billing them
-      //   vendor_bill    → ORANGE (#c2410c)  — they're billing us
-      // Customer perspective swaps the interpretation (their AR is our AP).
+      // v55.83-A.6.27.72 HOTFIX 14 (refined HOTFIX 15) — Per Max's exact spec:
+      // sales_invoice → BLUE (#1d4ed8) — we're billing them
+      // vendor_bill   → PURPLE (#7e22ce) — they're billing us  (changed from orange)
+      // Customer perspective swaps interpretation (their AR is our AP).
       var invoiceColor = null;
       if (e.transaction_type === 'sales_invoice') {
-        invoiceColor = perspective === 'customer' ? '#c2410c' : '#1d4ed8';
+        invoiceColor = perspective === 'customer' ? '#7e22ce' : '#1d4ed8';
       } else if (e.transaction_type === 'vendor_bill') {
-        invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#c2410c';
+        invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#7e22ce';
       }
       var arCellHtml = arSide > 0.005
         ? '<span style="color:' + (invoiceColor || '#15803d') + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';

@@ -130,8 +130,8 @@ ok('E4: Card shown when there is any activity (polish — was multi-cur only, no
 ok('E5: Card shows per-currency rate × value = base equiv',
   /b\.rate[\s\S]{0,500}b\.baseEquiv/.test(oa));
 
-ok('E6: Card subtitle flags missing FX rate inline (HOTFIX 14: replaced the big amber banner with subtle inline message)',
-  /EGP excluded — add rate in Inventory → FX Rates/.test(oa));
+ok('E6: Card subtitle flags missing FX rate inline (HOTFIX 15: generalized message — works for any currency)',
+  /Some balances excluded — FX rate not available/.test(oa));
 
 console.log('\n── Print export mirrors spec ──');
 

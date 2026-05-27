@@ -94,10 +94,10 @@ ok('D2: Jenna has faceAnchors with gestures = "warm"',
 ok('D3: Sara has faceAnchors with gestures = "bouncy"',
   /name: 'Sara'[\s\S]{0,3000}faceAnchors: \{[\s\S]{0,400}gestures: 'bouncy'/.test(pers));
 
-ok('D4: All anchors include mouth + eyeL + eyeR with x/y/width',
-  (pers.match(/mouth: \{ x: [\d.]+, y: [\d.]+, width: [\d.]+ \}/g) || []).length >= 3 &&
-  (pers.match(/eyeL:\s+\{ x: [\d.]+, y: [\d.]+, width: [\d.]+ \}/g) || []).length >= 3 &&
-  (pers.match(/eyeR:\s+\{ x: [\d.]+, y: [\d.]+, width: [\d.]+ \}/g) || []).length >= 3);
+ok('D4: All 3 personas have mouth + eyeL + eyeR anchors (HOTFIX 15 — measured per actual portrait)',
+  (pers.match(/mouth:\s+\{ x: [\d.]+,\s+y: [\d.]+,\s+width: [\d.]+ \}/g) || []).length >= 3 &&
+  (pers.match(/eyeL:\s+\{ x: [\d.]+,\s+y: [\d.]+,\s+width: [\d.]+ \}/g) || []).length >= 3 &&
+  (pers.match(/eyeR:\s+\{ x: [\d.]+,\s+y: [\d.]+,\s+width: [\d.]+ \}/g) || []).length >= 3);
 
 console.log('\n── AnimatedPortrait component ──');
 

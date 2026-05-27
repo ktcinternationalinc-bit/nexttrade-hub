@@ -2413,6 +2413,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
           size={56}
           audioElement={currentAudio}
           faceAnchors={activeAgent.faceAnchors}
+          skinTone={activeAgent.faceAnchors && activeAgent.faceAnchors.skinTone}
         />
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">

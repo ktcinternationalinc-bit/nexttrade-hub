@@ -25,8 +25,8 @@ console.log('\n── Color: invoices ONLY get blue/orange ──');
 ok('A1: sales_invoice has BLUE descCls + amountCls (text-blue-700)',
   /sales_invoice:[\s\S]{0,500}descCls: 'text-blue-700'[\s\S]{0,100}amountCls: 'text-blue-700'/.test(ledger));
 
-ok('A2: vendor_bill has ORANGE descCls + amountCls (text-orange-700)',
-  /vendor_bill:[\s\S]{0,500}descCls: 'text-orange-700'[\s\S]{0,100}amountCls: 'text-orange-700'/.test(ledger));
+ok('A2: vendor_bill has PURPLE descCls + amountCls (HOTFIX 15: text-purple-700, was orange)',
+  /vendor_bill:[\s\S]{0,800}descCls: 'text-purple-700'[\s\S]{0,100}amountCls: 'text-purple-700'/.test(ledger));
 
 ok('A3: payment_received has NO color (descCls: null, amountCls: null)',
   /payment_received:[\s\S]{0,500}descCls: null,[\s\S]{0,30}amountCls: null/.test(ledger));
@@ -34,9 +34,9 @@ ok('A3: payment_received has NO color (descCls: null, amountCls: null)',
 ok('A4: payment_sent has NO color (descCls: null, amountCls: null)',
   /payment_sent:[\s\S]{0,500}descCls: null,[\s\S]{0,30}amountCls: null/.test(ledger));
 
-ok('A5: NO blue/orange row backgrounds (rowCls: null for invoices, payments, offsets)',
-  /sales_invoice:[\s\S]{0,400}rowCls: null/.test(ledger) &&
-  /vendor_bill:[\s\S]{0,400}rowCls: null/.test(ledger));
+ok('A5: NO row-level background tint on invoices (rowCls: null for invoices and payments)',
+  /sales_invoice:[\s\S]{0,500}rowCls: null/.test(ledger) &&
+  /vendor_bill:[\s\S]{0,500}rowCls: null/.test(ledger));
 
 console.log('\n── Column headers reverted to emerald/red ──');
 
@@ -94,8 +94,8 @@ ok('E2: Print export AR cell defaults to emerald-700 unless invoice/bill',
 ok('E3: Print export AP cell defaults to red-700 unless invoice/bill',
   /invoiceColor \|\| '#b91c1c'/.test(exp));
 
-ok('E4: Print export computes invoiceColor as blue for sales_invoice, orange for vendor_bill',
-  /sales_invoice'[\s\S]{0,300}'#1d4ed8'[\s\S]{0,200}vendor_bill'[\s\S]{0,300}'#c2410c'/.test(exp));
+ok('E4: Print export computes invoiceColor: blue for sales_invoice, PURPLE for vendor_bill (HOTFIX 15)',
+  /sales_invoice'[\s\S]{0,300}'#1d4ed8'[\s\S]{0,300}vendor_bill'[\s\S]{0,300}'#7e22ce'/.test(exp));
 
 ok('E5: Print export description gets invoice color when sales/bill',
   /descColorStyle = invoiceColor \? ' style="color:' \+ invoiceColor/.test(exp));
@@ -112,8 +112,8 @@ ok('F2: Net Position card no longer wraps with amber border',
 ok('F3: NO separate amber banner under the card for missing rate',
   !/bg-amber-100 text-amber-900[\s\S]{0,300}Missing FX rate/.test(oa));
 
-ok('F4: Missing rate shown as subtle subtitle inside the card',
-  /EGP excluded — add rate in Inventory → FX Rates/.test(oa));
+ok('F4: Missing rate shown as subtle subtitle inside the card (HOTFIX 15 generalized message)',
+  /Some balances excluded — FX rate not available/.test(oa));
 
 ok('F5: NO chip row beneath the card (just a centered math line)',
   !/Per-currency contribution chips/.test(oa));

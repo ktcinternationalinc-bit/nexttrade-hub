@@ -246,8 +246,48 @@ export default function OpenAccountsTab(props) {
   // Lets us collapse all non-base currencies into a single base-currency liquidity number.
   // Schema: { from_currency, to_currency, rate, rate_date }. Base currency = USD by convention.
   var [fxRates, setFxRates] = useState([]);
+  // v55.83-A.6.27.72 HOTFIX 15 — Live USD/EGP rate from the same public API the
+  // main dashboard uses (open.er-api.com). Synthesized into the same { from_currency,
+  // to_currency, rate, rate_date } shape so lookupFxRate finds it. This means the
+  // Net Position card uses TODAY's market rate automatically — no manual entry needed.
+  var [liveFxRate, setLiveFxRate] = useState(null);
   // which account the 📎 Files button was clicked on; null when closed.
   var [attachAccountId, setAttachAccountId] = useState(null);
+
+  // v55.83-A.6.27.72 HOTFIX 15 — Pull live USD/EGP rate every time the tab mounts.
+  // open.er-api.com is the same free source used by src/app/page.jsx dashboard hero card.
+  useEffect(function () {
+    var cancelled = false;
+    async function loadLiveRate() {
+      try {
+        var res = await fetch('https://open.er-api.com/v6/latest/USD');
+        var data = await res.json();
+        if (cancelled) return;
+        if (data && data.rates && data.rates.EGP) {
+          setLiveFxRate({
+            from_currency: 'USD',
+            to_currency: 'EGP',
+            rate: data.rates.EGP,
+            rate_date: new Date().toISOString().substring(0, 10),
+            source: 'open.er-api.com (live)',
+          });
+        }
+      } catch (e) {
+        // Silent — Net Position card will fall back to manual fx_rates table or "rate missing" UI.
+        console.warn('[open-accounts] live FX fetch failed, falling back to fx_rates table:', e && e.message);
+      }
+    }
+    loadLiveRate();
+    return function () { cancelled = true; };
+  }, []);
+
+  // Combined rates: live USD/EGP rate takes precedence (most recent date), with
+  // manual fx_rates table as fallback for other currency pairs.
+  var combinedFxRates = useMemo(function () {
+    var base = Array.isArray(fxRates) ? fxRates.slice() : [];
+    if (liveFxRate) base.unshift(liveFxRate);
+    return base;
+  }, [fxRates, liveFxRate]);
 
   useEffect(function () {
     if (!canView) { setLoading(false); return; }
@@ -1262,7 +1302,7 @@ export default function OpenAccountsTab(props) {
           Falls back gracefully when an FX rate is missing — small inline notice
           inside the card instead of a separate amber banner below. */}
       {grandTotals.currencies.length > 0 && (function () {
-        var unified = convertToBaseCurrency(grandTotals.byCurrency, 'USD', fxRates);
+        var unified = convertToBaseCurrency(grandTotals.byCurrency, 'USD', combinedFxRates);
         var hasAnyMissing = unified.missingRates.length > 0;
         // Compact, single math line. Examples:
         //   "9,656.00 USD"                            (single-currency, no conversion)
@@ -1288,8 +1328,8 @@ export default function OpenAccountsTab(props) {
               <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-90">Net Position (USD)</div>
               <div className="text-[10px] opacity-75">
                 {hasAnyMissing
-                  ? 'EGP excluded — add rate in Inventory → FX Rates'
-                  : 'Consolidated across all currencies · live rate from FX Rates panel'}
+                  ? 'Some balances excluded — FX rate not available'
+                  : 'Consolidated across all currencies · live rate from open.er-api.com'}
               </div>
             </div>
             {hasConvertedMath && (

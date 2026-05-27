@@ -64,9 +64,11 @@ export var AGENT_PERSONALITIES = {
     //   eyeL / eyeR = (x, y) of each eye center; width = single-eye span
     //   gestures = persona's animation style preset
     faceAnchors: {
-      mouth: { x: 0.50, y: 0.74, width: 0.18 },
-      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
-      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      // v55.83-A.6.27.72 HOTFIX 15 — Measured from the actual Nadia portrait.
+      mouth:    { x: 0.50,  y: 0.515, width: 0.13 },
+      eyeL:     { x: 0.435, y: 0.37,  width: 0.075 },
+      eyeR:     { x: 0.555, y: 0.37,  width: 0.075 },
+      skinTone: '#d8a988',
       gestures: 'composed',
     },
     personalityPrompt:
@@ -135,9 +137,11 @@ export var AGENT_PERSONALITIES = {
       },
     },
     faceAnchors: {
-      mouth: { x: 0.50, y: 0.74, width: 0.18 },
-      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
-      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      // v55.83-A.6.27.72 HOTFIX 15 — Measured from the actual Jenna portrait.
+      mouth:    { x: 0.50,  y: 0.525, width: 0.12 },
+      eyeL:     { x: 0.425, y: 0.37,  width: 0.07 },
+      eyeR:     { x: 0.555, y: 0.37,  width: 0.07 },
+      skinTone: '#d8a886',
       gestures: 'warm',
     },
     personalityPrompt:
@@ -228,9 +232,11 @@ export var AGENT_PERSONALITIES = {
       },
     },
     faceAnchors: {
-      mouth: { x: 0.50, y: 0.74, width: 0.18 },
-      eyeL:  { x: 0.41, y: 0.46, width: 0.10 },
-      eyeR:  { x: 0.59, y: 0.46, width: 0.10 },
+      // v55.83-A.6.27.72 HOTFIX 15 — Measured from the actual Sara portrait.
+      mouth:    { x: 0.55,  y: 0.52,  width: 0.12 },
+      eyeL:     { x: 0.49,  y: 0.32,  width: 0.07 },
+      eyeR:     { x: 0.615, y: 0.32,  width: 0.07 },
+      skinTone: '#e8c4a0',
       gestures: 'bouncy',
     },
     personalityPrompt:

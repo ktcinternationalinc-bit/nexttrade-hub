@@ -46,8 +46,11 @@ export var TRANSACTION_TYPES = {
     label: 'Vendor Bill', labelAr: 'فاتورة مورد',
     sublabel: 'They billed us', sublabelAr: 'فوترونا',
     icon: '📥', side: 'debit', cashFlow: null,
-    pillCls: 'bg-orange-100 text-orange-900', rowCls: null,
-    descCls: 'text-orange-700', amountCls: 'text-orange-700',
+    // v55.83-A.6.27.72 HOTFIX 15 — Vendor bills now PURPLE (was orange).
+    // Max May 26 2026: purple reads as distinct from the AP-side red column without
+    // clashing with the warning-orange used elsewhere in the portal.
+    pillCls: 'bg-purple-100 text-purple-900', rowCls: null,
+    descCls: 'text-purple-700', amountCls: 'text-purple-700',
   },
   payment_received: {
     label: 'Payment Received', labelAr: 'دفعة مستلمة',
