@@ -98,6 +98,12 @@ export default function WarehouseBucketList(props) {
     return function () { cancelled = true; };
   }, []);
 
+  // v55.83-A.6.27.72 HOTFIX 16 — spent-amount-per-bucket map.
+  // Loads all entries once on mount/reload so each bucket card can show its USED total
+  // (not just the headline advance amount). Same source as the detail view but
+  // pre-aggregated so the cards display "Spent: X / Y · Remaining: Z" at a glance.
+  var [spentByBucket, setSpentByBucket] = useState({});
+
   // Load buckets on mount and whenever reloadToken changes
   useEffect(function () {
     var cancelled = false;
@@ -106,6 +112,26 @@ export default function WarehouseBucketList(props) {
       if (cancelled) return;
       setBuckets(rows || []);
       setLoading(false);
+      // After buckets load, fetch entry sums per bucket
+      var ids = (rows || []).map(function (r) { return r.id; });
+      if (ids.length === 0) { setSpentByBucket({}); return; }
+      supabase.from('warehouse_bucket_entries')
+        .select('bucket_id, amount')
+        .in('bucket_id', ids)
+        .limit(10000)
+        .then(function (eRes) {
+          if (cancelled) return;
+          if (eRes.error) {
+            console.warn('[buckets-list] spent aggregation failed:', eRes.error);
+            setSpentByBucket({});
+            return;
+          }
+          var map = {};
+          (eRes.data || []).forEach(function (e) {
+            map[e.bucket_id] = (map[e.bucket_id] || 0) + Number(e.amount || 0);
+          });
+          setSpentByBucket(map);
+        });
     }).catch(function (err) {
       console.warn('[buckets-list] load failed:', err);
       if (!cancelled) {
@@ -412,8 +438,19 @@ export default function WarehouseBucketList(props) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filtered.map(function (b) {
             var badge = statusBadge(b.status, ar);
-            // We don't have spent total in the list query — show amount and status
-            // Detail view does the real math. For card we just show the headline.
+            // v55.83-A.6.27.72 HOTFIX 16 — Card now shows spent + remaining + progress bar.
+            var spent = Number(spentByBucket[b.id] || 0);
+            var advance = Number(b.amount || 0);
+            var remaining = Math.max(0, advance - spent);
+            var pct = advance > 0 ? Math.min(100, (spent / advance) * 100) : 0;
+            // Pick bar color by status: closed = emerald, fully_spent = blue,
+            // open + nothing spent yet = slate, open + some spent = amber, cancelled = slate
+            var barColor =
+              b.status === 'closed'      ? 'bg-emerald-500' :
+              b.status === 'fully_spent' ? 'bg-blue-500' :
+              b.status === 'cancelled'   ? 'bg-slate-400' :
+              spent > 0                  ? 'bg-amber-500' :
+                                           'bg-slate-300';
             return (
               <div
                 key={b.id}
@@ -430,9 +467,29 @@ export default function WarehouseBucketList(props) {
                   </div>
                   <span className={'px-1.5 py-0.5 rounded text-[9px] font-extrabold whitespace-nowrap ' + badge.bg + ' ' + badge.text} title={badge.tooltip}>{badge.label}</span>
                 </div>
-                <div className="flex items-end justify-between">
+                {/* Advance amount + date */}
+                <div className="flex items-end justify-between mb-2">
                   <div className="text-[10px] text-slate-500">{fmtDate(b.issue_date)}</div>
-                  <div className="font-mono font-extrabold text-slate-900 text-lg">{fmtMoney(b.amount, b.currency)}</div>
+                  <div className="font-mono font-extrabold text-slate-900 text-lg">{fmtMoney(advance, b.currency)}</div>
+                </div>
+                {/* HOTFIX 16 — Spent + Remaining + progress bar.
+                    Shows at-a-glance: USED N of M (P%) · LEFT R */}
+                <div className="border-t border-slate-200 pt-2">
+                  <div className="flex items-center justify-between text-[10px] font-bold mb-1">
+                    <div>
+                      <span className="text-slate-500 uppercase tracking-wider">{ar ? 'مستخدم' : 'Used'}: </span>
+                      <span className={'font-mono ' + (spent > 0 ? 'text-amber-700' : 'text-slate-400')}>{fmtMoney(spent, b.currency)}</span>
+                      <span className="text-slate-400 mx-1">·</span>
+                      <span className="text-slate-500">{pct.toFixed(0)}%</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 uppercase tracking-wider">{ar ? 'متبقي' : 'Left'}: </span>
+                      <span className={'font-mono ' + (remaining > 0.005 ? 'text-emerald-700' : 'text-slate-400')}>{fmtMoney(remaining, b.currency)}</span>
+                    </div>
+                  </div>
+                  <div className="h-1.5 bg-slate-200 rounded overflow-hidden">
+                    <div className={barColor + ' h-full transition-all'} style={{ width: pct + '%' }} />
+                  </div>
                 </div>
               </div>
             );

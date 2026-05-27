@@ -90,20 +90,20 @@ ok('D6: activeFilterCount memo counts non-empty filters + search',
 
 ok('E1: filter section is visible (was <details> in .51, always-rendered in .60)',
   /Filter by classification/.test(ov));
-ok('E2: filter section header bilingual',
-  /Filter by classification \(Family → Category → Grade → \.\.\.\) \/ تصفية حسب التصنيف/.test(ov));
+ok('E2: filter section header (HOTFIX 16: cleaner cascade hint without parenthesized Arabic)',
+  /Filter by classification/.test(ov) && /Family → Category → Grade/.test(ov));
 ok('E3: shows active filter count badge',
   /\{activeFilterCount\} active/.test(ov));
-ok('E4: all 9 dropdowns rendered with bilingual labels',
-  /label_en: '1\. Family',\s+label_ar: 'العائلة'/.test(ov) &&
-  /label_en: '2\. Category',\s+label_ar: 'الفئة'/.test(ov) &&
-  /label_en: '9\. Origin',\s+label_ar: 'المنشأ'/.test(ov));
+ok('E4: all 9 dropdowns with bilingual labels + level number (HOTFIX 16: number moved to separate "level" field rendered as badge)',
+  /label_en: 'Family',\s+label_ar: 'العائلة',\s+level: 1/.test(ov) &&
+  /label_en: 'Category',\s+label_ar: 'الفئة',\s+level: 2/.test(ov) &&
+  /label_en: 'Origin',\s+label_ar: 'المنشأ',\s+level: 9/.test(ov));
 ok('E5: dropdown disabled when no options + no current value (cascade dead-end)',
   /var disabled = opts\.length === 0 && !current/.test(ov));
 ok('E6: dropdown indicates "— none match —" when disabled',
   /disabled \? '— none match —' : '— Any —'/.test(ov));
-ok('E7: dropdown highlighted (indigo bg) when a value is selected',
-  /current \? 'border-indigo-500 bg-indigo-50 text-indigo-900'/.test(ov));
+ok('E7: dropdown highlighted (indigo bg + ring) when a value is selected (HOTFIX 16 polish)',
+  /current \? 'border-indigo-500 bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200'/.test(ov));
 ok('E8: Clear button shown when activeFilterCount > 0',
   /activeFilterCount > 0 && \(\s+<button\s+onClick=\{clearFilters\}/.test(ov));
 
@@ -124,9 +124,9 @@ ok('F5: group header click toggles collapsed state',
   /onClick=\{function \(\) \{ toggleGroup\(g\.family_id\); \}\}/.test(ov));
 ok('F6: group header shows ▶ when collapsed, ▼ when expanded',
   /\{collapsed \? '▶' : '▼'\}/.test(ov));
-ok('F7: Expand All + Collapse All buttons',
-  /onClick=\{expandAll\}[\s\S]{0,300}Expand All \/ فتح الكل/.test(ov) &&
-  /onClick=\{collapseAll\}[\s\S]{0,300}Collapse All \/ طي الكل/.test(ov));
+ok('F7: Expand All + Collapse All buttons (HOTFIX 16: cleaner labels, glass-style buttons)',
+  /onClick=\{expandAll\}[\s\S]{0,400}Expand All/.test(ov) &&
+  /onClick=\{collapseAll\}[\s\S]{0,400}Collapse All/.test(ov));
 ok('F8: groups default to EXPANDED (collapsedGroups starts empty)',
   /var \[collapsedGroups, setCollapsedGroups\] = useState\(\{\}\)/.test(ov));
 
@@ -155,13 +155,13 @@ ok('G7: row count footer note when seeCosts=false',
 
 ok('H1: grand totals memo computed from grouped',
   /var grandTotals = useMemo\(function \(\) \{[\s\S]{0,500}grouped\.forEach\(function \(g\)/.test(ov));
-ok('H2: 4 always-visible total cards (Products, Current, Original, Sold)',
-  /Products \/ منتجات/.test(ov) &&
-  /Current Stock \/ المخزون الحالي/.test(ov) &&
-  /Original Stock \/ الأصلي/.test(ov) &&
-  /Sold \/ المباع/.test(ov));
-ok('H3: 3 cost-gated total cards (Revenue, COGS, Gross Profit) shown only when seeCosts',
-  /\{seeCosts && \(\s+<div className="grid grid-cols-1 md:grid-cols-3 gap-2">[\s\S]{0,2000}Revenue \/ الإيرادات[\s\S]{0,500}COGS \/ التكلفة[\s\S]{0,500}Gross Profit \/ الربح الإجمالي/.test(ov));
+ok('H2: 4 always-visible total cards (HOTFIX 16: dark slate with colored left-border accents + icon + RTL Arabic sublabel)',
+  />Products</.test(ov) && /منتجات</.test(ov) &&
+  />Current Stock</.test(ov) && /المخزون الحالي</.test(ov) &&
+  />Original Stock</.test(ov) && /الأصلي</.test(ov) &&
+  />Sold</.test(ov) && /المباع</.test(ov));
+ok('H3: 3 cost-gated total cards (HOTFIX 16: dark slate with amber/orange/emerald left-border accent)',
+  /\{seeCosts && \(\s+<div className="grid grid-cols-1 md:grid-cols-3 gap-2">[\s\S]{0,3500}>Revenue<[\s\S]{0,800}>COGS<[\s\S]{0,800}>Gross Profit</.test(ov));
 
 // ══════════════════════════════════════════════════════════════════
 // PART I — InventoryTab wiring

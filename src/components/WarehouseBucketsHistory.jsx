@@ -138,6 +138,9 @@ export default function WarehouseBucketsHistory(props) {
   }, [allEntries, filteredBuckets]);
 
   // ── SUMMARY (per currency for clarity, never mix) ──────────────
+  // v55.83-A.6.27.72 HOTFIX 16 — Added actualUsed (sum of all entries) and totalRemaining
+  // so the stats answer "how much of the advanced money has actually been spent so far?"
+  // — was only tracking bucket-level status counts before.
   var summary = useMemo(function () {
     var byCurrency = {};
     filteredBuckets.forEach(function (b) {
@@ -146,6 +149,7 @@ export default function WarehouseBucketsHistory(props) {
         byCurrency[cur] = {
           currency: cur,
           totalAdvanced: 0, totalReconciled: 0,
+          actualUsed: 0, totalRemaining: 0,
           open: 0, fullySpent: 0, pendingApproval: 0, closed: 0, cancelled: 0,
           openAmount: 0, pendingAmount: 0, cancelledAmount: 0,
         };
@@ -159,8 +163,20 @@ export default function WarehouseBucketsHistory(props) {
       else if (b.status === 'closed') { bucket.closed++; bucket.totalReconciled += amt; }
       else if (b.status === 'cancelled') { bucket.cancelled++; bucket.cancelledAmount += amt; }
     });
+    // Now layer in entry totals per currency. Map bucket_id → currency for fast lookup.
+    var bucketCur = {};
+    filteredBuckets.forEach(function (b) { bucketCur[b.id] = b.currency || 'EGP'; });
+    filteredEntries.forEach(function (e) {
+      var cur = bucketCur[e.bucket_id];
+      if (!cur || !byCurrency[cur]) return;
+      byCurrency[cur].actualUsed += Number(e.amount || 0);
+    });
+    // Remaining = advanced − used, floored at zero (over-spends shouldn't show negative)
+    Object.values(byCurrency).forEach(function (b) {
+      b.totalRemaining = Math.max(0, b.totalAdvanced - b.actualUsed);
+    });
     return Object.values(byCurrency).sort(function (a, b) { return a.currency.localeCompare(b.currency); });
-  }, [filteredBuckets]);
+  }, [filteredBuckets, filteredEntries]);
 
   // ── PER-RECIPIENT TABLE ────────────────────────────────────────
   var perRecipient = useMemo(function () {
@@ -173,8 +189,12 @@ export default function WarehouseBucketsHistory(props) {
         bucket[key] = {
           recipient: name, currency: cur,
           totalAdvanced: 0, totalReconciled: 0,
+          // v55.83-A.6.27.72 HOTFIX 16 — Per-recipient "actually used" and "remaining"
+          // sums (across ALL their buckets, regardless of status). Answers Max's
+          // question: "what has been spent for Abdelnassar so far? for Mouhamed?"
+          actualUsed: 0, remaining: 0,
           openCount: 0, closedCount: 0, cancelledCount: 0,
-          closeDurations: [],  // array of days-to-close per closed bucket
+          closeDurations: [],
         };
       }
       var r = bucket[key];
@@ -191,10 +211,28 @@ export default function WarehouseBucketsHistory(props) {
         r.openCount++;
       }
     });
+    // Now layer in entries — figure out which recipient+currency bucket each entry
+    // belongs to via the bucket_id → recipient lookup map built above.
+    var bucketMeta = {};
+    filteredBuckets.forEach(function (b) {
+      bucketMeta[b.id] = {
+        recipient: (b.recipient_name || '(unknown)').trim(),
+        currency: b.currency || 'EGP',
+      };
+    });
+    filteredEntries.forEach(function (e) {
+      var meta = bucketMeta[e.bucket_id];
+      if (!meta) return;
+      var key = meta.recipient + '||' + meta.currency;
+      if (!bucket[key]) return;
+      bucket[key].actualUsed += Number(e.amount || 0);
+    });
     return Object.values(bucket).map(function (r) {
       r.avgDaysToClose = r.closeDurations.length > 0
         ? r.closeDurations.reduce(function (a, b) { return a + b; }, 0) / r.closeDurations.length
         : null;
+      // Remaining = what was advanced minus what's actually been used (floored at 0).
+      r.remaining = Math.max(0, r.totalAdvanced - r.actualUsed);
       return r;
     }).sort(function (a, b) {
       if (a.currency !== b.currency) return a.currency.localeCompare(b.currency);
@@ -289,6 +327,9 @@ export default function WarehouseBucketsHistory(props) {
           'Recipient': r.recipient,
           'Currency': r.currency,
           'Total Advanced': r.totalAdvanced,
+          // v55.83-A.6.27.72 HOTFIX 16 — Actually-used + remaining columns
+          'Actually Used': r.actualUsed,
+          'Remaining': r.remaining,
           'Total Reconciled': r.totalReconciled,
           'Open Count': r.openCount,
           'Closed Count': r.closedCount,
@@ -297,7 +338,7 @@ export default function WarehouseBucketsHistory(props) {
         };
       });
       var ws3 = XLSX.utils.json_to_sheet(recRows);
-      ws3['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+      ws3['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, ws3, 'By Recipient');
 
       // Sheet 4: Per-subcategory summary (closed buckets only)
@@ -368,7 +409,7 @@ export default function WarehouseBucketsHistory(props) {
       {/* Summary cards (per currency) */}
       {summary.map(function (s) {
         return (
-          <div key={s.currency} className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div key={s.currency} className="grid grid-cols-2 md:grid-cols-7 gap-2">
             <div className="bg-slate-800 text-white rounded p-2">
               <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-80">{ar ? 'العملة' : 'Currency'}</div>
               <div className="text-lg font-mono font-extrabold">{s.currency}</div>
@@ -378,15 +419,32 @@ export default function WarehouseBucketsHistory(props) {
               <div className="text-base font-mono font-extrabold text-blue-900">{fmtMoney(s.totalAdvanced)}</div>
               <div className="text-[10px] text-blue-700">{s.open + s.fullySpent + s.pendingApproval + s.closed + s.cancelled} {ar ? 'دلو' : 'buckets'}</div>
             </div>
+            {/* v55.83-A.6.27.72 HOTFIX 16 — NEW: Actually Used (sum of all entries
+                across every bucket in this currency, regardless of status). Answers
+                "how much of what I advanced has actually been spent so far?" */}
+            <div className="bg-amber-100 border border-amber-300 rounded p-2">
+              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider">{ar ? 'مستخدم فعلياً' : 'Actually Used'}</div>
+              <div className="text-base font-mono font-extrabold text-amber-900">{fmtMoney(s.actualUsed)}</div>
+              <div className="text-[10px] text-amber-700">
+                {s.totalAdvanced > 0 ? ((s.actualUsed / s.totalAdvanced) * 100).toFixed(0) : '0'}% {ar ? 'من المُقدَّم' : 'of advanced'}
+              </div>
+            </div>
+            {/* HOTFIX 16 — NEW: Remaining (advanced − used). The cash that's still
+                sitting unspent across all buckets in this currency. */}
+            <div className="bg-purple-100 border border-purple-300 rounded p-2">
+              <div className="text-[10px] font-extrabold text-purple-900 uppercase tracking-wider">{ar ? 'المتبقي' : 'Remaining'}</div>
+              <div className="text-base font-mono font-extrabold text-purple-900">{fmtMoney(s.totalRemaining)}</div>
+              <div className="text-[10px] text-purple-700">{ar ? 'لم يُنفق بعد' : 'unspent'}</div>
+            </div>
             <div className="bg-emerald-100 border border-emerald-300 rounded p-2">
               <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wider">{ar ? 'تمت التسوية' : 'Reconciled'}</div>
               <div className="text-base font-mono font-extrabold text-emerald-900">{fmtMoney(s.totalReconciled)}</div>
               <div className="text-[10px] text-emerald-700">{s.closed} {ar ? 'مُغلق' : 'closed'}</div>
             </div>
-            <div className="bg-amber-100 border border-amber-300 rounded p-2">
-              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider">{ar ? 'قيد الانتظار' : 'Pending'}</div>
-              <div className="text-base font-mono font-extrabold text-amber-900">{fmtMoney(s.openAmount + s.pendingAmount)}</div>
-              <div className="text-[10px] text-amber-700">{s.open + s.fullySpent + s.pendingApproval} {ar ? 'مفتوح' : 'open'}</div>
+            <div className="bg-orange-100 border border-orange-300 rounded p-2">
+              <div className="text-[10px] font-extrabold text-orange-900 uppercase tracking-wider">{ar ? 'قيد الانتظار' : 'Pending'}</div>
+              <div className="text-base font-mono font-extrabold text-orange-900">{fmtMoney(s.openAmount + s.pendingAmount)}</div>
+              <div className="text-[10px] text-orange-700">{s.open + s.fullySpent + s.pendingApproval} {ar ? 'مفتوح' : 'open'}</div>
             </div>
             <div className="bg-slate-100 border border-slate-300 rounded p-2">
               <div className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider">{ar ? 'مُلغى' : 'Cancelled'}</div>
@@ -410,6 +468,11 @@ export default function WarehouseBucketsHistory(props) {
                   <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'المستلم' : 'Recipient'}</th>
                   <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'عملة' : 'Cur'}</th>
                   <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'إجمالي المُقدَّم' : 'Total Advanced'}</th>
+                  {/* v55.83-A.6.27.72 HOTFIX 16 — Per-recipient USED + REMAINING columns.
+                      Answers Max's exact question: "what has been spent for Abdelnassar
+                      so far? for Mouhamed?" — pulls entries.amount sums per recipient. */}
+                  <th className="px-3 py-2 text-right font-extrabold text-amber-800 uppercase tracking-wider" title="Sum of all entries against this recipient's buckets — what they've actually spent so far">{ar ? 'مستخدم' : 'Used'}</th>
+                  <th className="px-3 py-2 text-right font-extrabold text-purple-800 uppercase tracking-wider" title="Total advanced minus actually used — unspent balance">{ar ? 'متبقي' : 'Remaining'}</th>
                   <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'تمت التسوية' : 'Reconciled'}</th>
                   <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'مفتوح' : 'Open'}</th>
                   <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">{ar ? 'مُغلق' : 'Closed'}</th>
@@ -424,6 +487,9 @@ export default function WarehouseBucketsHistory(props) {
                       <td className="px-3 py-1.5 font-semibold text-slate-900">{r.recipient}</td>
                       <td className="px-3 py-1.5 font-mono font-bold text-slate-700">{r.currency}</td>
                       <td className="px-3 py-1.5 text-right font-mono font-bold text-blue-900">{fmtMoney(r.totalAdvanced)}</td>
+                      {/* HOTFIX 16 — actually used + remaining per recipient */}
+                      <td className="px-3 py-1.5 text-right font-mono font-bold text-amber-800">{fmtMoney(r.actualUsed)}</td>
+                      <td className="px-3 py-1.5 text-right font-mono font-bold text-purple-800">{fmtMoney(r.remaining)}</td>
                       <td className="px-3 py-1.5 text-right font-mono font-bold text-emerald-800">{fmtMoney(r.totalReconciled)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-amber-700">{r.openCount}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-emerald-700">{r.closedCount}</td>

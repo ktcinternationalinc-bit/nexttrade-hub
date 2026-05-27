@@ -379,18 +379,26 @@ export default function InventoryOverview(props) {
 
   return (
     <div className="space-y-3">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-indigo-700 to-purple-700 text-white rounded-xl p-4 shadow-md">
-        <div className="flex items-baseline justify-between gap-3 flex-wrap">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-indigo-100">Inventory Overview / نظرة عامة على المخزون</div>
-            <div className="text-2xl font-extrabold mt-0.5">📊 What&apos;s in stock right now</div>
-            <div className="text-sm font-semibold text-indigo-50 mt-0.5" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
+      {/* Header — v55.83-A.6.27.72 HOTFIX 16. Centered title per Max's request:
+          "make it more professional looking ... center what's in stock now".
+          Title block is dead-center horizontally; Expand/Collapse buttons sit
+          in the top-right corner without competing for vertical space. */}
+      <div className="relative bg-gradient-to-br from-slate-900 via-indigo-900 to-purple-900 text-white rounded-xl px-4 py-6 shadow-xl border border-indigo-700/30 overflow-hidden">
+        {/* Subtle decorative gradient halo */}
+        <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-500 opacity-10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-16 -left-16 w-48 h-48 bg-purple-500 opacity-10 rounded-full blur-3xl pointer-events-none" />
+        {/* Action buttons — top-right */}
+        <div className="absolute top-3 right-3 flex gap-2 z-10">
+          <button onClick={expandAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs font-extrabold rounded-lg border border-white/20 transition">⬇ Expand All</button>
+          <button onClick={collapseAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs font-extrabold rounded-lg border border-white/20 transition">⬆ Collapse All</button>
+        </div>
+        {/* Centered title block */}
+        <div className="text-center relative z-0">
+          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-indigo-300 mb-1">Inventory Overview · نظرة عامة على المخزون</div>
+          <div className="text-3xl font-extrabold mt-1 bg-gradient-to-r from-white via-indigo-100 to-purple-100 bg-clip-text text-transparent">
+            📊 What&apos;s in stock right now
           </div>
-          <div className="flex gap-2 items-center flex-wrap">
-            <button onClick={expandAll} className="px-3 py-1.5 bg-white text-indigo-900 text-xs font-extrabold rounded shadow hover:bg-indigo-50">⬇ Expand All / فتح الكل</button>
-            <button onClick={collapseAll} className="px-3 py-1.5 bg-slate-800 text-white text-xs font-extrabold rounded shadow hover:bg-slate-900">⬆ Collapse All / طي الكل</button>
-          </div>
+          <div className="text-sm font-semibold text-indigo-200 mt-1" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
         </div>
       </div>
 
@@ -427,38 +435,45 @@ export default function InventoryOverview(props) {
       {/* v55.83-A.6.27.60 — Filter section defaults to ALWAYS OPEN (was: open only
           when filters active). User wanted all 9 levels visible by default per Max
           May 22 2026 — option A. */}
-      <details className="bg-white border-2 border-indigo-300 rounded-lg" open>
-        <summary className="px-4 py-2 cursor-pointer font-extrabold text-slate-900 bg-indigo-50 hover:bg-indigo-100 rounded-t-lg flex items-center justify-between">
-          <span>🔍 Filter by classification (Family → Category → Grade → ...) / تصفية حسب التصنيف</span>
+      <details className="bg-white border border-slate-200 rounded-lg shadow-sm" open>
+        <summary className="px-4 py-2.5 cursor-pointer font-extrabold text-slate-900 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-slate-100 hover:to-indigo-100/50 rounded-t-lg flex items-center justify-between border-b border-slate-200">
+          <span className="flex items-center gap-2">
+            <span className="text-indigo-600">🔍</span>
+            <span>Filter by classification</span>
+            <span className="text-[10px] text-slate-500 font-semibold tracking-wider">Family → Category → Grade → ...</span>
+          </span>
           {activeFilterCount > 0 && (
-            <span className="text-xs bg-indigo-700 text-white px-2 py-0.5 rounded">{activeFilterCount} active</span>
+            <span className="text-xs bg-indigo-700 text-white px-2 py-0.5 rounded-full font-bold">{activeFilterCount} active</span>
           )}
         </summary>
-        <div className="p-3 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2">
+        <div className="p-3 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {[
-            { field: 'family_list_id',      label_en: '1. Family',       label_ar: 'العائلة' },
-            { field: 'category_list_id',    label_en: '2. Category',     label_ar: 'الفئة' },
-            { field: 'grade_list_id',       label_en: '3. Grade',        label_ar: 'الدرجة' },
-            { field: 'construction_list_id',label_en: '4. Construction', label_ar: 'التركيب' },
-            { field: 'backing_list_id',     label_en: '5. Backing',      label_ar: 'الظهر' },
-            { field: 'color_list_id',       label_en: '6. Color',        label_ar: 'اللون' },
-            { field: 'pattern_list_id',     label_en: '7. Pattern',      label_ar: 'النقش' },
-            { field: 'spec_class_list_id',  label_en: '8. Spec',         label_ar: 'المواصفات' },
-            { field: 'origin_list_id',      label_en: '9. Origin',       label_ar: 'المنشأ' },
+            { field: 'family_list_id',      label_en: 'Family',       label_ar: 'العائلة',   level: 1 },
+            { field: 'category_list_id',    label_en: 'Category',     label_ar: 'الفئة',     level: 2 },
+            { field: 'grade_list_id',       label_en: 'Grade',        label_ar: 'الدرجة',    level: 3 },
+            { field: 'construction_list_id',label_en: 'Construction', label_ar: 'التركيب',   level: 4 },
+            { field: 'backing_list_id',     label_en: 'Backing',      label_ar: 'الظهر',     level: 5 },
+            { field: 'color_list_id',       label_en: 'Color',        label_ar: 'اللون',     level: 6 },
+            { field: 'pattern_list_id',     label_en: 'Pattern',      label_ar: 'النقش',     level: 7 },
+            { field: 'spec_class_list_id',  label_en: 'Spec',         label_ar: 'المواصفات', level: 8 },
+            { field: 'origin_list_id',      label_en: 'Origin',       label_ar: 'المنشأ',    level: 9 },
           ].map(function (f) {
             var opts = availableOptionsByLevel[f.field] || [];
             var current = filterLevels[f.field] || '';
-            // Disable if no options available AND no value currently selected
-            // (i.e., the higher-level filter eliminated this level entirely).
             var disabled = opts.length === 0 && !current;
             return (
               <label key={f.field} className="block">
-                <span className="text-[11px] font-extrabold text-slate-900 block">{f.label_en} <span className="text-slate-600" style={{direction:'rtl'}}>/ {f.label_ar}</span></span>
+                {/* HOTFIX 16 — Level badge + label, tighter typography */}
+                <span className="flex items-center gap-1.5 mb-1">
+                  <span className={'inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold ' + (current ? 'bg-indigo-600 text-white' : disabled ? 'bg-slate-200 text-slate-400' : 'bg-slate-200 text-slate-700')}>{f.level}</span>
+                  <span className={'text-[11px] font-extrabold ' + (current ? 'text-indigo-900' : 'text-slate-800')}>{f.label_en}</span>
+                  <span className="text-[10px] text-slate-500" style={{direction:'rtl'}}>{f.label_ar}</span>
+                </span>
                 <select
                   value={current}
                   onChange={function (e) { setFilterLevel(f.field, e.target.value); }}
                   disabled={disabled}
-                  className={'w-full mt-0.5 px-2 py-1.5 border-2 rounded text-sm font-bold ' + (current ? 'border-indigo-500 bg-indigo-50 text-indigo-900' : disabled ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-slate-300 bg-white text-slate-900')}
+                  className={'w-full px-2.5 py-1.5 border rounded-md text-sm font-bold transition shadow-sm ' + (current ? 'border-indigo-500 bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200' : disabled ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' : 'border-slate-300 bg-white text-slate-900 hover:border-slate-400')}
                 >
                   <option value="">{disabled ? '— none match —' : '— Any —'}</option>
                   {opts.map(function (o) {
@@ -471,38 +486,68 @@ export default function InventoryOverview(props) {
         </div>
       </details>
 
-      {/* Grand totals */}
+      {/* Grand totals — v55.83-A.6.27.72 HOTFIX 16: world-class inventory aesthetic.
+          Dark slate base + colored left-border accent + icon badge + tabular numbers.
+          Replaces flat saturated tiles with something that reads as professional. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <div className="bg-slate-800 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Products / منتجات</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtInt(grandTotals.product_count)}</div>
+        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-slate-500 px-3 py-2.5 flex items-center gap-3">
+          <div className="text-2xl opacity-80">📦</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-slate-400">Products</div>
+            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums">{fmtInt(grandTotals.product_count)}</div>
+            <div className="text-[9px] text-slate-500" style={{ direction: 'rtl' }}>منتجات</div>
+          </div>
         </div>
-        <div className="bg-blue-700 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Current Stock / المخزون الحالي</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.current_qty, 2)}</div>
+        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-blue-500 px-3 py-2.5 flex items-center gap-3">
+          <div className="text-2xl opacity-80">📊</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Stock</div>
+            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-blue-100">{fmtNum(grandTotals.current_qty, 2)}</div>
+            <div className="text-[9px] text-blue-400" style={{ direction: 'rtl' }}>المخزون الحالي</div>
+          </div>
         </div>
-        <div className="bg-indigo-700 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Original Stock / الأصلي</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.original_qty, 2)}</div>
+        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-indigo-500 px-3 py-2.5 flex items-center gap-3">
+          <div className="text-2xl opacity-80">🗂️</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Stock</div>
+            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-indigo-100">{fmtNum(grandTotals.original_qty, 2)}</div>
+            <div className="text-[9px] text-indigo-400" style={{ direction: 'rtl' }}>الأصلي</div>
+          </div>
         </div>
-        <div className="bg-emerald-700 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Sold / المباع</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.sold_qty, 2)}</div>
+        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-emerald-500 px-3 py-2.5 flex items-center gap-3">
+          <div className="text-2xl opacity-80">✅</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold</div>
+            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-emerald-100">{fmtNum(grandTotals.sold_qty, 2)}</div>
+            <div className="text-[9px] text-emerald-400" style={{ direction: 'rtl' }}>المباع</div>
+          </div>
         </div>
       </div>
       {seeCosts && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <div className="bg-amber-700 text-white rounded p-2 shadow">
-            <div className="text-[10px] font-bold uppercase tracking-wider">Revenue / الإيرادات</div>
-            <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.sold_revenue, 2)}</div>
+          <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-amber-500 px-3 py-2.5 flex items-center gap-3">
+            <div className="text-2xl opacity-80">💰</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-300">Revenue</div>
+              <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-amber-100">{fmtNum(grandTotals.sold_revenue, 2)}</div>
+              <div className="text-[9px] text-amber-400" style={{ direction: 'rtl' }}>الإيرادات</div>
+            </div>
           </div>
-          <div className="bg-orange-700 text-white rounded p-2 shadow">
-            <div className="text-[10px] font-bold uppercase tracking-wider">COGS / التكلفة</div>
-            <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.cogs_total, 2)}</div>
+          <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-orange-500 px-3 py-2.5 flex items-center gap-3">
+            <div className="text-2xl opacity-80">📉</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-orange-300">COGS</div>
+              <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-orange-100">{fmtNum(grandTotals.cogs_total, 2)}</div>
+              <div className="text-[9px] text-orange-400" style={{ direction: 'rtl' }}>التكلفة</div>
+            </div>
           </div>
-          <div className={(grandTotals.gross_profit >= 0 ? 'bg-emerald-800' : 'bg-red-700') + ' text-white rounded p-2 shadow'}>
-            <div className="text-[10px] font-bold uppercase tracking-wider">Gross Profit / الربح الإجمالي</div>
-            <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.gross_profit, 2)}</div>
+          <div className={'bg-slate-900 text-white rounded-lg shadow-lg border-l-4 px-3 py-2.5 flex items-center gap-3 ' + (grandTotals.gross_profit >= 0 ? 'border-emerald-500' : 'border-red-500')}>
+            <div className="text-2xl opacity-80">{grandTotals.gross_profit >= 0 ? '📈' : '⚠️'}</div>
+            <div className="flex-1 min-w-0">
+              <div className={'text-[9px] font-bold uppercase tracking-[0.15em] ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>Gross Profit</div>
+              <div className={'text-2xl font-extrabold mt-0 leading-tight tabular-nums ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-100' : 'text-red-100')}>{fmtNum(grandTotals.gross_profit, 2)}</div>
+              <div className={'text-[9px] ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-400' : 'text-red-400')} style={{ direction: 'rtl' }}>الربح الإجمالي</div>
+            </div>
           </div>
         </div>
       )}
