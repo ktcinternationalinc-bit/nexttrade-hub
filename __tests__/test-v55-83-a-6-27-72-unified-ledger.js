@@ -61,8 +61,8 @@ ok('B6: simulate handles payment_received (FIFO across openInvoices, excess to t
   /else if \(type === 'payment_received'\)[\s\S]{0,800}cashLeft > 0\.001 && s\.openInvoices\.length > 0[\s\S]{0,400}s\.theirPrepaid \+= cashLeft/.test(lib));
 ok('B7: simulate handles payment_sent (FIFO across openBills, excess to ourPrepaid)',
   /else if \(type === 'payment_sent'\)[\s\S]{0,800}cashLeft2 > 0\.001 && s\.openBills\.length > 0[\s\S]{0,400}s\.ourPrepaid \+= cashLeft2/.test(lib));
-ok('B8: simulate handles offset (reduces matched invoice + bill)',
-  /else if \(type === 'offset'\)[\s\S]{0,1500}e\.offset_invoice_id && debitAmtO > 0[\s\S]{0,1500}e\.offset_bill_id && creditAmtO > 0/.test(lib));
+ok('B8: simulate handles offset (reduces matched invoice + bill; HOTFIX 28 atomic + type-checked)',
+  /else if \(type === 'offset'\)[\s\S]{0,3500}wantsInvoiceSide[\s\S]{0,1500}wantsBillSide/.test(lib));
 ok('B9: net balance computed as theirSide - ourSide',
   /netBalance: theirSide - ourSide/.test(lib));
 ok('B10: chronological sort by entry_date then created_at then id',

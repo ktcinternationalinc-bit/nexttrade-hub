@@ -94,8 +94,12 @@ console.log('\n── Guard 4: stale offset references ──');
       transaction_type: 'offset', offset_invoice_id: 'GHOST', offset_bill_id: 'inv1', offset_pair_id: 'p1' },
   ];
   var result = simulate(entries);
-  check('Warning when offset references missing invoice',
-    result.warnings && result.warnings.some(function (w) { return /not in open pool/.test(w.msg); }));
+  check('Warning when offset references missing invoice (HOTFIX 28 updated wording)',
+    result.warnings && result.warnings.some(function (w) {
+      // Old wording: "not in open pool". New wordings (HOTFIX 28):
+      // "REJECTED malformed offset row" / "Offset invoice already closed or not in this currency pool"
+      return /not in open pool|REJECTED malformed offset|already closed or not in this currency/.test(w.msg);
+    }));
 }
 
 // ═══════ HOTFIX 1.5: Max's real-data scenario still correct ═══════
