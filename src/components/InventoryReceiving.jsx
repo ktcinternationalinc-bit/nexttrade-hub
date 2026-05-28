@@ -1476,7 +1476,7 @@ export default function InventoryReceiving(props) {
       {/* New receipt modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-start justify-center"
           onClick={closeModal}
           style={{ padding: 6 }}
         >
@@ -1485,17 +1485,19 @@ export default function InventoryReceiving(props) {
             onClick={function (e) { e.stopPropagation(); }}
             style={{ width: '99vw', maxWidth: 'none', height: 'calc(100vh - 12px)', maxHeight: 'calc(100vh - 12px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {/* v55.83-A.6.27.72 HOTFIX 21 — Max May 27 2026 screenshot: form
-                appearing short with bottom buttons scrolled off below the fold.
-                Root cause: outer overlay had `overflow-y-auto`, so when
-                Region 1's `flexShrink: 0` content got tall, the whole overlay
-                scrolled instead of clamping. Triple fix below:
-                  (1) outer overlay = `flex items-center` (no scroll)
+            {/* v55.83-A.6.27.72 HOTFIX 21+23 — Max May 27 2026 screenshots: form
+                appearing short with bottom buttons scrolled off below the fold;
+                then after the height fix, the modal centered vertically and
+                pushed its TOP off-screen above the viewport.
+                Combined fix:
+                  (1) outer overlay = `flex items-start` (HOTFIX 23: anchor to
+                      TOP, not center — modal title + first fields always
+                      visible when it opens)
                   (2) inner box gets `overflow: hidden` + Region 1 max-height
                   (3) footer (Region 3) gets `flexShrink: 0` so it can never
-                      be compressed off-screen.
-                Net effect: modal always fills the viewport; Region 2 (product
-                lines) is what scrolls; footer always visible. */}
+                      be compressed off-screen
+                Net effect: modal opens at top of viewport, fills 99vh, Region 2
+                (product lines) scrolls; footer always visible at bottom. */}
             <div
               className="rounded-t-2xl flex justify-between items-center gap-2"
               style={{ background: '#3730a3', padding: '14px 20px', flexShrink: 0 }}

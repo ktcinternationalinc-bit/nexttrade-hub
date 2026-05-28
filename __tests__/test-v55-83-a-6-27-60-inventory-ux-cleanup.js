@@ -123,8 +123,9 @@ ok('7.5: Email check fires before name check (short-circuit)',
 // ══════════════════════════════════════════════════════════════════
 // ITEM 8 — Inbound Shipments modal go BIG
 // ══════════════════════════════════════════════════════════════════
-ok('8.1: Modal sizing comment present (HOTFIX 21 superseded the v55.83-A.6.27.60 comment with the 3-fix overflow rewrite)',
-  /HOTFIX 21 — Max May 27 2026 screenshot[\s\S]{0,200}form\s+appearing short/.test(ir) ||
+ok('8.1: Modal sizing comment present (HOTFIX 21+23 superseded the v55.83-A.6.27.60 comment)',
+  /HOTFIX 21\+23 — Max May 27 2026 screenshots/.test(ir) ||
+  /HOTFIX 21 — Max May 27 2026 screenshot/.test(ir) ||
   /v55\.83-A\.6\.27\.60 — Modal now near-fullscreen \(99vw × calc 100vh - 12px\)/.test(ir));
 ok('8.2: 99vw used',
   /99vw/.test(ir));

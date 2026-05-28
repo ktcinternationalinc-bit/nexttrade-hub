@@ -30,16 +30,18 @@
 //   Recomputed from scratch every time entries change.
 
 export var TRANSACTION_TYPES = {
-  // v55.83-A.6.27.72 HOTFIX 14 — Per Max May 26 2026: color-code ONLY invoices.
-  // Sales Invoice (we billed them) → BLUE description + amount
-  // Vendor Bill (they billed us)   → ORANGE description + amount
-  // ALL OTHER types (payments, offsets, adjustments) → neutral text, no special color.
-  // Previous HOTFIX 12 polish over-applied the color to payments too — reverted.
+  // v55.83-A.6.27.72 HOTFIX 25 — Per Max May 27 2026: every type tag was
+  // washing out because the bg-X-100 + text-X-900 pattern relies on the
+  // ambient page background being light. The portal's main layout is dark,
+  // so light-on-light pills became unreadable. Fix: solid saturated bg
+  // (-600/-700) + WHITE text + ring for depth — readable on ANY surface.
+  // RULE going forward: badge pills NEVER use bg-X-100/200; always use
+  // bg-X-600 or darker with text-white.
   sales_invoice: {
     label: 'Sales Invoice', labelAr: 'فاتورة بيع',
     sublabel: 'We billed them', sublabelAr: 'فوترناهم',
     icon: '📤', side: 'credit', cashFlow: null,
-    pillCls: 'bg-blue-100 text-blue-900', rowCls: null,
+    pillCls: 'bg-blue-600 text-white ring-1 ring-blue-700/50 shadow-sm', rowCls: null,
     descCls: 'text-blue-700', amountCls: 'text-blue-700',
   },
   vendor_bill: {
@@ -49,35 +51,36 @@ export var TRANSACTION_TYPES = {
     // v55.83-A.6.27.72 HOTFIX 15 — Vendor bills now PURPLE (was orange).
     // Max May 26 2026: purple reads as distinct from the AP-side red column without
     // clashing with the warning-orange used elsewhere in the portal.
-    pillCls: 'bg-purple-100 text-purple-900', rowCls: null,
+    // HOTFIX 25: bumped to solid purple-600 + white text for contrast on dark theme.
+    pillCls: 'bg-purple-600 text-white ring-1 ring-purple-700/50 shadow-sm', rowCls: null,
     descCls: 'text-purple-700', amountCls: 'text-purple-700',
   },
   payment_received: {
     label: 'Payment Received', labelAr: 'دفعة مستلمة',
     sublabel: 'They paid us', sublabelAr: 'دفعوا لنا',
     icon: '💰', side: 'credit', cashFlow: 'in',
-    pillCls: 'bg-emerald-100 text-emerald-900', rowCls: null,
+    pillCls: 'bg-emerald-600 text-white ring-1 ring-emerald-700/50 shadow-sm', rowCls: null,
     descCls: null, amountCls: null,
   },
   payment_sent: {
     label: 'Payment Sent', labelAr: 'دفعة مرسلة',
     sublabel: 'We paid them', sublabelAr: 'دفعنا لهم',
     icon: '💸', side: 'debit', cashFlow: 'out',
-    pillCls: 'bg-red-100 text-red-900', rowCls: null,
+    pillCls: 'bg-rose-600 text-white ring-1 ring-rose-700/50 shadow-sm', rowCls: null,
     descCls: null, amountCls: null,
   },
   credit_adjustment: {
     label: 'Credit/Adjustment', labelAr: 'تعديل',
     sublabel: 'Manual adjustment', sublabelAr: 'تعديل يدوي',
     icon: '⚖️', side: null, cashFlow: null,
-    pillCls: 'bg-slate-200 text-slate-800', rowCls: null,
+    pillCls: 'bg-slate-700 text-white ring-1 ring-slate-800/50 shadow-sm', rowCls: null,
     descCls: null, amountCls: null,
   },
   offset: {
     label: 'Offset', labelAr: 'مقاصة',
     sublabel: 'Balance offset', sublabelAr: 'مقاصة رصيد',
     icon: '🔄', side: null, cashFlow: null,
-    pillCls: 'bg-purple-100 text-purple-900', rowCls: 'bg-purple-50',
+    pillCls: 'bg-violet-600 text-white ring-1 ring-violet-700/50 shadow-sm', rowCls: 'bg-purple-50',
     descCls: null, amountCls: null,
   },
 };
@@ -207,10 +210,51 @@ export function simulate(entries) {
       }
       if (cashLeft2 > 0.001) s.ourPrepaid += cashLeft2;
     } else if (type === 'credit_adjustment') {
+      // v55.83-A.6.27.72 HOTFIX 26 — Per Max May 28 2026: credit adjustments
+      // were parking directly into prepaid pools without first consuming any
+      // open bills/invoices. That left the per-row Open Balance overstated
+      // (the credit sat unused beside an unpaid bill) and the prepaid pool
+      // inflated. Net balance came out correct because (AR − theirPrepaid)
+      // − (AP − ourPrepaid) cancels regardless of where the credit lives,
+      // but the per-row "Open Balance" column was lying.
+      //
+      // Real-world example: 151,570 USD vendor bill + 10,609.90 USD
+      // Algeria-commission credit adjustment + payments. The Algeria credit
+      // is economically equivalent to a payment toward the bill — it should
+      // pay the bill down, not sit as unused prepaid.
+      //
+      // Fix: drain the appropriate open pool first (just like payment_sent
+      // / payment_received do), then push any excess to prepaid.
       var creditAmt = Math.max(0, Number(e.credit_amount || 0));
       var debitAmt = Math.max(0, Number(e.debit_amount || 0));
-      if (creditAmt > 0) s.theirPrepaid += creditAmt;
-      if (debitAmt > 0) s.ourPrepaid += debitAmt;
+      // Credit side (we credit them = they get value from us = pays down open invoices first,
+      // remainder = they hold prepaid credit with us).
+      if (creditAmt > 0) {
+        var creditLeft = creditAmt;
+        while (creditLeft > 0.001 && s.openInvoices.length > 0) {
+          var invCA = s.openInvoices[0];
+          var applyCA = Math.min(invCA.remaining, creditLeft);
+          invCA.remaining -= applyCA;
+          applied[invCA.id] = (applied[invCA.id] || 0) + applyCA;
+          creditLeft -= applyCA;
+          if (invCA.remaining < 0.001) s.openInvoices.shift();
+        }
+        if (creditLeft > 0.001) s.theirPrepaid += creditLeft;
+      }
+      // Debit side (they credit us = we receive value = pays down open bills first,
+      // remainder = we hold prepaid credit with them).
+      if (debitAmt > 0) {
+        var debitLeft = debitAmt;
+        while (debitLeft > 0.001 && s.openBills.length > 0) {
+          var billCA = s.openBills[0];
+          var applyCAB = Math.min(billCA.remaining, debitLeft);
+          billCA.remaining -= applyCAB;
+          applied[billCA.id] = (applied[billCA.id] || 0) + applyCAB;
+          debitLeft -= applyCAB;
+          if (billCA.remaining < 0.001) s.openBills.shift();
+        }
+        if (debitLeft > 0.001) s.ourPrepaid += debitLeft;
+      }
     } else if (type === 'offset') {
       var creditAmtO = Math.max(0, Number(e.credit_amount || 0));
       var debitAmtO = Math.max(0, Number(e.debit_amount || 0));

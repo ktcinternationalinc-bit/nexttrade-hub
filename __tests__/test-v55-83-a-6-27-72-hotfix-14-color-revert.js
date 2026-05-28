@@ -35,8 +35,8 @@ ok('A4: payment_sent has NO color (descCls: null, amountCls: null)',
   /payment_sent:[\s\S]{0,500}descCls: null,[\s\S]{0,30}amountCls: null/.test(ledger));
 
 ok('A5: NO row-level background tint on invoices (rowCls: null for invoices and payments)',
-  /sales_invoice:[\s\S]{0,500}rowCls: null/.test(ledger) &&
-  /vendor_bill:[\s\S]{0,500}rowCls: null/.test(ledger));
+  /sales_invoice:[\s\S]{0,900}rowCls: null/.test(ledger) &&
+  /vendor_bill:[\s\S]{0,900}rowCls: null/.test(ledger));
 
 console.log('\n── Column headers reverted to emerald/red ──');
 

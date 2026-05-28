@@ -26,8 +26,8 @@ var rec = fs.readFileSync(path.join(__dirname, '..', 'src/components/InventoryRe
 
 console.log('\n── Fix 1: outer overlay no longer scrolls ──');
 
-ok('A1: Outer overlay uses flex items-center (NOT overflow-y-auto)',
-  /fixed inset-0 z-\[200\] bg-black\/70 backdrop-blur-sm flex items-center justify-center/.test(rec));
+ok('A1: Outer overlay uses flex with no scrolling — anchored to top (HOTFIX 23: items-start instead of items-center so the modal opens at the top of the viewport)',
+  /fixed inset-0 z-\[200\] bg-black\/70 backdrop-blur-sm flex items-start justify-center/.test(rec));
 
 ok('A2: Old "overflow-y-auto" removed from overlay (would have made whole overlay scrollable)',
   !/className="fixed inset-0 z-\[200\] bg-black\/70 backdrop-blur-sm overflow-y-auto"/.test(rec));
@@ -72,12 +72,13 @@ ok('E1: Region 2 still uses flex:1 + overflowY:auto + minHeight:0 (the legit scr
 
 console.log('\n── Comment trail ──');
 
-ok('F1: HOTFIX 21 explanation comment present in the source',
+ok('F1: HOTFIX 21 explanation comment still present in the source (HOTFIX 23 extended it instead of replacing)',
+  /HOTFIX 21\+23 — Max May 27 2026 screenshots/.test(rec) ||
   /HOTFIX 21 — Max May 27 2026 screenshot/.test(rec));
 
-ok('F2: HOTFIX 21 comment names the three fixes',
-  /\(1\)[\s\S]{0,200}\(2\)[\s\S]{0,200}\(3\)/.test(rec) &&
-  /flex items-center/.test(rec) &&
+ok('F2: HOTFIX 21+23 comment names the three fixes',
+  /\(1\)[\s\S]{0,400}\(2\)[\s\S]{0,400}\(3\)/.test(rec) &&
+  /flex items-start/.test(rec) &&
   /overflow: hidden/.test(rec) &&
   /flexShrink: 0/.test(rec));
 

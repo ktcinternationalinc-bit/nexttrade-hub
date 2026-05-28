@@ -1536,13 +1536,17 @@ export default function OpenAccountsTab(props) {
                             <div className="text-sm font-mono font-extrabold text-amber-900">{fmtNum(b.ourOpenBills)}</div>
                             <div className="text-[9px] text-amber-700">{b.openBills.length} open bill{b.openBills.length === 1 ? '' : 's'}</div>
                           </div>
-                          <div className="flex-1 min-w-[120px] bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5" title="Money they've paid us with no invoice to apply it to yet">
-                            <div className="text-[9px] font-extrabold text-emerald-900 uppercase tracking-wider">Their credit (prepaid)</div>
-                            <div className="text-sm font-mono font-extrabold text-emerald-900">{fmtNum(b.theirPrepaid)}</div>
+                          {/* v55.83-A.6.27.72 HOTFIX 25 — prepaid cards were bg-emerald-50/red-50
+                              with -900 text — washed out on the dark theme background. Bumped to
+                              solid bg-emerald-700/red-700 + white text, matching the net-balance
+                              card pattern below which already worked. */}
+                          <div className="flex-1 min-w-[120px] bg-emerald-700 border border-emerald-800 rounded px-2 py-1.5" title="Money they've paid us with no invoice to apply it to yet">
+                            <div className="text-[9px] font-extrabold text-white uppercase tracking-wider">Their credit (prepaid)</div>
+                            <div className="text-sm font-mono font-extrabold text-white">{fmtNum(b.theirPrepaid)}</div>
                           </div>
-                          <div className="flex-1 min-w-[120px] bg-red-50 border border-red-200 rounded px-2 py-1.5" title="Money we've paid them with no bill to apply it to yet">
-                            <div className="text-[9px] font-extrabold text-red-900 uppercase tracking-wider">Our credit (prepaid)</div>
-                            <div className="text-sm font-mono font-extrabold text-red-900">{fmtNum(b.ourPrepaid)}</div>
+                          <div className="flex-1 min-w-[120px] bg-red-700 border border-red-800 rounded px-2 py-1.5" title="Money we've paid them with no bill to apply it to yet">
+                            <div className="text-[9px] font-extrabold text-white uppercase tracking-wider">Our credit (prepaid)</div>
+                            <div className="text-sm font-mono font-extrabold text-white">{fmtNum(b.ourPrepaid)}</div>
                           </div>
                           <div className={'flex-1 min-w-[140px] rounded px-2 py-1.5 border-2 ' +
                             (b.netBalance > 0 ? 'bg-emerald-600 border-emerald-700 text-white' :
@@ -1661,10 +1665,20 @@ export default function OpenAccountsTab(props) {
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50">
                               {(function () {
                                 if (txnType !== 'sales_invoice' && txnType !== 'vendor_bill') {
-                                  return <span className="text-slate-300">—</span>;
+                                  return <span className="text-slate-400">—</span>;
                                 }
                                 if (pr.remaining < 0.005) {
-                                  return <span className="text-emerald-600 text-[10px]" title="Fully settled">✓ paid</span>;
+                                  // v55.83-A.6.27.72 HOTFIX 25 — paid chip was washed-out text-emerald-600
+                                  // sitting in a yellow cell. Bumped to solid emerald pill with white text
+                                  // so it reads as a true status badge on any background.
+                                  return (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-600 text-white ring-1 ring-emerald-700/50 shadow-sm whitespace-nowrap"
+                                      title="Fully settled"
+                                    >
+                                      ✓ paid
+                                    </span>
+                                  );
                                 }
                                 return <span className={typeMeta.amountCls || 'text-slate-900'}>{fmtNum(pr.remaining)}</span>;
                               })()}

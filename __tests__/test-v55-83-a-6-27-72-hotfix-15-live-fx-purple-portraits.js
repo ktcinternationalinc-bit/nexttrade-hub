@@ -47,7 +47,8 @@ ok('B1: vendor_bill descCls = text-purple-700 (was text-orange-700)',
 ok('B2: vendor_bill amountCls = text-purple-700',
   /vendor_bill:[\s\S]{0,800}amountCls: 'text-purple-700'/.test(ledger));
 
-ok('B3: vendor_bill pillCls = bg-purple-100 text-purple-900',
+ok('B3: vendor_bill pillCls is purple (HOTFIX 25 upgraded from pale -100/-900 to solid -600/white for dark-theme contrast)',
+  /vendor_bill:[\s\S]{0,800}pillCls: 'bg-purple-600 text-white/.test(ledger) ||
   /vendor_bill:[\s\S]{0,500}pillCls: 'bg-purple-100 text-purple-900'/.test(ledger));
 
 ok('B4: Print export vendor_bill hex = #7e22ce (purple-700)',

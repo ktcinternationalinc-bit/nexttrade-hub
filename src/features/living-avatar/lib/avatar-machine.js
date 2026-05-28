@@ -107,7 +107,14 @@ export var livingAvatarMachine = setup({
 }).createMachine({
   id: 'livingAvatar',
   initial: 'idle',
-  context: INITIAL_CONTEXT,
+  // HOTFIX 22 — accept input so consumers (useCompanionSocket) can seed
+  // the initial persona instead of always starting on 'nadia'.
+  context: function (args) {
+    var input = (args && args.input) || {};
+    return Object.assign({}, INITIAL_CONTEXT, {
+      personaId: input.personaId || INITIAL_CONTEXT.personaId,
+    });
+  },
   on: {
     // Global transitions — work from any state.
     SWITCH_PERSONA: {
