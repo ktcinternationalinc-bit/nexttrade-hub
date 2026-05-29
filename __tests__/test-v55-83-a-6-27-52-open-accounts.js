@@ -137,10 +137,13 @@ ok('E4: per-account summary pill shows Bal per currency (Cr/Dr removed in v72 HO
   !/Dr: <span className="text-red-700">\{fmtNum\(cs\.debit\)\}/.test(oa));
 ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
   /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
-ok('E6: ledger columns Date/Type/Description/Reference/Currency/AR Side/AP Side/Open Balance/Running Balance per cur (v72 HOTFIX 11 polish)',
-  />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Currency</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Open Balance</.test(oa) && /Running Balance \{cur\}/.test(oa));
-ok('E7: AR Side emerald bg, AP Side red bg, Open Balance amber bg (HOTFIX 14 reverted blue/orange to invoice rows only)',
-  /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
+ok('E6: ledger columns via ledgerLabel() i18n (HOTFIX 30: date/type/description/reference + they_owe_us/we_owe_them/open_balance/running_bal)',
+  /ledgerLabel\('date', lang\)/.test(oa) && /ledgerLabel\('type', lang\)/.test(oa) &&
+  /ledgerLabel\('description', lang\)/.test(oa) && /ledgerLabel\('reference', lang\)/.test(oa) &&
+  /ledgerLabel\('they_owe_us', lang\)/.test(oa) && /ledgerLabel\('we_owe_them', lang\)/.test(oa) &&
+  /ledgerLabel\('open_balance', lang\)/.test(oa) && /ledgerLabel\('running_bal', lang\)\}\s*\{cur\}/.test(oa));
+ok('E7: Header tints preserved (emerald for they_owe_us, red for we_owe_them, amber for open_balance) — HOTFIX 30',
+  /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa) && /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa) && /bg-amber-50[\s\S]{0,400}open_balance/.test(oa));
 ok('E8: running balance color-coded (HOTFIX 30 staircase: text-slate-700 baseline, inactive dimmed)',
   /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-700'/.test(oa) &&
   /text-slate-300 font-medium opacity-60/.test(oa));

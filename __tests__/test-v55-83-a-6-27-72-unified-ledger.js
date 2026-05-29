@@ -110,14 +110,15 @@ ok('C9: per-currency tile strip (They owe us / We owe them / Their prepaid / Our
   /They owe us/.test(oa) && /We owe them/.test(oa) &&
   /Their credit \(prepaid\)/.test(oa) && /Our credit \(prepaid\)/.test(oa) &&
   /Net balance/.test(oa));
-ok('C10: ledger has Type + AR Side + AP Side + Open Balance columns (HOTFIX 11 polish)',
-  />Type</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Open Balance</.test(oa));
+ok('C10: ledger columns via ledgerLabel() i18n (HOTFIX 30: type/they_owe_us/we_owe_them/open_balance)',
+  /ledgerLabel\('type', lang\)/.test(oa) && /ledgerLabel\('they_owe_us', lang\)/.test(oa) &&
+  /ledgerLabel\('we_owe_them', lang\)/.test(oa) && /ledgerLabel\('open_balance', lang\)/.test(oa));
 ok('C11: Type pill rendered from TRANSACTION_TYPES registry',
   /var typeMeta = TRANSACTION_TYPES\[txnType\] \|\| TRANSACTION_TYPES\.credit_adjustment/.test(oa));
 ok('C12: Paid/Remaining cells use computePaidRemaining',
   /var pr = computePaidRemaining\(entry, simResult\)/.test(oa));
-ok('C13: Running Balance per-currency column header (HOTFIX 11 final spec)',
-  /Running Balance \{cur\}/.test(oa));
+ok('C13: Running Balance per-currency column via ledgerLabel (HOTFIX 30 i18n)',
+  /ledgerLabel\('running_bal', lang\)\}\s*\{cur\}/.test(oa));
 ok('C14: manual Offset button REMOVED in HOTFIX 12 — auto-offset cascade handles it silently',
   !/🔄 Offset/.test(oa) && /autoOffsetCascade/.test(oa));
 ok('C15: handleOffset function — uses findOffsetCandidate + buildOffsetEntries, rollback on second insert failure',

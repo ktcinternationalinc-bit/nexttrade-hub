@@ -155,8 +155,8 @@ ok('G6: per-currency Balance tile shows "they owe us"/"we owe them"/"settled" ba
 
 ok('H1: ledger table header has Currency column (v72 HOTFIX 11 — was "Cur")',
   />Currency</.test(oa));
-ok('H2: ledger table has Running Balance CUR columns per currency (v72 HOTFIX 11 final spec)',
-  /Running Balance \{cur\}/.test(oa));
+ok('H2: ledger table has Running Balance per currency via ledgerLabel() (HOTFIX 30 i18n)',
+  /ledgerLabel\('running_bal', lang\)\}\s*\{cur\}/.test(oa));
 ok('H3: each entry row shows its own _currency in the Cur column (HOTFIX 30 — now with colored dot + brand-color text)',
   /\{entryCur\}<\/span>/.test(oa) && /cur-dot|w-2 h-2 rounded-full/.test(oa));
 ok('H4: each entry row renders per-currency running cells from _running_by_currency',

@@ -45,14 +45,14 @@ ok('A5: payment_sent routes to AP Side (reduces AP, shown positive)',
 
 console.log('\n── Column headers per spec ──');
 
-ok('B1: Header "AR Side" with emerald bg (HOTFIX 14 reverted color scheme to invoice-only)',
-  />AR Side</.test(oa) && /bg-emerald-50[\s\S]{0,200}AR Side/.test(oa));
+ok('B1: Header "they_owe_us" via ledgerLabel with emerald bg (HOTFIX 30 i18n)',
+  /ledgerLabel\('they_owe_us', lang\)/.test(oa) && /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa));
 
-ok('B2: Header "AP Side" with red bg (HOTFIX 14 reverted color scheme to invoice-only)',
-  />AP Side</.test(oa) && /bg-red-50[\s\S]{0,200}AP Side/.test(oa));
+ok('B2: Header "we_owe_them" via ledgerLabel with red bg (HOTFIX 30 i18n)',
+  /ledgerLabel\('we_owe_them', lang\)/.test(oa) && /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa));
 
-ok('B3: Single Open Balance column with amber bg (renamed from Remaining per polish)',
-  />Open Balance</.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
+ok('B3: Single Open Balance column via ledgerLabel with amber bg (HOTFIX 30 i18n)',
+  /ledgerLabel\('open_balance', lang\)/.test(oa) && /bg-amber-50[\s\S]{0,400}open_balance/.test(oa));
 
 ok('B4: NO Paid column on screen (spec dropped it)',
   !/>Paid<\/th>/.test(oa));
@@ -60,8 +60,8 @@ ok('B4: NO Paid column on screen (spec dropped it)',
 ok('B5: NO separate Open AR / Open AP columns (merged to single Remaining)',
   !/>Open AR</.test(oa) && !/>Open AP</.test(oa));
 
-ok('B6: Running Balance CUR header (per spec)',
-  /Running Balance \{cur\}/.test(oa));
+ok('B6: Running Balance per currency via ledgerLabel (HOTFIX 30 i18n)',
+  /ledgerLabel\('running_bal', lang\)\}\s*\{cur\}/.test(oa));
 
 ok('B7: Currency column (full word, not "Cur")',
   />Currency</.test(oa));

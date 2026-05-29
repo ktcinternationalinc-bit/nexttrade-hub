@@ -68,8 +68,10 @@ ok('UI.1: ledgerCurFilter state for per-account currency filter',
 ok('UI.2: currency filter toggle bar renders above table when multi-currency',
   /s\.currencies\.length > 1[\s\S]{0,2000}\['ALL'\]\.concat\(s\.currencies\)\.map/.test(oa));
 
-ok('UI.3: filter buttons use brand colors (sky USD, amber EGP, indigo ALL)',
-  /filt === 'USD' \? 'bg-sky-600 text-white'[\s\S]{0,200}filt === 'EGP' \? 'bg-amber-600 text-white'/.test(oa));
+ok('UI.3: currency tabs (HOTFIX 30 tabs visual: rounded-t-md, active brand-bg, count badge)',
+  /rounded-t-md border-t-2 border-l border-r font-extrabold/.test(oa) &&
+  /filt === 'USD' \? 'bg-sky-50 border-sky-400 text-sky-900'/.test(oa) &&
+  /filt === 'EGP' \? 'bg-amber-50 border-amber-400 text-amber-900'/.test(oa));
 
 ok('UI.4: filter actually applies to row visibility',
   /var curFilter = ledgerCurFilter\[a\.id\] \|\| 'ALL'[\s\S]{0,200}entry\._currency !== curFilter/.test(oa));
@@ -180,8 +182,8 @@ ok('FB.2: Net Balance card has soft text-shadow glow',
 ok('FB.3: Open Balance column prefixes partial amounts with "Open" word',
   /<span className="text-\[9px\] font-extrabold uppercase tracking-wider opacity-70 mr-1">Open<\/span>\{fmtNum\(pr\.remaining\)\}/.test(oa));
 
-ok('FB.4: payment_sent label gets "/ Deposit" suffix when no bill was offset',
-  /txnType === 'payment_sent' \|\| txnType === 'payment_received'[\s\S]{0,400}lbl \+ ' \/ Deposit'/.test(oa));
+ok('FB.4: payment_sent/received label gets "/ Deposit" suffix when no offset (Max May 28 feedback)',
+  /txnType === 'payment_sent' \|\| txnType === 'payment_received'[\s\S]{0,600}depositSuffix = ' \/ Deposit'/.test(oa));
 
 ok('FB.5: Active running balance has subtle text-shadow glow',
   /textShadow: '0 0 6px rgba\(255,255,255,0\.15\)'/.test(oa));
@@ -193,6 +195,58 @@ ok('FB.6: Hover tints use rgba 0.12 for USD and EGP, applied via --hov CSS varia
 ok('FB.7: Density preserved — row td still uses px-3 py-1.5 (not py-2 or py-3)',
   /<td className="px-3 py-1\.5 font-mono text-slate-900">\{fmtDate\(entry\.entry_date\)\}<\/td>/.test(oa));
 
+console.log('\n── HOTFIX 30b: On-screen Display Language toggle ──');
+
+ok('LANG.1: import t18n + i18nP from i18n module',
+  /import \{ T as t18n, P as i18nP \} from '\.\.\/lib\/open-account-i18n'/.test(oa));
+
+ok('LANG.2: ledgerLangFilter state per-account (EN/AR/BOTH)',
+  /var \[ledgerLangFilter, setLedgerLangFilter\] = useState\(\{\}\)/.test(oa));
+
+ok('LANG.3: ledgerLabel helper renders EN, AR, or BOTH stacked',
+  /function ledgerLabel\(key, lang, perspective\)/.test(oa) &&
+  /if \(lang === 'EN'\) return t18n\(key, 'en', perspective\)/.test(oa) &&
+  /if \(lang === 'AR'\) return t18n\(key, 'ar', perspective\)/.test(oa));
+
+ok('LANG.4: language toggle UI present with EN / AR / Both buttons',
+  /\{ id: 'EN', label: '🇺🇸 EN' \}/.test(oa) &&
+  /\{ id: 'AR', label: '🇪🇬 AR' \}/.test(oa) &&
+  /\{ id: 'BOTH', label: '🌐 Both' \}/.test(oa));
+
+ok('LANG.5: language toggle visible whether or not currency tabs render (single-currency fallback row)',
+  /s\.currencies\.length <= 1 && \(\s+<div className="bg-slate-100 border-b border-slate-200 px-3 py-1\.5 flex items-center justify-end/.test(oa));
+
+ok('LANG.6: type pill respects language toggle (EN/AR/BOTH)',
+  /var lang = ledgerLangFilter\[a\.id\] \|\| 'EN'/.test(oa) &&
+  /var en = t18n\(txnType, 'en'\)/.test(oa) &&
+  /var ar = t18n\(txnType, 'ar'\)/.test(oa));
+
+console.log('\n── HOTFIX 30b: Currency tabs (proper tab visual) ──');
+
+ok('TABS.1: currency tabs row with bg-slate-200 and items-end + pt-2 (tab strip pattern)',
+  /<div className="bg-slate-200 border-b-2 border-slate-300 flex items-end gap-0\.5 px-3 pt-2">/.test(oa));
+
+ok('TABS.2: active tab has rounded-t-md + brand color, inactive recessed in bg-slate-100',
+  /'px-4 py-1\.5 rounded-t-md border-t-2 border-l border-r font-extrabold text-xs/.test(oa) &&
+  /inactiveBg = 'bg-slate-100 border-slate-300 text-slate-500/.test(oa));
+
+ok('TABS.3: each tab shows a row count badge',
+  /accEntries\.filter\(function \(e\) \{ return e\.transaction_type !== 'offset' && e\._currency === filt; \}\)\.length/.test(oa));
+
+ok('TABS.4: tab icons (🌐 All, 🇺🇸 USD, 🇪🇬 EGP)',
+  /filt === 'ALL' \? '🌐 All' : filt === 'USD' \? '🇺🇸 USD' : '🇪🇬 EGP'/.test(oa));
+
+console.log('\n── HOTFIX 30b: Print/Excel dropdowns more obvious ──');
+
+ok('OBV.1: Print/Excel summary buttons have amber ring + EN/AR ▾ badge',
+  /ring-1 ring-amber-400\/60 hover:ring-amber-400[\s\S]{0,500}EN\/AR ▾/.test(oa));
+
+ok('OBV.2: dropdown menus have "Output language" header section',
+  /<div className="px-2 py-1 text-\[9px\] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language<\/div>/.test(oa));
+
+ok('OBV.3: dropdown items show flag icons (🇺🇸 EN, 🇪🇬 Bilingual)',
+  /🇺🇸 English Only/.test(oa) && /🇪🇬 Bilingual \(EN \+ AR\)/.test(oa));
+
 if (process.exitCode) console.log('FAILED');
-else console.log('✅ HOTFIX 30/31 — Ledger UI polish + bilingual reports + SALE-/BILL- prefix + Credit Applied + Max feedback');
+else console.log('✅ HOTFIX 30/31 + 30b — Language toggle + Currency tabs + Obvious dropdowns');
 console.log('══════════════════════════════════════════════');

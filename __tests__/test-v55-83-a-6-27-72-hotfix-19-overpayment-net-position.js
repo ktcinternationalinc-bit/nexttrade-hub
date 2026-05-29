@@ -87,11 +87,11 @@ ok('D5: "↑ In our favor" / "↓ Against us" / "Settled" sub-label preserved',
 ok('D6: Per-row Running Balance compute (line ~373) UNCHANGED — still the FIFO snapshot formula it always was',
   /var netForThisCur = \(snap\.theirOpenInvoices - snap\.theirPrepaid\) - \(snap\.ourOpenBills - snap\.ourPrepaid\)/.test(oa));
 
-ok('D7: AR Side column header preserved (emerald bg) — no color regression',
-  /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa));
+ok('D7: they_owe_us column header preserved with emerald bg (HOTFIX 30 i18n)',
+  /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa));
 
-ok('D8: AP Side column header preserved (red bg) — no color regression',
-  /bg-red-50[\s\S]{0,300}AP Side/.test(oa));
+ok('D8: we_owe_them column header preserved with red bg (HOTFIX 30 i18n)',
+  /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa));
 
 ok('D9: Bottom card Net Balance still pulls from t.balance (the FIFO net) — unchanged',
   /\{fmtSigned\(t\.balance\)\} \{cur\}/.test(oa) && /Net Balance/.test(oa));

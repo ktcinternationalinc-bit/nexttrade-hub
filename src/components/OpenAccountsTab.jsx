@@ -22,6 +22,7 @@ import { printAccountLedger, exportAccountLedgerToExcel } from '../lib/open-acco
 import { printOpenAccountInvoice } from '../lib/open-account-invoice-print';
 // v55.83-A.6.27.72 — Unified Counterparty Ledger model (FIFO auto-apply + 4 pots per currency).
 import { TRANSACTION_TYPES, simulate, computePaidRemaining, findOffsetCandidate, validateOffsetable, buildOffsetEntries } from '../lib/open-account-ledger';
+import { T as t18n, P as i18nP } from '../lib/open-account-i18n';
 // v55.83-A.6.27.61 — Attachments wire-up
 import AttachmentManager from './AttachmentManager';
 
@@ -232,6 +233,25 @@ export default function OpenAccountsTab(props) {
   // 'ALL' (default), 'USD', or 'EGP'. Each account has its own filter so you
   // can audit El Sayad in USD-only mode while leaving other accounts on ALL.
   var [ledgerCurFilter, setLedgerCurFilter] = useState({}); // { account_id: 'ALL'|'USD'|'EGP' }
+  // v55.83-A.6.27.72 HOTFIX 30 — per-account on-screen language filter.
+  // 'EN' (default), 'AR', or 'BOTH'. Controls column headers AND type pill
+  // labels in the visible ledger. The print/excel buttons have their own
+  // separate EN/Bilingual toggle (output format vs on-screen display are
+  // independent so you can review in English but print bilingual for a customer).
+  var [ledgerLangFilter, setLedgerLangFilter] = useState({}); // { account_id: 'EN'|'AR'|'BOTH' }
+  // Helper: render a stacked EN-on-top, AR-below label when lang='BOTH'.
+  function ledgerLabel(key, lang, perspective) {
+    if (lang === 'EN') return t18n(key, 'en', perspective);
+    if (lang === 'AR') return t18n(key, 'ar', perspective);
+    // BOTH: stacked
+    return (
+      <span className="inline-block">
+        <span>{t18n(key, 'en', perspective)}</span>
+        <br />
+        <span dir="rtl" className="text-[10px] text-slate-600 font-normal" style={{ fontFamily: 'Tahoma, "Arial Unicode MS", sans-serif' }}>{t18n(key, 'ar', perspective)}</span>
+      </span>
+    );
+  }
   var [accountModalOpen, setAccountModalOpen] = useState(false);
   var [accountDraft, setAccountDraft] = useState(null); // null | { id?, account_name, account_name_ar, notes }
   var [entryModalOpen, setEntryModalOpen] = useState(false);
@@ -1518,32 +1538,39 @@ export default function OpenAccountsTab(props) {
                         smaller side is fully settled. The user sees "✓ paid" on the closed
                         invoice/bill without any visible Offset rows in the ledger.
                         v55.83-A.6.27.72 HOTFIX 30 — Print/Excel buttons now have EN/Bilingual
-                        dropdowns using native <details> for click-to-open behavior. */}
+                        dropdowns using native <details>. Caret + outline ring make the toggle
+                        more obvious (earlier styling was too subtle and Max didn't see it). */}
                     <details className="relative inline-block">
-                      <summary className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Print our internal view as PDF">
-                        🖨️ Print (Internal) ▾
+                      <summary className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Print our internal view as PDF — choose English or Bilingual">
+                        🖨️ Print (Internal)
+                        <span className="ml-1 px-1 bg-amber-400 text-slate-900 rounded text-[9px] font-extrabold">EN/AR ▾</span>
                       </summary>
-                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
-                        <button onClick={function () { handlePrintLedger(a, 'internal', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
-                        <button onClick={function () { handlePrintLedger(a, 'internal', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[200px] p-1">
+                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language</div>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
                       </div>
                     </details>
                     <details className="relative inline-block">
-                      <summary className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Print customer statement (their perspective) as PDF — for sending to the counterparty">
-                        🖨️ Customer Statement ▾
+                      <summary className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Print customer statement (their perspective) — choose English or Bilingual">
+                        🖨️ Customer Statement
+                        <span className="ml-1 px-1 bg-amber-400 text-slate-900 rounded text-[9px] font-extrabold">EN/AR ▾</span>
                       </summary>
-                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
-                        <button onClick={function () { handlePrintLedger(a, 'customer', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
-                        <button onClick={function () { handlePrintLedger(a, 'customer', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[200px] p-1">
+                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language</div>
+                        <button onClick={function () { handlePrintLedger(a, 'customer', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'customer', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
                       </div>
                     </details>
                     <details className="relative inline-block">
-                      <summary className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Download Excel file">
-                        📊 Excel ▾
+                      <summary className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Download Excel file — choose English or Bilingual">
+                        📊 Excel
+                        <span className="ml-1 px-1 bg-amber-400 text-slate-900 rounded text-[9px] font-extrabold">EN/AR ▾</span>
                       </summary>
-                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
-                        <button onClick={function () { handleExportExcel(a, false, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">.xlsx with EN headers</div></button>
-                        <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">.xlsx with stacked EN/AR headers</div></button>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[200px] p-1">
+                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language</div>
+                        <button onClick={function () { handleExportExcel(a, false, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 English Only<div className="text-[9px] text-slate-400 font-normal">.xlsx with EN headers</div></button>
+                        <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">.xlsx with stacked EN/AR headers</div></button>
                       </div>
                     </details>
                     {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — account-level
@@ -1633,16 +1660,24 @@ export default function OpenAccountsTab(props) {
                   </div>
                 ) : (
                   <>
-                    {/* v55.83-A.6.27.72 HOTFIX 30 — Currency filter toggle (per-account state).
-                        Hides rows of the unselected currency for clean single-currency audit. */}
+                    {/* v55.83-A.6.27.72 HOTFIX 30 — Currency TABS + Language toggle above ledger.
+                        - Currency rendered as proper tabs (rounded top, active attached to table
+                          below via matching border color, inactive recessed in slate-200)
+                        - Language pill group (EN / AR / Both) on the right
+                        Both states are per-account so each card can be audited independently. */}
                     {s.currencies.length > 1 && (
-                      <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center gap-2 text-[11px]">
-                        <span className="font-extrabold text-slate-600 uppercase tracking-wider">Currency:</span>
+                      <div className="bg-slate-200 border-b-2 border-slate-300 flex items-end gap-0.5 px-3 pt-2">
+                        <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider self-center mr-2 mb-1">Currency:</span>
                         {['ALL'].concat(s.currencies).map(function (filt) {
                           var active = (ledgerCurFilter[a.id] || 'ALL') === filt;
-                          var btnCls = active
-                            ? (filt === 'USD' ? 'bg-sky-600 text-white' : filt === 'EGP' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white')
-                            : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-300';
+                          var activeBg = filt === 'USD' ? 'bg-sky-50 border-sky-400 text-sky-900' :
+                                         filt === 'EGP' ? 'bg-amber-50 border-amber-400 text-amber-900' :
+                                                          'bg-white border-slate-400 text-slate-900';
+                          var inactiveBg = 'bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-50 hover:text-slate-700';
+                          // count rows in this currency for the badge
+                          var count = filt === 'ALL'
+                            ? accEntries.filter(function (e) { return e.transaction_type !== 'offset'; }).length
+                            : accEntries.filter(function (e) { return e.transaction_type !== 'offset' && e._currency === filt; }).length;
                           return (
                             <button
                               key={filt}
@@ -1651,9 +1686,66 @@ export default function OpenAccountsTab(props) {
                                 next[a.id] = filt;
                                 setLedgerCurFilter(next);
                               }}
-                              className={'px-3 py-1 rounded font-extrabold ' + btnCls}
+                              className={'px-4 py-1.5 rounded-t-md border-t-2 border-l border-r font-extrabold text-xs transition-all ' +
+                                (active ? (activeBg + ' relative z-10 -mb-px shadow-sm') : inactiveBg)}
+                              style={active ? { borderBottom: '2px solid transparent' } : undefined}
                             >
-                              {filt === 'ALL' ? 'All' : filt + ' Only'}
+                              {filt === 'ALL' ? '🌐 All' : filt === 'USD' ? '🇺🇸 USD' : '🇪🇬 EGP'}
+                              <span className={'ml-2 px-1.5 py-0.5 rounded text-[9px] ' + (active ? 'bg-white/80 text-slate-700' : 'bg-slate-300 text-slate-600')}>{count}</span>
+                            </button>
+                          );
+                        })}
+                        {/* Spacer pushes language toggle to the right */}
+                        <div className="flex-1" />
+                        <div className="flex items-center gap-1 mb-1">
+                          <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider mr-1">Language:</span>
+                          {[
+                            { id: 'EN', label: '🇺🇸 EN' },
+                            { id: 'AR', label: '🇪🇬 AR' },
+                            { id: 'BOTH', label: '🌐 Both' },
+                          ].map(function (opt) {
+                            var lActive = (ledgerLangFilter[a.id] || 'EN') === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                onClick={function () {
+                                  var next = Object.assign({}, ledgerLangFilter);
+                                  next[a.id] = opt.id;
+                                  setLedgerLangFilter(next);
+                                }}
+                                className={'px-2 py-1 rounded text-[10px] font-extrabold transition-colors ' +
+                                  (lActive ? 'bg-purple-600 text-white shadow ring-1 ring-purple-300' : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-300')}
+                                title={opt.id === 'EN' ? 'English column headers + labels' : opt.id === 'AR' ? 'Arabic column headers + labels' : 'Both English and Arabic stacked'}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {/* When only one currency, the tabs strip is hidden, so the Language toggle goes in its own thin row */}
+                    {s.currencies.length <= 1 && (
+                      <div className="bg-slate-100 border-b border-slate-200 px-3 py-1.5 flex items-center justify-end gap-1">
+                        <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider mr-1">Display Language:</span>
+                        {[
+                          { id: 'EN', label: '🇺🇸 EN' },
+                          { id: 'AR', label: '🇪🇬 AR' },
+                          { id: 'BOTH', label: '🌐 Both' },
+                        ].map(function (opt) {
+                          var lActive = (ledgerLangFilter[a.id] || 'EN') === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              onClick={function () {
+                                var next = Object.assign({}, ledgerLangFilter);
+                                next[a.id] = opt.id;
+                                setLedgerLangFilter(next);
+                              }}
+                              className={'px-2 py-1 rounded text-[10px] font-extrabold ' +
+                                (lActive ? 'bg-purple-600 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-300')}
+                            >
+                              {opt.label}
                             </button>
                           );
                         })}
@@ -1661,28 +1753,28 @@ export default function OpenAccountsTab(props) {
                     )}
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 sticky top-0 z-10">
-                      <tr>
-                        <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Date</th>
-                        {/* v55.83-A.6.27.72 — Type column is the source of truth for what each row is.
-                            5 transaction types + offset. Color-coded pill in body. */}
-                        <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Type</th>
-                        <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Description</th>
-                        <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Reference</th>
-                        <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Currency</th>
-                        {/* v55.83-A.6.27.72 HOTFIX 14 — Per Max: revert AR/AP column theme.
-                            Color-coding is now ONLY on invoice rows (description + amount).
-                            Headers go back to the standard emerald/red. */}
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Accounts Receivable activity — sales invoices billed to them, payments they sent us">AR Side</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Accounts Payable activity — vendor bills they billed us, payments we sent them">AP Side</th>
-                        {/* Single Open Balance column — fills only on invoice/bill rows. */}
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance — the unpaid portion of an invoice or bill">Open Balance</th>
-                        {/* v55.83-A.6.27.72 HOTFIX 11 — "Net" renamed to "Running Balance" (these are
-                            cumulative running balances after each row, NOT per-row nets). */}
-                        {s.currencies.map(function (cur) {
-                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100" title="Cumulative running balance in this currency after this row">Running Balance {cur}</th>;
-                        })}
-                        {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
-                      </tr>
+                      {/* v55.83-A.6.27.72 HOTFIX 30 — column headers use ledgerLabel() with
+                          per-account language state. Customer-friendly i18n labels:
+                          "AR Side" → "They Owe Us / لنا عليهم", "AP Side" → "We Owe Them / لهم علينا". */}
+                      {(function () {
+                        var lang = ledgerLangFilter[a.id] || 'EN';
+                        return (
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('date', lang)}</th>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('type', lang)}</th>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('description', lang)}</th>
+                            <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('reference', lang)}</th>
+                            <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Currency</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
+                            {s.currencies.map(function (cur) {
+                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
+                            })}
+                            {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
+                          </tr>
+                        );
+                      })()}
                     </thead>
                     <tbody>
                       {accEntries
@@ -1736,20 +1828,30 @@ export default function OpenAccountsTab(props) {
                             <td className="px-3 py-1.5">
                               <span className={'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap ' + typeMeta.pillCls}>
                                 <span>{typeMeta.icon}</span>
-                                {/* v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) —
-                                    payment_sent label gets a "/ Deposit" suffix when no
-                                    matching open bill was available, i.e. the payment
-                                    became Our Prepaid credit. Same for payment_received
-                                    that became Their Prepaid. Helps the cash-flow direction
-                                    read instantly without inspecting the prepaid tile. */}
+                                {/* v55.83-A.6.27.72 HOTFIX 30 — Type pill respects the on-screen
+                                    Language toggle. EN shows English label, AR shows Arabic,
+                                    BOTH stacks them. Payment Sent/Received with no offset gets
+                                    "/ Deposit" suffix (Max May 28 feedback). */}
                                 <span>{(function () {
-                                  var lbl = typeMeta.label;
+                                  var lang = ledgerLangFilter[a.id] || 'EN';
+                                  // i18n keys match transaction_type values from the DB
+                                  var en = t18n(txnType, 'en');
+                                  var ar = t18n(txnType, 'ar');
+                                  var depositSuffix = '';
                                   if (txnType === 'payment_sent' || txnType === 'payment_received') {
                                     var applied = (simResult.applications && simResult.applications[entry.id]) || 0;
                                     var faceAmt = Number(entry.debit_amount || entry.credit_amount || 0);
-                                    if (faceAmt > 0.005 && applied < 0.005) lbl = lbl + ' / Deposit';
+                                    if (faceAmt > 0.005 && applied < 0.005) depositSuffix = ' / Deposit';
                                   }
-                                  return lbl;
+                                  if (lang === 'EN') return en + depositSuffix;
+                                  if (lang === 'AR') return ar + depositSuffix;
+                                  // BOTH
+                                  return (
+                                    <>
+                                      <span>{en + depositSuffix}</span>
+                                      <span dir="rtl" className="text-[9px] opacity-80 ml-1" style={{ fontFamily: 'Tahoma, "Arial Unicode MS", sans-serif' }}>{ar}</span>
+                                    </>
+                                  );
                                 })()}</span>
                               </span>
                             </td>
