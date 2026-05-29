@@ -228,6 +228,10 @@ export default function OpenAccountsTab(props) {
 
   // UI state
   var [collapsedAccounts, setCollapsedAccounts] = useState({}); // { account_id: true } when collapsed
+  // v55.83-A.6.27.72 HOTFIX 30 — per-account ledger currency filter.
+  // 'ALL' (default), 'USD', or 'EGP'. Each account has its own filter so you
+  // can audit El Sayad in USD-only mode while leaving other accounts on ALL.
+  var [ledgerCurFilter, setLedgerCurFilter] = useState({}); // { account_id: 'ALL'|'USD'|'EGP' }
   var [accountModalOpen, setAccountModalOpen] = useState(false);
   var [accountDraft, setAccountDraft] = useState(null); // null | { id?, account_name, account_name_ar, notes }
   var [entryModalOpen, setEntryModalOpen] = useState(false);
@@ -468,20 +472,27 @@ export default function OpenAccountsTab(props) {
     if (!account || !account.business_entity_code) return null;
     return entitiesByCode[account.business_entity_code] || null;
   }
-  function handlePrintLedger(account, perspective) {
+  function handlePrintLedger(account, perspective, bilingual) {
     var ent = entityFor(account);
     var rows = entriesByAccount[account.id] || [];
     var s = summaryFor(account.id);
     var sim = simulate(rows);
-    printAccountLedger(account, ent, rows, s, { perspective: perspective || 'internal', simulation: sim });
+    printAccountLedger(account, ent, rows, s, {
+      perspective: perspective || 'internal',
+      simulation: sim,
+      bilingual: bilingual === true,  // HOTFIX 30 — bilingual mode
+    });
   }
-  function handleExportExcel(account) {
+  function handleExportExcel(account, bilingual, perspective) {
     try {
       var ent = entityFor(account);
       var rows = entriesByAccount[account.id] || [];
       var s = summaryFor(account.id);
-      exportAccountLedgerToExcel(account, ent, rows, s);
-      toast.success('Excel exported: ' + account.account_name);
+      exportAccountLedgerToExcel(account, ent, rows, s, {
+        bilingual: bilingual === true,  // HOTFIX 30 — bilingual mode
+        perspective: perspective || 'internal',
+      });
+      toast.success('Excel exported: ' + account.account_name + (bilingual ? ' (EN+AR)' : ''));
     } catch (e) {
       console.error('[open-accounts] Excel export failed:', e);
       toast.error('Excel export failed: ' + ((e && e.message) || String(e)));
@@ -895,42 +906,54 @@ export default function OpenAccountsTab(props) {
   }
 
   // v55.83-A.6.27.66 (Issue 1, Max May 23 2026) — per-account invoice number.
-  // Format B (Max's choice): INV-{ACCT-SLUG}-{YEAR}-{NNN}
-  //   • SLUG = uppercase ASCII, alphanumeric only, hyphens for spaces
-  //     (e.g. "El Sayad" → "EL-SAYAD", "Stitches & More" → "STITCHES-MORE")
-  //   • YEAR = current 4-digit year
-  //   • NNN  = next sequential per-account counter for that year (zero-padded
-  //            to 3 digits, expands automatically if you reach 1000)
+  // v55.83-A.6.27.72 HOTFIX 31 (Max May 28 2026) — split prefix by direction:
+  //   SALE-{ACCT-SLUG}-{YEAR}-{NNN} for credit (sales invoice we issue)
+  //   BILL-{ACCT-SLUG}-{YEAR}-{NNN} for debit (vendor bill we receive)
+  // SALE and BILL count INDEPENDENTLY per account per year, so the first sales
+  // invoice is always 001 and the first vendor bill is always 001 (no shared
+  // sequence). Old INV-* references are still scanned for the max during the
+  // transition window so we don't overlap an existing number. Once the SQL
+  // rename in HOTFIX 31 runs, only SALE-/BILL- numbers exist.
+  //
   // Pre-filled when the user clicks + Invoice. Editable — type over it to
-  // override; otherwise saved as-is. If counting fails for any reason
-  // (account not loaded, no invoices array, etc.) returns the format prefix
-  // with NNN = 001 so save still works.
+  // override; otherwise saved as-is.
   function slugifyAccountName(name) {
     if (!name) return 'ACCT';
     var s = String(name).toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '-')   // non-alphanumeric → hyphen
-      .replace(/^-+|-+$/g, '');      // trim leading/trailing hyphens
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
     if (!s) return 'ACCT';
-    if (s.length > 18) s = s.substring(0, 18).replace(/-+$/, '');  // keep tidy
+    if (s.length > 18) s = s.substring(0, 18).replace(/-+$/, '');
     return s;
   }
-  function computeNextInvoiceNumber(account) {
+  function computeNextInvoiceNumber(account, direction) {
+    // direction defaults to 'credit' (sales) for back-compat with callers that
+    // don't pass it. The invoiceDraft.direction field flips it at save time.
+    var dir = direction === 'debit' ? 'debit' : 'credit';
+    var prefix = dir === 'credit' ? 'SALE-' : 'BILL-';
     var year = new Date().getFullYear();
     var slug = slugifyAccountName(account && account.account_name);
-    var prefix = 'INV-' + slug + '-' + year + '-';
-    // Find max existing sequence for this prefix
+    var fullPrefix = prefix + slug + '-' + year + '-';
+    // Find max existing sequence for THIS prefix on THIS account.
+    // We also scan legacy INV-* numbers of the same direction so the rename
+    // SQL and the live counter agree on what comes next (no duplicates).
+    var legacyPrefix = 'INV-' + slug + '-' + year + '-';
     var maxN = 0;
     (invoices || []).forEach(function (inv) {
       if (!inv || inv.account_id !== (account && account.id)) return;
+      // Only consider invoices of the matching direction
+      if ((inv.direction === 'debit' ? 'debit' : 'credit') !== dir) return;
       var num = String(inv.invoice_number || '');
-      if (num.indexOf(prefix) !== 0) return;
-      var tail = num.substring(prefix.length);
+      var tail = null;
+      if (num.indexOf(fullPrefix) === 0)       tail = num.substring(fullPrefix.length);
+      else if (num.indexOf(legacyPrefix) === 0) tail = num.substring(legacyPrefix.length);
+      if (tail === null) return;
       var n = parseInt(tail, 10);
       if (!isNaN(n) && n > maxN) maxN = n;
     });
     var next = maxN + 1;
     var padded = next < 1000 ? ('000' + next).slice(-3) : String(next);
-    return prefix + padded;
+    return fullPrefix + padded;
   }
 
   function openNewInvoice(accountId) {
@@ -938,13 +961,14 @@ export default function OpenAccountsTab(props) {
     var acc = accounts.find(function (a) { return a.id === accountId; });
     var ent = acc ? entityFor(acc) : null;
     var defaultCur = (ent && ent.default_currency) || 'USD';
+    var defaultDirection = 'credit';  // default: we billed them = sales invoice
     setInvoiceDraft({
       account_id: accountId,
-      // v55.83-A.6.27.66 (Issue 1) — pre-fill the next sequential invoice
-      // number per account in format INV-{ACCT-SLUG}-{YEAR}-{NNN}. User can
-      // override by typing over it; otherwise save uses it as-is.
-      invoice_number: computeNextInvoiceNumber(acc),
-      direction: 'credit',  // default: we billed them
+      // v55.83-A.6.27.72 HOTFIX 31 — generator now produces SALE-* or BILL-*
+      // depending on direction. Default 'credit' (sales) → SALE-*. When user
+      // flips to debit in the modal, the displayed default updates to BILL-*.
+      invoice_number: computeNextInvoiceNumber(acc, defaultDirection),
+      direction: defaultDirection,
       counterparty_name: (acc && acc.account_name) || '',
       counterparty_name_ar: (acc && acc.account_name_ar) || '',
       counterparty_address: '',
@@ -1492,10 +1516,36 @@ export default function OpenAccountsTab(props) {
                         bill, payment). When a state arises with simultaneous open AR + open AP
                         in the same currency, the system posts offsets automatically so the
                         smaller side is fully settled. The user sees "✓ paid" on the closed
-                        invoice/bill without any visible Offset rows in the ledger. */}
-                    <button onClick={function () { handlePrintLedger(a, 'internal'); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print our internal view as PDF">🖨️ Print (Internal)</button>
-                    <button onClick={function () { handlePrintLedger(a, 'customer'); }} className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow" title="Print customer statement (their perspective) as PDF — for sending to the counterparty">🖨️ Customer Statement</button>
-                    <button onClick={function () { handleExportExcel(a); }} className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow" title="Download Excel file">📊 Excel</button>
+                        invoice/bill without any visible Offset rows in the ledger.
+                        v55.83-A.6.27.72 HOTFIX 30 — Print/Excel buttons now have EN/Bilingual
+                        dropdowns using native <details> for click-to-open behavior. */}
+                    <details className="relative inline-block">
+                      <summary className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Print our internal view as PDF">
+                        🖨️ Print (Internal) ▾
+                      </summary>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
+                        <button onClick={function () { handlePrintLedger(a, 'internal', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
+                      </div>
+                    </details>
+                    <details className="relative inline-block">
+                      <summary className="px-2 py-1 bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Print customer statement (their perspective) as PDF — for sending to the counterparty">
+                        🖨️ Customer Statement ▾
+                      </summary>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
+                        <button onClick={function () { handlePrintLedger(a, 'customer', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'customer', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
+                      </div>
+                    </details>
+                    <details className="relative inline-block">
+                      <summary className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none" title="Download Excel file">
+                        📊 Excel ▾
+                      </summary>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[180px] p-1">
+                        <button onClick={function () { handleExportExcel(a, false, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">English Only<div className="text-[9px] text-slate-400 font-normal">.xlsx with EN headers</div></button>
+                        <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">.xlsx with stacked EN/AR headers</div></button>
+                      </div>
+                    </details>
                     {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — account-level
                         attachments. Stores files (contracts, master agreements,
                         signed docs) against the customer card itself, separate
@@ -1548,13 +1598,27 @@ export default function OpenAccountsTab(props) {
                             <div className="text-[9px] font-extrabold text-white uppercase tracking-wider">Our credit (prepaid)</div>
                             <div className="text-sm font-mono font-extrabold text-white">{fmtNum(b.ourPrepaid)}</div>
                           </div>
-                          <div className={'flex-1 min-w-[140px] rounded px-2 py-1.5 border-2 ' +
+                          <div className={'flex-1 min-w-[160px] rounded-lg px-3 py-2 border-2 shadow-md ' +
                             (b.netBalance > 0 ? 'bg-emerald-600 border-emerald-700 text-white' :
                              b.netBalance < 0 ? 'bg-red-600 border-red-700 text-white' :
                              'bg-slate-500 border-slate-600 text-white')}>
-                            <div className="text-[9px] font-extrabold uppercase tracking-wider opacity-90">Net balance</div>
-                            <div className="text-base font-mono font-extrabold">{fmtSigned(b.netBalance)}</div>
-                            <div className="text-[9px] opacity-90">
+                            <div className="text-[10px] font-extrabold uppercase tracking-wider opacity-90">Net balance</div>
+                            {/* v55.83-A.6.27.72 HOTFIX 30 (Max May 28 2026 feedback) —
+                                Bigger net number (28px, weight 900) + soft glow so the
+                                bottom-line position dominates the eye on expand. */}
+                            <div
+                              className="font-mono"
+                              style={{
+                                fontSize: '28px',
+                                fontWeight: 900,
+                                lineHeight: 1.15,
+                                textShadow: '0 0 10px rgba(255,255,255,0.35)',
+                                letterSpacing: '-0.5px',
+                              }}
+                            >
+                              {fmtSigned(b.netBalance)}
+                            </div>
+                            <div className="text-[10px] opacity-90 font-bold uppercase tracking-wider">
                               {b.netBalance > 0.001 ? 'in our favor' : b.netBalance < -0.001 ? 'against us' : 'settled'}
                             </div>
                           </div>
@@ -1568,8 +1632,35 @@ export default function OpenAccountsTab(props) {
                     No entries yet. Click <strong>+ Entry</strong> to add the first one.
                   </div>
                 ) : (
+                  <>
+                    {/* v55.83-A.6.27.72 HOTFIX 30 — Currency filter toggle (per-account state).
+                        Hides rows of the unselected currency for clean single-currency audit. */}
+                    {s.currencies.length > 1 && (
+                      <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center gap-2 text-[11px]">
+                        <span className="font-extrabold text-slate-600 uppercase tracking-wider">Currency:</span>
+                        {['ALL'].concat(s.currencies).map(function (filt) {
+                          var active = (ledgerCurFilter[a.id] || 'ALL') === filt;
+                          var btnCls = active
+                            ? (filt === 'USD' ? 'bg-sky-600 text-white' : filt === 'EGP' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white')
+                            : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-300';
+                          return (
+                            <button
+                              key={filt}
+                              onClick={function () {
+                                var next = Object.assign({}, ledgerCurFilter);
+                                next[a.id] = filt;
+                                setLedgerCurFilter(next);
+                              }}
+                              className={'px-3 py-1 rounded font-extrabold ' + btnCls}
+                            >
+                              {filt === 'ALL' ? 'All' : filt + ' Only'}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   <table className="w-full text-sm">
-                    <thead className="bg-slate-50 sticky top-0">
+                    <thead className="bg-slate-50 sticky top-0 z-10">
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Date</th>
                         {/* v55.83-A.6.27.72 — Type column is the source of truth for what each row is.
@@ -1600,7 +1691,11 @@ export default function OpenAccountsTab(props) {
                           // The auto-offset cascade silently settles opposite-side balances; the
                           // result is that the invoice/bill rows display "✓ paid" without two
                           // extra "Offset" rows cluttering the view. Audit trail is still in DB.
-                          return entry.transaction_type !== 'offset';
+                          if (entry.transaction_type === 'offset') return false;
+                          // v55.83-A.6.27.72 HOTFIX 30 — Apply per-account currency filter
+                          var curFilter = ledgerCurFilter[a.id] || 'ALL';
+                          if (curFilter !== 'ALL' && entry._currency !== curFilter) return false;
+                          return true;
                         })
                         .map(function (entry) {
                         var entryCur = entry._currency;
@@ -1618,13 +1713,44 @@ export default function OpenAccountsTab(props) {
                         var typeMeta = TRANSACTION_TYPES[txnType] || TRANSACTION_TYPES.credit_adjustment;
                         var pr = computePaidRemaining(entry, simResult);
                         var rowTint = typeMeta.rowCls || '';
+                        // v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) — Subtle currency
+                        // row tint plus a stronger hover (rgba 0.12) so the hover state
+                        // reads cleanly on varied monitor brightness.
+                        var curTint = entryCur === 'USD'
+                          ? 'bg-sky-50/40'
+                          : entryCur === 'EGP'
+                          ? 'bg-amber-50/30'
+                          : '';
+                        var hoverStyle = entryCur === 'USD'
+                          ? { '--hov': 'rgba(56, 189, 248, 0.12)' }
+                          : entryCur === 'EGP'
+                          ? { '--hov': 'rgba(245, 158, 11, 0.12)' }
+                          : { '--hov': 'rgba(100, 116, 139, 0.08)' };
                         return (
-                          <tr key={entry.id} className={'border-b border-slate-200 hover:bg-slate-50 ' + rowTint}>
+                          <tr
+                            key={entry.id}
+                            className={'border-b border-slate-200 transition-colors ' + curTint + ' ' + rowTint + ' hover:bg-[var(--hov)]'}
+                            style={hoverStyle}
+                          >
                             <td className="px-3 py-1.5 font-mono text-slate-900">{fmtDate(entry.entry_date)}</td>
                             <td className="px-3 py-1.5">
                               <span className={'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap ' + typeMeta.pillCls}>
                                 <span>{typeMeta.icon}</span>
-                                <span>{typeMeta.label}</span>
+                                {/* v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) —
+                                    payment_sent label gets a "/ Deposit" suffix when no
+                                    matching open bill was available, i.e. the payment
+                                    became Our Prepaid credit. Same for payment_received
+                                    that became Their Prepaid. Helps the cash-flow direction
+                                    read instantly without inspecting the prepaid tile. */}
+                                <span>{(function () {
+                                  var lbl = typeMeta.label;
+                                  if (txnType === 'payment_sent' || txnType === 'payment_received') {
+                                    var applied = (simResult.applications && simResult.applications[entry.id]) || 0;
+                                    var faceAmt = Number(entry.debit_amount || entry.credit_amount || 0);
+                                    if (faceAmt > 0.005 && applied < 0.005) lbl = lbl + ' / Deposit';
+                                  }
+                                  return lbl;
+                                })()}</span>
                               </span>
                             </td>
                             <td className="px-3 py-1.5">
@@ -1645,7 +1771,16 @@ export default function OpenAccountsTab(props) {
                               {entry.notes && <div className="text-[10px] text-slate-600 italic">{entry.notes}</div>}
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
-                            <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
+                            <td className="px-3 py-1.5 text-center font-mono font-bold text-[11px]">
+                              {/* v55.83-A.6.27.72 HOTFIX 30 — Currency cell: glowing colored dot + brand-color text */}
+                              <span className="inline-flex items-center gap-1.5 font-extrabold">
+                                <span
+                                  className={'inline-block w-2 h-2 rounded-full ' + (entryCur === 'USD' ? 'bg-sky-500' : entryCur === 'EGP' ? 'bg-amber-500' : 'bg-slate-400')}
+                                  style={{ boxShadow: entryCur === 'USD' ? '0 0 4px #38bdf8' : entryCur === 'EGP' ? '0 0 4px #f59e0b' : 'none' }}
+                                />
+                                <span className={entryCur === 'USD' ? 'text-sky-700' : entryCur === 'EGP' ? 'text-amber-700' : 'text-slate-700'}>{entryCur}</span>
+                              </span>
+                            </td>
                             {/* v55.83-A.6.27.72 HOTFIX 14 — Per-row AR Side / AP Side cells.
                                 Sales Invoice rows → blue text. Vendor Bill rows → orange text.
                                 Payments/offsets → neutral emerald/red (default). */}
@@ -1680,20 +1815,35 @@ export default function OpenAccountsTab(props) {
                                     </span>
                                   );
                                 }
-                                return <span className={typeMeta.amountCls || 'text-slate-900'}>{fmtNum(pr.remaining)}</span>;
+                                // v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) — Open
+                                // prefix on partial-remaining amounts so non-accountants
+                                // immediately read "Open 76,346.00" as a status + amount,
+                                // not just a bare number.
+                                return (
+                                  <span className={'whitespace-nowrap ' + (typeMeta.amountCls || 'text-slate-900')}>
+                                    <span className="text-[9px] font-extrabold uppercase tracking-wider opacity-70 mr-1">Open</span>{fmtNum(pr.remaining)}
+                                  </span>
+                                );
                               })()}
                             </td>
                             {/* Net per currency — running net balance from the simulation */}
                             {s.currencies.map(function (cur) {
                               var rbForCur = (entry._running_by_currency && entry._running_by_currency[cur]) || 0;
                               var isThisEntryCur = (cur === entryCur);
+                              // v55.83-A.6.27.72 HOTFIX 30 — staircase dimming: when this row's
+                              // currency is different from the column's currency, the running
+                              // balance for that column didn't change on this row, so dim it
+                              // aggressively (low-opacity gray) and only ACTIVE balance pops.
+                              var cls = isThisEntryCur
+                                ? ('bg-slate-100 font-extrabold ' + (rbForCur > 0 ? 'text-emerald-800' : rbForCur < 0 ? 'text-red-700' : 'text-slate-700'))
+                                : 'text-slate-300 font-medium opacity-60';
+                              // v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) — Active
+                              // balance gets a subtle text-shadow glow so the eye snaps to it.
+                              var styleObj = isThisEntryCur
+                                ? { textShadow: '0 0 6px rgba(255,255,255,0.15)' }
+                                : undefined;
                               return (
-                                <td
-                                  key={cur}
-                                  className={'px-3 py-1.5 text-right font-mono font-extrabold ' +
-                                    (isThisEntryCur ? 'bg-slate-100 ' : 'text-slate-400 ') +
-                                    (rbForCur > 0 ? 'text-emerald-800' : rbForCur < 0 ? 'text-red-700' : 'text-slate-500')}
-                                >
+                                <td key={cur} className={'px-3 py-1.5 text-right font-mono ' + cls} style={styleObj}>
                                   {fmtSigned(rbForCur)}
                                 </td>
                               );
@@ -1833,6 +1983,7 @@ export default function OpenAccountsTab(props) {
                       })}
                     </tbody>
                   </table>
+                  </>
                 )}
               </div>
             )}
@@ -2030,21 +2181,36 @@ export default function OpenAccountsTab(props) {
                     <input
                       type="radio" name="direction" value="credit"
                       checked={invoiceDraft.direction === 'credit'}
-                      onChange={function () { setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'credit' })); }}
+                      onChange={function () {
+                        // v55.83-A.6.27.72 HOTFIX 31 — regenerate invoice_number to match new direction
+                        // but ONLY if the current number still looks like the auto-generated one for
+                        // the opposite direction. If user typed a custom number, don't clobber it.
+                        var acc = accounts.find(function (a) { return a.id === invoiceDraft.account_id; });
+                        var currentNum = invoiceDraft.invoice_number || '';
+                        var lookedAuto = /^(SALE|BILL|INV)-[A-Z0-9-]+-\d{4}-\d{3,}$/.test(currentNum);
+                        var newNum = lookedAuto ? computeNextInvoiceNumber(acc, 'credit') : currentNum;
+                        setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'credit', invoice_number: newNum }));
+                      }}
                       className="mr-2"
                     />
                     <span className="text-sm font-extrabold text-emerald-900">We&apos;re billing them</span>
-                    <div className="text-[10px] text-slate-700 mt-1">Creates a CREDIT ledger entry (they owe us)</div>
+                    <div className="text-[10px] text-slate-700 mt-1">Creates a CREDIT ledger entry (they owe us) — number prefix: SALE-</div>
                   </label>
                   <label className={'border-2 rounded-lg p-3 cursor-pointer ' + (invoiceDraft.direction === 'debit' ? 'border-red-600 bg-red-50' : 'border-slate-300 bg-white')}>
                     <input
                       type="radio" name="direction" value="debit"
                       checked={invoiceDraft.direction === 'debit'}
-                      onChange={function () { setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'debit' })); }}
+                      onChange={function () {
+                        var acc = accounts.find(function (a) { return a.id === invoiceDraft.account_id; });
+                        var currentNum = invoiceDraft.invoice_number || '';
+                        var lookedAuto = /^(SALE|BILL|INV)-[A-Z0-9-]+-\d{4}-\d{3,}$/.test(currentNum);
+                        var newNum = lookedAuto ? computeNextInvoiceNumber(acc, 'debit') : currentNum;
+                        setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'debit', invoice_number: newNum }));
+                      }}
                       className="mr-2"
                     />
                     <span className="text-sm font-extrabold text-red-900">They&apos;re billing us</span>
-                    <div className="text-[10px] text-slate-700 mt-1">Creates a DEBIT ledger entry (we owe them)</div>
+                    <div className="text-[10px] text-slate-700 mt-1">Creates a DEBIT ledger entry (we owe them) — number prefix: BILL-</div>
                   </label>
                 </div>
 

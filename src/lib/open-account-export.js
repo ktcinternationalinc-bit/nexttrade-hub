@@ -20,6 +20,17 @@
 
 import * as XLSX from 'xlsx';
 
+// v55.83-A.6.27.72 — Open Account ledger export functions.
+//
+// v55.83-A.6.27.72 HOTFIX 30/31 — bilingual mode support + "Credit Applied"
+// terminology + offset linkage explainer lines + customer-friendly headers.
+// Bilingual mode: pass opts.bilingual = true to printAccountLedger() and
+// exportAccountLedgerToExcel() — column headers and type labels render
+// stacked (English on top, Arabic below). When omitted, EN-only is rendered
+// (unchanged behavior for existing call sites).
+
+import { T as t18n, stackedH } from './open-account-i18n.js';
+
 function fmtMoney(n) {
   if (n == null || isNaN(Number(n))) return '';
   return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -84,7 +95,33 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
   if (!account) return;
   opts = opts || {};
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
+  var bilingual = opts.bilingual === true;
   var simulation = opts.simulation || null;
+  // v55.83-A.6.27.72 HOTFIX 30 — Build offset-linkage lookup BEFORE filtering
+  // out offset rows from display. Maps invoice/bill ID → array of references
+  // it was offset against, so we can show "Paid by credit applied from SALE-XXX"
+  // under the ✓ paid badge on the linked invoice/bill row.
+  var allEntries = entries || [];
+  var refById = {};
+  var typeById = {};
+  allEntries.forEach(function (e) { if (e && e.id) { refById[e.id] = e.reference_number; typeById[e.id] = e.transaction_type; } });
+  var offsetsByTarget = {};
+  allEntries.filter(function (e) { return e.transaction_type === 'offset'; }).forEach(function (o) {
+    var invId = o.offset_invoice_id;
+    var billId = o.offset_bill_id;
+    // Skip malformed offset rows (HOTFIX 28 rejects them in simulator; we skip in UI too)
+    if (typeById[invId] !== 'sales_invoice' || typeById[billId] !== 'vendor_bill') return;
+    // Use the DEBIT-side row of each pair as canonical so we don't double-count.
+    if (Number(o.debit_amount || 0) > 0) {
+      var amt = Number(o.debit_amount);
+      var billRef = refById[billId] || (billId ? billId.substring(0, 8) : '');
+      var invRef = refById[invId] || (invId ? invId.substring(0, 8) : '');
+      if (!offsetsByTarget[invId]) offsetsByTarget[invId] = [];
+      offsetsByTarget[invId].push({ otherRef: billRef, amount: amt });
+      if (!offsetsByTarget[billId]) offsetsByTarget[billId] = [];
+      offsetsByTarget[billId].push({ otherRef: invRef, amount: amt });
+    }
+  });
   // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from printed statement.
   // The auto-offset cascade settles opposite-side balances; the invoice/bill rows
   // show "✓ paid" without two confusing offset lines. Audit trail still in DB.
@@ -128,15 +165,15 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     var cs = byCurrency[cur] || { credit: 0, debit: 0, balance: 0, count: 0 };
     var simCur = (simulation && simulation.byCurrency && simulation.byCurrency[cur]) || null;
     var applications = (simulation && simulation.applications) || {};
-    // v55.83-A.6.27.72 — labels are mirrored for customer perspective
-    var TYPE_LABEL = {
-      sales_invoice:    perspective === 'customer' ? 'Vendor Bill (you billed us)' : 'Sales Invoice (we billed them)',
-      vendor_bill:      perspective === 'customer' ? 'Sales Invoice (we billed you)' : 'Vendor Bill (they billed us)',
-      payment_received: perspective === 'customer' ? 'Payment Sent (you paid us)'   : 'Payment Received (they paid us)',
-      payment_sent:     perspective === 'customer' ? 'Payment Received (we paid you)' : 'Payment Sent (we paid them)',
-      credit_adjustment:'Adjustment',
-      offset:           'Offset',
-    };
+    // v55.83-A.6.27.72 HOTFIX 30/31 — type labels via i18n module with
+    // perspective flip. Customer copy shows clean labels ("Invoice"/"Bill")
+    // from THEIR perspective without the long parenthetical that was here.
+    function tLabel(typeKey) {
+      var en = t18n(typeKey, 'en', perspective);
+      if (!bilingual) return en;
+      var ar = t18n(typeKey, 'ar', perspective);
+      return en + '<br><span class="ar-sub" dir="rtl">' + ar + '</span>';
+    }
     var rowsHtml = '';
     var running = 0;
     var anyRows = false;
@@ -157,7 +194,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       if (isInvoiceOrBill) {
         remaining = Math.max(0, faceAmt - paid);
       }
-      var typeLabel = TYPE_LABEL[e.transaction_type] || 'Entry';
+      var typeLabel = tLabel(e.transaction_type);
       // v55.83-A.6.27.72 HOTFIX 11 — AR Side / AP Side routing per the spec.
       // Sales Invoice + Payment Received → AR Side
       // Vendor Bill + Payment Sent       → AP Side
@@ -184,26 +221,67 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       } else if (e.transaction_type === 'vendor_bill') {
         invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#7e22ce';
       }
+      // v55.83-A.6.27.72 HOTFIX 30 — color by transaction TYPE not blanket-by-column.
+      // sales_invoice/payment_received in AR column → green (asset)
+      // vendor_bill in AP column → red (liability)
+      // payment_sent in AP column → GREEN not red (we paid them = good for our position)
+      var arColor = '#15803d';  // green default
+      var apColor = '#b91c1c';  // red default for vendor bills
+      if (e.transaction_type === 'payment_sent') apColor = '#15803d';  // green
+      if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
       var arCellHtml = arSide > 0.005
-        ? '<span style="color:' + (invoiceColor || '#15803d') + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+        ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
-        ? '<span style="color:' + (invoiceColor || '#b91c1c') + '">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
+        ? '<span style="color:' + (invoiceColor || apColor) + '">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
       // Single Remaining column — fills only on invoice/bill rows, colored by invoice color
       var remainingCellHtml = '';
       if (isInvoiceOrBill) {
+        // v55.83-A.6.27.72 HOTFIX 30 — offset linkage explainer
+        var links = offsetsByTarget[e.id] || [];
+        var linkLine = '';
+        if (links.length > 0) {
+          var sortedLinks = links.slice().sort(function (a, b) { return b.amount - a.amount; });
+          var headlineRef = sortedLinks[0].otherRef;
+          var moreCount = sortedLinks.length - 1;
+          var moreText = moreCount > 0 ? ' + ' + moreCount + ' more' : '';
+          var isPartial = remaining > 0.005;
+          var phraseEn = isPartial ? t18n('partially_applied', 'en') : t18n('paid_by_credit', 'en');
+          var phraseLineEn = phraseEn + ' <strong>' + escapeHtml(headlineRef) + '</strong>' + moreText;
+          var phraseLineFull = phraseLineEn;
+          if (bilingual) {
+            var phraseAr = isPartial ? t18n('partially_applied', 'ar') : t18n('paid_by_credit', 'ar');
+            phraseLineFull += '<br><span class="ar-sub" dir="rtl">' + phraseAr + ' <strong>' + escapeHtml(headlineRef) + '</strong></span>';
+          }
+          linkLine = '<div style="font-size:9px;color:#64748b;margin-top:3px;font-style:italic">' + phraseLineFull + '</div>';
+        }
         if (remaining > 0.005) {
-          remainingCellHtml = '<span style="color:' + invoiceColor + '">' + escapeHtml(fmtMoney(remaining)) + '</span>';
+          var openTxt = bilingual
+            ? t18n('open', 'en') + ' ' + escapeHtml(fmtMoney(remaining)) + '<br><span class="ar-sub" dir="rtl">' + t18n('open', 'ar') + '</span>'
+            : t18n('open', 'en') + ' ' + escapeHtml(fmtMoney(remaining));
+          remainingCellHtml = '<span style="color:' + invoiceColor + ';font-weight:700">' + openTxt + '</span>' + linkLine;
         } else {
-          remainingCellHtml = '<span style="color:#15803d; font-size:10px">✓ paid</span>';
+          var paidTxt = bilingual
+            ? t18n('paid', 'en') + '<br><span class="ar-sub" dir="rtl">' + t18n('paid', 'ar') + '</span>'
+            : t18n('paid', 'en');
+          remainingCellHtml = '<span style="background:#15803d;color:white;padding:3px 8px;border-radius:4px;font-size:9px;font-weight:700">' + paidTxt + '</span>' + linkLine;
         }
       }
       var runCellHtml = '<span style="color:' + (running > 0.005 ? '#15803d' : running < -0.005 ? '#b91c1c' : '#475569') + '">' + escapeHtml(fmtSignedMoney(running)) + '</span>';
       // Description colored when it's an invoice/bill; otherwise default
       var descColorStyle = invoiceColor ? ' style="color:' + invoiceColor + '; font-weight:600"' : '';
+      // v55.83-A.6.27.72 HOTFIX 30 — surface Arabic note inline when bilingual mode
+      // is on (e.g. the Customs invoice has Arabic-language notes that customers
+      // should see naturally).
+      var arNoteHtml = '';
+      if (bilingual && e.notes && /[\u0600-\u06FF]/.test(e.notes)) {
+        arNoteHtml = '<br><span class="ar-sub" dir="rtl" style="font-size:10px;color:#64748b">' + escapeHtml(e.notes) + '</span>';
+      } else if (e.notes && !bilingual) {
+        arNoteHtml = '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>';
+      }
       rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
-        + '<td style="font-size:10px"><strong>' + escapeHtml(typeLabel) + '</strong></td>'
-        + '<td' + descColorStyle + '>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
+        + '<td style="font-size:10px"><strong>' + typeLabel + '</strong></td>'
+        + '<td' + descColorStyle + '>' + escapeHtml(e.description || '') + arNoteHtml + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
         + '<td class="num" style="background:#f0fdf4">' + arCellHtml + '</td>'
         + '<td class="num" style="background:#fef2f2">' + apCellHtml + '</td>'
@@ -214,9 +292,12 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     if (!anyRows) {
       rowsHtml = '<tr><td colspan="8" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
     }
-    var balanceLabel = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us')
-                     : cs.balance < 0 ? (perspective === 'customer' ? 'We owe you' : 'We owe them')
-                     : 'Settled';
+    var balanceLabelKey = cs.balance > 0 ? 'they_owe_us_dir'
+                        : cs.balance < 0 ? 'we_owe_them_dir'
+                        : 'settled';
+    var balanceLabel = bilingual
+      ? t18n(balanceLabelKey, 'en', perspective) + ' / ' + t18n(balanceLabelKey, 'ar', perspective)
+      : t18n(balanceLabelKey, 'en', perspective);
     var balanceColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
     var bgColor = cs.balance >= 0 ? '#f0fdf4' : '#fef2f2';
 
@@ -250,14 +331,14 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       + potTilesHtml
       + '<table>'
       + '<thead><tr>'
-      + '<th style="width:70px">Date</th>'
-      + '<th style="width:110px">Type</th>'
-      + '<th>Description</th>'
-      + '<th style="width:85px">Reference</th>'
-      + '<th class="num" style="width:80px; background:#f0fdf4">AR Side</th>'
-      + '<th class="num" style="width:80px; background:#fef2f2">AP Side</th>'
-      + '<th class="num" style="width:80px; background:#fffbeb">Open Balance</th>'
-      + '<th class="num" style="width:110px">Running Balance ' + escapeHtml(cur) + '</th>'
+      + '<th style="width:70px">' + (bilingual ? stackedH('date') : t18n('date', 'en')) + '</th>'
+      + '<th style="width:110px">' + (bilingual ? stackedH('type') : t18n('type', 'en')) + '</th>'
+      + '<th>' + (bilingual ? stackedH('description') : t18n('description', 'en')) + '</th>'
+      + '<th style="width:85px">' + (bilingual ? stackedH('reference') : t18n('reference', 'en')) + '</th>'
+      + '<th class="num" style="width:80px; background:#f0fdf4">' + (bilingual ? stackedH('they_owe_us', perspective) : t18n('they_owe_us', 'en', perspective)) + '</th>'
+      + '<th class="num" style="width:80px; background:#fef2f2">' + (bilingual ? stackedH('we_owe_them', perspective) : t18n('we_owe_them', 'en', perspective)) + '</th>'
+      + '<th class="num" style="width:80px; background:#fffbeb">' + (bilingual ? stackedH('open_balance') : t18n('open_balance', 'en')) + '</th>'
+      + '<th class="num" style="width:110px">' + (bilingual ? stackedH('running_bal') : t18n('running_bal', 'en')) + ' ' + escapeHtml(cur) + '</th>'
       + '</tr></thead>'
       + '<tbody>' + rowsHtml + '</tbody>'
       + (cs.count > 0
@@ -287,8 +368,8 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
               var subLabel = netP > 0.005 ? 'in our favor' : netP < -0.005 ? 'against us' : 'settled';
               return '<tfoot>'
                 + '<tr style="background:#1e293b; color:#fff"><td colspan="8" style="padding:8px 6px; text-align:left; text-transform:uppercase; font-size:10px; letter-spacing:1px; font-weight:800">' + escapeHtml(cur) + ' Summary</td></tr>'
-                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AR (They Owe Us):</td><td class="num" style="color:#86efac; background:rgba(34,197,94,0.15)">' + escapeHtml(fmtMoney(totAR)) + ' ' + escapeHtml(cur) + '</td><td colspan="3"></td></tr>'
-                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">Total AP (We Owe Them):</td><td></td><td class="num" style="color:#fca5a5; background:rgba(239,68,68,0.15)">' + escapeHtml(fmtMoney(totAP)) + ' ' + escapeHtml(cur) + '</td><td colspan="2"></td></tr>'
+                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">' + (bilingual ? stackedH('total_they_owe', perspective) : t18n('total_they_owe', 'en', perspective)) + ':</td><td class="num" style="color:#86efac; background:rgba(34,197,94,0.15)">' + escapeHtml(fmtMoney(totAR)) + ' ' + escapeHtml(cur) + '</td><td colspan="3"></td></tr>'
+                + '<tr style="background:#334155; color:#fff"><td colspan="4" style="padding:4px 6px; text-align:right">' + (bilingual ? stackedH('total_we_owe', perspective) : t18n('total_we_owe', 'en', perspective)) + ':</td><td></td><td class="num" style="color:#fca5a5; background:rgba(239,68,68,0.15)">' + escapeHtml(fmtMoney(totAP)) + ' ' + escapeHtml(cur) + '</td><td colspan="2"></td></tr>'
                 + '<tr style="background:#0f172a; color:#fff; font-weight:800">'
                 + '<td colspan="4" style="padding:8px 6px; text-align:right; text-transform:uppercase; font-size:11px">Net ' + escapeHtml(cur) + ' Position:</td>'
                 + '<td colspan="3" class="num" style="color:' + (netP > 0 ? '#86efac' : netP < 0 ? '#fca5a5' : '#fff') + '; font-size:14px">'
@@ -369,7 +450,13 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + '<div class="entity-lines">' + entityLines.slice(2).join('<br>') + '</div>'
     + '</div>'
     + '<div class="statement-block">'
-    + '<div class="statement-title">' + (perspective === 'customer' ? 'Customer Statement' : 'Statement') + '</div>'
+    + '<div class="statement-title">' + (function () {
+        var titleKey = perspective === 'customer' ? 'customer_statement' : 'internal_statement';
+        if (bilingual) {
+          return t18n(titleKey, 'en') + ' / <span dir="rtl">' + t18n(titleKey, 'ar') + '</span>';
+        }
+        return t18n(titleKey, 'en');
+      })() + '</div>'
     + '<div class="meta">Generated: ' + escapeHtml(generatedAt) + '</div>'
     + (firstDate ? '<div class="meta">Period: ' + escapeHtml(firstDate) + ' to ' + escapeHtml(lastDate) + '</div>' : '')
     + (currencies.length > 1 ? '<div class="meta">Currencies: ' + currencies.map(escapeHtml).join(', ') + '</div>' : '')
@@ -403,7 +490,10 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
 // Each currency has its own running-balance column so the recipient can
 // trace both balances side-by-side.
 // ──────────────────────────────────────────────────────────────────
-export function exportAccountLedgerToExcel(account, entity, entries, summary) {
+export function exportAccountLedgerToExcel(account, entity, entries, summary, opts) {
+  opts = opts || {};
+  var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
+  var bilingual = opts.bilingual === true;
   if (!account) return;
   // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from Excel export to match screen view.
   entries = (entries || []).filter(function (e) { return e.transaction_type !== 'offset'; });
@@ -428,26 +518,26 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   if (currencies.length > 0) rows.push(['Currencies:', currencies.join(', '), '', '', '', '', '']);
   rows.push(['', '', '', '', '', '', '']);
 
-  // v55.83-A.6.27.72 HOTFIX 11 — Excel column headers match the spec's two-column layout:
-  // Date, Type, Description, Reference, Currency, AR Side, AP Side, Remaining,
-  // then one "Running Balance CUR" column per currency.
-  var colHeaders = ['Date', 'Type', 'Description', 'Reference', 'Currency', 'AR Side', 'AP Side', 'Open Balance'];
-  currencies.forEach(function (cur) { colHeaders.push('Running Balance ' + cur); });
+  // v55.83-A.6.27.72 HOTFIX 30/31 — Excel headers via i18n with bilingual stacking
+  // (Excel cells support multi-line via \n). Customer-friendly labels via perspective.
+  function xlH(key) {
+    return bilingual ? (t18n(key, 'en', perspective) + '\n' + t18n(key, 'ar', perspective)) : t18n(key, 'en', perspective);
+  }
+  var colHeaders = [xlH('date'), xlH('type'), xlH('description'), xlH('reference'), 'Currency',
+                    xlH('they_owe_us'), xlH('we_owe_them'), xlH('open_balance')];
+  currencies.forEach(function (cur) { colHeaders.push((bilingual ? t18n('running_bal', 'en') + '\n' + t18n('running_bal', 'ar') : t18n('running_bal', 'en')) + ' ' + cur); });
   rows.push(colHeaders);
 
   // Per-currency running totals (rolling)
   var running = {}; // cur → running balance
   currencies.forEach(function (c) { running[c] = 0; });
 
-  // v55.83-A.6.27.72 — Type label map for display in Excel
-  var TYPE_LABEL = {
-    sales_invoice: 'Sales Invoice',
-    vendor_bill: 'Vendor Bill',
-    payment_received: 'Payment Received',
-    payment_sent: 'Payment Sent',
-    credit_adjustment: 'Adjustment',
-    offset: 'Offset',
-  };
+  // v55.83-A.6.27.72 HOTFIX 30/31 — Excel type labels via i18n with perspective + bilingual
+  function xlType(typeKey) {
+    var en = t18n(typeKey, 'en', perspective);
+    if (!bilingual) return en;
+    return en + '\n' + t18n(typeKey, 'ar', perspective);
+  }
 
   // v55.83-A.6.27.72 — compute paid amounts via FIFO simulation
   // We need the applications map. Caller didn't pass simulation here, so we
@@ -531,7 +621,7 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary) {
     }
     var row = [
       fmtDate(e.entry_date),
-      TYPE_LABEL[e.transaction_type] || '',
+      xlType(e.transaction_type) || '',
       (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
       e.reference_number || '',
       entryCur,

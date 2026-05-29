@@ -109,8 +109,8 @@ ok('C5: computeInvoiceTotals rounds to 2 decimals',
 ok('C6: openNewInvoice defaults currency from entity',
   /function openNewInvoice\(accountId\)/.test(oa) &&
   /var defaultCur = \(ent && ent\.default_currency\) \|\| 'USD'/.test(oa));
-ok('C7: openNewInvoice defaults direction = credit',
-  /direction: 'credit',  \/\/ default: we billed them/.test(oa));
+ok('C7: openNewInvoice defaults direction = credit (HOTFIX 31 stored in defaultDirection)',
+  /var defaultDirection = 'credit'/.test(oa) && /direction: defaultDirection/.test(oa));
 ok('C8: openNewInvoice defaults counterparty_name from account',
   /counterparty_name: \(acc && acc\.account_name\) \|\| ''/.test(oa));
 ok('C9: openNewInvoice defaults tax_enabled false',

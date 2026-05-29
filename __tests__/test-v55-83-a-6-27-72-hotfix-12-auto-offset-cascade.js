@@ -58,8 +58,8 @@ ok('A9: Cascade emits user-visible toast when it posted offsets',
 
 console.log('\n── Offset rows hidden from views ──');
 
-ok('B1: Screen ledger filters out transaction_type==="offset" rows',
-  /\.filter\(function \(entry\)[\s\S]{0,600}entry\.transaction_type !== 'offset'/.test(oa));
+ok('B1: Screen ledger filters out transaction_type==="offset" rows (HOTFIX 30 added currency filter alongside)',
+  /\.filter\(function \(entry\)[\s\S]{0,1500}entry\.transaction_type === 'offset'\) return false/.test(oa));
 
 ok('B2: Print export filters out offset rows at entry point',
   /entries = \(entries \|\| \[\]\)\.filter\(function \(e\) \{ return e\.transaction_type !== 'offset'; \}\)/.test(exp));

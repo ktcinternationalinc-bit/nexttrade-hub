@@ -212,26 +212,32 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
 
   return (
     <div className="space-y-4">
-      {/* Header strip */}
-      <div className="bg-gradient-to-r from-indigo-50 via-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+      {/* Header strip — v55.83-A.6.27.72 HOTFIX 29 — Per Max May 28 2026 screenshot:
+          the old `bg-gradient-to-r from-indigo-50 via-blue-50 to-cyan-50` rendered as
+          BRIGHT pastel because gradients bypass the dark-theme bg-X-50 overrides in
+          globals.css. Combined with the dark theme auto-brightening `text-slate-900`,
+          the title vanished entirely (white-on-pastel). Replaced with a dark slate-to-
+          indigo gradient that fits the theme, with explicit bright text colors that
+          stand out on the dark surface. */}
+      <div className="bg-gradient-to-r from-slate-800 via-indigo-900 to-slate-800 rounded-xl p-4 border border-indigo-500/30 shadow-lg">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-xl font-extrabold text-slate-900">📦 Inventory</h2>
-            <p className="text-xs text-slate-600">
+            <h2 className="text-xl font-extrabold text-white">📦 Inventory</h2>
+            <p className="text-xs text-indigo-200 font-medium">
               Track every shipment from arrival through sale. Costs, stock, and profit in one place.
             </p>
           </div>
           <div className="flex items-center gap-1 text-[11px]">
-            <span className="px-2 py-1 rounded bg-emerald-600 text-white font-extrabold">
+            <span className="px-2 py-1 rounded bg-emerald-600 text-white font-extrabold ring-1 ring-emerald-700/50 shadow-sm">
               v55.83-A.6.27.45 · Invoice variant picker
             </span>
             {seePnL && (
-              <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
+              <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-extrabold ring-1 ring-emerald-700/50 shadow-sm">
                 P&L access
               </span>
             )}
             {seeCosts && !seePnL && (
-              <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">
+              <span className="px-2 py-0.5 rounded bg-amber-600 text-white font-extrabold ring-1 ring-amber-700/50 shadow-sm">
                 Cost access
               </span>
             )}

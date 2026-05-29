@@ -238,8 +238,8 @@ ok('J2: Account header Bal pill uses fmtSigned (consistent with totals row)',
 ok('J3: Grand-totals Net Balance also uses fmtSigned',
   /<div className="text-xl font-extrabold mt-0\.5">\{fmtSigned\(t\.balance\)\}/.test(oa));
 
-ok('J4: 4-pot Net Balance tile uses fmtSigned',
-  /<div className="text-base font-mono font-extrabold">\{fmtSigned\(b\.netBalance\)\}<\/div>/.test(oa));
+ok('J4: 4-pot Net Balance tile uses fmtSigned (HOTFIX 30: now rendered at 28px / weight 900)',
+  /fontSize: '28px'[\s\S]{0,300}fontWeight: 900[\s\S]{0,500}\{fmtSigned\(b\.netBalance\)\}/.test(oa));
 
 console.log('\n══════════════════════════════════════════════');
 if (process.exitCode) console.log('FAILED');

@@ -135,8 +135,8 @@ ok('E6: Card subtitle flags missing FX rate inline (HOTFIX 15: generalized messa
 
 console.log('\n── Print export mirrors spec ──');
 
-ok('F1: PRINT headers AR Side / AP Side / Open Balance / Running Balance CUR (polish)',
-  />AR Side</.test(exp) && />AP Side</.test(exp) && />Open Balance</.test(exp) && /Running Balance ' \+ escapeHtml\(cur\)/.test(exp));
+ok('F1: PRINT headers via i18n t18n() for they_owe_us/we_owe_them/open_balance/running_bal (HOTFIX 30)',
+  /t18n\('they_owe_us'[\s\S]{0,500}t18n\('we_owe_them'[\s\S]{0,500}t18n\('open_balance'[\s\S]{0,500}t18n\('running_bal'/.test(exp));
 
 ok('F2: PRINT per-row uses arSide / apSide',
   /var arSide = 0[\s\S]{0,300}var apSide = 0/.test(exp));
@@ -152,8 +152,8 @@ ok('F5: PRINT customer perspective swaps AR/AP',
 
 console.log('\n── Excel export mirrors spec ──');
 
-ok('G1: EXCEL headers AR Side + AP Side + Open Balance + Running Balance CUR (polish)',
-  /'AR Side', 'AP Side', 'Open Balance'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
+ok('G1: EXCEL headers via xlH() i18n helper for they_owe_us/we_owe_them/open_balance (HOTFIX 30)',
+  /xlH\('date'\)[\s\S]{0,500}xlH\('they_owe_us'\)[\s\S]{0,500}xlH\('we_owe_them'\)[\s\S]{0,500}xlH\('open_balance'\)/.test(exp));
 
 ok('G2: EXCEL per-row writes positive arSide / apSide numerics',
   /arSide > 0\.005 \? arSide : ''/.test(exp) && /apSide > 0\.005 \? apSide : ''/.test(exp));

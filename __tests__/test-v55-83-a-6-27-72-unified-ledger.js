@@ -126,33 +126,34 @@ ok('C15: handleOffset function — uses findOffsetCandidate + buildOffsetEntries
   /Rollback first entry/.test(oa));
 ok('C16: invoice modal stamps transaction_type sales_invoice or vendor_bill',
   /transaction_type: invoiceDraft\.direction === 'credit' \? 'sales_invoice' : 'vendor_bill'/.test(oa));
-ok('C17: two Print buttons — internal + customer perspective',
-  /handlePrintLedger\(a, 'internal'\)/.test(oa) &&
-  /handlePrintLedger\(a, 'customer'\)/.test(oa));
+ok('C17: two Print dropdowns — internal + customer perspective (HOTFIX 30: each with EN/Bilingual options)',
+  /handlePrintLedger\(a, 'internal', (false|true)\)/.test(oa) &&
+  /handlePrintLedger\(a, 'customer', (false|true)\)/.test(oa));
 
 // ════════════════════════════════════════════════════════════════════
 // PART D — Export: print/Excel updates
 // ════════════════════════════════════════════════════════════════════
 ok('D1: printAccountLedger accepts opts (perspective + simulation)',
   /export function printAccountLedger\(account, entity, entries, summary, opts\)/.test(exp));
-ok('D2: print supports customer perspective with mirrored labels',
+ok('D2: print supports customer perspective with i18n labels (HOTFIX 30 — clean Invoice/Bill via i18n t18n)',
   /perspective === 'customer'/.test(exp) &&
-  /TYPE_LABEL/.test(exp));
-ok('D3: print displays type + AR Side/AP Side/Open Balance in PDF table (HOTFIX 11 polish)',
-  /AR Side/.test(exp) && /AP Side/.test(exp) && />Open Balance</.test(exp));
+  /t18n\(typeKey, 'en', perspective\)/.test(exp));
+ok('D3: print displays type + i18n column headers + offset linkage (HOTFIX 30)',
+  /t18n\('they_owe_us'/.test(exp) && /t18n\('we_owe_them'/.test(exp) && /t18n\('open_balance'/.test(exp) &&
+  /offsetsByTarget/.test(exp));
 ok('D4: 4-pot tile summary at top of each currency section',
   /potTilesHtml/.test(exp) &&
   /simCur\.theirOpenInvoices/.test(exp) &&
   /simCur\.ourOpenBills/.test(exp) &&
   /simCur\.theirPrepaid/.test(exp) &&
   /simCur\.ourPrepaid/.test(exp));
-ok('D5: Excel has Type + AR Side/AP Side/Open Balance columns (HOTFIX 11 polish)',
-  /'Type'/.test(exp) && /'AR Side'/.test(exp) && /'AP Side'/.test(exp) && /'Open Balance'/.test(exp));
+ok('D5: Excel has Type + i18n column headers + per-currency running (HOTFIX 30)',
+  /xlH\('they_owe_us'\)/.test(exp) && /xlH\('we_owe_them'\)/.test(exp) && /xlH\('open_balance'\)/.test(exp));
 ok('D6: Excel runs inline FIFO sim to compute Paid/Remaining per row',
   /var simApplied = \{\}/.test(exp) &&
   /var simState = \{\}/.test(exp));
-ok('D7: handlePrintLedger passes simulation + perspective to printAccountLedger',
-  /printAccountLedger\(account, ent, rows, s, \{ perspective: perspective \|\| 'internal', simulation: sim \}\)/.test(oa));
+ok('D7: handlePrintLedger passes simulation + perspective + bilingual to printAccountLedger (HOTFIX 30)',
+  /printAccountLedger\(account, ent, rows, s, \{[\s\S]{0,400}perspective: perspective \|\| 'internal'[\s\S]{0,200}simulation: sim[\s\S]{0,200}bilingual: bilingual === true/.test(oa));
 
 console.log('\n──────────────────────────────────────────────');
 console.log(fails === 0 ? '✅ ALL ' + (39) + ' assertions passed' : '❌ ' + fails + ' assertion(s) failed');

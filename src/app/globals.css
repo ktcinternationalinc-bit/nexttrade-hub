@@ -164,6 +164,26 @@ body {
 .text-purple-600, .text-purple-700 { color: #a78bfa !important; }
 .text-indigo-600, .text-indigo-700 { color: #818cf8 !important; }
 
+/* v55.83-A.6.27.72 HOTFIX 29 — Global -900/-800 dark-text auto-brightening.
+   Per Max May 28 2026 screenshot ("Current/Original columns too dark on
+   dark screen"): every `text-X-900` and `text-X-800` instance Tailwind
+   defaults to a near-black colored hue. On the portal's dark theme that
+   reads as invisible-on-dark. Until HOTFIX 29 only -500/-600/-700 had
+   dark-theme overrides; the -800/-900 darkest shades silently regressed
+   readability on every dark surface.
+   New rule: any -800 or -900 text shade automatically maps to its bright
+   -200 or -300 counterpart on the dark theme. This is the HOTFIX 25
+   readability rule enforced GLOBALLY rather than per-component. */
+.text-blue-800, .text-blue-900, .text-sky-800, .text-sky-900, .text-cyan-800, .text-cyan-900 { color: #7dd3fc !important; }
+.text-emerald-800, .text-emerald-900, .text-green-800, .text-green-900, .text-teal-800, .text-teal-900, .text-lime-800, .text-lime-900 { color: #6ee7b7 !important; }
+.text-red-800, .text-red-900, .text-rose-800, .text-rose-900, .text-pink-800, .text-pink-900 { color: #fca5a5 !important; }
+.text-purple-800, .text-purple-900, .text-violet-800, .text-violet-900, .text-fuchsia-800, .text-fuchsia-900 { color: #c4b5fd !important; }
+.text-indigo-800, .text-indigo-900 { color: #a5b4fc !important; }
+.text-orange-800, .text-orange-900 { color: #fdba74 !important; }
+/* NOTE on amber: HOTFIX 25 keeps amber JSX free to choose its own shade
+   for the amber-on-amber pill case, so amber-800/900 are intentionally
+   excluded from this global override. */
+
 /* Borders */
 .border-slate-200, .border-slate-100, .border-slate-50 { border-color: var(--border-glass) !important; }
 .border-blue-200, .border-blue-300 { border-color: rgba(56,189,248,0.2) !important; }

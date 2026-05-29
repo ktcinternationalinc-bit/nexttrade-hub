@@ -157,12 +157,12 @@ ok('H1: ledger table header has Currency column (v72 HOTFIX 11 — was "Cur")',
   />Currency</.test(oa));
 ok('H2: ledger table has Running Balance CUR columns per currency (v72 HOTFIX 11 final spec)',
   /Running Balance \{cur\}/.test(oa));
-ok('H3: each entry row shows its own _currency in the Cur column',
-  /<td className="px-3 py-1\.5 text-center font-mono font-bold text-slate-800 text-\[11px\]">\{entryCur\}<\/td>/.test(oa));
+ok('H3: each entry row shows its own _currency in the Cur column (HOTFIX 30 — now with colored dot + brand-color text)',
+  /\{entryCur\}<\/span>/.test(oa) && /cur-dot|w-2 h-2 rounded-full/.test(oa));
 ok('H4: each entry row renders per-currency running cells from _running_by_currency',
   /var rbForCur = \(entry\._running_by_currency && entry\._running_by_currency\[cur\]\) \|\| 0/.test(oa));
-ok('H5: entry\'s own currency cell highlighted (bg-slate-100), others dimmed (text-slate-400)',
-  /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,400}\(isThisEntryCur \? 'bg-slate-100 ' : 'text-slate-400 '\)/.test(oa));
+ok('H5: entry\'s own currency cell highlighted (bg-slate-100), inactive dimmed (HOTFIX 30 staircase: text-slate-300 + opacity-60)',
+  /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,600}'bg-slate-100[\s\S]{0,300}text-slate-300 font-medium opacity-60/.test(oa));
 ok('H6: per-currency Summary block split (one block per cur, v72 HOTFIX 11 polish — with spacer rows)',
   /s\.currencies\.map\(function \(cur, sumIdx\)/.test(oa) && /Net \{cur\} Position/.test(oa));
 ok('H7: totals row places per-currency balance in correct running column',
@@ -191,12 +191,12 @@ ok('I7: each section has its own Summary block in tfoot (v72 HOTFIX 11 final)',
 // PART J — Excel export (per-currency totals + running cols)
 // ══════════════════════════════════════════════════════════════════
 
-ok('J1: Excel headers Type/AR Side/AP Side/Open Balance + one Running Balance CUR per cur (v72 HOTFIX 11 polish)',
-  /'AR Side', 'AP Side', 'Open Balance'/.test(exp) && /'Running Balance ' \+ cur/.test(exp));
+ok('J1: Excel headers via xlH() i18n helper (HOTFIX 30: they_owe_us/we_owe_them/open_balance/running_bal)',
+  /xlH\('they_owe_us'\)/.test(exp) && /xlH\('we_owe_them'\)/.test(exp) && /xlH\('open_balance'\)/.test(exp));
 ok('J2: Excel walks entries with per-currency rolling running map (v72 HOTFIX 6 — now uses signedAmount)',
   /var running = \{\};[\s\S]{0,5000}running\[entryCur\] \+= signed/.test(exp));
-ok('J3: Excel row pushes Type + Amount + Paid + Remaining + per-currency running values (v55.83-A.6.27.72)',
-  /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,1000}TYPE_LABEL\[e\.transaction_type\]/.test(exp));
+ok('J3: Excel row pushes Type via xlType() i18n helper + Amount/Paid/Remaining/running (HOTFIX 30)',
+  /var row = \[\s+fmtDate\(e\.entry_date\)[\s\S]{0,200}xlType\(e\.transaction_type\)/.test(exp));
 ok('J4: Excel adds per-currency Summary block (Total AR + Total AP + Net Position rows) (v72 HOTFIX 11 final)',
   /cur \+ ' Summary:'/.test(exp) && /Total AR \(They Owe Us\)/.test(exp) && /Total AP \(We Owe Them\)/.test(exp));
 ok('J5: Excel adds plain-English balance lines per currency',
@@ -236,8 +236,8 @@ ok('R12: closed-tickets fetch still has NO .limit(100)',
   !/\.eq\('status', 'Closed'\)[\s\S]{0,200}\.limit\(100\)/.test(page));
 ok('R13: 44c — consume_invoice_item_inventory RPC still wired',
   /supabase\.rpc\('consume_invoice_item_inventory', \{ p_item_id: insertedItem\.id \}\)/.test(page));
-ok('R14: account card actions row preserved (+ Entry / Print / Excel / Files / Edit / Delete — Files added in .66 Issue 2)',
-  /openNewEntry\(a\.id\)[\s\S]{0,2000}\+ Entry[\s\S]{0,2000}handlePrintLedger[\s\S]{0,2000}handleExportExcel[\s\S]{0,2000}setAttachAccountId[\s\S]{0,2000}openEditAccount[\s\S]{0,2000}deleteAccount/.test(oa));
+ok('R14: account card actions row preserved (HOTFIX 30: Print/Excel buttons now have EN/Bilingual dropdowns)',
+  /openNewEntry\(a\.id\)[\s\S]{0,3000}\+ Entry[\s\S]{0,3000}handlePrintLedger[\s\S]{0,3000}handleExportExcel[\s\S]{0,3000}setAttachAccountId[\s\S]{0,3000}openEditAccount[\s\S]{0,3000}deleteAccount/.test(oa));
 ok('R15: saveEntry still inserts/updates open_account_entries table',
   /await dbInsert\('open_account_entries', payload, userProfile && userProfile\.id\)/.test(oa) &&
   /await dbUpdate\('open_account_entries', entryDraft\.id, payload, userProfile && userProfile\.id\)/.test(oa));

@@ -88,11 +88,12 @@ console.log('\n── Print export: invoice color, not blanket ──');
 ok('E1: Print export uses invoiceColor only for invoice/bill rows (default emerald/red for others)',
   /invoiceColor = null;[\s\S]{0,300}sales_invoice/.test(exp));
 
-ok('E2: Print export AR cell defaults to emerald-700 unless invoice/bill',
-  /invoiceColor \|\| '#15803d'/.test(exp));
+ok('E2: Print export AR cell uses arColor variable (HOTFIX 30 — color by transaction_type, defaults to emerald-700)',
+  /var arColor = '#15803d'/.test(exp) && /invoiceColor \|\| arColor/.test(exp));
 
-ok('E3: Print export AP cell defaults to red-700 unless invoice/bill',
-  /invoiceColor \|\| '#b91c1c'/.test(exp));
+ok('E3: Print export AP cell uses apColor variable (HOTFIX 30 — vendor_bill red, payment_sent green)',
+  /var apColor = '#b91c1c'/.test(exp) && /invoiceColor \|\| apColor/.test(exp) &&
+  /payment_sent[\s\S]{0,80}apColor = '#15803d'/.test(exp));
 
 ok('E4: Print export computes invoiceColor: blue for sales_invoice, PURPLE for vendor_bill (HOTFIX 15)',
   /sales_invoice'[\s\S]{0,300}'#1d4ed8'[\s\S]{0,300}vendor_bill'[\s\S]{0,300}'#7e22ce'/.test(exp));

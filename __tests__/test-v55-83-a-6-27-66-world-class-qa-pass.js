@@ -60,12 +60,13 @@ ok('A1: slugifyAccountName helper present (Issue 1)',
   /function slugifyAccountName\(name\)/.test(oa));
 ok('A2: slugifyAccountName uppercases + replaces non-alnum with hyphen + trims',
   /\.toUpperCase\(\)[\s\S]{0,200}replace\(\/\[\^A-Z0-9\]\+\/g, '-'\)/.test(oa));
-ok('A3: computeNextInvoiceNumber helper present',
-  /function computeNextInvoiceNumber\(account\)/.test(oa));
-ok('A4: format is INV-{SLUG}-{YEAR}-{NNN}',
-  /'INV-' \+ slug \+ '-' \+ year \+ '-'/.test(oa));
-ok('A5: openNewInvoice pre-fills invoice_number using computeNextInvoiceNumber',
-  /invoice_number: computeNextInvoiceNumber\(acc\)/.test(oa));
+ok('A3: computeNextInvoiceNumber helper present (HOTFIX 31 takes direction param)',
+  /function computeNextInvoiceNumber\(account, direction\)/.test(oa));
+ok('A4: format is SALE-{SLUG}-{YEAR}-{NNN} for credit, BILL-{SLUG}-{YEAR}-{NNN} for debit (HOTFIX 31)',
+  /var prefix = dir === 'credit' \? 'SALE-' : 'BILL-'/.test(oa) &&
+  /var fullPrefix = prefix \+ slug \+ '-' \+ year \+ '-'/.test(oa));
+ok('A5: openNewInvoice pre-fills invoice_number using computeNextInvoiceNumber with default direction',
+  /invoice_number: computeNextInvoiceNumber\(acc, defaultDirection\)/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART B — Issue 2: 📎 Files button on account row

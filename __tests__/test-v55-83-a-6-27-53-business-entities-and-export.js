@@ -71,8 +71,8 @@ ok('A16: backout SQL block present',
 
 ok('B1: open-account-export.js exports printAccountLedger (now accepts opts in v55.83-A.6.27.72)',
   /export function printAccountLedger\(account, entity, entries, summary, opts\)/.test(exp));
-ok('B2: open-account-export.js exports exportAccountLedgerToExcel',
-  /export function exportAccountLedgerToExcel\(account, entity, entries, summary\)/.test(exp));
+ok('B2: open-account-export.js exports exportAccountLedgerToExcel (HOTFIX 30 added opts)',
+  /export function exportAccountLedgerToExcel\(account, entity, entries, summary(?:, opts)?\)/.test(exp));
 ok('B3: imports xlsx (SheetJS) — already installed',
   /import \* as XLSX from 'xlsx'/.test(exp));
 ok('B4: print fn auto-fires window.print() via setTimeout',
@@ -118,9 +118,9 @@ ok('C5: business_entities load tolerates missing-table error gracefully',
 ok('C6: entitiesByCode memo + entityFor(account) helper',
   /var entitiesByCode = useMemo[\s\S]{0,300}\{\}/.test(oa) &&
   /function entityFor\(account\)/.test(oa));
-ok('C7: handlePrintLedger + handleExportExcel functions (v55.83-A.6.27.72: handlePrintLedger now accepts perspective)',
-  /function handlePrintLedger\(account, perspective\)/.test(oa) &&
-  /function handleExportExcel\(account\)/.test(oa));
+ok('C7: handlePrintLedger + handleExportExcel accept HOTFIX 30 bilingual parameter',
+  /function handlePrintLedger\(account, perspective, bilingual\)/.test(oa) &&
+  /function handleExportExcel\(account, bilingual, perspective\)/.test(oa));
 ok('C8: openNewAccount defaults business_entity_code to first entity (or ktc_intl)',
   /var defaultEntity = entities\.length > 0 \? entities\[0\]\.entity_code : 'ktc_intl'/.test(oa));
 ok('C9: openEditAccount preserves account.business_entity_code',
@@ -131,11 +131,14 @@ ok('C11: entity picker dropdown in account modal',
   /Our Entity for this Account \* \/ كياننا/.test(oa));
 ok('C12: dropdown shows fallback message when no entities loaded',
   /— No entities found \(run SQL migration \.53\) —/.test(oa));
-ok('C13: 🖨️ Print buttons on each account card — internal + customer (v55.83-A.6.27.72)',
-  /handlePrintLedger\(a, 'internal'\)[\s\S]{0,400}Print \(Internal\)/.test(oa) &&
-  /handlePrintLedger\(a, 'customer'\)[\s\S]{0,400}Customer Statement/.test(oa));
-ok('C14: 📊 Excel button on each account card calls handleExportExcel',
-  /onClick=\{function \(\) \{ handleExportExcel\(a\); \}\}[\s\S]{0,200}📊 Excel/.test(oa));
+ok('C13: 🖨️ Print dropdowns on each account card (HOTFIX 30 — EN/Bilingual options for both internal + customer)',
+  /handlePrintLedger\(a, 'internal', false\)[\s\S]{0,1500}English Only/.test(oa) &&
+  /handlePrintLedger\(a, 'internal', true\)[\s\S]{0,400}Bilingual/.test(oa) &&
+  /handlePrintLedger\(a, 'customer', false\)/.test(oa) &&
+  /handlePrintLedger\(a, 'customer', true\)/.test(oa));
+ok('C14: 📊 Excel dropdown on each account card (HOTFIX 30 — EN/Bilingual)',
+  /handleExportExcel\(a, false, 'internal'\)/.test(oa) &&
+  /handleExportExcel\(a, true, 'internal'\)/.test(oa));
 ok('C15: account header shows entity badge (🇺🇸 KTC Intl or 🇪🇬 KTC Egypt)',
   /🇺🇸 KTC Intl/.test(oa) && /🇪🇬 KTC Egypt/.test(oa));
 

@@ -141,8 +141,9 @@ ok('E6: ledger columns Date/Type/Description/Reference/Currency/AR Side/AP Side/
   />Type</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) && />Currency</.test(oa) && />AR Side</.test(oa) && />AP Side</.test(oa) && />Open Balance</.test(oa) && /Running Balance \{cur\}/.test(oa));
 ok('E7: AR Side emerald bg, AP Side red bg, Open Balance amber bg (HOTFIX 14 reverted blue/orange to invoice rows only)',
   /bg-emerald-50[\s\S]{0,300}AR Side/.test(oa) && /bg-red-50[\s\S]{0,300}AP Side/.test(oa) && /bg-amber-50[\s\S]{0,300}Open Balance/.test(oa));
-ok('E8: running balance color-coded (now per-currency in .58: rbForCur instead of rb)',
-  /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-500'/.test(oa));
+ok('E8: running balance color-coded (HOTFIX 30 staircase: text-slate-700 baseline, inactive dimmed)',
+  /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-700'/.test(oa) &&
+  /text-slate-300 font-medium opacity-60/.test(oa));
 ok('E9: per-currency Summary block (header + Total AR + Total AP + Net Position rows) per spec',
   /<CUR> Summary|cur \+ '-sumhead|cur \+ ' Summary|Total AR \(They Owe Us\)|Total AP \(We Owe Them\)/.test(oa));
 ok('E10: entry modal has 5-type picker (v55.83-A.6.27.72 — supersedes 2-way credit/debit toggle)',

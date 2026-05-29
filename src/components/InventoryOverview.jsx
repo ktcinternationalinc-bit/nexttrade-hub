@@ -434,16 +434,20 @@ export default function InventoryOverview(props) {
           narrows the Category dropdown to categories that exist in Textile products. */}
       {/* v55.83-A.6.27.60 — Filter section defaults to ALWAYS OPEN (was: open only
           when filters active). User wanted all 9 levels visible by default per Max
-          May 22 2026 — option A. */}
+          May 22 2026 — option A.
+          v55.83-A.6.27.72 HOTFIX 29 — gradient was bg-gradient-to-r from-slate-50
+          to-indigo-50/50, rendering as bright pastel that washed out the
+          "Family → Category → Grade..." breadcrumb. Now uses a dark slate→indigo
+          gradient with bright text for proper dark-theme contrast. */}
       <details className="bg-white border border-slate-200 rounded-lg shadow-sm" open>
-        <summary className="px-4 py-2.5 cursor-pointer font-extrabold text-slate-900 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-slate-100 hover:to-indigo-100/50 rounded-t-lg flex items-center justify-between border-b border-slate-200">
+        <summary className="px-4 py-2.5 cursor-pointer font-extrabold bg-gradient-to-r from-slate-800 to-indigo-900/70 hover:from-slate-700 hover:to-indigo-800/70 rounded-t-lg flex items-center justify-between border-b border-indigo-500/30">
           <span className="flex items-center gap-2">
-            <span className="text-indigo-600">🔍</span>
-            <span>Filter by classification</span>
-            <span className="text-[10px] text-slate-500 font-semibold tracking-wider">Family → Category → Grade → ...</span>
+            <span className="text-indigo-300">🔍</span>
+            <span className="text-white">Filter by classification</span>
+            <span className="text-[10px] text-indigo-200 font-semibold tracking-wider">Family → Category → Grade → ...</span>
           </span>
           {activeFilterCount > 0 && (
-            <span className="text-xs bg-indigo-700 text-white px-2 py-0.5 rounded-full font-bold">{activeFilterCount} active</span>
+            <span className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded-full font-bold ring-1 ring-indigo-700/50 shadow-sm">{activeFilterCount} active</span>
           )}
         </summary>
         <div className="p-3 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -635,6 +639,27 @@ export default function InventoryOverview(props) {
                         ['Sp', listsById[p.spec_class_list_id]],
                         ['O', listsById[p.origin_list_id]],
                       ].filter(function (pair) { return pair[1]; });
+                      // v55.83-A.6.27.72 HOTFIX 29 — Per Max May 28 2026: the textile naming
+                      // convention should follow Category → Grade → Color → Backing (e.g.
+                      // "Embossed Luxurious Olive Cotton"), NOT the imported name_en (which
+                      // came in as "Leather Luxurious Olive Cotton" — that's Family+Grade+
+                      // Color+Backing). Compute it at render time from resolved list labels;
+                      // fall back to name_en if any required level is missing.
+                      var catLbl = listsById[p.category_list_id];
+                      var grdLbl = listsById[p.grade_list_id];
+                      var clrLbl = listsById[p.color_list_id];
+                      var bckLbl = listsById[p.backing_list_id];
+                      var computedNameEn = [catLbl, grdLbl, clrLbl, bckLbl]
+                        .filter(function (l) { return l; })
+                        .map(function (l) { return l.label_en || l.code; })
+                        .join(' ');
+                      var computedNameAr = [catLbl, grdLbl, clrLbl, bckLbl]
+                        .filter(function (l) { return l && l.label_ar; })
+                        .map(function (l) { return l.label_ar; })
+                        .join(' ');
+                      // Use computed if all 4 resolved AND at least one piece differs from imported; else fall back.
+                      var displayNameEn = (catLbl && grdLbl) ? computedNameEn : (p.name_en || '—');
+                      var displayNameAr = computedNameAr || p.name_ar || '';
                       return (
                         <tr key={p.id} className="border-b border-slate-200 hover:bg-slate-50">
                           <td className="px-3 py-1.5 font-mono text-slate-900 font-bold">
@@ -643,8 +668,8 @@ export default function InventoryOverview(props) {
                           </td>
                           <td className="px-3 py-1.5 font-mono text-slate-700">{p.design_sku || '—'}</td>
                           <td className="px-3 py-1.5">
-                            <div className="font-bold text-slate-900">{p.name_en || '—'}</div>
-                            {p.name_ar && <div className="text-xs text-slate-700" style={{ direction: 'rtl' }}>{p.name_ar}</div>}
+                            <div className="font-bold text-slate-900">{displayNameEn}</div>
+                            {displayNameAr && <div className="text-xs text-slate-700" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
                             {/* v55.83-A.6.27.60 — All 9 classification levels inline under name */}
                             {levelLabels.length > 0 && (
                               <div className="text-[10px] text-slate-600 mt-0.5 leading-relaxed">
@@ -665,9 +690,13 @@ export default function InventoryOverview(props) {
                               title="View inbound shipments, outbound sales, and stock history for this product"
                             >↗ History</button>
                           </td>
-                          <td className="px-3 py-1.5 text-right font-mono font-extrabold text-blue-900">{fmtNum(s.current_qty, 2)}</td>
-                          <td className="px-3 py-1.5 text-right font-mono text-indigo-900">{fmtNum(s.original_qty, 2)}</td>
-                          <td className="px-3 py-1.5 text-right font-mono text-emerald-800">{fmtNum(s.sold_qty, 2)}</td>
+                          {/* v55.83-A.6.27.72 HOTFIX 29 — Per Max screenshot May 28 2026: Current/Original
+                              columns showing 0.00 in text-blue-900 / text-indigo-900 / text-emerald-800
+                              against the dark row bg made them unreadable (HOTFIX 25 rule violated).
+                              Switched to -300 light shades so the numbers stand out on dark surfaces. */}
+                          <td className="px-3 py-1.5 text-right font-mono font-extrabold text-blue-300">{fmtNum(s.current_qty, 2)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-emerald-300">{fmtNum(s.sold_qty, 2)}</td>
                           {seeCosts && (
                             <>
                               <td className="px-3 py-1.5 text-right font-mono text-slate-900 bg-amber-50">{fmtNum(avgCost, 2)}</td>
@@ -675,7 +704,7 @@ export default function InventoryOverview(props) {
                               <td className={'px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50 ' + (s.gross_profit >= 0 ? 'text-emerald-800' : 'text-red-700')}>{fmtNum(s.gross_profit, 2)}</td>
                             </>
                           )}
-                          <td className="px-3 py-1.5 text-xs text-slate-700">{p.default_uom || '—'}</td>
+                          <td className="px-3 py-1.5 text-xs text-slate-300">{p.default_uom || '—'}</td>
                         </tr>
                       );
                     })}
