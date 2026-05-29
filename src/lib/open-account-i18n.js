@@ -52,8 +52,13 @@ var DICT = {
   // ─── Status badges ───
   paid:               { en: '✓ paid',              ar: '✓ مدفوع' },
   open:               { en: 'Open',                ar: 'مفتوح' },
-  paid_by_credit:     { en: 'Paid by credit applied from', ar: 'مدفوع برصيد مطبق من' },
-  partially_applied:  { en: 'Credit partially applied from', ar: 'رصيد مطبق جزئياً من' },
+  paid_by_credit:           { en: 'Settled by offset against', ar: 'مُسوى مقابل' },
+  partially_applied:        { en: 'Partially settled by offset against', ar: 'مُسوى جزئياً مقابل' },
+  // v55.83-A.6.27.72 HOTFIX 33 — Type-aware suffixes per Max v2 feedback. Avoids
+  // the misleading "credit applied" phrasing — these are offsets between sales
+  // invoices and vendor bills, not credit notes.
+  type_sales_invoice_short: { en: 'sales invoice', ar: 'فاتورة بيع' },
+  type_vendor_bill_short:   { en: 'vendor bill',   ar: 'فاتورة مورد' },
 
   // ─── Summary / net direction (customer-flipped) ───
   total_they_owe:     { en: 'Total They Owe Us',   ar: 'إجمالي لنا عليهم',

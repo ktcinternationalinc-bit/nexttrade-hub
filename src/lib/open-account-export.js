@@ -96,6 +96,13 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
   opts = opts || {};
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var bilingual = opts.bilingual === true;
+  // v55.83-A.6.27.72 HOTFIX 33 (Max v2 feedback) — layout option:
+  //   'per_currency' (default) — separate USD and EGP sections (classic statement)
+  //   'combined'                — single chronological table interleaving all currencies,
+  //                              matching the live on-screen ledger (one Running USD column
+  //                              + one Running EGP column per row, dimmed by currency). For
+  //                              internal audits — less customary on customer copies.
+  var layout = opts.layout === 'combined' ? 'combined' : 'per_currency';
   var simulation = opts.simulation || null;
   // v55.83-A.6.27.72 HOTFIX 30 — Build offset-linkage lookup BEFORE filtering
   // out offset rows from display. Maps invoice/bill ID → array of references
@@ -236,7 +243,11 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       // Single Remaining column — fills only on invoice/bill rows, colored by invoice color
       var remainingCellHtml = '';
       if (isInvoiceOrBill) {
-        // v55.83-A.6.27.72 HOTFIX 30 — offset linkage explainer
+        // v55.83-A.6.27.72 HOTFIX 33 (Max v2 feedback) — Settlement wording.
+        // The other side of an offset is the OPPOSITE document type: for a
+        // vendor_bill row, the other side is a sales_invoice (and vice versa).
+        // Surface that type explicitly so the customer reads "Settled by offset
+        // against sales invoice INV-..." instead of the misleading "credit applied".
         var links = offsetsByTarget[e.id] || [];
         var linkLine = '';
         if (links.length > 0) {
@@ -245,11 +256,15 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
           var moreCount = sortedLinks.length - 1;
           var moreText = moreCount > 0 ? ' + ' + moreCount + ' more' : '';
           var isPartial = remaining > 0.005;
-          var phraseEn = isPartial ? t18n('partially_applied', 'en') : t18n('paid_by_credit', 'en');
+          // The OTHER side's type — opposite of THIS row's type
+          var otherTypeKey = e.transaction_type === 'vendor_bill' ? 'type_sales_invoice_short' : 'type_vendor_bill_short';
+          var phraseEn = (isPartial ? t18n('partially_applied', 'en') : t18n('paid_by_credit', 'en'))
+                       + ' ' + t18n(otherTypeKey, 'en');
           var phraseLineEn = phraseEn + ' <strong>' + escapeHtml(headlineRef) + '</strong>' + moreText;
           var phraseLineFull = phraseLineEn;
           if (bilingual) {
-            var phraseAr = isPartial ? t18n('partially_applied', 'ar') : t18n('paid_by_credit', 'ar');
+            var phraseAr = (isPartial ? t18n('partially_applied', 'ar') : t18n('paid_by_credit', 'ar'))
+                         + ' ' + t18n(otherTypeKey, 'ar');
             phraseLineFull += '<br><span class="ar-sub" dir="rtl">' + phraseAr + ' <strong>' + escapeHtml(headlineRef) + '</strong></span>';
           }
           linkLine = '<div style="font-size:9px;color:#64748b;margin-top:3px;font-style:italic">' + phraseLineFull + '</div>';
@@ -269,23 +284,26 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var runCellHtml = '<span style="color:' + (running > 0.005 ? '#15803d' : running < -0.005 ? '#b91c1c' : '#475569') + '">' + escapeHtml(fmtSignedMoney(running)) + '</span>';
       // Description colored when it's an invoice/bill; otherwise default
       var descColorStyle = invoiceColor ? ' style="color:' + invoiceColor + '; font-weight:600"' : '';
-      // v55.83-A.6.27.72 HOTFIX 30 — surface Arabic note inline when bilingual mode
-      // is on (e.g. the Customs invoice has Arabic-language notes that customers
-      // should see naturally).
+      // v55.83-A.6.27.72 HOTFIX 33 — Description block: detect "Auto-synced
+      // from invoice ..." preambles and demote them to a small italic line so
+      // the main description reads cleanly. Same for Arabic notes when bilingual.
+      var rawDesc = String(e.description || '');
+      var autoSyncMatch = rawDesc.match(/^(.+?)\s*Auto-synced from invoice .+?\.\s*Edit the invoice to change this entry\.\s*$/i);
+      var mainDesc = autoSyncMatch ? autoSyncMatch[1].trim() : rawDesc;
+      var hasAutoSync = !!autoSyncMatch;
       var arNoteHtml = '';
       if (bilingual && e.notes && /[\u0600-\u06FF]/.test(e.notes)) {
-        arNoteHtml = '<br><span class="ar-sub" dir="rtl" style="font-size:10px;color:#64748b">' + escapeHtml(e.notes) + '</span>';
-      } else if (e.notes && !bilingual) {
-        arNoteHtml = '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>';
+        arNoteHtml = '<div class="ar-sub" dir="rtl" style="font-size:10px;color:#64748b">' + escapeHtml(e.notes) + '</div>';
       }
+      var autoSyncHtml = hasAutoSync ? '<div class="auto-sync-note">auto-synced from invoice</div>' : '';
       rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
         + '<td style="font-size:10px"><strong>' + typeLabel + '</strong></td>'
-        + '<td' + descColorStyle + '>' + escapeHtml(e.description || '') + arNoteHtml + '</td>'
+        + '<td class="desc-cell"' + descColorStyle + '><div class="desc-main">' + escapeHtml(mainDesc) + '</div>' + arNoteHtml + autoSyncHtml + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
-        + '<td class="num" style="background:#f0fdf4">' + arCellHtml + '</td>'
-        + '<td class="num" style="background:#fef2f2">' + apCellHtml + '</td>'
-        + '<td class="num" style="background:#fffbeb">' + remainingCellHtml + '</td>'
+        + '<td class="num">' + arCellHtml + '</td>'
+        + '<td class="num">' + apCellHtml + '</td>'
+        + '<td class="num">' + remainingCellHtml + '</td>'
         + '<td class="num">' + runCellHtml + '</td>'
         + '</tr>';
     });
@@ -331,14 +349,14 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       + potTilesHtml
       + '<table>'
       + '<thead><tr>'
-      + '<th style="width:70px">' + (bilingual ? stackedH('date') : t18n('date', 'en')) + '</th>'
-      + '<th style="width:110px">' + (bilingual ? stackedH('type') : t18n('type', 'en')) + '</th>'
-      + '<th>' + (bilingual ? stackedH('description') : t18n('description', 'en')) + '</th>'
-      + '<th style="width:85px">' + (bilingual ? stackedH('reference') : t18n('reference', 'en')) + '</th>'
-      + '<th class="num" style="width:80px; background:#f0fdf4">' + (bilingual ? stackedH('they_owe_us', perspective) : t18n('they_owe_us', 'en', perspective)) + '</th>'
-      + '<th class="num" style="width:80px; background:#fef2f2">' + (bilingual ? stackedH('we_owe_them', perspective) : t18n('we_owe_them', 'en', perspective)) + '</th>'
-      + '<th class="num" style="width:80px; background:#fffbeb">' + (bilingual ? stackedH('open_balance') : t18n('open_balance', 'en')) + '</th>'
-      + '<th class="num" style="width:110px">' + (bilingual ? stackedH('running_bal') : t18n('running_bal', 'en')) + ' ' + escapeHtml(cur) + '</th>'
+      + '<th class="col-date">' + (bilingual ? stackedH('date') : t18n('date', 'en')) + '</th>'
+      + '<th class="col-type">' + (bilingual ? stackedH('type') : t18n('type', 'en')) + '</th>'
+      + '<th class="col-desc">' + (bilingual ? stackedH('description') : t18n('description', 'en')) + '</th>'
+      + '<th class="col-ref">' + (bilingual ? stackedH('reference') : t18n('reference', 'en')) + '</th>'
+      + '<th class="col-money num" style="color:#15803d">' + (bilingual ? stackedH('they_owe_us', perspective) : t18n('they_owe_us', 'en', perspective)) + '</th>'
+      + '<th class="col-money num" style="color:#b91c1c">' + (bilingual ? stackedH('we_owe_them', perspective) : t18n('we_owe_them', 'en', perspective)) + '</th>'
+      + '<th class="col-open num" style="color:#b45309">' + (bilingual ? stackedH('open_balance') : t18n('open_balance', 'en')) + '</th>'
+      + '<th class="col-run num">' + (bilingual ? stackedH('running_bal') : t18n('running_bal', 'en')) + ' ' + escapeHtml(cur) + '</th>'
       + '</tr></thead>'
       + '<tbody>' + rowsHtml + '</tbody>'
       + (cs.count > 0
@@ -382,16 +400,216 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
             })()
           : '')
       + '</table>'
-      + '<div class="balance-box" style="border-color:' + balanceColor + '; background:' + bgColor + ';">'
-      + '<div class="balance-label">' + balanceLabel + '</div>'
-      + '<div class="balance-value" style="color:' + balanceColor + ';">' + fmtMoney(Math.abs(cs.balance)) + ' ' + escapeHtml(cur) + '</div>'
-      + '</div>'
+      // v55.83-A.6.27.72 HOTFIX 33 — Structured breakdown card per Max v2 feedback.
+      // Don't collapse Open Invoice + Our Prepaid into a single line. Show every
+      // component that contributes to the net, then the net itself, big and bold.
+      + (function () {
+          var rowsArr = [];
+          if (simCur) {
+            if (simCur.theirOpenInvoices > 0.005) rowsArr.push({ label: 'Open invoice', val: simCur.theirOpenInvoices, color: '#15803d' });
+            if (simCur.ourOpenBills > 0.005)      rowsArr.push({ label: 'Open bill', val: simCur.ourOpenBills, color: '#b91c1c' });
+            if (simCur.theirPrepaid > 0.005)      rowsArr.push({ label: 'Their credit / prepaid', val: simCur.theirPrepaid, color: '#15803d' });
+            if (simCur.ourPrepaid > 0.005)        rowsArr.push({ label: 'Our credit / prepaid', val: simCur.ourPrepaid, color: '#15803d' });
+          }
+          var bdHtml = rowsArr.length > 0
+            ? '<table style="width:100%; border:none; margin:0; font-size:11px;">'
+              + rowsArr.map(function (r) {
+                  return '<tr><td style="border:none; padding:2px 0; color:#475569;">' + escapeHtml(r.label) + '</td>'
+                       + '<td style="border:none; padding:2px 0; text-align:right; font-family:monospace; font-weight:700; color:' + r.color + ';">' + escapeHtml(fmtMoney(r.val)) + ' ' + escapeHtml(cur) + '</td></tr>';
+                }).join('')
+              + '</table>'
+              + '<div style="border-top:1px solid ' + balanceColor + '; margin-top:8px; padding-top:8px;">'
+            : '';
+          return '<div class="balance-box" style="border-color:' + balanceColor + '; background:' + bgColor + ';">'
+            + bdHtml
+            + '<div class="balance-label">' + balanceLabel + '</div>'
+            + '<div class="balance-value" style="color:' + balanceColor + ';">' + fmtMoney(Math.abs(cs.balance)) + ' ' + escapeHtml(cur) + '</div>'
+            + (rowsArr.length > 0 ? '</div>' : '')
+            + '</div>';
+        })()
       + '</div>';
   }
 
-  var allSections = currencies.length > 0
-    ? currencies.map(sectionHtml).join('')
-    : '<p style="text-align:center; color:#666; padding:24px;">No ledger entries yet.</p>';
+  // v55.83-A.6.27.72 HOTFIX 33 — Combined chronological layout (Max v2: "should
+  // be an option to see the same view as we see the ledger with everything
+  // combined"). One table, all currencies interleaved by date, per-currency
+  // running balance columns with active/dim contrast like the live ledger.
+  function combinedSectionHtml() {
+    var applications = (simulation && simulation.applications) || {};
+    function tLabel(typeKey) {
+      var en = t18n(typeKey, 'en', perspective);
+      if (!bilingual) return en;
+      var ar = t18n(typeKey, 'ar', perspective);
+      return en + '<br><span class="ar-sub" dir="rtl">' + ar + '</span>';
+    }
+    // Build chronological list across all currencies
+    var allRows = (entries || []).slice().sort(function (a, b) {
+      var d = (a.entry_date || '').localeCompare(b.entry_date || '');
+      return d !== 0 ? d : (a.created_at || '').localeCompare(b.created_at || '');
+    });
+    var running = {};
+    currencies.forEach(function (c) { running[c] = 0; });
+    var rowsHtml = '';
+    allRows.forEach(function (e) {
+      var entryCur = e._currency || String(e.currency || 'USD').toUpperCase();
+      var credit = Number(e.credit_amount || 0);
+      var debit = Number(e.debit_amount || 0);
+      var signed;
+      switch (e.transaction_type) {
+        case 'sales_invoice':     signed = +credit; break;
+        case 'vendor_bill':       signed = -debit; break;
+        case 'payment_received':  signed = -credit; break;
+        case 'payment_sent':      signed = +debit; break;
+        case 'credit_adjustment': signed = debit - credit; break;
+        default:                  signed = credit - debit;
+      }
+      running[entryCur] = (running[entryCur] || 0) + signed;
+      // AR / AP sides
+      var arSide = 0, apSide = 0;
+      switch (e.transaction_type) {
+        case 'sales_invoice':    arSide = credit; break;
+        case 'payment_received': arSide = credit; break;
+        case 'vendor_bill':      apSide = debit; break;
+        case 'payment_sent':     apSide = debit; break;
+        case 'credit_adjustment': arSide = credit; apSide = debit; break;
+        case 'offset':           arSide = credit; apSide = debit; break;
+      }
+      if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
+      // Colors by type — payment_sent green not red
+      var arColor = '#15803d', apColor = '#b91c1c';
+      if (e.transaction_type === 'payment_sent') apColor = '#15803d';
+      if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
+      var invoiceColor = e.transaction_type === 'sales_invoice' ? '#1d4ed8'
+                       : e.transaction_type === 'vendor_bill' ? '#7e22ce' : null;
+      var arCellHtml = arSide > 0.005 ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+      var apCellHtml = apSide > 0.005
+        ? (apColor === '#15803d'
+            ? '<span style="color:' + apColor + '">' + escapeHtml(fmtMoney(apSide)) + '</span><div style="font-size:9px;color:#0f766e;font-style:italic;opacity:0.75;margin-top:2px;">reduces what we owe</div>'
+            : '<span style="color:' + (invoiceColor || apColor) + '">' + escapeHtml(fmtMoney(apSide)) + '</span>')
+        : '';
+      // Open balance + linkage
+      var isInvoiceOrBill = (e.transaction_type === 'sales_invoice' || e.transaction_type === 'vendor_bill');
+      var remainingCellHtml = '';
+      if (isInvoiceOrBill) {
+        var orig = e.transaction_type === 'sales_invoice' ? credit : debit;
+        var ap = applications[e.id] || 0;
+        var remaining = Math.max(0, orig - ap);
+        var links = offsetsByTarget[e.id] || [];
+        var linkLine = '';
+        if (links.length > 0) {
+          var sortedLinks = links.slice().sort(function (a, b) { return b.amount - a.amount; });
+          var headlineRef = sortedLinks[0].otherRef;
+          var moreCount = sortedLinks.length - 1;
+          var moreText = moreCount > 0 ? ' + ' + moreCount + ' more' : '';
+          var isPartial = remaining > 0.005;
+          var otherTypeKey = e.transaction_type === 'vendor_bill' ? 'type_sales_invoice_short' : 'type_vendor_bill_short';
+          var phraseEn = (isPartial ? t18n('partially_applied', 'en') : t18n('paid_by_credit', 'en'))
+                       + ' ' + t18n(otherTypeKey, 'en');
+          linkLine = '<div style="font-size:9px;color:#64748b;margin-top:3px;font-style:italic">' + phraseEn + ' <strong>' + escapeHtml(headlineRef) + '</strong>' + moreText + '</div>';
+        }
+        if (remaining > 0.005) {
+          remainingCellHtml = '<span style="color:' + (invoiceColor || '#b45309') + ';font-weight:700">' + t18n('open', 'en') + ' ' + escapeHtml(fmtMoney(remaining)) + '</span>' + linkLine;
+        } else {
+          remainingCellHtml = '<span style="background:#15803d;color:white;padding:3px 8px;border-radius:4px;font-size:9px;font-weight:700">' + t18n('paid', 'en') + '</span>' + linkLine;
+        }
+      }
+      // Description block
+      var rawDesc = String(e.description || '');
+      var autoSyncMatch = rawDesc.match(/^(.+?)\s*Auto-synced from invoice .+?\.\s*Edit the invoice to change this entry\.\s*$/i);
+      var mainDesc = autoSyncMatch ? autoSyncMatch[1].trim() : rawDesc;
+      var hasAutoSync = !!autoSyncMatch;
+      var autoSyncHtml = hasAutoSync ? '<div class="auto-sync-note">auto-synced from invoice</div>' : '';
+      var descColorStyle = invoiceColor ? ' style="color:' + invoiceColor + '; font-weight:600"' : '';
+      // Type label
+      var typeLabel = tLabel(e.transaction_type);
+      // Currency tag
+      var curTag = '<span style="display:inline-flex;align-items:center;gap:5px;font-weight:700;color:' + (entryCur === 'USD' ? '#0369a1' : '#b45309') + ';">'
+                 + '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (entryCur === 'USD' ? '#0ea5e9' : '#f59e0b') + ';"></span>'
+                 + entryCur + '</span>';
+      // Row tint by currency
+      var rowTint = entryCur === 'USD' ? 'background:rgba(14,165,233,0.04);' : 'background:rgba(245,158,11,0.04);';
+      // Running balance cells (one per currency, active bold + dim others)
+      var runCells = '';
+      currencies.forEach(function (c) {
+        var rb = running[c] || 0;
+        var isActive = (c === entryCur);
+        var cls = isActive ? 'color:' + (rb > 0 ? '#15803d' : rb < 0 ? '#b91c1c' : '#475569') + ';font-weight:800;' : 'color:#cbd5e1;opacity:0.6;';
+        runCells += '<td class="num" style="' + cls + '">' + escapeHtml(fmtSignedMoney(rb)) + ' ' + escapeHtml(c) + '</td>';
+      });
+      if (e.transaction_type === 'offset') return;  // hide offset rows
+      rowsHtml += '<tr style="' + rowTint + '">'
+        + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
+        + '<td style="font-size:10px"><strong>' + typeLabel + '</strong></td>'
+        + '<td class="desc-cell"' + descColorStyle + '><div class="desc-main">' + escapeHtml(mainDesc) + '</div>' + autoSyncHtml + '</td>'
+        + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
+        + '<td style="text-align:center">' + curTag + '</td>'
+        + '<td class="num">' + arCellHtml + '</td>'
+        + '<td class="num">' + apCellHtml + '</td>'
+        + '<td class="num">' + remainingCellHtml + '</td>'
+        + runCells
+        + '</tr>';
+    });
+
+    // Header row with all running-bal columns per currency
+    var runHeaders = currencies.map(function (c) {
+      return '<th class="col-run num">' + (bilingual ? stackedH('running_bal') : t18n('running_bal', 'en')) + ' ' + escapeHtml(c) + '</th>';
+    }).join('');
+
+    // Per-currency breakdown cards at the bottom
+    var breakdownCards = currencies.map(function (c) {
+      var cs = byCurrency[c];
+      var simC = (simulation && simulation.byCurrency && simulation.byCurrency[c]) || null;
+      var balanceColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
+      var bgColor = cs.balance >= 0 ? '#f0fdf4' : '#fef2f2';
+      var balanceLabelKey = cs.balance > 0 ? 'they_owe_us_dir' : cs.balance < 0 ? 'we_owe_them_dir' : 'settled';
+      var balanceLabel = bilingual
+        ? t18n(balanceLabelKey, 'en', perspective) + ' / ' + t18n(balanceLabelKey, 'ar', perspective)
+        : t18n(balanceLabelKey, 'en', perspective);
+      var rowsArr = [];
+      if (simC) {
+        if (simC.theirOpenInvoices > 0.005) rowsArr.push({ label: 'Open invoice', val: simC.theirOpenInvoices, color: '#15803d' });
+        if (simC.ourOpenBills > 0.005)      rowsArr.push({ label: 'Open bill', val: simC.ourOpenBills, color: '#b91c1c' });
+        if (simC.theirPrepaid > 0.005)      rowsArr.push({ label: 'Their credit / prepaid', val: simC.theirPrepaid, color: '#15803d' });
+        if (simC.ourPrepaid > 0.005)        rowsArr.push({ label: 'Our credit / prepaid', val: simC.ourPrepaid, color: '#15803d' });
+      }
+      var bdInner = rowsArr.length > 0
+        ? '<table style="width:100%; border:none; margin:0; font-size:11px;">'
+          + rowsArr.map(function (r) { return '<tr><td style="border:none;padding:2px 0;color:#475569;">' + escapeHtml(r.label) + '</td><td style="border:none;padding:2px 0;text-align:right;font-family:monospace;font-weight:700;color:' + r.color + ';">' + escapeHtml(fmtMoney(r.val)) + ' ' + escapeHtml(c) + '</td></tr>'; }).join('')
+          + '</table><div style="border-top:1px solid ' + balanceColor + ';margin-top:8px;padding-top:8px;">'
+        : '';
+      return '<div class="balance-box" style="flex:1;border-color:' + balanceColor + ';background:' + bgColor + ';">'
+        + '<div style="font-size:11px;font-weight:900;letter-spacing:0.06em;text-transform:uppercase;color:' + (c === 'USD' ? '#0369a1' : '#b45309') + ';margin-bottom:6px;">' + escapeHtml(c) + ' Summary</div>'
+        + bdInner
+        + '<div class="balance-label">' + balanceLabel + '</div>'
+        + '<div class="balance-value" style="color:' + balanceColor + ';">' + fmtMoney(Math.abs(cs.balance)) + ' ' + escapeHtml(c) + '</div>'
+        + (rowsArr.length > 0 ? '</div>' : '')
+        + '</div>';
+    }).join('');
+
+    return '<div class="currency-section">'
+      + '<h2>Combined Ledger — All Currencies, Chronological</h2>'
+      + '<div style="font-size:11px;color:#64748b;margin-bottom:8px;">Interleaved by date — running balance columns dim when the row\'s currency doesn\'t match the column.</div>'
+      + '<table>'
+      + '<thead><tr>'
+      + '<th class="col-date">' + (bilingual ? stackedH('date') : t18n('date', 'en')) + '</th>'
+      + '<th class="col-type">' + (bilingual ? stackedH('type') : t18n('type', 'en')) + '</th>'
+      + '<th class="col-desc">' + (bilingual ? stackedH('description') : t18n('description', 'en')) + '</th>'
+      + '<th class="col-ref">' + (bilingual ? stackedH('reference') : t18n('reference', 'en')) + '</th>'
+      + '<th class="col-cur">Currency</th>'
+      + '<th class="col-money num" style="color:#15803d">' + (bilingual ? stackedH('they_owe_us', perspective) : t18n('they_owe_us', 'en', perspective)) + '</th>'
+      + '<th class="col-money num" style="color:#b91c1c">' + (bilingual ? stackedH('we_owe_them', perspective) : t18n('we_owe_them', 'en', perspective)) + '</th>'
+      + '<th class="col-open num" style="color:#b45309">' + (bilingual ? stackedH('open_balance') : t18n('open_balance', 'en')) + '</th>'
+      + runHeaders
+      + '</tr></thead>'
+      + '<tbody>' + (rowsHtml || '<tr><td colspan="' + (8 + currencies.length) + '" style="padding:20px;text-align:center;color:#666">No entries</td></tr>') + '</tbody>'
+      + '</table>'
+      + '<div style="display:flex;gap:14px;margin-top:14px;">' + breakdownCards + '</div>'
+      + '</div>';
+  }
+
+  var allSections = currencies.length === 0
+    ? '<p style="text-align:center; color:#666; padding:24px;">No ledger entries yet.</p>'
+    : (layout === 'combined' ? combinedSectionHtml() : currencies.map(sectionHtml).join(''));
 
   var html = ''
     + '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -414,8 +632,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     // the ENTIRE first currency section onto a new page (leaving page 1 blank) whenever the
     // section was taller than the remaining space after the header. Now we just keep the
     // section header + first few rows together, but the table body can break naturally.
-    + '.currency-section { margin-bottom: 28px; }'
-    + '.currency-section > h2 { page-break-after: avoid; break-after: avoid; }'
+    + '.currency-section { margin-bottom: 36px; padding-top: 12px; border-top: 2px solid #1e293b; }'
+    + '.currency-section:first-of-type { border-top: none; padding-top: 0; }'
+    + '.currency-section > h2 { font-size: 18px; font-weight: 900; letter-spacing: 0.04em; margin: 0 0 4px; text-transform: uppercase; color: #0f172a; page-break-after: avoid; break-after: avoid; }'
     + '.currency-section thead { display: table-header-group; }'
     + '.currency-section tr { page-break-inside: avoid; break-inside: avoid; }'
     + 'table { width: 100%; border-collapse: collapse; margin-top: 8px; }'
@@ -428,16 +647,45 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + 'td.debit { color: #991b1b; font-weight: 700; }'
     + 'tr.totals { background: #f1f5f9; font-weight: 800; }'
     + 'tr.totals td { border-top: 2px solid #111; border-bottom: 2px solid #111; }'
-    + '.balance-box { margin-top: 12px; padding: 12px 16px; border: 2px solid; border-radius: 4px; }'
-    + '.balance-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #555; }'
-    + '.balance-value { font-size: 22px; font-weight: 800; }'
+    + '.balance-box { margin-top: 14px; padding: 14px 18px; border: 2px solid; border-radius: 6px; }'
+    + '.balance-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #555; font-weight: 800; }'
+    + '.balance-value { font-size: 28px; font-weight: 900; letter-spacing: -0.5px; line-height: 1.1; margin-top: 4px; }'
     + '.convention { margin-top: 24px; padding: 8px 12px; background: #fafafa; border-left: 3px solid #999; font-size: 10px; color: #555; }'
     + '.multi-currency-note { margin: 12px 0 0 0; padding: 6px 10px; background: #fef3c7; border-left: 3px solid #d97706; font-size: 10px; color: #451a03; }'
-    + '@media print { body { margin: 16px; } .no-print { display: none; } }'
-    + '.no-print { margin-bottom: 12px; padding: 8px; background: #fef3c7; border: 1px solid #fde68a; border-radius: 4px; font-size: 11px; }'
-    + '.no-print button { padding: 6px 12px; background: #1e293b; color: white; border: 0; border-radius: 3px; font-weight: 700; cursor: pointer; margin-right: 8px; }'
+    // v55.83-A.6.27.72 HOTFIX 33 — Print/PDF layout enforcement per Max v2 feedback.
+    // Without max-width the table stretches infinitely across whatever monitor
+    // you're on, leaving huge dead space between description and numbers.
+    // Lock the entire report into A4-equivalent (210mm = ~794px) for print and
+    // 950px for screen preview. Lock column widths so they don't auto-expand.
+    + '.report-page { max-width: 950px; margin: 0 auto; padding: 16px 24px; box-sizing: border-box; }'
+    + 'table { table-layout: fixed; }'
+    + 'th.col-date    { width: 9%;  }'
+    + 'th.col-type    { width: 12%; }'
+    + 'th.col-desc    { width: 30%; }'
+    + 'th.col-ref     { width: 11%; }'
+    + 'th.col-cur     { width: 6%;  text-align: center; }'
+    + 'th.col-money   { width: 10%; text-align: right; }'
+    + 'th.col-open    { width: 12%; text-align: right; }'
+    + 'th.col-run     { text-align: right; }'  /* claims remainder */
+    + 'td { word-break: break-word; overflow-wrap: anywhere; }'
+    + 'td.desc-cell .desc-main { font-weight: 600; }'
+    + 'td.desc-cell .auto-sync-note { font-size: 9px; color: #94a3b8; margin-top: 2px; font-style: italic; }'
+    + 'td.desc-cell .desc-ref { font-size: 10px; color: #64748b; font-family: "SF Mono", Menlo, monospace; margin-top: 2px; }'
+    + '@page { size: A4 portrait; margin: 12mm; }'
+    + '@media print {'
+    + '  body { background: white; color: black; margin: 0; }'
+    + '  .no-print { display: none !important; }'
+    + '  .report-page { width: 100%; max-width: 100%; padding: 0; }'
+    + '  table { font-size: 10px; }'
+    + '  th, td { padding: 4px 5px; }'
+    /* Force background colors (red/green totals + paid pill) to print */
+    + '  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }'
+    + '}'
+    + '.no-print { margin-bottom: 16px; padding: 10px 12px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 11px; color: #334155; display: flex; align-items: center; gap: 10px; }'
+    + '.no-print button { padding: 6px 14px; background: #1e293b; color: white; border: 0; border-radius: 4px; font-weight: 700; cursor: pointer; }'
     + '</style>'
     + '</head><body>'
+    + '<div class="report-page">'
     + '<div class="no-print">'
     + '<strong>Print this page</strong> to save as PDF or print on paper. Use your browser&apos;s Print → Save as PDF option. '
     + '<button onclick="window.print()">🖨️ Print Now</button>'
@@ -475,6 +723,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + 'Convention: <strong>Credit</strong> = money paid to us. <strong>Debit</strong> = money paid by us. '
     + 'A positive running balance means the counterparty owes us; a negative balance means we owe them.'
     + '</div>'
+    + '</div>' /* close .report-page */
     + '<script>setTimeout(function(){ try { window.print(); } catch (e) {} }, 350);</script>'
     + '</body></html>';
 
