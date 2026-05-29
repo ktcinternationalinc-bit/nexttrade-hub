@@ -56,9 +56,11 @@ ok('i18n.4: transaction types have customer-perspective flips (HOTFIX 31 clean l
 ok('i18n.5: "offset" type label is "Credit Applied" (HOTFIX 31)',
   /offset:[\s\S]{0,400}'Credit Applied'/.test(i18n));
 
-ok('i18n.6: offset linkage phrase keys exist (paid_by_credit, partially_applied)',
-  /paid_by_credit:[\s\S]{0,200}'Paid by credit applied from'/.test(i18n) &&
-  /partially_applied:[\s\S]{0,200}'Credit partially applied from'/.test(i18n));
+ok('i18n.6: offset linkage phrase keys updated to "Settled by offset against" (HOTFIX 33 v2 wording)',
+  /paid_by_credit:[\s\S]{0,200}'Settled by offset against'/.test(i18n) &&
+  /partially_applied:[\s\S]{0,200}'Partially settled by offset against'/.test(i18n) &&
+  /type_sales_invoice_short:[\s\S]{0,200}'sales invoice'/.test(i18n) &&
+  /type_vendor_bill_short:[\s\S]{0,200}'vendor bill'/.test(i18n));
 
 console.log('\n── HOTFIX 30: ledger UI polish ──');
 
@@ -93,14 +95,17 @@ ok('UI.8: sticky header (sticky top-0 + z-10)',
 
 console.log('\n── HOTFIX 30: Print/Excel dropdowns ──');
 
-ok('DROP.1: handlePrintLedger accepts bilingual param',
-  /function handlePrintLedger\(account, perspective, bilingual\)/.test(oa));
+ok('DROP.1: handlePrintLedger accepts bilingual + layout params (HOTFIX 33)',
+  /function handlePrintLedger\(account, perspective, bilingual, layout\)/.test(oa));
 
 ok('DROP.2: handleExportExcel accepts bilingual + perspective params',
   /function handleExportExcel\(account, bilingual, perspective\)/.test(oa));
 
-ok('DROP.3: Print (Internal) dropdown has EN and Bilingual options',
-  /handlePrintLedger\(a, 'internal', false\)[\s\S]{0,1500}English Only[\s\S]{0,2000}handlePrintLedger\(a, 'internal', true\)[\s\S]{0,400}Bilingual/.test(oa));
+ok('DROP.3: Print (Internal) dropdown has Per Currency × EN/AR + Combined × EN/AR (HOTFIX 33: 4-way matrix)',
+  /handlePrintLedger\(a, 'internal', false, 'per_currency'\)/.test(oa) &&
+  /handlePrintLedger\(a, 'internal', true, 'per_currency'\)/.test(oa) &&
+  /handlePrintLedger\(a, 'internal', false, 'combined'\)/.test(oa) &&
+  /handlePrintLedger\(a, 'internal', true, 'combined'\)/.test(oa));
 
 ok('DROP.4: Customer Statement dropdown has EN and Bilingual options',
   /handlePrintLedger\(a, 'customer', false\)[\s\S]{0,2000}handlePrintLedger\(a, 'customer', true\)/.test(oa));

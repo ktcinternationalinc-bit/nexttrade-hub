@@ -236,8 +236,8 @@ ok('R12: closed-tickets fetch still has NO .limit(100)',
   !/\.eq\('status', 'Closed'\)[\s\S]{0,200}\.limit\(100\)/.test(page));
 ok('R13: 44c — consume_invoice_item_inventory RPC still wired',
   /supabase\.rpc\('consume_invoice_item_inventory', \{ p_item_id: insertedItem\.id \}\)/.test(page));
-ok('R14: account card actions row preserved (HOTFIX 30: Print/Excel buttons now have EN/Bilingual dropdowns)',
-  /openNewEntry\(a\.id\)[\s\S]{0,3000}\+ Entry[\s\S]{0,3000}handlePrintLedger[\s\S]{0,3000}handleExportExcel[\s\S]{0,3000}setAttachAccountId[\s\S]{0,3000}openEditAccount[\s\S]{0,3000}deleteAccount/.test(oa));
+ok('R14: account card actions row preserved (HOTFIX 33: Print dropdown now has 4 layout/lang combinations)',
+  /openNewEntry\(a\.id\)[\s\S]{0,6000}\+ Entry[\s\S]{0,6000}handlePrintLedger[\s\S]{0,6000}handleExportExcel[\s\S]{0,6000}setAttachAccountId[\s\S]{0,6000}openEditAccount[\s\S]{0,6000}deleteAccount/.test(oa));
 ok('R15: saveEntry still inserts/updates open_account_entries table',
   /await dbInsert\('open_account_entries', payload, userProfile && userProfile\.id\)/.test(oa) &&
   /await dbUpdate\('open_account_entries', entryDraft\.id, payload, userProfile && userProfile\.id\)/.test(oa));

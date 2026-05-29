@@ -142,8 +142,8 @@ ok('E6: ledger columns via ledgerLabel() i18n (HOTFIX 30: date/type/description/
   /ledgerLabel\('description', lang\)/.test(oa) && /ledgerLabel\('reference', lang\)/.test(oa) &&
   /ledgerLabel\('they_owe_us', lang\)/.test(oa) && /ledgerLabel\('we_owe_them', lang\)/.test(oa) &&
   /ledgerLabel\('open_balance', lang\)/.test(oa) && /ledgerLabel\('running_bal', lang\)\}\s*\{cur\}/.test(oa));
-ok('E7: Header tints preserved (emerald for they_owe_us, red for we_owe_them, amber for open_balance) — HOTFIX 30',
-  /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa) && /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa) && /bg-amber-50[\s\S]{0,400}open_balance/.test(oa));
+ok('E7: Header color hints (text-emerald-700 they_owe_us, text-red-700 we_owe_them, text-amber-700 open_balance) — HOTFIX 33 stripped backgrounds',
+  /text-emerald-700[\s\S]{0,400}they_owe_us/.test(oa) && /text-red-700[\s\S]{0,400}we_owe_them/.test(oa) && /text-amber-700[\s\S]{0,400}open_balance/.test(oa));
 ok('E8: running balance color-coded (HOTFIX 30 staircase: text-slate-700 baseline, inactive dimmed)',
   /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-700'/.test(oa) &&
   /text-slate-300 font-medium opacity-60/.test(oa));

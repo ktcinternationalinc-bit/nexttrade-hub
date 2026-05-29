@@ -38,8 +38,8 @@ ok('A4: fmtSigned helper exists (formats with − prefix for negatives)',
 ok('B1: signedAmount helper still exists for running-balance computation (HOTFIX 11 uses In/Out columns for display, but signedAmount still drives the running balance arithmetic)',
   /function signedAmount\(entry\)/.test(oa));
 
-ok('B2: per-row AR Side / AP Side cells display positive magnitudes via fmtNum (HOTFIX 11 final)',
-  /var s = arApSide\(entry\)[\s\S]{0,400}fmtNum\(s\.ar\)/.test(oa) && /var s = arApSide\(entry\)[\s\S]{0,400}fmtNum\(s\.ap\)/.test(oa));
+ok('B2: per-row AR Side / AP Side cells display positive magnitudes via fmtNum (HOTFIX 33: new IIFE structure)',
+  /var s = arApSide\(entry\)/.test(oa) && /fmtNum\(s\.ar\)/.test(oa) && /fmtNum\(s\.ap\)/.test(oa));
 
 ok('C1: per-currency Summary block computes totalAR + totalAP SEPARATELY (HOTFIX 19: now from FIFO cs.theyOweUs/cs.weOweThem)',
   /var totalAR = Number\(cs\.theyOweUs \|\| 0\)/.test(oa) && /var totalAP = Number\(cs\.weOweThem \|\| 0\)/.test(oa));

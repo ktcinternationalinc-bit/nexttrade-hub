@@ -492,7 +492,7 @@ export default function OpenAccountsTab(props) {
     if (!account || !account.business_entity_code) return null;
     return entitiesByCode[account.business_entity_code] || null;
   }
-  function handlePrintLedger(account, perspective, bilingual) {
+  function handlePrintLedger(account, perspective, bilingual, layout) {
     var ent = entityFor(account);
     var rows = entriesByAccount[account.id] || [];
     var s = summaryFor(account.id);
@@ -500,7 +500,8 @@ export default function OpenAccountsTab(props) {
     printAccountLedger(account, ent, rows, s, {
       perspective: perspective || 'internal',
       simulation: sim,
-      bilingual: bilingual === true,  // HOTFIX 30 — bilingual mode
+      bilingual: bilingual === true,
+      layout: layout === 'combined' ? 'combined' : 'per_currency',
     });
   }
   function handleExportExcel(account, bilingual, perspective) {
@@ -1541,14 +1542,17 @@ export default function OpenAccountsTab(props) {
                         dropdowns using native <details>. Caret + outline ring make the toggle
                         more obvious (earlier styling was too subtle and Max didn't see it). */}
                     <details className="relative inline-block">
-                      <summary className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Print our internal view as PDF — choose English or Bilingual">
+                      <summary className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Print our internal view as PDF — choose English or Bilingual, Per-Currency or Combined layout">
                         🖨️ Print (Internal)
                         <span className="ml-1 px-1 bg-amber-400 text-slate-900 rounded text-[9px] font-extrabold">EN/AR ▾</span>
                       </summary>
-                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[200px] p-1">
-                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language</div>
-                        <button onClick={function () { handlePrintLedger(a, 'internal', false); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 English Only<div className="text-[9px] text-slate-400 font-normal">EN headers + EN labels</div></button>
-                        <button onClick={function () { handlePrintLedger(a, 'internal', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[240px] p-1">
+                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Layout · Language</div>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', false, 'per_currency'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">📄 Per Currency · 🇺🇸 English<div className="text-[9px] text-slate-400 font-normal">Separate USD and EGP sections</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', true, 'per_currency'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">📄 Per Currency · 🇪🇬 Bilingual<div className="text-[9px] text-slate-400 font-normal">Separate USD and EGP, stacked EN/AR</div></button>
+                        <div className="border-t border-slate-700 my-1"></div>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', false, 'combined'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🌐 Combined · 🇺🇸 English<div className="text-[9px] text-slate-400 font-normal">All currencies in one chronological table (like live ledger)</div></button>
+                        <button onClick={function () { handlePrintLedger(a, 'internal', true, 'combined'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🌐 Combined · 🇪🇬 Bilingual<div className="text-[9px] text-slate-400 font-normal">All currencies chronological, stacked EN/AR</div></button>
                       </div>
                     </details>
                     <details className="relative inline-block">
@@ -1765,11 +1769,13 @@ export default function OpenAccountsTab(props) {
                             <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('description', lang)}</th>
                             <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('reference', lang)}</th>
                             <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Currency</th>
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang)}</th>
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang)}</th>
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-900 border-b-2 border-slate-300 bg-amber-50" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
+                            {/* v55.83-A.6.27.72 HOTFIX 33 — strip vertical column backgrounds entirely.
+                                Keep header text in pastel color hint so the eye finds the right column. */}
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-700 border-b-2 border-slate-300" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-red-700 border-b-2 border-slate-300" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-700 border-b-2 border-slate-300" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
                             {s.currencies.map(function (cur) {
-                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
+                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
                             })}
                             {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                           </tr>
@@ -1883,23 +1889,37 @@ export default function OpenAccountsTab(props) {
                                 <span className={entryCur === 'USD' ? 'text-sky-700' : entryCur === 'EGP' ? 'text-amber-700' : 'text-slate-700'}>{entryCur}</span>
                               </span>
                             </td>
-                            {/* v55.83-A.6.27.72 HOTFIX 14 — Per-row AR Side / AP Side cells.
-                                Sales Invoice rows → blue text. Vendor Bill rows → orange text.
-                                Payments/offsets → neutral emerald/red (default). */}
-                            <td className={'px-3 py-1.5 text-right font-mono font-extrabold bg-emerald-50/30 ' + (typeMeta.amountCls || 'text-emerald-800')}>
+                            {/* v55.83-A.6.27.72 HOTFIX 33 — strip per-cell vertical backgrounds.
+                                Row tint is the ONLY background. AR/AP cells render with pastel
+                                text only. payment_sent gets a "reduces what we owe" subtag below
+                                its green number in the We Owe Them column so green-in-AP doesn't
+                                look like a column-meaning bug. */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
                               {(function () {
                                 var s = arApSide(entry);
-                                return s.ar > 0.005 ? fmtNum(s.ar) : <span className="text-slate-300">—</span>;
+                                return s.ar > 0.005
+                                  ? <span className={typeMeta.amountCls || 'text-emerald-700'}>{fmtNum(s.ar)}</span>
+                                  : <span className="text-slate-300">—</span>;
                               })()}
                             </td>
-                            <td className={'px-3 py-1.5 text-right font-mono font-extrabold bg-red-50/30 ' + (typeMeta.amountCls || 'text-red-700')}>
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
                               {(function () {
                                 var s = arApSide(entry);
-                                return s.ap > 0.005 ? fmtNum(s.ap) : <span className="text-slate-300">—</span>;
+                                if (s.ap <= 0.005) return <span className="text-slate-300">—</span>;
+                                var isFavorable = (txnType === 'payment_sent' || (txnType === 'credit_adjustment' && Number(entry.debit_amount || 0) > 0));
+                                if (isFavorable) {
+                                  return (
+                                    <span>
+                                      <span className="text-emerald-700">{fmtNum(s.ap)}</span>
+                                      <div className="text-[9px] text-teal-600 italic font-medium opacity-75 mt-0.5">reduces what we owe</div>
+                                    </span>
+                                  );
+                                }
+                                return <span className={typeMeta.amountCls || 'text-red-700'}>{fmtNum(s.ap)}</span>;
                               })()}
                             </td>
-                            {/* Open Balance — invoice rows blue, bill rows orange (uses amountCls). */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50">
+                            {/* Open Balance — strip the bg-amber-50 background per HOTFIX 33 */}
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
                               {(function () {
                                 if (txnType !== 'sales_invoice' && txnType !== 'vendor_bill') {
                                   return <span className="text-slate-400">—</span>;

@@ -41,8 +41,8 @@ console.log('\n── PDF page-break fix ──');
 ok('B1: NO strict section-level page-break-inside:avoid (was forcing blank first page)',
   !/\.currency-section \{ page-break-inside: avoid/.test(exp));
 
-ok('B2: Section header (h2) avoid-break-after — keeps header attached to its table',
-  /\.currency-section > h2 \{ page-break-after: avoid/.test(exp));
+ok('B2: Section header (h2) avoid-break-after — keeps header attached to its table (HOTFIX 33: also adds 18px/900 hierarchy)',
+  /\.currency-section > h2 \{[\s\S]{0,300}page-break-after: avoid/.test(exp));
 
 ok('B3: Row-level page-break-inside:avoid — rows stay together but tables can break',
   /\.currency-section tr \{ page-break-inside: avoid/.test(exp));

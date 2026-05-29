@@ -46,13 +46,13 @@ ok('A5: payment_sent routes to AP Side (reduces AP, shown positive)',
 console.log('\n── Column headers per spec ──');
 
 ok('B1: Header "they_owe_us" via ledgerLabel with emerald bg (HOTFIX 30 i18n)',
-  /ledgerLabel\('they_owe_us', lang\)/.test(oa) && /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa));
+  /ledgerLabel\('they_owe_us', lang\)/.test(oa) && /text-emerald-700[\s\S]{0,400}they_owe_us/.test(oa));
 
 ok('B2: Header "we_owe_them" via ledgerLabel with red bg (HOTFIX 30 i18n)',
-  /ledgerLabel\('we_owe_them', lang\)/.test(oa) && /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa));
+  /ledgerLabel\('we_owe_them', lang\)/.test(oa) && /text-red-700[\s\S]{0,400}we_owe_them/.test(oa));
 
 ok('B3: Single Open Balance column via ledgerLabel with amber bg (HOTFIX 30 i18n)',
-  /ledgerLabel\('open_balance', lang\)/.test(oa) && /bg-amber-50[\s\S]{0,400}open_balance/.test(oa));
+  /ledgerLabel\('open_balance', lang\)/.test(oa) && /text-amber-700[\s\S]{0,400}open_balance/.test(oa));
 
 ok('B4: NO Paid column on screen (spec dropped it)',
   !/>Paid<\/th>/.test(oa));
@@ -71,8 +71,8 @@ console.log('\n── Per-row cells ──');
 ok('C1: AR Side cell uses arApSide + fmtNum positive',
   /var s = arApSide\(entry\)[\s\S]{0,400}s\.ar > 0\.005[\s\S]{0,200}fmtNum\(s\.ar\)/.test(oa));
 
-ok('C2: AP Side cell uses arApSide + fmtNum positive',
-  /var s = arApSide\(entry\)[\s\S]{0,400}s\.ap > 0\.005[\s\S]{0,200}fmtNum\(s\.ap\)/.test(oa));
+ok('C2: AP Side cell uses arApSide + fmtNum, with "reduces what we owe" subtag on favorable payments (HOTFIX 33)',
+  /var s = arApSide\(entry\)/.test(oa) && /fmtNum\(s\.ap\)/.test(oa) && /reduces what we owe/.test(oa));
 
 ok('C3: Remaining fills only for invoice/bill rows',
   /txnType !== 'sales_invoice' && txnType !== 'vendor_bill'/.test(oa));

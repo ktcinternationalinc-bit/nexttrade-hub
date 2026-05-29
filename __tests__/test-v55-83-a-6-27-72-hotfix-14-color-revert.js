@@ -41,21 +41,21 @@ ok('A5: NO row-level background tint on invoices (rowCls: null for invoices and 
 console.log('\n── Column headers reverted to emerald/red ──');
 
 ok('B1: they_owe_us header uses bg-emerald-50 (HOTFIX 30 i18n: renamed from AR Side)',
-  /bg-emerald-50[\s\S]{0,400}they_owe_us/.test(oa));
+  /text-emerald-700[\s\S]{0,400}they_owe_us/.test(oa));
 
 ok('B2: we_owe_them header uses bg-red-50 (HOTFIX 30 i18n: renamed from AP Side)',
-  /bg-red-50[\s\S]{0,400}we_owe_them/.test(oa));
+  /text-red-700[\s\S]{0,400}we_owe_them/.test(oa));
 
-ok('B3: they_owe_us title text emerald-900 (HOTFIX 30)',
-  /text-emerald-900[\s\S]{0,400}they_owe_us/.test(oa));
+ok('B3: they_owe_us title text emerald-700 (HOTFIX 33 — lightened from emerald-900 since no bg)',
+  /text-emerald-700[\s\S]{0,400}they_owe_us/.test(oa));
 
-ok('B4: we_owe_them title text red-900 (HOTFIX 30)',
-  /text-red-900[\s\S]{0,400}we_owe_them/.test(oa));
+ok('B4: we_owe_them title text red-700 (HOTFIX 33 — lightened from red-900 since no bg)',
+  /text-red-700[\s\S]{0,400}we_owe_them/.test(oa));
 
 console.log('\n── Per-row cells reverted, color from typeMeta only ──');
 
-ok('C1: AR Side cell uses typeMeta.amountCls when invoice, default emerald otherwise',
-  /typeMeta\.amountCls \|\| 'text-emerald-800'/.test(oa));
+ok('C1: AR Side cell uses typeMeta.amountCls when invoice, default emerald-700 otherwise (HOTFIX 33)',
+  /typeMeta\.amountCls \|\| 'text-emerald-700'/.test(oa));
 
 ok('C2: AP Side cell uses typeMeta.amountCls when invoice, default red otherwise',
   /typeMeta\.amountCls \|\| 'text-red-700'/.test(oa));

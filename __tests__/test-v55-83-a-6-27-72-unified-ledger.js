@@ -127,8 +127,8 @@ ok('C15: handleOffset function — uses findOffsetCandidate + buildOffsetEntries
   /Rollback first entry/.test(oa));
 ok('C16: invoice modal stamps transaction_type sales_invoice or vendor_bill',
   /transaction_type: invoiceDraft\.direction === 'credit' \? 'sales_invoice' : 'vendor_bill'/.test(oa));
-ok('C17: two Print dropdowns — internal + customer perspective (HOTFIX 30: each with EN/Bilingual options)',
-  /handlePrintLedger\(a, 'internal', (false|true)\)/.test(oa) &&
+ok('C17: Print dropdowns — internal (HOTFIX 33: 4-arg with layout) + customer perspective (HOTFIX 30: EN/Bilingual)',
+  /handlePrintLedger\(a, 'internal', (false|true), '(per_currency|combined)'\)/.test(oa) &&
   /handlePrintLedger\(a, 'customer', (false|true)\)/.test(oa));
 
 // ════════════════════════════════════════════════════════════════════
