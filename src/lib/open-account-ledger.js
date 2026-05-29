@@ -221,29 +221,59 @@ export function simulate(entries) {
       }
       if (cashLeft2 > 0.001) s.ourPrepaid += cashLeft2;
     } else if (type === 'credit_adjustment') {
-      // v55.83-A.6.27.72 HOTFIX 27 — REVERTED HOTFIX 26.
+      // v55.83-A.6.27.72 HOTFIX 32 — Chronological consistency for credit_adjustment.
       //
-      // HOTFIX 26 made credit_adjustment drain the open pool (like a payment)
-      // before parking excess into prepaid. That introduced regressions worse
-      // than the bug it fixed:
-      //   - Vendor bills got marked "✓ paid" even when the credit pool was
-      //     exhausted (phantom payments)
-      //   - EGP summary widgets showed "they owe us 76,366" while running
-      //     balance correctly showed "we owe them 968,914" (hallucination)
-      //   - Per-row Open Balance contradicted the Running Balance column
+      // Per Max May 28 evening: the running balance walks the ledger chronologically
+      // row by row. The offset/credit allocator must follow the same flow. An
+      // "upfront" credit_adjustment (e.g. Algeria Brokerage $10,609.90 dated
+      // 2025-11-27, same day as the $151,570 vendor bill INV-003) should reduce
+      // INV-003 IMMEDIATELY — not get parked in ourPrepaid while the auto-offset
+      // cascade later cannibalizes a May 2026 sales invoice (INV-010) for the
+      // same dollars.
       //
-      // Decision per Max May 28 2026: revert to the original direct-park
-      // behavior. The previous bug (credit sitting in prepaid pool beside an
-      // open bill) was at least mathematically predictable. The HOTFIX 26
-      // bug actively lied about settled state.
+      // RULE: credit_adjustment behaves like a payment — drain the appropriate
+      // open pool FIFO first, park excess in prepaid only when no open balance
+      // exists to absorb it. Identical mechanics to payment_sent / payment_received.
       //
-      // Next step: rebuild a proper fix using real entry data from Supabase
-      // rather than guessing from screenshots. See SQL query in the related
-      // GitHub issue / Max's next message.
-      var creditAmt = Math.max(0, Number(e.credit_amount || 0));
-      var debitAmt = Math.max(0, Number(e.debit_amount || 0));
-      if (creditAmt > 0) s.theirPrepaid += creditAmt;
-      if (debitAmt > 0) s.ourPrepaid += debitAmt;
+      // Direction map:
+      //   debit_amount > 0  → we're holding credit AGAINST them
+      //                       → drain ourOpenBills first, park excess in ourPrepaid
+      //   credit_amount > 0 → they're holding credit AGAINST us
+      //                       → drain theirOpenInvoices first, park excess in theirPrepaid
+      //
+      // SAFETY: HOTFIX 26 first tried this and got reverted because the 4 corrupt
+      // offset rows (vendor_bill ↔ vendor_bill pairings) caused phantom payments
+      // on top of an already-drained pool. HOTFIX 28 added type-checking on offsets
+      // that REJECTS those corrupt rows before they touch the pool. With HOTFIX 28
+      // in place, the drain behavior is structurally safe.
+      var creditAmtA = Math.max(0, Number(e.credit_amount || 0));
+      var debitAmtA = Math.max(0, Number(e.debit_amount || 0));
+      if (debitAmtA > 0) {
+        // Drain open bills FIFO
+        var debitLeft = debitAmtA;
+        while (debitLeft > 0.001 && s.openBills.length > 0) {
+          var billA = s.openBills[0];
+          var applyA = Math.min(billA.remaining, debitLeft);
+          billA.remaining -= applyA;
+          applied[billA.id] = (applied[billA.id] || 0) + applyA;
+          debitLeft -= applyA;
+          if (billA.remaining < 0.001) s.openBills.shift();
+        }
+        if (debitLeft > 0.001) s.ourPrepaid += debitLeft;
+      }
+      if (creditAmtA > 0) {
+        // Drain open invoices FIFO
+        var creditLeft = creditAmtA;
+        while (creditLeft > 0.001 && s.openInvoices.length > 0) {
+          var invA = s.openInvoices[0];
+          var applyAC = Math.min(invA.remaining, creditLeft);
+          invA.remaining -= applyAC;
+          applied[invA.id] = (applied[invA.id] || 0) + applyAC;
+          creditLeft -= applyAC;
+          if (invA.remaining < 0.001) s.openInvoices.shift();
+        }
+        if (creditLeft > 0.001) s.theirPrepaid += creditLeft;
+      }
     } else if (type === 'offset') {
       // v55.83-A.6.27.72 HOTFIX 28 — Atomic + type-checked offset processing.
       //

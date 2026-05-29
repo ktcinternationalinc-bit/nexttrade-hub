@@ -215,11 +215,19 @@ ok('B7: INV-008 reopens at 514,700.50 (135,299.50 legitimately offset against IN
 ok('B8: Customs invoice still partial at 76,346 (650k legitimately offset against INV-009)',
   Math.abs(customsRemaining - 76346) < 0.01);
 
-ok('B9: USD net = +23,879.90 (untouched by EGP corruption — currencies isolated)',
-  Math.abs(usdNet - 23879.90) < 0.01);
+// HOTFIX 32 (May 28 evening) — credit_adjustment now drains the open pool.
+// Raw sim against the CSV (without the post-32 surgical SQL fix to the 2 USD
+// offset rows) leaves USD net at $13,270, because the offset row's $17,330
+// applies to INV-010 (full) but only $6,720.10 of the matching bill side
+// can absorb against INV-003 (the rest was drained by credit_adjustment).
+// The full $23,879.90 net target is restored AFTER the surgical SQL runs
+// (UPDATE the 2 USD offset rows from $17,330 → $6,720.10). See HOTFIX 32 test
+// for assertions on the post-SQL result.
+ok('B9: USD net = +13,270 BEFORE post-32 surgical SQL (was 23,879.90 before HOTFIX 32 added the drain)',
+  Math.abs(usdNet - 13270.00) < 0.01);
 
-ok('B10: USD our prepaid = 10,609.90 (Algeria brokerage credit)',
-  Math.abs(usdOurPrepaid - 10609.90) < 0.01);
+ok('B10: USD our prepaid = 0 after HOTFIX 32 drains Algeria credit into INV-003',
+  Math.abs(usdOurPrepaid - 0) < 0.01);
 
 ok('B11: USD INV-010 remaining = 13,270 (after 17,330 legitimately offset against INV-003)',
   Math.abs(usdOpenInvoiceRemaining - 13270) < 0.01);
