@@ -1086,7 +1086,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
         {/* LAST UPDATED INFO */}
         {sel.updated_at && (
-          <div className="flex items-center gap-2 mb-3 text-[10px] text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+          <div className="flex items-center gap-2 mb-3 text-[10px] text-slate-700 bg-slate-100 rounded-lg px-3 py-2">
             <span>🕐 Last updated: {fmtDate(sel.updated_at)}</span>
             {sel.updated_by && <span>by <span className="font-semibold text-purple-500">{getUserName(sel.updated_by) || 'Unknown'}</span></span>}
             {sel.closed_by && sel.status === 'Closed' && <span>• Closed by: <span className="font-semibold text-purple-500">{getUserName(sel.closed_by) || 'Unknown'}</span></span>}
@@ -1663,7 +1663,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
               {/* Meta row: created by / assignees / due date / order */}
               <div className="flex items-center gap-2 flex-wrap pl-7" onClick={()=>{setSel(t);loadComments(t.id);}}>
-                <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-600')}>
+                <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-200 text-slate-700' : 'bg-slate-50 text-slate-600')}>
                   <span className={'w-1.5 h-1.5 rounded-full ' + (t.status === 'Closed' ? 'bg-slate-400' : 'bg-blue-400')} />by {createdName || '?'}
                 </span>
                 {tAssignees.length > 0 ? tAssignees.map(uid => {
@@ -1683,19 +1683,19 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   );
                 }) : (
                   <span className={t.status === 'Closed'
-                    ? 'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-500 border border-slate-300'
+                    ? 'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-200 text-slate-700 border border-slate-300'
                     : 'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-800 border border-red-200'
                   }>
                     <span className={'w-1.5 h-1.5 rounded-full ' + (t.status === 'Closed' ? 'bg-slate-400' : 'bg-red-500')} />Unassigned
                   </span>
                 )}
                 {t.due_date && !isOverdue && !isDueToday && (
-                  <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-600')}>
+                  <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-200 text-slate-700' : 'bg-slate-50 text-slate-600')}>
                     📅 Due {t.due_date}
                   </span>
                 )}
                 {t.order_number && (
-                  <span className={'text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-500')}>
+                  <span className={'text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-700')}>
                     #{t.order_number}
                   </span>
                 )}

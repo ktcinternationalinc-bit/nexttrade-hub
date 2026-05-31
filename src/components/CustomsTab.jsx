@@ -945,7 +945,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
           {tablesReady && !selClr && !showAddClr && (
             <div className="space-y-2">
               {filteredClearances.length === 0 ? (
-                <div className="bg-white rounded-xl p-6 text-center text-slate-400 border border-slate-200">
+                <div className="bg-white rounded-xl p-6 text-center text-slate-500 border border-slate-200">
                   <p className="text-4xl mb-2">📋</p>
                   <p className="text-sm font-semibold">{clearances.length === 0 ? 'No clearances yet' : 'No clearances match your filters'}</p>
                   {clearances.length === 0 && <p className="text-xs mt-1">Tap "+ New Clearance" to add your first one.</p>}
@@ -1249,7 +1249,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                   </div>
                 </div>
               )) : (
-                <div className="bg-white rounded-xl p-6 text-center text-slate-400">
+                <div className="bg-white rounded-xl p-6 text-center text-slate-500">
                   <p className="text-4xl mb-2">🚢</p>
                   <p className="text-sm font-semibold">No shipments yet</p>
                   <p className="text-xs mt-1">Add a shipment to track customs clearance and broker rates</p>

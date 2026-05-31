@@ -2329,7 +2329,7 @@ Date: ${today}`;
     </div>
     <div className="overflow-auto rounded-lg border bg-white max-h-[500px]"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50">
       <th className="px-2 py-2 text-[10px] text-left">Quote #</th><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Customer</th><th className="px-2 py-2 text-[10px] text-left">Route</th><th className="px-2 py-2 text-[10px] text-right">Our Cost</th><th className="px-2 py-2 text-[10px] text-right">Client</th><th className="px-2 py-2 text-[10px] text-right">Profit</th><th className="px-2 py-2 text-[10px]">Status</th><th className="px-2 py-2 text-[10px]"></th>
-    </tr></thead><tbody>{quotes.map(qt => { const sc = {draft:'bg-slate-100 text-slate-600',sent:'bg-blue-100 text-blue-700',accepted:'bg-green-100 text-green-700',rejected:'bg-red-100 text-red-600',expired:'bg-red-50 text-red-400',booked:'bg-emerald-100 text-emerald-700'}; return (
+    </tr></thead><tbody>{quotes.map(qt => { const sc = {draft:'bg-slate-100 text-slate-600',sent:'bg-blue-100 text-blue-700',accepted:'bg-green-100 text-green-700',rejected:'bg-red-100 text-red-600',expired:'bg-red-100 text-red-600',booked:'bg-emerald-100 text-emerald-700'}; return (
       <tr key={qt.id} className="border-b border-slate-50 hover:bg-blue-50">
         <td className="px-2 py-2 font-bold text-blue-600 cursor-pointer" onClick={()=>{setEditingQuote(qt);setF({qNumber:qt.quote_number,qDate:qt.quote_date,qCustomer:qt.customer_name,qEmail:qt.customer_email,qOrigin:qt.origin,qDest:qt.destination,qPol:qt.port_of_loading,qPod:qt.port_of_discharge,qContainer:qt.container_type,qShipCost:qt.shipping_cost,qShipVendor:qt.shipping_vendor,qShipLine:qt.shipping_line,qTruckCost:qt.trucking_cost,qTruckVendor:qt.trucking_vendor,qCustomsCost:qt.customs_cost,qOtherInternal:qt.other_internal_cost,qClientShip:qt.client_shipping_fee,qClientTruck:qt.client_trucking_fee,qClientCustoms:qt.client_customs_fee,qClientService:qt.client_service_fee,qClientOther:qt.client_other_fee,qDisplayText:qt.client_display_text,qShowBreakdown:qt.client_show_breakdown,qCurrency:qt.currency,qStatus:qt.status,qValidUntil:qt.valid_until,qNotes:qt.notes});setManualShip(true);setManualTruck(true);setManualBroker(true);setView('add_quote');}}>{qt.quote_number}</td>
         <td className="px-2 py-2">{qt.quote_date}</td><td className="px-2 py-2 font-semibold">{qt.customer_name}</td><td className="px-2 py-2">{qt.origin}→{qt.destination}</td><td className="px-2 py-2 text-right text-red-500">{fCur(qt.total_internal_cost,qt.currency)}</td><td className="px-2 py-2 text-right font-bold">{fCur(qt.client_total,qt.currency)}</td><td className="px-2 py-2 text-right font-bold" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>{fCur(qt.profit,qt.currency)}</td><td className="px-2 py-2"><span className={'px-2 py-0.5 rounded-full text-[9px] font-bold '+(sc[qt.status]||'bg-slate-100')}>{qt.status}</span></td>
@@ -3482,7 +3482,7 @@ Date: ${today}`;
                     })}
                   </tbody>
                 </table>
-                <div className="px-2 py-1 text-[10px] text-slate-500 bg-slate-50 border-t border-slate-200">
+                <div className="px-2 py-1 text-[10px] text-slate-700 bg-slate-100 border-t border-slate-200">
                   Total rates in ratesForView: {ratesForView.length} · chart currency: {chartCurrency} · scope: {chartShippingLine}
                 </div>
               </div>
@@ -3657,7 +3657,7 @@ Date: ${today}`;
                   setSelectedRateIds(s);
                 }}
                 disabled={expiredIds.length === 0}
-                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (expiredIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100')}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (expiredIds.length === 0 ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100')}
                 title="Tick all expired rates in the visible list"
               >
                 🗓️ Historical / Expired ({expiredIds.length})
@@ -3670,7 +3670,7 @@ Date: ${today}`;
                   setSelectedRateIds(s);
                 }}
                 disabled={notBookedIds.length === 0}
-                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100')}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedIds.length === 0 ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100')}
                 title="Tick everything that isn't a confirmed booking"
               >
                 📭 Not Booked ({notBookedIds.length})
@@ -3683,7 +3683,7 @@ Date: ${today}`;
                   setSelectedRateIds(s);
                 }}
                 disabled={notBookedExpiredIds.length === 0}
-                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedExpiredIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-orange-50 border-orange-300 text-orange-800 hover:bg-orange-100')}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedExpiredIds.length === 0 ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-orange-50 border-orange-300 text-orange-800 hover:bg-orange-100')}
                 title="Safest bulk delete — expired + unused rates. Booked rates are PROTECTED."
               >
                 💡 Expired & Not Booked ({notBookedExpiredIds.length})

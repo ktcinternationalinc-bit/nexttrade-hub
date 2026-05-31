@@ -1209,9 +1209,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                         className="text-[10px] text-green-600 bg-green-50 px-2 py-1 rounded font-semibold border border-green-200">Restore</button>
                     )}
                     <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); loadData(); } catch(err) { alert(err.message); } }}
-                      className="text-[10px] text-slate-500 bg-slate-50 px-2 py-1 rounded font-semibold">{a.pinned ? 'Unpin' : '📌 Pin'}</button>
+                      className="text-[10px] text-slate-700 bg-slate-100 px-2 py-1 rounded font-semibold hover:bg-slate-200">{a.pinned ? 'Unpin' : '📌 Pin'}</button>
                     <button onClick={async () => { if (!confirm('Delete this message permanently?')) return; try { await dbDelete('announcements', a.id, user?.id); loadData(); } catch(err) { alert(err.message); } }}
-                      className="text-[10px] text-red-400 bg-red-50 px-2 py-1 rounded font-semibold">🗑️ Delete</button>
+                      className="text-[10px] text-red-700 bg-red-100 px-2 py-1 rounded font-semibold hover:bg-red-200">🗑️ Delete</button>
                   </div>
                 </div>
               </div>
@@ -1715,7 +1715,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                 className="px-3 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-bold hover:bg-blue-600"
                 title="Jump to this ticket in the Tickets tab to comment, reassign, or change status"
               >↗ Open in Tickets</button>
-              <button onClick={() => setViewTicket(null)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 text-lg font-bold">✕</button>
+              <button onClick={() => setViewTicket(null)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600 hover:text-red-600 hover:bg-red-50 text-lg font-bold">✕</button>
             </div>
           </div>
 

@@ -237,7 +237,7 @@ export default function WarehouseSettings({ userProfile, modulePerms, toast }) {
       {loading ? (
         <div className="text-xs text-slate-500 py-4 text-center">Loading warehouses…</div>
       ) : warehouses.length === 0 ? (
-        <div className="text-xs text-slate-500 py-4 text-center bg-slate-50 rounded-lg border border-dashed">
+        <div className="text-xs text-slate-600 py-4 text-center bg-slate-50 rounded-lg border border-dashed">
           No warehouses yet. Click <strong>Add Warehouse</strong> above to create one.
         </div>
       ) : (

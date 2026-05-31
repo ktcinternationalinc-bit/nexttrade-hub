@@ -40,6 +40,15 @@ var BUDGETS = {
   transcribe: { max: 30, windowMs: 60 * 60 * 1000 }, // 30 per hour
   // AI text endpoints (Anthropic). Tokens already capped per-call.
   ask: { max: 120, windowMs: 60 * 60 * 1000 },       // 120 per hour
+  // Social content generation — each call produces 3 platform posts.
+  // 40/hour/user is generous for real use, caps cost runaway.
+  'social-content': { max: 40, windowMs: 60 * 60 * 1000 },
+  // Brand learning extraction — reads a doc/URL per call. 30/hour is plenty.
+  'brand-learn': { max: 30, windowMs: 60 * 60 * 1000 },
+  // Image -> content (vision). 30/hour caps cost; each call sends one image.
+  'image-content': { max: 30, windowMs: 60 * 60 * 1000 },
+  // SEO audit — fetches + analyzes one page per call. 60/hour.
+  'seo-audit': { max: 60, windowMs: 60 * 60 * 1000 },
   // Default (anything else)
   default: { max: 60, windowMs: 60 * 60 * 1000 },
 };

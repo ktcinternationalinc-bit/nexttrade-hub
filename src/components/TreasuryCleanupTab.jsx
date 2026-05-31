@@ -344,7 +344,7 @@ export default function TreasuryCleanupTab({ supabase, treasury, invoices, check
             {/* RIGHT: detail panel for selected invoice */}
             <div className="lg:col-span-2">
               {!selectedEntry ? (
-                <div className="bg-slate-50 rounded-lg p-6 text-center text-sm text-slate-500 border border-slate-200">
+                <div className="bg-slate-50 rounded-lg p-6 text-center text-sm text-slate-600 border border-slate-200">
                   Select an invoice to review its treasury rows / اختر فاتورة لمراجعة قيودها
                 </div>
               ) : (

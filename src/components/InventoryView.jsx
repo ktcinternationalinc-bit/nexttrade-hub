@@ -193,7 +193,7 @@ export default function InventoryView({ userProfile, modulePerms, toast }) {
                 var entry = pivot[s.id] || { total: 0 };
                 var isZero = entry.total <= 0;
                 return (
-                  <tr key={s.id} className={'border-t border-slate-100 ' + (isZero ? 'bg-slate-50 text-slate-400' : 'hover:bg-blue-50')}>
+                  <tr key={s.id} className={'border-t border-slate-100 ' + (isZero ? 'bg-slate-50 text-slate-600' : 'hover:bg-blue-50')}>
                     <td className="px-2 py-1.5 font-mono text-[11px] font-bold">{s.sku_number}</td>
                     <td className="px-2 py-1.5">
                       <div className="text-xs font-medium">{s.description}</div>

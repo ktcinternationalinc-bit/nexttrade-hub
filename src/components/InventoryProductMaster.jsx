@@ -72,18 +72,50 @@ var LEVEL_LABELS = {
 //
 // To add a new family rule: add a key like 'NEWFAM': [1, 3, 6] and the system
 // builds "<family> <grade> <color>" automatically in both languages.
+// v55.83-A naming spec (Max May 31 2026):
+//   Textile / Leather → Family > Category > Grade > Construction > Color   [1,2,3,4,6]
+//   PVC (Pool) / Boat Decking → Family > Category > Grade > Color > Pattern > Spec Class  [1,2,3,6,7,8]
+// Keys are matched against the family CODE. After the .37 classification refresh the
+// live family codes are 2-letter (LE / TX / PV / BD); the longer aliases are kept so
+// older data and any future code styles still resolve to the right recipe.
 var NAMING_RECIPES = {
-  // Textile: Category > Grade > Color > Backing
-  'TEX':     [2, 3, 6, 5],
-  'TEXTILE': [2, 3, 6, 5],
-  // Leather: Family > Grade > Color > Backing
-  'LEA':     [1, 3, 6, 5],
-  'LEATHER': [1, 3, 6, 5],
-  // PVC pools / boardecking: Family > Grade > Color > Pattern > Spec Class
-  'PVC':     [1, 3, 6, 7, 8],
-  'PVCPOOL': [1, 3, 6, 7, 8],
-  'PVCBD':   [1, 3, 6, 7, 8],
+  // Textile: Family > Category > Grade > Construction > Color
+  'TX':      [1, 2, 3, 4, 6],
+  'TEX':     [1, 2, 3, 4, 6],
+  'TEXTILE': [1, 2, 3, 4, 6],
+  // Leather: Family > Category > Grade > Construction > Color
+  'LE':      [1, 2, 3, 4, 6],
+  'LEA':     [1, 2, 3, 4, 6],
+  'LEATHER': [1, 2, 3, 4, 6],
+  // PVC Pool: Family > Category > Grade > Construction > Color > Backing > Pattern > Spec Class
+  'PV':      [1, 2, 3, 4, 6, 5, 7, 8],
+  'PVC':     [1, 2, 3, 4, 6, 5, 7, 8],
+  'PVCPOOL': [1, 2, 3, 4, 6, 5, 7, 8],
+  // Boat Decking (PVC-based) — same convention as PVC
+  'BD':      [1, 2, 3, 4, 6, 5, 7, 8],
+  'PVCBD':   [1, 2, 3, 4, 6, 5, 7, 8],
 };
+
+// Labels that are real selections but read as noise inside a product name —
+// dropped from the composed name so we never get "Headliner Not Applicable Black Foam".
+var NAME_NOISE_EN = { 'not applicable': 1, 'none': 1, 'n/a': 1, 'na': 1, '-': 1, '—': 1 };
+var NAME_NOISE_AR = { 'غير مطبق': 1, 'لا يوجد': 1, '-': 1, '—': 1 };
+
+// Drop repeated words (case-insensitive, keep first occurrence, preserve order) so
+// names like "Leather Automotive Leather Luxurious Embossed Leather White" collapse to
+// "Leather Automotive Luxurious Embossed White".
+function dedupeWords(s) {
+  var seen = {};
+  var out = [];
+  String(s || '').split(/\s+/).forEach(function (w) {
+    if (!w) return;
+    var k = w.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(w);
+  });
+  return out.join(' ');
+}
 
 // Build a product name (en + ar) from the form's level selections, looking up
 // each list value to get its label_en / label_ar.
@@ -104,8 +136,8 @@ function buildAutoName(form, lists) {
     var prefixKey = Object.keys(NAMING_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
     if (prefixKey) recipe = NAMING_RECIPES[prefixKey];
   }
-  // Default recipe — Family > Grade > Color > Backing — when no family-specific rule
-  if (!recipe) recipe = [1, 3, 6, 5];
+  // Default recipe — Family > Category > Grade > Construction > Color — when no family-specific rule
+  if (!recipe) recipe = [1, 2, 3, 4, 6];
   // Walk the recipe; collect labels; record any unfilled level for the UI to gate Save
   var enParts = [];
   var arParts = [];
@@ -120,12 +152,18 @@ function buildAutoName(form, lists) {
     }
     var entry = lists.find(function (l) { return l.id === id; });
     if (!entry) continue;
-    if (entry.label_en) enParts.push(String(entry.label_en).trim());
-    if (entry.label_ar) arParts.push(String(entry.label_ar).trim());
+    if (entry.label_en) {
+      var le = String(entry.label_en).trim();
+      if (le && !NAME_NOISE_EN[le.toLowerCase()]) enParts.push(le);
+    }
+    if (entry.label_ar) {
+      var la = String(entry.label_ar).trim();
+      if (la && !NAME_NOISE_AR[la]) arParts.push(la);
+    }
   }
   return {
-    name_en: enParts.join(' '),
-    name_ar: arParts.join(' '),
+    name_en: dedupeWords(enParts.join(' ')),
+    name_ar: dedupeWords(arParts.join(' ')),
     recipe: recipe,
     missing: missing,
     familyCode: familyCode,

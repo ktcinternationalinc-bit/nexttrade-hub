@@ -23,6 +23,9 @@ import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
+import SocialContentTab from '../components/SocialContentTab';
+import BrandLearningTab from '../components/BrandLearningTab';
+import SEOAuditTab from '../components/SEOAuditTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 // v55.83-A.6.18 (Max May 14 2026) — Three high-priority dashboard cards
 // (Overdue / Recent Updates / Newly Assigned) and an in-place ticket modal
@@ -182,6 +185,9 @@ const TABS = [
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
+  { id: 'social', label: 'Social Studio / محتوى', icon: '📣' },
+  { id: 'brand', label: 'Brand Learning / تعلم', icon: '🧠' },
+  { id: 'seo', label: 'SEO Audit / تحسين', icon: '🔍' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
@@ -14093,6 +14099,18 @@ export default function App() {
         ========================================== */}
         {tab === 'crm' && (
           <SafeSection label="CRM"><CRMTab toast={toast} customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} /></SafeSection>
+        )}
+
+        {tab === 'social' && (
+          <SafeSection label="Social Studio"><SocialContentTab toast={toast} user={user} userProfile={userProfile} lang={lang} /></SafeSection>
+        )}
+
+        {tab === 'brand' && (
+          <SafeSection label="Brand Learning"><BrandLearningTab toast={toast} user={user} userProfile={userProfile} lang={lang} /></SafeSection>
+        )}
+
+        {tab === 'seo' && (
+          <SafeSection label="SEO Audit"><SEOAuditTab toast={toast} user={user} userProfile={userProfile} lang={lang} /></SafeSection>
         )}
 
         {/* ==========================================

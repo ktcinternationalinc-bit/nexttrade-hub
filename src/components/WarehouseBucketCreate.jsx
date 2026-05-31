@@ -224,7 +224,7 @@ export default function WarehouseBucketCreate(props) {
                     </div>
                   );
                 })}
-                <div className="px-3 py-1.5 text-[10px] text-slate-500 italic border-t border-slate-200 bg-slate-50">
+                <div className="px-3 py-1.5 text-[10px] text-slate-600 italic border-t border-slate-200 bg-slate-50">
                   {ar ? 'أو واصل الكتابة لمستلم جديد' : 'Or just keep typing for a new recipient'}
                 </div>
               </div>

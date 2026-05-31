@@ -326,7 +326,7 @@ export default function LoginHistoryV2({ users, sessions, sessionsWide, loginSum
                       <td className="px-3 py-2 text-center">
                         {row.isOnline
                           ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">🟢 Online</span>
-                          : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]">⚪ Offline</span>}
+                          : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px]">⚪ Offline</span>}
                       </td>
                       <td className="px-3 py-2 text-center">
                         {row.today.totalMinutes > 0
