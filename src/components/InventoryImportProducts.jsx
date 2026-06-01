@@ -476,54 +476,35 @@ export default function InventoryImportProducts(props) {
         var familyCode = String(resolvedLevels[1].code || '').toUpperCase().trim();
         // Recipes match the single-product form (NAMING_RECIPES in InventoryProductMaster.jsx)
         var IMPORT_RECIPES = {
-          // Textile: Family Category Grade Construction Color
-          'TX':      [1, 2, 3, 4, 6],
-          'TEX':     [1, 2, 3, 4, 6],
-          'TEXTILE': [1, 2, 3, 4, 6],
-          // Leather: Family Category Grade Construction Color
-          'LE':      [1, 2, 3, 4, 6],
-          'LEA':     [1, 2, 3, 4, 6],
-          'LEATHER': [1, 2, 3, 4, 6],
-          // PVC Pool: Family Category Grade Construction Color Backing Pattern Spec
-          'PV':      [1, 2, 3, 4, 6, 5, 7, 8],
+          // v55.83-A (Jun 1 2026) — real family codes L/T/P/B. Match ProductMaster.
+          'L':       [1, 2, 3, 4, 5, 6],   // Leather: Family Category Grade Construction Backing Color
+          'T':       [1, 2, 3, 4, 5, 6],   // Textile: same 6-field order
+          'P':       [1, 2, 3, 4, 6, 5, 7, 8], // PVC: Family Category Grade Construction Color Backing Pattern Spec
+          'B':       [1, 2, 3, 4, 6, 5, 7, 8], // Boat Decking: same 8-field order
+          'TEX':     [1, 2, 3, 4, 5, 6],
+          'TEXTILE': [1, 2, 3, 4, 5, 6],
+          'LEA':     [1, 2, 3, 4, 5, 6],
+          'LEATHER': [1, 2, 3, 4, 5, 6],
           'PVC':     [1, 2, 3, 4, 6, 5, 7, 8],
           'PVCPOOL': [1, 2, 3, 4, 6, 5, 7, 8],
-          // Boat Decking (PVC-based)
-          'BD':      [1, 2, 3, 4, 6, 5, 7, 8],
           'PVCBD':   [1, 2, 3, 4, 6, 5, 7, 8],
         };
-        var IMPORT_NOISE_EN = { 'not applicable': 1, 'none': 1, 'n/a': 1, 'na': 1, '-': 1, '—': 1 };
-        var IMPORT_NOISE_AR = { 'غير مطبق': 1, 'لا يوجد': 1, '-': 1, '—': 1 };
         var recipe = IMPORT_RECIPES[familyCode];
         if (!recipe) {
           var prefixKey = Object.keys(IMPORT_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
           if (prefixKey) recipe = IMPORT_RECIPES[prefixKey];
         }
-        if (!recipe) recipe = [1, 2, 3, 4, 6]; // default
+        if (!recipe) recipe = [1, 3, 6, 5]; // default
         var enParts = [];
         var arParts = [];
         recipe.forEach(function (lvl) {
           var lvlOpt = resolvedLevels[lvl];
           if (!lvlOpt) return;
-          if (lvlOpt.label_en) {
-            var ile = String(lvlOpt.label_en).trim();
-            if (ile && !IMPORT_NOISE_EN[ile.toLowerCase()]) enParts.push(ile);
-          }
-          if (lvlOpt.label_ar) {
-            var ila = String(lvlOpt.label_ar).trim();
-            if (ila && !IMPORT_NOISE_AR[ila]) arParts.push(ila);
-          }
+          if (lvlOpt.label_en) enParts.push(String(lvlOpt.label_en).trim());
+          if (lvlOpt.label_ar) arParts.push(String(lvlOpt.label_ar).trim());
         });
-        var importDedupe = function (s) {
-          var seen = {}; var out = [];
-          String(s || '').split(/\s+/).forEach(function (w) {
-            if (!w) return; var k = w.toLowerCase();
-            if (seen[k]) return; seen[k] = 1; out.push(w);
-          });
-          return out.join(' ');
-        };
-        if (!nameEn && enParts.length > 0) nameEn = importDedupe(enParts.join(' '));
-        if (!nameAr && arParts.length > 0) nameAr = importDedupe(arParts.join(' '));
+        if (!nameEn && enParts.length > 0) nameEn = enParts.join(' ');
+        if (!nameAr && arParts.length > 0) nameAr = arParts.join(' ');
       }
 
       // NOW check empty names (after auto-fill attempt)

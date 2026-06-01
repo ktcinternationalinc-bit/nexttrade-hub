@@ -1082,6 +1082,68 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             {sel.order_number && <div className="text-[10px] text-slate-500 mt-1">Order #{sel.order_number}</div>}
             {sel.client_name && <div className="text-[10px] text-slate-500">Client: {sel.client_name}</div>}
           </div>
+
+          {/* VISIBILITY — change a ticket to Confidential/Private AFTER creation.
+              v55.83-A (Max Jun 1 2026). Rules mirror creation:
+                • Only super_admin can set or keep PRIVATE (creator-only).
+                • CONFIDENTIAL (creator + assignees) is mutually exclusive with Private.
+                • Anyone who can edit the ticket can set Normal/Confidential. */}
+          {canEditTicketContent(sel) && (
+            <div className="rounded-lg p-3 bg-slate-100">
+              <div className="text-[10px] text-slate-500 font-semibold">Visibility / مستوى الخصوصية</div>
+              <select
+                value={sel.is_private ? 'private' : (sel.is_confidential ? 'confidential' : 'normal')}
+                onChange={async (e) => {
+                  var choice = e.target.value;
+                  var wantPrivate = choice === 'private';
+                  var wantConfidential = choice === 'confidential';
+                  if (wantPrivate && !isSuperAdmin) {
+                    if (toast) toast.error('Only a super admin can make a ticket private / المشرف الأعلى فقط');
+                    return;
+                  }
+                  var curr = sel.is_private ? 'private' : (sel.is_confidential ? 'confidential' : 'normal');
+                  if (choice === curr) return;
+                  var patch = {
+                    is_private: wantPrivate,
+                    is_confidential: wantConfidential,
+                    private_to: wantPrivate ? myId : null,
+                    updated_at: new Date().toISOString(),
+                    updated_by: myId
+                  };
+                  var prev = sel;
+                  setSel({ ...sel, is_private: wantPrivate, is_confidential: wantConfidential, private_to: wantPrivate ? myId : null });
+                  try {
+                    await dbUpdate('tickets', sel.id, patch, myId);
+                    try {
+                      var myName2 = getUserName(myId) || 'Unknown';
+                      var label = wantPrivate ? 'PRIVATE (creator only)' : (wantConfidential ? 'CONFIDENTIAL (creator + assignees)' : 'NORMAL');
+                      var vText = '🔒 Visibility changed to ' + label + ' (by ' + myName2 + ')';
+                      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: vText, is_system: true, created_by: myId }, myId);
+                    } catch (vAuditErr) { try { console.warn('[audit] visibility comment failed:', vAuditErr && vAuditErr.message); } catch(_) {} }
+                    try { await logActivity(myId, 'Changed visibility of ' + (sel.ticket_number || sel.title) + ' to ' + choice, 'ticket'); } catch(_) {}
+                    if (toast) toast.success('Visibility updated ✓');
+                    try { loadComments(sel.id); } catch(_) {}
+                    if (onReload) onReload();
+                  } catch (vErr) {
+                    setSel(prev);
+                    var vMsg = vErr && vErr.message ? vErr.message : String(vErr);
+                    var vHint = '';
+                    if (/column .* does not exist/i.test(vMsg)) {
+                      vHint = ' — Missing column. Ensure tickets has is_private, is_confidential, private_to.';
+                    }
+                    if (toast) toast.error('Visibility save failed: ' + vMsg + vHint);
+                    else alert('Visibility save failed: ' + vMsg + vHint);
+                  }
+                }}
+                className="text-sm font-bold bg-transparent border-0 cursor-pointer outline-none w-full text-slate-900">
+                <option value="normal">🌐 Normal — team can see</option>
+                <option value="confidential">🟠 Confidential — creator + assignees</option>
+                {(isSuperAdmin || sel.is_private) && <option value="private">🔒 Private — creator only</option>}
+              </select>
+              {sel.is_private && <div className="text-[10px] text-blue-700 mt-1 font-semibold">Only you can see this ticket.</div>}
+              {sel.is_confidential && <div className="text-[10px] text-orange-700 mt-1 font-semibold">Visible to you and assignees only.</div>}
+            </div>
+          )}
         </div>
 
         {/* LAST UPDATED INFO */}

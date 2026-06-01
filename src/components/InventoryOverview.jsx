@@ -41,7 +41,6 @@ export default function InventoryOverview(props) {
   // Data
   var [products, setProducts] = useState([]);
   var [lists, setLists] = useState([]);
-  var [rules, setRules] = useState([]);            // inventory_list_rules (parent->child cascade)
   var [layers, setLayers] = useState([]);          // inventory_layers (current stock)
   var [receipts, setReceipts] = useState([]);      // inventory_stock_receipts (original received)
   var [salesItems, setSalesItems] = useState([]);  // invoice_items where uses_inventory + variant_id
@@ -51,7 +50,7 @@ export default function InventoryOverview(props) {
   // UI state
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
-  var [showZeroStock, setShowZeroStock] = useState(true);   // Max May 31 2026: show zero-stock items by default
+  var [showZeroStock, setShowZeroStock] = useState(false);   // hide rows with 0 current AND 0 received by default
   // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
   // physical stock (they exist only to spawn variants), so including them in
   // "what's in stock" pollutes the totals + accordion. Off by default; toggle
@@ -148,10 +147,9 @@ export default function InventoryOverview(props) {
           });
         };
 
-        var [prodRes, lstRes, ruleRes, layRes, recRes, soldRes] = await Promise.all([
+        var [prodRes, lstRes, layRes, recRes, soldRes] = await Promise.all([
           supabase.from('inventory_products').select('*').eq('active', true).order('updated_at', { ascending: false }),
           supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
-          safe(supabase.from('inventory_list_rules').select('*')),
           safe(supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)),
           safe(supabase.from('inventory_stock_receipts').select('product_id, quantity')),
           safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status').eq('inventory_status', 'consumed')),
@@ -160,7 +158,6 @@ export default function InventoryOverview(props) {
 
         setProducts(prodRes.data || []);
         setLists(lstRes.data || []);
-        setRules((ruleRes && ruleRes.data) || []);
         setLayers((layRes && layRes.data) || []);
         setReceipts((recRes && recRes.data) || []);
         setSalesItems((soldRes && soldRes.data) || []);
@@ -263,48 +260,41 @@ export default function InventoryOverview(props) {
   // ALL HIGHER-level filters. So picking Family=Textiles narrows the Category
   // dropdown to only categories that exist within Textile products, and so on.
   var availableOptionsByLevel = useMemo(function () {
-    // v55.83-A (Max May 31 2026): build the filter options from the MASTER LIST
-    // (every active inventory_lists row), then cascade-narrow each child level by the
-    // parent rules (inventory_list_rules) given the current filter selections.
-    //   - New master-list entries with NO parent rules are universal and always show.
-    //   - Child entries that DO have a parent rule appear only once that parent is
-    //     picked (e.g. choosing Family = Leather narrows Category to Leather's).
-    //   - Orphaned/inactive ids never appear (they aren't in the active master list),
-    //     so the old raw-UUID "skewed" option is gone.
-    var fieldByLevel = {
-      1: 'family_list_id', 2: 'category_list_id', 3: 'grade_list_id', 4: 'construction_list_id',
-      5: 'backing_list_id', 6: 'color_list_id', 7: 'pattern_list_id', 8: 'spec_class_list_id', 9: 'origin_list_id',
-    };
-    function optionVisible(opt) {
-      var optRules = rules.filter(function (r) { return r.child_list_id === opt.id; });
-      if (optRules.length === 0) return true; // universal / new entry
-      return optRules.some(function (rule) {
-        var parent = lists.find(function (l) { return l.id === rule.parent_list_id; });
-        if (!parent) return false;
-        var pField = fieldByLevel[parent.level];
-        if (!pField) return false;
-        return filterLevels[pField] === parent.id; // parent currently selected upstream
-      });
-    }
+    var levelOrder = [
+      'family_list_id', 'category_list_id', 'grade_list_id', 'construction_list_id',
+      'backing_list_id', 'color_list_id', 'pattern_list_id', 'spec_class_list_id', 'origin_list_id',
+    ];
     var result = {};
-    Object.keys(fieldByLevel).forEach(function (lvlStr) {
-      var lvl = parseInt(lvlStr, 10);
-      var field = fieldByLevel[lvl];
-      var opts = lists
-        .filter(function (l) { return l.level === lvl; })
-        .filter(optionVisible)
-        .map(function (l) {
-          return {
-            id: l.id,
-            code: l.code || '',
-            label: (l.label_en || '') + (l.label_ar ? ' / ' + l.label_ar : ''),
-          };
-        });
+    // For each level, build the set of list_ids present in products that match
+    // every filter EXCEPT this level's own filter (so the user can change their
+    // mind without first un-setting).
+    levelOrder.forEach(function (lvl) {
+      var ids = {};
+      products.forEach(function (p) {
+        // Apply all OTHER levels' filters; skip the current level
+        var match = true;
+        for (var i = 0; i < levelOrder.length; i++) {
+          var other = levelOrder[i];
+          if (other === lvl) continue;
+          var want = filterLevels[other];
+          if (want && p[other] !== want) { match = false; break; }
+        }
+        if (match && p[lvl]) ids[p[lvl]] = true;
+      });
+      // Convert ids → option array with label
+      var opts = Object.keys(ids).map(function (id) {
+        var l = listsById[id];
+        return {
+          id: id,
+          code: l ? (l.code || '') : '',
+          label: l ? ((l.label_en || '') + (l.label_ar ? ' / ' + l.label_ar : '')) : id,
+        };
+      });
       opts.sort(function (a, b) { return (a.label || '').localeCompare(b.label || ''); });
-      result[field] = opts;
+      result[lvl] = opts;
     });
     return result;
-  }, [lists, rules, filterLevels]);
+  }, [products, filterLevels, listsById]);
 
   // How many filters are currently active
   var activeFilterCount = useMemo(function () {
@@ -649,27 +639,46 @@ export default function InventoryOverview(props) {
                         ['Sp', listsById[p.spec_class_list_id]],
                         ['O', listsById[p.origin_list_id]],
                       ].filter(function (pair) { return pair[1]; });
-                      // v55.83-A.6.27.72 HOTFIX 29 — Per Max May 28 2026: the textile naming
-                      // convention should follow Category → Grade → Color → Backing (e.g.
-                      // "Embossed Luxurious Olive Cotton"), NOT the imported name_en (which
-                      // came in as "Leather Luxurious Olive Cotton" — that's Family+Grade+
-                      // Color+Backing). Compute it at render time from resolved list labels;
-                      // fall back to name_en if any required level is missing.
-                      var catLbl = listsById[p.category_list_id];
-                      var grdLbl = listsById[p.grade_list_id];
-                      var clrLbl = listsById[p.color_list_id];
-                      var bckLbl = listsById[p.backing_list_id];
-                      var computedNameEn = [catLbl, grdLbl, clrLbl, bckLbl]
-                        .filter(function (l) { return l; })
-                        .map(function (l) { return l.label_en || l.code; })
-                        .join(' ');
-                      var computedNameAr = [catLbl, grdLbl, clrLbl, bckLbl]
-                        .filter(function (l) { return l && l.label_ar; })
-                        .map(function (l) { return l.label_ar; })
-                        .join(' ');
-                      // Use computed if all 4 resolved AND at least one piece differs from imported; else fall back.
-                      var displayNameEn = (catLbl && grdLbl) ? computedNameEn : (p.name_en || '—');
-                      var displayNameAr = computedNameAr || p.name_ar || '';
+                      // v55.83-A (Max Jun 1 2026) — NAME IS NOW DRIVEN BY THE STORED name_en,
+                      // which the rename SQL builds per the agreed convention:
+                      //   Leather/Textile (family code L/T): Family Category Grade Construction Backing Color
+                      //   PVC/Boat (P/B):                    Family Category Grade Construction Color Backing Pattern Spec
+                      // The GUI previously REBUILT the name live (Category Grade Color Backing),
+                      // which ignored the stored name and showed the wrong order. We now show the
+                      // stored name as the single source of truth. If a product has no stored name
+                      // yet, fall back to a family-aware computed name (same order + word de-dupe).
+                      function famOrder(code) {
+                        var c = String(code || '').toUpperCase();
+                        if (c === 'P' || c === 'B') {
+                          return ['family_list_id','category_list_id','grade_list_id','construction_list_id','color_list_id','backing_list_id','pattern_list_id','spec_class_list_id'];
+                        }
+                        // L, T, and default
+                        return ['family_list_id','category_list_id','grade_list_id','construction_list_id','backing_list_id','color_list_id'];
+                      }
+                      function dedupeWords(str) {
+                        var seen = {};
+                        return String(str || '').split(/\s+/).filter(function (w) {
+                          if (!w) return false;
+                          var k = w.toLowerCase();
+                          if (seen[k]) return false;
+                          seen[k] = true; return true;
+                        }).join(' ');
+                      }
+                      function buildFrom(field) {
+                        var famEntry = listsById[p.family_list_id];
+                        var order = famOrder(famEntry && famEntry.code);
+                        var noise = { 'not applicable': 1, 'none': 1, 'n/a': 1, 'na': 1, '': 1 };
+                        var parts = order.map(function (col) {
+                          var l = listsById[p[col]];
+                          if (!l) return '';
+                          var v = (field === 'ar') ? (l.label_ar || '') : (l.label_en || l.code || '');
+                          if (noise[String(v).toLowerCase().trim()]) return '';
+                          return v;
+                        }).filter(function (v) { return v; });
+                        return dedupeWords(parts.join(' '));
+                      }
+                      var displayNameEn = (p.name_en && p.name_en.trim()) ? p.name_en : (buildFrom('en') || '—');
+                      var displayNameAr = (p.name_ar && p.name_ar.trim()) ? p.name_ar : (buildFrom('ar') || '');
                       return (
                         <tr key={p.id} className="border-b border-slate-200 hover:bg-slate-50">
                           <td className="px-3 py-1.5 font-mono text-slate-900 font-bold">
