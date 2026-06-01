@@ -754,16 +754,18 @@ export default function InventoryProductMaster(props) {
       return '"' + label + '" — Quick Code: ' + code + ' — Status: ' + status + ' — ID: ' + p.id;
     }
 
-    // 1) Quick code conflict (only if user typed one)
-    if (quickCode) {
-      var dupCode = products.find(function (p) {
+    // 1) Design SKU conflict — DESIGN SKU MUST BE UNIQUE (Max Jun 1 2026).
+    //    Quick Code is allowed to repeat; the Design Code/SKU is the unique key.
+    var designSku = (form.design_sku || '').trim();
+    if (designSku) {
+      var dupSku = products.find(function (p) {
         if (modalMode === 'edit' && p.id === modalProductId) return false;
-        return (p.quick_code || '').trim().toLowerCase() === quickCode.toLowerCase();
+        return (p.design_sku || '').trim().toLowerCase() === designSku.toLowerCase();
       });
-      if (dupCode) {
-        fail('DUPLICATE QUICK CODE — cannot save.\n\nThe code "' + quickCode + '" is already used by:\n' +
-             describeConflict(dupCode, 'quick_code') +
-             '\n\nNo duplicates allowed. Use a different Quick Code, or open the existing product and edit it.');
+      if (dupSku) {
+        fail('DUPLICATE DESIGN CODE — cannot save.\n\nThe Design Code "' + designSku + '" is already used by:\n' +
+             describeConflict(dupSku, 'design_sku') +
+             '\n\nDesign Codes must be unique. Use a different Design Code, or open the existing product and edit it. (Quick Codes may repeat — only the Design Code must be unique.)');
         return;
       }
     }

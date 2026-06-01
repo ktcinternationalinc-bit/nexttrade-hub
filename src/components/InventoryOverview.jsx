@@ -50,7 +50,7 @@ export default function InventoryOverview(props) {
   // UI state
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
-  var [showZeroStock, setShowZeroStock] = useState(false);   // hide rows with 0 current AND 0 received by default
+  var [showZeroStock, setShowZeroStock] = useState(true);    // Max Jun 1 2026: show zero-stock items by default
   // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
   // physical stock (they exist only to spawn variants), so including them in
   // "what's in stock" pollutes the totals + accordion. Off by default; toggle
@@ -65,6 +65,7 @@ export default function InventoryOverview(props) {
   var [historyMovements, setHistoryMovements] = useState([]); // inventory_movements rows for outbound history
   var [historyLoading, setHistoryLoading] = useState(false);
   var [historyError, setHistoryError] = useState(null);
+  var [historyIntakeByCountry, setHistoryIntakeByCountry] = useState([]); // [{country, kg, rolls, qty}] — intake split US vs Canada etc.
 
   // v55.83-A.6.27.51 — Cascading multi-level filters. User can filter by ANY
   // combination of the 9 classification levels. Each dropdown shows only the
@@ -123,12 +124,36 @@ export default function InventoryOverview(props) {
       if (!movRes.error) setHistoryMovements(movRes.data || []);
       else console.warn('[history] movements query failed:', movRes.error.message);
     } catch (e) { console.warn('[history] movements threw:', e); }
+    // v55.83-A (Max Jun 1 2026) — Intake by country: how much of this product
+    // was RECEIVED from each country (US vs Canada etc.). Sold-as-one, tracked-by-intake.
+    try {
+      var COUNTRY_LABELS = { US: 'United States', CA: 'Canada', EG: 'Egypt', CN: 'China', TR: 'Turkey', IT: 'Italy', KR: 'South Korea', USCA: 'US/Canada' };
+      var rcRes = await supabase
+        .from('inventory_stock_receipts')
+        .select('quantity, quantity_kg, roll_count, origin_country_code, status')
+        .eq('product_id', product.id);
+      if (!rcRes.error && rcRes.data) {
+        var byC = {};
+        rcRes.data.forEach(function (r) {
+          if (r.status === 'cancelled') return;
+          var c = r.origin_country_code || 'Unspecified';
+          if (!byC[c]) byC[c] = { country: c, label: COUNTRY_LABELS[c] || c, kg: 0, rolls: 0, qty: 0 };
+          byC[c].kg += Number(r.quantity_kg || 0) || 0;
+          byC[c].rolls += Number(r.roll_count || 0) || 0;
+          byC[c].qty += Number(r.quantity || 0) || 0;
+        });
+        var arr = Object.keys(byC).map(function (k) { return byC[k]; });
+        arr.sort(function (a, b) { return b.kg - a.kg; });
+        setHistoryIntakeByCountry(arr);
+      }
+    } catch (e) { console.warn('[history] intake-by-country threw:', e); }
     setHistoryLoading(false);
   }
   function closeHistory() {
     setHistoryProduct(null);
     setHistoryLayers([]);
     setHistoryMovements([]);
+    setHistoryIntakeByCountry([]);
     setHistoryError(null);
   }
 
@@ -623,7 +648,7 @@ export default function InventoryOverview(props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {g.products.map(function (p) {
+                    {g.products.map(function (p, rowIdx) {
                       var s = productStats[p.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
                       var avgCost = s.current_qty > 0 ? s.current_weighted_cost / s.current_qty : 0;
                       var avgSoldPrice = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
@@ -679,24 +704,28 @@ export default function InventoryOverview(props) {
                       }
                       var displayNameEn = (p.name_en && p.name_en.trim()) ? p.name_en : (buildFrom('en') || '—');
                       var displayNameAr = (p.name_ar && p.name_ar.trim()) ? p.name_ar : (buildFrom('ar') || '');
+                      // v55.83-A (Max Jun 1 2026) — clearer separation between items:
+                      // zebra striping + thicker divider + roomier padding so each
+                      // multi-line product reads as its own block, not a wall of text.
+                      var zebra = (rowIdx % 2 === 0) ? 'bg-slate-800/40' : 'bg-slate-900/40';
                       return (
-                        <tr key={p.id} className="border-b border-slate-200 hover:bg-slate-50">
-                          <td className="px-3 py-1.5 font-mono text-slate-900 font-bold">
+                        <tr key={p.id} className={zebra + ' border-b-2 border-slate-700 hover:bg-slate-700/50 align-top'}>
+                          <td className="px-3 py-3 font-mono text-slate-100 font-bold">
                             {p.quick_code || '—'}
-                            {p.variant_suffix && <span className="text-slate-700">-{p.variant_suffix}</span>}
+                            {p.variant_suffix && <span className="text-slate-400">-{p.variant_suffix}</span>}
                           </td>
-                          <td className="px-3 py-1.5 font-mono text-slate-700">{p.design_sku || '—'}</td>
-                          <td className="px-3 py-1.5">
-                            <div className="font-bold text-slate-900">{displayNameEn}</div>
-                            {displayNameAr && <div className="text-xs text-slate-700" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
+                          <td className="px-3 py-3 font-mono text-slate-300">{p.design_sku || '—'}</td>
+                          <td className="px-3 py-3">
+                            <div className="font-bold text-white text-[13px]">{displayNameEn}</div>
+                            {displayNameAr && <div className="text-xs text-slate-300" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
                             {/* v55.83-A.6.27.60 — All 9 classification levels inline under name */}
                             {levelLabels.length > 0 && (
-                              <div className="text-[10px] text-slate-600 mt-0.5 leading-relaxed">
+                              <div className="text-[10px] text-slate-400 mt-1 leading-relaxed">
                                 {levelLabels.map(function (pair, i) {
                                   return (
                                     <span key={i} className="inline-block mr-2">
                                       <span className="font-bold text-slate-500">{pair[0]}:</span>{' '}
-                                      <span className="text-slate-800">{pair[1].label_en || pair[1].code}</span>
+                                      <span className="text-slate-200">{pair[1].label_en || pair[1].code}</span>
                                     </span>
                                   );
                                 })}
@@ -804,6 +833,26 @@ export default function InventoryOverview(props) {
 
               {!historyLoading && (
                 <>
+                  {/* v55.83-A (Max Jun 1 2026) — Intake by Country: how much of this
+                      product was received from each country. Product sells as ONE unit;
+                      this shows the US-vs-Canada (etc.) intake split. */}
+                  {historyIntakeByCountry.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm font-extrabold text-slate-900 mb-2">🌍 Intake by Country — where stock came from</div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                        {historyIntakeByCountry.map(function (c) {
+                          return (
+                            <div key={c.country} className="bg-white border border-slate-300 rounded p-2">
+                              <div className="text-[11px] font-extrabold text-slate-700 uppercase">{c.label}</div>
+                              <div className="text-slate-900 font-bold text-sm">{(Math.round(c.kg * 1000) / 1000).toLocaleString()} kg</div>
+                              <div className="text-[11px] text-slate-600">{c.rolls.toLocaleString()} rolls · {(Math.round(c.qty * 1000) / 1000).toLocaleString()} qty</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Inbound shipments */}
                   <div>
                     <div className="text-sm font-extrabold text-slate-900 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>

@@ -404,6 +404,7 @@ export default function InventoryImportProducts(props) {
     // Mirrors HOTFIX 7 single-product flow: detect collisions on quick_code+suffix,
     // classification_slug, name_en, name_ar so duplicates inside one file are caught
     // before any DB call (and named clearly so the user can fix the right row).
+    var seenDesignSkus = {};   // Design SKU must be unique (Max Jun 1 2026)
     var seenQuickCodes = {};   // key: quick_code|variant_suffix → first rowNum seen
     var seenSlugs = {};        // key: slug → first rowNum seen
     var seenNameEn = {};       // key: name_en lowercased → first rowNum seen
@@ -535,6 +536,16 @@ export default function InventoryImportProducts(props) {
             ' already appears on row ' + seenQuickCodes[qk] + '. No duplicates allowed.');
         } else {
           seenQuickCodes[qk] = rowNum;
+        }
+      }
+
+      // v55.83-A (Max Jun 1 2026) — DESIGN SKU must be UNIQUE (quick_code may repeat).
+      if (designSku) {
+        var dk = designSku.toLowerCase();
+        if (seenDesignSkus[dk]) {
+          errs.push('DUPLICATE within file — Design Code "' + designSku + '" already appears on row ' + seenDesignSkus[dk] + '. Design Codes must be unique.');
+        } else {
+          seenDesignSkus[dk] = rowNum;
         }
       }
 

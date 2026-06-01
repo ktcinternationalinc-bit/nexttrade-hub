@@ -687,19 +687,29 @@ export default function InventoryReceiving(props) {
   // v55.83-A.6.27.43 — Reconciliation helpers.
   // Computes the sum of all per-line actuals to compare against the shipment-level expected.
   function computeActualTotals(linesArr) {
-    var totals = { rolls: 0, gross: 0, net: 0, uom: 0 };
+    // v55.83-A (Max Jun 1 2026) — ACTUAL totals now read from the LINE fields the
+    // user actually fills in (Roll Count, Quantity in Kilos, Quantity Received),
+    // NOT only from hand-added per-roll entries. Net KG removed from reconciliation.
+    //   rolls  = line Roll Count  (+ any individually-added rolls)
+    //   gross  = line Quantity in Kilos (+ any per-roll gross_kg)
+    //   uom    = line Quantity Received (in the line's unit of measure)
+    var totals = { rolls: 0, gross: 0, uom: 0 };
     for (var i = 0; i < linesArr.length; i++) {
       var L = linesArr[i];
-      // Sum from the per-roll details if present
+      var addedRolls = (Array.isArray(L.rolls) && L.rolls.length) ? L.rolls.length : 0;
+      var addedGross = 0;
       if (Array.isArray(L.rolls) && L.rolls.length) {
         for (var j = 0; j < L.rolls.length; j++) {
-          var r = L.rolls[j];
-          totals.rolls += 1;
-          totals.gross += Number(r.gross_kg || 0) || 0;
-          totals.net   += Number(r.net_kg   || 0) || 0;
+          addedGross += Number(L.rolls[j].gross_kg || 0) || 0;
         }
       }
-      // UOM: use the line's quantity (which is the total UOM count for that line)
+      // Prefer the line's typed Roll Count; if individual rolls were added, use the larger of the two.
+      var lineRolls = Number(L.roll_count || 0) || 0;
+      totals.rolls += Math.max(lineRolls, addedRolls);
+      // Prefer the line's typed Quantity in Kilos; if per-roll gross was entered, use the larger.
+      var lineGross = Number(L.quantity_kg || 0) || 0;
+      totals.gross += Math.max(lineGross, addedGross);
+      // UOM: the line's received quantity (in its unit of measure)
       totals.uom += Number(L.quantity || 0) || 0;
     }
     return totals;
@@ -709,14 +719,12 @@ export default function InventoryReceiving(props) {
     var actual = computeActualTotals(linesArr);
     var expectedRolls = headerObj.expected_total_rolls === '' || headerObj.expected_total_rolls == null ? null : Number(headerObj.expected_total_rolls);
     var expectedGross = headerObj.expected_total_gross_kg === '' || headerObj.expected_total_gross_kg == null ? null : Number(headerObj.expected_total_gross_kg);
-    var expectedNet   = headerObj.expected_total_net_kg   === '' || headerObj.expected_total_net_kg   == null ? null : Number(headerObj.expected_total_net_kg);
     var expectedUom   = headerObj.expected_total_uom      === '' || headerObj.expected_total_uom      == null ? null : Number(headerObj.expected_total_uom);
     // Per-dimension variance is null when no expected was provided (can't compare).
     // Otherwise it's expected - actual (positive = under-delivered, negative = over-delivered).
     var variance = {
       rolls: expectedRolls == null ? null : (expectedRolls - actual.rolls),
       gross: expectedGross == null ? null : (Math.round((expectedGross - actual.gross) * 1000) / 1000),
-      net:   expectedNet   == null ? null : (Math.round((expectedNet   - actual.net)   * 1000) / 1000),
       uom:   expectedUom   == null ? null : (Math.round((expectedUom   - actual.uom)   * 1000) / 1000),
     };
     // is_balanced: true ONLY if every comparable dimension is exactly zero.
@@ -725,7 +733,6 @@ export default function InventoryReceiving(props) {
     var compared = 0;
     if (variance.rolls != null) { compared++; if (variance.rolls !== 0) anyMismatch = true; }
     if (variance.gross != null) { compared++; if (variance.gross !== 0) anyMismatch = true; }
-    if (variance.net   != null) { compared++; if (variance.net   !== 0) anyMismatch = true; }
     if (variance.uom   != null) { compared++; if (variance.uom   !== 0) anyMismatch = true; }
     return {
       actual: actual,
@@ -849,30 +856,10 @@ export default function InventoryReceiving(props) {
           return;
         }
       }
-      // If both ordered & actual exist and differ → variance reason required
-      var ordered = asNum(L.ordered_quantity);
-      var actual = asNum(L.quantity);
-      if (ordered != null && actual != null && ordered !== actual) {
-        if (!L.variance_reason || !L.variance_reason.trim()) {
-          alert('Line ' + (i + 1) + ': ordered quantity (' + ordered + ') differs from received quantity (' + actual + ') — please enter a variance reason.');
-          return;
-        }
-      }
-      // If rolls exist and roll-sum variance vs expected → ack required
-      if (hasRolls && hasExpected) {
-        var rollSumGross = (L.rolls || []).reduce(function (a, r) { return a + (Number(r.gross_kg) || 0); }, 0);
-        var rollSumMeters = (L.rolls || []).reduce(function (a, r) { return a + (Number(r.meters) || 0); }, 0);
-        var expGross = asNum(L.expected_gross_kg);
-        var expMeters = asNum(L.expected_uom_total);
-        var hasVarianceVsExpected =
-          (expGross != null && Math.abs(rollSumGross - expGross) > 0.01) ||
-          (expMeters != null && Math.abs(rollSumMeters - expMeters) > 0.01) ||
-          (asNum(L.expected_rolls) != null && (L.rolls || []).length !== asNum(L.expected_rolls));
-        if (hasVarianceVsExpected && !L.variance_acknowledged && (!L.variance_reason || !L.variance_reason.trim())) {
-          alert('Line ' + (i + 1) + ': roll-sum totals differ from expected. Please enter a variance reason OR check the acknowledge box.');
-          return;
-        }
-      }
+      // v55.83-A (Max Jun 1 2026) — PER-LINE variance reason requirement REMOVED.
+      // There is no expected/non-expected at the line level — reconciliation happens
+      // only at the shipment (top) level against Expected Totals (rolls + weight).
+      // ordered_quantity / variance_reason may still be entered, but are never required.
       anyValid = true;
     }
     if (!anyValid) { alert('At least one valid line required'); return; }
@@ -928,7 +915,7 @@ export default function InventoryReceiving(props) {
         if (variance) {
           headerPayload.variance_rolls    = variance.variance.rolls;
           headerPayload.variance_gross_kg = variance.variance.gross;
-          headerPayload.variance_net_kg   = variance.variance.net;
+          headerPayload.variance_net_kg   = null;  // Net kg removed from reconciliation (Max Jun 1 2026)
           headerPayload.variance_uom      = variance.variance.uom;
           headerPayload.variance_notes    = varianceNotes;
         }
@@ -1018,6 +1005,7 @@ export default function InventoryReceiving(props) {
           arrival_date: header.arrival_date || null,
           purchase_currency: header.purchase_currency || null,
           ordered_quantity: asNum(L2.ordered_quantity),
+          origin_country_code: header.origin_country_code || null,
           variance_reason: (L2.variance_reason || '').trim() || null,
           variance_acknowledged: L2.variance_acknowledged === true,
           quantity_kg: asNum(L2.quantity_kg),
@@ -1595,12 +1583,19 @@ export default function InventoryReceiving(props) {
                       <option value="EUR">EUR</option>
                     </select>
                   </label>
-                  {/* v55.83-A.6.27.37 — Origin Country (US / CA / CN only) */}
-                  <label className="text-[11px] font-extrabold text-slate-700">Origin Country
-                    <select value={header.origin_country_code || 'US'} onChange={function (e) { setHeader(Object.assign({}, header, { origin_country_code: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
+                  {/* v55.83-A (Max Jun 1 2026) — Origin Country is a CONSCIOUS choice now
+                      (was silently defaulting to US). Pick where THIS batch actually came from
+                      so US-vs-Canada intake is tracked correctly. */}
+                  <label className="text-[11px] font-extrabold text-slate-700">Origin Country (where this batch came from)
+                    <select value={header.origin_country_code || ''} onChange={function (e) { setHeader(Object.assign({}, header, { origin_country_code: e.target.value })); }} className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + ((!header.origin_country_code) ? 'border-amber-400' : 'border-slate-300')}>
+                      <option value="">— Select country —</option>
                       <option value="US">🇺🇸 United States</option>
                       <option value="CA">🇨🇦 Canada</option>
+                      <option value="EG">🇪🇬 Egypt</option>
                       <option value="CN">🇨🇳 China</option>
+                      <option value="TR">🇹🇷 Turkey</option>
+                      <option value="IT">🇮🇹 Italy</option>
+                      <option value="KR">🇰🇷 South Korea</option>
                     </select>
                   </label>
                 </div>
@@ -1682,6 +1677,7 @@ export default function InventoryReceiving(props) {
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_uom_type: e.target.value })); }}
                       className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
                     >
+                      <option value="kg">kg</option>
                       <option value="meter">meter</option>
                       <option value="yard">yard</option>
                       <option value="piece">piece</option>
@@ -1985,12 +1981,9 @@ export default function InventoryReceiving(props) {
                           );
                         })()}
 
-                        {/* Quantity row 1: ordered + received + uom + release_number
-                            v55.83-A.6.27.49 — clearer labels showing what's required at submit. */}
-                        <div className="grid grid-cols-4 gap-2 mb-2">
-                          <label className="text-[11px] font-extrabold text-slate-700">Order Qty
-                            <input type="text" value={line.ordered_quantity} onChange={function (e) { updateLineField(lineIdx, 'ordered_quantity', e.target.value); }} placeholder="what supplier shipped" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
-                          </label>
+                        {/* Quantity row 1: received + uom + release_number
+                            v55.83-A (Max Jun 1 2026) — Order Qty removed; reconciliation is top-level only. */}
+                        <div className="grid grid-cols-3 gap-2 mb-2">
                           <label className="text-[11px] font-extrabold text-slate-700">Quantity Received *
                             <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="required at submit" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
@@ -2005,21 +1998,8 @@ export default function InventoryReceiving(props) {
                           </label>
                         </div>
 
-                        {/* Variance reason — only shows when ordered != received */}
-                        {(function () {
-                          var ord = Number(line.ordered_quantity);
-                          var rec = Number(line.quantity);
-                          var diff = (line.ordered_quantity !== '' && line.quantity !== '' && !isNaN(ord) && !isNaN(rec) && ord !== rec);
-                          if (!diff) return null;
-                          return (
-                            <div className="mb-2 bg-amber-50 border border-amber-300 rounded px-2 py-1.5">
-                              <label className="text-[11px] font-extrabold text-amber-900 block">
-                                ⚠ Variance: ordered {ord} vs received {rec} ({rec > ord ? '+' : ''}{(rec - ord).toFixed(2)}) — reason required *
-                                <input type="text" value={line.variance_reason} onChange={function (e) { updateLineField(lineIdx, 'variance_reason', e.target.value); }} placeholder="e.g. damaged on arrival, short shipment, free samples added..." className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
-                              </label>
-                            </div>
-                          );
-                        })()}
+                        {/* v55.83-A (Max Jun 1 2026) — per-line variance reason UI removed.
+                            Reconciliation is top-level only (Expected Totals vs received). */}
 
                         {/* Quantity row 2: qty_kg (conditional required) + roll_count (always required) + rack
                             v55.83-A.6.27.49 — Quantity in Kilos required only when UoM = kg;
@@ -2172,14 +2152,6 @@ export default function InventoryReceiving(props) {
                       </div>
                     </div>
                     <div className="bg-white border border-slate-300 rounded p-2">
-                      <div className="text-[11px] font-bold text-slate-600 uppercase">Net kg</div>
-                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_net_kg === '' ? '—' : header.expected_total_net_kg}</div>
-                      <div className="text-slate-900 font-bold">Actual: {rec.actual.net.toFixed(3)}</div>
-                      <div className={'font-extrabold ' + (rec.variance.net === 0 || rec.variance.net == null ? 'text-emerald-700' : 'text-amber-800')}>
-                        {rec.variance.net == null ? '—' : (rec.variance.net === 0 ? '✓ match' : (rec.variance.net > 0 ? 'short ' + rec.variance.net.toFixed(3) : 'extra ' + Math.abs(rec.variance.net).toFixed(3)))}
-                      </div>
-                    </div>
-                    <div className="bg-white border border-slate-300 rounded p-2">
                       <div className="text-[11px] font-bold text-slate-600 uppercase">UOM ({header.expected_uom_type || 'meter'})</div>
                       <div className="text-slate-900 font-bold">Expected: {header.expected_total_uom === '' ? '—' : header.expected_total_uom}</div>
                       <div className="text-slate-900 font-bold">Actual: {rec.actual.uom.toFixed(3)}</div>
@@ -2250,9 +2222,6 @@ export default function InventoryReceiving(props) {
                   )}
                   {rec.variance.gross != null && rec.variance.gross !== 0 && (
                     <div>• Gross kg: <span className="font-extrabold">{rec.variance.gross > 0 ? 'short ' + rec.variance.gross.toFixed(3) : 'extra ' + Math.abs(rec.variance.gross).toFixed(3)}</span></div>
-                  )}
-                  {rec.variance.net != null && rec.variance.net !== 0 && (
-                    <div>• Net kg: <span className="font-extrabold">{rec.variance.net > 0 ? 'short ' + rec.variance.net.toFixed(3) : 'extra ' + Math.abs(rec.variance.net).toFixed(3)}</span></div>
                   )}
                   {rec.variance.uom != null && rec.variance.uom !== 0 && (
                     <div>• UOM: <span className="font-extrabold">{rec.variance.uom > 0 ? 'short ' + rec.variance.uom.toFixed(3) : 'extra ' + Math.abs(rec.variance.uom).toFixed(3)}</span></div>
