@@ -626,7 +626,6 @@ export default function InventoryReceiving(props) {
   // which requires product_id NOT NULL). Operator returns later via Edit to add
   // product lines and the lines link back via header_id.
   async function saveShipmentHeaderOnly() {
-    if (!header.receipt_date) { alert('Receipt date required'); return; }
     if (!header.warehouse_id) { alert('Warehouse required'); return; }
     if (!header.shipment_reference || !header.shipment_reference.trim()) {
       alert('Shipment Reference required (container number, PO number, or supplier reference).');
@@ -647,7 +646,7 @@ export default function InventoryReceiving(props) {
 
       var payload = {
         receipt_number: receiptNumber,
-        receipt_date: header.receipt_date,
+        receipt_date: header.receipt_date || new Date().toISOString().substring(0, 10),
         status: 'pending_detail',
         shipment_reference: header.shipment_reference.trim(),
         supplier: (header.supplier || '').trim() || null,
@@ -784,7 +783,6 @@ export default function InventoryReceiving(props) {
     // v55.83-A.6.27.35 — Validation rewritten for two-phase flow.
     // Phase 1: header + at least one product line with expected_* totals (quantity can be blank)
     // Phase 2: roll details + actual quantity filled in
-    if (!header.receipt_date) { alert('Receipt date required'); return; }
     if (!header.warehouse_id) { alert('Warehouse required'); return; }
     if (!header.shipment_reference || !header.shipment_reference.trim()) {
       alert('Shipment Reference required (e.g. container number, PO number, or supplier reference).');
@@ -886,7 +884,7 @@ export default function InventoryReceiving(props) {
 
       var headerPayload = {
         receipt_number: receiptNumber,
-        receipt_date: header.receipt_date,
+        receipt_date: header.receipt_date || new Date().toISOString().substring(0, 10),
         shipment_reference: header.shipment_reference.trim(),
         supplier: (header.supplier || '').trim() || null,
         warehouse_id: header.warehouse_id,
@@ -976,7 +974,7 @@ export default function InventoryReceiving(props) {
         var payload = {
           receipt_number: receiptNumber,
           receipt_type: 'new_shipment',
-          receipt_date: header.receipt_date,
+          receipt_date: header.receipt_date || new Date().toISOString().substring(0, 10),
           status: lineStatus,
           product_id: effectiveProductId,
           // Store actual quantity if entered, else fall back to expected_uom_total so
@@ -1557,7 +1555,7 @@ export default function InventoryReceiving(props) {
                       })}
                     </select>
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Receipt Date *
+                  <label className="text-[11px] font-extrabold text-slate-700">Receipt Date
                     <input type="date" value={header.receipt_date} onChange={function (e) { setHeader(Object.assign({}, header, { receipt_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                   </label>
                   <label className="text-[11px] font-extrabold text-slate-700">Container #
@@ -1698,16 +1696,20 @@ export default function InventoryReceiving(props) {
               {lines.map(function (line, lineIdx) {
                 var suggestions = suggestionsFor(line.quickCodeQuery);
                 return (
-                  <div key={lineIdx} className="bg-white border-2 border-indigo-200 rounded-lg p-3 mb-3">
-                    <div className="flex justify-between items-center mb-2">
-                      <div className="text-xs font-extrabold text-indigo-900">Line {lineIdx + 1}{line.product ? ': ' + (line.product.name_en || line.product.quick_code) : ''}</div>
-                      <div className="flex gap-1">
+                  <div key={lineIdx} className="bg-white rounded-xl mb-4 shadow-md overflow-hidden border border-slate-200">
+                    <div className="flex justify-between items-center px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700">
+                      <div className="text-sm font-extrabold text-white flex items-center gap-2">
+                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-white/20 text-white text-xs">{lineIdx + 1}</span>
+                        {line.product ? (line.product.name_en || line.product.quick_code) : 'New product line'}
+                      </div>
+                      <div className="flex gap-1.5">
                         {lines.length > 1 && (
-                          <button onClick={function () { removeLine(lineIdx); }} className="px-2 py-1 text-[10px] bg-red-100 hover:bg-red-200 text-red-900 rounded font-bold">Remove</button>
+                          <button onClick={function () { removeLine(lineIdx); }} className="px-2.5 py-1 text-[10px] bg-white/15 hover:bg-red-500 text-white rounded font-bold transition-colors">Remove</button>
                         )}
-                        <button onClick={function () { duplicateLine(lineIdx); }} className="px-2 py-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-900 rounded font-bold">Duplicate</button>
+                        <button onClick={function () { duplicateLine(lineIdx); }} className="px-2.5 py-1 text-[10px] bg-white/15 hover:bg-white/30 text-white rounded font-bold transition-colors">Duplicate</button>
                       </div>
                     </div>
+                    <div className="p-4">
 
                     {/* Quick-code field with autocomplete */}
                     <div className="mb-2 relative">
@@ -2104,6 +2106,7 @@ export default function InventoryReceiving(props) {
                         </div>
                       </>
                     )}
+                    </div>
                   </div>
                 );
               })}

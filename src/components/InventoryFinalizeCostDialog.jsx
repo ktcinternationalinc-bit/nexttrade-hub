@@ -273,9 +273,9 @@ export default function InventoryFinalizeCostDialog(props) {
           <div className="mb-4 bg-blue-50 rounded-lg p-3 border border-blue-200">
             <div className="text-[11px] font-extrabold text-blue-900 tracking-wider mb-2">USD → EGP EXCHANGE RATE</div>
             {fxLoading ? (
-              <div className="text-sm text-blue-800 italic">Fetching latest rate...</div>
-            ) : fxOverrideMode ? (
-              <div className="flex items-center gap-2">
+              <div className="text-sm text-blue-800 italic">Fetching latest rate from dashboard FX rates...</div>
+            ) : (fxOverrideMode || (!fxRate)) ? (
+              <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-[11px] font-extrabold text-blue-900">Manual rate (1 USD = ? EGP):</label>
                 <input
                   type="text"

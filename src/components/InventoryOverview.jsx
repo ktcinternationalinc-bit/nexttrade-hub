@@ -51,6 +51,7 @@ export default function InventoryOverview(props) {
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
   var [showZeroStock, setShowZeroStock] = useState(true);    // Max Jun 1 2026: show zero-stock items by default
+  var [uomView, setUomView] = useState('native');           // 'native' | 'kg' | 'rolls' — how to display quantities
   // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
   // physical stock (they exist only to spawn variants), so including them in
   // "what's in stock" pollutes the totals + accordion. Off by default; toggle
@@ -176,7 +177,7 @@ export default function InventoryOverview(props) {
           supabase.from('inventory_products').select('*').eq('active', true).order('updated_at', { ascending: false }),
           supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
           safe(supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)),
-          safe(supabase.from('inventory_stock_receipts').select('product_id, quantity')),
+          safe(supabase.from('inventory_stock_receipts').select('product_id, quantity, quantity_kg, roll_count, uom, status')),
           safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status').eq('inventory_status', 'consumed')),
         ]);
         if (cancelled) return;
@@ -213,28 +214,52 @@ export default function InventoryOverview(props) {
     // Initialize entry for every product
     products.forEach(function (p) {
       stats[p.id] = {
-        current_qty: 0,
-        current_weighted_cost: 0,  // sum(qty * cost) for weighted avg
+        current_qty: 0,           // finalized on-hand (from layers)
+        current_weighted_cost: 0, // sum(qty * cost) for weighted avg
         original_qty: 0,
         sold_qty: 0,
         sold_revenue: 0,
         cogs_total: 0,
         gross_profit: 0,
+        // v55.83-A (Max Jun 1 2026) — show stock immediately + status dot + UOM toggle
+        finalized_qty: 0,         // qty from finalized receipts (green)
+        pending_qty: 0,           // qty from received-but-not-finalized receipts (yellow)
+        recv_by_uom: {},          // { kg: 120, meter: 50, ... } from received qty in its UoM
+        recv_kg: 0,               // summed Quantity in Kilos across receipts
+        recv_rolls: 0,            // summed Roll Count across receipts
+        has_pending: false,       // any receipt not yet finalized
+        has_finalized: false,     // any receipt finalized
       };
     });
-    // Sum layers (current stock + cost-weighted)
+    // Sum layers (FINALIZED current stock + cost-weighted)
     layers.forEach(function (l) {
       var s = stats[l.product_id];
       if (!s) return;  // layer for unknown product
       var qty = Number(l.qty_remaining || 0);
       s.current_qty += qty;
+      s.finalized_qty += qty;
       s.current_weighted_cost += qty * Number(l.cost_per_uom || 0);
     });
-    // Sum receipts (original received)
+    // Sum receipts (original received + pending stock + per-UOM + kg + rolls + status)
     receipts.forEach(function (r) {
       var s = stats[r.product_id];
       if (!s) return;
-      s.original_qty += Number(r.quantity || 0);
+      var q = Number(r.quantity || 0);
+      s.original_qty += q;
+      var uom = (r.uom || 'unit').toLowerCase();
+      if (!s.recv_by_uom[uom]) s.recv_by_uom[uom] = 0;
+      s.recv_by_uom[uom] += q;
+      s.recv_kg += Number(r.quantity_kg || 0) || 0;
+      s.recv_rolls += Number(r.roll_count || 0) || 0;
+      if (r.status === 'finalized') {
+        s.has_finalized = true;
+      } else if (r.status !== 'cancelled') {
+        // received but NOT finalized → counts as pending (yellow) on-hand
+        s.pending_qty += q;
+        s.has_pending = true;
+        // show stock immediately: include pending in current_qty so it appears right away
+        s.current_qty += q;
+      }
     });
     // Sum sales (sold_qty + revenue + cogs + gross_profit) — by variant_id
     salesItems.forEach(function (it) {
@@ -440,6 +465,26 @@ export default function InventoryOverview(props) {
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
         </label>
+        {/* v55.83-A (Max Jun 1 2026) — view quantities in different units. Uses the
+            actual data entered on receipts (UoM qty / Quantity in Kilos / Roll Count). */}
+        <div className="flex items-center gap-1 text-xs font-extrabold text-slate-900">
+          <span className="text-slate-600">View:</span>
+          <div className="inline-flex rounded overflow-hidden border border-slate-300">
+            {['native', 'kg', 'rolls'].map(function (v) {
+              return (
+                <button key={v} onClick={function () { setUomView(v); }}
+                  className={'px-2.5 py-1 ' + (uomView === v ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100')}>
+                  {v === 'native' ? 'Unit' : v === 'kg' ? 'Kg' : 'Rolls'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {/* status dot legend */}
+        <span className="inline-flex items-center gap-3 text-[11px] font-bold text-slate-700">
+          <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>Cost finalized</span>
+          <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"></span>Needs cost</span>
+        </span>
         <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900" title="Template Products have no physical stock — they're only used to create Products.">
           <input type="checkbox" checked={showTemplates} onChange={function (e) { setShowTemplates(e.target.checked); }} className="w-4 h-4" />
           Show Template Products / إظهار قوالب المنتجات
@@ -602,25 +647,25 @@ export default function InventoryOverview(props) {
       {!loading && !error && grouped.length > 0 && grouped.map(function (g) {
         var collapsed = !!collapsedGroups[g.family_id];
         return (
-          <div key={g.family_id} className="bg-white border-2 border-slate-300 rounded-lg overflow-hidden">
+          <div key={g.family_id} className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg">
             {/* Group header — click to toggle */}
             <button
               onClick={function () { toggleGroup(g.family_id); }}
-              className="w-full px-4 py-3 bg-slate-100 hover:bg-slate-200 flex items-center justify-between text-left"
+              className="w-full px-4 py-3 bg-gradient-to-r from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 flex items-center justify-between text-left border-b border-slate-700"
             >
               <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-lg font-extrabold text-slate-900">{collapsed ? '▶' : '▼'}</span>
-                <span className="px-2 py-0.5 bg-slate-800 text-white text-xs font-extrabold rounded">{g.code}</span>
-                <span className="text-base font-extrabold text-slate-900">{g.label_en}</span>
-                <span className="text-sm font-bold text-slate-700" style={{ direction: 'rtl' }}>/ {g.label_ar}</span>
-                <span className="text-xs text-slate-700 font-semibold">({g.products.length} {g.products.length === 1 ? 'product' : 'products'})</span>
+                <span className="text-lg font-extrabold text-slate-300">{collapsed ? '▶' : '▼'}</span>
+                <span className="px-2 py-0.5 bg-orange-500 text-white text-xs font-extrabold rounded">{g.code}</span>
+                <span className="text-base font-extrabold text-white">{g.label_en}</span>
+                <span className="text-sm font-bold text-slate-400" style={{ direction: 'rtl' }}>/ {g.label_ar}</span>
+                <span className="text-xs text-slate-400 font-semibold">({g.products.length} {g.products.length === 1 ? 'product' : 'products'})</span>
               </div>
-              <div className="flex items-center gap-3 text-xs font-bold text-slate-800 flex-wrap">
-                <div>Current: <span className="text-blue-900">{fmtNum(g.totals.current_qty, 2)}</span></div>
-                <div>Original: <span className="text-indigo-900">{fmtNum(g.totals.original_qty, 2)}</span></div>
-                <div>Sold: <span className="text-emerald-800">{fmtNum(g.totals.sold_qty, 2)}</span></div>
+              <div className="flex items-center gap-3 text-xs font-bold text-slate-300 flex-wrap">
+                <div>Current: <span className="text-blue-300">{fmtNum(g.totals.current_qty, 2)}</span></div>
+                <div>Original: <span className="text-indigo-300">{fmtNum(g.totals.original_qty, 2)}</span></div>
+                <div>Sold: <span className="text-emerald-300">{fmtNum(g.totals.sold_qty, 2)}</span></div>
                 {seeCosts && (
-                  <div>P&amp;L: <span className={g.totals.gross_profit >= 0 ? 'text-emerald-800' : 'text-red-700'}>{fmtNum(g.totals.gross_profit, 2)}</span></div>
+                  <div>P&amp;L: <span className={g.totals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300'}>{fmtNum(g.totals.gross_profit, 2)}</span></div>
                 )}
               </div>
             </button>
@@ -629,22 +674,22 @@ export default function InventoryOverview(props) {
             {!collapsed && (
               <div className="overflow-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-50 sticky top-0">
+                  <thead className="bg-slate-950 sticky top-0 z-10">
                     <tr>
-                      <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Code</th>
-                      <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Design SKU</th>
-                      <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Name</th>
-                      <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Current</th>
-                      <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Original</th>
-                      <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Sold</th>
+                      <th className="px-3 py-2.5 text-left text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Code</th>
+                      <th className="px-3 py-2.5 text-left text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Design SKU</th>
+                      <th className="px-3 py-2.5 text-left text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Name</th>
+                      <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Current</th>
+                      <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Original</th>
+                      <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Sold</th>
                       {seeCosts && (
                         <>
-                          <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-amber-50">Avg Cost</th>
-                          <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-amber-50">Avg Sold Price</th>
-                          <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-amber-50">P&amp;L</th>
+                          <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-amber-300 border-b-2 border-slate-700 bg-slate-900">Avg Cost</th>
+                          <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-amber-300 border-b-2 border-slate-700 bg-slate-900">Avg Sold Price</th>
+                          <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-amber-300 border-b-2 border-slate-700 bg-slate-900">P&amp;L</th>
                         </>
                       )}
-                      <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">UoM</th>
+                      <th className="px-3 py-2.5 text-left text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">UoM</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -734,7 +779,7 @@ export default function InventoryOverview(props) {
                             {/* v55.83-A.6.27.60 — History drilldown link */}
                             <button
                               onClick={function () { openHistory(p); }}
-                              className="text-[10px] text-blue-700 hover:text-blue-900 font-bold mt-0.5 hover:underline"
+                              className="text-[10px] text-blue-300 hover:text-blue-100 font-bold mt-0.5 hover:underline"
                               title="View inbound shipments, outbound sales, and stock history for this product"
                             >↗ History</button>
                           </td>
@@ -742,17 +787,32 @@ export default function InventoryOverview(props) {
                               columns showing 0.00 in text-blue-900 / text-indigo-900 / text-emerald-800
                               against the dark row bg made them unreadable (HOTFIX 25 rule violated).
                               Switched to -300 light shades so the numbers stand out on dark surfaces. */}
-                          <td className="px-3 py-1.5 text-right font-mono font-extrabold text-blue-300">{fmtNum(s.current_qty, 2)}</td>
-                          <td className="px-3 py-1.5 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
-                          <td className="px-3 py-1.5 text-right font-mono text-emerald-300">{fmtNum(s.sold_qty, 2)}</td>
+                          <td className="px-3 py-3 text-right font-mono font-extrabold text-blue-300">
+                            <span className="inline-flex items-center gap-1.5 justify-end">
+                              {/* status dot: green = all finalized, amber = stock awaiting cost finalize */}
+                              {(s.current_qty > 0 || s.has_pending) && (
+                                <span
+                                  title={s.has_pending ? 'Received — awaiting cost finalize' : 'Cost finalized'}
+                                  className={'inline-block w-2 h-2 rounded-full ' + (s.has_pending ? 'bg-amber-400' : 'bg-emerald-400')}
+                                ></span>
+                              )}
+                              <span>{
+                                uomView === 'kg' ? fmtNum(s.recv_kg, 2)
+                                : uomView === 'rolls' ? fmtNum(s.recv_rolls, 0)
+                                : fmtNum(s.current_qty, 2)
+                              }</span>
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
+                          <td className="px-3 py-3 text-right font-mono text-emerald-300">{fmtNum(s.sold_qty, 2)}</td>
                           {seeCosts && (
                             <>
-                              <td className="px-3 py-1.5 text-right font-mono text-slate-900 bg-amber-50">{fmtNum(avgCost, 2)}</td>
-                              <td className="px-3 py-1.5 text-right font-mono text-slate-900 bg-amber-50">{fmtNum(avgSoldPrice, 2)}</td>
-                              <td className={'px-3 py-1.5 text-right font-mono font-extrabold bg-amber-50 ' + (s.gross_profit >= 0 ? 'text-emerald-800' : 'text-red-700')}>{fmtNum(s.gross_profit, 2)}</td>
+                              <td className="px-3 py-3 text-right font-mono text-amber-200 bg-slate-800/60">{fmtNum(avgCost, 2)}</td>
+                              <td className="px-3 py-3 text-right font-mono text-amber-200 bg-slate-800/60">{fmtNum(avgSoldPrice, 2)}</td>
+                              <td className={'px-3 py-3 text-right font-mono font-extrabold bg-slate-800/60 ' + (s.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fmtNum(s.gross_profit, 2)}</td>
                             </>
                           )}
-                          <td className="px-3 py-1.5 text-xs text-slate-300">{p.default_uom || '—'}</td>
+                          <td className="px-3 py-3 text-xs text-slate-300">{uomView === 'kg' ? 'kg' : uomView === 'rolls' ? 'rolls' : (p.default_uom || '—')}</td>
                         </tr>
                       );
                     })}
