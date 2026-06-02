@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-G',
+    date: '2026-06-01',
+    label: 'Fix: product search results now show in front of the receiving form',
+    items: [
+      '**🔍 Search results are now visible and clickable.** When adding a product on the Inbound Shipments screen, the matching products that come up as you type now appear clearly in front of the form so you can see and pick them. Before, the list was hidden behind the form fields.',
+      { superAdminOnly: true, text: 'InventoryReceiving.jsx autocomplete: dropdown z-index raised z-10 -> z-[90]; relative container lifts to z-[80] while open; removed overflow-hidden from the product-line card (was clipping the dropdown) and moved rounding to the header (rounded-t-xl). Test: test-receiving-search-dropdown-jun1.js.' },
+    ],
+  },
+  {
+    version: 'v55.83-F',
+    date: '2026-06-01',
+    label: 'Inventory cleanup, per-unit stock view, receiving fixes & ticket privacy',
+    items: [
+      '**📦 Inventory now shows the right name and the selling unit.** Every product shows its proper full name and a clear "Sold in:" tag (kg, square meters, meters, rolls) right under it, so you always know the unit you sell that item in.',
+      '**📊 Stock totals are now grouped by unit.** Instead of one mixed-up number, the top of the Inventory screen shows a clean block for each unit — your kilogram goods, your square-meter goods, your meter goods — each with its own Current, Original, and Sold. No more adding kilos and square meters together.',
+      '**🟡🟢 Stock shows the moment it is received.** A new item appears in Inventory right away with a yellow dot meaning "received, still needs cost." Once you finalize the cost it turns green. No more wondering why current stock looked empty.',
+      '**🌍 Track where stock came from.** When receiving a shipment you now pick the country it came from (US, Canada, Egypt, and more). Open any product\\u0027s History to see how much came in from each country — useful when you sell US and Canadian goods together as one product.',
+      '**🧾 Receiving screen cleaned up.** Removed the confusing "Order Qty" box, made Receipt Date optional, and added square meters as a unit everywhere. Quantity-in-Kilos stays (it feeds your cost math).',
+      '**💱 Cost finalize now finds your exchange rate automatically.** The Finalize Cost step now pulls the USD→EGP rate you keep on the dashboard, instead of failing and asking you to type it every time. You can still enter it by hand if needed.',
+      '**🔒 Make a ticket private or confidential after it is created.** You no longer have to decide at creation time — open any ticket and switch it between Normal, Confidential, or Private whenever you need.',
+      '**🏷️ Product codes made practical.** Quick Codes can now repeat across products; the Design Code is the one that must stay unique.',
+      '**✨ Cleaner, more professional look.** The whole Inventory screen and the receiving form were tidied up — consistent dark styling, clear lines between products, easier to read at a glance.',
+      { superAdminOnly: true, text: 'INVENTORY NAMING: InventoryOverview now displays stored name_en (DB is source of truth) with a family-aware computed fallback (L/T 6-field Backing-before-Color; P/B 8-field Color-before-Backing) + word de-dupe. NAMING_RECIPES in InventoryProductMaster + InventoryImportProducts rekeyed to real family codes L/T/P/B (prefix-match guarded to len>=2). Auto-naming trigger SQL (fn_inventory_build_name BEFORE INSERT/UPDATE + fn_inventory_refresh_on_list_change AFTER UPDATE on inventory_lists) provided inline to run in Supabase — makes names self-maintaining; +origin (level 9) appended.' },
+      { superAdminOnly: true, text: 'OVERVIEW: grandTotals rebuilt to per-UOM buckets (no blended qty sums); money still aggregates. Per-product current_qty now includes non-finalized receipts (pending) so stock shows immediately; status dot amber(has_pending)/green(finalized). UOM toggle removed in favor of per-product native unit + per-unit summary blocks.' },
+      { superAdminOnly: true, text: 'RECEIVING: removed ordered_quantity field + per-line variance-reason requirement (reconciliation is top-level only). Reconciliation actuals read from line roll_count + quantity_kg + quantity; Net KG removed. kg added to expected_uom dropdown. origin_country_code now a conscious dropdown (no silent US default) and stamped on each receipt line. Receipt Date no longer required (defaults to today on save).' },
+      { superAdminOnly: true, text: 'FX: getRateForDate (inventory-landed-cost-engine) now reads dashboard fx_rates table (was inv_fx_rates) with exact-date -> on-or-before -> latest fallbacks; manual entry always reachable. SQL pending: origin countries + USCA option, origin_country_code on inventory_stock_receipts, auto-naming trigger, marketing-suite tables, chk_sh_status widen (done).' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.72',
     date: '2026-05-26',
     label: 'Unified Counterparty Ledger — auto-FIFO + offset + customer statement PDFs',

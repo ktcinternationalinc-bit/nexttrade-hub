@@ -51,7 +51,6 @@ export default function InventoryOverview(props) {
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
   var [showZeroStock, setShowZeroStock] = useState(true);    // Max Jun 1 2026: show zero-stock items by default
-  var [uomView, setUomView] = useState('native');           // 'native' | 'kg' | 'rolls' — how to display quantities
   // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
   // physical stock (they exist only to spawn variants), so including them in
   // "what's in stock" pollutes the totals + accordion. Off by default; toggle
@@ -395,18 +394,46 @@ export default function InventoryOverview(props) {
 
   // Grand totals across all visible products
   var grandTotals = useMemo(function () {
-    var t = { current_qty: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0 };
-    grouped.forEach(function (g) {
-      t.current_qty += g.totals.current_qty;
-      t.original_qty += g.totals.original_qty;
-      t.sold_qty += g.totals.sold_qty;
-      t.sold_revenue += g.totals.sold_revenue;
-      t.cogs_total += g.totals.cogs_total;
-      t.gross_profit += g.totals.gross_profit;
-      t.product_count += g.products.length;
+    // v55.83-A (Max Jun 1 2026) — quantities are kept PER UNIT OF MEASURE (kg, sqm,
+    // meter, rolls...) because you can't add kg to sqm. Money (revenue/cogs/profit)
+    // is one currency so it sums across everything. product_count is a simple count.
+    var t = { sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0 };
+    var byUnit = {}; // { kg: {current, original, sold}, sqm: {...}, ... }
+    function bucket(u) {
+      var key = (u || 'unit').toLowerCase();
+      if (!byUnit[key]) byUnit[key] = { unit: key, current_qty: 0, original_qty: 0, sold_qty: 0 };
+      return byUnit[key];
+    }
+    products.forEach(function (p) {
+      var s = productStats[p.id];
+      if (!s) return;
+      var u = (p.default_uom || 'unit');
+      var b = bucket(u);
+      b.current_qty += s.current_qty || 0;
+      b.original_qty += s.original_qty || 0;
+      b.sold_qty += s.sold_qty || 0;
+      t.sold_revenue += s.sold_revenue || 0;
+      t.cogs_total += s.cogs_total || 0;
+      t.gross_profit += s.gross_profit || 0;
     });
+    // only count products that pass the current filter set (grouped)
+    grouped.forEach(function (g) { t.product_count += g.products.length; });
+    // stable, readable order of units
+    var order = ['kg', 'sqm', 'meter', 'yard', 'roll', 'rolls', 'piece', 'unit'];
+    var units = Object.keys(byUnit).sort(function (a, b2) {
+      var ia = order.indexOf(a), ib = order.indexOf(b2);
+      if (ia === -1) ia = 99; if (ib === -1) ib = 99;
+      return ia - ib;
+    }).map(function (k) { return byUnit[k]; });
+    t.units = units;
     return t;
-  }, [grouped]);
+  }, [products, productStats, grouped]);
+
+  // pretty label for a unit code
+  function unitLabel(u) {
+    var map = { kg: 'KG', sqm: 'SQM (m²)', meter: 'METERS', meters: 'METERS', yard: 'YARDS', roll: 'ROLLS', rolls: 'ROLLS', piece: 'PIECES', unit: 'UNITS' };
+    return map[(u || '').toLowerCase()] || (u || 'UNITS').toUpperCase();
+  }
 
   function toggleGroup(familyId) {
     setCollapsedGroups(function (prev) {
@@ -465,21 +492,6 @@ export default function InventoryOverview(props) {
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
         </label>
-        {/* v55.83-A (Max Jun 1 2026) — view quantities in different units. Uses the
-            actual data entered on receipts (UoM qty / Quantity in Kilos / Roll Count). */}
-        <div className="flex items-center gap-1 text-xs font-extrabold text-slate-900">
-          <span className="text-slate-600">View:</span>
-          <div className="inline-flex rounded overflow-hidden border border-slate-300">
-            {['native', 'kg', 'rolls'].map(function (v) {
-              return (
-                <button key={v} onClick={function () { setUomView(v); }}
-                  className={'px-2.5 py-1 ' + (uomView === v ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100')}>
-                  {v === 'native' ? 'Unit' : v === 'kg' ? 'Kg' : 'Rolls'}
-                </button>
-              );
-            })}
-          </div>
-        </div>
         {/* status dot legend */}
         <span className="inline-flex items-center gap-3 text-[11px] font-bold text-slate-700">
           <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>Cost finalized</span>
@@ -560,9 +572,9 @@ export default function InventoryOverview(props) {
         </div>
       </details>
 
-      {/* Grand totals — v55.83-A.6.27.72 HOTFIX 16: world-class inventory aesthetic.
-          Dark slate base + colored left-border accent + icon badge + tabular numbers.
-          Replaces flat saturated tiles with something that reads as professional. */}
+      {/* Grand totals — v55.83-A (Max Jun 1 2026): quantities shown PER UNIT OF MEASURE
+          (kg, sqm, meters, rolls...) since different goods sell in different units and
+          can't be added together. Money totals (revenue/cogs/profit) sum across all. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-slate-500 px-3 py-2.5 flex items-center gap-3">
           <div className="text-2xl opacity-80">📦</div>
@@ -572,31 +584,37 @@ export default function InventoryOverview(props) {
             <div className="text-[9px] text-slate-500" style={{ direction: 'rtl' }}>منتجات</div>
           </div>
         </div>
-        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-blue-500 px-3 py-2.5 flex items-center gap-3">
-          <div className="text-2xl opacity-80">📊</div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Stock</div>
-            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-blue-100">{fmtNum(grandTotals.current_qty, 2)}</div>
-            <div className="text-[9px] text-blue-400" style={{ direction: 'rtl' }}>المخزون الحالي</div>
-          </div>
-        </div>
-        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-indigo-500 px-3 py-2.5 flex items-center gap-3">
-          <div className="text-2xl opacity-80">🗂️</div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Stock</div>
-            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-indigo-100">{fmtNum(grandTotals.original_qty, 2)}</div>
-            <div className="text-[9px] text-indigo-400" style={{ direction: 'rtl' }}>الأصلي</div>
-          </div>
-        </div>
-        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-emerald-500 px-3 py-2.5 flex items-center gap-3">
-          <div className="text-2xl opacity-80">✅</div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold</div>
-            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-emerald-100">{fmtNum(grandTotals.sold_qty, 2)}</div>
-            <div className="text-[9px] text-emerald-400" style={{ direction: 'rtl' }}>المباع</div>
-          </div>
-        </div>
       </div>
+
+      {/* Per-unit stock breakdown — one clean block per unit of measure in inventory */}
+      {grandTotals.units && grandTotals.units.length > 0 && (
+        <div className="space-y-2">
+          {grandTotals.units.map(function (u) {
+            return (
+              <div key={u.unit} className="bg-slate-900 border border-slate-700 rounded-lg shadow-lg overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700">
+                  <span className="px-2 py-0.5 bg-blue-600 text-white text-[11px] font-extrabold rounded tracking-wider">{unitLabel(u.unit)}</span>
+                  <span className="text-[11px] text-slate-400 font-semibold">available for sale in {unitLabel(u.unit).toLowerCase()}</span>
+                </div>
+                <div className="grid grid-cols-3 divide-x divide-slate-700">
+                  <div className="px-4 py-3">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Stock</div>
+                    <div className="text-xl font-extrabold tabular-nums text-blue-100 leading-tight">{fmtNum(u.current_qty, 2)} <span className="text-[11px] text-blue-300 font-bold">{u.unit}</span></div>
+                  </div>
+                  <div className="px-4 py-3">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Stock</div>
+                    <div className="text-xl font-extrabold tabular-nums text-indigo-100 leading-tight">{fmtNum(u.original_qty, 2)} <span className="text-[11px] text-indigo-300 font-bold">{u.unit}</span></div>
+                  </div>
+                  <div className="px-4 py-3">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold</div>
+                    <div className="text-xl font-extrabold tabular-nums text-emerald-100 leading-tight">{fmtNum(u.sold_qty, 2)} <span className="text-[11px] text-emerald-300 font-bold">{u.unit}</span></div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {seeCosts && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-amber-500 px-3 py-2.5 flex items-center gap-3">
@@ -763,6 +781,9 @@ export default function InventoryOverview(props) {
                           <td className="px-3 py-3">
                             <div className="font-bold text-white text-[13px]">{displayNameEn}</div>
                             {displayNameAr && <div className="text-xs text-slate-300" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
+                            <div className="mt-0.5">
+                              <span className="inline-block px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px] font-bold tracking-wide">Sold in: {p.default_uom || 'unit'}</span>
+                            </div>
                             {/* v55.83-A.6.27.60 — All 9 classification levels inline under name */}
                             {levelLabels.length > 0 && (
                               <div className="text-[10px] text-slate-400 mt-1 leading-relaxed">
@@ -789,18 +810,13 @@ export default function InventoryOverview(props) {
                               Switched to -300 light shades so the numbers stand out on dark surfaces. */}
                           <td className="px-3 py-3 text-right font-mono font-extrabold text-blue-300">
                             <span className="inline-flex items-center gap-1.5 justify-end">
-                              {/* status dot: green = all finalized, amber = stock awaiting cost finalize */}
                               {(s.current_qty > 0 || s.has_pending) && (
                                 <span
                                   title={s.has_pending ? 'Received — awaiting cost finalize' : 'Cost finalized'}
                                   className={'inline-block w-2 h-2 rounded-full ' + (s.has_pending ? 'bg-amber-400' : 'bg-emerald-400')}
                                 ></span>
                               )}
-                              <span>{
-                                uomView === 'kg' ? fmtNum(s.recv_kg, 2)
-                                : uomView === 'rolls' ? fmtNum(s.recv_rolls, 0)
-                                : fmtNum(s.current_qty, 2)
-                              }</span>
+                              <span>{fmtNum(s.current_qty, 2)}</span>
                             </span>
                           </td>
                           <td className="px-3 py-3 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
@@ -812,7 +828,7 @@ export default function InventoryOverview(props) {
                               <td className={'px-3 py-3 text-right font-mono font-extrabold bg-slate-800/60 ' + (s.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fmtNum(s.gross_profit, 2)}</td>
                             </>
                           )}
-                          <td className="px-3 py-3 text-xs text-slate-300">{uomView === 'kg' ? 'kg' : uomView === 'rolls' ? 'rolls' : (p.default_uom || '—')}</td>
+                          <td className="px-3 py-3 text-xs font-bold text-slate-200">{p.default_uom || '—'}</td>
                         </tr>
                       );
                     })}

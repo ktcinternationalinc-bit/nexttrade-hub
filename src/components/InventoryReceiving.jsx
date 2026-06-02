@@ -1696,8 +1696,8 @@ export default function InventoryReceiving(props) {
               {lines.map(function (line, lineIdx) {
                 var suggestions = suggestionsFor(line.quickCodeQuery);
                 return (
-                  <div key={lineIdx} className="bg-white rounded-xl mb-4 shadow-md overflow-hidden border border-slate-200">
-                    <div className="flex justify-between items-center px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700">
+                  <div key={lineIdx} className="bg-white rounded-xl mb-4 shadow-md border border-slate-200">
+                    <div className="flex justify-between items-center px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-t-xl">
                       <div className="text-sm font-extrabold text-white flex items-center gap-2">
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-white/20 text-white text-xs">{lineIdx + 1}</span>
                         {line.product ? (line.product.name_en || line.product.quick_code) : 'New product line'}
@@ -1711,8 +1711,11 @@ export default function InventoryReceiving(props) {
                     </div>
                     <div className="p-4">
 
-                    {/* Quick-code field with autocomplete */}
-                    <div className="mb-2 relative">
+                    {/* Quick-code field with autocomplete.
+                        v55.83-F (Max Jun 1 2026) — dropdown was rendering BEHIND the form
+                        (z-10 trapped under sibling cards). Container gets a high z-index while
+                        open so the results float in front and are clickable. */}
+                    <div className={'mb-2 relative ' + (line.showSuggestions && suggestions.length > 0 ? 'z-[80]' : '')}>
                       <label className="text-[11px] font-extrabold text-slate-700 block">Quick code or product name *
                         <input
                           type="text"
@@ -1737,7 +1740,7 @@ export default function InventoryReceiving(props) {
                         />
                       </label>
                       {line.showSuggestions && suggestions.length > 0 && (
-                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border-2 border-indigo-300 rounded-lg shadow-lg max-h-60 overflow-auto">
+                        <div className="absolute z-[90] left-0 right-0 mt-1 bg-white border-2 border-indigo-400 rounded-lg shadow-2xl max-h-72 overflow-auto ring-1 ring-black/10">
                           {suggestions.map(function (s) {
                             // v55.83-A.6.27.39 — show ⭐ for featured + variant suffix + use_count badge
                             var displayCode = s.variant_suffix ? (s.quick_code + '-' + s.variant_suffix) : s.quick_code;
