@@ -147,7 +147,7 @@ export function simulate(entries) {
   // when the referenced entry IS in the open pool (just on the wrong side).
   var typeById = {};
   (entries || []).forEach(function (e) {
-    if (e && e.id) typeById[e.id] = e.transaction_type;
+    if (e && e.id) typeById[e.id] = String(e.transaction_type || '').trim().toLowerCase();
   });
 
   function warn(msg, ctx) {
@@ -167,7 +167,12 @@ export function simulate(entries) {
   sorted.forEach(function (e) {
     var cur = String(e.currency || 'USD').toUpperCase();
     var s = getCurState(cur);
-    var type = e.transaction_type;
+    // v55.83-H — Normalize the type before matching: trim whitespace + lowercase.
+    // Rows saved by older entry forms or imports sometimes carried " payment_sent ",
+    // "Payment_Sent", etc. A single stray space used to make the strict branch match
+    // fail, sending a legitimate payment to the "unknown → ignored" branch below, where
+    // it VANISHED from the totals (the El Sayad 500,000 EGP SAIB deposit bug).
+    var type = String(e.transaction_type || '').trim().toLowerCase();
     var amt = entryAmount(e);
 
     // GUARD 1: clamp negative amounts to 0 with warning
@@ -176,7 +181,7 @@ export function simulate(entries) {
       amt = 0;
     }
 
-    // GUARD 2: null/undefined type → treat as credit_adjustment, warn
+    // GUARD 2: null/undefined/empty type → treat as credit_adjustment, warn
     if (!type) {
       warn('Entry has no transaction_type — treating as credit_adjustment', { id: e.id });
       type = 'credit_adjustment';
@@ -376,8 +381,44 @@ export function simulate(entries) {
         }
       }
     } else {
-      // Unknown transaction_type — warn and skip
-      warn('Unknown transaction_type — entry ignored', { id: e.id, type: type });
+      // v55.83-H — SAFETY NET: never silently drop a row that carries real money.
+      // Previously an unrecognized transaction_type (e.g. a legacy "deposit"/"payment"
+      // value, or a typo) was logged and SKIPPED — which made the row's amount disappear
+      // from the totals entirely. That is the El Sayad 500,000 EGP SAIB deposit bug:
+      // the payment showed in the line-by-line column but never reduced the balance cards.
+      //
+      // New rule: treat any unknown type exactly like a credit_adjustment — apply by side.
+      //   debit_amount  > 0 → money we paid OUT → drain our open bills FIFO, excess → ourPrepaid
+      //   credit_amount > 0 → money we took IN  → drain their open invoices FIFO, excess → theirPrepaid
+      // A loud warning is still emitted so the bad type label can be cleaned up at the source,
+      // but the money is ALWAYS counted.
+      warn('Unrecognized transaction_type — applying by debit/credit side so the amount is not lost', { id: e.id, type: type });
+      var creditAmtU = Math.max(0, Number(e.credit_amount || 0));
+      var debitAmtU = Math.max(0, Number(e.debit_amount || 0));
+      if (debitAmtU > 0) {
+        var debitLeftU = debitAmtU;
+        while (debitLeftU > 0.001 && s.openBills.length > 0) {
+          var billU = s.openBills[0];
+          var applyU = Math.min(billU.remaining, debitLeftU);
+          billU.remaining -= applyU;
+          applied[billU.id] = (applied[billU.id] || 0) + applyU;
+          debitLeftU -= applyU;
+          if (billU.remaining < 0.001) s.openBills.shift();
+        }
+        if (debitLeftU > 0.001) s.ourPrepaid += debitLeftU;
+      }
+      if (creditAmtU > 0) {
+        var creditLeftU = creditAmtU;
+        while (creditLeftU > 0.001 && s.openInvoices.length > 0) {
+          var invU = s.openInvoices[0];
+          var applyUC = Math.min(invU.remaining, creditLeftU);
+          invU.remaining -= applyUC;
+          applied[invU.id] = (applied[invU.id] || 0) + applyUC;
+          creditLeftU -= applyUC;
+          if (invU.remaining < 0.001) s.openInvoices.shift();
+        }
+        if (creditLeftU > 0.001) s.theirPrepaid += creditLeftU;
+      }
     }
 
     trail.push({

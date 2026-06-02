@@ -750,7 +750,7 @@ export default function InventoryReceiving(props) {
     var rec = computeVariance(header, lines);
     if (!rec.has_any_expected) {
       // No expected totals filled in — can't reconcile, force user back to fill them
-      alert('Please fill in at least one Shipment Expected Total (rolls, gross kg, net kg, or UOM) before submitting.\n\nIf you want to save without committing yet, use "Save Draft" instead.');
+      alert('Please fill in at least one Shipment Expected Total (rolls, gross kg, or UOM) before submitting.\n\nIf you want to save without committing yet, use "Save Draft" instead.');
       return;
     }
     if (!rec.is_balanced) {
@@ -1649,7 +1649,7 @@ export default function InventoryReceiving(props) {
                       className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
                     />
                   </label>
-                  <label className="text-sm font-extrabold text-slate-900 block">Expected Net Weight (kg)
+                  <label className="text-sm font-extrabold text-slate-900 block">Expected Net Weight (kg) <span className="text-[10px] font-bold text-slate-500">· reference only — not reconciled</span>
                     <input
                       type="number"
                       step="0.001"

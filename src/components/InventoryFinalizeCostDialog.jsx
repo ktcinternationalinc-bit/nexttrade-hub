@@ -170,21 +170,48 @@ export default function InventoryFinalizeCostDialog(props) {
         await dbInsert('inventory_landed_costs', lcPayload, userProfile && userProfile.id);
       }
 
-      // 3. Update each receipt row with its landed cost
+      // 3. Update each receipt row with its landed cost.
+      // v55.83-H — multi-line finalize is now all-or-nothing. Finalizing a line
+      // flips status to 'finalized', which fires the DB trigger that creates the
+      // cost layer. If a later line fails mid-loop, we'd otherwise be left with a
+      // half-finalized receipt (some lines costed + layered, others not). So we
+      // track each finalized line and, on any failure, REVERSE the ones that
+      // succeeded (reopen_finalized_receipt undoes the layer + resets to 'received')
+      // before surfacing the error — leaving the receipt exactly as it was.
       var nowIso = new Date().toISOString();
-      for (var i = 0; i < preview.allocations.length; i++) {
-        var alloc = preview.allocations[i];
-        var L = alloc.line;
-        await dbUpdate('inventory_stock_receipts', L.id, {
-          landed_cost_per_uom: alloc.landed_per_uom,
-          landed_total: alloc.landed_total,
-          allocation_method: method,
-          fx_rate_used: effectiveRate,
-          finalized_at: nowIso,
-          finalized_by: userProfile && userProfile.id,
-          status: 'finalized',
-          updated_by: userProfile && userProfile.id,
-        }, userProfile && userProfile.id);
+      var finalizedLineIds = [];
+      try {
+        for (var i = 0; i < preview.allocations.length; i++) {
+          var alloc = preview.allocations[i];
+          var L = alloc.line;
+          await dbUpdate('inventory_stock_receipts', L.id, {
+            landed_cost_per_uom: alloc.landed_per_uom,
+            landed_total: alloc.landed_total,
+            allocation_method: method,
+            fx_rate_used: effectiveRate,
+            finalized_at: nowIso,
+            finalized_by: userProfile && userProfile.id,
+            status: 'finalized',
+            updated_by: userProfile && userProfile.id,
+          }, userProfile && userProfile.id);
+          finalizedLineIds.push(L.id);
+        }
+      } catch (lineErr) {
+        // Roll back every line we already finalized so we don't leave a partial finalize.
+        for (var rb = 0; rb < finalizedLineIds.length; rb++) {
+          try {
+            await supabase.rpc('reopen_finalized_receipt', {
+              p_receipt_id: finalizedLineIds[rb],
+              p_user_id: userProfile && userProfile.id,
+              p_reason: 'Auto-rollback: finalize failed partway and was reversed',
+            });
+          } catch (rbErr) {
+            console.error('[finalize] rollback of line ' + finalizedLineIds[rb] + ' failed — manual check needed', rbErr);
+          }
+        }
+        throw new Error('Finalize failed on line ' + (finalizedLineIds.length + 1) + ' of ' + preview.allocations.length +
+          '. The lines already finalized were rolled back, so the receipt is unchanged. Please try again. (' +
+          ((lineErr && lineErr.message) || String(lineErr)) + ')');
       }
 
       toast.success('Receipt ' + shipmentGroup.receipt_number + ' finalized. Total landed cost: ' + fmt(totalEgp) + ' EGP across ' + preview.allocations.length + ' line(s).');

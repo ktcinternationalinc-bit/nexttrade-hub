@@ -243,6 +243,19 @@ export default function InventoryOverview(props) {
     receipts.forEach(function (r) {
       var s = stats[r.product_id];
       if (!s) return;
+      // v55.83-H — A CANCELLED receipt is as good as deleted. Bail out before it
+      // touches ANY total. Previously the quantity was added to original_qty (and
+      // recv_by_uom / recv_kg / recv_rolls) above the status check, so a cancelled
+      // receipt still inflated "Original Stock" — e.g. LUX-BK showed Original 28,381
+      // (18,381 received + 10,000 cancelled) instead of the correct 18,381.
+      //
+      // v55.83-H QA — Also exclude 'pending_detail'. That status means the shipment
+      // is logged but NOT physically counted yet; the receiving form stores the
+      // supplier's EXPECTED quantity (or a 0.001 placeholder) in the quantity column
+      // just to satisfy the >0 check. Counting it here showed expected/unverified
+      // goods as real on-hand stock AND inflated Original. On-hand = only what has
+      // actually arrived: 'active' / 'received' (pending cost) or 'finalized'.
+      if (r.status === 'cancelled' || r.status === 'pending_detail') return;
       var q = Number(r.quantity || 0);
       s.original_qty += q;
       var uom = (r.uom || 'unit').toLowerCase();
@@ -252,7 +265,7 @@ export default function InventoryOverview(props) {
       s.recv_rolls += Number(r.roll_count || 0) || 0;
       if (r.status === 'finalized') {
         s.has_finalized = true;
-      } else if (r.status !== 'cancelled') {
+      } else {
         // received but NOT finalized → counts as pending (yellow) on-hand
         s.pending_qty += q;
         s.has_pending = true;
@@ -384,6 +397,20 @@ export default function InventoryOverview(props) {
     });
     // Convert to sorted array (alphabetic by label_en, "Unclassified" last)
     var arr = Object.keys(groups).map(function (k) { return groups[k]; });
+    // v55.83-H (Max Jun 2 2026) — within each family, list products largest amount
+    // first → lowest. Sort by current on-hand desc, then by original received desc,
+    // then by name so zero-stock items settle at the bottom in a stable order.
+    arr.forEach(function (g) {
+      g.products.sort(function (pa, pb) {
+        var sa = productStats[pa.id] || {};
+        var sb = productStats[pb.id] || {};
+        var ca = Number(sa.current_qty || 0), cb = Number(sb.current_qty || 0);
+        if (cb !== ca) return cb - ca;
+        var oa = Number(sa.original_qty || 0), ob = Number(sb.original_qty || 0);
+        if (ob !== oa) return ob - oa;
+        return String(pa.name_en || '').localeCompare(String(pb.name_en || ''));
+      });
+    });
     arr.sort(function (a, b) {
       if (a.family_id === ungroupedKey) return 1;
       if (b.family_id === ungroupedKey) return -1;
@@ -397,10 +424,18 @@ export default function InventoryOverview(props) {
     // v55.83-A (Max Jun 1 2026) — quantities are kept PER UNIT OF MEASURE (kg, sqm,
     // meter, rolls...) because you can't add kg to sqm. Money (revenue/cogs/profit)
     // is one currency so it sums across everything. product_count is a simple count.
-    var t = { sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0 };
+    var t = { sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0, inventory_value: 0, awaiting_cost: 0 };
     var byUnit = {}; // { kg: {current, original, sold}, sqm: {...}, ... }
     function bucket(u) {
-      var key = (u || 'unit').toLowerCase();
+      // v55.83-H QA — normalize unit aliases so the summary doesn't show two
+      // separate blocks for the same unit (e.g. "roll" vs "rolls", "meter" vs
+      // "meters"). Without this, a product set to default_uom "rolls" and another
+      // set to "roll" produced two identical "ROLLS" rows that each held half the total.
+      var raw = (u || 'unit').toLowerCase().trim();
+      var aliases = { rolls: 'roll', meters: 'meter', metre: 'meter', metres: 'meter',
+                      yards: 'yard', pieces: 'piece', pcs: 'piece', pc: 'piece',
+                      units: 'unit', m2: 'sqm', 'sq_m': 'sqm', sqmeter: 'sqm', sqmeters: 'sqm', kgs: 'kg' };
+      var key = aliases[raw] || raw;
       if (!byUnit[key]) byUnit[key] = { unit: key, current_qty: 0, original_qty: 0, sold_qty: 0 };
       return byUnit[key];
     }
@@ -415,6 +450,9 @@ export default function InventoryOverview(props) {
       t.sold_revenue += s.sold_revenue || 0;
       t.cogs_total += s.cogs_total || 0;
       t.gross_profit += s.gross_profit || 0;
+      // v55.83-H — executive KPI strip aggregates
+      t.inventory_value += s.current_weighted_cost || 0;   // EGP value of finalized on-hand
+      if (s.has_pending) t.awaiting_cost += 1;             // products with stock not yet costed
     });
     // only count products that pass the current filter set (grouped)
     grouped.forEach(function (g) { t.product_count += g.products.length; });
@@ -456,27 +494,54 @@ export default function InventoryOverview(props) {
 
   return (
     <div className="space-y-3">
-      {/* Header — v55.83-A.6.27.72 HOTFIX 16. Centered title per Max's request:
-          "make it more professional looking ... center what's in stock now".
-          Title block is dead-center horizontally; Expand/Collapse buttons sit
-          in the top-right corner without competing for vertical space. */}
-      <div className="relative bg-gradient-to-br from-slate-900 via-indigo-900 to-purple-900 text-white rounded-xl px-4 py-6 shadow-xl border border-indigo-700/30 overflow-hidden">
-        {/* Subtle decorative gradient halo */}
-        <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-500 opacity-10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-16 -left-16 w-48 h-48 bg-purple-500 opacity-10 rounded-full blur-3xl pointer-events-none" />
-        {/* Action buttons — top-right */}
-        <div className="absolute top-3 right-3 flex gap-2 z-10">
-          <button onClick={expandAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs font-extrabold rounded-lg border border-white/20 transition">⬇ Expand All</button>
-          <button onClick={collapseAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-xs font-extrabold rounded-lg border border-white/20 transition">⬆ Collapse All</button>
+      {/* Header — v55.83-H. Slimmed from the full-height gradient banner to a
+          compact title bar so the executive KPI strip can sit at the top of the
+          page (the financial pulse should be the first thing you see). */}
+      <div className="flex items-center justify-between gap-3 bg-slate-900 text-white rounded-lg px-4 py-3 border border-slate-700/50">
+        <div>
+          <div className="text-lg font-extrabold leading-tight">Inventory Overview</div>
+          <div className="text-[11px] font-semibold text-slate-400" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
         </div>
-        {/* Centered title block */}
-        <div className="text-center relative z-0">
-          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-indigo-300 mb-1">Inventory Overview · نظرة عامة على المخزون</div>
-          <div className="text-3xl font-extrabold mt-1 bg-gradient-to-r from-white via-indigo-100 to-purple-100 bg-clip-text text-transparent">
-            📊 What&apos;s in stock right now
-          </div>
-          <div className="text-sm font-semibold text-indigo-200 mt-1" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
+        <div className="flex gap-2">
+          <button onClick={expandAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-extrabold rounded-lg border border-white/15 transition">Expand All</button>
+          <button onClick={collapseAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-extrabold rounded-lg border border-white/15 transition">Collapse All</button>
         </div>
+      </div>
+
+      {/* Executive KPI strip — v55.83-H. Single-valued, real aggregates only.
+          Quantities stay in the per-unit blocks below (can't add kg to sqm), so
+          these cards are the cross-product figures that DO sum cleanly. Financial
+          cards are gated behind seeCosts. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        {(function () {
+          var cards = [];
+          if (seeCosts) {
+            cards.push({ k: 'val', label: 'Inventory Value', ar: 'قيمة المخزون', value: fmtNum(grandTotals.inventory_value, 2) + ' EGP', tone: 'slate', sub: 'finalized stock' });
+          }
+          cards.push({ k: 'prod', label: 'Products', ar: 'المنتجات', value: fmtNum(grandTotals.product_count, 0), tone: 'slate', sub: (grouped.length) + ' famil' + (grouped.length === 1 ? 'y' : 'ies') });
+          cards.push({ k: 'await', label: 'Awaiting Cost', ar: 'بانتظار التكلفة', value: fmtNum(grandTotals.awaiting_cost, 0), tone: grandTotals.awaiting_cost > 0 ? 'amber' : 'slate', sub: 'received, not finalized' });
+          if (seeCosts) {
+            cards.push({ k: 'rev', label: 'Sold Revenue', ar: 'إيراد المبيعات', value: fmtNum(grandTotals.sold_revenue, 2), tone: 'slate', sub: 'all currencies' });
+            cards.push({ k: 'cogs', label: 'COGS', ar: 'تكلفة البضاعة', value: fmtNum(grandTotals.cogs_total, 2), tone: 'slate', sub: 'cost of goods sold' });
+            cards.push({ k: 'gp', label: 'Gross Profit', ar: 'إجمالي الربح', value: fmtNum(grandTotals.gross_profit, 2), tone: grandTotals.gross_profit > 0 ? 'emerald' : grandTotals.gross_profit < 0 ? 'red' : 'slate', sub: 'revenue − COGS' });
+          }
+          var toneCls = {
+            slate:   { num: 'text-slate-900', chip: 'bg-slate-100 text-slate-700' },
+            amber:   { num: 'text-amber-700',  chip: 'bg-amber-100 text-amber-900' },
+            emerald: { num: 'text-emerald-700', chip: 'bg-emerald-100 text-emerald-900' },
+            red:     { num: 'text-red-700',     chip: 'bg-red-100 text-red-900' },
+          };
+          return cards.map(function (c) {
+            var tc = toneCls[c.tone] || toneCls.slate;
+            return (
+              <div key={c.k} className="bg-white border border-slate-300 rounded-lg px-3 py-2.5 shadow-sm">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">{c.label}</div>
+                <div className={'text-lg font-extrabold tabular-nums leading-tight mt-0.5 ' + tc.num}>{c.value}</div>
+                <div className="text-[9px] font-semibold text-slate-400 mt-0.5">{c.sub}</div>
+              </div>
+            );
+          });
+        })()}
       </div>
 
       {/* Toolbar */}
@@ -713,7 +778,7 @@ export default function InventoryOverview(props) {
                   <tbody>
                     {g.products.map(function (p, rowIdx) {
                       var s = productStats[p.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
-                      var avgCost = s.current_qty > 0 ? s.current_weighted_cost / s.current_qty : 0;
+                      var avgCost = s.finalized_qty > 0 ? s.current_weighted_cost / s.finalized_qty : 0; // v55.83-H QA: divide cost by FINALIZED qty only (current_qty also includes uncosted pending stock, which understated avg cost)
                       var avgSoldPrice = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
                       // v55.83-A.6.27.60 — 9-level classification labels for inline display
                       var levelLabels = [
@@ -876,7 +941,7 @@ export default function InventoryOverview(props) {
               {/* Stock summary */}
               {(function () {
                 var s = productStats[historyProduct.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
-                var avgCost = s.current_qty > 0 ? s.current_weighted_cost / s.current_qty : 0;
+                var avgCost = s.finalized_qty > 0 ? s.current_weighted_cost / s.finalized_qty : 0; // v55.83-H QA: divide cost by FINALIZED qty only (current_qty also includes uncosted pending stock, which understated avg cost)
                 var avgSold = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
                 return (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">

@@ -1811,14 +1811,12 @@ export default function OpenAccountsTab(props) {
                         var typeMeta = TRANSACTION_TYPES[txnType] || TRANSACTION_TYPES.credit_adjustment;
                         var pr = computePaidRemaining(entry, simResult);
                         var rowTint = typeMeta.rowCls || '';
-                        // v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) — Subtle currency
-                        // row tint plus a stronger hover (rgba 0.12) so the hover state
-                        // reads cleanly on varied monitor brightness.
-                        var curTint = entryCur === 'USD'
-                          ? 'bg-sky-50/40'
-                          : entryCur === 'EGP'
-                          ? 'bg-amber-50/30'
-                          : '';
+                        // v55.83-H — Removed the per-row light currency tint washes
+                        // (bg-amber-50/30 / bg-sky-50/40). On the dark ledger surface these
+                        // painted a translucent banded "overlay" across the whole table that
+                        // hurt readability. The Currency column pill already tells the eye
+                        // which currency a row is. Keep only a clean hover.
+                        var curTint = '';
                         var hoverStyle = entryCur === 'USD'
                           ? { '--hov': 'rgba(56, 189, 248, 0.12)' }
                           : entryCur === 'EGP'
@@ -1952,18 +1950,16 @@ export default function OpenAccountsTab(props) {
                             {s.currencies.map(function (cur) {
                               var rbForCur = (entry._running_by_currency && entry._running_by_currency[cur]) || 0;
                               var isThisEntryCur = (cur === entryCur);
-                              // v55.83-A.6.27.72 HOTFIX 30 — staircase dimming: when this row's
-                              // currency is different from the column's currency, the running
-                              // balance for that column didn't change on this row, so dim it
-                              // aggressively (low-opacity gray) and only ACTIVE balance pops.
+                              // v55.83-H — Removed the light bg-slate-100 box fill on the active
+                              // cell and the opacity-60 wash on inactive cells (HOTFIX 30's
+                              // "staircase dimming"). Those light fills stacked into the overlay
+                              // banding Max flagged. Now: the ACTIVE running balance pops via bold
+                              // colored text; inactive columns sit quietly in muted slate with
+                              // NO background fill and NO opacity wash — clean and high-contrast.
                               var cls = isThisEntryCur
-                                ? ('bg-slate-100 font-extrabold ' + (rbForCur > 0 ? 'text-emerald-800' : rbForCur < 0 ? 'text-red-700' : 'text-slate-700'))
-                                : 'text-slate-300 font-medium opacity-60';
-                              // v55.83-A.6.27.72 HOTFIX 30 (Max May 28 feedback) — Active
-                              // balance gets a subtle text-shadow glow so the eye snaps to it.
-                              var styleObj = isThisEntryCur
-                                ? { textShadow: '0 0 6px rgba(255,255,255,0.15)' }
-                                : undefined;
+                                ? ('font-extrabold ' + (rbForCur > 0 ? 'text-emerald-300' : rbForCur < 0 ? 'text-red-300' : 'text-slate-200'))
+                                : 'text-slate-500 font-medium';
+                              var styleObj = undefined;
                               return (
                                 <td key={cur} className={'px-3 py-1.5 text-right font-mono ' + cls} style={styleObj}>
                                   {fmtSigned(rbForCur)}
