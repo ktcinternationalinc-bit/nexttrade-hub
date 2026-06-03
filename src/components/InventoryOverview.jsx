@@ -385,6 +385,7 @@ export default function InventoryOverview(props) {
           totals: {
             current_qty: 0, original_qty: 0, sold_qty: 0,
             sold_revenue: 0, cogs_total: 0, gross_profit: 0,
+            rolls_current: 0, rolls_original: 0, rolls_sold: 0,
           },
         };
       }
@@ -396,6 +397,15 @@ export default function InventoryOverview(props) {
       groups[familyId].totals.sold_revenue += s.sold_revenue || 0;
       groups[familyId].totals.cogs_total += s.cogs_total || 0;
       groups[familyId].totals.gross_profit += s.gross_profit || 0;
+      // v55.83-H — roll totals per family (goods received in rolls but sold by weight/length)
+      var gUom = (p.default_uom || 'unit').toLowerCase().trim();
+      if (gUom !== 'roll' && gUom !== 'rolls') {
+        var gOrig = s.recv_rolls || 0;
+        var gSold = s.sold_rolls || 0;
+        groups[familyId].totals.rolls_original += gOrig;
+        groups[familyId].totals.rolls_sold += gSold;
+        groups[familyId].totals.rolls_current += Math.max(0, gOrig - gSold);
+      }
     });
     // Convert to sorted array (alphabetic by label_en, "Unclassified" last)
     var arr = Object.keys(groups).map(function (k) { return groups[k]; });
@@ -505,18 +515,18 @@ export default function InventoryOverview(props) {
   }
 
   return (
-    <div className="space-y-3">
-      {/* Header — v55.83-H. Slimmed from the full-height gradient banner to a
-          compact title bar so the executive KPI strip can sit at the top of the
-          page (the financial pulse should be the first thing you see). */}
-      <div className="flex items-center justify-between gap-3 bg-slate-900 text-white rounded-lg px-4 py-3 border border-slate-700/50">
+    <div className="space-y-5">
+      {/* Header — v55.83-H polish: a clean, borderless page header (no heavy banner
+          box) with a one-line description. Calmer and less boxed-in. */}
+      <div className="flex items-start justify-between gap-3 pt-1">
         <div>
-          <div className="text-lg font-extrabold leading-tight">Inventory Overview</div>
-          <div className="text-[11px] font-semibold text-slate-400" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
+          <div className="text-xl font-extrabold leading-tight text-slate-100">Inventory Overview</div>
+          <div className="text-xs font-medium text-slate-400 mt-0.5">Stock, landed cost, and profitability across warehouses.</div>
+          <div className="text-[11px] font-semibold text-slate-500 mt-0.5" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={expandAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-extrabold rounded-lg border border-white/15 transition">Expand All</button>
-          <button onClick={collapseAll} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-extrabold rounded-lg border border-white/15 transition">Collapse All</button>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={expandAll} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-extrabold rounded-lg border border-slate-700 transition">Expand All</button>
+          <button onClick={collapseAll} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-extrabold rounded-lg border border-slate-700 transition">Collapse All</button>
         </div>
       </div>
 
@@ -524,32 +534,26 @@ export default function InventoryOverview(props) {
           Quantities stay in the per-unit blocks below (can't add kg to sqm), so
           these cards are the cross-product figures that DO sum cleanly. Financial
           cards are gated behind seeCosts. */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {(function () {
           var cards = [];
           if (seeCosts) {
-            cards.push({ k: 'val', label: 'Inventory Value', ar: 'قيمة المخزون', value: fmtNum(grandTotals.inventory_value, 2) + ' EGP', tone: 'slate', sub: 'finalized stock' });
+            cards.push({ k: 'val', label: 'Inventory Value', value: fmtNum(grandTotals.inventory_value, 2) + ' EGP', tone: 'slate', sub: 'finalized stock' });
           }
-          cards.push({ k: 'prod', label: 'Products', ar: 'المنتجات', value: fmtNum(grandTotals.product_count, 0), tone: 'slate', sub: (grouped.length) + ' famil' + (grouped.length === 1 ? 'y' : 'ies') });
-          cards.push({ k: 'await', label: 'Awaiting Cost', ar: 'بانتظار التكلفة', value: fmtNum(grandTotals.awaiting_cost, 0), tone: grandTotals.awaiting_cost > 0 ? 'amber' : 'slate', sub: 'received, not finalized' });
+          cards.push({ k: 'prod', label: 'Products', value: fmtNum(grandTotals.product_count, 0), tone: 'slate', sub: (grouped.length) + ' famil' + (grouped.length === 1 ? 'y' : 'ies') });
+          cards.push({ k: 'await', label: 'Awaiting Cost', value: fmtNum(grandTotals.awaiting_cost, 0), tone: grandTotals.awaiting_cost > 0 ? 'amber' : 'slate', sub: 'received, not finalized' });
           if (seeCosts) {
-            cards.push({ k: 'rev', label: 'Sold Revenue', ar: 'إيراد المبيعات', value: fmtNum(grandTotals.sold_revenue, 2), tone: 'slate', sub: 'all currencies' });
-            cards.push({ k: 'cogs', label: 'COGS', ar: 'تكلفة البضاعة', value: fmtNum(grandTotals.cogs_total, 2), tone: 'slate', sub: 'cost of goods sold' });
-            cards.push({ k: 'gp', label: 'Gross Profit', ar: 'إجمالي الربح', value: fmtNum(grandTotals.gross_profit, 2), tone: grandTotals.gross_profit > 0 ? 'emerald' : grandTotals.gross_profit < 0 ? 'red' : 'slate', sub: 'revenue − COGS' });
+            cards.push({ k: 'rev', label: 'Sold Revenue', value: fmtNum(grandTotals.sold_revenue, 2), tone: 'slate', sub: 'all currencies' });
+            cards.push({ k: 'cogs', label: 'COGS', value: fmtNum(grandTotals.cogs_total, 2), tone: 'slate', sub: 'cost of goods sold' });
+            cards.push({ k: 'gp', label: 'Gross Profit', value: fmtNum(grandTotals.gross_profit, 2), tone: grandTotals.gross_profit > 0 ? 'emerald' : grandTotals.gross_profit < 0 ? 'red' : 'slate', sub: 'revenue − COGS' });
           }
-          var toneCls = {
-            slate:   { num: 'text-slate-900', chip: 'bg-slate-100 text-slate-700' },
-            amber:   { num: 'text-amber-700',  chip: 'bg-amber-100 text-amber-900' },
-            emerald: { num: 'text-emerald-700', chip: 'bg-emerald-100 text-emerald-900' },
-            red:     { num: 'text-red-700',     chip: 'bg-red-100 text-red-900' },
-          };
+          var numTone = { slate: 'text-slate-100', amber: 'text-amber-400', emerald: 'text-emerald-400', red: 'text-red-400' };
           return cards.map(function (c) {
-            var tc = toneCls[c.tone] || toneCls.slate;
             return (
-              <div key={c.k} className="bg-white border border-slate-300 rounded-lg px-3 py-2.5 shadow-sm">
-                <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">{c.label}</div>
-                <div className={'text-lg font-extrabold tabular-nums leading-tight mt-0.5 ' + tc.num}>{c.value}</div>
-                <div className="text-[9px] font-semibold text-slate-400 mt-0.5">{c.sub}</div>
+              <div key={c.k} className="bg-slate-900/70 border border-slate-700/60 rounded-xl px-4 py-3.5">
+                <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{c.label}</div>
+                <div className={'text-xl font-extrabold tabular-nums leading-tight mt-1 ' + (numTone[c.tone] || numTone.slate)}>{c.value}</div>
+                <div className="text-[10px] font-medium text-slate-500 mt-1">{c.sub}</div>
               </div>
             );
           });
@@ -557,31 +561,31 @@ export default function InventoryOverview(props) {
       </div>
 
       {/* Toolbar */}
-      <div className="bg-white border-2 border-slate-300 rounded-lg p-3 flex flex-wrap items-center gap-3">
+      <div className="bg-slate-900/70 border border-slate-700/60 rounded-xl p-3 flex flex-wrap items-center gap-3">
         <input
           type="text"
           value={search}
           onChange={function (e) { setSearch(e.target.value); }}
           placeholder="Search by code, design SKU, name, category, family..."
-          className="flex-1 min-w-[280px] px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-bold"
+          className="flex-1 min-w-[280px] px-3 py-2 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500 font-semibold focus:outline-none focus:border-indigo-500"
         />
-        <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900">
+        <label className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
         </label>
         {/* status dot legend */}
-        <span className="inline-flex items-center gap-3 text-[11px] font-bold text-slate-700">
+        <span className="inline-flex items-center gap-3 text-[11px] font-bold text-slate-300">
           <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>Cost finalized</span>
           <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"></span>Needs cost</span>
         </span>
-        <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900" title="Template Products have no physical stock — they're only used to create Products.">
+        <label className="flex items-center gap-1.5 text-xs font-bold text-slate-200" title="Template Products have no physical stock — they're only used to create Products.">
           <input type="checkbox" checked={showTemplates} onChange={function (e) { setShowTemplates(e.target.checked); }} className="w-4 h-4" />
           Show Template Products / إظهار قوالب المنتجات
         </label>
         {activeFilterCount > 0 && (
           <button
             onClick={clearFilters}
-            className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold rounded shadow"
+            className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold rounded-lg shadow"
           >
             ✕ Clear {activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} / مسح
           </button>
@@ -598,12 +602,12 @@ export default function InventoryOverview(props) {
           to-indigo-50/50, rendering as bright pastel that washed out the
           "Family → Category → Grade..." breadcrumb. Now uses a dark slate→indigo
           gradient with bright text for proper dark-theme contrast. */}
-      <details className="bg-white border border-slate-200 rounded-lg shadow-sm" open>
-        <summary className="px-4 py-2.5 cursor-pointer font-extrabold bg-gradient-to-r from-slate-800 to-indigo-900/70 hover:from-slate-700 hover:to-indigo-800/70 rounded-t-lg flex items-center justify-between border-b border-indigo-500/30">
+      <details className="bg-slate-900/70 border border-slate-700/60 rounded-xl overflow-hidden" open={activeFilterCount > 0}>
+        <summary className="px-4 py-2.5 cursor-pointer font-extrabold bg-slate-800/60 hover:bg-slate-800 flex items-center justify-between border-b border-slate-700/60">
           <span className="flex items-center gap-2">
             <span className="text-indigo-300">🔍</span>
-            <span className="text-white">Filter by classification</span>
-            <span className="text-[10px] text-indigo-200 font-semibold tracking-wider">Family → Category → Grade → ...</span>
+            <span className="text-slate-100">Filter by classification</span>
+            <span className="text-[10px] text-slate-400 font-semibold tracking-wider">Family → Category → Grade → …</span>
           </span>
           {activeFilterCount > 0 && (
             <span className="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded-full font-bold ring-1 ring-indigo-700/50 shadow-sm">{activeFilterCount} active</span>
@@ -649,102 +653,65 @@ export default function InventoryOverview(props) {
         </div>
       </details>
 
-      {/* Grand totals — v55.83-A (Max Jun 1 2026): quantities shown PER UNIT OF MEASURE
-          (kg, sqm, meters, rolls...) since different goods sell in different units and
-          can't be added together. Money totals (revenue/cogs/profit) sum across all. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-slate-500 px-3 py-2.5 flex items-center gap-3">
-          <div className="text-2xl opacity-80">📦</div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-slate-400">Products</div>
-            <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums">{fmtInt(grandTotals.product_count)}</div>
-            <div className="text-[9px] text-slate-500" style={{ direction: 'rtl' }}>منتجات</div>
-          </div>
+      {/* Stock Summary — v55.83-H polish. One card replacing the separate Products,
+          per-unit, rolls, and revenue/cogs/profit blocks (the reviewers' "too many
+          stacked boxes"). Quantities stay PER unit of measure (kg/meter/… can't be
+          summed); money totals sum across all. No numbers changed — display only. */}
+      <div className="bg-slate-900/70 border border-slate-700/60 rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-slate-700/60 flex items-center justify-between">
+          <span className="text-xs font-extrabold uppercase tracking-[0.15em] text-slate-300">Stock Summary</span>
+          <span className="text-[10px] font-semibold text-slate-500">{fmtInt(grandTotals.product_count)} products · by unit of measure</span>
         </div>
-      </div>
-
-      {/* Per-unit stock breakdown — one clean block per unit of measure in inventory */}
-      {grandTotals.units && grandTotals.units.length > 0 && (
-        <div className="space-y-2">
-          {grandTotals.units.map(function (u) {
-            return (
-              <div key={u.unit} className="bg-slate-900 border border-slate-700 rounded-lg shadow-lg overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700">
-                  <span className="px-2 py-0.5 bg-blue-600 text-white text-[11px] font-extrabold rounded tracking-wider">{unitLabel(u.unit)}</span>
-                  <span className="text-[11px] text-slate-400 font-semibold">available for sale in {unitLabel(u.unit).toLowerCase()}</span>
-                </div>
-                <div className="grid grid-cols-3 divide-x divide-slate-700">
-                  <div className="px-4 py-3">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Stock</div>
-                    <div className="text-xl font-extrabold tabular-nums text-blue-100 leading-tight">{fmtNum(u.current_qty, 2)} <span className="text-[11px] text-blue-300 font-bold">{u.unit}</span></div>
-                  </div>
-                  <div className="px-4 py-3">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Stock</div>
-                    <div className="text-xl font-extrabold tabular-nums text-indigo-100 leading-tight">{fmtNum(u.original_qty, 2)} <span className="text-[11px] text-indigo-300 font-bold">{u.unit}</span></div>
-                  </div>
-                  <div className="px-4 py-3">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold</div>
-                    <div className="text-xl font-extrabold tabular-nums text-emerald-100 leading-tight">{fmtNum(u.sold_qty, 2)} <span className="text-[11px] text-emerald-300 font-bold">{u.unit}</span></div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* v55.83-H — Rolls summary for goods received in rolls but sold by kg/meter.
-          Current = received − sold (real depletion from rolls entered on sales). */}
-      {grandTotals.rolls_original > 0 && (
-        <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-lg overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700">
-            <span className="px-2 py-0.5 bg-amber-600 text-white text-[11px] font-extrabold rounded tracking-wider">ROLLS</span>
-            <span className="text-[11px] text-slate-400 font-semibold">physical rolls in roll-tracked goods (sold by weight/length)</span>
-          </div>
-          <div className="grid grid-cols-3 divide-x divide-slate-700">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[9px] uppercase tracking-[0.14em] text-slate-500">
+              <th className="text-left font-bold px-4 py-2">Unit</th>
+              <th className="text-right font-bold px-4 py-2">Current</th>
+              <th className="text-right font-bold px-4 py-2">Original</th>
+              <th className="text-right font-bold px-4 py-2">Sold</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(grandTotals.units || []).map(function (u) {
+              return (
+                <tr key={u.unit} className="border-t border-slate-800">
+                  <td className="px-4 py-2.5"><span className="px-2 py-0.5 bg-blue-600/90 text-white text-[10px] font-extrabold rounded tracking-wider">{unitLabel(u.unit)}</span></td>
+                  <td className="px-4 py-2.5 text-right font-mono font-extrabold tabular-nums text-blue-200">{fmtNum(u.current_qty, 2)}</td>
+                  <td className="px-4 py-2.5 text-right font-mono tabular-nums text-indigo-200">{fmtNum(u.original_qty, 2)}</td>
+                  <td className="px-4 py-2.5 text-right font-mono tabular-nums text-emerald-200">{fmtNum(u.sold_qty, 2)}</td>
+                </tr>
+              );
+            })}
+            {grandTotals.rolls_original > 0 && (
+              <tr className="border-t border-slate-800">
+                <td className="px-4 py-2.5"><span className="px-2 py-0.5 bg-amber-600 text-white text-[10px] font-extrabold rounded tracking-wider">ROLLS</span></td>
+                <td className="px-4 py-2.5 text-right font-mono font-extrabold tabular-nums text-amber-200">{fmtNum(grandTotals.rolls_current, 0)}</td>
+                <td className="px-4 py-2.5 text-right font-mono tabular-nums text-amber-200/70">{fmtNum(grandTotals.rolls_original, 0)}</td>
+                <td className="px-4 py-2.5 text-right font-mono tabular-nums text-emerald-200">{fmtNum(grandTotals.rolls_sold, 0)}</td>
+              </tr>
+            )}
+            {(!grandTotals.units || grandTotals.units.length === 0) && !(grandTotals.rolls_original > 0) && (
+              <tr><td colSpan={4} className="px-4 py-3 text-center text-slate-500 text-xs">No stock yet / لا يوجد مخزون</td></tr>
+            )}
+          </tbody>
+        </table>
+        {seeCosts && (
+          <div className="grid grid-cols-3 divide-x divide-slate-800 border-t border-slate-700/60 bg-slate-900/40">
             <div className="px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Rolls</div>
-              <div className="text-xl font-extrabold tabular-nums text-blue-100 leading-tight">{fmtNum(grandTotals.rolls_current, 0)} <span className="text-[11px] text-blue-300 font-bold">rolls</span></div>
-            </div>
-            <div className="px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold Rolls</div>
-              <div className="text-xl font-extrabold tabular-nums text-emerald-100 leading-tight">{fmtNum(grandTotals.rolls_sold, 0)} <span className="text-[11px] text-emerald-300 font-bold">rolls</span></div>
-            </div>
-            <div className="px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Rolls</div>
-              <div className="text-xl font-extrabold tabular-nums text-indigo-100 leading-tight">{fmtNum(grandTotals.rolls_original, 0)} <span className="text-[11px] text-indigo-300 font-bold">rolls</span></div>
-            </div>
-          </div>
-        </div>
-      )}
-      {seeCosts && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-amber-500 px-3 py-2.5 flex items-center gap-3">
-            <div className="text-2xl opacity-80">💰</div>
-            <div className="flex-1 min-w-0">
               <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-amber-300">Revenue</div>
-              <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-amber-100">{fmtNum(grandTotals.sold_revenue, 2)}</div>
-              <div className="text-[9px] text-amber-400" style={{ direction: 'rtl' }}>الإيرادات</div>
+              <div className="text-lg font-extrabold tabular-nums text-amber-100 leading-tight">{fmtNum(grandTotals.sold_revenue, 2)}</div>
             </div>
-          </div>
-          <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-orange-500 px-3 py-2.5 flex items-center gap-3">
-            <div className="text-2xl opacity-80">📉</div>
-            <div className="flex-1 min-w-0">
+            <div className="px-4 py-3">
               <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-orange-300">COGS</div>
-              <div className="text-2xl font-extrabold mt-0 leading-tight tabular-nums text-orange-100">{fmtNum(grandTotals.cogs_total, 2)}</div>
-              <div className="text-[9px] text-orange-400" style={{ direction: 'rtl' }}>التكلفة</div>
+              <div className="text-lg font-extrabold tabular-nums text-orange-100 leading-tight">{fmtNum(grandTotals.cogs_total, 2)}</div>
             </div>
-          </div>
-          <div className={'bg-slate-900 text-white rounded-lg shadow-lg border-l-4 px-3 py-2.5 flex items-center gap-3 ' + (grandTotals.gross_profit >= 0 ? 'border-emerald-500' : 'border-red-500')}>
-            <div className="text-2xl opacity-80">{grandTotals.gross_profit >= 0 ? '📈' : '⚠️'}</div>
-            <div className="flex-1 min-w-0">
+            <div className="px-4 py-3">
               <div className={'text-[9px] font-bold uppercase tracking-[0.15em] ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>Gross Profit</div>
-              <div className={'text-2xl font-extrabold mt-0 leading-tight tabular-nums ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-100' : 'text-red-100')}>{fmtNum(grandTotals.gross_profit, 2)}</div>
-              <div className={'text-[9px] ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-400' : 'text-red-400')} style={{ direction: 'rtl' }}>الربح الإجمالي</div>
+              <div className={'text-lg font-extrabold tabular-nums leading-tight ' + (grandTotals.gross_profit >= 0 ? 'text-emerald-100' : 'text-red-100')}>{fmtNum(grandTotals.gross_profit, 2)}</div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Loading / error / empty states */}
       {loading && <div className="text-center py-10 text-slate-600 font-bold">Loading inventory... / جاري التحميل</div>}
@@ -784,6 +751,9 @@ export default function InventoryOverview(props) {
                 <div>Current: <span className="text-blue-300">{fmtNum(g.totals.current_qty, 2)}</span></div>
                 <div>Original: <span className="text-indigo-300">{fmtNum(g.totals.original_qty, 2)}</span></div>
                 <div>Sold: <span className="text-emerald-300">{fmtNum(g.totals.sold_qty, 2)}</span></div>
+                {g.totals.rolls_original > 0 && (
+                  <div className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30">Rolls: <span className="text-amber-300">{fmtNum(g.totals.rolls_current, 0)}</span> <span className="text-slate-500">/ {fmtNum(g.totals.rolls_original, 0)}</span></div>
+                )}
                 {seeCosts && (
                   <div>P&amp;L: <span className={g.totals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300'}>{fmtNum(g.totals.gross_profit, 2)}</span></div>
                 )}
@@ -802,6 +772,7 @@ export default function InventoryOverview(props) {
                       <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Current</th>
                       <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Original</th>
                       <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-slate-400 border-b-2 border-slate-700">Sold</th>
+                      <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-amber-300 border-b-2 border-slate-700">Rolls<div className="text-[8px] font-bold text-slate-500 normal-case tracking-normal">on hand / recv</div></th>
                       {seeCosts && (
                         <>
                           <th className="px-3 py-2.5 text-right text-[11px] uppercase tracking-wider font-extrabold text-amber-300 border-b-2 border-slate-700 bg-slate-900">Avg Cost</th>
@@ -931,15 +902,17 @@ export default function InventoryOverview(props) {
                               )}
                               <span>{fmtNum(s.current_qty, 2)}</span>
                             </span>
-                            {showRolls && <div className="text-[10px] font-semibold text-blue-300/70" title="Rolls on hand = rolls received minus rolls sold.">{fmtNum(currRolls, 0)} rolls</div>}
                           </td>
-                          <td className="px-3 py-3 text-right font-mono text-indigo-300">
-                            <div>{fmtNum(s.original_qty, 2)}</div>
-                            {showRolls && <div className="text-[10px] font-semibold text-indigo-300/70" title="Rolls received (excludes cancelled receipts).">{fmtNum(origRolls, 0)} rolls</div>}
-                          </td>
-                          <td className="px-3 py-3 text-right font-mono text-emerald-300">
-                            <div>{fmtNum(s.sold_qty, 2)}</div>
-                            {showRolls && soldRolls > 0 && <div className="text-[10px] font-semibold text-emerald-300/70" title="Rolls sold (entered on sales lines).">{fmtNum(soldRolls, 0)} rolls</div>}
+                          <td className="px-3 py-3 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
+                          <td className="px-3 py-3 text-right font-mono text-emerald-300">{fmtNum(s.sold_qty, 2)}</td>
+                          <td className="px-3 py-3 text-right font-mono" title="Rolls on hand = received − sold">
+                            {showRolls ? (
+                              <span>
+                                <span className="font-extrabold text-amber-300">{fmtNum(currRolls, 0)}</span>
+                                <span className="text-slate-500 text-[11px]"> / {fmtNum(origRolls, 0)}</span>
+                                {soldRolls > 0 && <div className="text-[10px] font-semibold text-emerald-400/70">{fmtNum(soldRolls, 0)} sold</div>}
+                              </span>
+                            ) : <span className="text-slate-600">—</span>}
                           </td>
                           {seeCosts && (
                             <>
