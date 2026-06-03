@@ -177,7 +177,7 @@ export default function InventoryOverview(props) {
           supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
           safe(supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)),
           safe(supabase.from('inventory_stock_receipts').select('product_id, quantity, quantity_kg, roll_count, uom, status')),
-          safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status').eq('inventory_status', 'consumed')),
+          safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, rolls_sold').eq('inventory_status', 'consumed')),
         ]);
         if (cancelled) return;
 
@@ -225,7 +225,8 @@ export default function InventoryOverview(props) {
         pending_qty: 0,           // qty from received-but-not-finalized receipts (yellow)
         recv_by_uom: {},          // { kg: 120, meter: 50, ... } from received qty in its UoM
         recv_kg: 0,               // summed Quantity in Kilos across receipts
-        recv_rolls: 0,            // summed Roll Count across receipts
+        recv_rolls: 0,            // summed Roll Count across receipts (rolls received)
+        sold_rolls: 0,            // v55.83-H — summed rolls_sold across consumed sales
         has_pending: false,       // any receipt not yet finalized
         has_finalized: false,     // any receipt finalized
       };
@@ -279,6 +280,7 @@ export default function InventoryOverview(props) {
       if (!s) return;
       var qty = Number(it.sale_quantity || 0);
       s.sold_qty += qty;
+      s.sold_rolls += Number(it.rolls_sold || 0) || 0;
       s.sold_revenue += qty * Number(it.sale_price_per_uom || 0);
       s.cogs_total += Number(it.cogs_total || 0);
       s.gross_profit += Number(it.gross_profit || 0);
@@ -424,7 +426,7 @@ export default function InventoryOverview(props) {
     // v55.83-A (Max Jun 1 2026) — quantities are kept PER UNIT OF MEASURE (kg, sqm,
     // meter, rolls...) because you can't add kg to sqm. Money (revenue/cogs/profit)
     // is one currency so it sums across everything. product_count is a simple count.
-    var t = { sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0, inventory_value: 0, awaiting_cost: 0 };
+    var t = { sold_revenue: 0, cogs_total: 0, gross_profit: 0, product_count: 0, inventory_value: 0, awaiting_cost: 0, rolls_original: 0, rolls_current: 0, rolls_sold: 0 };
     var byUnit = {}; // { kg: {current, original, sold}, sqm: {...}, ... }
     function bucket(u) {
       // v55.83-H QA — normalize unit aliases so the summary doesn't show two
@@ -447,6 +449,16 @@ export default function InventoryOverview(props) {
       b.current_qty += s.current_qty || 0;
       b.original_qty += s.original_qty || 0;
       b.sold_qty += s.sold_qty || 0;
+      // v55.83-H — roll totals for goods received in rolls but sold by kg/meter.
+      // (Products sold IN rolls already appear under the 'roll' unit block above.)
+      var uomN = (p.default_uom || 'unit').toLowerCase().trim();
+      if (uomN !== 'roll' && uomN !== 'rolls') {
+        var oRolls = s.recv_rolls || 0;
+        var sRolls = s.sold_rolls || 0;
+        t.rolls_original += oRolls;
+        t.rolls_sold += sRolls;
+        t.rolls_current += Math.max(0, oRolls - sRolls);
+      }
       t.sold_revenue += s.sold_revenue || 0;
       t.cogs_total += s.cogs_total || 0;
       t.gross_profit += s.gross_profit || 0;
@@ -680,6 +692,31 @@ export default function InventoryOverview(props) {
           })}
         </div>
       )}
+
+      {/* v55.83-H — Rolls summary for goods received in rolls but sold by kg/meter.
+          Current = received − sold (real depletion from rolls entered on sales). */}
+      {grandTotals.rolls_original > 0 && (
+        <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-lg overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700">
+            <span className="px-2 py-0.5 bg-amber-600 text-white text-[11px] font-extrabold rounded tracking-wider">ROLLS</span>
+            <span className="text-[11px] text-slate-400 font-semibold">physical rolls in roll-tracked goods (sold by weight/length)</span>
+          </div>
+          <div className="grid grid-cols-3 divide-x divide-slate-700">
+            <div className="px-4 py-3">
+              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-blue-300">Current Rolls</div>
+              <div className="text-xl font-extrabold tabular-nums text-blue-100 leading-tight">{fmtNum(grandTotals.rolls_current, 0)} <span className="text-[11px] text-blue-300 font-bold">rolls</span></div>
+            </div>
+            <div className="px-4 py-3">
+              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-300">Sold Rolls</div>
+              <div className="text-xl font-extrabold tabular-nums text-emerald-100 leading-tight">{fmtNum(grandTotals.rolls_sold, 0)} <span className="text-[11px] text-emerald-300 font-bold">rolls</span></div>
+            </div>
+            <div className="px-4 py-3">
+              <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-indigo-300">Original Rolls</div>
+              <div className="text-xl font-extrabold tabular-nums text-indigo-100 leading-tight">{fmtNum(grandTotals.rolls_original, 0)} <span className="text-[11px] text-indigo-300 font-bold">rolls</span></div>
+            </div>
+          </div>
+        </div>
+      )}
       {seeCosts && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <div className="bg-slate-900 text-white rounded-lg shadow-lg border-l-4 border-amber-500 px-3 py-2.5 flex items-center gap-3">
@@ -836,6 +873,17 @@ export default function InventoryOverview(props) {
                       // zebra striping + thicker divider + roomier padding so each
                       // multi-line product reads as its own block, not a wall of text.
                       var zebra = (rowIdx % 2 === 0) ? 'bg-slate-800/40' : 'bg-slate-900/40';
+                      // v55.83-H (Max Jun 2 2026) — rolls in the row.
+                      //   • original rolls = rolls received (recv_rolls)
+                      //   • current rolls  = received − rolls sold (real depletion; never below 0)
+                      //   • sold rolls     = rolls entered on sales lines
+                      // For products SOLD in rolls, the main qty IS rolls, so no sub-line.
+                      var uomNorm = String(p.default_uom || '').toLowerCase().trim();
+                      var isRollUnit = uomNorm === 'roll' || uomNorm === 'rolls';
+                      var origRolls = s.recv_rolls || 0;
+                      var soldRolls = s.sold_rolls || 0;
+                      var currRolls = Math.max(0, origRolls - soldRolls);
+                      var showRolls = !isRollUnit && (origRolls > 0 || soldRolls > 0);
                       return (
                         <tr key={p.id} className={zebra + ' border-b-2 border-slate-700 hover:bg-slate-700/50 align-top'}>
                           <td className="px-3 py-3 font-mono text-slate-100 font-bold">
@@ -883,9 +931,16 @@ export default function InventoryOverview(props) {
                               )}
                               <span>{fmtNum(s.current_qty, 2)}</span>
                             </span>
+                            {showRolls && <div className="text-[10px] font-semibold text-blue-300/70" title="Rolls on hand = rolls received minus rolls sold.">{fmtNum(currRolls, 0)} rolls</div>}
                           </td>
-                          <td className="px-3 py-3 text-right font-mono text-indigo-300">{fmtNum(s.original_qty, 2)}</td>
-                          <td className="px-3 py-3 text-right font-mono text-emerald-300">{fmtNum(s.sold_qty, 2)}</td>
+                          <td className="px-3 py-3 text-right font-mono text-indigo-300">
+                            <div>{fmtNum(s.original_qty, 2)}</div>
+                            {showRolls && <div className="text-[10px] font-semibold text-indigo-300/70" title="Rolls received (excludes cancelled receipts).">{fmtNum(origRolls, 0)} rolls</div>}
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-emerald-300">
+                            <div>{fmtNum(s.sold_qty, 2)}</div>
+                            {showRolls && soldRolls > 0 && <div className="text-[10px] font-semibold text-emerald-300/70" title="Rolls sold (entered on sales lines).">{fmtNum(soldRolls, 0)} rolls</div>}
+                          </td>
                           {seeCosts && (
                             <>
                               <td className="px-3 py-3 text-right font-mono text-amber-200 bg-slate-800/60">{fmtNum(avgCost, 2)}</td>

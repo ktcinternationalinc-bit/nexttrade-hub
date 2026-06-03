@@ -157,6 +157,15 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
 } from 'recharts';
+// v55.83-H — monochrome line icons for the sidebar (replacing emoji). lucide
+// icons inherit currentColor, so they pick up the zinc/emerald nav colors and
+// stay strictly monochrome — the "clean line icons only" direction.
+import {
+  LayoutDashboard, DollarSign, Users, FileText, Landmark, Building2, Banknote,
+  FileCheck, AlertTriangle, BookOpen, BarChart3, Warehouse, Package, Stamp,
+  Ship, Handshake, Ticket, Bug, Mail, Calendar, Notebook, Crown, Bot,
+  Megaphone, Brain, Search, Settings, Download, Circle
+} from 'lucide-react';
 
 // ============================================
 // TABS CONFIG
@@ -191,6 +200,17 @@ const TABS = [
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
+
+// v55.83-H — monochrome line-icon map for the sidebar, keyed by tab id.
+// Replaces the colorful emoji per the enterprise design direction.
+const TAB_ICONS = {
+  dashboard: LayoutDashboard, sales: DollarSign, customers: Users, quotes: FileText,
+  treasury: Landmark, egyptbank: Building2, bank: Banknote, checks: FileCheck,
+  debts: AlertTriangle, openaccounts: BookOpen, reports: BarChart3, warehouse: Warehouse,
+  inventory: Package, customs: Stamp, shipping: Ship, crm: Handshake, tickets: Ticket,
+  systemtickets: Bug, comms: Mail, calendar: Calendar, dailylog: Notebook, admin: Crown,
+  ai: Bot, social: Megaphone, brand: Brain, seo: Search, settings: Settings, import: Download,
+};
 
 // ============================================
 // NON-ORDER BANK EVENT CATEGORIES
@@ -5716,7 +5736,9 @@ export default function App() {
                           : 'text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50'
                         )}
                         style={isActive ? { boxShadow: 'inset 1px 0 0 #34d399' } : {}}>
-                        <span className="text-[13px] w-4 text-center opacity-80">{t.icon}</span>
+                        <span className="w-4 flex items-center justify-center shrink-0 opacity-80">
+                          {(function () { const Ic = TAB_ICONS[t.id] || Circle; return <Ic size={15} strokeWidth={2} />; })()}
+                        </span>
                         <span className="truncate flex-1">
                           <span>{t.label.split(' / ')[0]}</span>
                           {t.label.includes(' / ') && <span className="text-[9px] text-zinc-600 block leading-tight" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
@@ -8824,7 +8846,15 @@ export default function App() {
                           </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
-                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
+                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" />
+                            {item.uses_inventory && (
+                              <input type="number" value={item.inv_rolls != null ? item.inv_rolls : ''}
+                                onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_rolls: e.target.value === '' ? '' : (Number(e.target.value) || 0)}; setFormData({...formData, invoiceItems: items}); }}
+                                placeholder="rolls / لفات"
+                                title="Number of rolls sold on this line (optional — used to track rolls on hand)"
+                                className="w-full text-right text-[9px] border border-amber-300 rounded px-1 py-0.5 mt-0.5 text-amber-700 bg-amber-50/40" />
+                            )}
+                          </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_price}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_price: Number(e.target.value) || 0, inv_total: items[idx].inv_qty * (Number(e.target.value) || 0)}; setFormData({...formData, invoiceItems: items}); }}
                             className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
@@ -9153,6 +9183,10 @@ export default function App() {
                         itemPayload.uom = item.variant_uom || null;
                         itemPayload.sale_quantity = Number(item.inv_qty) || 0;
                         itemPayload.sale_price_per_uom = Number(item.inv_price) || 0;
+                        // v55.83-H — record rolls sold on this line (optional). Pure attribute;
+                        // FIFO/cost consumption is unaffected. The Overview subtracts summed
+                        // rolls_sold from rolls received to show real rolls-on-hand.
+                        if (item.inv_rolls !== '' && item.inv_rolls != null) itemPayload.rolls_sold = Number(item.inv_rolls) || 0;
                         itemPayload.inventory_status = 'draft';
                       }
                       const insertedItem = await dbInsert('invoice_items', itemPayload, user?.id);
