@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase';
 import MasterSKUList from './MasterSKUList';
 import WarehouseSettings from './WarehouseSettings';
 import ShipmentsManager from './ShipmentsManager';
+import NexpacImport from './NexpacImport';
 import InventoryView from './InventoryView';
 import MovementsLedger from './MovementsLedger';
 import LayersLedger from './LayersLedger';
@@ -52,6 +53,7 @@ var SUBTABS = [
   { id: 'adjustments',     group: 'core',      name: 'Adjustments',       label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
 
   { id: 'receivestock',    group: 'import',    name: 'Inbound Shipments', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product List.' },
+  { id: 'nexpacimport',    group: 'import',    name: 'NEXPAC Import',     label: '📥 NEXPAC Import', stage: 'Receiving', desc: 'Upload a NEXPAC report PDF to create an EXPECTED inbound shipment (reference only — does not change inventory).' },
   { id: 'importstock',     group: 'import',    name: 'Import Shipment',   label: '📦 Import Shipment', stage: 'Receiving', desc: 'One-time bulk import of existing inventory + shipment metadata from Excel.' },
   { id: 'costlayers',      group: 'import',    name: 'Cost Layers',       label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
   { id: 'advances',        group: 'import',    name: 'Advances',          label: '💵 Advances', stage: 'Reports', desc: 'Issue cash advances; track spending against each advance.' },
@@ -374,6 +376,9 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       )}
       {subtab === 'shipments' && (
         <ShipmentsManager userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
+      {subtab === 'nexpacimport' && (
+        <NexpacImport userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
       )}
       {subtab === 'movements' && (
         <MovementsLedger userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
