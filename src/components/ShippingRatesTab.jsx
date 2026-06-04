@@ -353,7 +353,7 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
   </div>);
 }
 
-export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, customers, canBulkDeleteBubbles }) {
+export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, customers, canBulkDeleteBubbles, canDeleteRates }) {
   const myId = userProfile?.id;
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
@@ -443,6 +443,11 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // is preserved. When the new `Delete Shipping Bubbles` permission is
   // granted to a non-admin user, canBulkDeleteBubbles=true is passed in.
   const canBulkDelete = canBulkDeleteBubbles !== undefined ? !!canBulkDeleteBubbles : !!isAdmin;
+  // v55.83-I (Max Jun 3 2026) — single-rate delete permission. Mirrors the bubble
+  // pattern: when the new `Delete Shipping Rates` permission is granted (passed in
+  // as canDeleteRates=true), a non-admin can delete individual rates. If the prop
+  // isn't passed at all, fall back to isAdmin so existing behavior is preserved.
+  const canDeleteRate = canDeleteRates !== undefined ? !!canDeleteRates : !!isAdmin;
   // Lifecycle: clear selection whenever the user navigates to a different
   // route or leaves the route detail view entirely. Prevents "I deleted
   // these in one bubble and now the ticks are still there in a different
@@ -3856,7 +3861,7 @@ Date: ${today}`;
                   <button onClick={() => handleConfirmBooking(r)} className="px-2 py-0.5 rounded border border-emerald-300 text-emerald-600 text-[10px] font-semibold" title="You received the booking number — record it">✅ Confirm Booking</button>
                 )}
                 <button onClick={() => { setEditingRate(r); setF({ origin: r.origin, destination: r.destination, vendorName: r.vendor_name, shippingLine: r.shipping_line, transportMode: r.transport_mode, rateType: r.rate_type || '', containerType: r.container_type, rateAmount: r.rate_amount, currency: r.currency, transitDays: r.transit_days, freeDays: r.free_days, portFees: r.port_fees, thcFees: r.thc_fees, docFees: r.documentation_fees, customsFees: r.customs_fees, otherFees: r.other_fees, otherFeesDesc: r.other_fees_desc, effectiveDate: r.effective_date, expiryDate: r.expiry_date, pol: r.port_of_loading, pod: r.port_of_discharge, notes: r.notes, booked: r.booked, shipmentRef: r.shipment_reference, bookingDate: r.booking_date, bookingNotes: r.booking_notes }); setView('add_rate'); }} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
-                {isAdmin && <button onClick={() => handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]" title="Danger: deletes historical pricing data">Del</button>}
+                {canDeleteRate && <button onClick={() => handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]" title="Danger: deletes historical pricing data">Del</button>}
               </td>
             </tr>);
           })}</tbody>

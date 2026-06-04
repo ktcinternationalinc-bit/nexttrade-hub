@@ -447,6 +447,8 @@ const ACTION_PERMS = [
   { key: 'Reopen Closed Buckets',        label: 'Reopen Closed Buckets',        desc: 'Reopen a closed bucket to revert reconciliation. Use sparingly — every reopen is audit-logged.' },
   // v55.83-A.6.27.69 (Phase 2 bonus) — Shipping bulk-delete permission.
   { key: 'Delete Shipping Bubbles',      label: 'Delete Shipping Bubbles',      desc: 'Use bulk-delete inside a shipping route bubble (Detail view) to remove multiple historical rates at once. Without this, the bulk-select toolbar and per-row checkboxes are hidden. Super-admin always has this.' },
+  // v55.83-I (Max Jun 3 2026) — single-rate delete permission (matches the bubble one).
+  { key: 'Delete Shipping Rates',        label: 'Delete Shipping Rates',        desc: 'Delete an individual shipping rate (the red Del button on each rate row). Previously admin-only; this lets a non-admin user delete single rates. Admins and super-admin always have this.' },
 ];
 
 const NOTIF_TYPES = [
