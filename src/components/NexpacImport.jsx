@@ -21,7 +21,14 @@ function fmt(n, d) {
 }
 
 export default function NexpacImport(props) {
-  var toast = props.toast || function () {};
+  var rawToast = props.toast;
+  function toast(msg, kind) {
+    try {
+      if (typeof rawToast === 'function') { rawToast(msg, kind || 'success'); return; }
+      if (rawToast && typeof rawToast[kind || 'success'] === 'function') { rawToast[kind || 'success'](msg); return; }
+      if (rawToast && typeof rawToast.success === 'function') { rawToast.success(msg); return; }
+    } catch (e) { /* never let a popup break the flow */ }
+  }
   var userProfile = props.userProfile || null;
 
   var [pdfReady, setPdfReady] = useState(false);

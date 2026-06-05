@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-L',
+    date: '2026-06-04',
+    label: 'Expected vs Actual inside the inbound shipment + AI line matching',
+    items: [
+      '**🚢 Expected vs Actual now lives inside each inbound shipment.** Open a shipment and you can import its NEXPAC report right there — that becomes the shipment\\u0027s **Expected** layer (grades, colors, rolls, weights in pounds and kilos). Your received SKU lines are the **Actual**. A simple toggle lets you look at **Expected only, Actual only, or both together**, and you can expand or collapse each side to drill in. The NEXPAC report is tied to that specific container.',
+      '**✨ AI match & compare button.** Press it and the assistant reads both sides and works out which NEXPAC line (e.g. Stock / Black) lines up with which items you actually received — even though they are not entered the same way. It shows the matched pairs, the roll difference on each, a confidence level, and a short reason, plus anything on either side it could not match. It is an estimate to review, and it never changes your stock.',
+      '**📥 The NEXPAC import moved out of its own tab.** It now lives inside the inbound shipment where it belongs, so there is one place that holds both what was promised and what arrived. Saving also completes cleanly now (the earlier "could not save" popup error is gone).',
+      { superAdminOnly: true, text: 'NEW: NexpacShipmentPanel.jsx mounted in ShipmentsManager ShipmentDetail (after the line-items table), props { shipment, actualLines=lineItems, skuById, canEdit, toast }. Holds Expected (NEXPAC) linked to the shipment via nexpac_expected_shipments.inv_shipment_id, beside Actual (inv_shipment_skus). View toggle expected/actual/both, collapsible panels, in-shipment PDF import (pdf.js CDN + nexpac-parse), delete-report, dedupe by load. AI: new route /api/nexpac-match (var + concat, no template literals; sonnet-4-6 → haiku-4-5 fallback; strips fences via \\u0060 unicode escape, extracts first{..last}; returns {matches:[{expectedId,actualIds,expectedRolls,actualRolls,rollDiff,confidence,note}],unmatchedExpected,unmatchedActual,summary}); client posts expected+actual labeled E#/A#. Standalone NEXPAC subtab + render REMOVED from InventoryTab (NexpacImport.jsx left in repo, unmounted). Toast wrapper handles function-or-object toast. RUN SQL: alter table nexpac_expected_shipments add column if not exists inv_shipment_id uuid references inv_shipments(id) on delete cascade; and (if not already) alter table nexpac_expected_lines add column if not exists ktc_grade text / gross_weight_kg numeric / final_net_weight_kg numeric.' },
+    ],
+  },
+  {
     version: 'v55.83-J',
     date: '2026-06-04',
     label: 'NEXPAC report import (expected shipments) + roll tracking + Overview polish + Open Accounts payment fix',
