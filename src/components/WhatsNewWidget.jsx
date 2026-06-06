@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-N',
+    date: '2026-06-06',
+    label: 'Inbound Shipments: import a NEXPAC report to fill the expected totals automatically',
+    items: [
+      '**\\ud83d\\udce5 Import a NEXPAC report straight into a stock receipt.** On the **Inbound Shipments** screen, the **Shipment Expected Totals** card now has an **Import NEXPAC report** button. Pick the report PDF and it reads it for you and fills in the **container number, expected rolls, expected gross weight (kg), and expected net weight (kg)** \\u2014 no more typing those by hand off the paperwork.',
+      '**\\ud83d\\udccb You also get the per-product breakdown.** Right under the totals it lists what the report says is coming \\u2014 by KTC grade and color, with rolls and net kilos for each \\u2014 so you can check it against the product lines you enter. Nothing touches inventory until you actually receive the shipment.',
+      '**The grades are translated to ours.** The report\\u2019s grade names are mapped to KTC grades automatically (Premium, Fortis, Luxurious, Stock), and roll weights are converted to kilos, so the numbers line up with how we track stock.',
+      { superAdminOnly: true, text: 'src/components/InventoryReceiving.jsx (the real Inbound Shipments component, subtab receivestock \\u2014 NOT ShipmentsManager). Added import of parseNexpac/NEXPAC_DEFAULTS from ../lib/nexpac-parse + NEXPAC_PDFJS_SRC/WORKER (cdnjs 3.11.174 UMD). New state nexpacReady/nexpacBusy/nexpacPreview/nexpacErr + useEffect CDN loader + handleNexpacImport(file): reads PDF via window.pdfjsLib, maps text items to {x,y,page,str}, parseNexpac(), then setHeader(functional) fills container_number/shipment_reference (only if empty), expected_total_rolls, expected_total_gross_kg (header.scaleGrossKgs||totals.grossWeightKg, toFixed 3), expected_total_net_kg (totals.finalNetWeightKg toFixed 3). UI: Import button in the amber Shipment Expected Totals card header + error banner + read-only breakdown table (ktcGrade/ntGrade/color/totalRolls/finalNetWeightKg) below the inputs grid, gated on nexpacPreview.' },
+      { superAdminOnly: true, text: 'Parser src/lib/nexpac-parse.js unchanged (verified earlier against real Nexpac_Reportq.pdf: 48 rows -> 9 lines, 549 rolls / 50,420.2 net lbs / 22,870.25 net kg). NexpacShipmentPanel.jsx remains mounted in ShipmentsManager (subtab shipments) for the expected-vs-actual + AI compare flow; this build adds the lighter auto-fill+breakdown into the receivestock form Max actually uses. AI compare against product lines (/api/nexpac-match) still available to wire into receivestock as a follow-up.' },
+    ],
+  },
+  {
+    version: 'v55.83-M',
+    date: '2026-06-05',
+    label: 'Open Accounts balance fixed (the El Sayad 500,000) + cleaner customer list',
+    items: [
+      '**\u2705 The open-account balance is fixed.** When a payment was entered after the books had already been auto-settled (like the El Sayad 500,000 SAIB deposit, back-dated to May), the old settle-up entries and the payment ended up fighting over the same bills \u2014 which quietly double-counted and threw the balance off by exactly that payment. El Sayad EGP now reads the correct **\u2212498,354.50**, matching the running column line for line. Your other customers are unaffected.',
+      '**\ud83e\uddf9 Cleaner customer list.** Open Accounts now opens with every customer **collapsed**, so you see a clean, scannable list instead of a wall of ledgers. The Print / Statement / Excel / Edit / Delete buttons only appear once you open a customer, and each customer is spaced into its own clear block. Click a name to drill in.',
+      { superAdminOnly: true, text: 'BALANCED OFFSET FIX in open-account-ledger.js simulate(): offset pairs were applied as two independent half-rows, so when one target was pre-consumed (back-dated payment drains INV-004/005 before the May-28 auto-offsets run) the invoice half over-cancelled while the bill half clamped \u2014 over-cancelling by 500,000 \u2192 -998,354.50. Now each pair (offset_pair_id) is processed ONCE, applying min(offsetAmt, invoiceRemaining, billRemaining) to BOTH sides so it can never cancel more of one side than the other has. Healthy offsets unchanged (min==full). Proven on the real El Sayad ledger: EGP net -498,354.50, USD 23,879.90; regression test test-v55-83-m-elsayad-offset-balance.js (healthy offset fully cancels; oversized offset clamps to bill). The stale offsets leave INV-001 partially open (they-owe 500,000) alongside we-owe 998,354.50 \u2014 net correct; re-running auto-offset would tidy the open items. OpenAccountsTab.jsx: collapse-by-default (collapseInit effect), action toolbar gated behind !collapsed, card spacing/shadow.' },
+    ],
+  },
+  {
     version: 'v55.83-L',
     date: '2026-06-04',
     label: 'Expected vs Actual inside the inbound shipment + AI line matching',

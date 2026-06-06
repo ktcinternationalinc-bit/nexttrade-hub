@@ -138,6 +138,7 @@ export function simulate(entries) {
   var applied = {};    // entryId -> amount applied
   var trail = [];
   var warnings = [];   // collected for diagnostics
+  var offsetPairsDone = {}; // offset_pair_id -> true, so each pair applies once
 
   // v55.83-A.6.27.72 HOTFIX 28 — Build a type lookup for ALL entries so the
   // offset handler can validate that offset_invoice_id actually points at a
@@ -280,103 +281,58 @@ export function simulate(entries) {
         if (creditLeft > 0.001) s.theirPrepaid += creditLeft;
       }
     } else if (type === 'offset') {
-      // v55.83-A.6.27.72 HOTFIX 28 — Atomic + type-checked offset processing.
-      //
-      // PRIOR BUG: offset rows had two halves — one with debit_amount targeting
-      // offset_invoice_id, one with credit_amount targeting offset_bill_id.
-      // Each half was processed independently. If offset_invoice_id pointed at
-      // a vendor_bill by mistake (auto-offset generator had a historical bug
-      // that paired vendor_bill ↔ vendor_bill), the invoice-side lookup would
-      // silently fail BUT the matching bill-side lookup on the OTHER row would
-      // still succeed — phantom-paying a bill with nothing backing it.
-      //
-      // EVIDENCE: El Sayad EGP showed "+76,346 they owe us" while running
-      // balance correctly showed "-998,354.50 we owe them". 4 corrupt offset
-      // rows wiped 1,074,700.50 EGP of legitimate debt from the open pool.
-      //
-      // NEW RULE: every offset row must satisfy TWO contracts before applying
-      // ANY side:
-      //   1. If offset_invoice_id is set, that entry must have
-      //      transaction_type === 'sales_invoice' (in the entire entries set,
-      //      not just the open pool — a paid-off invoice still counts as a
-      //      legitimate target).
-      //   2. If offset_bill_id is set, that entry must have
-      //      transaction_type === 'vendor_bill'.
-      // If either contract is violated, the entire row is rejected with a
-      // loud warning. Both halves of a corrupt pair get rejected because both
-      // halves carry both IDs.
-      var creditAmtO = Math.max(0, Number(e.credit_amount || 0));
-      var debitAmtO = Math.max(0, Number(e.debit_amount || 0));
-
-      // TYPE GUARD — runs on EVERY offset row, even credit-only rows.
-      var invType = e.offset_invoice_id ? typeById[e.offset_invoice_id] : null;
-      var billType = e.offset_bill_id ? typeById[e.offset_bill_id] : null;
-      var typeError = null;
-      if (e.offset_invoice_id && invType && invType !== 'sales_invoice') {
-        typeError = 'offset_invoice_id points at a ' + invType + ' (must be sales_invoice)';
-      } else if (e.offset_bill_id && billType && billType !== 'vendor_bill') {
-        typeError = 'offset_bill_id points at a ' + billType + ' (must be vendor_bill)';
-      }
-
-      if (typeError) {
-        warn('REJECTED malformed offset row — ' + typeError, {
-          id: e.id,
-          offset_invoice_id: e.offset_invoice_id,
-          offset_invoice_type: invType,
-          offset_bill_id: e.offset_bill_id,
-          offset_bill_type: billType,
-          debit: debitAmtO,
-          credit: creditAmtO,
-          currency: cur,
-        });
-        // Skip this row entirely. Its pair-mate will also be rejected on
-        // the same type grounds (both halves carry both IDs).
+      // v55.83-M — BALANCED OFFSET (fixes stale-offset vs back-dated payment).
+      // An offset is net-zero: it cancels an equal amount of one open sales
+      // invoice AND one open vendor bill. Each pair is two rows (debit half +
+      // credit half) sharing offset_pair_id, both carrying offset_invoice_id +
+      // offset_bill_id. PRIOR BUG: halves applied independently, so if one
+      // target was already consumed (by a payment or another offset) that side
+      // clamped while the other cancelled in full -> over-cancel by the gap.
+      // That is the El Sayad case: a back-dated 500,000 payment drained
+      // INV-004/005 before the older offsets ran, the invoice side
+      // over-cancelled by 500,000, and the balance read -998,354.50 instead of
+      // -498,354.50. FIX: process each pair ONCE, apply min(amount,
+      // invoiceRemaining, billRemaining) to BOTH sides. Healthy offsets (both
+      // sides fully open) are unchanged because min == full amount.
+      var pairKey = e.offset_pair_id || e.id;
+      if (offsetPairsDone[pairKey]) {
+        // sibling half already settled this pair
       } else {
-        // Resolve OPEN-pool memberships only for the sides we're actually applying.
-        var wantsInvoiceSide = (e.offset_invoice_id && debitAmtO > 0);
-        var wantsBillSide = (e.offset_bill_id && creditAmtO > 0);
-
-        var resolvedInv = wantsInvoiceSide ? findOpenById(s.openInvoices, e.offset_invoice_id) : null;
-        var resolvedBill = wantsBillSide ? findOpenById(s.openBills, e.offset_bill_id) : null;
-
-        if (wantsInvoiceSide && !resolvedInv) {
-          // Type checked out (it's a sales_invoice) but it's not currently
-          // open — already paid, or in a different currency bucket. Warn and
-          // skip this side without polluting the other side.
-          warn('Offset invoice already closed or not in this currency pool — invoice-side skipped', {
-            id: e.id, offset_invoice_id: e.offset_invoice_id, currency: cur,
-          });
-        } else if (wantsInvoiceSide && resolvedInv) {
-          var clampedInv = Math.min(debitAmtO, resolvedInv.remaining);
-          if (clampedInv < debitAmtO) {
-            warn('Offset debit exceeds invoice remaining — clamping', {
-              id: e.id, offsetAmount: debitAmtO, invoiceRemaining: resolvedInv.remaining,
-            });
-          }
-          resolvedInv.remaining -= clampedInv;
-          applied[resolvedInv.id] = (applied[resolvedInv.id] || 0) + clampedInv;
-          if (resolvedInv.remaining < 0.001) {
-            var idx = s.openInvoices.indexOf(resolvedInv);
-            if (idx >= 0) s.openInvoices.splice(idx, 1);
-          }
+        offsetPairsDone[pairKey] = true;
+        var offsetAmt = Math.max(Number(e.debit_amount || 0), Number(e.credit_amount || 0));
+        var invTypeO = e.offset_invoice_id ? typeById[e.offset_invoice_id] : null;
+        var billTypeO = e.offset_bill_id ? typeById[e.offset_bill_id] : null;
+        var typeErrO = null;
+        if (e.offset_invoice_id && invTypeO && invTypeO !== 'sales_invoice') {
+          typeErrO = 'offset_invoice_id points at a ' + invTypeO + ' (must be sales_invoice)';
+        } else if (e.offset_bill_id && billTypeO && billTypeO !== 'vendor_bill') {
+          typeErrO = 'offset_bill_id points at a ' + billTypeO + ' (must be vendor_bill)';
         }
-
-        if (wantsBillSide && !resolvedBill) {
-          warn('Offset bill already closed or not in this currency pool — bill-side skipped', {
-            id: e.id, offset_bill_id: e.offset_bill_id, currency: cur,
-          });
-        } else if (wantsBillSide && resolvedBill) {
-          var clampedBill = Math.min(creditAmtO, resolvedBill.remaining);
-          if (clampedBill < creditAmtO) {
-            warn('Offset credit exceeds bill remaining — clamping', {
-              id: e.id, offsetAmount: creditAmtO, billRemaining: resolvedBill.remaining,
-            });
+        if (typeErrO) {
+          warn('REJECTED malformed offset row - ' + typeErrO, { id: e.id, offset_invoice_id: e.offset_invoice_id, offset_bill_id: e.offset_bill_id, currency: cur });
+        } else {
+          var rInvO = e.offset_invoice_id ? findOpenById(s.openInvoices, e.offset_invoice_id) : null;
+          var rBillO = e.offset_bill_id ? findOpenById(s.openBills, e.offset_bill_id) : null;
+          var invRemO = rInvO ? rInvO.remaining : 0;
+          var billRemO = rBillO ? rBillO.remaining : 0;
+          var applicableO = offsetAmt;
+          if (e.offset_invoice_id) applicableO = Math.min(applicableO, invRemO);
+          if (e.offset_bill_id) applicableO = Math.min(applicableO, billRemO);
+          if (applicableO < 0) applicableO = 0;
+          if (applicableO > 0.001) {
+            if (rInvO) {
+              rInvO.remaining -= applicableO;
+              applied[rInvO.id] = (applied[rInvO.id] || 0) + applicableO;
+              if (rInvO.remaining < 0.001) { var iIdxO = s.openInvoices.indexOf(rInvO); if (iIdxO >= 0) s.openInvoices.splice(iIdxO, 1); }
+            }
+            if (rBillO) {
+              rBillO.remaining -= applicableO;
+              applied[rBillO.id] = (applied[rBillO.id] || 0) + applicableO;
+              if (rBillO.remaining < 0.001) { var bIdxO = s.openBills.indexOf(rBillO); if (bIdxO >= 0) s.openBills.splice(bIdxO, 1); }
+            }
           }
-          resolvedBill.remaining -= clampedBill;
-          applied[resolvedBill.id] = (applied[resolvedBill.id] || 0) + clampedBill;
-          if (resolvedBill.remaining < 0.001) {
-            var idx2 = s.openBills.indexOf(resolvedBill);
-            if (idx2 >= 0) s.openBills.splice(idx2, 1);
+          if (applicableO < offsetAmt - 0.001) {
+            warn('Offset only partially applied - a target was already settled (stale offset vs payment/other offset). Net stays correct; re-run auto-offset to tidy open items.', { id: e.id, offsetAmount: offsetAmt, applied: applicableO, invoiceRemaining: invRemO, billRemaining: billRemO, currency: cur });
           }
         }
       }
@@ -434,6 +390,28 @@ export function simulate(entries) {
   });
 
   var byCurrency = {};
+  // v55.83-M — AUTO-SETTLE leftover open items in-memory (read-time auto-offset).
+  // For one counterparty, any open sales invoice nets against any open vendor
+  // bill in the same currency. This keeps the position clean ("we owe X" OR
+  // "they owe X", never both) even when stored offset rows are stale against a
+  // later back-dated payment — no DB writes, no button. The net is unchanged
+  // (both sides drop equally). Amounts are credited into `applied` so per-entry
+  // Paid/Remaining, the open-item counts, and the tiles all stay consistent.
+  Object.keys(state).forEach(function (cur) {
+    var s = state[cur];
+    while (s.openInvoices.length > 0 && s.openBills.length > 0) {
+      var invN = s.openInvoices[0];
+      var billN = s.openBills[0];
+      var amtN = Math.min(invN.remaining, billN.remaining);
+      if (amtN <= 0.001) break;
+      invN.remaining -= amtN;
+      billN.remaining -= amtN;
+      applied[invN.id] = (applied[invN.id] || 0) + amtN;
+      applied[billN.id] = (applied[billN.id] || 0) + amtN;
+      if (invN.remaining < 0.001) s.openInvoices.shift();
+      if (billN.remaining < 0.001) s.openBills.shift();
+    }
+  });
   Object.keys(state).forEach(function (cur) {
     var s = state[cur];
     var theirOpenInvoices = sumRemaining(s.openInvoices);

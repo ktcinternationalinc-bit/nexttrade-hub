@@ -19,6 +19,10 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 import InventoryFinalizeCostDialog from './InventoryFinalizeCostDialog';
+import { parseNexpac, NEXPAC_DEFAULTS } from '../lib/nexpac-parse';
+
+var NEXPAC_PDFJS_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+var NEXPAC_PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 var UOM_OPTIONS = ['kg','meter','yard','roll','piece','liter','sqm'];
 var CURRENCY_OPTIONS = ['EGP','USD','EUR'];
@@ -148,6 +152,60 @@ export default function InventoryReceiving(props) {
   });
   var [lines, setLines] = useState([emptyLine()]);
   var [busy, setBusy] = useState(false);
+
+  // ---- NEXPAC report import: reads the PDF and auto-fills the expected totals ----
+  var [nexpacReady, setNexpacReady] = useState(false);
+  var [nexpacBusy, setNexpacBusy] = useState(false);
+  var [nexpacPreview, setNexpacPreview] = useState(null);
+  var [nexpacErr, setNexpacErr] = useState('');
+  useEffect(function () {
+    if (typeof window === 'undefined') return;
+    if (window.pdfjsLib) { setNexpacReady(true); return; }
+    var ex = document.querySelector('script[data-pdfjs]');
+    if (ex) { ex.addEventListener('load', function () { setNexpacReady(true); }); return; }
+    var el = document.createElement('script');
+    el.src = NEXPAC_PDFJS_SRC; el.setAttribute('data-pdfjs', '1');
+    el.onload = function () { try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = NEXPAC_PDFJS_WORKER; } catch (e) {} setNexpacReady(true); };
+    el.onerror = function () { setNexpacErr('Could not load the PDF reader — check the connection.'); };
+    document.body.appendChild(el);
+  }, []);
+  async function handleNexpacImport(file) {
+    if (!file) return;
+    setNexpacErr(''); setNexpacBusy(true);
+    try {
+      if (!window.pdfjsLib) throw new Error('PDF reader not ready yet — try again in a second.');
+      var buf = await file.arrayBuffer();
+      var doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+      var items = [];
+      var p, k;
+      for (p = 1; p <= doc.numPages; p++) {
+        var page = await doc.getPage(p);
+        var tc = await page.getTextContent();
+        for (k = 0; k < tc.items.length; k++) {
+          var it = tc.items[k];
+          if (it.str && it.str.trim()) items.push({ x: it.transform[4], y: it.transform[5], page: p, str: it.str });
+        }
+      }
+      var parsed = parseNexpac(items, { rollTareFactor: NEXPAC_DEFAULTS.rollTareFactor });
+      if (!parsed.orderRows.length) throw new Error("Couldn't find order rows — is this a NEXPAC report PDF?");
+      var hd = parsed.header;
+      var netKg = parsed.totals.finalNetWeightKg;
+      var grossKg = hd.scaleGrossKgs || parsed.totals.grossWeightKg;
+      setHeader(function (prev) {
+        return Object.assign({}, prev, {
+          container_number: prev.container_number || hd.containerNumber || '',
+          shipment_reference: prev.shipment_reference || hd.releaseNumber || hd.containerNumber || '',
+          expected_total_rolls: String(hd.totalRolls || parsed.totals.totalRolls || ''),
+          expected_total_gross_kg: grossKg ? Number(grossKg).toFixed(3) : '',
+          expected_total_net_kg: netKg ? Number(netKg).toFixed(3) : '',
+        });
+      });
+      setNexpacPreview(parsed);
+    } catch (e) {
+      setNexpacErr('Import failed: ' + (e.message || e));
+    }
+    setNexpacBusy(false);
+  }
   // v55.83-A.6.27.43 — Variance prompt modal (shown on Submit click when variance exists)
   var [variancePromptOpen, setVariancePromptOpen] = useState(false);
   var [variancePromptData, setVariancePromptData] = useState(null);  // { rolls, gross, net, uom }
@@ -1627,7 +1685,14 @@ export default function InventoryReceiving(props) {
                       Per-product details go in the lines below. We reconcile at the bottom.
                     </div>
                   </div>
+                  <label className={'shrink-0 px-3 py-2 rounded-lg text-sm font-extrabold cursor-pointer self-start ' + (nexpacReady && !nexpacBusy ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-300 text-slate-600 cursor-wait')}
+                    title="Read a NEXPAC report PDF and fill the expected rolls and weights automatically">
+                    {nexpacBusy ? 'Reading…' : (nexpacReady ? '📥 Import NEXPAC report' : 'Loading reader…')}
+                    <input type="file" accept="application/pdf,.pdf" disabled={!nexpacReady || nexpacBusy} className="hidden"
+                      onChange={function (e) { var f = e.target.files && e.target.files[0]; e.target.value = ''; handleNexpacImport(f); }} />
+                  </label>
                 </div>
+                {nexpacErr && <div className="mb-3 bg-red-100 border border-red-300 text-red-950 text-sm font-semibold rounded px-3 py-2">{nexpacErr}</div>}
                 <div className="grid grid-cols-5 gap-4">
                   <label className="text-sm font-extrabold text-slate-900 block">Expected Total Rolls
                     <input
@@ -1683,6 +1748,42 @@ export default function InventoryReceiving(props) {
                     </select>
                   </label>
                 </div>
+                {nexpacPreview && (
+                  <div className="mt-4 bg-white border border-amber-300 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-amber-100 text-amber-950 text-xs font-extrabold flex items-center justify-between gap-2">
+                      <span>📥 From NEXPAC report{nexpacPreview.header.releaseNumber ? ' · Release ' + nexpacPreview.header.releaseNumber : ''}{nexpacPreview.header.containerNumber ? ' · ' + nexpacPreview.header.containerNumber : ''}</span>
+                      <span className="shrink-0">{nexpacPreview.totals.totalRolls} rolls · {Number(nexpacPreview.totals.finalNetWeightKg).toLocaleString('en-US', { maximumFractionDigits: 1 })} kg net</span>
+                    </div>
+                    {nexpacPreview.warnings && nexpacPreview.warnings.length > 0 && (
+                      <div className="px-3 py-1.5 bg-amber-50 text-amber-900 text-[11px] font-semibold">
+                        {nexpacPreview.warnings.map(function (w, i) { return <div key={i}>⚠️ {w}</div>; })}
+                      </div>
+                    )}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead><tr className="border-b border-amber-200 bg-amber-50">
+                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-700">KTC Grade</th>
+                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-700">Color</th>
+                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-700">Rolls</th>
+                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-700">Net (kg)</th>
+                        </tr></thead>
+                        <tbody>
+                          {nexpacPreview.lines.map(function (g, i) {
+                            return (
+                              <tr key={i} className="border-b border-slate-100">
+                                <td className="px-3 py-1.5 text-slate-900 font-bold">{g.ktcGrade || '—'}{g.ntGrade ? <span className="text-[9px] text-slate-500 font-normal block">{g.ntGrade}</span> : null}</td>
+                                <td className="px-3 py-1.5 text-slate-900 font-semibold">{g.color || '—'}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-slate-900">{g.totalRolls}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-slate-900">{Number(g.finalNetWeightKg).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="px-3 py-1.5 text-[10px] text-slate-500 bg-white">The totals above were auto-filled from this report. This breakdown is the expected detail to check your product lines against. Inventory is not affected until you receive the shipment.</div>
+                  </div>
+                )}
                 </div>
               </div>
             </div>

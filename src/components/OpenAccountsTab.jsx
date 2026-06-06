@@ -229,6 +229,17 @@ export default function OpenAccountsTab(props) {
 
   // UI state
   var [collapsedAccounts, setCollapsedAccounts] = useState({}); // { account_id: true } when collapsed
+  // Readability: start with every customer collapsed so the screen is a clean,
+  // scannable list. Runs once when accounts first load; user toggles after that.
+  var [collapseInit, setCollapseInit] = useState(false);
+  useEffect(function () {
+    if (!collapseInit && accounts && accounts.length) {
+      var c = {};
+      accounts.forEach(function (a) { c[a.id] = true; });
+      setCollapsedAccounts(c);
+      setCollapseInit(true);
+    }
+  }, [accounts, collapseInit]);
   // v55.83-A.6.27.72 HOTFIX 30 — per-account ledger currency filter.
   // 'ALL' (default), 'USD', or 'EGP'. Each account has its own filter so you
   // can audit El Sayad in USD-only mode while leaving other accounts on ALL.
@@ -1484,9 +1495,9 @@ export default function OpenAccountsTab(props) {
         var offsetCandidate = findOffsetCandidate(accEntries);
         var offsetableCurs = validateOffsetable(accEntries);
         return (
-          <div key={a.id} className="bg-white border-2 border-slate-300 rounded-lg overflow-hidden">
+          <div key={a.id} className="bg-white border border-slate-300 rounded-xl overflow-hidden mb-3 shadow-sm">
             {/* Card header (clickable) */}
-            <div className="bg-slate-100 hover:bg-slate-200 transition-colors">
+            <div className={'transition-colors ' + (collapsed ? 'bg-white hover:bg-slate-50' : 'bg-slate-100 hover:bg-slate-200')}>
               <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
                 <button onClick={function () { toggleAccount(a.id); }} className="flex items-center gap-3 flex-1 text-left">
                   <span className="text-lg font-extrabold text-slate-900">{collapsed ? '▶' : '▼'}</span>
@@ -1528,7 +1539,7 @@ export default function OpenAccountsTab(props) {
                     <div className="text-slate-700 text-[10px]">({s.totalEntryCount} {s.totalEntryCount === 1 ? 'entry' : 'entries'})</div>
                   </div>
                 </button>
-                {canEdit && (
+                {canEdit && !collapsed && (
                   <div className="flex gap-1 flex-wrap">
                     <button onClick={function () { openNewEntry(a.id); }} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow">+ Entry</button>
                     <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
