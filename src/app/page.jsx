@@ -5369,7 +5369,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-R</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-U</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -8804,7 +8804,6 @@ export default function App() {
                   <table className="w-full border-collapse text-xs mb-2">
                     <thead><tr className="bg-blue-100">
                       <th className="px-2 py-1 text-left text-[10px]">Item / البند</th>
-                      <th className="px-2 py-1 text-left text-[10px] w-28">📦 SKU (optional)</th>
                       <th className="px-2 py-1 text-right text-[10px] w-16">Qty</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Price</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Total</th>
@@ -8831,18 +8830,6 @@ export default function App() {
                               placeholder="Description / الوصف"
                               className="w-full text-[10px] border rounded px-1 py-0.5"
                               style={{direction: (item.inv_desc || '').match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr'}} />
-                          </td>
-                          {/* v55.83-A.6.27 — Stage D: link to inventory SKU.
-                              When set, save will drain FIFO layers + stamp COGS. */}
-                          <td className="px-2 py-1">
-                            <select value={item.inv_sku_id || ''}
-                              onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_sku_id: e.target.value || null}; setFormData({...formData, invoiceItems: items}); }}
-                              className="w-full text-[10px] border rounded px-1 py-0.5">
-                              <option value="">— none —</option>
-                              {(invSkus || []).map(s => (
-                                <option key={s.id} value={s.id}>{s.sku_number}</option>
-                              ))}
-                            </select>
                           </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
@@ -9162,17 +9149,14 @@ export default function App() {
                   }).select('id').single();
                   if (newInv && items.length > 0) {
                     for (const item of items) {
-                      // v55.83-A.6.27 — Stage D: insert with inv_sku_id, then
-                      // if the SKU is set, drain FIFO layers + create a sale
-                      // movement + stamp COGS back onto this invoice_item.
-                      // v55.83-A.6.27.44b — Also persist NEW inventory variant linkage when present.
-                      //   uses_inventory + variant_id + warehouse_id + sale_quantity + sale_price_per_uom
-                      //   are saved here but FIFO consumption does NOT run yet (lands in 44c).
+                      // v55.83-T — SINGLE inventory engine. Inventory-linked items carry
+                      // uses_inventory + variant_id; on insert we call System A's
+                      // consume_invoice_item_inventory RPC (FIFO over inventory_layers),
+                      // which stamps cogs_total + gross_profit. No other engine runs.
                       const itemPayload = {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
                         product_id: item.product_id || null,
-                        inv_sku_id: item.inv_sku_id || null,
                       };
                       // Only attach the new variant-linkage fields when this item came from the
                       // 📦 From Inventory tab. Other items keep legacy/manual behavior unchanged.
@@ -9219,50 +9203,10 @@ export default function App() {
                           await dbUpdate('inventory', prod.id, { current_quantity: newQty, stock_status: newQty <= 0 ? 'out_of_stock' : newQty < 5 ? 'low' : 'in_stock' }, user?.id);
                         }
                       }
-                      // v55.83-A.6.27 — Stage D: drain new inventory layers if inv_sku_id set
-                      if (item.inv_sku_id && Number(item.inv_qty) > 0 && insertedItem && insertedItem.id) {
-                        try {
-                          const drain = await consumeFifo(item.inv_sku_id, null, Number(item.inv_qty));
-                          if (drain && !drain.error && drain.qtyDrained > 0) {
-                            // Create sale movement
-                            const movInsert = await supabase.from('inv_movements').insert({
-                              sku_id: item.inv_sku_id,
-                              warehouse_id: (drain.consumed && drain.consumed[0])
-                                ? (await supabase.from('inv_layers').select('warehouse_id').eq('id', drain.consumed[0].layer_id).maybeSingle()).data?.warehouse_id
-                                : null,
-                              movement_type: 'sale',
-                              qty_change: -Number(drain.qtyDrained),
-                              source_table: 'invoices',
-                              source_id: newInv.id,
-                              linked_invoice_id: newInv.id,
-                              linked_invoice_item_id: insertedItem.id,
-                              consumed_layers: drain.consumed,
-                              unit_cost_usd: drain.weightedUnitUsd,
-                              unit_cost_egp: drain.weightedUnitEgp,
-                              total_cost_usd: drain.totalCogsUsd,
-                              total_cost_egp: drain.totalCogsEgp,
-                              occurred_at: new Date().toISOString(),
-                              note: 'Auto: sale from invoice ' + (newInv.id || ''),
-                              created_by: user?.id || null,
-                            }).select().single();
-                            if (!movInsert.error && movInsert.data) {
-                              // Stamp COGS + movement id on the invoice_item
-                              await supabase.from('invoice_items').update({
-                                cogs_usd: drain.totalCogsUsd,
-                                cogs_egp: drain.totalCogsEgp,
-                                cogs_movement_id: movInsert.data.id,
-                              }).eq('id', insertedItem.id);
-                            }
-                            if (drain.shortfall > 0) {
-                              toast.warn && toast.warn('Stock shortfall on ' + (item.inv_desc || 'item') + ': sold ' + drain.qtyDrained + ', short ' + drain.shortfall);
-                            }
-                          } else if (drain && drain.error) {
-                            toast.warn && toast.warn('Inventory drain failed for ' + (item.inv_desc || 'item') + ': ' + drain.error);
-                          }
-                        } catch (e) {
-                          console.warn('[sale-deduct] threw:', e && e.message);
-                        }
-                      }
+                      // v55.83-T — System B (inv_sku_id / consumeFifo / inv_movements) RETIRED.
+                      // Every sale now deducts stock + COGS through ONE engine only: System A's
+                      // consume_invoice_item_inventory RPC above (variant_id -> inventory_layers).
+                      // This removes the parallel/double-deduction path entirely.
                     }
                   }
                   // BACKFILL: link any orphan treasury rows (cash OR bank) that reference

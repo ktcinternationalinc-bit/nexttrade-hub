@@ -33,6 +33,37 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-U',
+    date: '2026-06-07',
+    label: 'Profit in EGP — with currency gain/loss separated out',
+    items: [
+      '**\\ud83d\\udcb1 Your profit on imported goods is now calculated properly in EGP.** When goods arrive, the system locks in the USD\\u2192EGP rate of that day and records what the stock cost you **in pounds**. When you sell, it shows three clean numbers per sale: your **EGP sale**, your **real margin** (sale minus what the goods actually cost you in pounds), and the **currency gain or loss** caused by the pound moving between the day you bought and the day you sold.',
+      '**Why this matters:** before, profit on USD-bought goods mixed dollars and pounds together, so the margin was wrong. Now real trading margin is separated from currency swings \\u2014 you can see how much you earned from the deal versus how much the exchange rate helped or hurt you.',
+      '**Also tracked:** for stock still sitting in your warehouse, the report shows the unrealized currency gain/loss \\u2014 what it would cost in pounds to replace it today versus what you paid.',
+      { superAdminOnly: true, text: 'v55.83-U FX P&L INTEGRATION (single engine / System A). SQL: sql/v55-83-u-fx-pnl-integration.sql adds invoice_items.cogs_egp_at_receipt / gross_profit_egp / realized_fx_egp and rewrites consume_invoice_item_inventory to accumulate entry-rate EGP COGS from inventory_layers.cost_egp_at_receipt (per-uom) across consumed FIFO slices and stamp the EGP split. Convention (validated, __tests__/mock-fx-pnl-model.js 22/22): real_margin = line_total - cogs_egp_at_receipt; realized_fx = cogs_egp_at_receipt - cost_egp_at_sale (NEG=devaluation loss); real_margin + realized_fx = line_total - cost_egp_at_sale. FxPnLReport repointed: realized section now reads consumed invoice_items + invoices (NOT inventory_movements, which only logs receipts and was miscounting qty>0 receipts as sales); fixed TWO sign bugs (realized + unrealized). REQUIRED before this helps: run sql .63 (fx_rates + snapshots), .64 (finalize trigger + base consume), then .u; log USD->EGP rates in FX Rates for the relevant dates. Verify the .u consume is the DEPLOYED one (a later run of plain 44c would override it) via pg_get_functiondef check in the SQL footer. KNOWN: lines consumed before .u have NULL EGP cols until re-consumed; report backfills from consumed_layers snapshot or flags unconvertable rather than inventing a rate.' },
+    ],
+  },
+  {
+    version: 'v55.83-T',
+    date: '2026-06-07',
+    label: 'One inventory system — the duplicate engine has been removed',
+    items: [
+      '**\\ud83e\\uddf9 There were two inventory engines running side by side. There is now ONE.** A sale used to be able to deduct stock through two different paths, and the Adjustments screen was quietly showing two stacked panels \\u2014 one of them writing to old, disconnected tables that the dashboard never saw. Both of those duplicate paths are gone.',
+      '**What this means for you:** every sale, every receipt, and every adjustment now flows through the **same** stock-and-cost engine that feeds the Overview dashboard and P&L. No more risk of stock being counted, deducted, or costed twice, and no more ghost adjustments that don\\u2019t show up in your numbers.',
+      '**The \\u201coptional SKU\\u201d box on invoice lines is gone** \\u2014 it fed the old engine and is no longer needed. Inventory items are linked the normal way (the \\ud83d\\udce6 From Inventory picker).',
+      { superAdminOnly: true, text: 'v55.83-T CONSOLIDATION: retired System B (inv_sku_id / consumeFifo / inv_layers / inv_movements). Removed from page.jsx: the sale-time consumeFifo+inv_movements insert block, itemPayload.inv_sku_id, and the inv_sku_id <th>/<select> picker column. Removed from InventoryTab.jsx: the duplicate AdjustmentsManager render that fired on subtab===\'adjustments\' alongside System A InventoryAdjustments (System A now sole renderer). Canonical engine = System A: uses_inventory + variant_id -> consume_invoice_item_inventory RPC -> inventory_layers -> cogs_total/gross_profit on invoice_items, feeding InventoryOverview/CostLayers/MovementsLedger/PnLReports/FxPnL. KEPT for backward-compat: reverseFifoConsumption on invoice delete/edit (page.jsx ~5945/~6443) so historical inv_movements rows still reverse cleanly; consumeFifo import now unused (harmless). STILL PRESENT but UNREACHABLE (no nav entry in SUBTABS): legacy render branches skus/inventory/shipments/movements/layers/pnl/reports -> MasterSKUList/InventoryView/ShipmentsManager/MovementsLedger/LayersLedger/InventoryPnL/InventoryReports. They render nothing because subtab can never equal those ids via the nav; safe to delete in a later cleanup pass. No SQL change.' },
+    ],
+  },
+  {
+    version: 'v55.83-S',
+    date: '2026-06-07',
+    label: 'Drill-down bug fixed: Inbound Orders now shows every shipment, even before finalizing',
+    items: [
+      '**\\ud83d\\udc1b Fixed: a product could show stock but \\u201cno inbound orders.\\u201d** The Inbound Orders tab was only listing shipments that had been **finalized/costed**, so stock you\\u2019ve received but not yet finalized showed nothing \\u2014 even though the quantity was clearly there. It now lists **every** inbound shipment the product came from, each tagged **In stock \\u00b7 costed**, **Received \\u00b7 awaiting cost**, or **Logged \\u00b7 not counted**, with date, shipment/receipt, supplier, origin, qty received and rolls.',
+      { superAdminOnly: true, text: 'v55.83-S: InventoryOverview product History \\u2192 Inbound Orders tab now sources from inventory_stock_receipts (eq product_id, exclude cancelled) via new historyReceipts state, not inventory_layers. Root cause: cost layers are only created at finalization, but current_qty also includes received-but-not-finalized receipts (no layer yet) \\u2014 so layer-sourced inbound showed empty while qty existed. Tab count + table now driven by historyReceipts with a status badge (finalized/received/pending_detail); reset on open + close. Receipts loaded with select(*) so no column-name coupling. No SQL change. Relates to QA finding that the Inbound tab and on-hand qty must share a source.' },
+    ],
+  },
+  {
     version: 'v55.83-R',
     date: '2026-06-07',
     label: 'Click any product to drill into its inbound orders and sales — now in tabs',

@@ -384,10 +384,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {subtab === 'pnl' && (
         <InventoryPnL skus={skus} toast={toast} />
       )}
-      {/* v55.83-A.6.27.9 — Stage E + F live */}
-      {subtab === 'adjustments' && (
-        <AdjustmentsManager skus={skus} warehouses={warehouses} userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
-      )}
+      {/* v55.83-T — System B AdjustmentsManager (writes inv_layers) REMOVED.
+          The live Adjustments tab now renders ONLY System A's InventoryAdjustments
+          (see subtab === 'adjustments' below), so adjustments hit the same engine
+          as receiving, sales, and the dashboard. */}
       {subtab === 'reports' && (
         <InventoryReports skus={skus} warehouses={warehouses} toast={toast} />
       )}

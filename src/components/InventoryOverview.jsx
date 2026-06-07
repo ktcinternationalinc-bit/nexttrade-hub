@@ -61,7 +61,8 @@ export default function InventoryOverview(props) {
   // on a product row, this opens a modal showing all inbound shipments, outbound
   // sales, and the current stock summary for that product.
   var [historyProduct, setHistoryProduct] = useState(null); // null = closed; object = open for that product
-  var [historyLayers, setHistoryLayers] = useState([]);     // inventory_layers rows for inbound history
+  var [historyLayers, setHistoryLayers] = useState([]);     // inventory_layers rows (finalized cost layers)
+  var [historyReceipts, setHistoryReceipts] = useState([]); // v55.83-S — inventory_stock_receipts (real inbound orders, finalized OR pending)
   var [historyMovements, setHistoryMovements] = useState([]); // inventory_movements rows for outbound history
   var [historyLoading, setHistoryLoading] = useState(false);
   var [historyError, setHistoryError] = useState(null);
@@ -106,6 +107,7 @@ export default function InventoryOverview(props) {
     setHistoryTab('summary');
     setHistoryLayers([]);
     setHistoryMovements([]);
+    setHistoryReceipts([]);
     setHistoryLoading(true);
     setHistoryError(null);
     try {
@@ -117,6 +119,19 @@ export default function InventoryOverview(props) {
       if (!layersRes.error) setHistoryLayers(layersRes.data || []);
       else console.warn('[history] layers query failed:', layersRes.error.message);
     } catch (e) { console.warn('[history] layers threw:', e); }
+    // v55.83-S — Inbound Orders must come from the actual stock receipts, not the cost
+    // layers. A cost layer only exists AFTER finalization, but on-hand qty also includes
+    // received-but-not-yet-finalized stock — which has a real receipt but no layer. Reading
+    // layers made the Inbound tab look empty for pending stock even though qty existed.
+    try {
+      var inbRes = await supabase
+        .from('inventory_stock_receipts')
+        .select('*')
+        .eq('product_id', product.id)
+        .order('receipt_date', { ascending: false });
+      if (!inbRes.error) setHistoryReceipts((inbRes.data || []).filter(function (r) { return r.status !== 'cancelled'; }));
+      else console.warn('[history] receipts query failed:', inbRes.error.message);
+    } catch (e) { console.warn('[history] receipts threw:', e); }
     try {
       var movRes = await supabase
         .from('inventory_movements')
@@ -155,6 +170,7 @@ export default function InventoryOverview(props) {
     setHistoryProduct(null);
     setHistoryLayers([]);
     setHistoryMovements([]);
+    setHistoryReceipts([]);
     setHistoryIntakeByCountry([]);
     setHistoryError(null);
   }
@@ -1001,7 +1017,7 @@ export default function InventoryOverview(props) {
             <div className="flex gap-1 px-5 pt-3 border-b border-slate-800 bg-slate-900/40">
               {[
                 { k: 'summary', label: 'Summary' },
-                { k: 'inbound', label: 'Inbound Orders (' + historyLayers.length + ')' },
+                { k: 'inbound', label: 'Inbound Orders (' + historyReceipts.length + ')' },
                 { k: 'sales', label: 'Sales (' + historyMovements.length + ')' },
               ].map(function (t) {
                 var on = historyTab === t.k;
@@ -1071,35 +1087,49 @@ export default function InventoryOverview(props) {
                     </div>
                   )}
 
-                  {/* Inbound shipments */}
+                  {/* v55.83-S — Inbound Orders sourced from stock receipts (finalized OR
+                      pending), so on-hand stock always shows the shipments it came from.
+                      Cost layers only exist after finalization, so reading them hid
+                      received-but-not-yet-finalized stock. */}
                   {historyTab === 'inbound' && (
                   <div>
-                    <div className="text-sm font-extrabold text-slate-100 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>
-                    {historyLayers.length === 0 ? (
-                      <div className="text-xs text-slate-400 italic p-3 bg-slate-800/40 rounded">No inbound history found for this product.</div>
+                    <div className="text-sm font-extrabold text-slate-100 mb-2">📥 Inbound Orders — shipments this stock came from ({historyReceipts.length})</div>
+                    {historyReceipts.length === 0 ? (
+                      <div className="text-xs text-slate-400 italic p-3 bg-slate-800/40 rounded">No inbound shipments recorded for this product yet.</div>
                     ) : (
                       <div className="overflow-auto border border-slate-700 rounded">
                         <table className="w-full text-xs">
                           <thead className="bg-slate-800/70">
                             <tr>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Receipt #</th>
                               <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Shipment / Receipt</th>
                               <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Supplier</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Origin</th>
                               <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty Received</th>
-                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty Remaining</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Rolls</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Status</th>
                               {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">Unit Cost</th>}
                             </tr>
                           </thead>
                           <tbody>
-                            {historyLayers.map(function (layer) {
+                            {historyReceipts.map(function (r) {
+                              var st = r.status || 'received';
+                              var badge = st === 'finalized'
+                                ? { cls: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40', txt: 'In stock · costed' }
+                                : (st === 'pending_detail'
+                                  ? { cls: 'bg-slate-600/30 text-slate-300 border border-slate-500/40', txt: 'Logged · not counted' }
+                                  : { cls: 'bg-amber-500/15 text-amber-300 border border-amber-500/40', txt: 'Received · awaiting cost' });
+                              var ref = r.receipt_number || r.shipment_reference || r.container_number || '—';
                               return (
-                                <tr key={layer.id} className="border-b border-slate-700">
-                                  <td className="px-2 py-1.5 font-mono text-slate-200">{layer.receipt_number || '—'}</td>
-                                  <td className="px-2 py-1.5 font-mono text-slate-300">{layer.received_at ? String(layer.received_at).substring(0, 10) : '—'}</td>
-                                  <td className="px-2 py-1.5 text-slate-300">{layer.supplier || '—'}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-indigo-300">{fmtNum(layer.qty_received || layer.quantity || 0, 2)}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-blue-300">{fmtNum(layer.qty_remaining || 0, 2)}</td>
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(layer.unit_cost || 0, 2)} {layer.cost_currency || ''}</td>}
+                                <tr key={r.id} className="border-b border-slate-700">
+                                  <td className="px-2 py-1.5 font-mono text-slate-300">{r.receipt_date ? String(r.receipt_date).substring(0, 10) : '—'}</td>
+                                  <td className="px-2 py-1.5 font-mono text-slate-200">{ref}</td>
+                                  <td className="px-2 py-1.5 text-slate-300">{r.supplier || '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-300">{r.origin_country_code || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-indigo-300">{fmtNum(r.quantity || 0, 2)} {r.uom || ''}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono text-amber-200">{fmtNum(r.roll_count || 0, 0)}</td>
+                                  <td className="px-2 py-1.5"><span className={'inline-block px-2 py-0.5 rounded text-[10px] font-bold ' + badge.cls}>{badge.txt}</span></td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{r.cost_per_uom != null ? fmtNum(r.cost_per_uom, 2) + ' ' + (r.currency || '') : '—'}</td>}
                                 </tr>
                               );
                             })}

@@ -11,7 +11,7 @@ ok(/setHistoryProduct\(product\);\s*\n\s*setHistoryTab\('summary'\)/.test(ov), '
 
 // tab bar with three tabs + live counts
 ok(/k: 'summary', label: 'Summary'/.test(ov), 'Summary tab defined');
-ok(/k: 'inbound', label: 'Inbound Orders \(' \+ historyLayers\.length/.test(ov), 'Inbound Orders tab with count');
+ok(/k: 'inbound', label: 'Inbound Orders \(' \+ historyReceipts\.length/.test(ov), 'Inbound Orders tab with count');
 ok(/k: 'sales', label: 'Sales \(' \+ historyMovements\.length/.test(ov), 'Sales tab with count');
 ok(/onClick=\{function \(\) \{ setHistoryTab\(t\.k\); \}\}/.test(ov), 'tab buttons switch historyTab');
 
