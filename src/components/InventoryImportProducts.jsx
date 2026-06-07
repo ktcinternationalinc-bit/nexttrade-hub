@@ -514,7 +514,8 @@ export default function InventoryImportProducts(props) {
 
       // UOM / currency / numbers
       var uom = String(raw.default_uom || '').trim().toLowerCase();
-      if (uom && VALID_UOM.indexOf(uom) < 0) errs.push('default_uom must be one of: ' + VALID_UOM.join(', '));
+      if (!uom) errs.push('default_uom is required (one of: ' + VALID_UOM.join(', ') + ')');
+      else if (VALID_UOM.indexOf(uom) < 0) errs.push('default_uom must be one of: ' + VALID_UOM.join(', '));
       var currency = String(raw.default_currency || '').trim().toUpperCase();
       if (currency && VALID_CURRENCY.indexOf(currency) < 0) errs.push('default_currency must be one of: ' + VALID_CURRENCY.join(', '));
 

@@ -5369,7 +5369,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-N</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-O</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -13704,6 +13704,12 @@ export default function App() {
                       ))}
                       <option value="__custom">+ Custom...</option>
                     </select>
+                    {formData.whExpCat === '__custom' && (
+                      <input autoFocus value={formData.whExpCatCustom || ''}
+                        onChange={e => setFormData({...formData, whExpCatCustom: e.target.value})}
+                        placeholder="Type new category name / اكتب اسم التصنيف"
+                        className="w-full mt-1 px-3 py-2 rounded-lg border-2 border-purple-400 bg-purple-50 text-sm text-slate-900 font-semibold" />
+                    )}
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-600">Subcategory / فرعي</label>
@@ -13767,9 +13773,8 @@ export default function App() {
                   if (!formData.whExpDesc || !formData.whExpAmount) { alert('Please fill in description and amount'); return; }
                   let cat = formData.whExpCat || '';
                   if (cat === '__custom') {
-                    const custom = prompt('Enter custom category name:');
-                    if (!custom) return;
-                    cat = custom.trim();
+                    cat = (formData.whExpCatCustom || '').trim();
+                    if (!cat) { alert('Please type the new category name / اكتب اسم التصنيف الجديد'); return; }
                   }
                   try {
                     await dbInsert('warehouse_expenses', {
@@ -13782,7 +13787,7 @@ export default function App() {
                       advance_id: formData.whAdvanceId || null,
                       created_by: userProfile?.id,
                     }, userProfile?.id);
-                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general', whAdvanceId: ''});
+                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpCatCustom: '', whExpSub: '', whExpRef: '', whType: 'general', whAdvanceId: ''});
                     await loadAllData();
                   } catch(err) { toast.error(err.message); }
                 }} className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold">

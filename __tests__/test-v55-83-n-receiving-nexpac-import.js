@@ -19,8 +19,8 @@ ok(src.indexOf('nexpacPreview &&') !== -1, 'breakdown preview gated on nexpacPre
 ok(/ktcGrade/.test(src) && /finalNetWeightKg/.test(src), 'breakdown shows ktcGrade + net kg');
 ok(src.indexOf('Inventory is not affected') !== -1, 'preview clarifies inventory not touched');
 // only the empty-field guard for ref/container (do not overwrite typed values)
-ok(/prev\.container_number \|\| hd\.containerNumber/.test(src), 'container only filled when empty');
-ok(/prev\.shipment_reference \|\| hd\.releaseNumber/.test(src), 'shipment ref only filled when empty');
+ok(/if \(!prev\.container_number\) patch\.container_number = hd\.containerNumber/.test(src), 'container only filled when empty');
+ok(/if \(!prev\.shipment_reference\) patch\.shipment_reference = hd\.releaseNumber/.test(src), 'shipment ref only filled when empty');
 
 console.log('\nv55.83-N receiving NEXPAC import: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

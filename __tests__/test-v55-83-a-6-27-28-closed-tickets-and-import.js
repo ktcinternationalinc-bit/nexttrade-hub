@@ -95,7 +95,7 @@ ok('B3d: unknown classification codes rejected with row#',
 ok('B3e: cascade rule check — option must be valid under chosen Family',
   /errs\.push\('L' \+ lvl \+ ' "' \+ opt\.code \+ '" is not valid under Family "/.test(imp));
 ok('B3f: default_uom validated against VALID_UOM list',
-  /if \(uom && VALID_UOM\.indexOf\(uom\) < 0\) errs\.push\('default_uom must be one of:/.test(imp));
+  /else if \(VALID_UOM\.indexOf\(uom\) < 0\) errs\.push\('default_uom must be one of:/.test(imp));
 ok('B3g: default_currency validated against VALID_CURRENCY list',
   /if \(currency && VALID_CURRENCY\.indexOf\(currency\) < 0\) errs\.push\('default_currency must be one of:/.test(imp));
 ok('B3h: numeric fields validated as numbers',

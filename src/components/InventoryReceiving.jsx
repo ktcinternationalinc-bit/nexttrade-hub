@@ -189,16 +189,21 @@ export default function InventoryReceiving(props) {
       var parsed = parseNexpac(items, { rollTareFactor: NEXPAC_DEFAULTS.rollTareFactor });
       if (!parsed.orderRows.length) throw new Error("Couldn't find order rows — is this a NEXPAC report PDF?");
       var hd = parsed.header;
-      var netKg = parsed.totals.finalNetWeightKg;
+      var netKg = hd.netBillableKgs != null ? hd.netBillableKgs : parsed.totals.finalNetWeightKg;
       var grossKg = hd.scaleGrossKgs || parsed.totals.grossWeightKg;
       setHeader(function (prev) {
-        return Object.assign({}, prev, {
-          container_number: prev.container_number || hd.containerNumber || '',
-          shipment_reference: prev.shipment_reference || hd.releaseNumber || hd.containerNumber || '',
-          expected_total_rolls: String(hd.totalRolls || parsed.totals.totalRolls || ''),
-          expected_total_gross_kg: grossKg ? Number(grossKg).toFixed(3) : '',
-          expected_total_net_kg: netKg ? Number(netKg).toFixed(3) : '',
-        });
+        var patch = Object.assign({}, prev);
+        // Container / Shipment Reference: fill only if you haven't typed one (don't clobber).
+        if (!prev.container_number) patch.container_number = hd.containerNumber || '';
+        if (!prev.shipment_reference) patch.shipment_reference = hd.releaseNumber || hd.containerNumber || '';
+        // Rolls / Gross kg / Net kg: ALWAYS overwrite from the report (Max, Jun 6 2026).
+        // (Only skipped if the report itself has no value — so a good report never wipes a box.)
+        var rolls = hd.totalRolls || parsed.totals.totalRolls;
+        if (rolls != null && rolls !== '' && !isNaN(Number(rolls))) patch.expected_total_rolls = String(rolls);
+        if (grossKg) patch.expected_total_gross_kg = Number(grossKg).toFixed(3);
+        if (netKg) patch.expected_total_net_kg = Number(netKg).toFixed(3);
+        // expected_total_uom + expected_uom_type: LEFT MANUAL — the report never touches these.
+        return patch;
       });
       setNexpacPreview(parsed);
     } catch (e) {
@@ -1235,7 +1240,7 @@ export default function InventoryReceiving(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+        <div className="bg-amber-500/15 border-2 border-amber-600/50 rounded-lg p-4 text-amber-100">
           <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
           <div className="text-sm text-amber-800 mt-1 font-medium">
             Viewing stock receipts requires the Inventory permission.
@@ -1320,16 +1325,16 @@ export default function InventoryReceiving(props) {
   });
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-200" style={{ padding: 20 }}>
+    <div className="bg-slate-950 rounded-2xl shadow-xl border border-slate-800" style={{ padding: 20 }}>
       <div className="mb-4">
         <div className="flex items-center gap-2">
           <span style={{ fontSize: 24 }}>🚚</span>
-          <h2 className="text-xl font-extrabold text-slate-900">Inbound Shipments</h2>
+          <h2 className="text-xl font-extrabold text-slate-100">Inbound Shipments</h2>
         </div>
-        <div className="text-sm text-slate-700 font-medium mt-1">
+        <div className="text-sm text-slate-400 font-medium mt-1">
           Record incoming shipments. Each receipt can have multiple product lines. Auto-fills from Product List defaults.
         </div>
-        <div className="text-sm text-slate-700 font-medium" style={{ direction: 'rtl' }}>
+        <div className="text-sm text-slate-400 font-medium" style={{ direction: 'rtl' }}>
           سجّل الشحنات الواردة. كل إيصال يمكن أن يحتوي على عدة منتجات. يُعبأ تلقائياً من القيم الافتراضية للمنتج.
         </div>
       </div>
@@ -1341,12 +1346,12 @@ export default function InventoryReceiving(props) {
           placeholder="Search receipt#, product, release, supplier..."
           value={search}
           onChange={function (e) { setSearch(e.target.value); }}
-          className="flex-1 min-w-[260px] px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+          className="flex-1 min-w-[260px] px-3 py-2 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500"
         />
         <select
           value={filterWarehouse}
           onChange={function (e) { setFilterWarehouse(e.target.value); }}
-          className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
+          className="px-3 py-2 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500 font-semibold"
         >
           <option value="all">All warehouses</option>
           {warehouses.map(function (w) {
@@ -1356,7 +1361,7 @@ export default function InventoryReceiving(props) {
         <select
           value={filterStatus}
           onChange={function (e) { setFilterStatus(e.target.value); }}
-          className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
+          className="px-3 py-2 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500 font-semibold"
         >
           <option value="all">All status</option>
           <option value="pending_detail">Pending Detail (no rolls/qty yet)</option>
@@ -1365,8 +1370,8 @@ export default function InventoryReceiving(props) {
           <option value="active">Active (legacy)</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <input type="date" value={filterFrom} onChange={function (e) { setFilterFrom(e.target.value); }} className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm bg-white" />
-        <input type="date" value={filterTo} onChange={function (e) { setFilterTo(e.target.value); }} className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm bg-white" />
+        <input type="date" value={filterFrom} onChange={function (e) { setFilterFrom(e.target.value); }} className="px-2 py-1.5 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
+        <input type="date" value={filterTo} onChange={function (e) { setFilterTo(e.target.value); }} className="px-2 py-1.5 border border-slate-600 rounded-lg text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
         {canEdit && (
           <button
             onClick={openNew}
@@ -1378,8 +1383,8 @@ export default function InventoryReceiving(props) {
       </div>
 
       {/* Receipts list */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="grid bg-slate-100 text-[10px] font-extrabold text-slate-700 tracking-wider uppercase"
+      <div className="bg-slate-900/60 rounded-xl border border-slate-800 overflow-hidden">
+        <div className="grid bg-slate-800/60 text-[10px] font-extrabold text-slate-300 tracking-wider uppercase"
              style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '8px 12px' }}>
           <div>Receipt # / Ref</div>
           <div>Date</div>
@@ -1429,10 +1434,10 @@ export default function InventoryReceiving(props) {
               <div key={g.receipt_number} className={rowClass}
                    style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '12px 12px' }}>
                 <div>
-                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.receipt_number}</div>
+                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.receipt_number}</div>
                   {g.shipment_reference && <div className={'text-[10px] font-mono ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-600')}>{g.shipment_reference}</div>}
                 </div>
-                <div className={'text-sm font-semibold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.receipt_date}</div>
+                <div className={'text-sm font-semibold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.receipt_date}</div>
                 <div>
                   <span className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + (isCancelled ? 'bg-slate-200 text-slate-600' : typeBadge)}>
                     {g.receipt_type === 'legacy_import' ? 'Legacy' : g.receipt_type === 'adjustment' ? 'Adjust' : 'New'}
@@ -1443,7 +1448,7 @@ export default function InventoryReceiving(props) {
                     {statusLabel}
                   </span>
                 </div>
-                <div className={'text-sm ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>
+                <div className={'text-sm ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
                   {g.lines.slice(0, 2).map(function (ln) {
                     var p = productById(ln.product_id);
                     return p ? (p.quick_code || p.name_en || '?') : '?';
@@ -1451,10 +1456,10 @@ export default function InventoryReceiving(props) {
                   {g.lineCount > 2 && <span className="text-slate-500 italic ml-1">+ {g.lineCount - 2} more</span>}
                   <div className="text-[10px] text-slate-600">{g.lineCount} line{g.lineCount === 1 ? '' : 's'}{g.supplier ? ' · ' + g.supplier : ''}</div>
                 </div>
-                <div className={'text-sm font-extrabold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.totalQty.toLocaleString()}</div>
-                <div className={'text-sm ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-700 font-semibold')}>{wh ? wh.name : <span className="italic text-slate-400">—</span>}</div>
+                <div className={'text-sm font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.totalQty.toLocaleString()}</div>
+                <div className={'text-sm ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-200 font-semibold')}>{wh ? wh.name : <span className="italic text-slate-400">—</span>}</div>
                 {seeCosts && (
-                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>
+                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
                     {g.totalCost > 0 ? g.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 }) : <span className="italic text-slate-400 font-normal">—</span>}
                   </div>
                 )}
@@ -1463,7 +1468,7 @@ export default function InventoryReceiving(props) {
                   {canEdit && !isCancelled && !isFinalized && (
                     <button
                       onClick={function () { openEdit(g); }}
-                      className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-900 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-bold border border-slate-700"
                       title="Edit this receipt — change header, lines, rolls, costs"
                     >
                       ✏️ Edit
@@ -1473,7 +1478,7 @@ export default function InventoryReceiving(props) {
                   {isSuperAdmin && isFinalized && (
                     <button
                       onClick={function () { reopenReceipt(g); }}
-                      className="px-2 py-1 text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded font-bold border border-amber-600/40"
                       title="Reopen this finalized receipt for editing (reverses the cost layer)"
                     >
                       🔓 Reopen
@@ -1525,7 +1530,7 @@ export default function InventoryReceiving(props) {
           style={{ padding: 6 }}
         >
           <div
-            className="bg-white text-slate-900 rounded-2xl shadow-2xl"
+            className="bg-slate-950 text-slate-100 rounded-2xl shadow-2xl"
             onClick={function (e) { e.stopPropagation(); }}
             style={{ width: '99vw', maxWidth: 'none', height: 'calc(100vh - 12px)', maxHeight: 'calc(100vh - 12px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
@@ -1577,63 +1582,63 @@ export default function InventoryReceiving(props) {
             <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0', maxHeight: '45vh', overflowY: 'auto' }}>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields
                   v55.83-A.6.27.56 — collapsible header */}
-              <div className="mb-3 bg-slate-50 rounded-lg border border-slate-200">
+              <div className="mb-3 bg-slate-900/60 rounded-lg border border-slate-700">
                 <button
                   onClick={function () { setHeaderCollapsed(!headerCollapsed); }}
-                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-100 transition-colors rounded-t-lg"
+                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-800 transition-colors rounded-t-lg"
                   title={headerCollapsed ? 'Click to expand Shipment Info' : 'Click to collapse Shipment Info and give product lines more space'}
                 >
-                  <div className="text-[11px] font-extrabold text-slate-700 tracking-wider">
+                  <div className="text-[11px] font-extrabold text-slate-300 tracking-wider">
                     {headerCollapsed ? '▶' : '▼'} SHIPMENT INFO (applies to all lines)
                     {headerCollapsed && header.shipment_reference && (
                       <span className="ml-2 font-mono font-bold text-indigo-700">{header.shipment_reference}</span>
                     )}
                   </div>
-                  <span className="text-[10px] text-slate-500 font-semibold">{headerCollapsed ? 'expand' : 'collapse'}</span>
+                  <span className="text-[10px] text-slate-400 font-semibold">{headerCollapsed ? 'expand' : 'collapse'}</span>
                 </button>
                 {!headerCollapsed && (
                 <div className="px-3 pb-3">
 
                 {/* Row 1: reference + warehouse + receipt date + container # */}
                 <div className="grid grid-cols-4 gap-2 mb-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">Shipment Reference *
+                  <label className="text-[11px] font-extrabold text-slate-300">Shipment Reference *
                     <input
                       type="text"
                       value={header.shipment_reference}
                       onChange={function (e) { setHeader(Object.assign({}, header, { shipment_reference: e.target.value })); }}
                       placeholder="e.g. KTC-2026-042"
-                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white font-mono"
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500 font-mono"
                     />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Warehouse *
-                    <select value={header.warehouse_id} onChange={function (e) { setHeader(Object.assign({}, header, { warehouse_id: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
+                  <label className="text-[11px] font-extrabold text-slate-300">Warehouse *
+                    <select value={header.warehouse_id} onChange={function (e) { setHeader(Object.assign({}, header, { warehouse_id: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500">
                       <option value="">— pick warehouse —</option>
                       {warehouses.map(function (w) {
                         return <option key={w.id} value={w.id}>{w.name}</option>;
                       })}
                     </select>
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Receipt Date
-                    <input type="date" value={header.receipt_date} onChange={function (e) { setHeader(Object.assign({}, header, { receipt_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Receipt Date
+                    <input type="date" value={header.receipt_date} onChange={function (e) { setHeader(Object.assign({}, header, { receipt_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Container #
-                    <input type="text" value={header.container_number} onChange={function (e) { setHeader(Object.assign({}, header, { container_number: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Container #
+                    <input type="text" value={header.container_number} onChange={function (e) { setHeader(Object.assign({}, header, { container_number: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
                 </div>
 
                 {/* Row 2: supplier + freight forwarder + shipping line + purchase currency */}
                 <div className="grid grid-cols-4 gap-2 mb-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">Default Supplier
-                    <input type="text" value={header.supplier} onChange={function (e) { setHeader(Object.assign({}, header, { supplier: e.target.value })); }} placeholder="e.g. ABC Suppliers" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Default Supplier
+                    <input type="text" value={header.supplier} onChange={function (e) { setHeader(Object.assign({}, header, { supplier: e.target.value })); }} placeholder="e.g. ABC Suppliers" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Freight Forwarder
-                    <input type="text" value={header.freight_forwarder} onChange={function (e) { setHeader(Object.assign({}, header, { freight_forwarder: e.target.value })); }} placeholder="e.g. DHL" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Freight Forwarder
+                    <input type="text" value={header.freight_forwarder} onChange={function (e) { setHeader(Object.assign({}, header, { freight_forwarder: e.target.value })); }} placeholder="e.g. DHL" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Shipping Line
-                    <input type="text" value={header.shipping_line} onChange={function (e) { setHeader(Object.assign({}, header, { shipping_line: e.target.value })); }} placeholder="e.g. Maersk" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Shipping Line
+                    <input type="text" value={header.shipping_line} onChange={function (e) { setHeader(Object.assign({}, header, { shipping_line: e.target.value })); }} placeholder="e.g. Maersk" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Purchase Currency
-                    <select value={header.purchase_currency} onChange={function (e) { setHeader(Object.assign({}, header, { purchase_currency: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
+                  <label className="text-[11px] font-extrabold text-slate-300">Purchase Currency
+                    <select value={header.purchase_currency} onChange={function (e) { setHeader(Object.assign({}, header, { purchase_currency: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500">
                       <option value="EGP">EGP</option>
                       <option value="USD">USD</option>
                       <option value="EUR">EUR</option>
@@ -1642,8 +1647,8 @@ export default function InventoryReceiving(props) {
                   {/* v55.83-A (Max Jun 1 2026) — Origin Country is a CONSCIOUS choice now
                       (was silently defaulting to US). Pick where THIS batch actually came from
                       so US-vs-Canada intake is tracked correctly. */}
-                  <label className="text-[11px] font-extrabold text-slate-700">Origin Country (where this batch came from)
-                    <select value={header.origin_country_code || ''} onChange={function (e) { setHeader(Object.assign({}, header, { origin_country_code: e.target.value })); }} className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + ((!header.origin_country_code) ? 'border-amber-400' : 'border-slate-300')}>
+                  <label className="text-[11px] font-extrabold text-slate-300">Origin Country (where this batch came from)
+                    <select value={header.origin_country_code || ''} onChange={function (e) { setHeader(Object.assign({}, header, { origin_country_code: e.target.value })); }} className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-slate-800 text-slate-100 ' + ((!header.origin_country_code) ? 'border-amber-400' : 'border-slate-600')}>
                       <option value="">— Select country —</option>
                       <option value="US">🇺🇸 United States</option>
                       <option value="CA">🇨🇦 Canada</option>
@@ -1658,16 +1663,16 @@ export default function InventoryReceiving(props) {
 
                 {/* Row 3: ETA + arrival */}
                 <div className="grid grid-cols-4 gap-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">ETA Date
-                    <input type="date" value={header.eta_date} onChange={function (e) { setHeader(Object.assign({}, header, { eta_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">ETA Date
+                    <input type="date" value={header.eta_date} onChange={function (e) { setHeader(Object.assign({}, header, { eta_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Arrival Date
-                    <input type="date" value={header.arrival_date} onChange={function (e) { setHeader(Object.assign({}, header, { arrival_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-300">Arrival Date
+                    <input type="date" value={header.arrival_date} onChange={function (e) { setHeader(Object.assign({}, header, { arrival_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                   </label>
                 </div>
 
-                <label className="text-[11px] font-extrabold text-slate-700 block mt-2">Shipment Notes
-                  <textarea value={header.notes} onChange={function (e) { setHeader(Object.assign({}, header, { notes: e.target.value })); }} rows={1} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none" />
+                <label className="text-[11px] font-extrabold text-slate-300 block mt-2">Shipment Notes
+                  <textarea value={header.notes} onChange={function (e) { setHeader(Object.assign({}, header, { notes: e.target.value })); }} rows={1} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500 resize-none" />
                 </label>
               </div>
               )}
@@ -1676,16 +1681,16 @@ export default function InventoryReceiving(props) {
                   Big, prominent, can't-miss. Optional during Draft, required at Submit.
                   v55.83-A.6.27.48 — widened: more padding + larger inputs to use the full modal width.
                   v55.83-A.6.27.56 — NOT collapsible (small and important; stays visible). */}
-              <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-6 mt-4">
+              <div className="bg-slate-900/70 border border-slate-700 border-l-4 border-l-violet-500 rounded-xl p-6 mt-4">
                 <div className="flex items-baseline justify-between mb-4">
                   <div>
-                    <div className="text-lg font-extrabold text-slate-900">📦 Shipment Expected Totals</div>
-                    <div className="text-sm text-slate-700 font-medium mt-0.5">
+                    <div className="text-lg font-extrabold text-slate-100">📦 Shipment Expected Totals</div>
+                    <div className="text-sm text-slate-400 font-medium mt-0.5">
                       What the supplier&apos;s shipping documents say came in this container.
                       Per-product details go in the lines below. We reconcile at the bottom.
                     </div>
                   </div>
-                  <label className={'shrink-0 px-3 py-2 rounded-lg text-sm font-extrabold cursor-pointer self-start ' + (nexpacReady && !nexpacBusy ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-300 text-slate-600 cursor-wait')}
+                  <label className={'shrink-0 px-3 py-2 rounded-lg text-sm font-extrabold cursor-pointer self-start ' + (nexpacReady && !nexpacBusy ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-700 text-slate-400 cursor-wait')}
                     title="Read a NEXPAC report PDF and fill the expected rolls and weights automatically">
                     {nexpacBusy ? 'Reading…' : (nexpacReady ? '📥 Import NEXPAC report' : 'Loading reader…')}
                     <input type="file" accept="application/pdf,.pdf" disabled={!nexpacReady || nexpacBusy} className="hidden"
@@ -1694,51 +1699,51 @@ export default function InventoryReceiving(props) {
                 </div>
                 {nexpacErr && <div className="mb-3 bg-red-100 border border-red-300 text-red-950 text-sm font-semibold rounded px-3 py-2">{nexpacErr}</div>}
                 <div className="grid grid-cols-5 gap-4">
-                  <label className="text-sm font-extrabold text-slate-900 block">Expected Total Rolls
+                  <label className="text-sm font-extrabold text-slate-100 block">Expected Total Rolls
                     <input
                       type="number"
                       step="1"
                       value={header.expected_total_rolls}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_rolls: e.target.value })); }}
                       placeholder="e.g. 23"
-                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     />
                   </label>
-                  <label className="text-sm font-extrabold text-slate-900 block">Expected Gross Weight (kg)
+                  <label className="text-sm font-extrabold text-slate-100 block">Expected Gross Weight (kg)
                     <input
                       type="number"
                       step="0.001"
                       value={header.expected_total_gross_kg}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_gross_kg: e.target.value })); }}
                       placeholder="e.g. 5750.000"
-                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     />
                   </label>
-                  <label className="text-sm font-extrabold text-slate-900 block">Expected Net Weight (kg) <span className="text-[10px] font-bold text-slate-500">· reference only — not reconciled</span>
+                  <label className="text-sm font-extrabold text-slate-100 block">Expected Net Weight (kg) <span className="text-[10px] font-bold text-slate-500">· reference only — not reconciled</span>
                     <input
                       type="number"
                       step="0.001"
                       value={header.expected_total_net_kg}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_net_kg: e.target.value })); }}
                       placeholder="e.g. 5400.000"
-                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     />
                   </label>
-                  <label className="text-sm font-extrabold text-slate-900 block">Expected Total UOM
+                  <label className="text-sm font-extrabold text-slate-100 block">Expected Total UOM
                     <input
                       type="number"
                       step="0.001"
                       value={header.expected_total_uom}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_uom: e.target.value })); }}
                       placeholder="optional"
-                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     />
                   </label>
-                  <label className="text-sm font-extrabold text-slate-900 block">UOM Type
+                  <label className="text-sm font-extrabold text-slate-100 block">UOM Type
                     <select
                       value={header.expected_uom_type || 'meter'}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_uom_type: e.target.value })); }}
-                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     >
                       <option value="kg">kg</option>
                       <option value="meter">meter</option>
@@ -1749,39 +1754,39 @@ export default function InventoryReceiving(props) {
                   </label>
                 </div>
                 {nexpacPreview && (
-                  <div className="mt-4 bg-white border border-amber-300 rounded-lg overflow-hidden">
-                    <div className="px-3 py-2 bg-amber-100 text-amber-950 text-xs font-extrabold flex items-center justify-between gap-2">
+                  <div className="mt-4 bg-slate-900/60 border border-slate-700 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-slate-800 text-slate-200 text-xs font-extrabold flex items-center justify-between gap-2">
                       <span>📥 From NEXPAC report{nexpacPreview.header.releaseNumber ? ' · Release ' + nexpacPreview.header.releaseNumber : ''}{nexpacPreview.header.containerNumber ? ' · ' + nexpacPreview.header.containerNumber : ''}</span>
                       <span className="shrink-0">{nexpacPreview.totals.totalRolls} rolls · {Number(nexpacPreview.totals.finalNetWeightKg).toLocaleString('en-US', { maximumFractionDigits: 1 })} kg net</span>
                     </div>
                     {nexpacPreview.warnings && nexpacPreview.warnings.length > 0 && (
-                      <div className="px-3 py-1.5 bg-amber-50 text-amber-900 text-[11px] font-semibold">
+                      <div className="px-3 py-1.5 bg-slate-800/60 text-slate-300 text-[11px] font-semibold">
                         {nexpacPreview.warnings.map(function (w, i) { return <div key={i}>⚠️ {w}</div>; })}
                       </div>
                     )}
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
-                        <thead><tr className="border-b border-amber-200 bg-amber-50">
-                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-700">KTC Grade</th>
-                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-700">Color</th>
-                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-700">Rolls</th>
-                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-700">Net (kg)</th>
+                        <thead><tr className="border-b border-slate-700 bg-slate-800/50">
+                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-300">KTC Grade</th>
+                          <th className="px-3 py-1.5 text-left font-extrabold text-slate-300">Color</th>
+                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-300">Rolls</th>
+                          <th className="px-3 py-1.5 text-right font-extrabold text-slate-300">Net (kg)</th>
                         </tr></thead>
                         <tbody>
                           {nexpacPreview.lines.map(function (g, i) {
                             return (
-                              <tr key={i} className="border-b border-slate-100">
-                                <td className="px-3 py-1.5 text-slate-900 font-bold">{g.ktcGrade || '—'}{g.ntGrade ? <span className="text-[9px] text-slate-500 font-normal block">{g.ntGrade}</span> : null}</td>
-                                <td className="px-3 py-1.5 text-slate-900 font-semibold">{g.color || '—'}</td>
-                                <td className="px-3 py-1.5 text-right font-mono text-slate-900">{g.totalRolls}</td>
-                                <td className="px-3 py-1.5 text-right font-mono text-slate-900">{Number(g.finalNetWeightKg).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                              <tr key={i} className="border-b border-slate-800">
+                                <td className="px-3 py-1.5 text-slate-100 font-bold">{g.ktcGrade || '—'}{g.ntGrade ? <span className="text-[9px] text-slate-400 font-normal block">{g.ntGrade}</span> : null}</td>
+                                <td className="px-3 py-1.5 text-slate-200 font-semibold">{g.color || '—'}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-slate-200">{g.totalRolls}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-slate-200">{Number(g.finalNetWeightKg).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
                     </div>
-                    <div className="px-3 py-1.5 text-[10px] text-slate-500 bg-white">The totals above were auto-filled from this report. This breakdown is the expected detail to check your product lines against. Inventory is not affected until you receive the shipment.</div>
+                    <div className="px-3 py-1.5 text-[10px] text-slate-400 bg-transparent">The totals above were auto-filled from this report. This breakdown is the expected detail to check your product lines against. Inventory is not affected until you receive the shipment.</div>
                   </div>
                 )}
                 </div>
@@ -1792,12 +1797,12 @@ export default function InventoryReceiving(props) {
                 The Shipment Info form above stays put. The footer below stays put. */}
             <div style={{ padding: '12px 20px', flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {/* Lines */}
-              <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">PRODUCT LINES ({lines.length})</div>
+              <div className="text-[11px] font-extrabold text-slate-300 tracking-wider mb-2">PRODUCT LINES ({lines.length})</div>
 
               {lines.map(function (line, lineIdx) {
                 var suggestions = suggestionsFor(line.quickCodeQuery);
                 return (
-                  <div key={lineIdx} className="bg-white rounded-xl mb-4 shadow-md border border-slate-200">
+                  <div key={lineIdx} className="bg-slate-900/70 rounded-xl mb-4 shadow-md border border-slate-700">
                     <div className="flex justify-between items-center px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-t-xl">
                       <div className="text-sm font-extrabold text-white flex items-center gap-2">
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-white/20 text-white text-xs">{lineIdx + 1}</span>
@@ -1817,7 +1822,7 @@ export default function InventoryReceiving(props) {
                         (z-10 trapped under sibling cards). Container gets a high z-index while
                         open so the results float in front and are clickable. */}
                     <div className={'mb-2 relative ' + (line.showSuggestions && suggestions.length > 0 ? 'z-[80]' : '')}>
-                      <label className="text-[11px] font-extrabold text-slate-700 block">Quick code or product name *
+                      <label className="text-[11px] font-extrabold text-slate-300 block">Quick code or product name *
                         <input
                           type="text"
                           value={line.quickCodeQuery}
@@ -1837,11 +1842,11 @@ export default function InventoryReceiving(props) {
                             });
                           }}
                           placeholder="Type e.g. NM-204 or 'mosaic dark blue'..."
-                          className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm font-mono bg-white"
+                          className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm font-mono bg-slate-800 text-slate-100 placeholder-slate-500"
                         />
                       </label>
                       {line.showSuggestions && suggestions.length > 0 && (
-                        <div className="absolute z-[90] left-0 right-0 mt-1 bg-white border-2 border-indigo-400 rounded-lg shadow-2xl max-h-72 overflow-auto ring-1 ring-black/10">
+                        <div className="absolute z-[90] left-0 right-0 mt-1 bg-slate-800 border-2 border-indigo-500 rounded-lg shadow-2xl max-h-72 overflow-auto ring-1 ring-black/10">
                           {suggestions.map(function (s) {
                             // v55.83-A.6.27.39 — show ⭐ for featured + variant suffix + use_count badge
                             var displayCode = s.variant_suffix ? (s.quick_code + '-' + s.variant_suffix) : s.quick_code;
@@ -1849,17 +1854,17 @@ export default function InventoryReceiving(props) {
                               <button
                                 key={s.id}
                                 onClick={function () { pickProductForLine(lineIdx, s); }}
-                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-100 active:bg-indigo-200 border-b border-slate-200 last:border-0 transition-colors"
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-900/40 active:bg-indigo-900/60 border-b border-slate-700 last:border-0 transition-colors"
                               >
                                 <div className="flex items-center gap-2">
                                   {s.featured === true && <span title="Featured" className="text-amber-500">⭐</span>}
-                                  <span className="font-mono font-extrabold text-slate-900">{displayCode || '(no code)'}</span>
+                                  <span className="font-mono font-extrabold text-slate-100">{displayCode || '(no code)'}</span>
                                   {s.is_family_template === true && <span className="text-[9px] bg-indigo-200 text-indigo-900 font-bold rounded px-1.5">TEMPLATE</span>}
                                   {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-200 text-emerald-900 font-bold rounded px-1.5">PRODUCT</span>}
-                                  {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-700 font-bold ml-auto">used {s.use_count}×</span>}
+                                  {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-400 font-bold ml-auto">used {s.use_count}×</span>}
                                 </div>
                                 <div className="text-slate-800 font-semibold">{s.name_en} / <span style={{ direction: 'rtl' }}>{s.name_ar}</span></div>
-                                <div className="text-[10px] text-slate-700 font-mono font-semibold">{s.classification_slug}</div>
+                                <div className="text-[10px] text-slate-400 font-mono font-semibold">{s.classification_slug}</div>
                               </button>
                             );
                           })}
@@ -1870,7 +1875,7 @@ export default function InventoryReceiving(props) {
                     {line.product && (
                       <>
                         {/* Product header (read-only) */}
-                        <div className="bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5 mb-2 text-[11px]">
+                        <div className="bg-indigo-950/40 border border-indigo-800 rounded px-2 py-1.5 mb-2 text-[11px] text-slate-200">
                           <div className="font-extrabold text-indigo-900">{line.product.name_en} / <span style={{ direction: 'rtl' }}>{line.product.name_ar}</span></div>
                           <div className="font-mono text-indigo-700">Classification: {line.product.classification_slug}</div>
                           {line.product.is_family_template === true && (
@@ -1885,14 +1890,14 @@ export default function InventoryReceiving(props) {
                             <div className="text-[10px] text-purple-800 mb-2 italic">Each combination creates a unique variant (e.g. {line.product.quick_code}-001). System reuses an existing variant if specs match.</div>
                             <div className="grid grid-cols-4 gap-2">
                               <label className="text-[11px] font-extrabold text-purple-900">Category *
-                                <select value={line.variant_category_code} onChange={function (e) { updateLineField(lineIdx, 'variant_category_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                <select value={line.variant_category_code} onChange={function (e) { updateLineField(lineIdx, 'variant_category_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-500 rounded text-sm bg-slate-800 text-slate-100">
                                   <option value="">— pick —</option>
                                   <option value="SM">SM · Smooth</option>
                                   <option value="EM">EM · Embossed</option>
                                 </select>
                               </label>
                               <label className="text-[11px] font-extrabold text-purple-900">Construction *
-                                <select value={line.variant_construction_code} onChange={function (e) { updateLineField(lineIdx, 'variant_construction_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                <select value={line.variant_construction_code} onChange={function (e) { updateLineField(lineIdx, 'variant_construction_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-500 rounded text-sm bg-slate-800 text-slate-100">
                                   <option value="">— pick —</option>
                                   <option value="RG">RG · Regular</option>
                                   <option value="PF">PF · Perforated</option>
@@ -1902,7 +1907,7 @@ export default function InventoryReceiving(props) {
                                 </select>
                               </label>
                               <label className="text-[11px] font-extrabold text-purple-900">Backing *
-                                <select value={line.variant_backing_code} onChange={function (e) { updateLineField(lineIdx, 'variant_backing_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                <select value={line.variant_backing_code} onChange={function (e) { updateLineField(lineIdx, 'variant_backing_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-500 rounded text-sm bg-slate-800 text-slate-100">
                                   <option value="">— pick —</option>
                                   <option value="BK">BK · Black</option>
                                   <option value="CT">CT · Cotton</option>
@@ -1914,7 +1919,7 @@ export default function InventoryReceiving(props) {
                                 </select>
                               </label>
                               <label className="text-[11px] font-extrabold text-purple-900">Pattern *
-                                <select value={line.variant_pattern_code} onChange={function (e) { updateLineField(lineIdx, 'variant_pattern_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                <select value={line.variant_pattern_code} onChange={function (e) { updateLineField(lineIdx, 'variant_pattern_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-500 rounded text-sm bg-slate-800 text-slate-100">
                                   <option value="">— pick —</option>
                                   <option value="NA">NA · None</option>
                                   <option value="HC">HC · Honeycomb</option>
@@ -1993,26 +1998,26 @@ export default function InventoryReceiving(props) {
                                   </div>
                                   {rolls.map(function (r, rIdx) {
                                     return (
-                                      <div key={rIdx} className="grid gap-1 items-center bg-white rounded px-1 py-1" style={{ gridTemplateColumns: '40px 110px 90px 90px 90px 90px 1fr 40px' }}>
+                                      <div key={rIdx} className="grid gap-1 items-center bg-slate-800/50 rounded px-1 py-1" style={{ gridTemplateColumns: '40px 110px 90px 90px 90px 90px 1fr 40px' }}>
                                         <div className="text-[11px] font-mono font-extrabold text-blue-900">{rIdx + 1}</div>
                                         <input type="text" value={r.roll_number} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { roll_number: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="release / ID" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        }} placeholder="release / ID" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500 font-mono" />
                                         <input type="text" value={r.gross_kg} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { gross_kg: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500 font-mono" />
                                         <input type="text" value={r.net_kg} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { net_kg: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500 font-mono" />
                                         <input type="text" value={r.meters} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { meters: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500 font-mono" />
                                         <input type="text" value={r.rack} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { rack: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="A-12" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white" />
+                                        }} placeholder="A-12" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500" />
                                         <input type="text" value={r.notes} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { notes: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="optional" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white" />
+                                        }} placeholder="optional" className="w-full px-1 py-1 border border-slate-600 rounded text-xs bg-slate-800 text-slate-100 placeholder-slate-500" />
                                         <button
                                           onClick={function () {
                                             var nr = (line.rolls || []).slice(); nr.splice(rIdx, 1); updateLineField(lineIdx, 'rolls', nr);
@@ -2028,13 +2033,13 @@ export default function InventoryReceiving(props) {
 
                               {/* Variance summary panel */}
                               {(rolls.length > 0 || expRolls != null || expGross != null) && (
-                                <div className={'mt-2 rounded p-2 border-2 ' + (hasAnyVariance ? 'bg-red-50 border-red-300' : 'bg-emerald-50 border-emerald-300')}>
+                                <div className={'mt-2 rounded p-2 border-2 ' + (hasAnyVariance ? 'bg-red-950/40 border-red-700' : 'bg-emerald-950/40 border-emerald-700')}>
                                   <div className={'text-[11px] font-extrabold tracking-wider mb-1 ' + (hasAnyVariance ? 'text-red-900' : 'text-emerald-900')}>
                                     {hasAnyVariance ? '⚠ VARIANCE DETECTED' : '✓ EXPECTED MATCHES ACTUAL'}
                                   </div>
                                   <div className="grid grid-cols-4 gap-2 text-[11px]">
                                     <div>
-                                      <div className="font-bold text-slate-700">Rolls</div>
+                                      <div className="font-bold text-slate-300">Rolls</div>
                                       <div className="font-mono">{rolls.length}{expRolls != null && <span className="text-slate-500"> / {expRolls}</span>}</div>
                                       {expRolls != null && rolls.length !== expRolls && (
                                         <div className={'text-[10px] font-extrabold ' + (rolls.length > expRolls ? 'text-emerald-700' : 'text-red-700')}>
@@ -2043,7 +2048,7 @@ export default function InventoryReceiving(props) {
                                       )}
                                     </div>
                                     <div>
-                                      <div className="font-bold text-slate-700">Gross kg</div>
+                                      <div className="font-bold text-slate-300">Gross kg</div>
                                       <div className="font-mono">{rollSumGross.toLocaleString(undefined, {maximumFractionDigits: 2})}{expGross != null && <span className="text-slate-500"> / {expGross}</span>}</div>
                                       {expGross != null && Math.abs(rollSumGross - expGross) > 0.01 && (
                                         <div className={'text-[10px] font-extrabold ' + (rollSumGross > expGross ? 'text-emerald-700' : 'text-red-700')}>
@@ -2052,7 +2057,7 @@ export default function InventoryReceiving(props) {
                                       )}
                                     </div>
                                     <div>
-                                      <div className="font-bold text-slate-700">Net kg</div>
+                                      <div className="font-bold text-slate-300">Net kg</div>
                                       <div className="font-mono">{rollSumNet.toLocaleString(undefined, {maximumFractionDigits: 2})}{expNet != null && <span className="text-slate-500"> / {expNet}</span>}</div>
                                       {expNet != null && rollSumNet > 0 && Math.abs(rollSumNet - expNet) > 0.01 && (
                                         <div className={'text-[10px] font-extrabold ' + (rollSumNet > expNet ? 'text-emerald-700' : 'text-red-700')}>
@@ -2061,7 +2066,7 @@ export default function InventoryReceiving(props) {
                                       )}
                                     </div>
                                     <div>
-                                      <div className="font-bold text-slate-700">{line.uom || 'UOM Total'}</div>
+                                      <div className="font-bold text-slate-300">{line.uom || 'UOM Total'}</div>
                                       <div className="font-mono">{rollSumMeters.toLocaleString(undefined, {maximumFractionDigits: 2})}{expMeters != null && <span className="text-slate-500"> / {expMeters}</span>}</div>
                                       {expMeters != null && Math.abs(rollSumMeters - expMeters) > 0.01 && (
                                         <div className={'text-[10px] font-extrabold ' + (rollSumMeters > expMeters ? 'text-emerald-700' : 'text-red-700')}>
@@ -2073,7 +2078,7 @@ export default function InventoryReceiving(props) {
                                   {hasAnyVariance && (
                                     <div className="mt-2 space-y-1">
                                       <label className="text-[11px] font-extrabold text-red-900 block">Variance reason *
-                                        <input type="text" value={line.variance_reason} onChange={function (e) { updateLineField(lineIdx, 'variance_reason', e.target.value); }} placeholder="e.g. short shipment / damaged / overage / counting error" className="w-full mt-0.5 px-2 py-1.5 border border-red-300 rounded text-sm bg-white" />
+                                        <input type="text" value={line.variance_reason} onChange={function (e) { updateLineField(lineIdx, 'variance_reason', e.target.value); }} placeholder="e.g. short shipment / damaged / overage / counting error" className="w-full mt-0.5 px-2 py-1.5 border border-red-500 rounded text-sm bg-slate-800 text-slate-100" />
                                       </label>
                                       <label className="flex items-center gap-1 text-[11px] text-red-800">
                                         <input type="checkbox" checked={line.variance_acknowledged === true} onChange={function (e) { updateLineField(lineIdx, 'variance_acknowledged', e.target.checked); }} />
@@ -2090,17 +2095,17 @@ export default function InventoryReceiving(props) {
                         {/* Quantity row 1: received + uom + release_number
                             v55.83-A (Max Jun 1 2026) — Order Qty removed; reconciliation is top-level only. */}
                         <div className="grid grid-cols-3 gap-2 mb-2">
-                          <label className="text-[11px] font-extrabold text-slate-700">Quantity Received *
-                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="required at submit" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-300">Quantity Received *
+                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="required at submit" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Unit of Measure *
-                            <select value={line.uom} onChange={function (e) { updateLineField(lineIdx, 'uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.uom ? 'bg-blue-50' : 'bg-white')}>
+                          <label className="text-[11px] font-extrabold text-slate-300">Unit of Measure *
+                            <select value={line.uom} onChange={function (e) { updateLineField(lineIdx, 'uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.uom ? 'bg-blue-900/40' : 'bg-slate-800')}>
                               <option value="">—</option>
                               {UOM_OPTIONS.map(function (u) { return <option key={u} value={u}>{u}</option>; })}
                             </select>
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Release # *
-                            <input type="text" value={line.batch_number} onChange={function (e) { updateLineField(lineIdx, 'batch_number', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-300">Release # *
+                            <input type="text" value={line.batch_number} onChange={function (e) { updateLineField(lineIdx, 'batch_number', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                           </label>
                         </div>
 
@@ -2115,73 +2120,73 @@ export default function InventoryReceiving(props) {
                             var u = String(line.uom || '').trim().toLowerCase();
                             var kgRequired = (u === 'kg' || u === 'kgs' || u === 'kilo' || u === 'kilogram' || u === 'kilograms');
                             return (
-                              <label className="text-[11px] font-extrabold text-slate-700">
+                              <label className="text-[11px] font-extrabold text-slate-300">
                                 Quantity in Kilos {kgRequired ? '*' : '(optional)'}
                                 <input
                                   type="text"
                                   value={line.quantity_kg}
                                   onChange={function (e) { updateLineField(lineIdx, 'quantity_kg', e.target.value); }}
                                   placeholder={kgRequired ? 'required because UoM = kg' : 'optional cross-unit tracking'}
-                                  className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + (kgRequired && (line.quantity_kg === '' || line.quantity_kg == null) ? 'border-red-400' : 'border-slate-300')}
+                                  className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-slate-800 text-slate-100 ' + (kgRequired && (line.quantity_kg === '' || line.quantity_kg == null) ? 'border-red-400' : 'border-slate-600')}
                                 />
                               </label>
                             );
                           })()}
-                          <label className="text-[11px] font-extrabold text-slate-700">Roll Count *
+                          <label className="text-[11px] font-extrabold text-slate-300">Roll Count *
                             <input
                               type="text"
                               value={line.roll_count}
                               onChange={function (e) { updateLineField(lineIdx, 'roll_count', e.target.value); }}
                               placeholder="required: # of physical rolls"
-                              className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + ((line.roll_count === '' || line.roll_count == null) ? 'border-red-400' : 'border-slate-300')}
+                              className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-slate-800 text-slate-100 ' + ((line.roll_count === '' || line.roll_count == null) ? 'border-red-400' : 'border-slate-600')}
                             />
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Rack
-                            <input type="text" value={line.rack} onChange={function (e) { updateLineField(lineIdx, 'rack', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.rack ? 'bg-blue-50' : 'bg-white')} />
+                          <label className="text-[11px] font-extrabold text-slate-300">Rack
+                            <input type="text" value={line.rack} onChange={function (e) { updateLineField(lineIdx, 'rack', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.rack ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             {line.product && !line.fromMaster.rack && line.product.default_rack && line.rack && line.rack !== line.product.default_rack && (
                               <button onClick={function () { toggleUpdateMaster(lineIdx, 'rack'); }} className={'mt-0.5 text-[10px] px-1.5 py-0.5 rounded font-bold ' + (line.updateMaster.rack ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-100 text-amber-900 hover:bg-amber-200')}>
                                 📌 {line.updateMaster.rack ? 'Will update master' : 'Update master?'}
                               </button>
                             )}
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Line Notes
-                            <input type="text" value={line.line_notes} onChange={function (e) { updateLineField(lineIdx, 'line_notes', e.target.value); }} placeholder="per-line note" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-300">Line Notes
+                            <input type="text" value={line.line_notes} onChange={function (e) { updateLineField(lineIdx, 'line_notes', e.target.value); }} placeholder="per-line note" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                           </label>
                         </div>
 
                         {/* Tech specs (overrides on receipt only — no popup) */}
-                        <div className="bg-slate-50 border border-slate-200 rounded p-2 mb-2">
+                        <div className="bg-slate-800/40 border border-slate-700 rounded p-2 mb-2">
                           <div className="text-[10px] font-extrabold text-slate-600 tracking-wider mb-1">TECH SPECS (per-roll overrides — saved on receipt only)</div>
                           <div className="grid grid-cols-6 gap-2">
-                            <label className="text-[11px] font-extrabold text-slate-700">Thickness (mm)
-                              <input type="text" value={line.actual_thickness_mm} onChange={function (e) { updateLineField(lineIdx, 'actual_thickness_mm', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_thickness_mm ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Thickness (mm)
+                              <input type="text" value={line.actual_thickness_mm} onChange={function (e) { updateLineField(lineIdx, 'actual_thickness_mm', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_thickness_mm ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
-                            <label className="text-[11px] font-extrabold text-slate-700">Width (m)
-                              <input type="text" value={line.actual_width_m} onChange={function (e) { updateLineField(lineIdx, 'actual_width_m', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_width_m ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Width (m)
+                              <input type="text" value={line.actual_width_m} onChange={function (e) { updateLineField(lineIdx, 'actual_width_m', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_width_m ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
-                            <label className="text-[11px] font-extrabold text-slate-700">GSM
-                              <input type="text" value={line.actual_gsm} onChange={function (e) { updateLineField(lineIdx, 'actual_gsm', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_gsm ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">GSM
+                              <input type="text" value={line.actual_gsm} onChange={function (e) { updateLineField(lineIdx, 'actual_gsm', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_gsm ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
-                            <label className="text-[11px] font-extrabold text-slate-700">Density
-                              <input type="text" value={line.actual_density} onChange={function (e) { updateLineField(lineIdx, 'actual_density', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_density ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Density
+                              <input type="text" value={line.actual_density} onChange={function (e) { updateLineField(lineIdx, 'actual_density', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_density ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
-                            <label className="text-[11px] font-extrabold text-slate-700">Weight/roll
-                              <input type="text" value={line.actual_weight_per_roll} onChange={function (e) { updateLineField(lineIdx, 'actual_weight_per_roll', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_weight_per_roll ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Weight/roll
+                              <input type="text" value={line.actual_weight_per_roll} onChange={function (e) { updateLineField(lineIdx, 'actual_weight_per_roll', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_weight_per_roll ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
-                            <label className="text-[11px] font-extrabold text-slate-700">Roll length (m)
-                              <input type="text" value={line.actual_roll_length_m} onChange={function (e) { updateLineField(lineIdx, 'actual_roll_length_m', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.actual_roll_length_m ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Roll length (m)
+                              <input type="text" value={line.actual_roll_length_m} onChange={function (e) { updateLineField(lineIdx, 'actual_roll_length_m', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.actual_roll_length_m ? 'bg-blue-900/40' : 'bg-slate-800')} />
                             </label>
                           </div>
                         </div>
 
                         {/* Sourcing + cost (cost gated by seeCosts) */}
-                        <div className="bg-slate-50 border border-slate-200 rounded p-2">
+                        <div className="bg-slate-800/40 border border-slate-700 rounded p-2">
                           <div className="text-[10px] font-extrabold text-slate-600 tracking-wider mb-1">
                             SOURCING{seeCosts ? ' + COST' : ''} (master defaults can be updated via 📌 button)
                           </div>
                           <div className={'grid gap-2 ' + (seeCosts ? 'grid-cols-3' : 'grid-cols-1')}>
-                            <label className="text-[11px] font-extrabold text-slate-700">Supplier
-                              <input type="text" value={line.supplier} onChange={function (e) { updateLineField(lineIdx, 'supplier', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.supplier ? 'bg-blue-50' : 'bg-white')} />
+                            <label className="text-[11px] font-extrabold text-slate-300">Supplier
+                              <input type="text" value={line.supplier} onChange={function (e) { updateLineField(lineIdx, 'supplier', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.supplier ? 'bg-blue-900/40' : 'bg-slate-800')} />
                               {line.product && !line.fromMaster.supplier && line.product.default_supplier && line.supplier && line.supplier !== line.product.default_supplier && (
                                 <button onClick={function () { toggleUpdateMaster(lineIdx, 'supplier'); }} className={'mt-0.5 text-[10px] px-1.5 py-0.5 rounded font-bold ' + (line.updateMaster.supplier ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-100 text-amber-900 hover:bg-amber-200')}>
                                   📌 {line.updateMaster.supplier ? 'Will update master' : 'Update master?'}
@@ -2189,8 +2194,8 @@ export default function InventoryReceiving(props) {
                               )}
                             </label>
                             {seeCosts && (
-                              <label className="text-[11px] font-extrabold text-slate-700">Cost per UOM
-                                <input type="text" value={line.cost_per_uom} onChange={function (e) { updateLineField(lineIdx, 'cost_per_uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm font-mono ' + (line.fromMaster.cost_per_uom ? 'bg-blue-50' : 'bg-white')} />
+                              <label className="text-[11px] font-extrabold text-slate-300">Cost per UOM
+                                <input type="text" value={line.cost_per_uom} onChange={function (e) { updateLineField(lineIdx, 'cost_per_uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm font-mono text-slate-100 ' + (line.fromMaster.cost_per_uom ? 'bg-blue-900/40' : 'bg-slate-800')} />
                                 {line.product && !line.fromMaster.cost_per_uom && line.product.default_cost != null && line.cost_per_uom && Number(line.cost_per_uom) !== Number(line.product.default_cost) && (
                                   <button onClick={function () { toggleUpdateMaster(lineIdx, 'cost_per_uom'); }} className={'mt-0.5 text-[10px] px-1.5 py-0.5 rounded font-bold ' + (line.updateMaster.cost_per_uom ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-100 text-amber-900 hover:bg-amber-200')}>
                                     📌 {line.updateMaster.cost_per_uom ? 'Will update master' : 'Update master?'}
@@ -2199,8 +2204,8 @@ export default function InventoryReceiving(props) {
                               </label>
                             )}
                             {seeCosts && (
-                              <label className="text-[11px] font-extrabold text-slate-700">Currency
-                                <select value={line.currency} onChange={function (e) { updateLineField(lineIdx, 'currency', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-sm ' + (line.fromMaster.currency ? 'bg-blue-50' : 'bg-white')}>
+                              <label className="text-[11px] font-extrabold text-slate-300">Currency
+                                <select value={line.currency} onChange={function (e) { updateLineField(lineIdx, 'currency', e.target.value); }} className={'w-full mt-0.5 px-2 py-1 border border-slate-600 rounded text-sm text-slate-100 ' + (line.fromMaster.currency ? 'bg-blue-900/40' : 'bg-slate-800')}>
                                   {CURRENCY_OPTIONS.map(function (c) { return <option key={c} value={c}>{c}</option>; })}
                                 </select>
                               </label>
@@ -2227,8 +2232,8 @@ export default function InventoryReceiving(props) {
               var rec = computeVariance(header, lines);
               if (!rec.has_any_expected) {
                 return (
-                  <div className="bg-slate-100 border-t-2 border-slate-300 px-5 py-3">
-                    <div className="text-sm font-bold text-slate-700">
+                  <div className="bg-slate-900/80 border-t-2 border-slate-700 px-5 py-3">
+                    <div className="text-sm font-bold text-slate-300">
                       📊 Reconciliation will appear once you fill in Shipment Expected Totals above.
                     </div>
                   </div>
@@ -2242,26 +2247,26 @@ export default function InventoryReceiving(props) {
                     {rec.is_balanced ? '✓ Reconciliation: Balanced (all totals match)' : '⚠ Reconciliation: Variance detected (yellow status on submit)'}
                   </div>
                   <div className="grid grid-cols-4 gap-3 text-sm">
-                    <div className="bg-white border border-slate-300 rounded p-2">
+                    <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
                       <div className="text-[11px] font-bold text-slate-600 uppercase">Rolls</div>
-                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_rolls === '' ? '—' : header.expected_total_rolls}</div>
-                      <div className="text-slate-900 font-bold">Actual: {rec.actual.rolls}</div>
+                      <div className="text-slate-100 font-bold">Expected: {header.expected_total_rolls === '' ? '—' : header.expected_total_rolls}</div>
+                      <div className="text-slate-100 font-bold">Actual: {rec.actual.rolls}</div>
                       <div className={'font-extrabold ' + (rec.variance.rolls === 0 || rec.variance.rolls == null ? 'text-emerald-700' : 'text-amber-800')}>
                         {rec.variance.rolls == null ? '—' : (rec.variance.rolls === 0 ? '✓ match' : (rec.variance.rolls > 0 ? 'short ' + rec.variance.rolls : 'extra ' + Math.abs(rec.variance.rolls)))}
                       </div>
                     </div>
-                    <div className="bg-white border border-slate-300 rounded p-2">
+                    <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
                       <div className="text-[11px] font-bold text-slate-600 uppercase">Gross kg</div>
-                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_gross_kg === '' ? '—' : header.expected_total_gross_kg}</div>
-                      <div className="text-slate-900 font-bold">Actual: {rec.actual.gross.toFixed(3)}</div>
+                      <div className="text-slate-100 font-bold">Expected: {header.expected_total_gross_kg === '' ? '—' : header.expected_total_gross_kg}</div>
+                      <div className="text-slate-100 font-bold">Actual: {rec.actual.gross.toFixed(3)}</div>
                       <div className={'font-extrabold ' + (rec.variance.gross === 0 || rec.variance.gross == null ? 'text-emerald-700' : 'text-amber-800')}>
                         {rec.variance.gross == null ? '—' : (rec.variance.gross === 0 ? '✓ match' : (rec.variance.gross > 0 ? 'short ' + rec.variance.gross.toFixed(3) : 'extra ' + Math.abs(rec.variance.gross).toFixed(3)))}
                       </div>
                     </div>
-                    <div className="bg-white border border-slate-300 rounded p-2">
+                    <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
                       <div className="text-[11px] font-bold text-slate-600 uppercase">UOM ({header.expected_uom_type || 'meter'})</div>
-                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_uom === '' ? '—' : header.expected_total_uom}</div>
-                      <div className="text-slate-900 font-bold">Actual: {rec.actual.uom.toFixed(3)}</div>
+                      <div className="text-slate-100 font-bold">Expected: {header.expected_total_uom === '' ? '—' : header.expected_total_uom}</div>
+                      <div className="text-slate-100 font-bold">Actual: {rec.actual.uom.toFixed(3)}</div>
                       <div className={'font-extrabold ' + (rec.variance.uom === 0 || rec.variance.uom == null ? 'text-emerald-700' : 'text-amber-800')}>
                         {rec.variance.uom == null ? '—' : (rec.variance.uom === 0 ? '✓ match' : (rec.variance.uom > 0 ? 'short ' + rec.variance.uom.toFixed(3) : 'extra ' + Math.abs(rec.variance.uom).toFixed(3)))}
                       </div>
@@ -2276,8 +2281,8 @@ export default function InventoryReceiving(props) {
                 much content is above them. Combined with the parent flex-col
                 + Region 2 owning the scroll, this guarantees the buttons are
                 always visible without scrolling. */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px', flexShrink: 0 }}>
-              <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-base font-bold rounded-lg">
+            <div className="flex justify-end gap-2 border-t border-slate-800 bg-slate-900/80 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px', flexShrink: 0 }}>
+              <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-base font-bold rounded-lg border border-slate-600">
                 Cancel
               </button>
               {/* v55.83-A.6.27.37 — Save Shipment Only: writes JUST the header (no products). */}
@@ -2315,14 +2320,14 @@ export default function InventoryReceiving(props) {
         var noteRef = { current: header.variance_notes || '' };
         return (
           <div className="fixed inset-0 z-[300] bg-black/70 flex items-center justify-center p-4">
-            <div className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl">
+            <div className="bg-slate-950 text-slate-100 rounded-2xl shadow-2xl w-full max-w-2xl">
               <div className="bg-amber-500 text-white rounded-t-2xl px-6 py-4">
                 <div className="text-xs font-bold uppercase tracking-wider text-amber-100">Variance detected</div>
                 <div className="text-xl font-extrabold">⚠ Expected totals don&apos;t match actual</div>
                 <div className="text-sm text-amber-50 mt-1">Please document why before submitting. This will be saved with the receipt and audited.</div>
               </div>
               <div className="p-6 space-y-3">
-                <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 text-sm font-semibold text-slate-900">
+                <div className="bg-amber-500/15 border-2 border-amber-600/40 rounded p-3 text-sm font-semibold text-amber-100">
                   <div className="font-extrabold text-amber-900 mb-2">Variance summary:</div>
                   {rec.variance.rolls != null && rec.variance.rolls !== 0 && (
                     <div>• Rolls: <span className="font-extrabold">{rec.variance.rolls > 0 ? 'short ' + rec.variance.rolls : 'extra ' + Math.abs(rec.variance.rolls)}</span></div>
@@ -2334,13 +2339,13 @@ export default function InventoryReceiving(props) {
                     <div>• UOM: <span className="font-extrabold">{rec.variance.uom > 0 ? 'short ' + rec.variance.uom.toFixed(3) : 'extra ' + Math.abs(rec.variance.uom).toFixed(3)}</span></div>
                   )}
                 </div>
-                <label className="block text-sm font-extrabold text-slate-900">Variance Notes <span className="text-red-600">*</span>
+                <label className="block text-sm font-extrabold text-slate-100">Variance Notes <span className="text-red-600">*</span>
                   <textarea
                     defaultValue={noteRef.current}
                     onChange={function (e) { noteRef.current = e.target.value; }}
                     placeholder="e.g. Truck broke a roll during unloading. 2 rolls damaged, supplier credit pending. Net weight short by 30 kg explained by paper-wrap residue removed."
                     rows={5}
-                    className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-medium resize-y"
+                    className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-medium resize-y"
                   />
                 </label>
               </div>
@@ -2348,7 +2353,7 @@ export default function InventoryReceiving(props) {
                 <button
                   onClick={function () { setVariancePromptOpen(false); setVariancePromptData(null); }}
                   disabled={busy}
-                  className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-base font-bold rounded-lg"
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-base font-bold rounded-lg border border-slate-600"
                 >
                   Back
                 </button>
@@ -2368,16 +2373,16 @@ export default function InventoryReceiving(props) {
       {/* Cancel-receipt prompt */}
       {cancelTarget && (
         <div className="fixed inset-0 z-[210] bg-black/70 flex items-center justify-center" style={{ padding: 16 }}>
-          <div className="bg-white rounded-xl shadow-2xl" style={{ maxWidth: 480, padding: 20 }}>
+          <div className="bg-slate-950 text-slate-100 rounded-xl shadow-2xl border border-slate-800" style={{ maxWidth: 480, padding: 20 }}>
             <div className="text-base font-extrabold text-red-900 mb-2">Cancel receipt {cancelTarget.receipt_number}?</div>
-            <div className="text-sm text-slate-700 mb-3">
+            <div className="text-sm text-slate-300 mb-3">
               This soft-cancels all {cancelTarget.lineCount} line(s) of this shipment. The records stay in the database (greyed out) but stop counting toward stock-on-hand. You can restore later if it was a mistake.
             </div>
-            <label className="text-[11px] font-extrabold text-slate-700 block">Reason *
-              <textarea value={cancelReason} onChange={function (e) { setCancelReason(e.target.value); }} rows={2} placeholder="Why is this being cancelled?" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none" />
+            <label className="text-[11px] font-extrabold text-slate-300 block">Reason *
+              <textarea value={cancelReason} onChange={function (e) { setCancelReason(e.target.value); }} rows={2} placeholder="Why is this being cancelled?" className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500 resize-none" />
             </label>
             <div className="flex justify-end gap-2 mt-3">
-              <button onClick={function () { setCancelTarget(null); setCancelReason(''); }} className="px-3 py-1.5 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Keep it</button>
+              <button onClick={function () { setCancelTarget(null); setCancelReason(''); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm font-bold rounded-lg border border-slate-600">Keep it</button>
               <button onClick={confirmCancelReceipt} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-extrabold rounded-lg">Confirm Cancel</button>
             </div>
           </div>

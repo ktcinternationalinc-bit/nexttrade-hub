@@ -33,7 +33,7 @@ ok('rolls row in Stock Summary (current/original/sold)', /ROLLS<\/span>[\s\S]{0,
 ok('product table has a Rolls column header', /Rolls<div className="text-\[8px\]/.test(ov));
 ok('product row renders dedicated rolls cell', /font-extrabold text-amber-300">\{fmtNum\(currRolls, 0\)\}/.test(ov));
 ok('group totals accumulate rolls', /groups\[familyId\]\.totals\.rolls_current \+= Math\.max\(0, gOrig - gSold\)/.test(ov));
-ok('category row shows rolls', /Rolls: <span className="text-amber-300">\{fmtNum\(g\.totals\.rolls_current/.test(ov));
+ok('category row shows rolls', /ROLLS<\/span>\s*<span className="text-amber-300">\{fmtNum\(g\.totals\.rolls_current/.test(ov));
 
 var pg = read('src/app/page.jsx');
 ok('sale line has rolls input', /inv_rolls/.test(pg) && /rolls \/ /.test(pg));

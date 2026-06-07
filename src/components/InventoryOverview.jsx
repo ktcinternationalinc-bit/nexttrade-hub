@@ -386,6 +386,7 @@ export default function InventoryOverview(props) {
             current_qty: 0, original_qty: 0, sold_qty: 0,
             sold_revenue: 0, cogs_total: 0, gross_profit: 0,
             rolls_current: 0, rolls_original: 0, rolls_sold: 0,
+            by_uom: {},  // { kg: {current,original,sold}, meter: {...} } — break out per unit so units are never summed together
           },
         };
       }
@@ -397,6 +398,13 @@ export default function InventoryOverview(props) {
       groups[familyId].totals.sold_revenue += s.sold_revenue || 0;
       groups[familyId].totals.cogs_total += s.cogs_total || 0;
       groups[familyId].totals.gross_profit += s.gross_profit || 0;
+      // v55.83 — break each product's qty out by its own unit of measure so the
+      // family line never adds kg + meters + units into one meaningless number.
+      var pUomKey = (p.default_uom || 'unit').toLowerCase().trim();
+      if (!groups[familyId].totals.by_uom[pUomKey]) groups[familyId].totals.by_uom[pUomKey] = { current: 0, original: 0, sold: 0 };
+      groups[familyId].totals.by_uom[pUomKey].current += s.current_qty || 0;
+      groups[familyId].totals.by_uom[pUomKey].original += s.original_qty || 0;
+      groups[familyId].totals.by_uom[pUomKey].sold += s.sold_qty || 0;
       // v55.83-H — roll totals per family (goods received in rolls but sold by weight/length)
       var gUom = (p.default_uom || 'unit').toLowerCase().trim();
       if (gUom !== 'roll' && gUom !== 'rolls') {
@@ -493,6 +501,13 @@ export default function InventoryOverview(props) {
   function unitLabel(u) {
     var map = { kg: 'KG', sqm: 'SQM (m²)', meter: 'METERS', meters: 'METERS', yard: 'YARDS', roll: 'ROLLS', rolls: 'ROLLS', piece: 'PIECES', unit: 'UNITS' };
     return map[(u || '').toLowerCase()] || (u || 'UNITS').toUpperCase();
+  }
+
+  // v55.83 — each unit of measure gets its own badge color so KG, METERS, UNITS,
+  // etc. are visually separated at a glance.
+  function uomBadgeColor(u) {
+    var m = { kg: 'bg-blue-600', meter: 'bg-teal-600', meters: 'bg-teal-600', yard: 'bg-sky-600', sqm: 'bg-indigo-600', piece: 'bg-violet-600', unit: 'bg-violet-600', liter: 'bg-cyan-600' };
+    return m[(u || '').toLowerCase()] || 'bg-slate-600';
   }
 
   function toggleGroup(familyId) {
@@ -632,15 +647,15 @@ export default function InventoryOverview(props) {
               <label key={f.field} className="block">
                 {/* HOTFIX 16 — Level badge + label, tighter typography */}
                 <span className="flex items-center gap-1.5 mb-1">
-                  <span className={'inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold ' + (current ? 'bg-indigo-600 text-white' : disabled ? 'bg-slate-200 text-slate-400' : 'bg-slate-200 text-slate-700')}>{f.level}</span>
-                  <span className={'text-[11px] font-extrabold ' + (current ? 'text-indigo-900' : 'text-slate-800')}>{f.label_en}</span>
+                  <span className={'inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold ' + (current ? 'bg-indigo-600 text-white' : disabled ? 'bg-slate-200 text-slate-400' : 'bg-slate-200 text-slate-300')}>{f.level}</span>
+                  <span className={'text-[11px] font-extrabold ' + (current ? 'text-indigo-300' : 'text-slate-200')}>{f.label_en}</span>
                   <span className="text-[10px] text-slate-500" style={{direction:'rtl'}}>{f.label_ar}</span>
                 </span>
                 <select
                   value={current}
                   onChange={function (e) { setFilterLevel(f.field, e.target.value); }}
                   disabled={disabled}
-                  className={'w-full px-2.5 py-1.5 border rounded-md text-sm font-bold transition shadow-sm ' + (current ? 'border-indigo-500 bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200' : disabled ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' : 'border-slate-300 bg-white text-slate-900 hover:border-slate-400')}
+                  className={'w-full px-2.5 py-1.5 border rounded-md text-sm font-bold transition shadow-sm ' + (current ? 'border-indigo-500 bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-500/40' : disabled ? 'border-slate-700 bg-slate-900 text-slate-400 cursor-not-allowed' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-slate-500')}
                 >
                   <option value="">{disabled ? '— none match —' : '— Any —'}</option>
                   {opts.map(function (o) {
@@ -714,9 +729,9 @@ export default function InventoryOverview(props) {
       </div>
 
       {/* Loading / error / empty states */}
-      {loading && <div className="text-center py-10 text-slate-600 font-bold">Loading inventory... / جاري التحميل</div>}
+      {loading && <div className="text-center py-10 text-slate-400 font-bold">Loading inventory... / جاري التحميل</div>}
       {error && !loading && (
-        <div className="bg-red-100 border-2 border-red-400 text-red-900 rounded p-3 font-bold">
+        <div className="bg-red-100 border-2 border-red-400 text-red-300 rounded p-3 font-bold">
           Failed to load: {error}
         </div>
       )}
@@ -747,15 +762,30 @@ export default function InventoryOverview(props) {
                 <span className="text-sm font-bold text-slate-400" style={{ direction: 'rtl' }}>/ {g.label_ar}</span>
                 <span className="text-xs text-slate-400 font-semibold">({g.products.length} {g.products.length === 1 ? 'product' : 'products'})</span>
               </div>
-              <div className="flex items-center gap-3 text-xs font-bold text-slate-300 flex-wrap">
-                <div>Current: <span className="text-blue-300">{fmtNum(g.totals.current_qty, 2)}</span></div>
-                <div>Original: <span className="text-indigo-300">{fmtNum(g.totals.original_qty, 2)}</span></div>
-                <div>Sold: <span className="text-emerald-300">{fmtNum(g.totals.sold_qty, 2)}</span></div>
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-300 flex-wrap justify-end">
+                {Object.keys(g.totals.by_uom || {}).filter(function (u) {
+                  var b = g.totals.by_uom[u];
+                  return (b.current || 0) !== 0 || (b.original || 0) !== 0 || (b.sold || 0) !== 0;
+                }).sort().map(function (u) {
+                  var b = g.totals.by_uom[u];
+                  return (
+                    <div key={u} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/80 border border-slate-700">
+                      <span className={'px-1.5 py-0.5 rounded text-white text-[9px] font-extrabold tracking-wider ' + uomBadgeColor(u)}>{unitLabel(u)}</span>
+                      <span className="text-blue-200">{fmtNum(b.current, 2)}</span>
+                      <span className="text-slate-500 font-semibold">/ {fmtNum(b.original, 2)}</span>
+                      {b.sold > 0 && <span className="text-emerald-300 ml-0.5">· {fmtNum(b.sold, 2)} sold</span>}
+                    </div>
+                  );
+                })}
                 {g.totals.rolls_original > 0 && (
-                  <div className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30">Rolls: <span className="text-amber-300">{fmtNum(g.totals.rolls_current, 0)}</span> <span className="text-slate-500">/ {fmtNum(g.totals.rolls_original, 0)}</span></div>
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40">
+                    <span className="px-1.5 py-0.5 rounded text-white text-[9px] font-extrabold tracking-wider bg-amber-600">ROLLS</span>
+                    <span className="text-amber-300">{fmtNum(g.totals.rolls_current, 0)}</span>
+                    <span className="text-slate-500 font-semibold">/ {fmtNum(g.totals.rolls_original, 0)}</span>
+                  </div>
                 )}
                 {seeCosts && (
-                  <div>P&amp;L: <span className={g.totals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300'}>{fmtNum(g.totals.gross_profit, 2)}</span></div>
+                  <div className="px-2 py-1">P&amp;L: <span className={g.totals.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300'}>{fmtNum(g.totals.gross_profit, 2)}</span></div>
                 )}
               </div>
             </button>
@@ -889,7 +919,7 @@ export default function InventoryOverview(props) {
                             >↗ History</button>
                           </td>
                           {/* v55.83-A.6.27.72 HOTFIX 29 — Per Max screenshot May 28 2026: Current/Original
-                              columns showing 0.00 in text-blue-900 / text-indigo-900 / text-emerald-800
+                              columns showing 0.00 in text-blue-300 / text-indigo-300 / text-emerald-300
                               against the dark row bg made them unreadable (HOTFIX 25 rule violated).
                               Switched to -300 light shades so the numbers stand out on dark surfaces. */}
                           <td className="px-3 py-3 text-right font-mono font-extrabold text-blue-300">
@@ -912,7 +942,7 @@ export default function InventoryOverview(props) {
                                 <span className="text-slate-500 text-[11px]"> / {fmtNum(origRolls, 0)}</span>
                                 {soldRolls > 0 && <div className="text-[10px] font-semibold text-emerald-400/70">{fmtNum(soldRolls, 0)} sold</div>}
                               </span>
-                            ) : <span className="text-slate-600">—</span>}
+                            ) : <span className="text-slate-400">—</span>}
                           </td>
                           {seeCosts && (
                             <>
@@ -921,7 +951,7 @@ export default function InventoryOverview(props) {
                               <td className={'px-3 py-3 text-right font-mono font-extrabold bg-slate-800/60 ' + (s.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fmtNum(s.gross_profit, 2)}</td>
                             </>
                           )}
-                          <td className="px-3 py-3 text-xs font-bold text-slate-200">{p.default_uom || '—'}</td>
+                          <td className="px-3 py-3 text-xs font-bold text-slate-200">{p.default_uom || 'unit'}</td>
                         </tr>
                       );
                     })}
@@ -935,7 +965,7 @@ export default function InventoryOverview(props) {
 
       {/* Footer note about super_admin gating */}
       {!seeCosts && !loading && (
-        <div className="text-xs text-slate-600 italic mt-2">
+        <div className="text-xs text-slate-400 italic mt-2">
           Avg Cost and P&amp;L columns are hidden. Ask a super admin to grant you the &quot;See Inventory Costs&quot; permission to view them.
         </div>
       )}
@@ -947,7 +977,7 @@ export default function InventoryOverview(props) {
             • Outbound movements (inventory_movements — sales + adjustments) */}
       {historyProduct && (
         <div className="fixed inset-0 bg-black/60 z-[120] flex items-start justify-center p-4 overflow-auto">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl my-4">
+          <div className="bg-slate-950 text-slate-100 rounded-2xl shadow-2xl w-full max-w-5xl my-4 border border-slate-800">
             {/* Modal header */}
             <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white rounded-t-2xl px-5 py-3 flex justify-between items-center">
               <div>
@@ -961,7 +991,7 @@ export default function InventoryOverview(props) {
               <button
                 onClick={closeHistory}
                 aria-label="Close"
-                className="bg-white text-slate-800 w-9 h-9 rounded-full font-bold text-lg shadow"
+                className="bg-white text-slate-200 w-9 h-9 rounded-full font-bold text-lg shadow"
               >✕</button>
             </div>
 
@@ -973,23 +1003,23 @@ export default function InventoryOverview(props) {
                 var avgSold = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
                 return (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    <div className="bg-blue-100 border border-blue-300 rounded p-2">
-                      <div className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider">Current Stock</div>
-                      <div className="text-lg font-mono font-extrabold text-blue-900">{fmtNum(s.current_qty, 2)} {historyProduct.default_uom || ''}</div>
+                    <div className="bg-blue-500/15 border border-blue-500/30 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-blue-300 uppercase tracking-wider">Current Stock</div>
+                      <div className="text-lg font-mono font-extrabold text-blue-300">{fmtNum(s.current_qty, 2)} {historyProduct.default_uom || ''}</div>
                     </div>
-                    <div className="bg-indigo-100 border border-indigo-300 rounded p-2">
-                      <div className="text-[10px] font-extrabold text-indigo-900 uppercase tracking-wider">Original Received</div>
-                      <div className="text-lg font-mono font-extrabold text-indigo-900">{fmtNum(s.original_qty, 2)}</div>
+                    <div className="bg-indigo-500/15 border border-indigo-500/30 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider">Original Received</div>
+                      <div className="text-lg font-mono font-extrabold text-indigo-300">{fmtNum(s.original_qty, 2)}</div>
                     </div>
-                    <div className="bg-emerald-100 border border-emerald-300 rounded p-2">
-                      <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wider">Sold</div>
-                      <div className="text-lg font-mono font-extrabold text-emerald-900">{fmtNum(s.sold_qty, 2)}</div>
+                    <div className="bg-emerald-500/15 border border-emerald-500/30 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-emerald-300 uppercase tracking-wider">Sold</div>
+                      <div className="text-lg font-mono font-extrabold text-emerald-300">{fmtNum(s.sold_qty, 2)}</div>
                     </div>
                     {seeCosts && (
-                      <div className={'border rounded p-2 ' + (s.gross_profit >= 0 ? 'bg-emerald-50 border-emerald-300' : 'bg-red-50 border-red-300')}>
-                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-900">P&amp;L</div>
-                        <div className={'text-lg font-mono font-extrabold ' + (s.gross_profit >= 0 ? 'text-emerald-900' : 'text-red-900')}>{fmtNum(s.gross_profit, 2)}</div>
-                        <div className="text-[10px] text-slate-700">Avg cost {fmtNum(avgCost, 2)} · sold {fmtNum(avgSold, 2)}</div>
+                      <div className={'border rounded p-2 ' + (s.gross_profit >= 0 ? 'bg-emerald-500/15 border-emerald-500/40' : 'bg-red-500/15 border-red-500/40')}>
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-100">P&amp;L</div>
+                        <div className={'text-lg font-mono font-extrabold ' + (s.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fmtNum(s.gross_profit, 2)}</div>
+                        <div className="text-[10px] text-slate-300">Avg cost {fmtNum(avgCost, 2)} · sold {fmtNum(avgSold, 2)}</div>
                       </div>
                     )}
                   </div>
@@ -997,7 +1027,7 @@ export default function InventoryOverview(props) {
               })()}
 
               {historyLoading && (
-                <div className="text-center py-6 text-slate-600 font-semibold">Loading history...</div>
+                <div className="text-center py-6 text-slate-400 font-semibold">Loading history...</div>
               )}
 
               {!historyLoading && (
@@ -1007,14 +1037,14 @@ export default function InventoryOverview(props) {
                       this shows the US-vs-Canada (etc.) intake split. */}
                   {historyIntakeByCountry.length > 0 && (
                     <div className="mb-4">
-                      <div className="text-sm font-extrabold text-slate-900 mb-2">🌍 Intake by Country — where stock came from</div>
+                      <div className="text-sm font-extrabold text-slate-100 mb-2">🌍 Intake by Country — where stock came from</div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                         {historyIntakeByCountry.map(function (c) {
                           return (
-                            <div key={c.country} className="bg-white border border-slate-300 rounded p-2">
-                              <div className="text-[11px] font-extrabold text-slate-700 uppercase">{c.label}</div>
-                              <div className="text-slate-900 font-bold text-sm">{(Math.round(c.kg * 1000) / 1000).toLocaleString()} kg</div>
-                              <div className="text-[11px] text-slate-600">{c.rolls.toLocaleString()} rolls · {(Math.round(c.qty * 1000) / 1000).toLocaleString()} qty</div>
+                            <div key={c.country} className="bg-slate-800/60 border border-slate-700 rounded p-2">
+                              <div className="text-[11px] font-extrabold text-slate-300 uppercase">{c.label}</div>
+                              <div className="text-slate-100 font-bold text-sm">{(Math.round(c.kg * 1000) / 1000).toLocaleString()} kg</div>
+                              <div className="text-[11px] text-slate-400">{c.rolls.toLocaleString()} rolls · {(Math.round(c.qty * 1000) / 1000).toLocaleString()} qty</div>
                             </div>
                           );
                         })}
@@ -1024,32 +1054,32 @@ export default function InventoryOverview(props) {
 
                   {/* Inbound shipments */}
                   <div>
-                    <div className="text-sm font-extrabold text-slate-900 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>
+                    <div className="text-sm font-extrabold text-slate-100 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>
                     {historyLayers.length === 0 ? (
-                      <div className="text-xs text-slate-600 italic p-3 bg-slate-50 rounded">No inbound history found for this product.</div>
+                      <div className="text-xs text-slate-400 italic p-3 bg-slate-800/40 rounded">No inbound history found for this product.</div>
                     ) : (
-                      <div className="overflow-auto border border-slate-200 rounded">
+                      <div className="overflow-auto border border-slate-700 rounded">
                         <table className="w-full text-xs">
-                          <thead className="bg-slate-100">
+                          <thead className="bg-slate-800/70">
                             <tr>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Receipt #</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Date</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Supplier</th>
-                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty Received</th>
-                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty Remaining</th>
-                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">Unit Cost</th>}
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Receipt #</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Supplier</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty Received</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty Remaining</th>
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">Unit Cost</th>}
                             </tr>
                           </thead>
                           <tbody>
                             {historyLayers.map(function (layer) {
                               return (
-                                <tr key={layer.id} className="border-b border-slate-200">
-                                  <td className="px-2 py-1.5 font-mono text-slate-800">{layer.receipt_number || '—'}</td>
-                                  <td className="px-2 py-1.5 font-mono text-slate-700">{layer.received_at ? String(layer.received_at).substring(0, 10) : '—'}</td>
-                                  <td className="px-2 py-1.5 text-slate-700">{layer.supplier || '—'}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-indigo-900">{fmtNum(layer.qty_received || layer.quantity || 0, 2)}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-blue-900">{fmtNum(layer.qty_remaining || 0, 2)}</td>
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(layer.unit_cost || 0, 2)} {layer.cost_currency || ''}</td>}
+                                <tr key={layer.id} className="border-b border-slate-700">
+                                  <td className="px-2 py-1.5 font-mono text-slate-200">{layer.receipt_number || '—'}</td>
+                                  <td className="px-2 py-1.5 font-mono text-slate-300">{layer.received_at ? String(layer.received_at).substring(0, 10) : '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-300">{layer.supplier || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-indigo-300">{fmtNum(layer.qty_received || layer.quantity || 0, 2)}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-blue-300">{fmtNum(layer.qty_remaining || 0, 2)}</td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(layer.unit_cost || 0, 2)} {layer.cost_currency || ''}</td>}
                                 </tr>
                               );
                             })}
@@ -1061,32 +1091,32 @@ export default function InventoryOverview(props) {
 
                   {/* Outbound movements */}
                   <div>
-                    <div className="text-sm font-extrabold text-slate-900 mb-2">📤 Outbound — Movements ({historyMovements.length})</div>
+                    <div className="text-sm font-extrabold text-slate-100 mb-2">📤 Outbound — Movements ({historyMovements.length})</div>
                     {historyMovements.length === 0 ? (
-                      <div className="text-xs text-slate-600 italic p-3 bg-slate-50 rounded">No outbound history found for this product.</div>
+                      <div className="text-xs text-slate-400 italic p-3 bg-slate-800/40 rounded">No outbound history found for this product.</div>
                     ) : (
-                      <div className="overflow-auto border border-slate-200 rounded">
+                      <div className="overflow-auto border border-slate-700 rounded">
                         <table className="w-full text-xs">
-                          <thead className="bg-slate-100">
+                          <thead className="bg-slate-800/70">
                             <tr>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Date</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Type</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Reference</th>
-                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty</th>
-                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">Revenue</th>}
-                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">COGS</th>}
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Type</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Reference</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty</th>
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">Revenue</th>}
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">COGS</th>}
                             </tr>
                           </thead>
                           <tbody>
                             {historyMovements.map(function (mov) {
                               return (
-                                <tr key={mov.id} className="border-b border-slate-200">
-                                  <td className="px-2 py-1.5 font-mono text-slate-700">{mov.moved_at ? String(mov.moved_at).substring(0, 10) : '—'}</td>
-                                  <td className="px-2 py-1.5 text-slate-800 font-semibold">{mov.movement_type || mov.type || '—'}</td>
-                                  <td className="px-2 py-1.5 font-mono text-slate-700">{mov.invoice_number || mov.reference || mov.notes || '—'}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-800">{fmtNum(mov.quantity || mov.qty || 0, 2)}</td>
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(mov.revenue || 0, 2)}</td>}
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(mov.cogs || 0, 2)}</td>}
+                                <tr key={mov.id} className="border-b border-slate-700">
+                                  <td className="px-2 py-1.5 font-mono text-slate-300">{mov.moved_at ? String(mov.moved_at).substring(0, 10) : '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-200 font-semibold">{mov.movement_type || mov.type || '—'}</td>
+                                  <td className="px-2 py-1.5 font-mono text-slate-300">{mov.invoice_number || mov.reference || mov.notes || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">{fmtNum(mov.quantity || mov.qty || 0, 2)}</td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(mov.revenue || 0, 2)}</td>}
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(mov.cogs || 0, 2)}</td>}
                                 </tr>
                               );
                             })}
@@ -1100,7 +1130,7 @@ export default function InventoryOverview(props) {
             </div>
 
             {/* Modal footer */}
-            <div className="border-t border-slate-200 px-5 py-3 flex justify-end bg-slate-50 rounded-b-2xl">
+            <div className="border-t border-slate-700 px-5 py-3 flex justify-end bg-slate-50 rounded-b-2xl">
               <button onClick={closeHistory} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-extrabold rounded">Close</button>
             </div>
           </div>

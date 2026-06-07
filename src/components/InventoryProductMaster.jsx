@@ -727,6 +727,10 @@ export default function InventoryProductMaster(props) {
       }
     }
 
+    // v55.83 (Max Jun 7 2026) — Unit of Measure is REQUIRED. A blank UOM made
+    // products silently land in the "units" bucket on the inventory overview.
+    if (!(form.default_uom || '').trim()) missing.push('• Unit of Measure (default_uom)');
+
     if (missing.length > 0) {
       fail('Cannot save — please fill in these required fields:\n\n' + missing.join('\n') +
            '\n\n(' + missing.length + ' field' + (missing.length === 1 ? '' : 's') + ' missing)');
@@ -1516,9 +1520,9 @@ export default function InventoryProductMaster(props) {
 
               {/* Section 3: Tech spec defaults */}
               <div className="mb-4">
-                <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">DEFAULT TECHNICAL SPECS / المواصفات الافتراضية (optional)</div>
+                <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">DEFAULT TECHNICAL SPECS / المواصفات الافتراضية <span className="text-slate-500 font-bold">(UOM required · others optional)</span></div>
                 <div className="grid grid-cols-3 gap-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">UOM
+                  <label className="text-[11px] font-extrabold text-slate-700">UOM <span className="text-red-600">*</span>
                     <select
                       value={form.default_uom}
                       onChange={function (e) { setForm(Object.assign({}, form, { default_uom: e.target.value })); }}

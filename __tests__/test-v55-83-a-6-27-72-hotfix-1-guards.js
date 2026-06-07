@@ -82,7 +82,7 @@ console.log('\n── Guard 3: offset over-apply ──');
     result.applications.inv1 === 1000,
     'applied[inv1]=' + result.applications.inv1 + ' (expected exactly 1000, was overshooting before)');
   check('Warning emitted for offset clamp',
-    result.warnings && result.warnings.some(function (w) { return /exceeds invoice remaining/.test(w.msg); }));
+    result.warnings && result.warnings.some(function (w) { return /partially applied|exceeds invoice remaining/i.test(w.msg); }));
 }
 
 // ═══════ HOTFIX 1.4: Stale offset references logged ═══════

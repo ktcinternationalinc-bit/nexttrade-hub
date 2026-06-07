@@ -36,6 +36,10 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   // Today/Yesterday/7d/30d buckets so they don't go blank when the user picks
   // a narrow custom range like "Today".
   const [sessionsLast30d, setSessionsLast30d] = useState([]);
+  // v55.83 — 30-day daily_log "login" slice (all users), always loaded independent
+  // of the date filter, so the per-user 7-day login grid is reliable for the whole
+  // week even when a user has an activity-log login but no user_sessions row.
+  const [loginLogs30d, setLoginLogs30d] = useState([]);
   const [loginSummary, setLoginSummary] = useState([]);  // user_login_summary view (ET-aware)
   // v55.61 — Track whether the login_events table is set up. If the SQL
   // wasn't run, every user appears "Offline" forever even when they're
@@ -191,6 +195,14 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         var thirtyAgo = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
         return supabase.from('user_sessions').select('*').gte('date', thirtyAgo).order('login_at', { ascending: false }).limit(2000)
           .then(function (r) { setSessionsLast30d(r.data || []); }).catch(function (e) { console.warn('sessionsLast30d:', e); });
+      })(),
+      // v55.83 — 30-day daily_log login slice (all users), for the 7-day login grid.
+      (function () {
+        var d2 = new Date();
+        d2.setDate(d2.getDate() - 30);
+        var thirtyAgo2 = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d2);
+        return supabase.from('daily_log').select('user_id, log_date, log_category, entry_text, created_at').eq('log_category', 'login').gte('log_date', thirtyAgo2).limit(3000)
+          .then(function (r) { setLoginLogs30d(r.data || []); }).catch(function (e) { console.warn('loginLogs30d:', e); });
       })(),
       // Login summary endpoint
       fetch('/api/login-event?summary=1').then(function (r) { return r.json(); }).then(function (d) {
@@ -930,7 +942,16 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         if (!dUser) return null;
         const uLogs = logs.filter(l => l.user_id === drillUser);
         const todayLogs = uLogs.filter(l => l.log_date === todayStr);
-        const uSessions = sessions.filter(s => s.user_id === drillUser).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        // v55.83 — the 7-day login grid must look past the admin date filter AND
+        // agree with the activity log shown above it. Use the 30-day session window
+        // (not the date-filtered `sessions`), and ALSO treat any daily_log "login"
+        // entry as a login day — so a day the activity log shows a login on can never
+        // render as a red ❌ just because no user_sessions row happened to be written.
+        const uSessions = (sessionsLast30d || []).filter(s => s.user_id === drillUser).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const loginDayMap = {};
+        uSessions.forEach(s => { if (s.date) loginDayMap[s.date] = loginDayMap[s.date] || s; });
+        loginLogs30d.forEach(function (l) { if (l.user_id === drillUser && l.log_date && !loginDayMap[l.log_date]) loginDayMap[l.log_date] = { date: l.log_date, login_at: l.created_at, _fromLog: true }; });
+        uLogs.forEach(l => { if (l.log_category === 'login' && l.log_date && !loginDayMap[l.log_date]) loginDayMap[l.log_date] = { date: l.log_date, login_at: l.created_at, _fromLog: true }; });
         const catGroups = {};
         todayLogs.forEach(l => {
           const cat = l.log_category || (l.auto_generated ? 'other' : 'manual');
@@ -985,7 +1006,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   const d = new Date(); d.setDate(d.getDate() - (6 - i));
                   const ds = fmtET(d, 'iso');
                   const dayLabel = fmtET(d, 'weekday', { tag: false }).substring(0, 3);
-                  const sess = uSessions.find(s => s.date === ds);
+                  const sess = loginDayMap[ds];
                   return (
                     <div key={ds} className={'rounded-lg p-2 text-center text-[9px] ' + (sess ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200')}>
                       <div className="font-bold">{dayLabel}</div>
