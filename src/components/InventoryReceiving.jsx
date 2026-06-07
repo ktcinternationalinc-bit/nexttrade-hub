@@ -147,7 +147,7 @@ export default function InventoryReceiving(props) {
     expected_total_gross_kg: '',
     expected_total_net_kg: '',
     expected_total_uom: '',
-    expected_uom_type: 'meter',   // meter | yard | piece | sqm
+    expected_uom_type: 'kg',   // kg | meter | yard | piece | sqm
     variance_notes: '',
   });
   var [lines, setLines] = useState([emptyLine()]);
@@ -202,7 +202,9 @@ export default function InventoryReceiving(props) {
         if (rolls != null && rolls !== '' && !isNaN(Number(rolls))) patch.expected_total_rolls = String(rolls);
         if (grossKg) patch.expected_total_gross_kg = Number(grossKg).toFixed(3);
         if (netKg) patch.expected_total_net_kg = Number(netKg).toFixed(3);
-        // expected_total_uom + expected_uom_type: LEFT MANUAL — the report never touches these.
+        // UOM: default to kg and the net billable total — editable afterwards (Max, Jun 7 2026).
+        patch.expected_uom_type = 'kg';
+        if (netKg) patch.expected_total_uom = Number(netKg).toFixed(3);
         return patch;
       });
       setNexpacPreview(parsed);
@@ -381,8 +383,12 @@ export default function InventoryReceiving(props) {
       arrival_date: '',
       purchase_currency: 'USD',
     origin_country_code: 'US',
+      expected_total_rolls: '', expected_total_gross_kg: '', expected_total_net_kg: '',
+      expected_total_uom: '', expected_uom_type: 'kg',
     });
     setLines([emptyLine()]);
+    setNexpacPreview(null);
+    setNexpacErr(null);
     setHeaderCollapsed(false);  // v55.83-A.6.27.56 — always start with header expanded
     setModalOpen(true);
   }
@@ -403,8 +409,12 @@ export default function InventoryReceiving(props) {
       arrival_date: '',
       purchase_currency: 'USD',
     origin_country_code: 'US',
+      expected_total_rolls: '', expected_total_gross_kg: '', expected_total_net_kg: '',
+      expected_total_uom: '', expected_uom_type: 'kg',
     });
     setLines([emptyLine()]);
+    setNexpacPreview(null);
+    setNexpacErr(null);
   }
 
   // v55.83-A.6.27.35 — Open an existing receipt for editing (all lines + rolls)
@@ -437,8 +447,15 @@ export default function InventoryReceiving(props) {
           arrival_date: h.arrival_date || '',
           purchase_currency: h.purchase_currency || 'USD',
           origin_country_code: h.origin_country_code || 'US',
+          expected_total_rolls: h.expected_total_rolls != null ? String(h.expected_total_rolls) : '',
+          expected_total_gross_kg: h.expected_total_gross_kg != null ? String(h.expected_total_gross_kg) : '',
+          expected_total_net_kg: h.expected_total_net_kg != null ? String(h.expected_total_net_kg) : '',
+          expected_total_uom: h.expected_total_uom != null ? String(h.expected_total_uom) : '',
+          expected_uom_type: h.expected_uom_type || 'kg',
         });
         setLines([emptyLine()]);
+        setNexpacPreview((h && h.nexpac_breakdown) || null);
+        setNexpacErr(null);
         setHeaderCollapsed(false);
         setModalOpen(true);
         setBusy(false);
@@ -518,6 +535,19 @@ export default function InventoryReceiving(props) {
       });
 
       setLines(loadedLines.length ? loadedLines : [emptyLine()]);
+      var hdrBd = await supabase.from('inventory_shipment_headers').select('expected_total_rolls, expected_total_gross_kg, expected_total_net_kg, expected_total_uom, expected_uom_type, nexpac_breakdown').eq('receipt_number', grouped.receipt_number).maybeSingle();
+      var hRow = (hdrBd && hdrBd.data) || {};
+      setHeader(function (prev) {
+        return Object.assign({}, prev, {
+          expected_total_rolls: hRow.expected_total_rolls != null ? String(hRow.expected_total_rolls) : '',
+          expected_total_gross_kg: hRow.expected_total_gross_kg != null ? String(hRow.expected_total_gross_kg) : '',
+          expected_total_net_kg: hRow.expected_total_net_kg != null ? String(hRow.expected_total_net_kg) : '',
+          expected_total_uom: hRow.expected_total_uom != null ? String(hRow.expected_total_uom) : '',
+          expected_uom_type: hRow.expected_uom_type || 'kg',
+        });
+      });
+      setNexpacPreview(hRow.nexpac_breakdown || null);
+      setNexpacErr(null);
       setHeaderCollapsed(false);
       setModalOpen(true);
     } catch (err) {
@@ -967,6 +997,19 @@ export default function InventoryReceiving(props) {
         expected_uom_type: header.expected_uom_type || null,
         updated_by: userProfile && userProfile.id,
       };
+
+      // v55.83-O — persist the imported NEXPAC breakdown on the shipment header so the
+      // expected per-line detail is kept. Only set when a report was imported this
+      // session; a plain edit without re-import leaves any saved breakdown untouched.
+      if (nexpacPreview) {
+        headerPayload.nexpac_breakdown = {
+          header: { releaseNumber: (nexpacPreview.header && nexpacPreview.header.releaseNumber) || null, containerNumber: (nexpacPreview.header && nexpacPreview.header.containerNumber) || null },
+          totals: nexpacPreview.totals || null,
+          lines: nexpacPreview.lines || [],
+          warnings: nexpacPreview.warnings || [],
+          imported_at: new Date().toISOString(),
+        };
+      }
 
       if (statusToSet) {
         headerPayload.status = statusToSet;
@@ -1741,7 +1784,7 @@ export default function InventoryReceiving(props) {
                   </label>
                   <label className="text-sm font-extrabold text-slate-100 block">UOM Type
                     <select
-                      value={header.expected_uom_type || 'meter'}
+                      value={header.expected_uom_type || 'kg'}
                       onChange={function (e) { setHeader(Object.assign({}, header, { expected_uom_type: e.target.value })); }}
                       className="w-full mt-1 px-3 py-2.5 border-2 border-slate-600 rounded text-base bg-slate-800 text-slate-100 font-bold focus:border-violet-500 outline-none"
                     >
@@ -2264,7 +2307,7 @@ export default function InventoryReceiving(props) {
                       </div>
                     </div>
                     <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
-                      <div className="text-[11px] font-bold text-slate-600 uppercase">UOM ({header.expected_uom_type || 'meter'})</div>
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">UOM ({header.expected_uom_type || 'kg'})</div>
                       <div className="text-slate-100 font-bold">Expected: {header.expected_total_uom === '' ? '—' : header.expected_total_uom}</div>
                       <div className="text-slate-100 font-bold">Actual: {rec.actual.uom.toFixed(3)}</div>
                       <div className={'font-extrabold ' + (rec.variance.uom === 0 || rec.variance.uom == null ? 'text-emerald-700' : 'text-amber-800')}>

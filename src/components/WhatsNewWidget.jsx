@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-R',
+    date: '2026-06-07',
+    label: 'Click any product to drill into its inbound orders and sales — now in tabs',
+    items: [
+      '**\\ud83d\\udd0d Click a product to see where its stock came from and where it went.** Click a product\\u2019s code or name in the Inventory list (or the new **\\ud83d\\udcdc Inbound & sales** button) and a drill-down opens with three tabs: **Summary** (current/original/sold + value), **Inbound Orders** (every shipment the on-hand quantity is made of, with how much of each is still in stock), and **Sales** (the invoices and movements that drew it down). Before, this was one tiny link that was easy to miss and everything was crammed into a single scroll.',
+      '**\\ud83c\\udfa8 Consistent dark look.** The drill-down now matches the rest of the system \\u2014 no more white pop-up.',
+      { superAdminOnly: true, text: 'v55.83-R: InventoryOverview product History modal split into tabs via historyTab state (summary | inbound | sales), reset to summary on openHistory. Stock summary + Intake-by-Country gated to summary tab; inventory_layers table -> Inbound Orders tab; inventory_movements -> Sales tab; tab bar shows live counts. Discoverability: product code <td> and name <div> are now click-to-open (cursor-pointer + hover:text-indigo-200), and the old 10px text link is now a bordered indigo button. Footer leftover bg-slate-50 darkened. No new SQL. Note: this is the drill-down portion of the inventory redesign; the executive Action-Required row from the mockup is still pending.' },
+    ],
+  },
+  {
+    version: 'v55.83-Q',
+    date: '2026-06-07',
+    label: 'Expected totals stick to saved shipments · unit defaults to Kg',
+    items: [
+      '**\\ud83d\\udce6 Expected totals now stay on a saved shipment.** Save a shipment shell with its expected rolls and weights, reopen it later, and those numbers are right there \\u2014 before, they came back blank as if they were never saved.',
+      '**\\u2696\\ufe0f The unit now defaults to Kg.** The Expected Total unit starts as Kg, and when you import a NEXPAC report it fills the total quantity with the net billable kilos automatically. You can still change the unit or the number by hand.',
+      { superAdminOnly: true, text: 'v55.83-Q: openEdit reloads expected_total_rolls/gross/net/uom + expected_uom_type from inventory_shipment_headers on BOTH paths (header-only from grouped.header; normal path extends the header fetch + a functional setHeader merge) \\u2014 previously these reconciliation fields returned blank on reopen even though they were persisted. Initial header state + openNew/closeModal default expected_uom_type to kg (was meter); select fallback || kg. handleNexpacImport now sets expected_uom_type=kg and expected_total_uom=Number(netKg).toFixed(3) (net billable) as editable defaults (was LEFT MANUAL). No new SQL (expected_* columns pre-exist); the v55.83-P ALTER ... ADD COLUMN nexpac_breakdown jsonb is still required.' },
+    ],
+  },
+  {
+    version: 'v55.83-P',
+    date: '2026-06-07',
+    label: 'Imported NEXPAC details now stay with the shipment',
+    items: [
+      '**\\ud83d\\udce5 The NEXPAC breakdown is saved with the receipt now.** When you import a NEXPAC report and save the shipment, the per-product breakdown (KTC grade, color, rolls, net kilos) is stored too. Reopen that shipment later and the expected detail is right there to check against what you actually received \\u2014 it no longer disappears after saving.',
+      { superAdminOnly: true, text: 'v55.83-P: nexpac_breakdown jsonb column on inventory_shipment_headers. InventoryReceiving save() sets headerPayload.nexpac_breakdown = { header:{releaseNumber,containerNumber}, totals, lines, warnings, imported_at } ONLY when nexpacPreview is set, so a plain edit without re-import preserves the stored value (partial update). openEdit reloads it \\u2014 header-only path from grouped.header.nexpac_breakdown, normal path fetches inventory_shipment_headers.nexpac_breakdown by receipt_number; openNew/closeModal clear nexpacPreview+nexpacErr. Stored in the exact shape the breakdown panel reads, so it re-renders identically on reopen. REQUIRES SQL (run first): ALTER TABLE inventory_shipment_headers ADD COLUMN IF NOT EXISTS nexpac_breakdown jsonb; \\u2014 until run, importing+saving a report errors; saves without import are unaffected.' },
+    ],
+  },
+  {
     version: 'v55.83-O',
     date: '2026-06-06',
     label: 'A cleaner, easier-to-read Inventory & Inbound Shipments screen — plus NEXPAC report import',

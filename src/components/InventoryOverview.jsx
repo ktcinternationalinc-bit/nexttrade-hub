@@ -65,6 +65,7 @@ export default function InventoryOverview(props) {
   var [historyMovements, setHistoryMovements] = useState([]); // inventory_movements rows for outbound history
   var [historyLoading, setHistoryLoading] = useState(false);
   var [historyError, setHistoryError] = useState(null);
+  var [historyTab, setHistoryTab] = useState('summary'); // v55.83-R drill-down tabs: summary | inbound | sales
   var [historyIntakeByCountry, setHistoryIntakeByCountry] = useState([]); // [{country, kg, rolls, qty}] — intake split US vs Canada etc.
 
   // v55.83-A.6.27.51 — Cascading multi-level filters. User can filter by ANY
@@ -102,6 +103,7 @@ export default function InventoryOverview(props) {
   async function openHistory(product) {
     if (!product) return;
     setHistoryProduct(product);
+    setHistoryTab('summary');
     setHistoryLayers([]);
     setHistoryMovements([]);
     setHistoryLoading(true);
@@ -887,13 +889,13 @@ export default function InventoryOverview(props) {
                       var showRolls = !isRollUnit && (origRolls > 0 || soldRolls > 0);
                       return (
                         <tr key={p.id} className={zebra + ' border-b-2 border-slate-700 hover:bg-slate-700/50 align-top'}>
-                          <td className="px-3 py-3 font-mono text-slate-100 font-bold">
+                          <td onClick={function () { openHistory(p); }} title="Open drill-down — inbound orders + sales for this product" className="px-3 py-3 font-mono text-slate-100 font-bold cursor-pointer hover:text-indigo-200 transition-colors">
                             {p.quick_code || '—'}
                             {p.variant_suffix && <span className="text-slate-400">-{p.variant_suffix}</span>}
                           </td>
                           <td className="px-3 py-3 font-mono text-slate-300">{p.design_sku || '—'}</td>
                           <td className="px-3 py-3">
-                            <div className="font-bold text-white text-[13px]">{displayNameEn}</div>
+                            <div onClick={function () { openHistory(p); }} className="font-bold text-white text-[13px] cursor-pointer hover:text-indigo-200 transition-colors" title="Open drill-down — inbound orders + sales">{displayNameEn}</div>
                             {displayNameAr && <div className="text-xs text-slate-300" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
                             <div className="mt-0.5">
                               <span className="inline-block px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px] font-bold tracking-wide">Sold in: {p.default_uom || 'unit'}</span>
@@ -914,9 +916,9 @@ export default function InventoryOverview(props) {
                             {/* v55.83-A.6.27.60 — History drilldown link */}
                             <button
                               onClick={function () { openHistory(p); }}
-                              className="text-[10px] text-blue-300 hover:text-blue-100 font-bold mt-0.5 hover:underline"
-                              title="View inbound shipments, outbound sales, and stock history for this product"
-                            >↗ History</button>
+                              className="inline-flex items-center gap-1 mt-1.5 px-2.5 py-1 rounded-md bg-indigo-500/15 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-200 text-[11px] font-extrabold transition"
+                              title="Open the drill-down — the inbound orders this stock came from + the sales that drew it down"
+                            >📜 Inbound &amp; sales →</button>
                           </td>
                           {/* v55.83-A.6.27.72 HOTFIX 29 — Per Max screenshot May 28 2026: Current/Original
                               columns showing 0.00 in text-blue-300 / text-indigo-300 / text-emerald-300
@@ -995,9 +997,26 @@ export default function InventoryOverview(props) {
               >✕</button>
             </div>
 
+            {/* v55.83-R — tabbed drill-down: Summary · Inbound Orders · Sales */}
+            <div className="flex gap-1 px-5 pt-3 border-b border-slate-800 bg-slate-900/40">
+              {[
+                { k: 'summary', label: 'Summary' },
+                { k: 'inbound', label: 'Inbound Orders (' + historyLayers.length + ')' },
+                { k: 'sales', label: 'Sales (' + historyMovements.length + ')' },
+              ].map(function (t) {
+                var on = historyTab === t.k;
+                return (
+                  <button key={t.k} onClick={function () { setHistoryTab(t.k); }}
+                    className={'px-4 py-2 text-sm font-extrabold rounded-t-lg border-b-2 -mb-px transition ' + (on ? 'border-indigo-400 text-indigo-200 bg-slate-800/60' : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/30')}>
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="px-5 py-4 space-y-4">
               {/* Stock summary */}
-              {(function () {
+              {historyTab === 'summary' && (function () {
                 var s = productStats[historyProduct.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
                 var avgCost = s.finalized_qty > 0 ? s.current_weighted_cost / s.finalized_qty : 0; // v55.83-H QA: divide cost by FINALIZED qty only (current_qty also includes uncosted pending stock, which understated avg cost)
                 var avgSold = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
@@ -1035,7 +1054,7 @@ export default function InventoryOverview(props) {
                   {/* v55.83-A (Max Jun 1 2026) — Intake by Country: how much of this
                       product was received from each country. Product sells as ONE unit;
                       this shows the US-vs-Canada (etc.) intake split. */}
-                  {historyIntakeByCountry.length > 0 && (
+                  {historyTab === 'summary' && historyIntakeByCountry.length > 0 && (
                     <div className="mb-4">
                       <div className="text-sm font-extrabold text-slate-100 mb-2">🌍 Intake by Country — where stock came from</div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -1053,6 +1072,7 @@ export default function InventoryOverview(props) {
                   )}
 
                   {/* Inbound shipments */}
+                  {historyTab === 'inbound' && (
                   <div>
                     <div className="text-sm font-extrabold text-slate-100 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>
                     {historyLayers.length === 0 ? (
@@ -1088,8 +1108,10 @@ export default function InventoryOverview(props) {
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Outbound movements */}
+                  {historyTab === 'sales' && (
                   <div>
                     <div className="text-sm font-extrabold text-slate-100 mb-2">📤 Outbound — Movements ({historyMovements.length})</div>
                     {historyMovements.length === 0 ? (
@@ -1125,12 +1147,13 @@ export default function InventoryOverview(props) {
                       </div>
                     )}
                   </div>
+                  )}
                 </>
               )}
             </div>
 
             {/* Modal footer */}
-            <div className="border-t border-slate-700 px-5 py-3 flex justify-end bg-slate-50 rounded-b-2xl">
+            <div className="border-t border-slate-800 px-5 py-3 flex justify-end bg-slate-900/60 rounded-b-2xl">
               <button onClick={closeHistory} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-extrabold rounded">Close</button>
             </div>
           </div>
