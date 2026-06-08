@@ -16,7 +16,7 @@
 //     supplier/cost/rack with confirm; tech specs just save no popup
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 import InventoryFinalizeCostDialog from './InventoryFinalizeCostDialog';
 import { parseNexpac, NEXPAC_DEFAULTS } from '../lib/nexpac-parse';
@@ -1246,7 +1246,15 @@ export default function InventoryReceiving(props) {
           updated_by: userProfile && userProfile.id,
         }, userProfile && userProfile.id);
       }
-      toast.success('Receipt ' + rn + ' cancelled (' + rows.length + ' line(s)' + (finalizedLines.length > 0 ? ', ' + finalizedLines.length + ' cost layer(s) reversed' : '') + ').');
+      // v55.83-V — also cancel the shipment HEADER so NEXPAC shells (header, no lines) cancel too.
+      var hdrCancel = headers.find(function (h) { return h.receipt_number === rn; });
+      if (hdrCancel) {
+        await dbUpdate('inventory_shipment_headers', hdrCancel.id, {
+          status: 'cancelled', cancelled_at: new Date().toISOString(),
+          cancelled_by: userProfile && userProfile.id, cancel_reason: cancelReason.trim(),
+        }, userProfile && userProfile.id);
+      }
+      toast.success('Shipment ' + rn + ' cancelled' + (rows.length > 0 ? ' (' + rows.length + ' line(s)' + (finalizedLines.length > 0 ? ', ' + finalizedLines.length + ' cost layer(s) reversed' : '') + ')' : ' (shell — no product lines yet)') + '.');
       setCancelTarget(null);
       setCancelReason('');
       await reload();
@@ -1271,11 +1279,45 @@ export default function InventoryReceiving(props) {
           updated_by: userProfile && userProfile.id,
         }, userProfile && userProfile.id);
       }
-      toast.success('Receipt ' + rn + ' restored.');
+      var hdrRestore = headers.find(function (h) { return h.receipt_number === rn; });
+      if (hdrRestore) {
+        await dbUpdate('inventory_shipment_headers', hdrRestore.id, { status: 'pending_detail', cancelled_at: null, cancelled_by: null, cancel_reason: null }, userProfile && userProfile.id);
+      }
+      toast.success('Shipment ' + rn + ' restored.');
       await reload();
     } catch (err) {
       console.error('[receiving] restore failed:', err);
       toast.error('Restore failed: ' + ((err && err.message) || String(err)));
+    }
+  }
+
+  // ── Delete (hard, super_admin only) ──────────────────────────────
+  // v55.83-V — permanent removal. Cancel keeps a record (greyed out); Delete wipes
+  // the lines, their rolls, and the shipment header. Blocked on finalized shipments
+  // (they own cost layers — reopen first). Restricted to super_admin; logged via dbDelete.
+  async function deleteShipment(g) {
+    if (!isSuperAdmin) { alert('Permanently deleting a shipment is restricted to super-admins. Use Cancel instead.'); return; }
+    if (g.status === 'finalized') { alert('This shipment is FINALIZED and owns cost layers. Reopen it first (which reverses the layers), then delete.'); return; }
+    var rn = g.receipt_number;
+    var lineRows = receipts.filter(function (r) { return r.receipt_number === rn; });
+    var typed = window.prompt('PERMANENTLY DELETE shipment ' + rn + '?\n\nThis removes ' + lineRows.length + ' product line(s), their rolls, and the shipment header. It CANNOT be undone. To keep a record instead, use Cancel.\n\nType the shipment number to confirm:');
+    if (typed == null) return;
+    if (typed.trim() !== rn) { alert('What you typed did not match "' + rn + '". Delete aborted.'); return; }
+    try {
+      for (var i = 0; i < lineRows.length; i++) {
+        try { await supabase.from('inventory_receipt_rolls').delete().eq('receipt_id', lineRows[i].id); } catch (e) { console.warn('[receiving] roll delete:', e); }
+      }
+      for (var j = 0; j < lineRows.length; j++) {
+        await dbDelete('inventory_stock_receipts', lineRows[j].id, userProfile && userProfile.id);
+      }
+      var hdrDel = headers.find(function (h) { return h.receipt_number === rn; });
+      if (hdrDel) await dbDelete('inventory_shipment_headers', hdrDel.id, userProfile && userProfile.id);
+      toast.success('Shipment ' + rn + ' permanently deleted.');
+      await reload();
+    } catch (err) {
+      console.error('[receiving] delete failed:', err);
+      toast.error('Delete failed: ' + ((err && err.message) || String(err)));
+      alert('Delete failed: ' + ((err && err.message) || String(err)));
     }
   }
 
@@ -1298,6 +1340,8 @@ export default function InventoryReceiving(props) {
   }
 
   // Group receipts by receipt_number for the list display (so multi-line shipments show as one row)
+  var headerByNumber = {};
+  headers.forEach(function (h) { headerByNumber[h.receipt_number] = h; });
   var groupedReceipts = {};
   filteredReceipts.forEach(function (r) {
     if (!groupedReceipts[r.receipt_number]) groupedReceipts[r.receipt_number] = [];
@@ -1324,6 +1368,7 @@ export default function InventoryReceiving(props) {
       totalQty: rows.reduce(function (a, b) { return a + Number(b.quantity || 0); }, 0),
       totalCost: totalCost,
       isHeaderOnly: false,
+      header: headerByNumber[rn] || null,
     };
   });
 
@@ -1473,6 +1518,12 @@ export default function InventoryReceiving(props) {
                               g.status === 'pending_detail' ? 'PENDING DETAIL' :
                               g.status === 'draft' ? 'DRAFT' :
                               'ACTIVE';
+            // v55.83-V — expected NEXPAC totals from the shipment header (shell or full)
+            var hx = g.header || {};
+            var expRolls = (hx.expected_total_rolls != null && hx.expected_total_rolls !== '') ? Number(hx.expected_total_rolls) : null;
+            var expGross = (hx.expected_total_gross_kg != null && hx.expected_total_gross_kg !== '') ? Number(hx.expected_total_gross_kg) : null;
+            var expNet = (hx.expected_total_net_kg != null && hx.expected_total_net_kg !== '') ? Number(hx.expected_total_net_kg) : null;
+            var hasExpected = expRolls != null || expGross != null || expNet != null;
             return (
               <div key={g.receipt_number} className={rowClass}
                    style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '12px 12px' }}>
@@ -1492,14 +1543,37 @@ export default function InventoryReceiving(props) {
                   </span>
                 </div>
                 <div className={'text-sm ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
-                  {g.lines.slice(0, 2).map(function (ln) {
-                    var p = productById(ln.product_id);
-                    return p ? (p.quick_code || p.name_en || '?') : '?';
-                  }).join(', ')}
-                  {g.lineCount > 2 && <span className="text-slate-500 italic ml-1">+ {g.lineCount - 2} more</span>}
-                  <div className="text-[10px] text-slate-600">{g.lineCount} line{g.lineCount === 1 ? '' : 's'}{g.supplier ? ' · ' + g.supplier : ''}</div>
+                  {g.lineCount === 0 ? (
+                    hasExpected ? (
+                      <div>
+                        <div className="text-[11px] font-extrabold text-indigo-200">📋 NEXPAC expected</div>
+                        <div className="text-[11px] text-slate-100 font-semibold">
+                          {expRolls != null ? expRolls.toLocaleString() + ' rolls' : ''}
+                          {expNet != null ? ((expRolls != null ? ' · ' : '') + expNet.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' kg net') : ''}
+                          {expGross != null ? (' · ' + expGross.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' kg gross') : ''}
+                        </div>
+                        <div className="text-[10px] text-slate-500 italic">{g.supplier ? g.supplier + ' · ' : ''}awaiting product lines — click Edit to add</div>
+                      </div>
+                    ) : (
+                      <span className="italic text-slate-500 text-[11px]">Shell — no detail yet{g.supplier ? ' · ' + g.supplier : ''}</span>
+                    )
+                  ) : (
+                    <div>
+                      {g.lines.slice(0, 2).map(function (ln) {
+                        var p = productById(ln.product_id);
+                        return p ? (p.quick_code || p.name_en || '?') : '?';
+                      }).join(', ')}
+                      {g.lineCount > 2 && <span className="text-slate-500 italic ml-1">+ {g.lineCount - 2} more</span>}
+                      <div className="text-[10px] text-slate-600">
+                        {g.lineCount} line{g.lineCount === 1 ? '' : 's'}{g.supplier ? ' · ' + g.supplier : ''}
+                        {hasExpected ? <span className="text-indigo-300"> · exp {expNet != null ? (expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' kg') : (expRolls != null ? (expRolls.toLocaleString() + ' rolls') : 'NEXPAC')}</span> : null}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className={'text-sm font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.totalQty.toLocaleString()}</div>
+                <div className={'text-sm font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
+                  {g.totalQty > 0 ? g.totalQty.toLocaleString() : (hasExpected ? <span className="text-indigo-300 text-xs font-semibold" title="Expected from NEXPAC; no actuals received yet">exp {expNet != null ? expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) : (expRolls != null ? (expRolls + ' r') : '—')}</span> : g.totalQty.toLocaleString())}
+                </div>
                 <div className={'text-sm ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-200 font-semibold')}>{wh ? wh.name : <span className="italic text-slate-400">—</span>}</div>
                 {seeCosts && (
                   <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
@@ -1544,6 +1618,15 @@ export default function InventoryReceiving(props) {
                       title="Cancel this receipt (greys out, doesn't count toward stock)"
                     >
                       Cancel
+                    </button>
+                  )}
+                  {isSuperAdmin && !isFinalized && (
+                    <button
+                      onClick={function () { deleteShipment(g); }}
+                      className="px-2 py-1 text-[10px] bg-red-700 hover:bg-red-600 text-white rounded font-bold border border-red-800"
+                      title="Permanently delete this shipment (super-admin only). Use Cancel to keep a record instead."
+                    >
+                      🗑 Delete
                     </button>
                   )}
                   {canEdit && isCancelled && (

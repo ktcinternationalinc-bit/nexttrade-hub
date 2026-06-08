@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-V',
+    date: '2026-06-07',
+    label: 'Inbound shipments: cancel or delete, and NEXPAC totals now show on the list',
+    items: [
+      '**\\ud83d\\udccb Fixed: after uploading a NEXPAC report and saving the shipment, its totals now show on the inbound list.** Before, a saved shipment that only had its NEXPAC report (no product lines entered yet) showed up blank/zeroed. It now displays the expected rolls, net kg and gross kg right on the row, marked "NEXPAC expected", so you can see the shipment is real and what it should contain.',
+      '**\\ud83d\\uddd1 You can now Cancel or Delete an inbound shipment.** **Cancel** greys it out and keeps it on record (and now works even on a NEXPAC-only shell with no lines yet). **Delete** removes it permanently \\u2014 lines, rolls and all \\u2014 and is limited to super-admins, with a type-to-confirm step so it can\\u2019t happen by accident. A finalized shipment must be Reopened first before it can be deleted.',
+      { superAdminOnly: true, text: 'v55.83-V InventoryReceiving: (1) summary bug — grouped receipt rows now carry header (via headerByNumber lookup) and the row renders expected_total_rolls/net_kg/gross_kg from the shipment header for shells (lineCount 0) and as an "exp" hint for shipments with lines; header-only shells already carried header. Root cause was display-only — the expected totals were saved to inventory_shipment_headers but never read into the list row. (2) confirmCancelReceipt + restoreReceipt now also flip inventory_shipment_headers status (cancelled / pending_detail) so NEXPAC shells with no inventory_stock_receipts lines cancel/restore correctly. (3) new deleteShipment(g): super_admin-only hard delete (type-to-confirm = receipt_number), blocked when status==finalized (owns cost layers — reopen first); deletes inventory_receipt_rolls -> inventory_stock_receipts (dbDelete, audit-logged) -> inventory_shipment_headers. Delete button gated isSuperAdmin && !isFinalized. No SQL change.' },
+    ],
+  },
+  {
     version: 'v55.83-U',
     date: '2026-06-07',
     label: 'Profit in EGP — with currency gain/loss separated out',
