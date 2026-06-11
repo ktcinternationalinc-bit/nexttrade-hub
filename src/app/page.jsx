@@ -43,6 +43,7 @@ import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
 import NotificationBell from '../components/NotificationBell';
 import BankTab from '../components/BankTab';
+import AccountingTab from '../components/AccountingTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import OpenAccountsTab from '../components/OpenAccountsTab';
@@ -178,6 +179,7 @@ const TABS = [
   { id: 'treasury', label: 'Treasury / الخزنة', icon: '🏦' },
   { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
   { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
+  { id: 'accounting', label: 'Accounting / محاسبة', icon: '🧾' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
   { id: 'openaccounts', label: 'Open Accounts / حسابات', icon: '📒' },
@@ -1913,7 +1915,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Treasury', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', accounting: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
   };
 
   const visibleTabs = useMemo(() => {
@@ -1924,7 +1926,7 @@ export default function App() {
       // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
       // No explicit permission: hide all financial + admin tabs (even for admin/manager role)
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports', 'customs', 'customers'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'accounting', 'egyptbank', 'reports', 'customs', 'customers'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -5369,7 +5371,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-V</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-AD</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -14135,7 +14137,14 @@ export default function App() {
         )}
 
         {tab === 'bank' && (
-          <SafeSection label="Bank"><BankTab user={user} supabase={supabase} /></SafeSection>
+          <SafeSection label="Bank">
+            <BankTab user={user} supabase={supabase} />
+          </SafeSection>
+        )}
+        {tab === 'accounting' && (
+          <SafeSection label="Accounting">
+            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} />
+          </SafeSection>
         )}
 
         {tab === 'egyptbank' && (

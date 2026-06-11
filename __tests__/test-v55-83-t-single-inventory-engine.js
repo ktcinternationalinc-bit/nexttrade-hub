@@ -31,7 +31,7 @@ ok((tab.match(/subtab === 'adjustments' &&/g) || []).length === 1, 'exactly ONE 
 ok(/reverseFifoConsumption/.test(page), 'reverseFifoConsumption kept for historical rows');
 
 // --- version + whatsnew ---
-ok(/>v55\.83-[A-Z]</.test(page), 'page.jsx header stamped (current v55.83 build)');
+ok(/>v55\.83-[A-Z]+</.test(page), 'page.jsx header stamped (current v55.83 build)');
 ok(/version: 'v55\.83-T'/.test(wn), 'WhatsNew has v55.83-T entry');
 ok(/UNREACHABLE/.test(wn), 'WhatsNew honestly notes dead legacy branches remain (super-admin)');
 

@@ -26,7 +26,7 @@ ok(!/var realizedFx = costAtSale - costAtReceipt;/.test(rep), 'old (wrong) reali
 ok(/cogs_egp_at_receipt/.test(rep) && /cost_egp_at_sale/.test(rep), 'report uses both EGP cost snapshots');
 
 // --- version ---
-ok(/>v55\.83-[A-Z]</.test(p('src/app/page.jsx')), 'page.jsx stamped (current v55.83 build)');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')), 'page.jsx stamped (current v55.83 build)');
 ok(/version: 'v55\.83-U'/.test(p('src/components/WhatsNewWidget.jsx')), 'WhatsNew has v55.83-U');
 
 console.log('\nv55.83-U FX P&L integration: ' + pass + ' passed, ' + fail + ' failed');

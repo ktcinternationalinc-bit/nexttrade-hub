@@ -23,7 +23,7 @@ const clears = (rc.match(/setNexpacPreview\(null\)/g) || []).length;
 ok(clears >= 2, 'reset: openNew + closeModal clear nexpacPreview (found ' + clears + ')');
 
 // version stamps aligned
-ok(/>v55\.83-[A-Z]</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
 ok(/version: 'v55\.83-P'/.test(p('src/components/WhatsNewWidget.jsx')), 'WhatsNew still has the v55.83-P entry');
 
 console.log('\nv55.83-P NEXPAC persistence: ' + pass + ' passed, ' + fail + ' failed');

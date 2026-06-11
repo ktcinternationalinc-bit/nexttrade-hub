@@ -22,7 +22,7 @@ ok(/expected_total_rolls: hRow\.expected_total_rolls != null \? String\(hRow\.ex
 ok(/expected_uom_type: hRow\.expected_uom_type \|\| 'kg'/.test(rc), 'normal edit reloads UOM type (kg default)');
 
 // version
-ok(/>v55\.83-[A-Z]</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
 ok(/version: 'v55\.83-Q'/.test(p('src/components/WhatsNewWidget.jsx')), 'WhatsNew top entry v55.83-Q');
 
 console.log('\nv55.83-Q expected-totals + UOM: ' + pass + ' passed, ' + fail + ' failed');

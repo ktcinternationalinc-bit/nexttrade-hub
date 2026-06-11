@@ -10,11 +10,11 @@ const r = p('src/components/InventoryReceiving.jsx');
 ok(/dbDelete/.test(r) && /from '\.\.\/lib\/supabase'/.test(r), 'dbDelete imported');
 ok(/async function deleteShipment\(g\)/.test(r), 'deleteShipment function exists');
 ok(/if \(!isSuperAdmin\)/.test(r) && /deleteShipment/.test(r), 'delete is super-admin gated');
-ok(/if \(g\.status === 'finalized'\)/.test(r), 'delete blocked on finalized (reopen first)');
+ok(/shipmentDrawdown\(g\)/.test(r), 'delete guarded by drawdown check (v55.83-W superseded the finalized block)');
 ok(/typed\.trim\(\) !== rn/.test(r), 'delete requires type-to-confirm receipt number');
 ok(/dbDelete\('inventory_stock_receipts'/.test(r) && /dbDelete\('inventory_shipment_headers'/.test(r), 'delete removes lines + header');
 ok(/inventory_receipt_rolls'\)\.delete\(\)/.test(r), 'delete removes rolls first (FK)');
-ok(/isSuperAdmin && !isFinalized && \(/.test(r), 'Delete button gated isSuperAdmin && !isFinalized');
+ok(/\{isSuperAdmin && \(\n\s*<button\n\s*onClick=\{function \(\) \{ deleteShipment/.test(r), 'Delete button gated to super-admin (v55.83-W allows finalized)');
 ok(/🗑 Delete/.test(r), 'Delete button rendered');
 
 // --- Cancel/Restore now handle the header (shells) ---
@@ -29,7 +29,7 @@ ok(/📋 NEXPAC expected/.test(r), 'shell row renders NEXPAC expected totals');
 ok(/expNet\.toLocaleString/.test(r) && /expRolls\.toLocaleString/.test(r), 'expected net + rolls displayed');
 
 // --- version ---
-ok(/>v55\.83-V</.test(p('src/app/page.jsx')), 'page.jsx stamped v55.83-V');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')), 'page.jsx stamped (current v55.83 build)');
 ok(/version: 'v55\.83-V'/.test(p('src/components/WhatsNewWidget.jsx')), 'WhatsNew has v55.83-V');
 
 console.log('\nv55.83-V cancel/delete + NEXPAC summary: ' + pass + ' passed, ' + fail + ' failed');

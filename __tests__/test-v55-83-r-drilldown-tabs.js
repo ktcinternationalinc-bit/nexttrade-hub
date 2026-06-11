@@ -31,7 +31,7 @@ ok(/bg-indigo-500\/15 hover:bg-indigo-500\/30 border border-indigo-500\/40/.test
 ok(!/bg-slate-50 rounded-b-2xl/.test(ov), 'modal footer no longer light');
 
 // version
-ok(/>v55\.83-[A-Z]</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')), 'page.jsx has a v55.83 build stamp');
 ok(/version: 'v55\.83-R'/.test(p('src/components/WhatsNewWidget.jsx')), 'WhatsNew has the v55.83-R entry');
 
 console.log('\nv55.83-R drill-down tabs: ' + pass + ' passed, ' + fail + ' failed');

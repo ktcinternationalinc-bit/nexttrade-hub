@@ -562,15 +562,23 @@ export default function InventoryReceiving(props) {
   // Calls the reopen_finalized_receipt SQL function which reverses the FIFO layer
   // and flips status back to 'received'. Re-finalization later creates a new layer.
   async function reopenReceipt(grouped) {
-    if (!isSuperAdmin) {
-      alert('Reopening a finalized receipt is restricted to super_admin.');
+    if (!isSuperAdmin && !canEdit) {
+      alert('Editing a finalized shipment requires Edit Inventory permission.');
       return;
     }
     if (grouped.status !== 'finalized') {
       alert('Receipt is not in Finalized state. Status: ' + grouped.status);
       return;
     }
-    var reason = window.prompt('Reopening "' + grouped.receipt_number + '" will REVERSE its cost layer and any sales that drew from it will need COGS restatement.\n\nEnter a reason for reopening:');
+    // v55.83-W — reopening reverses the cost layer. If stock was already sold,
+    // only a super-admin may proceed (COGS on those sales will need restatement).
+    var ddR = await shipmentDrawdown(grouped);
+    if (!ddR.error && ddR.consumedQty > 0 && !isSuperAdmin) {
+      alert('Cannot reopen ' + grouped.receipt_number + ': ' + ddR.consumedQty.toLocaleString() + ' unit(s) already sold from this shipment. Reversing would restate COGS on those sales — only a super-admin can do this.');
+      return;
+    }
+    var soldWarn = (!ddR.error && ddR.consumedQty > 0) ? ('\n\nWARNING: ' + ddR.consumedQty.toLocaleString() + ' unit(s) already sold — those sales will need COGS restatement.') : '';
+    var reason = window.prompt('Reopening "' + grouped.receipt_number + '" will REVERSE its cost layer so you can edit it, then you re-finalize.' + soldWarn + '\n\nEnter a reason for reopening:');
     if (!reason || !reason.trim()) { alert('Reason required.'); return; }
     if (!window.confirm('Confirm reopen of ' + grouped.receipt_number + '?\n\nThis creates a reversal movement, marks the cost layer as reversed, and changes status back to "Received" so you can edit and re-finalize.\n\nReason: ' + reason.trim())) return;
 
@@ -1211,6 +1219,13 @@ export default function InventoryReceiving(props) {
       var rn = cancelTarget.receipt_number;
       var rows = receipts.filter(function (r) { return r.receipt_number === rn && r.status !== 'cancelled'; });
 
+      // v55.83-W — don't reverse stock that an outbound order already consumed.
+      var ddC = await shipmentDrawdown(cancelTarget);
+      if (!ddC.error && ddC.consumedQty > 0) {
+        alert('Cannot cancel ' + rn + ': ' + ddC.consumedQty.toLocaleString() + ' unit(s) have already been sold / drawn down from this shipment.\n\nReverse or edit the invoice(s) that consumed this stock first, then cancel.');
+        return;
+      }
+
       // v55.83-A.6.27.66 (C4, Max May 23 2026) — finalized lines need their
       // FIFO cost layer reversed BEFORE we flip status to 'cancelled'.
       // Previously the cancel just set status='cancelled' on every line
@@ -1291,19 +1306,51 @@ export default function InventoryReceiving(props) {
     }
   }
 
+  // v55.83-W — has any stock from this shipment's cost layers been drawn down
+  // (sold/consumed by an outbound)? Protects delete/cancel/reopen: we never remove
+  // or reverse stock an outbound order already consumed.
+  async function shipmentDrawdown(g) {
+    var rn = g.receipt_number;
+    var lineIds = receipts.filter(function (r) { return r.receipt_number === rn; }).map(function (r) { return r.id; });
+    if (lineIds.length === 0) return { layers: [], consumedQty: 0, error: null };
+    try {
+      var res = await supabase.from('inventory_layers').select('id, qty_received, qty_remaining, source_receipt_id').in('source_receipt_id', lineIds);
+      if (res.error) return { layers: [], consumedQty: 0, error: res.error.message };
+      var layers = res.data || [];
+      var consumedQty = layers.reduce(function (a, l) { return a + Math.max(0, Number(l.qty_received || 0) - Number(l.qty_remaining || 0)); }, 0);
+      return { layers: layers, consumedQty: consumedQty, error: null };
+    } catch (e) { return { layers: [], consumedQty: 0, error: (e && e.message) || String(e) }; }
+  }
+
   // ── Delete (hard, super_admin only) ──────────────────────────────
   // v55.83-V — permanent removal. Cancel keeps a record (greyed out); Delete wipes
   // the lines, their rolls, and the shipment header. Blocked on finalized shipments
   // (they own cost layers — reopen first). Restricted to super_admin; logged via dbDelete.
   async function deleteShipment(g) {
     if (!isSuperAdmin) { alert('Permanently deleting a shipment is restricted to super-admins. Use Cancel instead.'); return; }
-    if (g.status === 'finalized') { alert('This shipment is FINALIZED and owns cost layers. Reopen it first (which reverses the layers), then delete.'); return; }
     var rn = g.receipt_number;
     var lineRows = receipts.filter(function (r) { return r.receipt_number === rn; });
-    var typed = window.prompt('PERMANENTLY DELETE shipment ' + rn + '?\n\nThis removes ' + lineRows.length + ' product line(s), their rolls, and the shipment header. It CANNOT be undone. To keep a record instead, use Cancel.\n\nType the shipment number to confirm:');
+
+    // v55.83-W — never delete stock an outbound order already consumed.
+    var dd = await shipmentDrawdown(g);
+    if (dd.error) {
+      if (!window.confirm('Could not verify whether any stock from ' + rn + ' has been sold (' + dd.error + ').\n\nDeleting anyway could corrupt sales/COGS if it was sold. Proceed ONLY if you are certain nothing was sold from this shipment. Continue?')) return;
+    } else if (dd.consumedQty > 0) {
+      alert('Cannot delete ' + rn + ': ' + dd.consumedQty.toLocaleString() + ' unit(s) have already been sold / drawn down from this shipment.\n\nReverse or edit the invoice(s) that consumed this stock first, then delete.');
+      return;
+    }
+
+    var typed = window.prompt('PERMANENTLY DELETE shipment ' + rn + '?\n\nThis removes its cost layers, stock movements, ' + lineRows.length + ' product line(s) and rolls, and the shipment header — so it disappears from the inventory overview. It CANNOT be undone. To keep a record instead, use Cancel.\n\nType the shipment number to confirm:');
     if (typed == null) return;
     if (typed.trim() !== rn) { alert('What you typed did not match "' + rn + '". Delete aborted.'); return; }
     try {
+      var lineIds = lineRows.map(function (r) { return r.id; });
+      // v55.83-W — remove the inventory-overview entries this shipment created:
+      // its stock movements + cost layers (safe: guarded above as not consumed).
+      if (lineIds.length > 0) {
+        try { await supabase.from('inventory_movements').delete().in('source_receipt_id', lineIds); } catch (e) { console.warn('[receiving] movement delete:', e); }
+        try { await supabase.from('inventory_layers').delete().in('source_receipt_id', lineIds); } catch (e) { console.warn('[receiving] layer delete:', e); }
+      }
       for (var i = 0; i < lineRows.length; i++) {
         try { await supabase.from('inventory_receipt_rolls').delete().eq('receipt_id', lineRows[i].id); } catch (e) { console.warn('[receiving] roll delete:', e); }
       }
@@ -1312,7 +1359,7 @@ export default function InventoryReceiving(props) {
       }
       var hdrDel = headers.find(function (h) { return h.receipt_number === rn; });
       if (hdrDel) await dbDelete('inventory_shipment_headers', hdrDel.id, userProfile && userProfile.id);
-      toast.success('Shipment ' + rn + ' permanently deleted.');
+      toast.success('Shipment ' + rn + ' permanently deleted (cost layers + stock removed from the overview).');
       await reload();
     } catch (err) {
       console.error('[receiving] delete failed:', err);
@@ -1592,13 +1639,13 @@ export default function InventoryReceiving(props) {
                     </button>
                   )}
                   {/* v55.83-A.6.27.35 — Reopen button: finalized receipts only, super_admin only */}
-                  {isSuperAdmin && isFinalized && (
+                  {(isSuperAdmin || canEdit) && isFinalized && (
                     <button
                       onClick={function () { reopenReceipt(g); }}
                       className="px-2 py-1 text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded font-bold border border-amber-600/40"
-                      title="Reopen this finalized receipt for editing (reverses the cost layer)"
+                      title="Edit this finalized shipment — reverses its cost layer so you can change it, then re-finalize"
                     >
-                      🔓 Reopen
+                      🔓 Edit (reopen)
                     </button>
                   )}
                   {/* v55.83-A.6.27.33 — Finalize Cost button opens landed-cost dialog */}
@@ -1620,7 +1667,7 @@ export default function InventoryReceiving(props) {
                       Cancel
                     </button>
                   )}
-                  {isSuperAdmin && !isFinalized && (
+                  {isSuperAdmin && (
                     <button
                       onClick={function () { deleteShipment(g); }}
                       className="px-2 py-1 text-[10px] bg-red-700 hover:bg-red-600 text-white rounded font-bold border border-red-800"
