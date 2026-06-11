@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AG',
+    date: '2026-06-08',
+    label: 'CRITICAL FIX: accounting records now save',
+    items: [
+      '**\\u2705 Saving works again.** Adding customers, invoices, and proformas was silently blocked by an over-strict security rule. That rule is fixed, and records now save normally. Run the one SQL block provided, then saving works immediately.',
+      '**\\ud83d\\udd0d Errors are no longer silent.** If a save ever fails now, you\\u2019ll see the real reason on screen and in the browser console instead of nothing happening.',
+      { superAdminOnly: true, text: 'v55.83-AG CRITICAL RLS fix. ROOT CAUSE: -Y/-Z/-AB/-AC put business-scoped RLS on the accounting/bank tables using app_user_business_ids() which filters user_business_memberships WHERE user_id = auth.uid(). But this app authenticates by EMAIL (users looked up via .eq(email), users.id != auth.uid()), so the membership seed (keyed by users.id) never matches auth.uid() -> app_user_business_ids() returns empty -> every INSERT/SELECT/UPDATE on accounting_customers/invoices/items/proformas + payment_matches/credits/deposits/bank_transactions was rejected by RLS (dbInsert throws "new row violates row-level security policy"). FIX: sql/v55-83-ag-rls-fix.sql reverts SELECT/INSERT/UPDATE to USING(true)/WITH CHECK(true) (the app-wide pattern: open RLS + app-code permission gates via canViewBank/SeeAmounts/Classify/Match/EditMappings), keeps DELETE USING(false) on financial record tables, DELETE open on item tables; backfills business_id. Also added console.error to save catches in AccountingCustomersTab/AccountingInvoicesTab/BankReviewTab so failures surface in DevTools. user_business_memberships + app_user_business_ids() left in place (harmless, future use once a real auth.uid<->user mapping exists). No schema/table changes.' },
+    ],
+  },
+  {
+    version: 'v55.83-AF',
+    date: '2026-06-08',
+    label: 'Fix: Nadia can now update / reassign tickets again',
+    items: [
+      '**\\ud83e\\udd16 Fixed Nadia\\u2019s \\u201cUnknown action type: update_ticket\\u201d error.** Asking Nadia to add someone to a ticket, reassign it, change its status, or add a note now works \\u2014 she updates the ticket, leaves a note on it, and emails the new assignee. (Creating tickets always worked; updating them was the gap.)',
+      { superAdminOnly: true, text: 'v55.83-AF hotfix in src/app/api/ask/route.js. The greeter multi-action executor (the loop ending in the Unknown-action throw) handled create_ticket/create_event/update_event/delete_event but had no update_ticket branch, so update_ticket fell through to throw -> "Action failed (update_ticket): Unknown action type". Added an update_ticket branch mirroring the canonical single-action handler (lookup by ticket_number/title, apply status/priority/assigned_to/due_date/new_title/description/category/add_comment via normalizeTicketStatus/Priority, write ticket_comments, notifyTicketAssignedServer on reassign, push actionsExecuted ok:true). var + string-concat only (SWC-safe). No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-AE',
     date: '2026-06-08',
     label: 'Fix: Accounting tab now shows in the sidebar',

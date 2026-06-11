@@ -142,7 +142,7 @@ export default function AccountingInvoicesTab(props) {
     }).then(function (docId) {
       return logActivity(userProfile && userProfile.id, (editing === 'new' ? 'Created ' : 'Updated ') + (isInvoice() ? 'invoice ' : 'proforma ') + (hpayload.invoice_number || hpayload.proforma_number || docId) + ' (' + fmt(total) + ')', 'accounting_' + mode);
     }).then(function () { toast.success('Saved'); setEditing(null); load(); })
-      .catch(function (e) { toast.error('Save failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Save failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -156,7 +156,7 @@ export default function AccountingInvoicesTab(props) {
     dbUpdate('accounting_invoices', row.id, patch, userProfile && userProfile.id)
       .then(function () { return logActivity(userProfile && userProfile.id, 'Invoice ' + (row.invoice_number || row.id) + ' -> ' + status, 'accounting_invoices'); })
       .then(function () { toast.success('Invoice ' + status.replace('_', ' ')); load(); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
   function reopenInvoice(row) {
@@ -167,7 +167,7 @@ export default function AccountingInvoicesTab(props) {
     dbUpdate('accounting_invoices', row.id, { approval_status: 'internal_review', ready_for_wave: false, updated_by: userProfile && userProfile.id }, userProfile && userProfile.id)
       .then(function () { return logActivity(userProfile && userProfile.id, 'Reopened invoice ' + (row.invoice_number || row.id) + ' (' + reason.trim() + ')', 'accounting_invoices'); })
       .then(function () { toast.success('Reopened'); load(); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -193,7 +193,7 @@ export default function AccountingInvoicesTab(props) {
         });
       })
       .then(function () { toast.success('Converted to invoice'); setMode('invoices'); load(); })
-      .catch(function (e) { toast.error('Convert failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Convert failed: ', e); toast.error('Convert failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 

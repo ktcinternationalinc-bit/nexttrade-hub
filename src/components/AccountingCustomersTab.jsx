@@ -71,7 +71,7 @@ export default function AccountingCustomersTab(props) {
         .then(function () { return logActivity(userProfile && userProfile.id, 'Updated accounting customer ' + payload.company_name, 'accounting_customers'); });
     }
     done.then(function () { toast.success('Saved'); setEditing(null); load(); })
-      .catch(function (e) { toast.error('Save failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Save failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 

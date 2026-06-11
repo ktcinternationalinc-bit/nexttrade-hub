@@ -147,7 +147,7 @@ export default function BankReviewTab(props) {
     patchTxn(t, { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
       'Classified bank txn ' + (t.name || t.id) + ' as ' + cls)
       .then(function () { toast.success('Classified as ' + labelize(cls)); load(); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -161,7 +161,7 @@ export default function BankReviewTab(props) {
     if (reason) patch.notes = ((t.notes || '') + (t.notes ? ' | ' : '') + labelize(status) + ': ' + reason.trim());
     patchTxn(t, patch, 'Marked bank txn ' + (t.name || t.id) + ' ' + status + (reason ? (' (' + reason.trim() + ')') : ''))
       .then(function () { toast.success('Marked ' + labelize(status)); load(); setSel(null); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -171,7 +171,7 @@ export default function BankReviewTab(props) {
     patchTxn(t, { review_status: 'approved', reviewed_by: userProfile && userProfile.id, reviewed_at: new Date().toISOString() },
       'Approved bank txn ' + (t.name || t.id))
       .then(function () { toast.success('Approved & locked'); load(); setSel(null); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
   function reopen(t) {
@@ -181,7 +181,7 @@ export default function BankReviewTab(props) {
     setBusy(true);
     patchTxn(t, { review_status: 'reviewed' }, 'Reopened approved bank txn ' + (t.name || t.id) + ' (' + reason.trim() + ')')
       .then(function () { toast.success('Reopened'); load(); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -222,7 +222,7 @@ export default function BankReviewTab(props) {
     });
     chain.then(function () { return patchTxn(t, { review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status, accounting_customer_id: t.accounting_customer_id }, 'Split bank txn ' + (t.name || t.id) + ' into ' + splitRows.length + ' line(s)'); })
       .then(function () { toast.success('Split saved (' + splitRows.length + ' lines)'); setSplitMode(false); setSplitRows([]); onReload(); load(); })
-      .catch(function (e) { toast.error('Split failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Split failed: ', e); toast.error('Split failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
@@ -263,7 +263,7 @@ export default function BankReviewTab(props) {
       toast.success('Matched ' + fmt(c.applied_to_invoice) + (c.type === 'partial' ? ' (partial)' : '') + (c.overpayment > 0 ? ' · ' + fmt(c.overpayment) + ' to customer credit' : ''));
       onReload(); load();
     })
-    .catch(function (e) { toast.error('Match failed: ' + (e && e.message)); })
+    .catch(function (e) { console.error('[save] Match failed: ', e); toast.error('Match failed: ' + ((e && e.message) || 'unknown error — check console')); })
     .finally(function () { setBusy(false); });
   }
 
@@ -276,7 +276,7 @@ export default function BankReviewTab(props) {
     dbInsert('unapplied_deposits', { business_id: t.business_id, bank_transaction_id: t.id, accounting_customer_id: mCustomerId || null, amount: amt, status: 'open', notes: mNotes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
       .then(function () { return patchTxn(t, { accounting_customer_id: mCustomerId || t.accounting_customer_id, classification: t.classification || 'customer_payment', review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status }, 'Created unapplied deposit ' + fmt(amt) + ' from bank txn ' + (t.name || t.id)); })
       .then(function () { toast.success('Unapplied deposit created — awaiting allocation'); load(); })
-      .catch(function (e) { toast.error('Failed: ' + (e && e.message)); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
 
