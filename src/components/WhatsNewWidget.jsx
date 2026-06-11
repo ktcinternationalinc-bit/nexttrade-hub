@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AN',
+    date: '2026-06-08',
+    label: 'Wave customer import — live, with report',
+    items: [
+      '**\\ud83d\\udc65 Import your Wave customers into the Hub** (Accounting → Wave Import → "Import customers into Hub"). Pulls every customer from the business you pick and brings them in.',
+      '**\\ud83d\\udd01 Safe to run again.** It matches on each customer\\u2019s Wave ID, so re-running updates them instead of making duplicates. You get a report: created, updated, skipped, and any errors.',
+      '**\\u2139\\ufe0f Invoices come next.** Customers carry no balances, so they\\u2019re the safe first step. The invoice + payments import (the money part) is the next build.',
+      { superAdminOnly: true, text: 'v55.83-AN. New route src/app/api/wave/import-customers/route.js (POST {businessId,userId}): server-side service-role client (NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY) to bypass RLS for bulk import; paginates Wave customers (pageSize 50, loops totalPages, safety<200); dedupe by wave_customer_id (preloads existing map) -> insert new / update existing (company_name/email/phone); sets source=wave_import, wave_sync_status=synced, business_id=internal businesses.id; report {created,updated,skipped,errors[],total,businessId,timestamp}; writes wave_sync_log (entity_type customer, action import, response_payload=report). var+concat, no arrows/backticks (SWC-safe). WaveImportTab: "Import customers into Hub" button (window.confirm) + report card (created/updated/skipped + errors list). Preview still available. NEXT (money-critical): src/app/api/wave/import-invoices — paginate invoices+items, dedupe wave_invoice_id, link accounting_customer_id via wave_customer_id, set total_amount/amount_paid/wave_imported_paid/balance_due/payment_status/status/is_historical, line items (dedupe, no phantom payments), report + sync_log. THEN Customer AR History screen. THEN Hub->Wave push. THEN Product Master.' },
+    ],
+  },
+  {
     version: 'v55.83-AM',
     date: '2026-06-08',
     label: 'Groundwork for two-way Wave sync (no double-counting)',

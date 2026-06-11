@@ -16,6 +16,8 @@ export default function WaveImportTab(props) {
   var [page, setPage] = useState(1);
   var [data, setData] = useState(null);
   var [busy, setBusy] = useState(false);
+  var [importing, setImporting] = useState(false);
+  var [report, setReport] = useState(null);
 
   useEffect(function () {
     fetch('/api/wave/check').then(function (r) { return r.json(); }).then(function (d) {
@@ -31,6 +33,17 @@ export default function WaveImportTab(props) {
       .then(function (d) { setData(d); })
       .catch(function (e) { setData({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
       .finally(function () { setBusy(false); });
+  }
+
+  function runImportCustomers() {
+    if (!bizId) return;
+    if (!window.confirm('Import customers from the selected Wave business into the Hub? This is safe and re-runnable (no duplicates), and customers carry no balances.')) return;
+    setImporting(true); setReport(null);
+    fetch('/api/wave/import-customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
+      .catch(function (e) { setReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
+      .finally(function () { setImporting(false); });
   }
 
   if (!isSuperAdmin) {
@@ -84,6 +97,34 @@ export default function WaveImportTab(props) {
       ) : (
         <div className="bg-rose-100 text-rose-950 rounded-lg p-3 text-xs font-medium">{data.error || 'Preview failed.'}</div>
       ))}
+
+      {bizId && (
+        <div className="mt-5 border-t border-slate-700 pt-4">
+          <div className="text-sm font-bold text-slate-200 mb-1">Step 2 — Import customers into the Hub</div>
+          <div className="text-[11px] text-slate-400 mb-2">Safe and re-runnable: matches on Wave customer ID, so running it again updates instead of duplicating. (Invoices are a separate, later import.)</div>
+          <button onClick={runImportCustomers} disabled={importing} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold disabled:opacity-50">
+            {importing ? 'Importing…' : 'Import customers into Hub'}
+          </button>
+          {report && (
+            <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200 text-xs">
+              <div className="font-extrabold mb-1">📋 Import report</div>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                <div className="bg-emerald-100 text-emerald-950 rounded p-2"><div className="text-lg font-extrabold">{report.created || 0}</div>created</div>
+                <div className="bg-sky-100 text-sky-950 rounded p-2"><div className="text-lg font-extrabold">{report.updated || 0}</div>updated</div>
+                <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-lg font-extrabold">{report.skipped || 0}</div>skipped</div>
+              </div>
+              <div className="text-slate-600">Total read from Wave: {report.total == null ? '—' : report.total} · {report.timestamp || ''}</div>
+              {(report.errors && report.errors.length > 0) && (
+                <div className="mt-2"><div className="font-bold text-rose-700">Errors ({report.errors.length}):</div>
+                  <ul className="list-disc ml-4 text-rose-700">{report.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
+                  {report.errors.length > 20 && <div className="text-rose-700">…and {report.errors.length - 20} more</div>}
+                </div>
+              )}
+              {(!report.errors || report.errors.length === 0) && <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
