@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AO',
+    date: '2026-06-08',
+    label: 'Wave Import: business list fixed + delete/archive groundwork',
+    items: [
+      '**\\ud83d\\udd27 Fixed the blank business list** on Wave Import. The screen now shows a clear status line — connected, token missing, or the exact error — plus a Recheck button, instead of a silent empty dropdown.',
+      '**\\ud83d\\uddc4\\ufe0f Groundwork for controlled delete/void/archive** of invoices, proformas, and customers is in place. The actual buttons and the rules that protect synced/historical/paid records are the next build.',
+      { superAdminOnly: true, text: 'v55.83-AO. FIX (blocker): WaveImportTab business loader only set businesses when d.connected AND .catch swallowed errors -> blank dropdown, no message. Now loadBusinesses() stores full /api/wave/check response in conn state, renders status banner (connected + count | configured===false token-missing + error | error message) + Recheck button + "connected but 0 businesses" note. Same /api/wave/check route (gql.waveapps.com businesses{id name isClassicInvoicing}) that works on the Connection tab. SQL sql/v55-83-ao-lifecycle-foundation.sql (additive): accounting_invoices += record_status(active|void|cancelled|archived)/archived_at/archived_by/void_reason; accounting_proformas += record_status/archived_at/archived_by; accounting_customers += record_status(active|archived)/archived_at/archived_by. NEXT BUILD: delete/void/archive UI + guards — customers hard-delete only if no invoices/proformas/payments/bank-matches/wave_customer_id & role Owner|Admin|Accounting Manager else archive; invoices hard-delete only if !synced & no payment_matches & no wave_invoice_id & !is_historical & role else void/cancel/archive; proformas delete if not converted else void/cancel/archive; Restore for archived; every action logged to audit (daily_log + wave_sync_log where relevant); confirmation prompts. THEN invoice import.' },
+    ],
+  },
+  {
     version: 'v55.83-AN',
     date: '2026-06-08',
     label: 'Wave customer import — live, with report',

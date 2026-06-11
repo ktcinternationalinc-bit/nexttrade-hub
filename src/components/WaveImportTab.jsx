@@ -18,12 +18,19 @@ export default function WaveImportTab(props) {
   var [busy, setBusy] = useState(false);
   var [importing, setImporting] = useState(false);
   var [report, setReport] = useState(null);
+  var [conn, setConn] = useState(null);
 
-  useEffect(function () {
+  function loadBusinesses() {
+    setLoadingBiz(true);
     fetch('/api/wave/check').then(function (r) { return r.json(); }).then(function (d) {
-      if (d && d.connected) setBusinesses(d.businesses || []);
-    }).catch(function () {}).finally(function () { setLoadingBiz(false); });
-  }, []);
+      setConn(d || { connected: false, error: 'Empty response from server.' });
+      setBusinesses(d && d.connected && d.businesses ? d.businesses : []);
+    }).catch(function (e) {
+      setConn({ connected: false, error: 'Request failed: ' + ((e && e.message) || 'network error') });
+      setBusinesses([]);
+    }).finally(function () { setLoadingBiz(false); });
+  }
+  useEffect(function () { loadBusinesses(); }, []);
 
   function preview(t, p) {
     if (!bizId) return;
@@ -56,6 +63,21 @@ export default function WaveImportTab(props) {
       <div className="bg-white text-slate-900 rounded p-3 text-xs font-medium mb-3">
         Pick the exact business, then preview its real customers and invoices. <b>This is preview only — nothing is saved into the Hub yet.</b> The next step adds importing with duplicate detection. Wave gives each invoice\u2019s Paid / Due / Status (your AR balance); detailed cash transactions come from Plaid, not Wave.
       </div>
+
+      <div className="rounded p-2 mb-3 text-xs font-semibold flex items-center justify-between gap-2 flex-wrap"
+        style={{ background: conn && conn.connected ? '#dcfce7' : (conn && conn.configured === false ? '#fef9c3' : '#fee2e2'), color: '#0f172a' }}>
+        <span>
+          {loadingBiz ? 'Checking Wave connection…'
+            : conn && conn.connected ? ('✅ Connected to Wave — ' + (businesses.length) + ' business(es) found')
+            : conn && conn.configured === false ? ('⚙️ Wave token missing on the server. ' + (conn.error || ''))
+            : conn ? ('❌ Wave error: ' + (conn.error || 'not connected'))
+            : '—'}
+        </span>
+        <button onClick={loadBusinesses} disabled={loadingBiz} className="bg-white text-slate-900 border border-slate-300 rounded px-2 py-0.5 font-bold disabled:opacity-50">Recheck</button>
+      </div>
+      {conn && conn.connected && businesses.length === 0 && (
+        <div className="bg-amber-100 text-amber-950 rounded p-2 mb-3 text-xs font-medium">Connected, but Wave returned no businesses for this token.</div>
+      )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <label className="text-xs text-slate-300">Business:</label>
