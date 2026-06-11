@@ -1,0 +1,17 @@
+const fs=require('fs');const path=require('path');
+const p=(f)=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
+let pass=0,fail=0;const ok=(c,m)=>{if(c)pass++;else{fail++;console.log('  ✗ '+m);}};
+const sql=p('sql/v55-83-am-wave-bridge-foundation.sql');
+ok(/ADD COLUMN IF NOT EXISTS source/.test(sql),'source provenance column');
+ok(/is_historical/.test(sql),'historical flag');
+ok(/wave_imported_paid/.test(sql),'Wave paid baseline kept separate (anti-double-count)');
+ok(/uq_acct_customers_wave_id/.test(sql)&&/uq_acct_invoices_wave_id/.test(sql),'dedup unique keys on wave ids');
+ok(/CREATE TABLE IF NOT EXISTS accounting_invoice_payments/.test(sql),'payments table');
+ok(/uq_invpay_bank_txn_per_invoice/.test(sql)&&/uq_invpay_wave_id/.test(sql),'payment dedup (bank txn + wave id)');
+ok(/CREATE TABLE IF NOT EXISTS wave_sync_log/.test(sql),'sync log table');
+['entity_type','hub_record_id','wave_record_id','action','request_payload','response_payload','success','error_message','attempted_by','attempted_at'].forEach(function(c){ok(new RegExp(c).test(sql),'sync log col '+c);});
+ok(/FOR INSERT TO authenticated WITH CHECK \(true\)/.test(sql)&&/FOR DELETE TO authenticated USING \(false\)/.test(sql),'open RLS + DELETE locked');
+ok(/>v55\.83-AM</.test(p('src/app/page.jsx')),'page AM');
+ok(/version: 'v55\.83-AM'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew AM');
+console.log('\nv55.83-AM wave bridge foundation: '+pass+' passed, '+fail+' failed');
+if(fail>0)process.exit(1);console.log('ALL PASS');
