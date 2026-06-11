@@ -16,6 +16,7 @@ ok(/id: 'accounting'/.test(page)&&/AccountingTab/.test(page),'Accounting tab add
 ok(/accounting: 'Bank'/.test(page),'accounting tab gated via Bank permission');
 ok(/'bank', 'accounting'/.test(page),'accounting hidden by default for users without Bank perm');
 ok(/tab === 'accounting'/.test(page)&&/<AccountingTab /.test(page),'accounting tab renders wrapper');
+ok(/'bank', 'accounting', 'quotes'/.test(page),'accounting is in the FINANCE sidebar group (actually rendered)');
 // bank tab stripped of accounting screens
 var bankSec=(page.match(/tab === 'bank' && \([\s\S]*?\)\}/)||[''])[0];
 ok(/BankTab/.test(bankSec)&&!/AccountingDashboard/.test(bankSec)&&!/BankReviewTab/.test(bankSec)&&!/AccountingInvoicesTab/.test(bankSec),'Bank tab is Plaid-only (accounting moved out)');
