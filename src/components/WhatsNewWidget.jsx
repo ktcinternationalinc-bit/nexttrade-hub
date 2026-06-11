@@ -33,6 +33,37 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AM',
+    date: '2026-06-08',
+    label: 'Groundwork for two-way Wave sync (no double-counting)',
+    items: [
+      '**\\ud83d\\udd17 Foundation for importing from Wave AND syncing back.** This build sets up the behind-the-scenes record-keeping so historical Wave data and new Hub activity stay matched, with no duplicate invoices or payments.',
+      '**\\ud83d\\udee1\\ufe0f Double-payment protection built in.** Money already marked paid in Wave is kept separate from new bank-matched payments, so nothing ever gets counted twice. Every Wave sync will be logged.',
+      { superAdminOnly: true, text: 'v55.83-AM. Schema lock for the Wave<->Hub<->Plaid bridge (sql/v55-83-am-wave-bridge-foundation.sql, additive, open RLS + DELETE-locked on financial/audit, app pattern). accounting_customers += source; UNIQUE(wave_customer_id) partial. accounting_invoices += source, is_historical, wave_imported_paid (Wave baseline kept SEPARATE from later payments so balance_due = total - (wave_imported_paid + SUM payments) never double-counts); UNIQUE(wave_invoice_id) partial. NEW accounting_invoice_payments (one row per real payment: source plaid_match|manual|wave_import, bank_transaction_id, payment_match_id, wave_payment_id, sync_status pending_wave_sync|synced; UNIQUE(invoice,bank_txn) + UNIQUE(wave_payment_id) dedup). NEW wave_sync_log (entity_type/hub_record_id/wave_record_id/action/request_payload/response_payload/success/error_message/attempted_by/attempted_at). NEXT BUILD: import execution route (paginate customers->invoices+lines, dedupe on the unique keys, set amount_paid/wave_imported_paid/balance_due/payment_status/status from Wave, source=wave_import, is_historical, wave_sync_status=synced, write wave_sync_log; import report) + Customer AR History screen. THEN Hub->Wave push (customerCreate/invoiceCreate/applyPayment) with conflict checks (wave_invoice_id exists? already synced? amount already in wave_imported_paid?). THEN Product Master + price history.' },
+    ],
+  },
+  {
+    version: 'v55.83-AL',
+    date: '2026-06-08',
+    label: 'Wave import preview now shows Paid / Due / Status (AR view)',
+    items: [
+      '**\\ud83d\\udcb0 Invoice preview now shows what\\u2019s been Paid and what\\u2019s still Due** for every invoice, plus its status — so you can see each customer\\u2019s open balance straight from Wave.',
+      '**\\u2139\\ufe0f About payment detail:** Wave gives the paid amount, balance, and status per invoice. The blow-by-blow cash history (each deposit) comes from your bank via Plaid — that\\u2019s by design, and it\\u2019s what we match against these invoices.',
+      { superAdminOnly: true, text: 'v55.83-AL. FINDING (verified against Wave List-invoices schema): Wave Invoice node exposes amountPaid/amountDue/status/total/taxTotal/dueDate/invoiceDate/memo/items/customer but NO per-invoice payments connection (no individual payment date/method records). Therefore: import amountPaid/amountDue/status (AR balance = sum amountDue per customer); detailed cash history stays Plaid-sourced. Code: import-preview route invoice query += amountPaid{value}; WaveImportTab invoice table += Paid column (Total/Paid/Due/Status). NEXT BUILD: commit import to Hub — customers (dedupe wave_customer_id/email) then invoices (dedupe wave_invoice_id/invoice_number), set accounting_invoices.amount_paid/balance_due/payment_status from Wave amountPaid/amountDue/status, link accounting_customer_id, mark historical, wave_sync_status=synced; import report. Then Product Master + price history.' },
+    ],
+  },
+  {
+    version: 'v55.83-AK',
+    date: '2026-06-08',
+    label: 'Wave Import — preview your real customers & invoices',
+    items: [
+      '**\\u2b07\\ufe0f New Wave Import preview** (Accounting → Wave Import). Pick the exact business and see your real Wave customers and invoices, page by page, before anything is brought in.',
+      '**\\ud83d\\udd0e Picks the right KTC.** Two of your businesses share the same name — the screen shows an ID next to each so you choose the one with your real invoices, not the empty duplicate.',
+      '**\\ud83d\\udee1\\ufe0f Nothing is saved yet.** This step only looks — importing into the Hub (with duplicate detection) is the next build, so you review first.',
+      { superAdminOnly: true, text: 'v55.83-AK. New route src/app/api/wave/import-preview/route.js (GET ?businessId=&type=customers|invoices&page=): paginated read from gql.waveapps.com (business(id){customers|invoices pageInfo+edges}), pageSize 25, GraphQL variables (bid/page), returns totalCount/currentPage/totalPages/items; var+concat SWC-safe; token never returned; READ ONLY. New WaveImportTab.jsx (super_admin): loads businesses via /api/wave/check (id+name), business <select> showing name + truncated id to disambiguate duplicate KTC LLCs, Preview customers/invoices buttons + Prev/Next pagination, customers table (name/email/phone), invoices table (number/customer/status/date/total/amountDue). Wired as Accounting sub-tab. NO writes to Hub or Wave yet. NEXT: commit-to-Hub with dedupe on wave_customer_id / wave_invoice_id + import report, then Product Master + price history.' },
+    ],
+  },
+  {
     version: 'v55.83-AJ',
     date: '2026-06-08',
     label: 'Wave capability audit — what can we import?',
