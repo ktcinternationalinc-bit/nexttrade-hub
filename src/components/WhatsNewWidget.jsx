@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AE',
+    date: '2026-06-08',
+    label: 'Fix: Accounting tab now shows in the sidebar',
+    items: [
+      '**\\ud83e\\uddfe The Accounting tab now appears in the menu**, in the Finance group right under Bank. (It was added but not wired into the sidebar grouping, so it was hidden \\u2014 now fixed.)',
+      { superAdminOnly: true, text: 'v55.83-AE hotfix. The sidebar renders only tab ids listed in its group arrays (page.jsx ~line 5718). AD added id=accounting to TABS/visibleTabs/TAB_MODULE_MAP but not to the FINANCE group items, so groupTabs filtered it out. Added accounting to the FINANCE group items (after bank) and to TAB_GROUPS breadcrumb map. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-AD',
     date: '2026-06-08',
     label: 'Accounting moved to its own tab + recent activity feed',

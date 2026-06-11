@@ -1887,7 +1887,7 @@ export default function App() {
   };
 
   // Breadcrumb — shows current location
-  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', accounting:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
   const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
   const currentGroup = TAB_GROUPS[tab] || '';
 
@@ -5371,7 +5371,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-AD</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-AE</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5716,7 +5716,7 @@ export default function App() {
           <div className="py-2">
             {[
               { group: 'OVERVIEW', items: ['dashboard'] },
-              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'openaccounts', 'egyptbank', 'bank', 'quotes', 'reports'] },
+              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'openaccounts', 'egyptbank', 'bank', 'accounting', 'quotes', 'reports'] },
               { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
               { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
