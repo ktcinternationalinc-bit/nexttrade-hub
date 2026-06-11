@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import AccountingDashboard from './AccountingDashboard';
 import CompanyProfileTab from './CompanyProfileTab';
+import WaveConnectionTab from './WaveConnectionTab';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import BankReviewTab from './BankReviewTab';
@@ -16,6 +17,7 @@ export default function AccountingTab(props) {
     ['invoices', '🧾 Invoices'],
     ['proformas', '📄 Proformas'],
     ['review', '🏦 Bank Review & Matching'],
+    ['wave', '🌊 Wave Connection'],
   ];
   return (
     <div>
@@ -35,6 +37,7 @@ export default function AccountingTab(props) {
       {sub === 'invoices' && <AccountingInvoicesTab key="acct-inv" {...props} defaultMode="invoices" />}
       {sub === 'proformas' && <AccountingInvoicesTab key="acct-pf" {...props} defaultMode="proformas" />}
       {sub === 'review' && <BankReviewTab {...props} />}
+      {sub === 'wave' && <WaveConnectionTab {...props} />}
     </div>
   );
 }
