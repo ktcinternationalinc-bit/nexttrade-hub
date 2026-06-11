@@ -9,6 +9,16 @@ export default function WaveConnectionTab(props) {
 
   var [state, setState] = useState(null);
   var [loading, setLoading] = useState(false);
+  var [audit, setAudit] = useState(null);
+  var [auditing, setAuditing] = useState(false);
+
+  function runAudit() {
+    setAuditing(true); setAudit(null);
+    fetch('/api/wave/audit').then(function (r) { return r.json(); })
+      .then(function (d) { setAudit(d); })
+      .catch(function (e) { setAudit({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
+      .finally(function () { setAuditing(false); });
+  }
 
   function test() {
     setLoading(true); setState(null);
@@ -65,6 +75,30 @@ export default function WaveConnectionTab(props) {
               <div className="text-xs font-medium">{state.error || 'Unknown error.'}</div>
             </div>
           )}
+        </div>
+      )}
+
+      {state && state.connected && (
+        <div className="mt-4">
+          <button onClick={runAudit} disabled={auditing} className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded text-sm font-bold disabled:opacity-50">
+            {auditing ? 'Auditing…' : 'Run capability audit (what can we import?)'}
+          </button>
+          {audit && (audit.ok ? (
+            <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200">
+              <div className="font-extrabold mb-2">📋 What your Wave account holds (live)</div>
+              <table className="w-full text-xs">
+                <thead><tr className="text-slate-600 text-left"><th className="py-1">Business</th><th className="text-right">Customers</th><th className="text-right">Invoices</th><th className="text-right">Products</th></tr></thead>
+                <tbody>
+                  {(audit.businesses || []).map(function (b, i) {
+                    return <tr key={i} className="border-t border-slate-100 text-slate-900"><td className="py-1 font-bold">{b.name}</td><td className="text-right">{b.customers == null ? '—' : b.customers}</td><td className="text-right">{b.invoices == null ? '—' : b.invoices}</td><td className="text-right">{b.products == null ? '—' : b.products}</td></tr>;
+                  })}
+                </tbody>
+              </table>
+              <div className="text-[11px] text-slate-600 mt-2">These counts are existing records (including historical) we can <b>read and import</b> from Wave. Creating/updating customers, invoices, and recording payments back to Wave is also supported by the API — that's the push direction we build next.</div>
+            </div>
+          ) : (
+            <div className="bg-rose-100 text-rose-950 rounded-lg p-3 mt-3 text-xs font-medium">{audit.error || 'Audit failed.'}</div>
+          ))}
         </div>
       )}
 

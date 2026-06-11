@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AJ',
+    date: '2026-06-08',
+    label: 'Wave capability audit — what can we import?',
+    items: [
+      '**\\ud83d\\udccb New "Run capability audit" button** on the Wave Connection screen. It checks your live Wave account and shows how many customers, invoices, and products are there — so you know exactly what historical data we can pull in.',
+      '**\\u2705 Confirms the two-way picture.** Records we can read/import from Wave, plus the create/update we\\u2019ll use to push approved invoices and payments back to Wave.',
+      { superAdminOnly: true, text: 'v55.83-AJ. New route src/app/api/wave/audit/route.js (GET): reads WAVE_ACCESS_TOKEN env, POSTs businesses{ customers/invoices/products pageInfo.totalCount } to gql.waveapps.com/graphql/public; returns per-business counts; var+concat SWC-safe; token never returned. WaveConnectionTab.jsx: "Run capability audit" button -> /api/wave/audit -> live counts table (customers/invoices/products) + note that read/import is confirmed and create/update/payment is API-supported (built next). ARCHITECTURE CONFIRMED: Plaid = bank-feed source (NOT Wave); Wave = ledger; Wave->Hub = historical import; Hub->Wave = approved customers/invoices/payments. No SQL. Read-only — no writes to Wave yet.' },
+    ],
+  },
+  {
     version: 'v55.83-AI',
     date: '2026-06-08',
     label: 'Wave connection check screen',
