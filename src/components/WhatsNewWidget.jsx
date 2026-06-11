@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AI',
+    date: '2026-06-08',
+    label: 'Wave connection check screen',
+    items: [
+      '**\\ud83c\\udf0a New Wave Connection screen** (Accounting → Wave Connection, owner only). After you add your Wave token in Vercel, click "Test Wave connection" to confirm the link works and see which of your Wave businesses supports invoice syncing.',
+      '**\\ud83d\\udd12 Your token stays secret.** It lives in a server setting (WAVE_ACCESS_TOKEN), never in the app code or the browser. This screen only reads from Wave — it changes nothing.',
+      { superAdminOnly: true, text: 'v55.83-AI. New route src/app/api/wave/check/route.js (GET): reads process.env.WAVE_ACCESS_TOKEN, POSTs businesses{ id name isClassicInvoicing isPersonal } to https://gql.waveapps.com/graphql/public with Bearer auth; returns {connected, configured, businesses[], error}; var+concat (SWC-safe), token never returned to client. New WaveConnectionTab.jsx (super_admin only): Test button -> /api/wave/check; on success lists businesses with isClassicInvoicing badge (classic=needs Wave migration before invoice sync; new=API sync supported); on failure shows configured=false (no token) vs error. Wired as Accounting sub-tab. SETUP: owner adds WAVE_ACCESS_TOKEN env var in Vercel + redeploy, then Test. No SQL. No write/sync yet — read-only compatibility check only.' },
+    ],
+  },
+  {
     version: 'v55.83-AH',
     date: '2026-06-08',
     label: 'Company Profile + branded invoices/proformas',
