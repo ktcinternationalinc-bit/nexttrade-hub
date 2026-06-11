@@ -1,7 +1,8 @@
 // v55.83-AB — US accounting customer master (separate from Egypt CRM).
 // Everything in the banking/accounting workflow links to accounting_customer_id.
 import { useState, useEffect } from 'react';
-import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
+import { customerLifecycle, archivePatch, restorePatch } from '../lib/record-lifecycle';
 import { canViewBank, canEditMappings } from '../lib/bank-permissions';
 
 var BLANK = {
@@ -26,13 +27,25 @@ export default function AccountingCustomersTab(props) {
   var [editing, setEditing] = useState(null);      // null | 'new' | row
   var [form, setForm] = useState(BLANK);
   var [busy, setBusy] = useState(false);
+  var [histSet, setHistSet] = useState({});
+  var [showArchived, setShowArchived] = useState(false);
 
   function load() {
     setLoading(true);
     if (!businessId) { supabase.from('businesses').select('id').limit(1).then(function (b) { if (b && b.data && b.data[0]) setBusinessId(b.data[0].id); }).catch(function () {}); }
-    supabase.from('accounting_customers').select('*').order('company_name', { ascending: true })
-      .then(function (r) { setRows((r && r.data) || []); })
-      .catch(function (e) { console.error('[acctcust] load', e); toast.error('Failed to load accounting customers'); })
+    function ids(q) { return q.then(function (r) { return r && r.data ? r.data : []; }).catch(function () { return []; }); }
+    Promise.all([
+      supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }).then(function (r) { return r && r.data ? r.data : []; }).catch(function () { return []; }),
+      ids(supabase.from('accounting_invoices').select('accounting_customer_id')),
+      ids(supabase.from('accounting_proformas').select('accounting_customer_id')),
+      ids(supabase.from('accounting_invoice_payments').select('accounting_customer_id')),
+      ids(supabase.from('payment_matches').select('accounting_customer_id'))
+    ]).then(function (res) {
+      setRows(res[0] || []);
+      var m = {};
+      [1, 2, 3, 4].forEach(function (i) { (res[i] || []).forEach(function (row) { if (row && row.accounting_customer_id) m[row.accounting_customer_id] = true; }); });
+      setHistSet(m);
+    }).catch(function (e) { console.error('[acctcust] load', e); toast.error('Failed to load accounting customers'); })
       .finally(function () { setLoading(false); });
   }
   useEffect(function () { if (mayView) load(); else setLoading(false); }, []);
@@ -88,12 +101,35 @@ export default function AccountingCustomersTab(props) {
   if (loading) return <div className="p-6 text-slate-300">Loading accounting customers…</div>;
 
   var filtered = rows.filter(function (r) {
+    if (!showArchived && r.record_status === 'archived') return false;
     if (!search.trim()) return true;
     var q = search.trim().toLowerCase();
     return (r.company_name || '').toLowerCase().indexOf(q) >= 0
       || (r.contact_name || '').toLowerCase().indexOf(q) >= 0
       || (r.email || '').toLowerCase().indexOf(q) >= 0;
   });
+
+  function refresh() { load(); setEditing(null); }
+  function doDelete(row) {
+    if (!window.confirm('Permanently delete this customer? This CANNOT be undone.')) return;
+    dbDelete('accounting_customers', row.id, userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Deleted accounting customer ' + (row.company_name || row.id), 'accounting_customers'); })
+      .then(function () { toast.success('Customer deleted'); refresh(); })
+      .catch(function (e) { console.error('[lifecycle] delete', e); toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
+  }
+  function doArchive(row) {
+    if (!window.confirm('Archive this customer? They stay in the records (and their Wave link is preserved) but are hidden from the active list.')) return;
+    dbUpdate('accounting_customers', row.id, archivePatch(userProfile && userProfile.id), userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Archived accounting customer ' + (row.company_name || row.id), 'accounting_customers'); })
+      .then(function () { toast.success('Customer archived'); refresh(); })
+      .catch(function (e) { console.error('[lifecycle] archive', e); toast.error('Archive failed: ' + ((e && e.message) || 'error')); });
+  }
+  function doRestore(row) {
+    dbUpdate('accounting_customers', row.id, restorePatch(), userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Restored accounting customer ' + (row.company_name || row.id), 'accounting_customers'); })
+      .then(function () { toast.success('Customer restored'); refresh(); })
+      .catch(function (e) { console.error('[lifecycle] restore', e); toast.error('Restore failed: ' + ((e && e.message) || 'error')); });
+  }
 
   return (
     <div className="p-4 text-slate-100">
@@ -106,6 +142,7 @@ export default function AccountingCustomersTab(props) {
       </div>
 
       <input placeholder="Search company / contact / email" value={search} onChange={function (e) { setSearch(e.target.value); }} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs mb-2" />
+      <label className="text-[11px] text-slate-400 flex items-center gap-1 mb-2"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived</label>
 
       <div className="border border-slate-700 rounded overflow-hidden mb-4">
         <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px' }}>
@@ -155,6 +192,18 @@ export default function AccountingCustomersTab(props) {
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
             </div>
           )}
+          {mayEdit && editing !== 'new' && (function () {
+            var lc = customerLifecycle(editing, { invoiceCount: histSet[editing.id] ? 1 : 0 }, userProfile && userProfile.role);
+            return (
+              <div className="flex gap-2 mt-2 flex-wrap items-center border-t border-slate-700 pt-2">
+                {editing.record_status === 'archived' && <span className="text-[11px] bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">ARCHIVED</span>}
+                {lc.canHardDelete && <button onClick={function () { doDelete(editing); }} className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded text-xs font-bold">Delete</button>}
+                {lc.canArchive && <button onClick={function () { doArchive(editing); }} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Archive</button>}
+                {lc.canRestore && <button onClick={function () { doRestore(editing); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold">Restore</button>}
+                {!lc.canHardDelete && lc.blockReason && <span className="text-[11px] text-amber-300 font-semibold">{lc.blockReason}</span>}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

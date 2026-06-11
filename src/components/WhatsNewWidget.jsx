@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AQ',
+    date: '2026-06-08',
+    label: 'Invoice & proforma Delete / Void / Cancel / Archive / Restore',
+    items: [
+      '**\\ud83e\\uddfe Invoices and proformas now have full controls.** Open one to Delete (only when safe), Void, Mark cancelled, Archive, or Restore. A reason is captured when you void or cancel.',
+      '**\\ud83d\\udee1\\ufe0f Same protection as customers.** Anything synced to Wave, imported (historical), or with payment activity can\\u2019t be hard-deleted — you void or archive instead, and the Wave link is always kept. Archived/voided records are hidden by default with a "Show archived/voided" toggle, and show a clear status tag. Every action is logged.',
+      '**\\u2705 Lifecycle gate complete.** Customers, invoices, and proformas all have controlled delete/void/archive now. Invoice import is the next build.',
+      { superAdminOnly: true, text: 'v55.83-AQ. Wired invoiceLifecycle/proformaLifecycle + archivePatch/voidPatch/restorePatch into AccountingInvoicesTab. load() += payment_matches map (independently caught) -> pmCount for invoice guard; displayRows hides record_status archived|void|cancelled unless showArchived toggle; row status tag; edit-panel lifecycle block: Delete (canHardDelete) / Void / Mark cancelled / Archive / Restore + blockReason; void/cancel capture reason via prompt -> void_reason. dbDelete for hard delete; dbUpdate for void/archive/restore (NEVER nulls wave ids). logActivity on every action (category accounting_invoices). Roles: super_admin|owner|admin|accounting_manager (accounting_manager harmless if unused). Lifecycle gate now COMPLETE across all 3 record types. NEXT: invoice import execution (paginate invoices+items, dedupe wave_invoice_id, link via wave_customer_id, set total/amount_paid/wave_imported_paid/balance_due/status/is_historical, line items no-dup, report + sync_log).' },
+    ],
+  },
+  {
+    version: 'v55.83-AP',
+    date: '2026-06-08',
+    label: 'Customer Delete / Archive / Restore (Wave-safe)',
+    items: [
+      '**\\uddd1\\ufe0f Manage customers safely.** On a customer you can now Delete (only when they have no history and no Wave link), or Archive them (hidden from the active list but kept). Archived customers can be Restored, and a "Show archived" toggle reveals them.',
+      '**\\ud83d\\udee1\\ufe0f Protected records can\\u2019t be wrongly deleted.** If a customer has invoices, payments, bank matches, or is linked to Wave, hard delete is blocked and you\\u2019re told to archive instead — which preserves the Wave link so nothing breaks later. Every action is logged.',
+      '**\\u2139\\ufe0f Invoices & proformas next.** The same controls for invoices (with Void/Cancel) and proformas are the next build; the rules are already written and tested.',
+      { superAdminOnly: true, text: 'v55.83-AP. New pure lib src/lib/record-lifecycle.js (customerLifecycle/invoiceLifecycle/proformaLifecycle + archivePatch/voidPatch/restorePatch; DELETE_ROLES super_admin|owner|admin|accounting_manager). WAVE-COMPAT INVARIANT: records with wave_customer_id/wave_invoice_id are never hard-deletable -> archive/void only, and patches NEVER null wave_* ids (re-import dedupe + future sync stay intact). 21/21 truth-table tests. WIRED INTO AccountingCustomersTab: load() builds history map from accounting_invoices/proformas/invoice_payments/payment_matches (each query independently caught); guard customerLifecycle(row,{invoiceCount:hist?1:0},role); edit-panel Delete (canHardDelete) / Archive / Restore buttons + blockReason; Show-archived toggle; archived filtered from default; logActivity on every action. NEXT BUILD: wire invoiceLifecycle (Delete/Void/Cancel/Archive/Restore) + proformaLifecycle into AccountingInvoicesTab (rules already done). Invoice import stays blocked until invoice/proforma lifecycle wired + verified.' },
+    ],
+  },
+  {
     version: 'v55.83-AO',
     date: '2026-06-08',
     label: 'Wave Import: business list fixed + delete/archive groundwork',

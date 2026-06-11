@@ -5,6 +5,8 @@ import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { canViewBank, canEditMappings, canReopen } from '../lib/bank-permissions';
 import { roundMoney } from '../lib/payment-matching';
+import { dbDelete } from '../lib/supabase';
+import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -53,6 +55,8 @@ export default function AccountingInvoicesTab(props) {
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [proformas, setProformas] = useState([]);
+  var [pmCount, setPmCount] = useState({});
+  var [showArchived, setShowArchived] = useState(false);
   var [loading, setLoading] = useState(true);
   var [busy, setBusy] = useState(false);
 
@@ -68,20 +72,55 @@ export default function AccountingInvoicesTab(props) {
       supabase.from('accounting_invoices').select('*').order('created_at', { ascending: false }),
       supabase.from('accounting_proformas').select('*').order('created_at', { ascending: false }),
       supabase.from('company_profile').select('*').limit(1),
+      supabase.from('payment_matches').select('accounting_invoice_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
       if (b) { setBusinessId(b.id); if (b.name) setBusinessName(b.name); }
       setCustomers((r[1] && r[1].data) || []);
       setInvoices((r[2] && r[2].data) || []);
       setProformas((r[3] && r[3].data) || []); setCompany((r[4] && r[4].data && r[4].data[0]) || null);
+      var pm = {}; ((r[5] && r[5].data) || []).forEach(function (row) { if (row && row.accounting_invoice_id) pm[row.accounting_invoice_id] = true; }); setPmCount(pm);
     }).catch(function (e) { console.error('[acctinv] load', e); toast.error('Failed to load'); })
       .finally(function () { setLoading(false); });
   }
   useEffect(function () { if (mayView) load(); else setLoading(false); }, []);
 
   function custName(id) { var c = customers.find(function (x) { return x.id === id; }); return c ? (c.company_name || c.contact_name || id) : '—'; }
+  function lcTbl() { return isInvoice() ? 'accounting_invoices' : 'accounting_proformas'; }
+  function lcName(row) { return (isInvoice() ? row.invoice_number : row.proforma_number) || row.id; }
+  function lcKind() { return isInvoice() ? 'invoice' : 'proforma'; }
+  function lcRefresh() { setEditing(null); load(); }
+  function doLcDelete(row) {
+    if (!window.confirm('Permanently delete this ' + lcKind() + '? This CANNOT be undone.')) return;
+    dbDelete(lcTbl(), row.id, userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Deleted ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
+      .then(function () { toast.success('Deleted'); lcRefresh(); })
+      .catch(function (e) { console.error('[lifecycle] delete', e); toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
+  }
+  function doLcArchive(row) {
+    if (!window.confirm('Archive this ' + lcKind() + '? It stays in the records (Wave link preserved) but is hidden from the active list.')) return;
+    dbUpdate(lcTbl(), row.id, archivePatch(userProfile && userProfile.id), userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Archived ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
+      .then(function () { toast.success('Archived'); lcRefresh(); })
+      .catch(function (e) { console.error('[lifecycle] archive', e); toast.error('Archive failed: ' + ((e && e.message) || 'error')); });
+  }
+  function doLcVoid(row, kind) {
+    var reason = window.prompt((kind === 'cancelled' ? 'Cancel' : 'Void') + ' reason (optional):', '');
+    if (reason === null) return;
+    dbUpdate(lcTbl(), row.id, voidPatch(userProfile && userProfile.id, kind, reason), userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, (kind === 'cancelled' ? 'Cancelled ' : 'Voided ') + lcKind() + ' ' + lcName(row) + (reason ? (' — ' + reason) : ''), 'accounting_invoices'); })
+      .then(function () { toast.success(kind === 'cancelled' ? 'Cancelled' : 'Voided'); lcRefresh(); })
+      .catch(function (e) { console.error('[lifecycle] void', e); toast.error('Failed: ' + ((e && e.message) || 'error')); });
+  }
+  function doLcRestore(row) {
+    dbUpdate(lcTbl(), row.id, restorePatch(), userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Restored ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
+      .then(function () { toast.success('Restored'); lcRefresh(); })
+      .catch(function (e) { console.error('[lifecycle] restore', e); toast.error('Restore failed: ' + ((e && e.message) || 'error')); });
+  }
   function isInvoice() { return mode === 'invoices'; }
   var rows = isInvoice() ? invoices : proformas;
+  var displayRows = rows.filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; });
 
   function startNew() {
     var today = new Date().toISOString().substring(0, 10);
@@ -257,6 +296,7 @@ export default function AccountingInvoicesTab(props) {
         <div className="flex gap-1">
           <button onClick={function () { setMode('invoices'); setEditing(null); }} className={'px-3 py-1.5 text-xs rounded font-bold ' + (isInvoice() ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300')}>Invoices</button>
           <button onClick={function () { setMode('proformas'); setEditing(null); }} className={'px-3 py-1.5 text-xs rounded font-bold ' + (!isInvoice() ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300')}>Proformas</button>
+          <label className="text-[11px] text-slate-400 flex items-center gap-1 ml-2"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived/voided</label>
         </div>
         {mayEdit && <button onClick={startNew} className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded font-bold">+ New {isInvoice() ? 'invoice' : 'proforma'}</button>}
       </div>
@@ -265,15 +305,15 @@ export default function AccountingInvoicesTab(props) {
         <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '110px 1fr 100px 110px 120px 150px' }}>
           <div className="px-2 py-1.5">Number</div><div className="px-2 py-1.5">Customer</div><div className="px-2 py-1.5 r text-right">Total</div><div className="px-2 py-1.5">{isInvoice() ? 'Balance' : 'Valid until'}</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Actions</div>
         </div>
-        {rows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'} yet.</div> :
-          rows.map(function (row) {
+        {displayRows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'} yet.</div> :
+          displayRows.map(function (row) {
             return (
               <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: '110px 1fr 100px 110px 120px 150px' }}>
                 <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { startEdit(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
                 <div className="px-2 py-1.5 text-xs text-slate-100 truncate cursor-pointer" onClick={function () { startEdit(row); }}>{custName(row.accounting_customer_id)}</div>
                 <div className="px-2 py-1.5 text-right text-xs font-mono font-bold">{fmt(row.total_amount)}</div>
                 <div className="px-2 py-1.5 text-[11px] text-slate-300">{isInvoice() ? fmt(row.balance_due != null ? row.balance_due : row.total_amount) : (row.valid_until || '—')}</div>
-                <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{isInvoice() && row.ready_for_wave ? <span className="ml-1 text-[9px] bg-indigo-700 text-white rounded px-1">wave-ready</span> : null}</div>
+                <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{isInvoice() && row.ready_for_wave ? <span className="ml-1 text-[9px] bg-indigo-700 text-white rounded px-1">wave-ready</span> : null}{row.record_status && row.record_status !== 'active' ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1 font-bold">{String(row.record_status).toUpperCase()}</span> : null}</div>
                 <div className="px-2 py-1.5 flex gap-1 flex-wrap">
                   <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Opens your browser print dialog — choose Save as PDF">Print / Save PDF</button>
                   {isInvoice() && mayEdit && row.approval_status === 'draft' && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
@@ -325,6 +365,20 @@ export default function AccountingInvoicesTab(props) {
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
             </div>
           )}
+          {mayEdit && editing !== 'new' && (function () {
+            var lc = isInvoice() ? invoiceLifecycle(editing, { paymentMatchCount: pmCount[editing.id] ? 1 : 0 }, userProfile && userProfile.role) : proformaLifecycle(editing, userProfile && userProfile.role);
+            return (
+              <div className="flex gap-2 mt-2 flex-wrap items-center border-t border-slate-700 pt-2">
+                {editing.record_status && editing.record_status !== 'active' && <span className="text-[11px] bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{String(editing.record_status).toUpperCase()}</span>}
+                {lc.canHardDelete && <button onClick={function () { doLcDelete(editing); }} className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded text-xs font-bold">Delete</button>}
+                {lc.canVoid && <button onClick={function () { doLcVoid(editing, 'void'); }} className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs font-bold">Void</button>}
+                {lc.canCancel && <button onClick={function () { doLcVoid(editing, 'cancelled'); }} className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-bold">Mark cancelled</button>}
+                {lc.canArchive && <button onClick={function () { doLcArchive(editing); }} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Archive</button>}
+                {lc.canRestore && <button onClick={function () { doLcRestore(editing); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold">Restore</button>}
+                {!lc.canHardDelete && lc.blockReason && <span className="text-[11px] text-amber-300 font-semibold">{lc.blockReason}</span>}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
