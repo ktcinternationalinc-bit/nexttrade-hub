@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AH',
+    date: '2026-06-08',
+    label: 'Company Profile + branded invoices/proformas',
+    items: [
+      '**\\ud83c\\udfe2 New Company Profile screen** (Accounting → Company Profile): set your company name, address, phone, email, website, tax ID, default notes/terms, and upload a logo. It saves once and is used everywhere.',
+      '**\\ud83e\\udde6 Professional invoices & proformas.** Print / Save PDF now shows your logo, full company details, customer info, line items, total, amount paid, balance due, your default notes/terms, and signature lines for both the customer and an authorized signer.',
+      '**\\ud83d\\udd17 Wave-ready fields preserved.** Customer, invoice, and proforma records now carry their Wave mapping + sync-status fields so future Wave sync slots straight in.',
+      { superAdminOnly: true, text: 'v55.83-AH. SQL sql/v55-83-ah-company-profile.sql: company_profile (singleton: name/address/phone/email/website/tax_id/default_invoice_notes/default_proforma_notes/default_payment_terms/logo_data_url base64, audit, updated_at trigger, open RLS + DELETE false). Wave-compat cols: accounting_invoices += wave_invoice_id/wave_sync_status; accounting_proformas += wave_estimate_id/wave_sync_status; accounting_customers += wave_sync_status (wave_customer_id already present). New CompanyProfileTab.jsx (FileReader->base64 logo <600KB, view=Bank:View edit=Accounting:Edit Mappings) wired as Accounting sub-tab. AccountingInvoicesTab.printDoc rebranded: logo + company block + Bill-to + line items + Total + (invoices) Amount paid/Balance due + notes/terms (fallback to company defaults) + dual signature areas; company_profile loaded in load(). ARCHITECTURE: Hub = controlled operational+permission layer in front of Wave; Wave = official ledger. Wave mapping per table tracked. STILL TO BUILD: product master, customer price history, customer history screen, deductions, CSV import, Wave connection screen.' },
+    ],
+  },
+  {
     version: 'v55.83-AG',
     date: '2026-06-08',
     label: 'CRITICAL FIX: accounting records now save',

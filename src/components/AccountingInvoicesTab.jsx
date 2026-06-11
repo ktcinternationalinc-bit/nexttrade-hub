@@ -49,6 +49,7 @@ export default function AccountingInvoicesTab(props) {
   var [mode, setMode] = useState(props.defaultMode || 'invoices');     // invoices | proformas
   var [businessId, setBusinessId] = useState(null);
   var [businessName, setBusinessName] = useState('KTC International Inc.');
+  var [company, setCompany] = useState(null);
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [proformas, setProformas] = useState([]);
@@ -66,12 +67,13 @@ export default function AccountingInvoicesTab(props) {
       supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }),
       supabase.from('accounting_invoices').select('*').order('created_at', { ascending: false }),
       supabase.from('accounting_proformas').select('*').order('created_at', { ascending: false }),
+      supabase.from('company_profile').select('*').limit(1),
     ]).then(function (r) {
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
       if (b) { setBusinessId(b.id); if (b.name) setBusinessName(b.name); }
       setCustomers((r[1] && r[1].data) || []);
       setInvoices((r[2] && r[2].data) || []);
-      setProformas((r[3] && r[3].data) || []);
+      setProformas((r[3] && r[3].data) || []); setCompany((r[4] && r[4].data && r[4].data[0]) || null);
     }).catch(function (e) { console.error('[acctinv] load', e); toast.error('Failed to load'); })
       .finally(function () { setLoading(false); });
   }
@@ -210,23 +212,33 @@ export default function AccountingInvoicesTab(props) {
       var d2 = isInvoice() ? row.due_date : row.valid_until;
       var lines = its.map(function (it) { return '<tr><td>' + esc(it.description) + '</td><td class="r">' + esc(it.quantity) + '</td><td class="r">' + fmt(it.unit_price) + '</td><td class="r">' + fmt(it.line_total) + '</td></tr>'; }).join('');
       var total = its.reduce(function (a, it) { return a + (Number(it.line_total) || 0); }, 0);
+      var c = company || {};
+      var paid = Number(row.amount_paid) || 0;
+      var bal = row.balance_due != null ? Number(row.balance_due) : (total - paid);
+      var notes = row.notes || (isInvoice() ? (c.default_invoice_notes || '') : (c.default_proforma_notes || ''));
+      var terms = row.terms || (c.default_payment_terms || '');
+      var logoHtml = c.logo_data_url ? '<img src="' + c.logo_data_url + '" style="max-height:70px;max-width:200px;margin-bottom:6px"/>' : '';
+      var compName = c.company_name || businessName;
+      var compLines = [c.address, c.phone, c.email, c.website, (c.tax_id ? 'Tax ID: ' + c.tax_id : '')].filter(Boolean).map(esc).join('<br>');
+      var paidRows = isInvoice() ? ('<tr><td colspan="3" class="r">Amount paid</td><td class="r">' + fmt(paid) + '</td></tr><tr><td colspan="3" class="r tot">Balance due</td><td class="r tot">' + fmt(bal) + '</td></tr>') : '';
       var html = '<html><head><title>' + esc(num) + '</title><style>'
-        + 'body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:32px;max-width:760px;margin:auto}'
+        + 'body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:32px;max-width:780px;margin:auto}'
         + 'h1{font-size:22px;margin:0}.muted{color:#555}.r{text-align:right}'
         + 'table{width:100%;border-collapse:collapse;margin-top:18px}'
         + 'th,td{border-bottom:1px solid #ddd;padding:8px;font-size:13px}th{background:#f4f4f4;text-align:left}'
-        + '.tot{font-size:16px;font-weight:bold}.head{display:flex;justify-content:space-between}'
-        + '.box{font-size:13px;line-height:1.5}.terms{margin-top:18px;font-size:12px;color:#444;white-space:pre-wrap}'
+        + '.tot{font-size:15px;font-weight:bold}.head{display:flex;justify-content:space-between;align-items:flex-start}'
+        + '.box{font-size:13px;line-height:1.5}.terms{margin-top:14px;font-size:12px;color:#444;white-space:pre-wrap}'
+        + '.sigwrap{display:flex;justify-content:space-between;margin-top:48px}.sig{width:45%}.sigline{border-top:1px solid #333;margin-top:40px;padding-top:4px;font-size:12px;color:#555}'
         + '</style></head><body>'
-        + '<div class="head"><div><h1>' + esc(businessName) + '</h1></div>'
-        + '<div class="r"><h1>' + title + '</h1><div class="muted">#' + esc(num) + '</div></div></div>'
-        + '<div style="margin-top:18px" class="box"><b>Bill to:</b><br>' + esc(cust.company_name || '') + '<br>' + esc(cust.contact_name || '') + '<br>' + esc(cust.billing_address || '') + '<br>' + esc(cust.email || '') + '  ' + esc(cust.phone || '')
-        + '<div class="muted" style="margin-top:8px">Date: ' + esc(d1 || '') + ' &nbsp; ' + d2label + ': ' + esc(d2 || '') + '</div></div>'
+        + '<div class="head"><div>' + logoHtml + '<h1>' + esc(compName) + '</h1><div class="muted box">' + compLines + '</div></div>'
+        + '<div class="r"><h1>' + title + '</h1><div class="muted">#' + esc(num) + '</div><div class="muted box" style="margin-top:8px">Date: ' + esc(d1 || '') + '<br>' + d2label + ': ' + esc(d2 || '') + '</div></div></div>'
+        + '<div style="margin-top:18px" class="box"><b>Bill to:</b><br>' + esc(cust.company_name || '') + '<br>' + esc(cust.contact_name || '') + '<br>' + esc(cust.billing_address || '') + '<br>' + esc(cust.email || '') + '  ' + esc(cust.phone || '') + '</div>'
         + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Line total</th></tr></thead>'
         + '<tbody>' + lines + '</tbody>'
-        + '<tfoot><tr><td colspan="3" class="r tot">Total</td><td class="r tot">' + fmt(total) + '</td></tr></tfoot></table>'
-        + (row.notes ? '<div class="terms"><b>Notes:</b>\n' + esc(row.notes) + '</div>' : '')
-        + (row.terms ? '<div class="terms"><b>Terms:</b>\n' + esc(row.terms) + '</div>' : '')
+        + '<tfoot><tr><td colspan="3" class="r tot">Total</td><td class="r tot">' + fmt(total) + '</td></tr>' + paidRows + '</tfoot></table>'
+        + (notes ? '<div class="terms"><b>Notes:</b>\n' + esc(notes) + '</div>' : '')
+        + (terms ? '<div class="terms"><b>Terms:</b>\n' + esc(terms) + '</div>' : '')
+        + '<div class="sigwrap"><div class="sig"><div class="sigline">Customer signature / date</div></div><div class="sig"><div class="sigline">Authorized signature (' + esc(compName) + ')</div></div></div>'
         + '<script>window.onload=function(){window.print();}<\/script></body></html>';
       var w = window.open('', '_blank');
       if (!w) { toast.error('Allow pop-ups to print/save the PDF.'); return; }

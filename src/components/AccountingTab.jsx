@@ -2,6 +2,7 @@
 // (The Plaid bank connection/import stays in the Bank tab.)
 import { useState } from 'react';
 import AccountingDashboard from './AccountingDashboard';
+import CompanyProfileTab from './CompanyProfileTab';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import BankReviewTab from './BankReviewTab';
@@ -10,6 +11,7 @@ export default function AccountingTab(props) {
   var [sub, setSub] = useState('dashboard');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
+    ['company', '🏢 Company Profile'],
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
     ['proformas', '📄 Proformas'],
@@ -28,6 +30,7 @@ export default function AccountingTab(props) {
         })}
       </div>
       {sub === 'dashboard' && <AccountingDashboard {...props} />}
+      {sub === 'company' && <CompanyProfileTab {...props} />}
       {sub === 'customers' && <AccountingCustomersTab {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key="acct-inv" {...props} defaultMode="invoices" />}
       {sub === 'proformas' && <AccountingInvoicesTab key="acct-pf" {...props} defaultMode="proformas" />}
