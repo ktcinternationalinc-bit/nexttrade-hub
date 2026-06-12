@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AV',
+    date: '2026-06-08',
+    label: 'FIX: invoice import line items + duplicate-skip on re-run',
+    items: [
+      '**\\ud83e\\uddfe Invoice line items now import.** They were failing because of an internal column-name mismatch — fixed. Re-run the invoice import and the line items come in.',
+      '**\\ud83d\\udd01 Re-runs no longer skip invoices.** Large imports were skipping invoices past the first 1,000 on a second run; that limit is removed, so re-running updates them all with no duplicates.',
+      '**\\ud83d\\udee1\\ufe0f Clear error if something\\u2019s missing.** The import now checks the database is set up correctly first and shows one plain message, instead of a thousand repeated errors.',
+      { superAdminOnly: true, text: 'v55.83-AV. THREE fixes to import-invoices route (code-only, NO SQL). (1) Line items used wrong cols: accounting_invoice_id->invoice_id, qty->quantity, +business_id +sort_order (table is accounting_invoice_items(business_id,invoice_id,quantity,unit_price,line_total,sku,product_ref,sort_order)); delete .eq also fixed to invoice_id. Root cause of 1284 "Could not find accounting_invoice_id column" errors. (2) custMap/invMap preloads were capped at Supabase default 1000 rows -> invoices >1000 not in map -> re-run tried INSERT -> uq_acct_invoices_wave_id unique violation -> skipped (the 709 skips). Now fetchAllMap() paginates via .range() in a loop. (3) Preflight: admin.select required cols on accounting_invoices + accounting_invoice_items; on error return ONE clear message (run migrations) instead of 1284 per-row errors. SWC-safe. Safe re-run: matches wave_invoice_id -> updates, no dup invoices; line items delete-then-insert.' },
+    ],
+  },
+  {
+    version: 'v55.83-AU',
+    date: '2026-06-08',
+    label: 'Customer AR History screen',
+    items: [
+      '**\\ud83d\\udcd2 New Customer AR History** (Accounting → Customer AR History). Pick a customer to see everything they owe: total invoiced, paid, open balance, and every invoice, payment, and proforma.',
+      '**\\ud83d\\udd0e Filter and find.** See all customers, only those needing review (placeholders from import), or only those with an open balance. Placeholder customers are clearly flagged.',
+      '**\\u2696\\ufe0f Balances are exact.** Open balance = total minus Wave-imported paid minus bank-matched payments — never double-counted. Voided/cancelled invoices are excluded from the balance.',
+      { superAdminOnly: true, text: 'v55.83-AU. New read-only AccountingCustomerHistory.jsx (Accounting sub-tab, gated canViewBank, amounts masked w/o canSeeAmounts). Loads accounting_customers/invoices/invoice_payments/proformas/bank_transactions (each independently caught). Per customer: AR summary (invoiced, wave_imported paid, hub/plaid paid, totalPaid, open) + counts (open/paid/partial/overdue by due_date). BALANCE FORMULA (locked): open = total_amount - wave_imported_paid - SUM(accounting_invoice_payments.amount); void/cancelled excluded; NO payment rows synthesized from wave paid (no double-count). Invoice table (number/source Wave|Hub/dates/status/total/wave paid/hub paid/balance/sync). Payment history from accounting_invoice_payments joined to bank_transactions (date/name/amount/source/sync_status). Proformas (number/status/total/converted). Deductions placeholder = "not yet enabled". Filters all|needs_review|open. NO SQL. NEXT (not built): Hub->Wave push, Product Master, hourly sync, Sync Issues screen, deductions.' },
+    ],
+  },
+  {
     version: 'v55.83-AT',
     date: '2026-06-08',
     label: 'Wave invoice import — historical invoices + line items',

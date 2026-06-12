@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import AccountingDashboard from './AccountingDashboard';
 import CompanyProfileTab from './CompanyProfileTab';
+import AccountingCustomerHistory from './AccountingCustomerHistory';
 import WaveConnectionTab from './WaveConnectionTab';
 import WaveImportTab from './WaveImportTab';
 import AccountingCustomersTab from './AccountingCustomersTab';
@@ -14,6 +15,7 @@ export default function AccountingTab(props) {
   var tabs = [
     ['dashboard', '📊 Dashboard'],
     ['company', '🏢 Company Profile'],
+    ['arhistory', '📒 Customer AR History'],
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
     ['proformas', '📄 Proformas'],
@@ -35,6 +37,7 @@ export default function AccountingTab(props) {
       </div>
       {sub === 'dashboard' && <AccountingDashboard {...props} />}
       {sub === 'company' && <CompanyProfileTab {...props} />}
+      {sub === 'arhistory' && <AccountingCustomerHistory {...props} />}
       {sub === 'customers' && <AccountingCustomersTab {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key="acct-inv" {...props} defaultMode="invoices" />}
       {sub === 'proformas' && <AccountingInvoicesTab key="acct-pf" {...props} defaultMode="proformas" />}

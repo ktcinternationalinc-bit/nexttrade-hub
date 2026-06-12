@@ -30,6 +30,22 @@ function gqlInvoices(token, bid, page) {
   }).then(function (r) { return r.json().then(function (j) { return { status: r.status, ok: r.ok, json: j }; }); });
 }
 
+function fetchAllMap(admin, table, col) {
+  var map = {}; var from = 0; var pageSize = 1000; var guard = 0;
+  function loop() {
+    guard++;
+    if (guard > 100) { return Promise.resolve(map); }
+    return admin.from(table).select('id, ' + col).not(col, 'is', null).range(from, from + pageSize - 1).then(function (res) {
+      if (res.error || !res.data || res.data.length === 0) { return map; }
+      res.data.forEach(function (row) { map[row[col]] = row.id; });
+      if (res.data.length < pageSize) { return map; }
+      from += pageSize;
+      return loop();
+    });
+  }
+  return loop();
+}
+
 export async function POST(request) {
   var waveToken = process.env.WAVE_ACCESS_TOKEN;
   var supaUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -48,16 +64,18 @@ export async function POST(request) {
   var report = { created: 0, updated: 0, skipped: 0, errors: [], lineItems: 0, placeholders: [], total: 0, businessId: businessId, timestamp: startedAt };
 
   try {
+    // PREFLIGHT — confirm tables + required columns exist; one clear error if not.
+    var chkInv = await admin.from('accounting_invoices').select('wave_invoice_id, wave_imported_paid, balance_due, last_synced_hash, due_date').limit(1);
+    if (chkInv.error) { return Response.json({ ok: false, error: 'Schema check failed on accounting_invoices: ' + chkInv.error.message + '. Run the v55.83-AT SQL migration first, then re-import.' }); }
+    var chkItems = await admin.from('accounting_invoice_items').select('invoice_id, quantity, unit_price, line_total, business_id').limit(1);
+    if (chkItems.error) { return Response.json({ ok: false, error: 'Schema check failed on accounting_invoice_items: ' + chkItems.error.message + '. Run the accounting SQL migrations first, then re-import.' }); }
+
     var bizRes = await admin.from('businesses').select('id').order('created_at', { ascending: true }).limit(1);
     var internalBusinessId = bizRes && bizRes.data && bizRes.data[0] ? bizRes.data[0].id : null;
 
-    // preload customer + invoice maps for linking + dedupe
-    var custMap = {};
-    var cRes = await admin.from('accounting_customers').select('id, wave_customer_id').not('wave_customer_id', 'is', null);
-    if (cRes && cRes.data) { cRes.data.forEach(function (row) { custMap[row.wave_customer_id] = row.id; }); }
-    var invMap = {};
-    var iRes = await admin.from('accounting_invoices').select('id, wave_invoice_id').not('wave_invoice_id', 'is', null);
-    if (iRes && iRes.data) { iRes.data.forEach(function (row) { invMap[row.wave_invoice_id] = row.id; }); }
+    // preload customer + invoice maps (FULLY paginated — not capped at 1000) for linking + dedupe
+    var custMap = await fetchAllMap(admin, 'accounting_customers', 'wave_customer_id');
+    var invMap = await fetchAllMap(admin, 'accounting_invoices', 'wave_invoice_id');
 
     var page = 1;
     var totalPages = 1;
@@ -135,17 +153,19 @@ export async function POST(request) {
 
           // line items: delete-then-insert (dedupe-safe on re-run)
           if (invoiceId) {
-            await admin.from('accounting_invoice_items').delete().eq('accounting_invoice_id', invoiceId);
+            await admin.from('accounting_invoice_items').delete().eq('invoice_id', invoiceId);
             var items = n.items || [];
             if (items.length) {
-              var rows = items.map(function (it) {
+              var rows = items.map(function (it, idx) {
                 return {
-                  accounting_invoice_id: invoiceId,
+                  business_id: internalBusinessId,
+                  invoice_id: invoiceId,
                   description: it.description || (it.product && it.product.name) || null,
-                  qty: it.quantity != null ? Number(it.quantity) : null,
+                  quantity: it.quantity != null ? Number(it.quantity) : null,
                   unit_price: it.price != null ? Number(it.price) : null,
                   line_total: num(it.total),
-                  product_ref: it.product && it.product.name ? it.product.name : null
+                  product_ref: it.product && it.product.name ? it.product.name : null,
+                  sort_order: idx
                 };
               });
               var li = await admin.from('accounting_invoice_items').insert(rows);
