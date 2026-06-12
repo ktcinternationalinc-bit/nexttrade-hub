@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 
 function money(m) { return m && m.value != null ? m.value : ''; }
+function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export default function WaveImportTab(props) {
   var userProfile = props.userProfile || null;
@@ -23,6 +24,8 @@ export default function WaveImportTab(props) {
   var [invReport, setInvReport] = useState(null);
   var [diag, setDiag] = useState(null);
   var [diagBusy, setDiagBusy] = useState(false);
+  var [recon, setRecon] = useState(null);
+  var [reconBusy, setReconBusy] = useState(false);
 
   function loadBusinesses() {
     setLoadingBiz(true);
@@ -80,6 +83,27 @@ export default function WaveImportTab(props) {
 
   if (!isSuperAdmin) {
     return <div className="p-6"><div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950"><div className="font-extrabold">🔒 Owner only</div></div></div>;
+  }
+
+  function runReconcile() {
+    if (!bizId) { return; }
+    setReconBusy(true); setRecon(null);
+    fetch('/api/wave/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { setRecon(j); })
+      .catch(function (e) { setRecon({ ok: false, error: String(e) }); })
+      .finally(function () { setReconBusy(false); });
+  }
+  function downloadReconCsv() {
+    if (!recon || !recon.topMismatches) { return; }
+    var head = 'invoice,year,where,wave_status,hub_status,wave_total,wave_paid,wave_due,hub_total,hub_paid,hub_balance,delta_total,delta_paid,delta_balance\n';
+    var lines = recon.topMismatches.map(function (m) {
+      return [m.num, m.year, m.in, m.wStatus || '', m.hStatus || '', m.wTotal, m.wPaid, m.wDue, m.hTotal == null ? '' : m.hTotal, m.hPaid == null ? '' : m.hPaid, m.hBal == null ? '' : m.hBal, m.dTotal == null ? '' : m.dTotal, m.dPaid == null ? '' : m.dPaid, m.dBal == null ? '' : m.dBal].join(',');
+    }).join('\n');
+    var blob = new Blob([head + lines], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = 'wave-hub-reconcile-mismatches.csv'; a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -214,6 +238,65 @@ export default function WaveImportTab(props) {
                 ) : <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
               </div>
             )}
+          </div>
+
+          <div className="mt-4 border-t border-slate-700 pt-3">
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 4 — Reconcile Wave vs Hub (read-only audit)</div>
+            <div className="text-[11px] text-slate-400 mb-2">Pulls every invoice from Wave and from the Hub, matches them on Wave invoice ID, and shows exactly where totals, paid, or balance disagree. It writes nothing.</div>
+            <button onClick={runReconcile} disabled={reconBusy} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-bold disabled:opacity-50">
+              {reconBusy ? 'Reconciling… (can take a minute)' : '⚖️ Reconcile Wave vs Hub'}
+            </button>
+            {recon && (recon.ok === false ? (
+              <div className="bg-rose-100 text-rose-950 rounded-lg p-3 mt-3 text-xs font-medium">{recon.error}</div>
+            ) : (
+              <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200 text-xs">
+                <div className="font-extrabold mb-2">⚖️ Reconciliation — Wave vs Hub</div>
+                <div className="grid gap-2 mb-3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
+                  <div className="bg-slate-100 rounded p-2"><div className="text-[10px] font-bold text-slate-600">WAVE INVOICES</div><div className="text-lg font-extrabold">{recon.waveCount}</div></div>
+                  <div className="bg-slate-100 rounded p-2"><div className="text-[10px] font-bold text-slate-600">HUB (WAVE-LINKED)</div><div className="text-lg font-extrabold">{recon.hubWithWaveId}</div></div>
+                  <div className="bg-emerald-100 text-emerald-950 rounded p-2"><div className="text-[10px] font-bold">MATCHED</div><div className="text-lg font-extrabold">{recon.matched}</div></div>
+                  <div className="bg-rose-100 text-rose-950 rounded p-2"><div className="text-[10px] font-bold">MISMATCHED</div><div className="text-lg font-extrabold">{recon.mismatched}</div></div>
+                  <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-[10px] font-bold">IN WAVE, NOT HUB</div><div className="text-lg font-extrabold">{recon.missingInHub}</div></div>
+                  <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-[10px] font-bold">IN HUB, NOT WAVE</div><div className="text-lg font-extrabold">{recon.missingInWave}</div></div>
+                </div>
+                <div className="grid gap-2 mb-3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
+                  <div className="bg-slate-100 rounded p-2"><div className="text-[10px] font-bold text-slate-600">WAVE AR (all due)</div><div className="text-base font-extrabold">${fmt(recon.waveAR)}</div></div>
+                  <div className="bg-slate-100 rounded p-2"><div className="text-[10px] font-bold text-slate-600">WAVE AR (excl. draft/unsent)</div><div className="text-base font-extrabold">${fmt(recon.waveAR_nonDraft)}</div></div>
+                  <div className="bg-slate-100 rounded p-2"><div className="text-[10px] font-bold text-slate-600">HUB AR (open balance)</div><div className="text-base font-extrabold">${fmt(recon.hubAR)}</div></div>
+                  <div className={'rounded p-2 ' + (Math.abs(recon.arDifference) < 1 ? 'bg-emerald-100 text-emerald-950' : 'bg-rose-100 text-rose-950')}><div className="text-[10px] font-bold">HUB − WAVE DIFF</div><div className="text-base font-extrabold">${fmt(recon.arDifference)}</div></div>
+                </div>
+                <div className="mb-2">
+                  <div className="font-bold mb-1">By year — Wave / Hub (green = counts match):</div>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.keys(recon.byYear).sort().map(function (y) { var b = recon.byYear[y]; var okc = b.wave === b.hub; return <span key={y} className={'rounded px-2 py-1 text-[11px] font-bold ' + (okc ? 'bg-emerald-100 text-emerald-950' : 'bg-rose-100 text-rose-950')}>{y}: {b.wave}/{b.hub}</span>; })}
+                  </div>
+                </div>
+                <div className="mb-2">
+                  <div className="font-bold mb-1">Wave status counts:</div>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.keys(recon.statusWave).sort().map(function (st) { return <span key={st} className="rounded px-2 py-1 text-[11px] font-bold bg-slate-100 text-slate-800">{st}: {recon.statusWave[st]}</span>; })}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mb-1 mt-3">
+                  <div className="font-bold">Worst mismatches (top {(recon.topMismatches || []).length})</div>
+                  <button onClick={downloadReconCsv} className="bg-slate-800 text-white rounded px-2 py-1 text-[11px] font-bold">⬇ Download CSV</button>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="w-full text-[11px]" style={{ minWidth: '820px' }}>
+                    <thead><tr className="text-slate-600 text-left border-b border-slate-200"><th className="py-1">Invoice</th><th>Yr</th><th>Wave status</th><th className="text-right">Wave total</th><th className="text-right">Wave paid</th><th className="text-right">Wave due</th><th className="text-right">Hub total</th><th className="text-right">Hub paid</th><th className="text-right">Hub bal</th><th>Where</th></tr></thead>
+                    <tbody>{(recon.topMismatches || []).map(function (m, i) {
+                      return <tr key={i} className="border-b border-slate-100">
+                        <td className="py-1 font-mono font-bold text-slate-900">{m.num}</td><td className="text-slate-700">{m.year}</td><td className="text-slate-700">{m.wStatus || '—'}</td>
+                        <td className="text-right font-mono text-slate-900">{fmt(m.wTotal)}</td><td className="text-right font-mono text-slate-900">{fmt(m.wPaid)}</td><td className="text-right font-mono text-slate-900">{fmt(m.wDue)}</td>
+                        <td className="text-right font-mono text-slate-900">{m.hTotal == null ? '—' : fmt(m.hTotal)}</td><td className="text-right font-mono text-slate-900">{m.hPaid == null ? '—' : fmt(m.hPaid)}</td><td className="text-right font-mono text-slate-900">{m.hBal == null ? '—' : fmt(m.hBal)}</td>
+                        <td className="text-slate-700">{m.in === 'wave_only' ? 'missing in Hub' : 'both'}</td>
+                      </tr>;
+                    })}</tbody>
+                  </table>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-2">Read-only — nothing changed. A large “Hub − Wave diff” usually means Hub is counting draft/unsent invoices as open that Wave excludes, or a stale paid amount on specific invoices (download the CSV to see every one).</div>
+              </div>
+            ))}
           </div>
         </div>
       )}

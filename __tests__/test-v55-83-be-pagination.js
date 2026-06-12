@@ -9,7 +9,7 @@ ok(/fetchAllRows\('accounting_invoices', '\*'\)/.test(hist)&&/fetchAllRows\('ban
 ok(/fetchAllRows\('accounting_invoices', '\*', 'created_at', false\)/.test(bank),'bank matching invoice list paginated');
 ok(!/from\('accounting_invoices'\)\.select\('\*'\)\.order\('created_at'/.test(inv),'no capped invoice select remains in list');
 ok(/AR data audit/.test(dash)&&/Invoices loaded/.test(dash)&&/withWaveId/.test(dash),'dashboard diagnostic audit panel');
-ok(/By year:/.test(dash)&&/By Wave sync:/.test(dash)&&/AR included:/.test(dash),'audit shows by-year, sync, AR inclusion');
+ok(/By year:/.test(dash)&&/Wave sync/.test(dash)&&/Open AR/.test(dash),'audit shows by-year; Wave sync section present; Open AR shown');
 ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')),'page version stamp');
 ok(/version: 'v55\.83-BE'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew BE');
 console.log('\nv55.83-BE pagination + audit: '+pass+' passed, '+fail+' failed');

@@ -33,6 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BH',
+    date: '2026-06-08',
+    label: 'Wave vs Hub reconciliation audit',
+    items: [
+      '**\\u2696\\ufe0f New: Reconcile Wave vs Hub.** In Wave Import there is a new read-only audit that pulls every invoice from both Wave and the Hub, matches them, and shows exactly where totals, paid amounts, or balances disagree \\u2014 with year-by-year counts and a downloadable list of every mismatch. It changes nothing; it only reports.',
+      { superAdminOnly: true, text: 'v55.83-BH. NEW read-only route api/wave/reconcile/route.js (service-role, SWC-safe): paginates ALL Wave invoices (id/number/status/date/due/total/amountPaid/amountDue, comma-stripped num()), fetches ALL Hub accounting_invoices via .range loop, joins on wave_invoice_id. Per-invoice match = |wTotal-hTotal|<.01 && |wDue-hBal|<.01 && |wPaid-hPaid|<.01. Aggregates: waveCount/hubCount/hubWithWaveId, matched/mismatched/missingInHub/missingInWave, waveAR(Sum amountDue all)/waveAR_nonDraft(excl DRAFT+SAVED)/hubAR(Sum balance_due live+approved)/arDifference, byYear{wave,hub,matched}, statusWave breakdown, topMismatches[80] sorted by |balance gap|. WaveImportTab Step 4 button + summary cards + by-year chips (green when wave==hub) + Wave status chips + worst-mismatch table + CSV download. NO writes, NO SQL. Purpose: prove the $6.42M-overdue vs $1.22M-Wave gap. Hypothesis to confirm: Hub counts DRAFT/UNSENT as overdue that Wave excludes (compare hubAR vs waveAR_nonDraft) and/or stale paid on old invoices. STILL FROZEN: product master, price history, dashboard redesign, Hub->Wave push, reports until 4 invoices + AR totals reconcile.' },
+    ],
+  },
+  {
+    version: 'v55.83-BG',
+    date: '2026-06-08',
+    label: 'Dashboard cleanup + overdue controls',
+    items: [
+      '**\\ud83e\\uddf9 Cleaner dashboard.** Organized into clear sections: Receivables summary, Upcoming due, Overdue aging, Bank review, and Wave sync \\u2014 no more everything-in-one-row.',
+      '**\\ud83d\\udd95\\ufe0f Overdue controls.** Each overdue invoice has View (read-only, no reopen) and Ignore. Ignoring hides it from overdue reporting only \\u2014 it does not delete the invoice or change Wave, it is logged, and it is reversible.',
+      '**\\ud83d\\udcb5 Less clutter.** Overdue invoices under $200 are hidden by default; a toggle shows small &amp; ignored ones.',
+      { superAdminOnly: true, text: 'v55.83-BG. SQL sql/v55-83-bg-overdue-ignore.sql (additive): accounting_invoices += overdue_dashboard_ignored bool default false / overdue_dashboard_ignored_by uuid / overdue_dashboard_ignored_at timestamptz / overdue_dashboard_ignore_note text. AccountingDashboard.jsx rebuilt into Sections A Receivables(Open AR/Overdue AR/Credits/Approvals) B Upcoming Due(now/30/60/90 from currentRows) C Overdue Aging(1-30/31-60/61-90/90+ from shownOverdue) + overdue table w/ View+Ignore + threshold toggle D Bank Review(unmatched/paid today; deposits hidden until verified) E Wave Sync(pending/failed/conflict from wave_sync_status + last wave_sync_log). FILTER: shownOverdue = showSmall ? all overdueRows : overdueRows.filter(!ignored && balance>=200). overdueTotal/aging/table all use shownOverdue (ignored excluded from overdue totals unless toggle). toggleIgnore(row,ignore): dbUpdate ignore fields + ignored_by/at/note, logActivity, reversible. openView: read-only modal w/ line items (fetched). AR formula unchanged (total-wave_imported_paid-non-void payments; void/cancelled/archived excluded). Audit panel retained. paidToday from accounting_invoice_payments payment_date==today. NEXT: Hub->Wave push.' },
+    ],
+  },
+  {
     version: 'v55.83-BF',
     date: '2026-06-08',
     label: 'HOTFIX: Accounting → Invoices crash',
