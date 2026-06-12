@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BI',
+    date: '2026-06-08',
+    label: 'AR integrity audit — currency + drafts',
+    items: [
+      '**\\ud83d\\udcb1 New read-only AR audit.** The Wave-vs-Hub reconcile now also shows how much of your Open AR is inflated by two things: invoices in EGP being added at face value (instead of converted to USD), and draft invoices being counted as owed. It lays out Current AR \\u2192 minus drafts \\u2192 minus void/cancelled/archived \\u2192 after USD conversion, with a Top-20 customer table showing each fix. Nothing is changed \\u2014 audit only.',
+      { superAdminOnly: true, text: 'v55.83-BI (read-only, NO SQL, NO writes). ROOT CAUSES CONFIRMED via screenshots+code: (1) import-invoices hardcodes approval_status:\'approved\' (line 171) so Wave DRAFTs (e.g. AMERICA 620aa) import as approved and leak into AR. (2) import stores Wave native-currency total{value} with NO currency code / NO USD value, so EGP invoices (SH1003 1,424,000 EGP; 620aa 1,995,000 EGP) are summed as dollars -> inflated $6.55M. Extended api/wave/reconcile: Wave query now pulls total{value currency{code}} + amountDue{value currency{code}} + customer{id name}; loads fx_rates (from_currency/to_currency/rate/rate_date) into buildConverter() (date-matched USD>cur => amt/rate, cur>USD => amt*rate, else unconvertible); arAudit ladder over live+approved set: currentNative (mixed, incl drafts) / draftNative (Wave DRAFT|SAVED) / exDraftNative / voidishNative (record_status void|cancelled|archived, already excluded) / normalizedUsd (clean set in USD) / unconvertibleNative + byCurrencyNative + unconvertibleByCur; topCustomers[20] {currentNative, afterCurrencyFix(USD), afterDraftExclusion(native), finalCorrect(USD)}. WaveImportTab panel renders ladder + by-currency chips + unconvertible note + top-20 table. FIX (next, needs approval): import must store currency + USD value (from Wave per-invoice rate) and map Wave DRAFT->approval_status not approved; dashboard/AR/aging/top-customers must sum USD + exclude drafts. STILL FROZEN until reconciled.' },
+    ],
+  },
+  {
     version: 'v55.83-BH',
     date: '2026-06-08',
     label: 'Wave vs Hub reconciliation audit',

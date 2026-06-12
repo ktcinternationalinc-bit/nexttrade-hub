@@ -7,12 +7,45 @@ import { createClient } from '@supabase/supabase-js';
 function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function yr(d) { return d ? String(d).substring(0, 4) : '(none)'; }
+function curOf(n) {
+  if (n.total && n.total.currency && n.total.currency.code) { return n.total.currency.code; }
+  if (n.amountDue && n.amountDue.currency && n.amountDue.currency.code) { return n.amountDue.currency.code; }
+  return 'USD';
+}
+// Build a date-sorted rate index from fx_rates rows. Returns convert(amount, cur, date) -> USD or null.
+function buildConverter(rateRows) {
+  var idx = {}; // 'FROM>TO' -> array of {date, rate} sorted asc
+  for (var i = 0; i < rateRows.length; i++) {
+    var rr = rateRows[i];
+    var key = (rr.from_currency || '') + '>' + (rr.to_currency || '');
+    if (!idx[key]) { idx[key] = []; }
+    idx[key].push({ date: rr.rate_date || '', rate: Number(rr.rate) || 0 });
+  }
+  Object.keys(idx).forEach(function (k) { idx[k].sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }); });
+  function pick(arr, date) {
+    if (!arr || arr.length === 0) { return null; }
+    var chosen = null;
+    for (var j = 0; j < arr.length; j++) { if (arr[j].date <= date) { chosen = arr[j]; } }
+    if (!chosen) { chosen = arr[0]; } // before any logged rate → use earliest known
+    return chosen.rate > 0 ? chosen.rate : null;
+  }
+  return function (amount, cur, date) {
+    if (!cur || cur === 'USD') { return r2(amount); }
+    var d = date || '9999-12-31';
+    var rUsdToCur = pick(idx['USD>' + cur], d);   // 1 USD = rUsdToCur cur
+    if (rUsdToCur) { return r2(amount / rUsdToCur); }
+    var rCurToUsd = pick(idx[cur + '>USD'], d);    // 1 cur = rCurToUsd USD
+    if (rCurToUsd) { return r2(amount * rCurToUsd); }
+    return null; // unconvertible (no rate logged for this pair)
+  };
+}
 
 function gqlPage(token, bid, page) {
   var query = 'query($bid: ID!, $page: Int!) { business(id:$bid){ invoices(page:$page,pageSize:50){'
     + ' pageInfo{ currentPage totalPages totalCount } edges{ node{'
     + ' id invoiceNumber status invoiceDate dueDate'
-    + ' total{ value } amountPaid{ value } amountDue{ value } } } } } }';
+    + ' customer{ id name }'
+    + ' total{ value currency{ code } } amountPaid{ value } amountDue{ value currency{ code } } } } } } }';
   return fetch('https://gql.waveapps.com/graphql/public', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -140,6 +173,70 @@ export async function POST(request) {
     // sort mismatches by absolute balance gap (worst first)
     mism.sort(function (a, b) { var ax = Math.abs(a.dBal != null ? a.dBal : (a.wDue || 0)); var bx = Math.abs(b.dBal != null ? b.dBal : (b.wDue || 0)); return bx - ax; });
 
+    // ===== AR INTEGRITY AUDIT (read-only): currency + drafts =====
+    var fxRes = await admin.from('fx_rates').select('from_currency,to_currency,rate,rate_date').then(function (x) { return x; }).catch(function () { return { data: [] }; });
+    var convert = buildConverter((fxRes && fxRes.data) || []);
+
+    function isDraftWave(st) { return st === 'DRAFT' || st === 'SAVED'; }
+    function hubLive(h) { var rs = h && h.record_status; return rs !== 'void' && rs !== 'cancelled' && rs !== 'archived' && rs !== 'deleted'; }
+    function hubVoidish(h) { var rs = h && h.record_status; return rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted'; }
+
+    var ar = {
+      currentNative: 0,            // mirrors dashboard: live + approved, native amountDue (mixed currency, incl drafts)
+      draftNative: 0,             // native AR sitting in Wave drafts
+      voidishNative: 0,          // native AR in void/cancelled/archived (excluded by dashboard already)
+      exDraftNative: 0,          // current minus drafts (native)
+      exDraftVoidNative: 0,      // current minus drafts minus voidish (native)
+      normalizedUsd: 0,          // clean set, converted to USD
+      unconvertibleNative: 0,    // clean-set AR with no FX rate available
+      byCurrencyNative: {},      // currency -> native AR (clean set)
+      unconvertibleByCur: {}
+    };
+    var custAgg = {}; // custId -> { name, currentNative, currencyFixUsd, exDraftNative, finalUsd }
+    function bumpCust(id, name, field, val) {
+      if (!custAgg[id]) { custAgg[id] = { name: name || '(unknown)', currentNative: 0, currencyFixUsd: 0, exDraftNative: 0, finalUsd: 0 }; }
+      custAgg[id][field] += val;
+    }
+
+    waveList.forEach(function (n) {
+      var h = hubByWave[n.id];
+      // mirror dashboard scope: Hub has it, live, approved
+      if (!h || !hubLive(h) || h.approval_status !== 'approved') {
+        // still capture voidish native for documentation
+        if (h && hubVoidish(h)) { ar.voidishNative += r2(num(n.amountDue)); }
+        return;
+      }
+      var cur = curOf(n);
+      var dueNative = r2(num(n.amountDue));
+      if (dueNative <= 0.005) { return; }
+      var usd = convert(dueNative, cur, n.invoiceDate);
+      var draft = isDraftWave(n.status);
+      var cid = (n.customer && n.customer.id) || ('x_' + (h.id || ''));
+      var cname = (n.customer && n.customer.name) || '(unknown)';
+
+      ar.currentNative += dueNative;
+      bumpCust(cid, cname, 'currentNative', dueNative);
+      bumpCust(cid, cname, 'currencyFixUsd', usd != null ? usd : 0);
+
+      if (draft) { ar.draftNative += dueNative; }
+      else {
+        ar.exDraftNative += dueNative;
+        bumpCust(cid, cname, 'exDraftNative', dueNative);
+        ar.byCurrencyNative[cur] = r2((ar.byCurrencyNative[cur] || 0) + dueNative);
+        if (usd != null) { ar.normalizedUsd += usd; bumpCust(cid, cname, 'finalUsd', usd); }
+        else { ar.unconvertibleNative += dueNative; ar.unconvertibleByCur[cur] = r2((ar.unconvertibleByCur[cur] || 0) + dueNative); }
+      }
+    });
+    ar.exDraftVoidNative = ar.exDraftNative; // voidish already excluded from currentNative scope
+    ar.currentNative = r2(ar.currentNative); ar.draftNative = r2(ar.draftNative); ar.voidishNative = r2(ar.voidishNative);
+    ar.exDraftNative = r2(ar.exDraftNative); ar.exDraftVoidNative = r2(ar.exDraftVoidNative);
+    ar.normalizedUsd = r2(ar.normalizedUsd); ar.unconvertibleNative = r2(ar.unconvertibleNative);
+
+    var topCustomers = Object.keys(custAgg).map(function (id) {
+      var c = custAgg[id];
+      return { name: c.name, currentNative: r2(c.currentNative), afterCurrencyFix: r2(c.currencyFixUsd), afterDraftExclusion: r2(c.exDraftNative), finalCorrect: r2(c.finalUsd) };
+    }).sort(function (a, b) { return b.currentNative - a.currentNative; }).slice(0, 20);
+
     var report = {
       ok: true,
       waveCount: waveList.length,
@@ -160,6 +257,8 @@ export async function POST(request) {
       statusWave: statusWave,
       byYear: byYear,
       topMismatches: mism.slice(0, 80),
+      arAudit: ar,
+      topCustomers: topCustomers,
       allRows: rows
     };
     return Response.json(report);

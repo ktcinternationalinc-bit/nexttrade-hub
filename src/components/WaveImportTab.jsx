@@ -294,6 +294,32 @@ export default function WaveImportTab(props) {
                     })}</tbody>
                   </table>
                 </div>
+                {recon.arAudit && (
+                  <div className="mt-4 border-t border-slate-200 pt-3">
+                    <div className="font-extrabold mb-2">💱 AR integrity — currency + drafts</div>
+                    <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))' }}>
+                      <div className="bg-rose-100 text-rose-950 rounded p-2"><div className="text-[10px] font-bold">CURRENT AR (native, mixed currency)</div><div className="text-base font-extrabold">{fmt(recon.arAudit.currentNative)}</div><div className="text-[10px]">what the dashboard shows now</div></div>
+                      <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-[10px] font-bold">AR EXCLUDING DRAFTS</div><div className="text-base font-extrabold">{fmt(recon.arAudit.exDraftNative)}</div><div className="text-[10px]">removed {fmt(recon.arAudit.draftNative)} of drafts</div></div>
+                      <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-[10px] font-bold">EXCL. DRAFTS + VOID/CANCEL/ARCHIVE</div><div className="text-base font-extrabold">{fmt(recon.arAudit.exDraftVoidNative)}</div><div className="text-[10px]">{fmt(recon.arAudit.voidishNative)} already excluded</div></div>
+                      <div className="bg-emerald-100 text-emerald-950 rounded p-2"><div className="text-[10px] font-bold">AFTER CURRENCY NORMALIZATION (USD)</div><div className="text-base font-extrabold">${fmt(recon.arAudit.normalizedUsd)}</div><div className="text-[10px]">clean set converted to USD</div></div>
+                    </div>
+                    <div className="mb-2 text-[11px]">
+                      <span className="font-bold text-slate-900">AR by currency (clean set, native): </span>
+                      {Object.keys(recon.arAudit.byCurrencyNative).map(function (c) { return <span key={c} className="inline-block bg-slate-100 text-slate-800 rounded px-2 py-0.5 mr-1 font-bold">{c}: {fmt(recon.arAudit.byCurrencyNative[c])}</span>; })}
+                    </div>
+                    {recon.arAudit.unconvertibleNative > 0 && (
+                      <div className="bg-amber-100 text-amber-950 rounded p-2 text-[11px] mb-2"><b>Note:</b> {fmt(recon.arAudit.unconvertibleNative)} of non-USD AR has no matching FX rate logged, so it isn't in the USD figure yet. Log the USD↔currency rate in FX Rates for an exact number.</div>
+                    )}
+                    <div className="font-bold mb-1 text-slate-900">Top 20 customers</div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="w-full text-[11px]" style={{ minWidth: '640px' }}>
+                        <thead><tr className="text-slate-600 text-left border-b border-slate-200"><th className="py-1">Customer</th><th className="text-right">Current (native)</th><th className="text-right">After currency fix (USD)</th><th className="text-right">After draft excl. (native)</th><th className="text-right">Final correct (USD)</th></tr></thead>
+                        <tbody>{(recon.topCustomers || []).map(function (c, i) { return <tr key={i} className="border-b border-slate-100"><td className="py-1 font-medium text-slate-900 truncate" style={{ maxWidth: '170px' }}>{c.name}</td><td className="text-right font-mono text-slate-900">{fmt(c.currentNative)}</td><td className="text-right font-mono text-slate-900">{fmt(c.afterCurrencyFix)}</td><td className="text-right font-mono text-slate-900">{fmt(c.afterDraftExclusion)}</td><td className="text-right font-mono font-bold text-emerald-800">{fmt(c.finalCorrect)}</td></tr>; })}</tbody>
+                      </table>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">“Current (native)” adds EGP + USD at face value — that is the bug. “After currency fix” converts each invoice to USD via your logged FX rates. “Final correct” = USD + drafts removed.</div>
+                  </div>
+                )}
                 <div className="text-[10px] text-slate-500 mt-2">Read-only — nothing changed. A large “Hub − Wave diff” usually means Hub is counting draft/unsent invoices as open that Wave excludes, or a stale paid amount on specific invoices (download the CSV to see every one).</div>
               </div>
             ))}
