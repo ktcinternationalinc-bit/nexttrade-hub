@@ -33,6 +33,37 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BA',
+    date: '2026-06-08',
+    label: 'Printed invoices reconcile to the Wave total (discount line)',
+    items: [
+      '**\\ud83e\\uddfe Printed invoices now match Wave exactly.** When a Wave invoice had a discount, the printed total could show the pre-discount subtotal. Now the print shows a Subtotal line, a Discount / adjustment line, and a Total that equals the real invoice total \\u2014 every time.',
+      { superAdminOnly: true, text: 'v55.83-BA. AccountingInvoicesTab.jsx print (code-only, NO SQL). lineSum = roundMoney(sum line_total). docTot = row.total_amount!=null ? roundMoney(total_amount) : lineSum (authoritative Wave/stored total). adjustment = roundMoney(docTot - lineSum). tfoot: when adjustment!=0 render Subtotal(lineSum) + (adjustment<0?Discount / adjustment:Adjustment)(adjustment) rows; Total row now fmt(docTot) not fmt(lineSum). bal fallback uses docTot-paid. Fixes discounted Wave invoices (e.g. 1722 total 11181.39 vs subtotal 11980.41) so print Total == stored total == Wave total. Non-discounted invoices (adjustment==0) unchanged. Pairs with AZ comma-parse fix. Payment matching + Wave sync MODEL already locked in AY (payment rows, no double-count balance, pending_wave_sync, wave ids, AR History states); Hub->Wave PUSH still deferred per Max.' },
+    ],
+  },
+  {
+    version: 'v55.83-AZ',
+    date: '2026-06-08',
+    label: 'FIX: invoice amounts over $1,000 now import correctly',
+    items: [
+      '**\\ud83d\\udcb5 The real fix for invoice totals.** Wave sends money with commas (e.g. "11,181.39"), which the import was reading as blank \\u2014 so any amount over a thousand was lost and totals/paid/balances came out wrong. Fixed: amounts now read exactly, so total, paid, and balance match Wave on every invoice.',
+      '**\\ud83d\\udd01 Re-import to correct everything.** Re-run the invoice import and every invoice updates with the correct figures \\u2014 including ones that were wrongly showing as paid.',
+      '**\\ud83e\\uddfe Note on history.** Wave\\u2019s API only gives the total amount paid per invoice, not the individual historical payment dates, so imported invoices show the aggregate paid. Future bank-matched payments keep full detail.',
+      { superAdminOnly: true, text: 'v55.83-AZ. ROOT CAUSE (from diagnostic): Wave Money.value is a formatted STRING with thousands commas ("11,181.39"); Number() -> NaN -> JSON null. num() returned NaN for all >=1000 amounts, so AX fell back to qty*price compute and paid/due were lost. FIX (code-only, NO SQL): num() in import-invoices + invoice-diagnostic now Number(String(m.value).replace(/,/g,\'\')) with isNaN guard. AX prefer-Wave logic now works: total=waveTotal>0?waveTotal:sumLines, paid=wavePaid>0?wavePaid:(due!=null?total-due:0), due=amountDue. Verified parse 11,181.39->11181.39. NOTE: Wave total can differ from subtotal/line-sum when a Wave-level discount applied (e.g. 1722 total 11181.39 vs subtotal 11980.41) — total_amount uses Wave total (authoritative for AR); print sums lines so discounted invoices show subtotal in print (minor). PAYMENT HISTORY: diagnostic confirms invoice node exposes only aggregate amountPaid/amountDue, NO per-payment connection in Wave public GraphQL = Possibility B. AR History notes Wave paid is aggregate; future Plaid matches (AY) carry full detail. Re-import: matches wave_invoice_id, updates, no dups.' },
+    ],
+  },
+  {
+    version: 'v55.83-AY',
+    date: '2026-06-08',
+    label: 'Bank payments are now Wave-syncable',
+    items: [
+      '**\\ud83d\\udd17 Matching a bank payment now records a proper payment.** When you match a bank transaction to an invoice, the system creates a real payment record (ready to send to Wave later), on top of the existing match — so nothing is stuck only inside Hub.',
+      '**\\u2696\\ufe0f Balances stay correct on imported invoices.** Adding a bank payment to a Wave-imported invoice now adds to what Wave already recorded instead of wiping it out. Open balance = total minus Wave-paid minus your bank-matched payments.',
+      '**\\ud83d\\udcd2 AR History shows payment sync state.** Each payment shows pending Wave sync, synced, or failed.',
+      { superAdminOnly: true, text: 'v55.83-AY. SQL sql/v55-83-ay-payment-wave-sync.sql (additive+idempotent): accounting_invoice_payments += wave_invoice_id/wave_customer_id/last_synced_at/sync_error; BACKFILL payment rows from existing payment_matches (NOT EXISTS by payment_match_id + invoice/bank_txn guard); RECONCILE all invoices amount_paid=wave_imported_paid+SUM(payment rows), balance_due=total-that, payment_status. BankReviewTab.jsx: (1) NEW createInvPaymentRow(inv,t,amt,matchId,notes) -> dbInsert accounting_invoice_payments {source plaid_match, sync_status pending_wave_sync, wave_payment_id null, bank_transaction_id, payment_match_id, wave_invoice_id from inv, wave_customer_id from acctCustomers map, payment_date posted_date||date, amount}. (2) recomputeInvoice REWRITTEN: was sum(payment_matches) -> set amount_paid (CLOBBERED wave_imported_paid). Now reads accounting_invoice_payments, amount_paid=wave_imported_paid+SUM(rows), balance=total-paid. (3) both saveMatch + split paths create the payment row BEFORE recompute. AccountingCustomerHistory.jsx: payment sync_status renders synced/failed(+sync_error title)/pending Wave sync. VERIFIED existing matcher previously wrote ONLY payment_matches -> now writes both. Approval gate + Hub->Wave PUSH itself NOT built yet (next): push reads pending_wave_sync rows with wave_invoice_id, posts invoiceApplyPayment, saves wave_payment_id, sets synced/last_synced_at or failed/sync_error.' },
+    ],
+  },
+  {
     version: 'v55.83-AX',
     date: '2026-06-08',
     label: 'FIX: imported invoice totals now correct (compute from lines)',

@@ -12,7 +12,7 @@ ok(/function r2\(x\)/.test(r),'rounding helper');
 ok(/itemRows\[z\]\.invoice_id = invoiceId/.test(r)&&/delete\(\)\.eq\('invoice_id', invoiceId\)/.test(r),'items: set invoice_id then delete-then-insert (no dup)');
 ok(/payStatus\(total, balance, paid\)/.test(r),'payment status from computed values');
 ok(!/`/.test(r)&&!/\bconst /.test(r)&&!/\blet \b/.test(r)&&!/=>/.test(r),'SWC-safe');
-ok(p('src/app/page.jsx').indexOf('>v55.83-AX<')>=0,'page AX');
+ok(/>v55\.83-[A-Z]+</.test(p('src/app/page.jsx')),'page has version stamp');
 ok(/version: 'v55\.83-AX'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew AX');
 
 // arithmetic proof of the AMERICA 322 case

@@ -185,11 +185,41 @@ export default function BankReviewTab(props) {
       .finally(function () { setBusy(false); });
   }
 
+  // v55.83-AY — create a Wave-syncable payment row alongside every payment_match.
+  function createInvPaymentRow(inv, t, amt, matchId, notes) {
+    var cust = acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; });
+    return dbInsert('accounting_invoice_payments', {
+      business_id: t.business_id || inv.business_id || null,
+      accounting_invoice_id: inv.id,
+      accounting_customer_id: inv.accounting_customer_id || null,
+      amount: amt,
+      payment_date: t.posted_date || t.date || null,
+      source: 'plaid_match',
+      bank_transaction_id: t.id,
+      payment_match_id: matchId || null,
+      wave_payment_id: null,
+      sync_status: 'pending_wave_sync',
+      wave_invoice_id: inv.wave_invoice_id || null,
+      wave_customer_id: cust && cust.wave_customer_id ? cust.wave_customer_id : null,
+      memo: notes || null,
+      created_by: userProfile && userProfile.id
+    }, userProfile && userProfile.id);
+  }
+
+  // v55.83-AY — canonical balance: amount_paid = wave_imported_paid + SUM(hub payment rows).
+  // Reads accounting_invoice_payments (NOT payment_matches) so it never clobbers the
+  // Wave-imported paid amount and never double-counts.
   function recomputeInvoice(invId) {
-    return supabase.from('payment_matches').select('matched_amount').eq('invoice_id', invId).then(function (r) {
+    return supabase.from('accounting_invoice_payments').select('amount').eq('accounting_invoice_id', invId).then(function (r) {
       var inv = acctInvoices.find(function (i) { return i.id === invId; });
-      var bal = computeInvoiceBalance(invoiceTotal(inv), (r && r.data) || []);
-      return dbUpdate('accounting_invoices', invId, { amount_paid: bal.amount_paid, balance_due: bal.balance_due, payment_status: bal.status }, userProfile && userProfile.id);
+      var total = invoiceTotal(inv);
+      var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
+      var hubPaid = 0;
+      ((r && r.data) || []).forEach(function (p) { hubPaid += Number(p.amount) || 0; });
+      var amountPaid = Math.round((waveImported + hubPaid) * 100) / 100;
+      var balanceDue = Math.round((total - amountPaid) * 100) / 100;
+      var status = balanceDue <= 0.0001 ? 'paid' : (amountPaid > 0.0001 ? 'partial' : 'unpaid');
+      return dbUpdate('accounting_invoices', invId, { amount_paid: amountPaid, balance_due: balanceDue, payment_status: status }, userProfile && userProfile.id);
     });
   }
 
@@ -216,6 +246,7 @@ export default function BankReviewTab(props) {
           if (!inv) return null;
           if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('Skipped an invoice from another business.'); return null; }
           return dbInsert('payment_matches', { business_id: t.business_id, bank_transaction_id: t.id, invoice_id: r.invoice_id, matched_amount: amt, match_type: 'partial', is_manual_override: true, notes: 'split', matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
+            .then(function (matchRow) { return createInvPaymentRow(inv, t, amt, matchRow && matchRow.id, 'split'); })
             .then(function () { return recomputeInvoice(r.invoice_id); });
         });
       }
@@ -245,6 +276,9 @@ export default function BankReviewTab(props) {
       matched_amount: c.applied_to_invoice, match_type: c.type, is_manual_override: false,
       notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
     }, userProfile && userProfile.id)
+    .then(function (matchRow) {
+      return createInvPaymentRow(inv, t, c.applied_to_invoice, matchRow && matchRow.id, mNotes);
+    })
     .then(function () {
       var chain = recomputeInvoice(inv.id);
       // overpayment -> customer credit (never dropped)

@@ -6,7 +6,7 @@
 // report + wave_sync_log. Server-side service-role client. SWC-safe.
 import { createClient } from '@supabase/supabase-js';
 
-function num(m) { return m && m.value != null ? Number(m.value) : 0; }
+function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function payStatus(total, due, paid) {
   if (due != null && due <= 0.0001) return 'paid';

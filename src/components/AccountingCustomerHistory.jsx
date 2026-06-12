@@ -157,6 +157,7 @@ export default function AccountingCustomerHistory(props) {
 
               {/* payments */}
               <Section title="Payment history (Hub / Plaid matches)">
+                <div className="text-[10px] text-slate-400 italic mb-1">Wave-imported invoices carry only an aggregate paid total (shown per invoice as "Wave paid") — Wave's API does not expose individual historical payment dates. Bank-matched payments below show full detail.</div>
                 {paymentsFor(selCust.id).length === 0 ? <div className="text-slate-400 italic text-xs">No Hub/Plaid payments matched yet. (Wave-imported paid amounts are shown per invoice above, not as separate payments.)</div> :
                   <div className="overflow-x-auto"><table className="w-full text-xs">
                     <thead><tr className="text-slate-400 text-left"><th className="py-1">Date</th><th>Bank description</th><th className="text-right">Amount</th><th>Source</th><th>Sync to Wave</th></tr></thead>
@@ -167,7 +168,7 @@ export default function AccountingCustomerHistory(props) {
                         <td>{bt && bt.name ? bt.name : (p.memo || '—')}</td>
                         <td className="text-right font-bold">{money(p.amount, showAmt)}</td>
                         <td>{p.source || ''}</td>
-                        <td>{p.sync_status === 'synced' ? <span className="text-emerald-400">synced</span> : <span className="text-amber-400">{p.sync_status || 'pending'}</span>}</td>
+                        <td>{p.sync_status === 'synced' ? <span className="text-emerald-400">synced</span> : p.sync_status === 'failed' ? <span className="text-rose-400" title={p.sync_error || ''}>failed</span> : <span className="text-amber-400">pending Wave sync</span>}</td>
                       </tr>;
                     })}</tbody>
                   </table></div>}

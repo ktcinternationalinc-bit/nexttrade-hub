@@ -250,10 +250,15 @@ export default function AccountingInvoicesTab(props) {
       var d2label = isInvoice() ? 'Due' : 'Valid until';
       var d2 = isInvoice() ? row.due_date : row.valid_until;
       var lines = its.map(function (it) { return '<tr><td>' + esc(it.description) + '</td><td class="r">' + esc(it.quantity) + '</td><td class="r">' + fmt(it.unit_price) + '</td><td class="r">' + fmt(it.line_total) + '</td></tr>'; }).join('');
-      var total = its.reduce(function (a, it) { return a + (Number(it.line_total) || 0); }, 0);
+      var lineSum = roundMoney(its.reduce(function (a, it) { return a + (Number(it.line_total) || 0); }, 0));
+      // v55.83-BA — printed total must equal the imported Wave/stored total. If a
+      // Wave-level discount made the stored total less than the line subtotal, show
+      // a visible adjustment line so the print reconciles exactly.
+      var docTot = row.total_amount != null ? roundMoney(Number(row.total_amount)) : lineSum;
+      var adjustment = roundMoney(docTot - lineSum);
       var c = company || {};
       var paid = Number(row.amount_paid) || 0;
-      var bal = row.balance_due != null ? Number(row.balance_due) : (total - paid);
+      var bal = row.balance_due != null ? Number(row.balance_due) : roundMoney(docTot - paid);
       var notes = row.notes || (isInvoice() ? (c.default_invoice_notes || '') : (c.default_proforma_notes || ''));
       var terms = row.terms || (c.default_payment_terms || '');
       var logoHtml = c.logo_data_url ? '<img src="' + c.logo_data_url + '" style="max-height:70px;max-width:200px;margin-bottom:6px"/>' : '';
@@ -274,7 +279,9 @@ export default function AccountingInvoicesTab(props) {
         + '<div style="margin-top:18px" class="box"><b>Bill to:</b><br>' + esc(cust.company_name || '') + '<br>' + esc(cust.contact_name || '') + '<br>' + esc(cust.billing_address || '') + '<br>' + esc(cust.email || '') + '  ' + esc(cust.phone || '') + '</div>'
         + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Line total</th></tr></thead>'
         + '<tbody>' + lines + '</tbody>'
-        + '<tfoot><tr><td colspan="3" class="r tot">Total</td><td class="r tot">' + fmt(total) + '</td></tr>' + paidRows + '</tfoot></table>'
+        + '<tfoot>'
+        + (adjustment !== 0 ? ('<tr><td colspan="3" class="r">Subtotal</td><td class="r">' + fmt(lineSum) + '</td></tr><tr><td colspan="3" class="r">' + (adjustment < 0 ? 'Discount / adjustment' : 'Adjustment') + '</td><td class="r">' + fmt(adjustment) + '</td></tr>') : '')
+        + '<tr><td colspan="3" class="r tot">Total</td><td class="r tot">' + fmt(docTot) + '</td></tr>' + paidRows + '</tfoot></table>'
         + (notes ? '<div class="terms"><b>Notes:</b>\n' + esc(notes) + '</div>' : '')
         + (terms ? '<div class="terms"><b>Terms:</b>\n' + esc(terms) + '</div>' : '')
         + '<div class="sigwrap"><div class="sig"><div class="sigline">Customer signature / date</div></div><div class="sig"><div class="sigline">Authorized signature (' + esc(compName) + ')</div></div></div>'

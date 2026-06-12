@@ -4,7 +4,7 @@
 // current DB row, so we can see exactly which Wave field holds the real total.
 import { createClient } from '@supabase/supabase-js';
 
-function num(m) { return m && m.value != null ? Number(m.value) : null; }
+function num(m) { if (!m || m.value == null) { return null; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? null : v; }
 
 export async function POST(request) {
   var waveToken = process.env.WAVE_ACCESS_TOKEN;
