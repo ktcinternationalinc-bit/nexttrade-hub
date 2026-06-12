@@ -19,6 +19,8 @@ export default function WaveImportTab(props) {
   var [importing, setImporting] = useState(false);
   var [report, setReport] = useState(null);
   var [conn, setConn] = useState(null);
+  var [importingInv, setImportingInv] = useState(false);
+  var [invReport, setInvReport] = useState(null);
 
   function loadBusinesses() {
     setLoadingBiz(true);
@@ -40,6 +42,17 @@ export default function WaveImportTab(props) {
       .then(function (d) { setData(d); })
       .catch(function (e) { setData({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
       .finally(function () { setBusy(false); });
+  }
+
+  function runImportInvoices() {
+    if (!bizId) return;
+    if (!window.confirm('Import ALL invoices (and their line items) from the selected Wave business into the Hub? Safe and re-runnable — it matches on Wave invoice ID, so re-running updates instead of duplicating. Make sure you imported customers first.')) return;
+    setImportingInv(true); setInvReport(null);
+    fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setInvReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
+      .catch(function (e) { setInvReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
+      .finally(function () { setImportingInv(false); });
   }
 
   function runImportCustomers() {
@@ -145,6 +158,35 @@ export default function WaveImportTab(props) {
               {(!report.errors || report.errors.length === 0) && <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
             </div>
           )}
+
+          <div className="mt-4 border-t border-slate-700 pt-3">
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 3 — Import invoices (+ line items) into the Hub</div>
+            <div className="text-[11px] text-slate-400 mb-2">Import customers first. Safe and re-runnable: matches on Wave invoice ID. Wave's paid amount is kept as a baseline (wave_imported_paid) — no payment records are created here; bank-matched payments stay separate.</div>
+            <button onClick={runImportInvoices} disabled={importingInv} className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-white rounded text-sm font-bold disabled:opacity-50">
+              {importingInv ? 'Importing invoices…' : 'Import invoices into Hub'}
+            </button>
+            {invReport && (
+              <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200 text-xs">
+                <div className="font-extrabold mb-1">📋 Invoice import report</div>
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  <div className="bg-emerald-100 text-emerald-950 rounded p-2"><div className="text-lg font-extrabold">{invReport.created || 0}</div>created</div>
+                  <div className="bg-sky-100 text-sky-950 rounded p-2"><div className="text-lg font-extrabold">{invReport.updated || 0}</div>updated</div>
+                  <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-lg font-extrabold">{invReport.skipped || 0}</div>skipped</div>
+                  <div className="bg-violet-100 text-violet-950 rounded p-2"><div className="text-lg font-extrabold">{invReport.lineItems || 0}</div>line items</div>
+                </div>
+                <div className="text-slate-600">Total read: {invReport.total == null ? '—' : invReport.total} · {invReport.timestamp || ''}</div>
+                {(invReport.placeholders && invReport.placeholders.length > 0) && (
+                  <div className="mt-2 bg-amber-50 text-amber-950 rounded p-2"><b>{invReport.placeholders.length} placeholder customer(s) created</b> (Wave customer wasn't imported) — flagged for review: {invReport.placeholders.slice(0, 10).join(', ')}{invReport.placeholders.length > 10 ? '…' : ''}</div>
+                )}
+                {(invReport.errors && invReport.errors.length > 0) ? (
+                  <div className="mt-2"><div className="font-bold text-rose-700">Errors ({invReport.errors.length}):</div>
+                    <ul className="list-disc ml-4 text-rose-700">{invReport.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
+                    {invReport.errors.length > 20 && <div className="text-rose-700">…and {invReport.errors.length - 20} more</div>}
+                  </div>
+                ) : <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -142,7 +142,7 @@ export default function AccountingCustomersTab(props) {
       </div>
 
       <input placeholder="Search company / contact / email" value={search} onChange={function (e) { setSearch(e.target.value); }} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs mb-2" />
-      <label className="text-[11px] text-slate-400 flex items-center gap-1 mb-2"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived</label>
+      <label className="text-xs text-slate-100 font-bold flex items-center gap-2 mb-3 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 w-max cursor-pointer hover:bg-slate-700"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived customers</label>
 
       <div className="border border-slate-700 rounded overflow-hidden mb-4">
         <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px' }}>

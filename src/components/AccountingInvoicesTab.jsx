@@ -296,7 +296,7 @@ export default function AccountingInvoicesTab(props) {
         <div className="flex gap-1">
           <button onClick={function () { setMode('invoices'); setEditing(null); }} className={'px-3 py-1.5 text-xs rounded font-bold ' + (isInvoice() ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300')}>Invoices</button>
           <button onClick={function () { setMode('proformas'); setEditing(null); }} className={'px-3 py-1.5 text-xs rounded font-bold ' + (!isInvoice() ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300')}>Proformas</button>
-          <label className="text-[11px] text-slate-400 flex items-center gap-1 ml-2"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived/voided</label>
+          <label className="text-xs text-slate-100 font-bold flex items-center gap-2 ml-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer hover:bg-slate-700"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived/voided</label>
         </div>
         {mayEdit && <button onClick={startNew} className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded font-bold">+ New {isInvoice() ? 'invoice' : 'proforma'}</button>}
       </div>

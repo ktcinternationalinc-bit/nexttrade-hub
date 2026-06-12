@@ -33,6 +33,36 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AT',
+    date: '2026-06-08',
+    label: 'Wave invoice import — historical invoices + line items',
+    items: [
+      '**\\ud83e\\uddfe Import your historical invoices from Wave** (Accounting → Wave Import → "Import invoices into Hub"). Brings in every invoice with its line items, totals, paid amount, balance, status, dates, and customer link.',
+      '**\\ud83d\\udd01 Safe to re-run.** Matches on each invoice\\u2019s Wave ID — re-running updates instead of duplicating. If an invoice\\u2019s customer wasn\\u2019t imported, a placeholder customer is created and flagged for review. You get a full report.',
+      '**\\ud83d\\udd17 No double-counting.** Wave\\u2019s paid amount is kept as a baseline; no payment records are invented. Real bank-matched payments stay separate. Records carry the fields a future hourly Wave sync will need.',
+      { superAdminOnly: true, text: 'v55.83-AT. SQL sql/v55-83-at-invoice-import.sql (additive): accounting_invoices += due_date/last_synced_at/last_synced_hash; accounting_customers += needs_review/last_synced_at/last_synced_hash; wave_sync_log += started_at/completed_at/records_pulled/records_pushed. New route src/app/api/wave/import-invoices/route.js (POST {businessId,userId}): service-role client; preloads custMap(wave_customer_id->id) + invMap(wave_invoice_id->id); paginates invoices(pageSize 25) with items{product.name description quantity price total}; per invoice resolves accounting_customer_id (creates needs_review placeholder if Wave customer not imported), sets invoice_number/invoice_date/due_date/notes(memo)/total_amount/amount_paid/wave_imported_paid(=paid)/balance_due(=due)/payment_status(paid|partial|unpaid)/approval_status approved/source wave_import/is_historical/wave_sync_status synced/last_synced_at/last_synced_hash(fingerprint invNo|total|paid|status); dedupe wave_invoice_id -> update else insert; line items delete-then-insert (dedupe-safe); NO payment rows (Wave paid stays in wave_imported_paid). Report created/updated/skipped/errors/lineItems/placeholders/total. wave_sync_log entry (started/completed/records_pulled). SWC-safe. WaveImportTab Step 3 button + report card (created/updated/skipped/lineItems + placeholders + errors). NEXT: Customer AR History screen. NOT building Product Master or Hub->Wave push yet. Hourly sync prepared-for via last_synced_* fields, built later.' },
+    ],
+  },
+  {
+    version: 'v55.83-AS',
+    date: '2026-06-08',
+    label: 'FIX: editing an inbound shipment reference now updates the list',
+    items: [
+      '**\\ud83d\\udce6 Shipment reference edits now stick.** When you change the reference on an inbound shipment and Submit (or Save Shipment Only), the top-level shipment row now updates to match — before, it could keep showing the old reference.',
+      { superAdminOnly: true, text: 'v55.83-AS InventoryReceiving.jsx. BUG: shipment_reference stored on BOTH inventory_shipment_headers AND each inventory_stock_receipts line; grouped list row reads rows[0].shipment_reference (the first line). saveReceipt updates header + only lines matched by L2.existing_id; saveShipmentHeaderOnly updated only the header. So an edited reference could leave the first line (and thus the displayed top-level value) stale. FIX: after the header upsert/line loop in BOTH saveReceipt and saveShipmentHeaderOnly, blanket-propagate header.shipment_reference to ALL lines via supabase.from(inventory_stock_receipts).update({shipment_reference}).eq(receipt_number) (try-wrapped, best-effort). Guarantees rows[0].shipment_reference reflects the edit. No SQL. Only shipment_reference propagated (per-line supplier/cost overrides untouched).' },
+    ],
+  },
+  {
+    version: 'v55.83-AR',
+    date: '2026-06-08',
+    label: 'FIX: Delete / Archive / Void now actually work',
+    items: [
+      '**\\u2705 Lifecycle actions now save.** Delete, Archive, and Void were showing but not changing anything in the database. Fixed — they now persist and the list updates immediately. Run the one SQL block provided.',
+      '**\\ud83d\\udc41\\ufe0f "Show archived" is now a visible button** on both the Customers and Invoices/Proformas screens (it was there before but as tiny grey text that was easy to miss).',
+      { superAdminOnly: true, text: 'v55.83-AR. ROOT CAUSE of "buttons do nothing": (1) DELETE was locked USING(false) on accounting_customers/invoices/proformas from the AG/AM hardening, so dbDelete was silently refused by RLS (0 rows, no error) -> row stayed. (2) Archive/Void write record_status/void_reason/archived_* which only exist if AO SQL ran; if missing, dbUpdate strip-missing-column loop dropped them -> no-op. FIX sql/v55-83-ar-lifecycle-fix.sql: idempotent re-add of lifecycle columns + DROP/CREATE ac_del/ai_del/ap_del DELETE policies USING(true) (app-side record-lifecycle guard still blocks protected records). UI: both Show-archived toggles restyled from text-[11px] text-slate-400 to a visible bordered button. Handlers unchanged (were correct). After SQL: Delete removes, Archive/Void persist + hide, Restore returns, toggle reveals.' },
+    ],
+  },
+  {
     version: 'v55.83-AQ',
     date: '2026-06-08',
     label: 'Invoice & proforma Delete / Void / Cancel / Archive / Restore',

@@ -772,6 +772,12 @@ export default function InventoryReceiving(props) {
         await dbInsert('inventory_shipment_headers', payload, userProfile && userProfile.id);
       }
 
+      // v55.83-AS — also propagate the reference to any existing receipt lines so
+      // a with-lines shipment's top-level reference updates from "Save Shipment Only" too.
+      try {
+        await supabase.from('inventory_stock_receipts').update({ shipment_reference: header.shipment_reference.trim(), updated_by: userProfile && userProfile.id }).eq('receipt_number', receiptNumber);
+      } catch (refErr) { console.error('[receiving] shell reference propagate failed', refErr); }
+
       toast.success('Shipment ' + receiptNumber + ' saved as Pending Detail. Add products later via Edit.');
       await reload();
       closeModal();
@@ -1183,6 +1189,13 @@ export default function InventoryReceiving(props) {
           }
         }
       }
+
+      // v55.83-AS — propagate the shipment-level reference to ALL lines of this
+      // receipt so the top-level list (which reads the reference from the first
+      // line) always reflects the edit, even if a line wasn't matched/updated above.
+      try {
+        await supabase.from('inventory_stock_receipts').update({ shipment_reference: header.shipment_reference.trim(), updated_by: userProfile && userProfile.id }).eq('receipt_number', receiptNumber);
+      } catch (refErr) { console.error('[receiving] reference propagate failed', refErr); }
 
       // Apply any master updates
       for (var k2 = 0; k2 < masterUpdatesQueued.length; k2++) {
