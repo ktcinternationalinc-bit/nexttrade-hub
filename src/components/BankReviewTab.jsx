@@ -91,7 +91,7 @@ export default function BankReviewTab(props) {
       supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false }).limit(1000),
       supabase.from('payment_matches').select('*'),
       supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }),
-      supabase.from('accounting_invoices').select('*').order('created_at', { ascending: false }),
+      fetchAllRows('accounting_invoices', '*', 'created_at', false),
     ]).then(function (res) {
       var t = (res[0] && res[0].data) || [];
       var m = (res[1] && res[1].data) || [];

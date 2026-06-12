@@ -2,7 +2,7 @@ var fs=require('fs');var path=require('path');
 function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 var t=p('src/components/AccountingDashboard.jsx');
-ok(/accounting_invoice_payments'\)\.select\('accounting_invoice_id,amount,sync_status'\)/.test(t),'loads payment rows');
+ok(/fetchAllRows\('accounting_invoice_payments', 'accounting_invoice_id,amount,sync_status'\)/.test(t),'loads payment rows (paginated)');
 ok(/st === 'void' \|\| st === 'cancelled' \|\| st === 'reversed' \|\| st === 'deleted'/.test(t),'excludes void/cancelled/reversed/deleted payments');
 ok(/\(Number\(i\.total_amount\) \|\| 0\) - \(Number\(i\.wave_imported_paid\) \|\| 0\) - \(payByInv\[i\.id\] \|\| 0\)/.test(t),'open = total - wave_imported_paid - hub payments');
 ok(/st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'/.test(t),'excludes void/cancelled/archived/deleted invoices');

@@ -76,8 +76,8 @@ export default function AccountingInvoicesTab(props) {
     Promise.all([
       supabase.from('businesses').select('id,name').limit(1),
       supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }),
-      supabase.from('accounting_invoices').select('*').order('created_at', { ascending: false }),
-      supabase.from('accounting_proformas').select('*').order('created_at', { ascending: false }),
+      fetchAllRows('accounting_invoices', '*', 'created_at', false),
+      fetchAllRows('accounting_proformas', '*', 'created_at', false),
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('accounting_invoice_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {

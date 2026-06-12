@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
+import { fetchAllRows } from '../lib/fetch-all-rows';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -38,9 +39,9 @@ export default function AccountingDashboard(props) {
     setLoading(true);
     var today = new Date().toISOString().substring(0, 10);
     Promise.all([
-      supabase.from('accounting_invoices').select('*').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('accounting_customers').select('id,company_name').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('accounting_invoice_payments').select('accounting_invoice_id,amount,sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,sync_status').catch(function () { return { data: [] }; }),
       supabase.from('bank_transactions').select('id,review_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(15).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
@@ -117,7 +118,26 @@ export default function AccountingDashboard(props) {
       var unmatched = txns.filter(function (t) { return (t.review_status || 'unreviewed') === 'unreviewed'; });
       var pendingApproval = inv.filter(function (i) { return isLive(i) && i.approval_status === 'internal_review'; });
 
+      // ---- diagnostic audit (completeness + AR math) ----
+      var diag = { total: inv.length, wave: 0, hub: 0, withWaveId: 0, bySync: {}, byYear: {}, maxDate: '', maxNum: '', sumTotal: 0, sumWave: 0, sumHub: 0, inclAR: 0, exDead: 0, exNotApproved: 0, exPaid: 0, exCredit: 0 };
+      inv.forEach(function (i) {
+        if (i.source === 'wave_import') { diag.wave++; } else { diag.hub++; }
+        if (i.wave_invoice_id) { diag.withWaveId++; }
+        var ss = i.wave_sync_status || '(none)'; diag.bySync[ss] = (diag.bySync[ss] || 0) + 1;
+        var yr = i.invoice_date ? String(i.invoice_date).substring(0, 4) : '(no date)'; diag.byYear[yr] = (diag.byYear[yr] || 0) + 1;
+        if ((i.invoice_date || '') > diag.maxDate) { diag.maxDate = i.invoice_date || diag.maxDate; }
+        if ((i.invoice_number || '') > diag.maxNum) { diag.maxNum = i.invoice_number || diag.maxNum; }
+        diag.sumTotal += Number(i.total_amount) || 0;
+        diag.sumWave += Number(i.wave_imported_paid) || 0;
+        if (!isLive(i)) { diag.exDead++; }
+        else if (i.approval_status !== 'approved') { diag.exNotApproved++; }
+        else { var ob = openOf(i); if (ob < -0.005) { diag.exCredit++; } else if (ob <= 0.005) { diag.exPaid++; } else { diag.inclAR++; } }
+      });
+      Object.keys(payByInv).forEach(function (k) { diag.sumHub += payByInv[k]; });
+      diag.sumTotal = r2(diag.sumTotal); diag.sumWave = r2(diag.sumWave); diag.sumHub = r2(diag.sumHub);
+
       setD({
+        diag: diag,
         openCount: openCount, openTotal: r2(openTotal),
         overdueCount: overdueCount, overdueTotal: r2(overdueTotal),
         creditTotal: r2(creditTotal),
@@ -224,6 +244,26 @@ export default function AccountingDashboard(props) {
             );
           })}
       </div>
+
+      {isSuperAdmin && (
+        <div className="mt-4 bg-slate-950 text-slate-100 rounded-lg p-3 border border-slate-700 text-[11px]">
+          <div className="font-extrabold text-amber-300 mb-1">🔬 AR data audit (super-admin) — completeness + math</div>
+          <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))' }}>
+            <div>Invoices loaded: <b>{d.diag.total}</b> (Wave {d.diag.wave} · Hub {d.diag.hub})</div>
+            <div>With Wave ID: <b>{d.diag.withWaveId}</b> <span className="text-slate-400">(Wave audit ≈ 1,285)</span></div>
+            <div>Max invoice date: <b>{d.diag.maxDate || '—'}</b></div>
+            <div>Max invoice #: <b>{d.diag.maxNum || '—'}</b></div>
+            <div>Σ total_amount: <b>{money(d.diag.sumTotal)}</b></div>
+            <div>Σ wave_imported_paid: <b>{money(d.diag.sumWave)}</b></div>
+            <div>Σ Hub/Plaid payments: <b>{money(d.diag.sumHub)}</b></div>
+            <div>Computed Open AR: <b className="text-emerald-300">{money(d.openTotal)}</b></div>
+          </div>
+          <div>By year: {Object.keys(d.diag.byYear).sort().map(function (y) { return y + ': ' + d.diag.byYear[y]; }).join('  ·  ')}</div>
+          <div className="mt-0.5">By Wave sync: {Object.keys(d.diag.bySync).map(function (k) { return k + ': ' + d.diag.bySync[k]; }).join('  ·  ')}</div>
+          <div className="mt-0.5">AR included: <b className="text-emerald-300">{d.diag.inclAR}</b> · excluded — not approved: {d.diag.exNotApproved} · void/cancelled/archived: {d.diag.exDead} · fully paid: {d.diag.exPaid} · credit/overpaid: {d.diag.exCredit}</div>
+          <div className="mt-1 text-slate-400">If "Invoices loaded" &lt; your Wave count, reads are still capped; if it matches, completeness is good. Open AR = Σtotal − Σwave_paid − Σhub_payments across the AR-included set only.</div>
+        </div>
+      )}
 
       {/* RECENT ACTIVITY */}
       <div className="mt-4 bg-white text-slate-900 rounded-lg p-3">

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BE',
+    date: '2026-06-08',
+    label: 'FIX: all 1,285 invoices now load (was capped at 1,000)',
+    items: [
+      '**\\ud83d\\udce5 Missing newer invoices are back.** The invoice list and dashboard were only loading the first 1,000 invoices, so later 2025 and 2026 invoices were hidden and AR totals were too low. Now every invoice loads, so the list, the dashboard, AR History and bank matching all see the full set.',
+      '**\\ud83d\\udd2c Built-in data audit.** The dashboard now has a super-admin audit panel showing how many invoices loaded, by year and source, the latest invoice date/number, and the AR math \\u2014 so completeness is easy to confirm at a glance.',
+      { superAdminOnly: true, text: 'v55.83-BE. ROOT CAUSE: Supabase default 1000-row read cap. Import preloads were paginated (AV) but DISPLAY reads were not -> list/dashboard/AR-history/bank-matching saw only first 1000 of 1285 (lowest invoice_numbers; list stopped ~AMERICA 1420 Feb-2025; AR computed on partial set -> Open 283/29,930 understated). FIX (code-only, NO SQL): new src/lib/fetch-all-rows.js fetchAllRows(table,cols,orderCol,asc) loops .range(from,from+999) until <1000 returned -> {data:all}. Replaced capped selects in AccountingDashboard (invoices/customers/payments), AccountingInvoicesTab (invoices/proformas list), AccountingCustomerHistory (customers/invoices/payments/proformas/bank_transactions), BankReviewTab (invoices for matching). Per-invoice payment reads (filtered by id) unaffected. Added super-admin AR data-audit panel: invoices loaded (Wave/Hub split), withWaveId vs ~1285, max invoice_date, max invoice_number, by-year counts, by wave_sync_status, Σtotal/Σwave_imported_paid/Σhub, computed Open AR, AR included vs excluded(not approved/dead/paid/credit). Deposits-to-allocate card already removed in BD; Unmatched bank txns = review_status unreviewed. Expense-classification buckets = future (not in AR). NEXT: verify counts then Hub->Wave push.' },
+    ],
+  },
+  {
     version: 'v55.83-BD',
     date: '2026-06-08',
     label: 'Accurate dashboard AR + aging buckets',

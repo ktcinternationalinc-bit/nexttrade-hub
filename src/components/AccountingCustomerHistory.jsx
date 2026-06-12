@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
+import { fetchAllRows } from '../lib/fetch-all-rows';
 
 function n(v) { return v == null || v === '' ? 0 : Number(v) || 0; }
 function money(v, show) { if (!show) return '•••'; var x = n(v); return x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -32,11 +33,11 @@ export default function AccountingCustomerHistory(props) {
   useEffect(function () {
     if (!mayView) { setLoading(false); return; }
     Promise.all([
-      safe(supabase.from('accounting_customers').select('*').order('company_name', { ascending: true })),
-      safe(supabase.from('accounting_invoices').select('*')),
-      safe(supabase.from('accounting_invoice_payments').select('*')),
-      safe(supabase.from('accounting_proformas').select('*')),
-      safe(supabase.from('bank_transactions').select('id, posted_date, name, amount_abs, direction'))
+      safe(fetchAllRows('accounting_customers', '*', 'company_name', true)),
+      safe(fetchAllRows('accounting_invoices', '*')),
+      safe(fetchAllRows('accounting_invoice_payments', '*')),
+      safe(fetchAllRows('accounting_proformas', '*')),
+      safe(fetchAllRows('bank_transactions', 'id, posted_date, name, amount_abs, direction'))
     ]).then(function (res) {
       setCustomers(res[0]); setInvoices(res[1]); setPayments(res[2]); setProformas(res[3]);
       var bt = {}; (res[4] || []).forEach(function (t) { bt[t.id] = t; }); setBankTxns(bt);
