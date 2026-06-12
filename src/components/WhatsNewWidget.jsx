@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BC',
+    date: '2026-06-08',
+    label: 'Reopen now lets you edit + invoice search, scroll & columns',
+    items: [
+      '**\\u270f\\ufe0f Reopen now actually opens the invoice for editing.** Click Reopen and the invoice opens in an editable form right away \\u2014 no more closing and re-opening, and the fields are no longer locked.',
+      '**\\ud83d\\udd0e Search your invoices.** A search box filters by invoice number, customer, status, or Wave/Hub. The list now scrolls inside a fixed height with a sticky header, so 1,285 invoices stay usable.',
+      '**\\ud83d\\udcca More columns.** The list now shows invoice date, due date, total, paid, balance, source and status \\u2014 newest invoices first.',
+      { superAdminOnly: true, text: 'v55.83-BC. AccountingInvoicesTab.jsx (code-only, NO SQL). BUG2 reopenInvoice: was dbUpdate->load only (editor never opened; clicking row opens View post-BB) -> now after update calls startEdit(Object.assign({},row,{approval_status:internal_review,ready_for_wave:false})) so locked()=false=editable, setViewing(null); also if source==wave_import||wave_sync_status==synced sets wave_sync_status=pending_sync + audit note. View (BB) is the read-only path (BUG1). LIST: search state filters number/custName/approval_status+payment_status/source(wave|hub); displayRows sorted invoice_date desc; scroll container overflowX auto minWidth1010 + inner maxHeight58vh overflowY auto + sticky header top0 z2; gcols 10-col grid Number/Customer/InvDate/DueDate/Total/Paid/Balance/Source(Wave|Hub badge)/Status/Actions. NEXT (separate build): AccountingDashboard accuracy — top customer balances via total_amount-wave_imported_paid-SUM(payment rows) excl void/cancelled/archived + AR aging buckets (current/30/60/90, overdue 1-30/31-60/61-90/90+) + table. Deferred until that build.' },
+    ],
+  },
+  {
+    version: 'v55.83-BB',
+    date: '2026-06-08',
+    label: 'View any invoice without reopening it',
+    items: [
+      '**\\ud83d\\udc41\\ufe0f New View button on every invoice.** Click an invoice (or the View button) to open a read-only detail view \\u2014 no need to Reopen, and it never changes the invoice\\u2019s status.',
+      '**\\ud83d\\udcc4 See everything at a glance.** The view shows customer, dates, status, whether it came from Wave or was made in Hub, line items, subtotal, any discount, total, Wave-paid, bank-matched payments, balance due, notes \\u2014 plus Print / Save PDF.',
+      '**\\u270f\\ufe0f Reopen stays separate.** Reopen is still only for editing approved invoices (with permission, reason and audit) \\u2014 inspecting an invoice no longer requires it.',
+      { superAdminOnly: true, text: 'v55.83-BB. AccountingInvoicesTab.jsx (code-only, NO SQL). Added read-only View: viewing/viewItems/viewPayments/viewLoading state; openView(row) loads accounting_invoice_items(by invoice_id) + accounting_invoice_payments(by accounting_invoice_id), each .catch([]); viewCalc() computes lineSum, docTot(=total_amount), adjustment(=docTot-lineSum), waveImported(=wave_imported_paid), hubPaid(=SUM non-void payment rows), balance(=balance_due ?? docTot-waveImported-hubPaid). Row number/customer click now openView (was startEdit). New sky View button per row before Print. View modal (fixed overlay, read-only): meta grid (customer/dates/status+payment_status/source Wave import|Hub-created+historical/wave sync), line items table, Subtotal+Discount/adjustment(when adj!=0)+Total, Wave imported paid, Hub/Plaid matched paid, Balance due, payment history table (date/amount/source/sync synced|failed|pending Wave sync) with aggregate note when none, notes. Print/Save PDF + Edit(only when editable && mayEdit -> startEdit) buttons. New module Field/Row helpers. Reopen path unchanged. No status mutation in View.' },
+    ],
+  },
+  {
     version: 'v55.83-BA',
     date: '2026-06-08',
     label: 'Printed invoices reconcile to the Wave total (discount line)',

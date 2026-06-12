@@ -13,6 +13,8 @@ function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').repla
 function blankItem() { return { description: '', quantity: '1', unit_price: '0', sku: '', product_ref: '' }; }
 function itemTotal(it) { return roundMoney((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)); }
 function docTotal(items) { var t = 0; (items || []).forEach(function (it) { t += itemTotal(it); }); return roundMoney(t); }
+function Field(props) { return <div><div className="text-[10px] text-slate-400 font-semibold">{props.label}</div><div className="text-slate-100 font-medium">{props.value}</div></div>; }
+function Row(props) { return <div className={'flex justify-between py-0.5 ' + (props.bold ? 'font-extrabold text-slate-100 border-t border-slate-700 mt-0.5 pt-1' : 'text-slate-300')}><span>{props.k}</span><span className="font-mono">{props.v}</span></div>; }
 
 function MiniTypeahead(props) {
   var items = props.items || [];
@@ -57,12 +59,17 @@ export default function AccountingInvoicesTab(props) {
   var [proformas, setProformas] = useState([]);
   var [pmCount, setPmCount] = useState({});
   var [showArchived, setShowArchived] = useState(false);
+  var [search, setSearch] = useState('');
   var [loading, setLoading] = useState(true);
   var [busy, setBusy] = useState(false);
 
   var [editing, setEditing] = useState(null);     // null | 'new' | row
   var [hdr, setHdr] = useState({});
   var [items, setItems] = useState([blankItem()]);
+  var [viewing, setViewing] = useState(null);
+  var [viewItems, setViewItems] = useState([]);
+  var [viewPayments, setViewPayments] = useState([]);
+  var [viewLoading, setViewLoading] = useState(false);
 
   function load() {
     setLoading(true);
@@ -120,7 +127,24 @@ export default function AccountingInvoicesTab(props) {
   }
   function isInvoice() { return mode === 'invoices'; }
   var rows = isInvoice() ? invoices : proformas;
-  var displayRows = rows.filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; });
+  var displayRows = rows
+    .filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; })
+    .filter(function (r) {
+      if (!search.trim()) return true;
+      var qq = search.trim().toLowerCase();
+      var numv = (isInvoice() ? r.invoice_number : r.proforma_number) || '';
+      var cn = custName(r.accounting_customer_id) || '';
+      var stat = (isInvoice() ? (r.approval_status || '') : (r.status || '')) + ' ' + (r.payment_status || '');
+      var srcv = r.source === 'wave_import' ? 'wave' : 'hub';
+      return (numv + ' ' + cn + ' ' + stat + ' ' + srcv).toLowerCase().indexOf(qq) >= 0;
+    })
+    .slice()
+    .sort(function (a, b) {
+      var da = (isInvoice() ? a.invoice_date : a.proforma_date) || '';
+      var db = (isInvoice() ? b.invoice_date : b.proforma_date) || '';
+      if (da < db) return 1; if (da > db) return -1; return 0;
+    });
+  var gcols = '92px minmax(140px,1fr) 82px 82px 92px 82px 90px 54px 98px 142px';
 
   function startNew() {
     var today = new Date().toISOString().substring(0, 10);
@@ -136,6 +160,32 @@ export default function AccountingInvoicesTab(props) {
       var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '' }; });
       setItems(its.length ? its : [blankItem()]);
     });
+  }
+  function openView(row) {
+    setViewing(row); setViewItems([]); setViewPayments([]); setViewLoading(true);
+    var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
+    var key = isInvoice() ? 'invoice_id' : 'proforma_id';
+    var pItems = supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) { return (r && r.data) || []; }).catch(function () { return []; });
+    var pPays = isInvoice()
+      ? supabase.from('accounting_invoice_payments').select('*').eq('accounting_invoice_id', row.id).order('payment_date', { ascending: true }).then(function (r) { return (r && r.data) || []; }).catch(function () { return []; })
+      : Promise.resolve([]);
+    Promise.all([pItems, pPays]).then(function (res) { setViewItems(res[0]); setViewPayments(res[1]); }).finally(function () { setViewLoading(false); });
+  }
+  function viewCalc() {
+    var lineSum = 0;
+    viewItems.forEach(function (it) {
+      var lt = (it.line_total != null && Number(it.line_total) !== 0) ? Number(it.line_total) : (Number(it.quantity) || 0) * (Number(it.unit_price) || 0);
+      lineSum += lt;
+    });
+    lineSum = roundMoney(lineSum);
+    var docTot = (viewing && viewing.total_amount != null) ? roundMoney(Number(viewing.total_amount)) : lineSum;
+    var adjustment = roundMoney(docTot - lineSum);
+    var waveImported = viewing ? (Number(viewing.wave_imported_paid) || 0) : 0;
+    var hubPaid = 0;
+    viewPayments.forEach(function (p) { if (p.sync_status !== 'void') { hubPaid += Number(p.amount) || 0; } });
+    hubPaid = roundMoney(hubPaid);
+    var balance = (viewing && viewing.balance_due != null) ? Number(viewing.balance_due) : roundMoney(docTot - waveImported - hubPaid);
+    return { lineSum: lineSum, docTot: docTot, adjustment: adjustment, waveImported: waveImported, hubPaid: hubPaid, balance: balance };
   }
   function uh(k, v) { var c = Object.assign({}, hdr); c[k] = v; setHdr(c); }
   function ui(i, k, v) { var c = items.slice(); c[i] = Object.assign({}, c[i]); c[i][k] = v; setItems(c); }
@@ -205,9 +255,19 @@ export default function AccountingInvoicesTab(props) {
     var reason = window.prompt('Reopen approved invoice for editing. Reason:') || '';
     if (!reason.trim()) { toast.error('Reason required.'); return; }
     setBusy(true);
-    dbUpdate('accounting_invoices', row.id, { approval_status: 'internal_review', ready_for_wave: false, updated_by: userProfile && userProfile.id }, userProfile && userProfile.id)
-      .then(function () { return logActivity(userProfile && userProfile.id, 'Reopened invoice ' + (row.invoice_number || row.id) + ' (' + reason.trim() + ')', 'accounting_invoices'); })
-      .then(function () { toast.success('Reopened'); load(); })
+    var waveTouch = (row.source === 'wave_import' || row.wave_sync_status === 'synced');
+    var rpatch = { approval_status: 'internal_review', ready_for_wave: false, updated_by: userProfile && userProfile.id };
+    if (waveTouch) { rpatch.wave_sync_status = 'pending_sync'; }
+    dbUpdate('accounting_invoices', row.id, rpatch, userProfile && userProfile.id)
+      .then(function () { return logActivity(userProfile && userProfile.id, 'Reopened invoice ' + (row.invoice_number || row.id) + ' (' + reason.trim() + ')' + (waveTouch ? ' [marked pending Wave re-sync]' : ''), 'accounting_invoices'); })
+      .then(function () {
+        toast.success('Reopened — now editable' + (waveTouch ? ' (will need Wave re-sync)' : ''));
+        load();
+        var reopened = Object.assign({}, row, { approval_status: 'internal_review', ready_for_wave: false });
+        if (waveTouch) { reopened.wave_sync_status = 'pending_sync'; }
+        setViewing(null);
+        startEdit(reopened);
+      })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
@@ -308,30 +368,108 @@ export default function AccountingInvoicesTab(props) {
         {mayEdit && <button onClick={startNew} className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded font-bold">+ New {isInvoice() ? 'invoice' : 'proforma'}</button>}
       </div>
 
-      <div className="border border-slate-700 rounded overflow-hidden mb-4">
-        <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '110px 1fr 100px 110px 120px 150px' }}>
-          <div className="px-2 py-1.5">Number</div><div className="px-2 py-1.5">Customer</div><div className="px-2 py-1.5 r text-right">Total</div><div className="px-2 py-1.5">{isInvoice() ? 'Balance' : 'Valid until'}</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Actions</div>
+      <div className="flex items-center gap-2 mb-2">
+        <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={'Search ' + (isInvoice() ? 'invoices' : 'proformas') + ' — number, customer, status, Wave/Hub…'} className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-slate-100 text-xs" style={{ width: '380px' }} />
+        {search.trim() && <button onClick={function () { setSearch(''); }} className="text-[11px] text-slate-300 hover:text-white">clear</button>}
+        <span className="text-[11px] text-slate-400">{displayRows.length} shown · newest first</span>
+      </div>
+
+      <div className="border border-slate-700 rounded mb-4" style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: '1010px' }}>
+          <div className="bg-slate-800 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: gcols, position: 'sticky', top: 0, zIndex: 2 }}>
+            <div className="px-2 py-1.5">Number</div><div className="px-2 py-1.5">Customer</div><div className="px-2 py-1.5">Inv date</div><div className="px-2 py-1.5">{isInvoice() ? 'Due date' : 'Valid until'}</div><div className="px-2 py-1.5 text-right">Total</div><div className="px-2 py-1.5 text-right">Paid</div><div className="px-2 py-1.5 text-right">Balance</div><div className="px-2 py-1.5">Source</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Actions</div>
+          </div>
+          <div style={{ maxHeight: '58vh', overflowY: 'auto' }}>
+          {displayRows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'}{search.trim() ? ' match your search' : ' yet'}.</div> :
+            displayRows.map(function (row) {
+              return (
+                <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
+                  <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
+                  <div className="px-2 py-1.5 text-xs text-slate-100 truncate cursor-pointer" onClick={function () { openView(row); }}>{custName(row.accounting_customer_id)}</div>
+                  <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.invoice_date : row.proforma_date) || '—'}</div>
+                  <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.due_date : row.valid_until) || '—'}</div>
+                  <div className="px-2 py-1.5 text-right text-xs font-mono font-bold">{fmt(row.total_amount)}</div>
+                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-300">{isInvoice() ? fmt(row.amount_paid) : '—'}</div>
+                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-200">{isInvoice() ? fmt(row.balance_due != null ? row.balance_due : row.total_amount) : '—'}</div>
+                  <div className="px-2 py-1.5">{isInvoice() ? <span className={'text-[9px] rounded px-1 py-0.5 font-bold ' + (row.source === 'wave_import' ? 'bg-sky-700 text-white' : 'bg-emerald-700 text-white')}>{row.source === 'wave_import' ? 'Wave' : 'Hub'}</span> : '—'}</div>
+                  <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{row.record_status && row.record_status !== 'active' ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1 font-bold">{String(row.record_status).toUpperCase()}</span> : null}</div>
+                  <div className="px-2 py-1.5 flex gap-1 flex-wrap">
+                    <button onClick={function () { openView(row); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
+                    <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Print / Save PDF">Print</button>
+                    {isInvoice() && mayEdit && row.approval_status === 'draft' && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
+                    {isInvoice() && row.approval_status === 'internal_review' && mayApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
+                    {isInvoice() && row.approval_status === 'approved' && mayApprove && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
+                    {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        {displayRows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'} yet.</div> :
-          displayRows.map(function (row) {
-            return (
-              <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: '110px 1fr 100px 110px 120px 150px' }}>
-                <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { startEdit(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
-                <div className="px-2 py-1.5 text-xs text-slate-100 truncate cursor-pointer" onClick={function () { startEdit(row); }}>{custName(row.accounting_customer_id)}</div>
-                <div className="px-2 py-1.5 text-right text-xs font-mono font-bold">{fmt(row.total_amount)}</div>
-                <div className="px-2 py-1.5 text-[11px] text-slate-300">{isInvoice() ? fmt(row.balance_due != null ? row.balance_due : row.total_amount) : (row.valid_until || '—')}</div>
-                <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{isInvoice() && row.ready_for_wave ? <span className="ml-1 text-[9px] bg-indigo-700 text-white rounded px-1">wave-ready</span> : null}{row.record_status && row.record_status !== 'active' ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1 font-bold">{String(row.record_status).toUpperCase()}</span> : null}</div>
-                <div className="px-2 py-1.5 flex gap-1 flex-wrap">
-                  <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Opens your browser print dialog — choose Save as PDF">Print / Save PDF</button>
-                  {isInvoice() && mayEdit && row.approval_status === 'draft' && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
-                  {isInvoice() && row.approval_status === 'internal_review' && mayApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
-                  {isInvoice() && row.approval_status === 'approved' && mayApprove && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
-                  {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
+      </div>
+
+      {viewing && (function () {
+        var vc = viewCalc();
+        var src = viewing.source === 'wave_import' ? 'Wave import' : 'Hub-created';
+        var editable = isInvoice() ? (viewing.approval_status !== 'approved') : (viewing.status !== 'converted');
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '24px' }} onClick={function () { setViewing(null); }}>
+            <div className="bg-slate-900 border border-slate-600 rounded-xl w-full" style={{ maxWidth: '840px' }} onClick={function (e) { e.stopPropagation(); }}>
+              <div className="flex items-center justify-between p-3 border-b border-slate-700">
+                <div className="font-extrabold text-slate-100">View {isInvoice() ? 'invoice' : 'proforma'} · {(isInvoice() ? viewing.invoice_number : viewing.proforma_number) || '(no number)'} <span className="text-[10px] text-slate-400 font-medium">(read-only)</span></div>
+                <div className="flex gap-1">
+                  <button onClick={function () { printDoc(viewing); }} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Print / Save PDF</button>
+                  {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
+                  <button onClick={function () { setViewing(null); }} className="text-slate-300 hover:text-white text-sm px-2">✕</button>
                 </div>
               </div>
-            );
-          })}
-      </div>
+              <div className="p-3 text-slate-100 text-xs">
+                <div className="grid gap-2 mb-3" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+                  <Field label="Customer" value={custName(viewing.accounting_customer_id)} />
+                  <Field label={isInvoice() ? 'Invoice date' : 'Date'} value={(isInvoice() ? viewing.invoice_date : viewing.proforma_date) || '—'} />
+                  <Field label={isInvoice() ? 'Due date' : 'Valid until'} value={(isInvoice() ? viewing.due_date : viewing.valid_until) || '—'} />
+                  <Field label="Status" value={labelStatus(isInvoice() ? viewing.approval_status : viewing.status) + (viewing.payment_status ? ' · ' + viewing.payment_status : '')} />
+                  <Field label="Source" value={src + (viewing.is_historical ? ' · historical' : '')} />
+                  {isInvoice() && <Field label="Wave sync" value={viewing.wave_sync_status || '—'} />}
+                </div>
+
+                <div className="text-[11px] font-bold text-slate-300 mb-1 border-b border-slate-700 pb-0.5">Line items</div>
+                {viewLoading ? <div className="text-slate-400 italic py-2">Loading…</div> : (
+                  <table className="w-full mb-2"><thead><tr className="text-slate-400 text-left"><th className="py-1">Description</th><th className="text-right">Qty</th><th className="text-right">Unit price</th><th className="text-right">Line total</th></tr></thead>
+                    <tbody>{viewItems.length === 0 ? <tr><td colSpan={4} className="text-slate-500 italic py-1">No line items.</td></tr> : viewItems.map(function (it, i) {
+                      var lt = (it.line_total != null && Number(it.line_total) !== 0) ? Number(it.line_total) : (Number(it.quantity) || 0) * (Number(it.unit_price) || 0);
+                      return <tr key={i} className="border-t border-slate-800"><td className="py-1">{it.description || (it.product_ref || '')}</td><td className="text-right">{it.quantity}</td><td className="text-right font-mono">{fmt(it.unit_price)}</td><td className="text-right font-mono">{fmt(lt)}</td></tr>;
+                    })}</tbody>
+                  </table>
+                )}
+
+                <div className="flex justify-end"><div style={{ minWidth: '280px' }}>
+                  {vc.adjustment !== 0 && <Row k="Subtotal" v={fmt(vc.lineSum)} />}
+                  {vc.adjustment !== 0 && <Row k={vc.adjustment < 0 ? 'Discount / adjustment' : 'Adjustment'} v={fmt(vc.adjustment)} />}
+                  <Row k="Total" v={fmt(vc.docTot)} bold={true} />
+                  {isInvoice() && <Row k="Wave imported paid" v={fmt(vc.waveImported)} />}
+                  {isInvoice() && <Row k="Hub / Plaid matched paid" v={fmt(vc.hubPaid)} />}
+                  {isInvoice() && <Row k="Balance due" v={fmt(vc.balance)} bold={true} />}
+                </div></div>
+
+                {isInvoice() && (
+                  <div className="mt-3">
+                    <div className="text-[11px] font-bold text-slate-300 mb-1 border-b border-slate-700 pb-0.5">Payment history</div>
+                    {viewPayments.length === 0 ? <div className="text-slate-400 italic">No bank-matched payments. {vc.waveImported > 0 ? 'Wave-imported paid (' + fmt(vc.waveImported) + ') is an aggregate from Wave — individual historical dates are not exposed by Wave\u2019s API.' : ''}</div> :
+                      <table className="w-full"><thead><tr className="text-slate-400 text-left"><th className="py-1">Date</th><th className="text-right">Amount</th><th>Source</th><th>Wave sync</th></tr></thead>
+                        <tbody>{viewPayments.map(function (p) {
+                          return <tr key={p.id} className="border-t border-slate-800"><td className="py-1">{p.payment_date || '—'}</td><td className="text-right font-mono">{fmt(p.amount)}</td><td>{p.source || ''}</td><td>{p.sync_status === 'synced' ? <span className="text-emerald-400">synced</span> : p.sync_status === 'failed' ? <span className="text-rose-400">failed</span> : <span className="text-amber-400">pending Wave sync</span>}</td></tr>;
+                        })}</tbody>
+                      </table>}
+                  </div>
+                )}
+
+                {viewing.notes && <div className="mt-3 bg-slate-800 rounded p-2 text-slate-200"><span className="font-bold">Notes:</span> {viewing.notes}</div>}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {editing && (
         <div className="border border-slate-700 rounded bg-slate-900/60 p-3 mb-2">
