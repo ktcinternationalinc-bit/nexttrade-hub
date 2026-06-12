@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BD',
+    date: '2026-06-08',
+    label: 'Accurate dashboard AR + aging buckets',
+    items: [
+      '**\\ud83d\\udcca Accurate AR on the dashboard.** Top customer balances and Open AR are now calculated correctly \\u2014 invoice total minus Wave-paid minus bank-matched payments \\u2014 instead of relying on a stored balance that could be wrong. Void, cancelled and archived invoices are excluded; overpaid invoices count as a customer credit, not money owed.',
+      '**\\u23f3 AR aging.** New aging view: Due now, Due in 30 / 60 / 90 days, and Overdue 1\\u201330 / 31\\u201360 / 61\\u201390 / 90+ days \\u2014 each with its dollar total and invoice count. Click a bucket to see exactly which invoices are in it.',
+      '**\\ud83e\\uddfe Open invoice table.** Shows number, customer, invoice date, due date, status, total, paid, balance and source, sorted by due date (earliest/most overdue first).',
+      { superAdminOnly: true, text: 'v55.83-BD. AccountingDashboard.jsx rewritten (code-only, NO SQL). Now loads accounting_invoice_payments (was missing). Per-invoice openOf(i)=r2(total_amount - wave_imported_paid - SUM(non-void payByInv)); payByInv excludes sync_status void/cancelled/reversed/deleted. arInv = isLive (record_status not void/cancelled/archived/deleted) && approval_status===approved. ob<-0.005 -> creditTotal (NOT AR); ob<=0.005 -> skip (paid). Aging by daysUntil(due_date,today): overdue od30/od60/od90/od90p (1-30/31-60/61-90/90+), current now(du==0 or no due)/d30/d60/d90/later(90+). Each bucket {label,t,c,inv}. custBalances = SUM positive ob per customer top8. Open/overdue table sorted due_date asc (blanks last), columns number/customer/inv date/due date/status/total/paid(wave_imported+hub)/balance(ob)/source, scrollable maxHeight46vh + sticky-ish header, overdue due dates red. Clickable bucket -> setBucket filters table. Summary cards Open AR/Overdue/Credits/Unmatched/Approvals all from computed totals (no stale balance_due). Drafts/in-review excluded from AR (known limitation). NEXT: Hub->Wave push (still deferred).' },
+    ],
+  },
+  {
     version: 'v55.83-BC',
     date: '2026-06-08',
     label: 'Reopen now lets you edit + invoice search, scroll & columns',
