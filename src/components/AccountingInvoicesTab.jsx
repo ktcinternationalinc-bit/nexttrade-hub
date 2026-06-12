@@ -3,6 +3,7 @@
 // Proformas never touch balances until converted. Printable PDF via browser print.
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetch-all-rows';
 import { canViewBank, canEditMappings, canReopen } from '../lib/bank-permissions';
 import { roundMoney } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';

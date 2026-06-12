@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BF',
+    date: '2026-06-08',
+    label: 'HOTFIX: Accounting → Invoices crash',
+    items: [
+      '**\\ud83d\\udee0\\ufe0f Fixed the Accounting → Invoices crash.** The invoice screen was failing to open after the last update; it now opens normally with the full invoice list.',
+      { superAdminOnly: true, text: 'v55.83-BF HOTFIX (code-only, NO SQL). BE added fetchAllRows() usage to AccountingInvoicesTab + BankReviewTab but the auto-import patch searched for the bare \'import { supabase } from\' line; both files import \'{ supabase, dbInsert, dbUpdate, logActivity }\', so the import was never inserted -> runtime ReferenceError fetchAllRows is not defined (parse-check passes; Babel does not resolve imports). FIX: added import { fetchAllRows } from \'../lib/fetch-all-rows\' to both. NEW regression test test-v55-83-bf-import-integrity.js walks src/, and for ANY file that calls fetchAllRows( (excluding WhatsNewWidget changelog text + the helper itself) asserts the import is present -> catches used-but-not-imported before ship. NEXT BUILD (BG, queued): dashboard layout into sections A Receivables / B Upcoming Due / C Overdue Aging / D Bank Review / E Wave Sync; overdue row View+Ignore controls; default hide overdue < \$200 with toggle (needs SQL ignore flag). Then user re-imports invoices.' },
+    ],
+  },
+  {
     version: 'v55.83-BE',
     date: '2026-06-08',
     label: 'FIX: all 1,285 invoices now load (was capped at 1,000)',

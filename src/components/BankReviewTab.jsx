@@ -3,6 +3,7 @@
 // src/lib/bank-permissions.js. No Wave sync here. No deletes. Approved = locked.
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetch-all-rows';
 import {
   canViewBank, canSeeAmounts, canClassify, canMatchPayments, canReopen,
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
