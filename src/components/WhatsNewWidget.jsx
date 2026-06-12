@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BJ',
+    date: '2026-06-08',
+    label: 'Dashboard AR fix — drafts out, currencies separated',
+    items: [
+      '**\\u2705 Drafts no longer inflate your numbers.** Draft invoices stay in the Invoices list (editable + approvable) but are now kept out of Open AR, Overdue, aging, customer balances, and collections \\u2014 matching Wave.',
+      '**\\ud83d\\udcb1 EGP and USD are no longer added together.** Open AR shows USD only; receivables in other currencies (e.g. EGP) appear in their own clearly-labeled cards and are never summed into the dollar figure.',
+      { superAdminOnly: true, text: 'v55.83-BJ. ROOT CAUSE (proven by reconcile: Hub AR == Wave AR $6,424,323.42, diff $0 \\u2014 import money is correct; inflation was 100% dashboard-layer): drafts imported as approved + EGP summed with USD. SQL sql/v55-83-bj-wave-status-currency.sql (additive): accounting_invoices += wave_status text + currency text default USD. import-invoices: Wave query pulls total{value currency{code}}; helpers curOf()+isDraftStatus(DRAFT|SAVED); fields now set wave_status=n.status, currency=curOf(n), and approval_status = isDraftStatus ? draft : approved (so existing approved-filter excludes drafts; drafts still show in Invoices list w/ Approve). AccountingDashboard: arInv filter += wave_status not DRAFT/SAVED; per-invoice currency split \\u2014 non-USD accumulate into nonUsd{cur:{open,count}} and RETURN before USD AR/aging/overdue/custBalances (never mixed); credits also currency-guarded; Section A relabeled Open/Overdue/Credits (USD) + drafts-excluded sub, new non-USD receivable cards (native, amber) + FX-rate hint. AccountingCustomerHistory: isDead += archived/deleted, new isDraft (wave_status DRAFT/SAVED or approval_status draft), summary skips dead/draft/non-USD. REQUIRES: run BJ SQL, then RE-IMPORT invoices to populate wave_status+currency (until then wave_status null => treated non-draft; currency null => USD). After re-import, Open AR should drop to ~USD-only non-draft figure (audit: $1,207,350 USD + EGP 1,424,000 separate). Reconcile/AR-audit tool unchanged. STILL FROZEN: product master, price history, Hub->Wave push, reports.' },
+    ],
+  },
+  {
     version: 'v55.83-BI',
     date: '2026-06-08',
     label: 'AR integrity audit — currency + drafts',

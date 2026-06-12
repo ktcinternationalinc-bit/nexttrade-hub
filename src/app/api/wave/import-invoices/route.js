@@ -7,6 +7,11 @@
 import { createClient } from '@supabase/supabase-js';
 
 function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
+function curOf(n) {
+  if (n.total && n.total.currency && n.total.currency.code) { return n.total.currency.code; }
+  return 'USD';
+}
+function isDraftStatus(st) { return st === 'DRAFT' || st === 'SAVED'; }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function payStatus(total, due, paid) {
   if (due != null && due <= 0.0001) return 'paid';
@@ -21,7 +26,7 @@ function gqlInvoices(token, bid, page) {
   var query = 'query($bid: ID!, $page: Int!) { business(id:$bid){ id invoices(page:$page,pageSize:25){'
     + ' pageInfo{ currentPage totalPages totalCount } edges{ node{'
     + ' id invoiceNumber status invoiceDate dueDate memo'
-    + ' total{ value } amountPaid{ value } amountDue{ value }'
+    + ' total{ value currency{ code } } amountPaid{ value } amountDue{ value }'
     + ' customer{ id name }'
     + ' items{ product{ name } description quantity price total{ value } } } } } } }';
   return fetch('https://gql.waveapps.com/graphql/public', {
@@ -168,7 +173,9 @@ export async function POST(request) {
             wave_imported_paid: paid,
             balance_due: balance,
             payment_status: payStatus(total, balance, paid),
-            approval_status: 'approved',
+            approval_status: isDraftStatus(n.status) ? 'draft' : 'approved',
+            wave_status: n.status || null,
+            currency: curOf(n),
             accounting_customer_id: acctCustomerId,
             wave_invoice_id: n.id,
             source: 'wave_import',

@@ -64,13 +64,19 @@ export default function AccountingDashboard(props) {
       function isLive(i) { var st = i.record_status; return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'; }
       function paidOf(i) { return r2((Number(i.wave_imported_paid) || 0) + (payByInv[i.id] || 0)); }
       function openOf(i) { return r2((Number(i.total_amount) || 0) - (Number(i.wave_imported_paid) || 0) - (payByInv[i.id] || 0)); }
-      var arInv = inv.filter(function (i) { return isLive(i) && i.approval_status === 'approved'; });
+      var arInv = inv.filter(function (i) { return isLive(i) && i.approval_status === 'approved' && i.wave_status !== 'DRAFT' && i.wave_status !== 'SAVED'; });
 
       var overdueRows = [], currentRows = [];
       var openTotal = 0, openCount = 0, creditTotal = 0;
       var balByCust = {};
+      var nonUsd = {};   // currency code -> { open native, count } — kept separate, never summed into USD
       arInv.forEach(function (i) {
         var ob = openOf(i);
+        var cur = i.currency || 'USD';
+        if (cur !== 'USD') {
+          if (Math.abs(ob) > 0.005) { if (!nonUsd[cur]) { nonUsd[cur] = { open: 0, count: 0 }; } nonUsd[cur].open += ob; nonUsd[cur].count += 1; }
+          return;
+        }
         if (ob < -0.005) { creditTotal += (-ob); return; }
         if (ob <= 0.005) return;
         openTotal += ob; openCount += 1;
@@ -110,12 +116,14 @@ export default function AccountingDashboard(props) {
       });
       Object.keys(payByInv).forEach(function (k) { diag.sumHub += payByInv[k]; });
       diag.inclAR = openCount; diag.sumTotal = r2(diag.sumTotal); diag.sumWave = r2(diag.sumWave); diag.sumHub = r2(diag.sumHub);
+      var nonUsdList = Object.keys(nonUsd).map(function (c) { return { cur: c, open: r2(nonUsd[c].open), count: nonUsd[c].count }; }).sort(function (a, b) { return b.open - a.open; });
 
       setD({
         openTotal: r2(openTotal), openCount: openCount, creditTotal: r2(creditTotal),
         overdueRows: overdueRows, currentRows: currentRows, custBalances: custBalances,
         unmatchedCount: unmatched.length, pendingApproval: pendingApproval.length,
         paidTodayTotal: r2(paidTodayTotal), paidTodayCount: paidTodayCount,
+        nonUsd: nonUsdList,
         ws: ws, lastLog: lastLog, activity: activity, diag: diag
       });
     }).catch(function (e) { console.error('[acctdash]', e); }).finally(function () { setLoading(false); });
@@ -171,11 +179,20 @@ export default function AccountingDashboard(props) {
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title="Open AR" big={money(d.openTotal)} sub={d.openCount + ' open invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Overdue AR" big={money(overdueTotal)} sub={shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
-          <Stat title="Customer credits" big={money(d.creditTotal)} sub="overpaid / not AR" tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
+          <Stat title="Open AR (USD)" big={money(d.openTotal)} sub={d.openCount + ' open · drafts excluded'} tone="bg-slate-800" />
+          <Stat title="Overdue AR (USD)" big={money(overdueTotal)} sub={shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
+          <Stat title="Customer credits (USD)" big={money(d.creditTotal)} sub="overpaid / not AR" tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
           <Stat title="Approvals pending" big={d.pendingApproval} sub="invoices in review" tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
         </div>
+        {d.nonUsd && d.nonUsd.length > 0 && (
+          <div className="mt-2">
+            <div className="text-[11px] font-bold text-amber-300 mb-1">Receivables in other currencies (shown separately — never added to USD):</div>
+            <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
+              {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeAmounts ? (n.cur + ' ' + fmt(n.open)) : '•••••'} sub={n.count + ' invoice(s) · native'} tone="bg-amber-900" />; })}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">To fold these into one USD figure, log the USD↔currency rate in FX Rates and they’ll convert; until then they stay in their own currency.</div>
+          </div>
+        )}
       </Section>
 
       {/* B — Upcoming Due */}

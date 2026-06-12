@@ -9,7 +9,8 @@ import { fetchAllRows } from '../lib/fetch-all-rows';
 
 function n(v) { return v == null || v === '' ? 0 : Number(v) || 0; }
 function money(v, show) { if (!show) return '•••'; var x = n(v); return x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function isDead(inv) { var s = inv.record_status; return s === 'void' || s === 'cancelled'; }
+function isDead(inv) { var s = inv.record_status; return s === 'void' || s === 'cancelled' || s === 'archived' || s === 'deleted'; }
+function isDraft(inv) { return inv.wave_status === 'DRAFT' || inv.wave_status === 'SAVED' || inv.approval_status === 'draft'; }
 
 export default function AccountingCustomerHistory(props) {
   var userProfile = props.userProfile || null;
@@ -61,7 +62,9 @@ export default function AccountingCustomerHistory(props) {
     var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, open: 0, openCount: 0, paidCount: 0, partialCount: 0, overdueCount: 0 };
     var today = new Date().toISOString().substring(0, 10);
     invs.forEach(function (i) {
-      if (isDead(i)) return; // void/cancelled excluded from AR
+      if (isDead(i)) return;   // void/cancelled/archived/deleted excluded from AR
+      if (isDraft(i)) return;  // Wave drafts excluded from AR (still visible in Invoices)
+      if ((i.currency || 'USD') !== 'USD') return; // keep currencies separate — USD summary only
       var total = n(i.total_amount);
       var wave = n(i.wave_imported_paid);
       var hub = hubPaidForInvoice(i.id);
