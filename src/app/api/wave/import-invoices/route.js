@@ -7,6 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 function num(m) { return m && m.value != null ? Number(m.value) : 0; }
+function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function payStatus(total, due, paid) {
   if (due != null && due <= 0.0001) return 'paid';
   if (paid != null && paid > 0) return 'partial';
@@ -61,7 +62,7 @@ export async function POST(request) {
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
   var startedAt = new Date().toISOString();
-  var report = { created: 0, updated: 0, skipped: 0, errors: [], lineItems: 0, placeholders: [], total: 0, businessId: businessId, timestamp: startedAt };
+  var report = { created: 0, updated: 0, skipped: 0, errors: [], lineItems: 0, placeholders: [], total: 0, businessId: businessId, timestamp: startedAt, samples: [] };
 
   try {
     // PREFLIGHT — confirm tables + required columns exist; one clear error if not.
@@ -114,9 +115,49 @@ export async function POST(request) {
             }
           }
 
-          var total = num(n.total);
-          var paid = num(n.amountPaid);
-          var due = num(n.amountDue);
+          // --- line items computed FIRST. Wave's per-line and invoice 'total' come
+          // back 0/null via the API, but quantity + unit price import correctly,
+          // so compute line_total = qty * unit_price (use Wave line total only if > 0). ---
+          var items = n.items || [];
+          var itemRows = [];
+          var sumLines = 0;
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k];
+            var q = it.quantity != null ? Number(it.quantity) : 0;
+            var up = it.price != null ? Number(it.price) : 0;
+            var waveLine = num(it.total);
+            var lt = (waveLine && waveLine > 0) ? r2(waveLine) : r2(q * up);
+            sumLines += lt;
+            itemRows.push({
+              business_id: internalBusinessId,
+              invoice_id: null,
+              description: it.description || (it.product && it.product.name) || null,
+              quantity: q,
+              unit_price: up,
+              line_total: lt,
+              product_ref: it.product && it.product.name ? it.product.name : null,
+              sort_order: k
+            });
+          }
+          sumLines = r2(sumLines);
+
+          // --- totals: prefer Wave value when present (> 0), else compute from parts.
+          // Identity used: Total = Paid + Due. amountDue maps reliably from Wave. ---
+          var waveTotal = num(n.total);
+          var total = (waveTotal && waveTotal > 0) ? r2(waveTotal) : sumLines;
+          var due = (n.amountDue && n.amountDue.value != null) ? r2(num(n.amountDue)) : null;
+          var wavePaid = num(n.amountPaid);
+          var paid;
+          if (wavePaid && wavePaid > 0) { paid = r2(wavePaid); }
+          else if (due != null) { paid = r2(total - due); }
+          else { paid = 0; }
+          if (paid < 0) { paid = 0; }
+          var balance = (due != null) ? due : r2(total - paid);
+
+          if (report.samples.length < 6) {
+            report.samples.push({ invoice: n.invoiceNumber, waveTotal: waveTotal, sumLines: sumLines, total: total, wavePaid: wavePaid, paid: paid, due: due, balance: balance, lines: items.length });
+          }
+
           var fields = {
             invoice_number: n.invoiceNumber || null,
             invoice_date: n.invoiceDate || null,
@@ -125,8 +166,8 @@ export async function POST(request) {
             total_amount: total,
             amount_paid: paid,
             wave_imported_paid: paid,
-            balance_due: due,
-            payment_status: payStatus(total, due, paid),
+            balance_due: balance,
+            payment_status: payStatus(total, balance, paid),
             approval_status: 'approved',
             accounting_customer_id: acctCustomerId,
             wave_invoice_id: n.id,
@@ -154,23 +195,11 @@ export async function POST(request) {
           // line items: delete-then-insert (dedupe-safe on re-run)
           if (invoiceId) {
             await admin.from('accounting_invoice_items').delete().eq('invoice_id', invoiceId);
-            var items = n.items || [];
-            if (items.length) {
-              var rows = items.map(function (it, idx) {
-                return {
-                  business_id: internalBusinessId,
-                  invoice_id: invoiceId,
-                  description: it.description || (it.product && it.product.name) || null,
-                  quantity: it.quantity != null ? Number(it.quantity) : null,
-                  unit_price: it.price != null ? Number(it.price) : null,
-                  line_total: num(it.total),
-                  product_ref: it.product && it.product.name ? it.product.name : null,
-                  sort_order: idx
-                };
-              });
-              var li = await admin.from('accounting_invoice_items').insert(rows);
+            if (itemRows.length) {
+              for (var z = 0; z < itemRows.length; z++) { itemRows[z].invoice_id = invoiceId; }
+              var li = await admin.from('accounting_invoice_items').insert(itemRows);
               if (li && li.error) { report.errors.push('Line items invoice ' + (n.invoiceNumber || n.id) + ': ' + li.error.message); }
-              else { report.lineItems += rows.length; }
+              else { report.lineItems += itemRows.length; }
             }
           }
         } catch (rowErr) {

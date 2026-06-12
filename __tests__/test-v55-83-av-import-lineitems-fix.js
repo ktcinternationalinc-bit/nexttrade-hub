@@ -2,9 +2,9 @@ var fs=require('fs');var path=require('path');
 function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 var r=p('src/app/api/wave/import-invoices/route.js');
-ok(/invoice_id: invoiceId/.test(r)&&!/accounting_invoice_id: invoiceId/.test(r),'line items use invoice_id (not accounting_invoice_id)');
-ok(/quantity: it\.quantity/.test(r)&&!/qty:/.test(r),'quantity column (not qty)');
-ok(/business_id: internalBusinessId,\n\s*invoice_id: invoiceId/.test(r),'business_id included on line items');
+ok(/itemRows\[z\]\.invoice_id = invoiceId/.test(r)&&!/accounting_invoice_id/.test(r),'line items use invoice_id (not accounting_invoice_id)');
+ok(/quantity: q/.test(r)&&!/qty:/.test(r),'quantity column (not qty)');
+ok(/business_id: internalBusinessId,\n\s*invoice_id: null/.test(r),'business_id included on line items');
 ok(/\.delete\(\)\.eq\('invoice_id', invoiceId\)/.test(r),'line-item delete keyed on invoice_id');
 ok(/function fetchAllMap/.test(r)&&/\.range\(from, from \+ pageSize - 1\)/.test(r),'maps paginated past 1000 rows');
 ok(/custMap = await fetchAllMap/.test(r)&&/invMap = await fetchAllMap/.test(r),'both maps use paginated fetch');

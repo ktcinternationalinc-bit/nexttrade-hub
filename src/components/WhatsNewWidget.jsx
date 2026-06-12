@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-AX',
+    date: '2026-06-08',
+    label: 'FIX: imported invoice totals now correct (compute from lines)',
+    items: [
+      '**\\ud83d\\udcb0 Invoice totals are now right.** Imported invoices were showing the wrong total (e.g. $826 instead of $46,808) because Wave\\u2019s total field came back blank through the connection. The import now calculates each line (quantity × price) and the invoice total from those, so totals, amount paid, and balance all match Wave.',
+      '**\\ud83d\\udd01 Re-run to apply.** Re-import invoices and every invoice updates in place \\u2014 no duplicates \\u2014 with correct line totals, total, paid, and balance. The import report now shows a few sample invoices with their math so you can sanity-check.',
+      { superAdminOnly: true, text: 'v55.83-AX. import-invoices route (code-only, NO SQL). EVIDENCE invoice AMERICA 322: Wave actual total 46808.45 / paid 46808.45 / due 0; Hub had total 826.15 (only 1 of 5 lines imported a line_total) / paid 0. ROOT CAUSE: Wave per-line total{value} and invoice total{value} return 0/null via API, while quantity + price (line) and amountDue (invoice) map correctly. FIX (compute-first): line_total = waveLine>0 ? waveLine : r2(quantity*unit_price); sumLines accumulated. total = waveTotal>0 ? waveTotal : sumLines. due = amountDue when value!=null. paid = wavePaid>0 ? wavePaid : (due!=null ? total-due : 0) [identity Total=Paid+Due]; paid floored at 0; balance = due!=null ? due : total-paid. Added r2() rounding + report.samples[6] {invoice,waveTotal,sumLines,total,wavePaid,paid,due,balance,lines} for visible diagnostics. Line items restructured: compute rows first (invoice_id:null), upsert invoice, set invoice_id, delete-then-insert. payStatus(total,balance,paid). Print already computes total from line_total sum + reads amount_paid/balance_due -> correct after re-import (no print change). Re-run: matches wave_invoice_id (updates, no dup invoices); items delete-then-insert. Expected 322: total 46808.45, paid 46808.45, balance 0, all 5 line totals correct.' },
+    ],
+  },
+  {
+    version: 'v55.83-AW',
+    date: '2026-06-08',
+    label: 'Diagnose imported invoice totals (Wave field check)',
+    items: [
+      '**\\ud83d\\udd2c Total diagnostic.** Some imported invoices showed a 0.00 total with a real balance. Added a "Diagnose totals" button (Wave Import) that shows exactly which Wave field carries the real amount, so the mapping can be corrected with certainty before re-importing.',
+      { superAdminOnly: true, text: 'v55.83-AW. Read-only diagnostic only (NO writes, NO SQL). Symptom: imported accounting_invoices show total_amount=0 but balance_due>0 (grid line 314 reads row.total_amount directly; line 315 balance_due — confirmed not computed from line items). So import wrote total_amount=0 while amountDue mapped fine. New route src/app/api/wave/invoice-diagnostic/route.js (POST {businessId}): pulls page1 pageSize8 with ALL money fields total{value currency}/subtotal/taxTotal/amountPaid/amountDue, returns per invoice raw + num()-mapped + the DB row (by wave_invoice_id). WaveImportTab "Diagnose totals" button dumps it. PURPOSE: identify whether Wave total{value} is genuinely 0/null (need a different field e.g. subtotal/total) or a mapping error, BEFORE patching import-invoices total_amount. Next build fixes mapping per diagnostic output, then user re-imports (expect total>0, balance<=total).' },
+    ],
+  },
+  {
     version: 'v55.83-AV',
     date: '2026-06-08',
     label: 'FIX: invoice import line items + duplicate-skip on re-run',

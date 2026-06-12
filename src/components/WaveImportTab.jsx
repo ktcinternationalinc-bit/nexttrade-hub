@@ -21,6 +21,8 @@ export default function WaveImportTab(props) {
   var [conn, setConn] = useState(null);
   var [importingInv, setImportingInv] = useState(false);
   var [invReport, setInvReport] = useState(null);
+  var [diag, setDiag] = useState(null);
+  var [diagBusy, setDiagBusy] = useState(false);
 
   function loadBusinesses() {
     setLoadingBiz(true);
@@ -42,6 +44,16 @@ export default function WaveImportTab(props) {
       .then(function (d) { setData(d); })
       .catch(function (e) { setData({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
       .finally(function () { setBusy(false); });
+  }
+
+  function runDiagnostic() {
+    if (!bizId) return;
+    setDiagBusy(true); setDiag(null);
+    fetch('/api/wave/invoice-diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setDiag(d); })
+      .catch(function (e) { setDiag({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
+      .finally(function () { setDiagBusy(false); });
   }
 
   function runImportInvoices() {
@@ -165,6 +177,22 @@ export default function WaveImportTab(props) {
             <button onClick={runImportInvoices} disabled={importingInv} className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-white rounded text-sm font-bold disabled:opacity-50">
               {importingInv ? 'Importing invoices…' : 'Import invoices into Hub'}
             </button>
+            <button onClick={runDiagnostic} disabled={diagBusy} className="ml-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm font-bold disabled:opacity-50">
+              {diagBusy ? 'Running…' : '🔬 Diagnose totals'}
+            </button>
+            {diag && (
+              <div className="bg-slate-950 text-slate-100 rounded-lg p-3 mt-3 border border-slate-700 text-[11px]">
+                <div className="font-extrabold mb-1 text-amber-300">🔬 Wave total diagnostic — which field carries the real total?</div>
+                {diag.ok === false ? <div className="text-rose-400">{diag.error}</div> : (diag.invoices || []).map(function (iv, ix) {
+                  return <div key={ix} className="border-t border-slate-800 py-1">
+                    <div className="font-bold text-slate-100">{iv.invoiceNumber} · {iv.status}</div>
+                    <div className="text-slate-300">Wave mapped → total: <b className="text-amber-300">{String(iv.mapped_with_num && iv.mapped_with_num.total)}</b> · subtotal: {String(iv.mapped_with_num && iv.mapped_with_num.subtotal)} · tax: {String(iv.mapped_with_num && iv.mapped_with_num.taxTotal)} · paid: {String(iv.mapped_with_num && iv.mapped_with_num.amountPaid)} · due: {String(iv.mapped_with_num && iv.mapped_with_num.amountDue)}</div>
+                    <div className="text-slate-400">DB row → total_amount: {iv.db_row ? String(iv.db_row.total_amount) : '(not in DB)'} · balance_due: {iv.db_row ? String(iv.db_row.balance_due) : '—'}</div>
+                  </div>;
+                })}
+                <pre className="mt-2 overflow-x-auto text-[10px] text-slate-400" style={{ maxHeight: '220px' }}>{JSON.stringify(diag, null, 2)}</pre>
+              </div>
+            )}
             {invReport && (
               <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200 text-xs">
                 <div className="font-extrabold mb-1">📋 Invoice import report</div>
