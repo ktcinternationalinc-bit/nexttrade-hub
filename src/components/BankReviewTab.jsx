@@ -66,6 +66,8 @@ export default function BankReviewTab(props) {
   var [matchesByTxn, setMatchesByTxn] = useState({});
   var [acctCustomers, setAcctCustomers] = useState([]);
   var [acctInvoices, setAcctInvoices] = useState([]);
+  var [registry, setRegistry] = useState([]);
+  function bizLabel(id) { if (!id) { return 'All businesses'; } var e = registry.find(function (r) { return r.wave_business_id === id; }); return e ? (e.label || id) : id; }
   var [loading, setLoading] = useState(true);
   var [sel, setSel] = useState(null);            // selected transaction
   var [busy, setBusy] = useState(false);
@@ -100,7 +102,10 @@ export default function BankReviewTab(props) {
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
-      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers((res[2] && res[2].data) || []); setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
+      setRegistry(reg);
+      setTxns(t); setMatchesByTxn(byTxn);
+      setAcctCustomers(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), reg, true));
+      setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
       setSel(function (cur) { if (!cur) { return cur; } var fr = null; t.forEach(function (x) { if (x.id === cur.id) { fr = x; } }); return fr || cur; });
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
@@ -285,7 +290,12 @@ export default function BankReviewTab(props) {
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
     var inv = acctInvoices.find(function (i) { return i.id === mInvoiceId; });
     if (!inv) { toast.error('Pick an invoice.'); return; }
-    // Guardrail: never match across businesses
+    // Guardrail: never match across Wave businesses (silo). The real key is wave_business_id.
+    var activeBiz = getActiveWaveBusiness();
+    if (activeBiz && inv.wave_business_id && inv.wave_business_id !== activeBiz) {
+      toast.error('This transaction belongs to ' + bizLabel(activeBiz) + ' and cannot be matched to an invoice from ' + bizLabel(inv.wave_business_id) + '.');
+      return;
+    }
     if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('That invoice belongs to another business.'); return; }
     var apply = roundMoney(Number(mAmount));
     if (!(apply > 0)) { toast.error('Enter an amount greater than zero.'); return; }
@@ -372,6 +382,23 @@ export default function BankReviewTab(props) {
         <div className="text-lg font-extrabold">🏦 Bank Review &amp; Matching</div>
         <button onClick={load} className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded font-bold border border-slate-700">↻ Refresh</button>
       </div>
+
+      {(function () {
+        var activeBiz = getActiveWaveBusiness();
+        var entry = registry.find(function (r) { return r.wave_business_id === activeBiz; });
+        var isTest = entry && entry.is_production === false;
+        var canWrite = entry && entry.writes_enabled === true;
+        var label = entry ? (entry.label || activeBiz) : (activeBiz || 'No business selected');
+        var cls = entry ? (isTest ? 'bg-amber-100 text-amber-950 border-amber-400' : 'bg-emerald-100 text-emerald-950 border-emerald-400') : 'bg-slate-800 text-amber-300 border-amber-600';
+        return (
+          <div className={'mb-3 rounded-lg px-3 py-2 text-xs font-bold border ' + cls}>
+            Current Accounting Silo: {label}
+            {entry
+              ? ' · Mode: ' + (isTest ? 'TEST' : 'PRODUCTION') + ' / ' + (canWrite ? 'READ-WRITE ENABLED' : 'READ-ONLY')
+              : ' · ⚠ This business is NOT registered — scoping is OFF and ALL businesses\u2019 data is shown. Register it (Wave Import → Register) to silo it.'}
+          </div>
+        );
+      })()}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 mb-3 text-xs">

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CZ',
+    date: '2026-06-08',
+    label: 'Bank Review: test/production silo leak fixed',
+    items: [
+      '**🔒 The customer picker now respects the selected Wave business.** When you pick KANDIL EGYPT (Test), the Match drawer customer list now only shows that business\u2019s customers — production customers no longer leak in. The invoice picker was already scoped; the customer list was not, which is why production names were still appearing.',
+      '**🏷️ Clear silo banner.** Bank Review now shows a banner at the top: "Current Accounting Silo: [business] · Mode: TEST/READ-WRITE or PRODUCTION/READ-ONLY". If the selected business is not registered, it warns you that scoping is OFF and all data is shown — register it to silo it. Matching a transaction to an invoice from a different business is now blocked with a clear message.',
+      { superAdminOnly: true, text: 'v55.83-CZ (no SQL). ROOT CAUSE of production customers in the Test match drawer: BankReviewTab.load() scoped acctInvoices via scopeIfRegistered but loaded acctCustomers RAW (all businesses). FIX: acctCustomers now scopeIfRegistered(getActiveWaveBusiness(), reg, true) like invoices. Added registry state + bizLabel(id). applyToInvoice guard strengthened to the real silo key: blocks when inv.wave_business_id !== getActiveWaveBusiness() with message "This transaction belongs to {A} and cannot be matched to an invoice from {B}." Added Current Accounting Silo banner (label + is_production->TEST/PRODUCTION + writes_enabled->READ-WRITE/READ-ONLY; if not registered, warns scoping OFF = failsafe shows all, which is itself a likely cause if KANDIL EGYPT Test was never registered). NOT in this build (larger, separate, called out to user): Issue 2 Plaid connection->business assignment + stamping bank_transactions.wave_business_id (bank-txn list scoping is only as good as the tags, which need this); Issue 3 Unassigned Bank Data admin screen; Issue 6 dry-run + Hub->Wave push workflow (no push routes exist yet); banner not yet added to Wave Import/Sync/Ledger. Issue 4 read-write registry already exists (CG register-as-TEST sets writes_enabled).' },
+    ],
+  },
+  {
     version: 'v55.83-CY',
     date: '2026-06-08',
     label: 'Merge: new-shell form + no more silent failures',
