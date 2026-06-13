@@ -3,6 +3,7 @@
 // real customer/invoice records. NOTHING is written to the Hub yet.
 import { useState, useEffect } from 'react';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { supabase } from '../lib/supabase';
 import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
 
 function money(m) { return m && m.value != null ? m.value : ''; }
@@ -29,6 +30,7 @@ export default function WaveImportTab(props) {
   var [recon, setRecon] = useState(null);
   var [reconBusy, setReconBusy] = useState(false);
   var [registry, setRegistry] = useState([]);
+  var [registering, setRegistering] = useState(false);
   var [legacyNulls, setLegacyNulls] = useState(0);
 
   function loadBusinesses() {
@@ -45,8 +47,11 @@ export default function WaveImportTab(props) {
 
   // v55.83-CA — load the Wave business registry + count untagged legacy Wave
   // invoices so we can gate imports and keep test data out of real KTC views.
-  useEffect(function () {
+  function loadRegistry() {
     fetchAllRows('wave_business_registry', '*').then(function (rows) { setRegistry((rows && rows.data) || []); }).catch(function () { setRegistry([]); });
+  }
+  useEffect(function () {
+    loadRegistry();
     fetchAllRows('accounting_invoices', 'id,wave_business_id,wave_invoice_id').then(function (rows) {
       var arr = (rows && rows.data) || []; var n = 0; arr.forEach(function (r) { if ((r.wave_business_id == null || r.wave_business_id === '') && r.wave_invoice_id) n++; });
       setLegacyNulls(n);
@@ -54,6 +59,20 @@ export default function WaveImportTab(props) {
   }, []);
 
   function selReg() { var reg = null; registry.forEach(function (b) { if (b.wave_business_id === bizId) reg = b; }); return reg; }
+  function registerBusiness(isProd) {
+    if (!bizId) { return; }
+    var name = ((businesses.find(function (b) { return b.id === bizId; }) || {}).name) || bizId;
+    var warn = isProd
+      ? 'Register "' + name + '" as a REAL production business?\n\nIt will be READ-ONLY (the Hub never pushes or deletes to Wave). Its records get tagged to this business and stay separated from your other Wave businesses.'
+      : 'Register "' + name + '" as a TEST business?\n\nWRITES will be ALLOWED on it and it will be kept OUT of your real KTC views. Only do this for a throwaway/test company \u2014 NEVER for real accounting data.';
+    if (!window.confirm(warn)) { return; }
+    setRegistering(true);
+    supabase.from('wave_business_registry').upsert({ wave_business_id: bizId, label: name, is_production: isProd, writes_enabled: isProd ? false : true }, { onConflict: 'wave_business_id' }).then(function (res) {
+      setRegistering(false);
+      if (res && res.error) { window.alert('Could not register: ' + res.error.message); return; }
+      loadRegistry();
+    });
+  }
   function importBlockReason() {
     if (!bizId) { return 'Choose a Wave business first.'; }
     if (!selReg()) { return 'This Wave business is not registered yet. Add it to wave_business_registry (with its production/test flag) before importing, so its records stay walled off from your other Wave business.'; }
@@ -171,7 +190,19 @@ export default function WaveImportTab(props) {
             <div className={'rounded-lg p-2.5 text-xs font-bold border ' + (!reg ? 'bg-red-100 border-red-300 text-red-950' : (reg.is_production !== false ? 'bg-emerald-100 border-emerald-300 text-emerald-950' : 'bg-amber-100 border-amber-300 text-amber-950'))}>
               <div>Current Wave business: <b>{(reg && reg.label) || (businesses.find(function (b) { return b.id === bizId; }) || {}).name || bizId}</b></div>
               <div className="font-mono text-[10px] opacity-80">id {String(bizId).slice(0, 16)}…</div>
-              {!reg && <div className="mt-1">⚠ NOT REGISTERED — add this business to wave_business_registry before importing.</div>}
+              {!reg && (
+                <div className="mt-1">
+                  <div>⚠ NOT REGISTERED — tell the Hub what this business is before importing:</div>
+                  {isSuperAdmin ? (
+                    <div className="flex flex-wrap gap-2 mt-1.5">
+                      <button disabled={registering} onClick={function () { registerBusiness(true); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold disabled:opacity-50">🔒 Register as REAL (read-only)</button>
+                      <button disabled={registering} onClick={function () { registerBusiness(false); }} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold disabled:opacity-50">🧪 Register as TEST (writes allowed)</button>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px]">Ask a super-admin to register this business.</div>
+                  )}
+                </div>
+              )}
               {reg && reg.is_production !== false && <div className="mt-1">🔒 REAL KTC PRODUCTION — READ ONLY — WRITES {canWriteToWaveBusiness(reg) ? 'ENABLED' : 'DISABLED'}. Import pulls from Wave (read-only); no pushes/deletes to Wave.</div>}
               {reg && reg.is_production === false && <div className="mt-1">🧪 TEST BUSINESS — WRITES ALLOWED. Imported records are tagged to this test business and stay out of your real KTC views.</div>}
             </div>

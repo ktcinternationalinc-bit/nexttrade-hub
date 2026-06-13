@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CG',
+    date: '2026-06-08',
+    label: 'One-click: register a Wave business',
+    items: [
+      '**\\ud83c\\udd95 Register a Wave business with one click.** When you pick a Wave business that the Hub does not know yet, you will now see two buttons right there: **Register as REAL (read-only)** or **Register as TEST (writes allowed)**. No more copying long ID codes into a database \\u2014 just click, confirm, and the business is set up. Real businesses are locked read-only automatically; test businesses are kept out of your real views.',
+      { superAdminOnly: true, text: 'v55.83-CG (no SQL). WaveImportTab.jsx: NOT-REGISTERED banner now shows Register-as-REAL / Register-as-TEST buttons (super_admin only; others see "ask a super-admin"). registerBusiness(isProd) upserts wave_business_registry {wave_business_id:bizId, label:name, is_production:isProd, writes_enabled: isProd?false:true} onConflict wave_business_id, with a confirm() warning (REAL=read-only/separated; TEST=writes allowed/never for real data), then reloads registry so the banner flips to the prod/test state live. Registry load refactored into reusable loadRegistry(). Removes the manual base64-ID SQL step. NOTE: still run BY SQL first so wave_business_registry table + columns exist; this only inserts a row.' },
+    ],
+  },
+  {
     version: 'v55.83-CF',
     date: '2026-06-08',
     label: 'Wave import: per-business safety lock',
