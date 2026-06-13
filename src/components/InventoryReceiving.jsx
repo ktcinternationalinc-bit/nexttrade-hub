@@ -732,8 +732,19 @@ export default function InventoryReceiving(props) {
     }
     setBusy(true);
     try {
+      // v55.83-DT — Authoritative reopen: read this receipt's lines straight from the DB
+      // by receipt_number, instead of trusting the in-memory grouped.lines (which can be
+      // stale right after an autosave when you X out and reopen without a page refresh).
+      // The header-only decision and the lines source are both driven by this fresh read,
+      // so reopening always reflects what is actually saved.
+      var freshRows = [];
+      try {
+        var freshRes = await supabase.from('inventory_stock_receipts').select('*').eq('receipt_number', grouped.receipt_number).neq('status', 'cancelled');
+        freshRows = (freshRes && freshRes.data) || [];
+      } catch (eFresh) { freshRows = grouped.lines || []; }
+      var hasFreshLines = freshRows.length > 0;
       // v55.83-A.6.27.37 — Header-only shell: open with empty line, load header data from grouped.header
-      if (grouped.isHeaderOnly && grouped.header) {
+      if (!hasFreshLines && grouped.header) {
         var h = grouped.header;
         setEditingReceiptNumber(grouped.receipt_number);
         setAutosaveStatus('');
@@ -767,7 +778,7 @@ export default function InventoryReceiving(props) {
         return;
       }
 
-      var rows = grouped.lines || [];
+      var rows = hasFreshLines ? freshRows : (grouped.lines || []);
       var first = rows[0];
       setEditingReceiptNumber(grouped.receipt_number);
         setAutosaveStatus('');
@@ -1581,6 +1592,11 @@ export default function InventoryReceiving(props) {
             });
           });
         } catch (eRehydrate) { /* non-fatal — DB-level line_uid dedup still prevents duplicates */ }
+        // v55.83-DS — Silently refresh the blotter source (receipts/headers) so that
+        // X-ing out and reopening this receipt shows the autosaved lines WITHOUT a full
+        // page refresh. reload() only updates background lists; it does not close the
+        // modal or reset the open editor form (lines/header are separate state).
+        try { await reload(); } catch (eReload) { /* non-fatal — data is already saved */ }
         var hh = new Date();
         var hhmm = ('0' + hh.getHours()).slice(-2) + ':' + ('0' + hh.getMinutes()).slice(-2);
         setAutosaveStatus('Saved ' + hhmm);

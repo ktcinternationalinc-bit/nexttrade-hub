@@ -333,6 +333,9 @@ export default function InventoryOverview(props) {
     return products.filter(function (p) {
       // v55.83-A.6.27.55 — hide template products by default (no physical stock).
       if (!showTemplates && p.is_family_template === true) return false;
+      // v55.83-DR — hide virtual Stock Mix SKUs: they hold no layers and are not
+      // physical inventory (their real colors are counted on their own rows).
+      if (p.is_virtual_mix === true) return false;
       var s = productStats[p.id] || { current_qty: 0, original_qty: 0 };
       // Hide rows with zero current AND zero original unless toggle on
       if (!showZeroStock && s.current_qty === 0 && s.original_qty === 0) return false;

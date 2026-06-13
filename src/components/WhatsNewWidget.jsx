@@ -33,6 +33,42 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DT',
+    date: '2026-06-08',
+    label: 'Receiving: reopening a receipt always shows your saved lines',
+    items: [
+      '**\ud83d\udce6 Fixed (for real this time): after auto-save, X-ing out and reopening a receipt now always shows the product lines you entered \u2014 no page refresh needed.** When you reopen a receipt, the editor now reads the lines directly from the database at that moment, instead of relying on the on-screen list being up to date. So whatever was saved is what you see.',
+      { superAdminOnly: true, text: 'v55.83-DT. No SQL. Real root cause of the reopen-stale bug (DS reload was necessary but not sufficient): openEdit chose its path from the IN-MEMORY grouped object. Right after autosave of the FIRST line of a new receipt, if receipts state was even slightly stale, grouped saw only the header -> isHeaderOnly:true -> openEdit header-only branch set setLines([emptyLine()]) = empty, so reopening showed nothing (a full refresh rebuilt receipts from DB and worked, the tell). FIX: at openEdit start, authoritatively re-read this receipt_number\u2019s lines from inventory_stock_receipts (neq cancelled). hasFreshLines drives BOTH the header-only decision (now: !hasFreshLines && grouped.header) AND the lines source (var rows = hasFreshLines ? freshRows : grouped.lines). Reopen is now DB-truth, independent of reload timing / grouping staleness. Rolls still fetched per line as before; line_uid/existing_id mapping intact; draft-only + dedup unchanged.' },
+    ],
+  },
+  {
+    version: 'v55.83-DS',
+    date: '2026-06-08',
+    label: 'Receiving: autosaved lines show on reopen (no refresh needed)',
+    items: [
+      '**\ud83d\udcbe Fixed: after a product line auto-saves, you can now X out and reopen the receipt and your entered items are there \u2014 no page refresh needed.** Before, the saved items only showed up after refreshing the whole portal. Now the list updates quietly in the background the moment a line auto-saves, so reopening the receipt always shows your latest work.',
+      { superAdminOnly: true, text: 'v55.83-DS. No SQL. Bug: autosave (DO/DP) wrote to the DB and re-hydrated existing_id, but deliberately skipped reload(), so the blotter source state (receipts/headers) stayed stale; closeModal()+openEdit rebuild grouped FROM that stale state, so reopening without a full page reload showed no lines (a full refresh re-ran initial load and DID show them \u2014 the tell). Fix: the autosave success branch now awaits reload() after the existing_id re-hydrate. reload() only refreshes background lists (receipts/products/warehouses/headers/lists); it does NOT close the modal or reset the editor form (lines/header are independent state), so the open editor is undisturbed while the blotter source becomes fresh \u2014 reopening now rebuilds grouped with the autosaved lines. Still draft-only, still no duplicate inserts (line_uid DB dedup intact), Submit validation unchanged.' },
+    ],
+  },
+  {
+    version: 'v55.83-DR',
+    date: '2026-06-08',
+    label: 'Stock Mix: keep the virtual lot out of physical stock',
+    items: [
+      '**\ud83e\uddf9 Stock Mix Lots no longer show up as a stock line in the Inventory Overview.** A Stock Mix Lot is virtual \u2014 it holds no stock of its own \u2014 so it is now hidden from the physical stock list. Only the real colors (Black, Red, etc.) appear there with their real quantities, so nothing is counted twice.',
+      { superAdminOnly: true, text: 'v55.83-DR. No SQL. InventoryOverview visibleRows filter now also excludes p.is_virtual_mix === true (alongside the existing family-template hide), so a virtual Stock Mix SKU never appears as a (zero-qty) physical stock row and can never be mistaken for / double-counted as inventory. Confirms checklist item 5: only real color products hold/show physical stock. The Mix composition report and Overview both read availability from the SAME source (inventory_layers.qty_remaining > 0 summed per product_id), so per-color numbers match by construction (checklist item 6). Phase 2 (proportional drawdown on real sale) still NOT built — decisions locked: real FIFO per color, shortfall redistribute-with-warning.' },
+    ],
+  },
+  {
+    version: 'v55.83-DQ',
+    date: '2026-06-08',
+    label: 'Stock Mix Lot — Phase 1 (view-only composition)',
+    items: [
+      '**\ud83c\udfa8 New: Stock Mix Lot (Phase 1, view-only).** You can now mark a product as a \u201cStock Mix Lot\u201d \u2014 a sellable mixed lot that holds no stock of its own \u2014 and map the real colors it is made of (e.g. Black, Red, Orange, Yellow). A new Inventory \u2192 Stock Mix screen then shows the live mix: how much of each color is available, each color\u2019s share of the mix as a percentage, and the total available. This step is read-only: it does not deduct stock, change any costs, or touch invoices. Selling the mix (which will deduct the real colors proportionally) is the next, separate step.',
+      { superAdminOnly: true, text: 'v55.83-DQ Stock Mix PHASE 1 (read-only; NEEDS SQL in chat). SQL: inventory_products += is_virtual_mix bool default false; NEW table inventory_mix_components (mix_product_id, component_product_id, component_color, is_active default true, sort_order int, created_at) + open RLS 4 policies (app-auth-by-email pattern). NEW src/lib/mix-composition.js (pure, 12 tests): buildComposition(components, availByProduct) -> rows[{available, pct}] + total (available = SUM inventory_layers.qty_remaining per component product, dominant color sorted first, inactive excluded); previewProportionalSplit(rows, saleQty) -> per-color planned with LAST color absorbing rounding remainder so parts sum exactly to saleQty, flags shortfall + feasible (preview only; NO consume here). NEW src/components/InventoryMixComposition.jsx wired into InventoryTab core group as subtab mixcomposition (\ud83c\udfa8 Stock Mix): pick a is_virtual_mix product, map real color products as components (add/remove, dbInsert/dbDelete inventory_mix_components), live composition table (color/code/available/% + total). Amber view-only banner. Product modal (InventoryProductMaster) got an is_virtual_mix checkbox (form init + editProduct load + save payload). Decisions locked for Phase 2: real FIFO per color (NOT blended), shortfall auto-redistributes across remaining colors WITH preview+warning+confirm. PHASE 2 NOT BUILT (proportional drawdown on real sale: fan one Mix invoice line into N per-color FIFO consumes via the existing consume_invoice_item_inventory engine, COGS=sum of per-color FIFO, atomic reverse-all on void, mix allocation audit, no double-count of the virtual SKU in Overview). Virtual mix holds NO inventory_layers by design.' },
+    ],
+  },
+  {
     version: 'v55.83-DP',
     date: '2026-06-08',
     label: 'Receiving autosave: no duplicate lines (bulletproof)',

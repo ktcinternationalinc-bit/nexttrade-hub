@@ -25,6 +25,7 @@ import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
 import InventoryAdjustments from './InventoryAdjustments';
 import InventoryOverview from './InventoryOverview';
+import InventoryMixComposition from './InventoryMixComposition';
 // v55.83-A.6.27.62 — new reports + warehouse advances subtabs
 import InventoryPnLReports from './InventoryPnLReports';
 import WarehouseAdvancesTab from './WarehouseAdvancesTab';
@@ -45,6 +46,7 @@ var SUBTABS = [
   // reports) remain imported in code but have no nav entry.
   { id: 'overview',        group: 'core',      name: 'Overview',          label: '📊 Overview', stage: 'View', desc: 'One-screen view of current stock by Family, with cascading multi-level classification filters.' },
   { id: 'productmaster',   group: 'core',      name: 'Product List',      label: '🏷️ Product List', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
+  { id: 'mixcomposition',  group: 'core',      name: 'Stock Mix',         label: '🎨 Stock Mix', stage: 'View', desc: 'Read-only: what a Stock Mix Lot is currently made of, by real color stock. No inventory changes.' },
   { id: 'masterlists',     group: 'admin',      name: 'Master Lists',      label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
   { id: 'importproducts',  group: 'admin',      name: 'Import Products',   label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
   { id: 'warehouses',      group: 'core',      name: 'Warehouses',        label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
@@ -407,6 +409,9 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.51 — Inventory Overview (new default landing) */}
       {subtab === 'overview' && (
         <InventoryOverview userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {subtab === 'mixcomposition' && (
+        <InventoryMixComposition userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
       {/* v55.83-A.6.27.22 — Phase 1 Build 1: Master Lists admin */}
       {subtab === 'masterlists' && (

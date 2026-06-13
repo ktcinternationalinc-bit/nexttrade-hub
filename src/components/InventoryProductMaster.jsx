@@ -166,6 +166,7 @@ function emptyForm() {
     default_currency: 'EGP',
     default_rack: '',
     notes: '',
+    is_virtual_mix: false,
   };
 }
 
@@ -538,6 +539,7 @@ export default function InventoryProductMaster(props) {
       default_currency: p.default_currency || 'EGP',
       default_rack: p.default_rack || '',
       notes: p.notes || '',
+      is_virtual_mix: p.is_virtual_mix === true,
     });
   }
 
@@ -842,6 +844,7 @@ export default function InventoryProductMaster(props) {
         default_currency: form.default_currency || null,
         default_rack: (form.default_rack || '').trim() || null,
         notes: (form.notes || '').trim() || null,
+        is_virtual_mix: form.is_virtual_mix === true,
         updated_by: userProfile && userProfile.id,
       };
       console.log(DEBUG, 'payload built:', payload);
@@ -1590,6 +1593,17 @@ export default function InventoryProductMaster(props) {
                     placeholder="Anything else about this product..."
                     className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none"
                   />
+                </label>
+              </div>
+
+              {/* Section 6: Stock Mix Lot (virtual) — v55.83-DQ */}
+              <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.is_virtual_mix === true} onChange={function (e) { setForm(Object.assign({}, form, { is_virtual_mix: e.target.checked })); }} className="mt-0.5 w-4 h-4" />
+                  <span>
+                    <span className="text-[12px] font-extrabold text-indigo-900">This is a Stock Mix Lot (virtual)</span>
+                    <span className="block text-[11px] text-indigo-800 font-medium">A sellable mixed lot that holds no stock of its own. Its colors are mapped under Inventory → Stock Mix. Leave unchecked for normal products that hold real inventory.</span>
+                  </span>
                 </label>
               </div>
             </div>
