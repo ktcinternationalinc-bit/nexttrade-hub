@@ -19,6 +19,8 @@ export default function BankTab({ user, supabase }) {
   const [bizRegistry, setBizRegistry] = useState([]);
   const [assignSel, setAssignSel] = useState({}); // { connId: wave_business_id }
   const [assigning, setAssigning] = useState(false);
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
+  const [connectBizSel, setConnectBizSel] = useState('');
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
   const assignConnection = async (conn) => {
     const bizId = assignSel[conn.id];
@@ -70,10 +72,9 @@ export default function BankTab({ user, supabase }) {
   useEffect(() => { loadData(); }, [loadData]);
 
   // Connect bank via Plaid Link
-  const connectBank = async () => {
+  const connectBank = async (chosenBiz) => {
     setError('');
-    const activeBiz = getActiveWaveBusiness();
-    if (!activeBiz) { setError('Select a Wave business (accounting silo) at the top first — the new bank connection will be assigned to it so its transactions stay siloed.'); return; }
+    if (!chosenBiz) { setError('Choose which accounting silo this bank connection belongs to before connecting.'); return; }
     try {
       const linkRes = await fetch('/api/plaid/link', {
         method: 'POST',
@@ -102,7 +103,7 @@ export default function BankTab({ user, supabase }) {
           const exRes = await fetch('/api/plaid/exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ public_token, metadata, wave_business_id: getActiveWaveBusiness() || null }),
+            body: JSON.stringify({ public_token, metadata, wave_business_id: chosenBiz || null }),
           });
           const exData = await exRes.json();
           if (exData.error) { setError(exData.error); return; }
@@ -228,6 +229,41 @@ export default function BankTab({ user, supabase }) {
     <div>
       <h2 className="text-xl font-extrabold mb-3">🏦 Bank / البنك</h2>
 
+      {connectModalOpen && (
+        <div className="fixed inset-0 z-[210] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16 }} onClick={function () { setConnectModalOpen(false); }}>
+          <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 480, width: '100%' }}>
+            <div className="rounded-t-2xl flex justify-between items-center" style={{ background: '#1d4ed8', padding: '14px 20px' }}>
+              <div className="text-base font-extrabold text-white">Which accounting silo does this bank belong to?</div>
+              <button onClick={function () { setConnectModalOpen(false); }} className="text-white text-xl font-bold" style={{ width: 32, height: 32 }}>✕</button>
+            </div>
+            <div className="p-4 text-slate-900">
+              <p className="text-xs text-slate-600 mb-3">This bank connection — and every transaction it imports — will belong to the silo you pick here. Choose carefully: it keeps Test and Production separate.</p>
+              {bizRegistry.length === 0 ? (
+                <div className="bg-amber-100 text-amber-950 rounded-lg p-3 text-sm font-semibold">No Wave businesses are registered yet. Register one in Accounting → Wave Import before connecting a bank.</div>
+              ) : (
+                <div className="space-y-2">
+                  {bizRegistry.map(function (b) {
+                    var sel = connectBizSel === b.wave_business_id;
+                    var isTest = b.is_production === false;
+                    return (
+                      <button key={b.wave_business_id} onClick={function () { setConnectBizSel(b.wave_business_id); }}
+                        className={'w-full text-left rounded-lg border-2 px-3 py-2 flex items-center justify-between ' + (sel ? 'border-blue-600 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50')}>
+                        <span className="font-bold text-sm text-slate-900">{b.label || b.wave_business_id}</span>
+                        <span className={'px-2 py-0.5 rounded text-[10px] font-extrabold ' + (isTest ? 'bg-amber-600 text-white' : 'bg-emerald-700 text-white')}>{isTest ? 'TEST' : 'PRODUCTION'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl p-3">
+              <button onClick={function () { setConnectModalOpen(false); }} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Cancel</button>
+              <button onClick={function () { var biz = connectBizSel; setConnectModalOpen(false); connectBank(biz); }} disabled={!connectBizSel} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg">Continue to Plaid →</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {(function () {
         var active = getActiveWaveBusiness();
         var reg = null; bizRegistry.forEach(function (b) { if (b.wave_business_id === active) reg = b; });
@@ -267,7 +303,7 @@ export default function BankTab({ user, supabase }) {
       <div className="bg-white rounded-xl p-4 mb-3 shadow-sm border">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-sm">Connected Accounts / حسابات متصلة</h3>
-          <button onClick={connectBank} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
+          <button onClick={function () { setError(''); setConnectBizSel(getActiveWaveBusiness() || ''); setConnectModalOpen(true); }} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
             + Connect Bank
           </button>
         </div>

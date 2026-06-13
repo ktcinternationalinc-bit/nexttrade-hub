@@ -7,7 +7,7 @@ ok(/wave_business_id: conn \? \(conn\.wave_business_id \|\| null\) : null/.test(
 // sync block
 ok(/if \(!conn\.wave_business_id\) \{ return NextResponse\.json\(\{ error: 'This bank connection is not assigned/.test(rt),'sync BLOCKED (409) when connection unassigned');
 // connect guard
-ok(/const activeBiz = getActiveWaveBusiness\(\);\s*\n\s*if \(!activeBiz\) \{ setError/.test(bt),'connect refuses without an active silo');
+ok(/const connectBank = async \(chosenBiz\) =>/.test(bt) && /if \(!chosenBiz\) \{ setError/.test(bt),'connect refuses without a chosen silo (explicit modal choice)');
 // unassigned panel + assign
 ok(/Unassigned Bank Data \(/.test(bt),'Unassigned Bank Data panel');
 ok(/connections\.filter\(function \(c\) \{ return !c\.wave_business_id; \}\)/.test(bt),'panel lists connections with no silo');

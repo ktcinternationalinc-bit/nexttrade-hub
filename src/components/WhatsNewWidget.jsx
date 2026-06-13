@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DE',
+    date: '2026-06-08',
+    label: 'Connect Bank now asks which silo first',
+    items: [
+      '**\ud83c\udfe6 You explicitly choose the silo before connecting a bank.** Clicking Connect Bank now opens a window asking which accounting silo (Real KTC Production, KANDIL EGYPT Test, or any registered business) the bank account belongs to. Plaid only opens after you pick one and click Continue. The connection and every transaction it imports are tagged to that silo — no more silent assignment to whatever happened to be selected.',
+      { superAdminOnly: true, text: 'v55.83-DE (no SQL). BankTab: new connectModalOpen/connectBizSel state. Connect Bank button now opens a pre-Plaid modal (defaults the selection to the active silo but the user must confirm) listing wave_business_registry entries with TEST/PRODUCTION pills; Continue to Plaid is disabled until one is chosen and passes it to connectBank(chosenBiz). connectBank refactored to take chosenBiz (was reading getActiveWaveBusiness() silently); blocks if none; exchange body now sends wave_business_id: chosenBiz so bank_connections + (via mapPlaidTransaction inheritance) bank_transactions carry it. Empty-registry state tells the user to register a business first. Still enforced from earlier builds: sync blocked for unassigned connections (DB), Unassigned Bank Data panel assigns old connections + stamps txns + audit (DB), Bank Review list + customer + invoice pickers scoped (CZ), cross-silo match blocked by wave_business_id (CZ), silo banner (DC).' },
+    ],
+  },
+  {
     version: 'v55.83-DD',
     date: '2026-06-08',
     label: 'Unmerge fix — source lines now load, Confirm guarded',
