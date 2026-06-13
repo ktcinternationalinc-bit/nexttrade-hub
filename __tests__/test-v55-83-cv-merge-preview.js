@@ -16,7 +16,7 @@ ok(/g\.sources\.map\(function \(sb, si\)/.test(r) && /sb\.receipt_number/.test(r
 ok(/productClassSummary\(p\)/.test(r) && /Classification:<\/b>/.test(r),'expanded shows full classification');
 // aggregation + no double count engine untouched
 ok(/import \{ mergePlan \} from '..\/lib\/shipment-merge'/.test(r),'still uses tested mergePlan engine');
-ok(/disabled=\{mergeBusy \|\| !plan\.balanced\}/.test(r),'confirm still gated by balanced (no double-count)');
+ok(/disabled=\{mergeBusy \|\| !plan\.balanced/.test(r),'confirm still gated by balanced (no double-count)');
 var o=p('src/components/InventoryOverview.jsx');
 ok(/r\.status === 'cancelled' \|\| r\.status === 'pending_detail' \|\| r\.status === 'merged'/.test(o),'Overview no-double-count intact');
 ok(/version: 'v55\.83-CV'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew CV');

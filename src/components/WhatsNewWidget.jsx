@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CY',
+    date: '2026-06-08',
+    label: 'Merge: new-shell form + no more silent failures',
+    items: [
+      '**⎘ Creating a new merged shell is now a visible step.** When you choose "New merged shell" in the Merge window, a short form appears right away — reference, date, supplier, warehouse, container, notes — with the expected totals auto-filled from the shipments you picked. You review and adjust it before anything is saved; the receipt number is generated on save. Merging into an existing shipment still works the same way.',
+      '**🛡️ The Merge button never fails silently.** If the preview can not be built (for example the merge database columns are not set up yet) you now get a clear on-screen message telling you what to do, instead of nothing happening. Confirm is blocked until a warehouse is chosen for a new shell and the totals balance.',
+      { superAdminOnly: true, text: 'v55.83-CY (uses CQ SQL). ROOT CAUSE of "button does nothing": the merge modal computed mergePlan() unconditionally during render, so any throw (e.g. missing inventory_shipment_merges columns) crashed the modal subtree (ErrorBoundary) = nothing visible. FIX: wrapped srcLines/srcHeaders/mergePlan in try/catch; on error the modal renders a visible red "Merge preview failed" card naming the likely missing-SQL cause. Button onClick hardened: validates >=2 + non-empty mergeable lines, initMergeShell(sel), try/catch with toast, console.log. ISSUE 2 (new shell): added mergeShell state {shipment_reference,receipt_date,supplier,warehouse_id,container_number,notes} + initMergeShell auto-fills from first selected source header; modal renders an editable shell form when mergeTarget===new, showing auto-filled expected (plan.header_totals) + aggregated actual (plan.totals_after) + "Receipt # will be generated on save". executeMerge now writes the new header with the reviewed shell fields (reference/warehouse/date/container/notes) and stamps aggregated LINES with shellDate/shellWh/shellSupplier. Confirm disabled unless plan.balanced AND (target!==new || mergeShell.warehouse_id); label "Create Shell & Confirm Merge" on the new path. No-double-count + finalized typed-confirm + source breakdown unchanged.' },
+    ],
+  },
+  {
+    version: 'v55.83-CX',
+    date: '2026-06-08',
+    label: 'Receiving Step 1: Nexpac import now at the top',
+    items: [
+      '**📥 Import NEXPAC is now the first thing you see.** On Step 1 of a new receipt, the Import NEXPAC button sits in a clear bar at the very top — no more scrolling past the shipment form to find it. Once a report is loaded it shows a green confirmation right there (release, container, roll/weight totals, line count), and you can still fill the shipment details manually below.',
+      { superAdminOnly: true, text: 'v55.83-CX (no SQL). InventoryReceiving.jsx: added a prominent NEXPAC import bar at the very top of the openStep===1 region, above the SHIPMENT INFO card. Same handleNexpacImport(file) handler + nexpacReady/nexpacBusy/nexpacErr state; shows a green loaded-summary (releaseNumber/containerNumber/totalRolls/finalNetWeightKg/line count) when nexpacPreview is set. The detailed import control + preview table inside the Shipment Expected Totals block remain unchanged below. No logic duplication beyond the button + summary.' },
+    ],
+  },
+  {
     version: 'v55.83-CW',
     date: '2026-06-08',
     label: 'Step 4 is now a full review page + display fixes',

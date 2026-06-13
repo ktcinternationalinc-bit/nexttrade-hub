@@ -237,6 +237,19 @@ export default function InventoryReceiving(props) {
 
   // v55.83-CR — Merge shipments
   var [mergeSel, setMergeSel] = useState({});            // { receipt_number: true }
+  var [mergeShell, setMergeShell] = useState({ shipment_reference: '', receipt_date: '', supplier: '', warehouse_id: '', container_number: '', notes: '' });
+  function initMergeShell(sel) {
+    var fh = headers.find(function (h) { return sel.indexOf(h.receipt_number) >= 0; }) || {};
+    var fl = receipts.find(function (r) { return sel.indexOf(r.receipt_number) >= 0; }) || {};
+    setMergeShell({
+      shipment_reference: '',
+      receipt_date: fh.receipt_date || fl.receipt_date || new Date().toISOString().slice(0, 10),
+      supplier: fh.supplier || fl.supplier || '',
+      warehouse_id: fh.warehouse_id || fl.warehouse_id || (warehouses[0] ? warehouses[0].id : ''),
+      container_number: fh.container_number || '',
+      notes: ''
+    });
+  }
   var [showMerged, setShowMerged] = useState(false);     // reveal merged source shipments
   var [mergeModalOpen, setMergeModalOpen] = useState(false);
   var [mergeTarget, setMergeTarget] = useState('new');   // 'new' | existing receipt_number
@@ -279,6 +292,10 @@ export default function InventoryReceiving(props) {
     var targetRn = mergeTarget === 'new' ? ('MERGE-' + Date.now()) : mergeTarget;
     var groupId = 'mg-' + Date.now();
     var base = srcLines[0] || {};
+    var useShell = mergeTarget === 'new';
+    var shellSupplier = useShell ? (mergeShell.supplier || base.supplier || null) : (base.supplier || null);
+    var shellWh = useShell ? (mergeShell.warehouse_id || base.warehouse_id || null) : (base.warehouse_id || null);
+    var shellDate = useShell ? (mergeShell.receipt_date || base.receipt_date || new Date().toISOString().slice(0, 10)) : (base.receipt_date || new Date().toISOString().slice(0, 10));
     setMergeBusy(true);
     try {
       var targetLineIds = [];
@@ -287,15 +304,17 @@ export default function InventoryReceiving(props) {
         var ins = await dbInsert('inventory_stock_receipts', {
           receipt_number: targetRn, product_id: g.product_id, uom: g.uom,
           quantity: g.quantity, quantity_kg: g.quantity_kg, roll_count: g.roll_count,
-          status: 'received', receipt_date: base.receipt_date || new Date().toISOString().slice(0, 10),
-          warehouse_id: base.warehouse_id || null, supplier: base.supplier || null,
+          status: 'received', receipt_date: shellDate,
+          warehouse_id: shellWh, supplier: shellSupplier,
           merge_group_id: groupId, merged_source_breakdown: g.sources
         }, uid);
         if (ins && ins.id) { targetLineIds.push(ins.id); }
       }
       if (mergeTarget === 'new') {
         await dbInsert('inventory_shipment_headers', {
-          receipt_number: targetRn, supplier: base.supplier || null, status: 'received', merge_group_id: groupId,
+          receipt_number: targetRn, supplier: shellSupplier, status: 'received', merge_group_id: groupId,
+          shipment_reference: mergeShell.shipment_reference || null, warehouse_id: shellWh, receipt_date: shellDate,
+          container_number: mergeShell.container_number || null, notes: mergeShell.notes || null,
           expected_total_rolls: plan.header_totals.expected_total_rolls || null,
           expected_total_gross_kg: plan.header_totals.expected_total_gross_kg || null,
           expected_total_net_kg: plan.header_totals.expected_total_net_kg || null
@@ -1683,7 +1702,18 @@ export default function InventoryReceiving(props) {
         )}
         {canEdit && (
           <button
-            onClick={function () { if (selectedNumbers().length < 2) { toast.error('Tick at least 2 shipments to merge.'); return; } setMergeTarget('new'); setMergeConfirmText(''); setMergeNotes(''); setMergeModalOpen(true); }}
+            onClick={function () {
+              var sel = selectedNumbers();
+              if (sel.length < 2) { toast.error('Tick at least 2 shipments to merge.'); return; }
+              try {
+                var validLines = receipts.filter(function (r) { return sel.indexOf(r.receipt_number) >= 0 && r.status !== 'cancelled' && r.status !== 'merged'; });
+                if (validLines.length === 0) { toast.error('The selected shipments have no mergeable product lines (all cancelled or already merged).'); return; }
+                initMergeShell(sel);
+                setMergeTarget('new'); setMergeConfirmText(''); setMergeNotes('');
+                setMergeModalOpen(true);
+                console.log('[merge] opening modal for', sel);
+              } catch (e) { console.error('[merge] open failed', e); toast.error('Could not open merge: ' + ((e && e.message) || 'unknown')); }
+            }}
             disabled={selectedNumbers().length < 2}
             className={'px-3 py-2 text-xs font-extrabold rounded-lg ' + (selectedNumbers().length >= 2 ? 'bg-violet-600 hover:bg-violet-700 text-white' : 'bg-slate-700 text-slate-400 cursor-not-allowed')}
           >
@@ -1964,6 +1994,28 @@ export default function InventoryReceiving(props) {
 
             {openStep === 1 && (
             <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0', maxHeight: '45vh', overflowY: 'auto' }}>
+              {/* v55.83-CX — Prominent NEXPAC import at the TOP of Step 1 so it's the first thing seen (no scrolling). */}
+              <div className="mb-3 rounded-lg border border-indigo-500/40 bg-indigo-950/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-extrabold text-indigo-100">📥 Start here — Import NEXPAC report</div>
+                    <div className="text-[11px] text-indigo-300">ابدأ هنا — استورد تقرير نكسباك · auto-fills expected rolls &amp; weights. Or enter the shipment details below manually.</div>
+                  </div>
+                  <label className={'shrink-0 px-4 py-2 rounded-lg text-sm font-extrabold cursor-pointer ' + (nexpacReady && !nexpacBusy ? 'bg-indigo-500 hover:bg-indigo-400 text-white' : 'bg-slate-700 text-slate-400 cursor-wait')}
+                    title="Read a NEXPAC report PDF and fill the expected rolls and weights automatically">
+                    {nexpacBusy ? 'Reading…' : (nexpacReady ? '📥 Import NEXPAC report' : 'Loading reader…')}
+                    <input type="file" accept="application/pdf,.pdf" disabled={!nexpacReady || nexpacBusy} className="hidden"
+                      onChange={function (e) { var f = e.target.files && e.target.files[0]; e.target.value = ''; handleNexpacImport(f); }} />
+                  </label>
+                </div>
+                {nexpacErr && <div className="mt-2 bg-red-100 border border-red-300 text-red-950 text-xs font-semibold rounded px-3 py-1.5">{nexpacErr}</div>}
+                {nexpacPreview && (
+                  <div className="mt-2 bg-emerald-100 text-emerald-950 rounded px-3 py-1.5 text-xs font-semibold flex flex-wrap items-center justify-between gap-2">
+                    <span>✅ Loaded{nexpacPreview.header && nexpacPreview.header.releaseNumber ? ' · Release ' + nexpacPreview.header.releaseNumber : ''}{nexpacPreview.header && nexpacPreview.header.containerNumber ? ' · ' + nexpacPreview.header.containerNumber : ''}</span>
+                    <span>{nexpacPreview.totals ? (nexpacPreview.totals.totalRolls + ' rolls · ' + Number(nexpacPreview.totals.finalNetWeightKg || 0).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' kg net') : ''} · {(nexpacPreview.lines || []).length} line(s) — details in Expected Totals below</span>
+                  </div>
+                )}
+              </div>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields
                   v55.83-A.6.27.56 — collapsible header */}
               <div className="mb-3 bg-slate-900/60 rounded-lg border border-slate-700">
@@ -2954,12 +3006,31 @@ export default function InventoryReceiving(props) {
       })()}
 
       {mergeModalOpen && (() => {
-        var srcLines = mergeSourceLines();
-        var srcHeaders = mergeSourceHeaders();
-        var plan = mergePlan(srcLines, srcHeaders);
-        var sel = selectedNumbers();
-        var anyFinal = mergeAnyFinalized();
         var fmt = function (n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+        var sel = selectedNumbers();
+        var srcLines, srcHeaders, plan, planErr = null;
+        try {
+          srcLines = mergeSourceLines();
+          srcHeaders = mergeSourceHeaders();
+          plan = mergePlan(srcLines, srcHeaders);
+        } catch (e) {
+          console.error('[merge] preview failed', e);
+          planErr = (e && e.message) || 'Could not build the merge preview.';
+          srcLines = srcLines || []; srcHeaders = srcHeaders || [];
+        }
+        if (planErr) {
+          return (
+            <div className="fixed inset-0 z-[210] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16 }} onClick={function () { setMergeModalOpen(false); }}>
+              <div className="bg-white rounded-2xl shadow-2xl p-5" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 520 }}>
+                <div className="text-base font-extrabold text-red-700 mb-2">⚠ Merge preview failed</div>
+                <div className="text-sm text-slate-800 mb-3">{planErr}</div>
+                <div className="text-xs text-slate-500 mb-3">This usually means the merge database columns aren't set up yet. Run the merge SQL (inventory_shipment_merges + the merged columns) in Supabase, then try again.</div>
+                <button onClick={function () { setMergeModalOpen(false); }} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Close</button>
+              </div>
+            </div>
+          );
+        }
+        var anyFinal = mergeAnyFinalized();
         return (
           <div className="fixed inset-0 z-[210] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16, overflow: 'hidden' }} onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }}>
             <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 820, width: '100%', maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
@@ -2987,6 +3058,37 @@ export default function InventoryReceiving(props) {
                   <button onClick={function () { setMergeTarget('new'); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === 'new' ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>＋ New merged shell</button>
                   {sel.map(function (rn) { return <button key={rn} onClick={function () { setMergeTarget(rn); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === rn ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>Into {rn}</button>; })}
                 </div>
+                {mergeTarget === 'new' && (
+                  <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-3">
+                    <div className="text-[11px] font-extrabold text-violet-900 uppercase mb-2">New merged shell — review before merging</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                      <label className="block">Reference (optional)
+                        <input value={mergeShell.shipment_reference} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { shipment_reference: v }); }); }} placeholder="will be generated on save if blank" className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900" />
+                      </label>
+                      <label className="block">Receipt date
+                        <input type="date" value={mergeShell.receipt_date} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { receipt_date: v }); }); }} className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900" />
+                      </label>
+                      <label className="block">Supplier / source
+                        <input value={mergeShell.supplier} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { supplier: v }); }); }} className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900" />
+                      </label>
+                      <label className="block">Warehouse *
+                        <select value={mergeShell.warehouse_id} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { warehouse_id: v }); }); }} className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900 bg-white">
+                          <option value="">— choose —</option>
+                          {warehouses.map(function (w) { return <option key={w.id} value={w.id}>{w.name}</option>; })}
+                        </select>
+                      </label>
+                      <label className="block">Container / release
+                        <input value={mergeShell.container_number} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { container_number: v }); }); }} className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900" />
+                      </label>
+                      <label className="block">Shell notes
+                        <input value={mergeShell.notes} onChange={function (e) { var v = e.target.value; setMergeShell(function (p) { return Object.assign({}, p, { notes: v }); }); }} className="w-full mt-0.5 px-2 py-1 border border-slate-300 rounded text-slate-900" />
+                      </label>
+                    </div>
+                    <div className="mt-2 text-[11px] text-violet-800">
+                      Receipt #: <b>will be generated on save</b> · Expected totals auto-filled from the {sel.length} selected shipments: <b>{fmt(plan.header_totals.expected_total_rolls)} rolls · {fmt(plan.header_totals.expected_total_gross_kg)} kg gross</b> · Actual lines auto-aggregated below: <b>{fmt(plan.totals_after.roll_count)} rolls · {fmt(plan.totals_after.quantity)} qty</b>.
+                    </div>
+                  </div>
+                )}
                 <div className="text-xs font-bold text-slate-500 mb-1">PREVIEW — AGGREGATED LINES (tap a row to see full details &amp; sources)</div>
                 <div className="border border-slate-200 rounded-lg overflow-hidden mb-2">
                   {plan.aggregated.map(function (g, i) {
@@ -3038,7 +3140,7 @@ export default function InventoryReceiving(props) {
               </div>
               <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
                 <button onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }} disabled={mergeBusy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Cancel</button>
-                <button onClick={executeMerge} disabled={mergeBusy || !plan.balanced} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg">{mergeBusy ? 'Merging…' : 'Confirm Merge'}</button>
+                <button onClick={executeMerge} disabled={mergeBusy || !plan.balanced || (mergeTarget === 'new' && !mergeShell.warehouse_id)} title={mergeTarget === 'new' && !mergeShell.warehouse_id ? 'Choose a warehouse for the new shell first' : (!plan.balanced ? 'Totals do not balance' : '')} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg">{mergeBusy ? 'Merging…' : (mergeTarget === 'new' ? 'Create Shell & Confirm Merge' : 'Confirm Merge')}</button>
               </div>
             </div>
           </div>

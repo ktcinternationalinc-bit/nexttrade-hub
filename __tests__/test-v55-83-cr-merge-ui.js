@@ -13,7 +13,7 @@ ok(/merged_source_breakdown: g\.sources/.test(r),'aggregated line stores source 
 ok(/status: 'merged', merged_into_shipment_id: targetRn/.test(r),'source lines marked merged + linked (not deleted)');
 ok(/from\('inventory_shipment_merges'\)|'inventory_shipment_merges'/.test(r),'writes audit row');
 ok(/MERGE FINALIZED SHIPMENTS/.test(r),'finalized typed confirmation');
-ok(/disabled=\{mergeBusy \|\| !plan\.balanced\}/.test(r),'confirm blocked unless totals conserved');
+ok(/disabled=\{mergeBusy \|\| !plan\.balanced/.test(r),'confirm blocked unless totals conserved');
 ok(/toggleMergeSel\(g\.receipt_number\)/.test(r),'row checkbox toggles selection');
 var o=p('src/components/InventoryOverview.jsx');
 ok(/r\.status === 'cancelled' \|\| r\.status === 'pending_detail' \|\| r\.status === 'merged'/.test(o),'Overview excludes merged (no double count)');
