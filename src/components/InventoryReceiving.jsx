@@ -243,6 +243,9 @@ export default function InventoryReceiving(props) {
   var [mergeNotes, setMergeNotes] = useState('');
   var [mergeConfirmText, setMergeConfirmText] = useState('');
   var [mergeBusy, setMergeBusy] = useState(false);
+  // v55.83-CT — 4-step accordion: which step is expanded (0 = all collapsed) + submit-attempt flag
+  var [openStep, setOpenStep] = useState(1);
+  var [submitAttempted, setSubmitAttempted] = useState(false);
   function toggleMergeSel(rn) { setMergeSel(function (p) { var n = Object.assign({}, p); if (n[rn]) { delete n[rn]; } else { n[rn] = true; } return n; }); }
   function isMergedSource(g) { var hdrMerged = g.header && g.header.merged_into_shipment_id; var allMerged = g.lines && g.lines.length > 0 && g.lines.every(function (l) { return l.status === 'merged'; }); return !!(hdrMerged || allMerged); }
   function selectedNumbers() { return Object.keys(mergeSel).filter(function (k) { return mergeSel[k]; }); }
@@ -480,6 +483,8 @@ export default function InventoryReceiving(props) {
     setNexpacPreview(null);
     setNexpacErr(null);
     setHeaderCollapsed(false);  // v55.83-A.6.27.56 — always start with header expanded
+    setOpenStep(0);            // v55.83-CT.2 — all 4 steps collapsed by default on NEW
+    setSubmitAttempted(false); // no required-field warnings until a submit attempt
     setModalOpen(true);
   }
 
@@ -547,6 +552,8 @@ export default function InventoryReceiving(props) {
         setNexpacPreview((h && h.nexpac_breakdown) || null);
         setNexpacErr(null);
         setHeaderCollapsed(false);
+        setSubmitAttempted(false);
+        setOpenStep(grouped.status === 'submitted_unbalanced' ? 3 : 0); // collapsed unless variance issue
         setModalOpen(true);
         setBusy(false);
         return;
@@ -627,6 +634,8 @@ export default function InventoryReceiving(props) {
       });
 
       setLines(loadedLines.length ? loadedLines : [emptyLine()]);
+      setSubmitAttempted(false);
+      setOpenStep(grouped.status === 'submitted_unbalanced' ? 3 : 0); // v55.83-CT.2 — collapsed unless variance
       // When opening an EXISTING shipment, default every already-entered product
       // line (and the container shell) to collapsed so the screen opens clean.
       var _collapseAll = {};
@@ -1893,6 +1902,35 @@ export default function InventoryReceiving(props) {
                 Expected Totals block + collapsible header can NEVER eat all the room.
                 If a user fully expands Shipment Info, Region 1 internally scrolls
                 instead of pushing the footer off-screen. */}
+            {(function () {
+              var step1Done = !!(header.expected_total_rolls || header.expected_total_gross_kg || header.expected_total_uom || header.supplier || header.shipment_reference || header.container_number);
+              var step2Done = lines.some(function (l) { return l.product_id && (Number(l.quantity) > 0 || Number(l.roll_count) > 0 || (l.rolls && l.rolls.length > 0)); });
+              var steps = [
+                { n: 1, en: 'STEP 1 \u2014 Nexpac / Expected', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0661 \u2014 \u062a\u0642\u0631\u064a\u0631 \u0646\u0643\u0633\u0628\u0627\u0643 / \u0627\u0644\u0645\u062a\u0648\u0642\u0639', done: step1Done },
+                { n: 2, en: 'STEP 2 \u2014 Actual Received', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0662 \u2014 \u0627\u0644\u0645\u0633\u062a\u0644\u0645 \u0627\u0644\u0641\u0639\u0644\u064a', done: step2Done },
+                { n: 3, en: 'STEP 3 \u2014 Variance / Reconcile', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0663 \u2014 \u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0641\u0631\u0648\u0642\u0627\u062a', done: step2Done },
+                { n: 4, en: 'STEP 4 \u2014 Submit / Finalize', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0664 \u2014 \u0625\u0631\u0633\u0627\u0644 / \u0627\u0639\u062a\u0645\u0627\u062f', done: step1Done && step2Done }
+              ];
+              return (
+                <div style={{ padding: '10px 20px 0', flexShrink: 0 }}>
+                  <div className="flex flex-wrap gap-1.5">
+                    {steps.map(function (st) {
+                      var active = openStep === st.n;
+                      var warn = submitAttempted && !st.done;
+                      return (
+                        <button key={st.n} type="button" onClick={function () { setOpenStep(active ? 0 : st.n); }}
+                          className={'flex-1 min-w-[150px] text-left rounded-lg px-2.5 py-1.5 border transition-colors ' + (active ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700')}>
+                          <div className="flex items-center gap-1 text-[11px] font-extrabold"><span>{st.done ? '\u2705' : (warn ? '\u26a0\ufe0f' : '\u2b1c')}</span><span className="truncate">{st.en}</span><span className="ml-auto">{active ? '\u25be' : '\u25b8'}</span></div>
+                          <div className="text-[10px] opacity-80" dir="rtl">{st.ar}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {openStep === 1 && (
             <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0', maxHeight: '45vh', overflowY: 'auto' }}>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields
                   v55.83-A.6.27.56 — collapsible header */}
@@ -2115,9 +2153,9 @@ export default function InventoryReceiving(props) {
                 </div>
               </div>
             </div>
+            )}
 
-            {/* v55.83-A.6.27.56 — Region 2: scrollable middle. ONLY product lines scroll here.
-                The Shipment Info form above stays put. The footer below stays put. */}
+            {openStep === 2 && (
             <div className="bg-slate-950/50 border-t-2 border-indigo-500/30" style={{ padding: '12px 20px', flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {/* Lines */}
               <div className="flex items-center justify-between mb-2">
@@ -2590,11 +2628,9 @@ export default function InventoryReceiving(props) {
                 + Add another product line
               </button>
             </div>
+            )}
 
-            {/* v55.83-A.6.27.43 — RECONCILIATION PANEL (always visible). Shows live diff of
-                expected vs actual. Green when balanced, yellow when variance. Lives at the
-                bottom of the modal so it's always visible regardless of how many lines. */}
-            {(function () {
+            {openStep === 3 && (function () {
               var rec = computeVariance(header, lines);
               if (!rec.has_any_expected) {
                 return (
@@ -2662,6 +2698,21 @@ export default function InventoryReceiving(props) {
               );
             })()}
 
+            {openStep === 4 && (() => {
+              var s1 = !!(header.expected_total_rolls || header.expected_total_gross_kg || header.expected_total_uom || header.supplier || header.shipment_reference || header.container_number);
+              var s2 = lines.some(function (l) { return l.product_id && (Number(l.quantity) > 0 || Number(l.roll_count) > 0 || (l.rolls && l.rolls.length > 0)); });
+              return (
+                <div style={{ padding: '12px 20px', flexShrink: 0 }} className="border-t border-slate-800">
+                  <div className="bg-white text-slate-900 rounded-lg p-3 text-sm font-medium">
+                    <div className="font-extrabold mb-1">STEP 4 \u2014 Submit / Finalize</div>
+                    {s1 && s2
+                      ? <div className="text-emerald-700 font-bold">\u2705 Ready to submit \u2014 use Submit below to validate &amp; finalize.</div>
+                      : <div className="text-amber-800 font-bold">\u26a0\ufe0f Before finalizing: {!s1 ? 'Step 1 shipment/expected info is incomplete. ' : ''}{!s2 ? 'Step 2 has no completed product line. ' : ''}You can still Save Draft.</div>}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Footer — v55.83-A.6.27.72 HOTFIX 21: explicit flexShrink:0 so
                 Cancel/Save/Submit stay pinned at the bottom no matter how
                 much content is above them. Combined with the parent flex-col
@@ -2689,7 +2740,7 @@ export default function InventoryReceiving(props) {
               </button>
               {/* v55.83-A.6.27.43 — Submit: runs reconciliation. Balanced → green. Variance → yellow + note required. */}
               <button
-                onClick={submitReceipt}
+                onClick={function () { setSubmitAttempted(true); var hasExp = !!(header.expected_total_rolls || header.expected_total_gross_kg || header.expected_total_uom); setOpenStep(hasExp ? 3 : 1); submitReceipt(); }}
                 disabled={busy}
                 title="Submit this receipt. Reconciliation will run — if totals match it'll be green; if they don't, you'll be asked for a variance note."
                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow">

@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CT.2',
+    date: '2026-06-08',
+    label: 'Receiving steps: collapsed by default + smarter submit',
+    items: [
+      '**\\ud83d\\udce6 The 4-step receiving flow now opens tidy.** New shipments open with all four steps collapsed so the screen is calm; you open the step you want. Existing shipments also open collapsed \\u2014 unless they have an unresolved variance, in which case Step 3 opens for you. Required-field warnings stay quiet during entry and only appear once you try to submit, and Submit jumps you to the exact step that needs attention.',
+      { superAdminOnly: true, text: 'v55.83-CT.2 (no SQL). InventoryReceiving.jsx: openStep/submitAttempted now RESET on every open (previously openStep stuck at 1 and carried across opens). openNew -> setOpenStep(0) + setSubmitAttempted(false) = all collapsed, no warnings. openEdit (both shell-only and normal paths) -> setSubmitAttempted(false) + setOpenStep(status===submitted_unbalanced ? 3 : 0) = collapsed unless variance. Submit onClick computes hasExp from expected totals and setOpenStep(hasExp ? 3 : 1) so it lands on the step holding the blocking field, then submitReceipt() (which already BLOCKS: alert+return if no expected total; variance prompt+return until notes). Verified all 14 spec confirmations via test-v55-83-ct2-accordion-verify (16/0): 4 steps, Arabic titles, collapsed-by-default new+existing, Save Draft with blanks, Submit blocks, warn-after-submit, Step1 Nexpac+shell, Step2 lines+collapse, CS source breakdown, CR merge, Overview no-double-count, KG-once, variance auto-open, Step4 readiness.' },
+    ],
+  },
+  {
+    version: 'v55.83-CT',
+    date: '2026-06-08',
+    label: 'Receiving redesigned into 4 clear steps',
+    items: [
+      '**\\ud83d\\udce6 The inbound shipment screen is now a simple 4-step flow.** Step 1: enter the Nexpac report / expected totals (or type them in). Step 2: enter what actually arrived (product lines). Step 3: review any differences. Step 4: submit & finalize. Each step has English + Arabic titles, only one is open at a time so it is not overwhelming, a green check shows when a step is done, and a warning only appears after you try to submit. Save Draft still works even with blanks; Submit still checks everything. Nexpac import, merging, the merged-source view, and variance all work exactly as before.',
+      { superAdminOnly: true, text: 'v55.83-CT (no SQL). InventoryReceiving.jsx modal body wrapped into a 4-step accordion WITHOUT rewriting the regions. New state openStep (default 1) + submitAttempted. Step bar IIFE before Region 1 renders 4 buttons (EN + Arabic via unicode escapes, status ✅ done / ⚠️ warn-after-submit / ⬜ todo, ▾/▸ chevron); click toggles openStep (same step closes to 0 = all collapsed). step1Done = any shell/expected field; step2Done = any line with product + qty/rolls. Region 1 (shell + Shipment Expected Totals + Nexpac import) gated by openStep===1; Region 2 (product lines, per-line collapse, rolls, specs, sourcing, CS merged_source_breakdown view) gated by openStep===2; Region 3 reconciliation IIFE guarded by merging the condition into its own braces ({openStep === 3 && (function(){...})()}) — avoids the JSX comment-as-first-child + double-brace pitfalls that failed the first attempt. Step 4 panel (openStep===4) shows ready/missing summary on a solid bg-white card. Submit onClick now setSubmitAttempted(true)+setOpenStep(3)+submitReceipt() so reconciliation auto-shows on submit; variance prompt modal still fires. Save Draft (saveReceipt) unchanged — drafts allowed with blanks. KG-once behavior, Nexpac, merge, source breakdown, Overview no-double-count all preserved. Parse-clean; first attempt restored from backup and re-applied after two JSX errors.' },
+    ],
+  },
+  {
     version: 'v55.83-CS',
     date: '2026-06-08',
     label: 'Merged shipments: see what they were combined from',
