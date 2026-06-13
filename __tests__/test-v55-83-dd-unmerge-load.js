@@ -5,7 +5,7 @@ var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+
 // root cause fix: load by merge_group_id from DB (not capped receipts array)
 ok(/async function loadUnmergeData\(g\)/.test(r),'loadUnmergeData loader exists');
 ok(/from\('inventory_stock_receipts'\)\.select\('\*'\)\.eq\('merge_group_id', groupId\)/.test(r),'source lines loaded DIRECTLY by merge_group_id (no 1000-cap)');
-ok(/var src = rows\.filter\(function \(r\) \{ return r\.status === 'merged'; \}\)/.test(r),'splits source lines (status merged)');
+ok(/\.eq\('merge_group_id', groupId\)\.eq\('status', 'merged'\)/.test(r),'finds source lines by group + status=merged (server-side, no 1000-cap)');
 ok(/var \[unmergeData, setUnmergeData\] = useState/.test(r),'unmergeData state');
 ok(/loadUnmergeData\(g\); \}\}/.test(r),'Unmerge button loads source data on open');
 // guarded confirm

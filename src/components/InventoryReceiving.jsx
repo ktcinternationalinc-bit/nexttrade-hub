@@ -270,31 +270,85 @@ export default function InventoryReceiving(props) {
   var [unmergeConfirmText, setUnmergeConfirmText] = useState('');
   var [unmergeNotes, setUnmergeNotes] = useState('');
   var [unmergeBusy, setUnmergeBusy] = useState(false);
-  var [unmergeData, setUnmergeData] = useState({ loading: false, error: null, groupId: null, srcLines: [], targetLines: [] });
+  var [unmergeData, setUnmergeData] = useState({ loading: false, error: null, groupId: null, srcLines: [], targetLines: [], diag: null });
   function mergeGroupOf(g) { var grp = null; (g.lines || []).forEach(function (l) { if (l.merge_group_id && l.merged_source_breakdown) { grp = l.merge_group_id; } }); return grp; }
   function isMergeTarget(g) { return !!mergeGroupOf(g); }
   function isUnmergedTarget(g) { var hdrUn = g.header && g.header.unmerged_at; var allRev = g.lines && g.lines.length > 0 && g.lines.every(function (l) { return l.status === 'reversed'; }); return !!(hdrUn || allRev); }
-  // Load the source + target lines for a merge group DIRECTLY from the DB by merge_group_id.
-  // (The in-memory `receipts` list is capped at 1000 rows, so older merged source lines can be
-  //  missing there — querying by group returns only this merge's rows, no cap.)
+  // Load the source + target lines for a merge. Tries every place the source data can live,
+  // in order, so a merge tagged differently by an older build can still be recovered:
+  //   1) source lines tagged merge_group_id + status=merged (DD path)
+  //   2) source lines whose ids are listed in the target lines' merged_source_breakdown
+  //   3) source lines whose ids are in the inventory_shipment_merges audit row
+  //   4) source lines tagged merged_into_shipment_id = target receipt number
+  // If none resolve to real rows, block with a copyable diagnostic.
   async function loadUnmergeData(g) {
-    var groupId = mergeGroupOf(g);
-    if (!groupId) { setUnmergeData({ loading: false, error: 'This shipment is not a merge target — nothing to unmerge.', groupId: null, srcLines: [], targetLines: [] }); return; }
-    setUnmergeData({ loading: true, error: null, groupId: groupId, srcLines: [], targetLines: [] });
+    var targetRn = g.receipt_number;
+    setUnmergeData({ loading: true, error: null, groupId: null, srcLines: [], targetLines: [], diag: null });
     try {
-      var res = await supabase.from('inventory_stock_receipts').select('*').eq('merge_group_id', groupId);
-      if (res.error) { throw res.error; }
-      var rows = (res && res.data) || [];
-      var src = rows.filter(function (r) { return r.status === 'merged'; });
-      var tgt = rows.filter(function (r) { return r.status !== 'merged' && r.status !== 'reversed' && r.merged_source_breakdown; });
-      setUnmergeData({
-        loading: false,
-        error: src.length === 0 ? 'Cannot unmerge because no source shipment lines were found. This merge is missing its source breakdown data.' : null,
-        groupId: groupId, srcLines: src, targetLines: tgt
-      });
+      // Target aggregated lines — by receipt_number (robust; does not depend on the capped in-memory list)
+      var tgtRes = await supabase.from('inventory_stock_receipts').select('*').eq('receipt_number', targetRn);
+      var targetLines = ((tgtRes && tgtRes.data) || []).filter(function (r) { return r.status !== 'reversed'; });
+      var groupId = null;
+      targetLines.forEach(function (t) { if (t.merge_group_id) { groupId = t.merge_group_id; } });
+      if (!groupId) { groupId = mergeGroupOf(g); }
+
+      // Candidate source line ids from the breakdown on the target lines
+      var breakdownIds = [];
+      var breakdownCount = 0;
+      targetLines.forEach(function (t) { (t.merged_source_breakdown || []).forEach(function (sb) { breakdownCount++; if (sb.line_id != null) { breakdownIds.push(sb.line_id); } }); });
+
+      // Audit row (by group or by target receipt number)
+      var auditRow = null;
+      try {
+        var aq = supabase.from('inventory_shipment_merges').select('*');
+        if (groupId) { aq = aq.or('merge_group_id.eq.' + groupId + ',target_receipt_number.eq.' + targetRn); } else { aq = aq.eq('target_receipt_number', targetRn); }
+        var aRes = await aq.order('created_at', { ascending: false }).limit(1);
+        if (aRes && aRes.data && aRes.data.length) { auditRow = aRes.data[0]; }
+      } catch (eA) { console.error('[unmerge] audit lookup', eA); }
+      var auditIds = (auditRow && auditRow.source_line_ids) || [];
+
+      // Fallback chain to find the actual source rows
+      var srcLines = [];
+      var via = null;
+      if (groupId) {
+        var r1 = await supabase.from('inventory_stock_receipts').select('*').eq('merge_group_id', groupId).eq('status', 'merged');
+        if (r1 && r1.data && r1.data.length) { srcLines = r1.data; via = 'merge_group_id+status'; }
+      }
+      if (srcLines.length === 0 && breakdownIds.length) {
+        var r2 = await supabase.from('inventory_stock_receipts').select('*').in('id', breakdownIds);
+        if (r2 && r2.data && r2.data.length) { srcLines = r2.data; via = 'merged_source_breakdown ids'; }
+      }
+      if (srcLines.length === 0 && auditIds.length) {
+        var r3 = await supabase.from('inventory_stock_receipts').select('*').in('id', auditIds);
+        if (r3 && r3.data && r3.data.length) { srcLines = r3.data; via = 'audit source_line_ids'; }
+      }
+      if (srcLines.length === 0) {
+        var r4 = await supabase.from('inventory_stock_receipts').select('*').eq('merged_into_shipment_id', targetRn);
+        if (r4 && r4.data && r4.data.length) { srcLines = r4.data; via = 'merged_into_shipment_id'; }
+      }
+      // never include the target's own aggregated lines as "sources"
+      srcLines = srcLines.filter(function (r) { return r.receipt_number !== targetRn; });
+
+      var diag = {
+        target_receipt_number: targetRn,
+        merge_group_id: groupId || null,
+        target_line_count: targetLines.length,
+        source_line_count: srcLines.length,
+        source_found_via: via,
+        audit_row_found: !!auditRow,
+        breakdown_found: breakdownCount > 0,
+        breakdown_id_count: breakdownIds.length,
+        audit_source_id_count: auditIds.length
+      };
+
+      var err = null;
+      if (srcLines.length === 0) {
+        err = 'Unmerge blocked because source lines cannot be found for merge group ' + (groupId || '(unknown)') + '. Checked: merged_source_breakdown (' + breakdownIds.length + ' ids), inventory_shipment_merges.source_line_ids (' + auditIds.length + ' ids), and source lines tagged merged_into_shipment_id=' + targetRn + '. The original source rows may have been deleted. Use Copy Diagnostics and send it over so we can recover safely — do not force anything.';
+      }
+      setUnmergeData({ loading: false, error: err, groupId: groupId, srcLines: srcLines, targetLines: targetLines, diag: diag });
     } catch (e) {
       console.error('[unmerge] load source data failed', e);
-      setUnmergeData({ loading: false, error: 'Could not load merge source data: ' + ((e && e.message) || 'unknown'), groupId: groupId, srcLines: [], targetLines: [] });
+      setUnmergeData({ loading: false, error: 'Could not load merge source data: ' + ((e && e.message) || 'unknown'), groupId: null, srcLines: [], targetLines: [], diag: null });
     }
   }
   async function executeUnmerge(g) {
@@ -313,7 +367,8 @@ export default function InventoryReceiving(props) {
     try {
       for (var i = 0; i < srcLines.length; i++) {
         var sl = srcLines[i];
-        await supabase.from('inventory_stock_receipts').update({ status: origStatus[sl.id] || 'received', merged_into_shipment_id: null, merge_group_id: null, updated_by: uid }).eq('id', sl.id);
+        var uRestore = await supabase.from('inventory_stock_receipts').update({ status: origStatus[sl.id] || 'received', merged_into_shipment_id: null, merge_group_id: null, updated_by: uid }).eq('id', sl.id);
+        if (uRestore && uRestore.error) { throw new Error('Could not restore source line ' + sl.id + ': ' + uRestore.error.message); }
       }
       var rnSet = {};
       srcLines.forEach(function (sl) { var rn = sl.source_receipt_number || sl.receipt_number; if (rn && rn !== targetRn) { rnSet[rn] = true; } });
@@ -323,7 +378,8 @@ export default function InventoryReceiving(props) {
       }
       var reversedIds = [];
       for (var t = 0; t < targetLines.length; t++) {
-        await supabase.from('inventory_stock_receipts').update({ status: 'reversed', updated_by: uid }).eq('id', targetLines[t].id);
+        var uRev = await supabase.from('inventory_stock_receipts').update({ status: 'reversed', updated_by: uid }).eq('id', targetLines[t].id);
+        if (uRev && uRev.error) { throw new Error('Could not reverse target line ' + targetLines[t].id + ': ' + uRev.error.message); }
         reversedIds.push(targetLines[t].id);
       }
       await supabase.from('inventory_shipment_headers').update({ unmerged_at: new Date().toISOString(), unmerged_by: uid, unmerge_notes: unmergeNotes || null }).eq('receipt_number', targetRn);
@@ -404,7 +460,8 @@ export default function InventoryReceiving(props) {
       }
       // Mark every original source line merged (incl. the target's own originals, which were aggregated in)
       for (var s2 = 0; s2 < srcLines.length; s2++) {
-        await supabase.from('inventory_stock_receipts').update({ status: 'merged', merged_into_shipment_id: targetRn, merge_group_id: groupId, source_receipt_number: srcLines[s2].receipt_number, source_line_id: srcLines[s2].id, updated_by: uid }).eq('id', srcLines[s2].id);
+        var uMerge = await supabase.from('inventory_stock_receipts').update({ status: 'merged', merged_into_shipment_id: targetRn, merge_group_id: groupId, source_receipt_number: srcLines[s2].receipt_number, source_line_id: srcLines[s2].id, updated_by: uid }).eq('id', srcLines[s2].id);
+        if (uMerge && uMerge.error) { throw new Error('Could not tag source line as merged (schema/status issue?): ' + uMerge.error.message); }
       }
       // Mark source shipment shells merged (not the target)
       for (var h = 0; h < sel.length; h++) {
@@ -3116,7 +3173,20 @@ export default function InventoryReceiving(props) {
                 {d.loading ? (
                   <div className="text-slate-500 italic py-6 text-center">Loading source shipment data…</div>
                 ) : d.error ? (
-                  <div className="bg-red-100 text-red-950 rounded-lg p-3 text-sm font-semibold">{d.error}</div>
+                  <div>
+                    <div className="bg-red-100 text-red-950 rounded-lg p-3 text-sm font-semibold">{d.error}</div>
+                    {d.diag && (
+                      <div className="mt-2 bg-slate-100 rounded-lg p-2 text-[11px] text-slate-800">
+                        <div className="font-bold mb-1">Diagnostics</div>
+                        <div>Target receipt: <span className="font-mono">{d.diag.target_receipt_number}</span></div>
+                        <div>Merge group: <span className="font-mono">{d.diag.merge_group_id || '—'}</span></div>
+                        <div>Target lines: {d.diag.target_line_count} · Source lines found: {d.diag.source_line_count}</div>
+                        <div>Audit row found: {d.diag.audit_row_found ? 'yes' : 'no'} · Breakdown found: {d.diag.breakdown_found ? 'yes' : 'no'}</div>
+                        <div>Breakdown ids: {d.diag.breakdown_id_count} · Audit source ids: {d.diag.audit_source_id_count}</div>
+                        <button onClick={function () { try { navigator.clipboard.writeText(JSON.stringify(d.diag, null, 2)); toast.success('Diagnostics copied'); } catch (eC) { toast.error('Copy failed — see console'); console.log('[unmerge diag]', d.diag); } }} className="mt-2 px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded">Copy Diagnostics</button>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <div>
                     <p className="mb-3">You are about to unmerge this shipment. The original source shipments below will be restored as separate shipments on the list, and this merged shipment will be marked reversed (kept for audit under <b>Show merged</b>). <b>Total inventory quantity does not change</b> — only how it is represented.</p>

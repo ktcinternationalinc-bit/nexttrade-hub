@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DG',
+    date: '2026-06-08',
+    label: 'Merge/Unmerge: stop silent failures',
+    items: [
+      '**\u2398 Merge and unmerge now tell you if a step fails instead of half-finishing.** A recent merge looked like it worked but had not properly linked the original shipments, because the database was quietly rejecting part of the save. From now on, if any part of a merge or unmerge is rejected, you get a clear error and the action stops — so you are never left with a half-merged shipment that looks fine but is not. (The database settings behind this were also corrected so merge and unmerge can save properly.)',
+      { superAdminOnly: true, text: 'v55.83-DG. ROOT CAUSE of the MERGE-1781358331979 incident: inventory_stock_receipts was missing merged_into_shipment_id/merged_at/merged_by AND chk_status did not permit merged or reversed; the merge source-tagging UPDATE (status=merged, merged_into_shipment_id=...) was therefore rejected by Postgres, but the code did not check .error and continued, leaving sources untagged in received status while the aggregated target lines existed = silent half-merge; unmerge then could not find sources. SCHEMA FIX (run in Supabase, done for prod): ADD COLUMN IF NOT EXISTS merged_into_shipment_id text / merged_at timestamptz / merged_by text on inventory_stock_receipts; and chk_status extended to include merged + reversed. CODE FIX (this build): the three merge/unmerge UPDATEs now capture the result and throw on .error (uMerge tag-as-merged, uRev reverse-target, uRestore restore-source) so a rejected write aborts inside the try/catch and toasts a clear message instead of half-writing. MERGE-1781358331979 itself was recovered manually from its inventory_shipment_merges audit row (10 sources restored to received, 10 target lines set cancelled to stop double-count; total held at 167 rolls). With columns + status values now valid, the DA/DF merge+unmerge code runs as written. REQUIRED SCHEMA for any other environment is in chat.' },
+    ],
+  },
+  {
+    version: 'v55.83-DF',
+    date: '2026-06-08',
+    label: 'Unmerge now finds source shipments more ways + shows diagnostics',
+    items: [
+      '**\u2398 Unmerge looks harder for the original shipments before giving up.** If a merge was created by an older version that tagged things slightly differently, unmerge now checks several places for the original shipment lines instead of one. When it still cannot find them, it shows a clear diagnostic (which merge group, how many lines it found, whether the saved breakdown and audit record exist) and a Copy Diagnostics button so the exact situation can be reviewed — instead of a vague message. Your total inventory is never changed by this.',
+      { superAdminOnly: true, text: 'v55.83-DF (no SQL needed for the app; a read-only diagnostic SQL is provided in chat). loadUnmergeData rewritten as a fallback chain for a specific merge that blocked (MERGE-1781358331979): target aggregated lines loaded by receipt_number (not the capped in-memory list); groupId derived from those lines; source rows resolved in order: (1) inventory_stock_receipts where merge_group_id=group AND status=merged, (2) ids from the target lines merged_source_breakdown line_id, (3) ids from inventory_shipment_merges.source_line_ids audit row, (4) rows tagged merged_into_shipment_id=target receipt number; target own lines excluded. Builds a diag object {target_receipt_number, merge_group_id, target_line_count, source_line_count, source_found_via, audit_row_found, breakdown_found, breakdown_id_count, audit_source_id_count}. Modal error state shows the diagnostics + Copy Diagnostics (clipboard) button; Confirm still disabled when 0 sources. executeUnmerge unchanged (consumes resolved unmergeData; restores by id, status from breakdown map or received, clears tags, marks target lines reversed, audit row). Overview still skips merged+reversed so total qty constant. If all four fallbacks find nothing, the source rows were never stored or were deleted -> blocked safely with diagnostic, no guessing, nothing deleted.' },
+    ],
+  },
+  {
     version: 'v55.83-DE',
     date: '2026-06-08',
     label: 'Connect Bank now asks which silo first',
