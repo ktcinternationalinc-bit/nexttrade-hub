@@ -33,6 +33,43 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DP',
+    date: '2026-06-08',
+    label: 'Receiving autosave: no duplicate lines (bulletproof)',
+    items: [
+      '**\ud83d\udee1\ufe0f Auto-save can no longer create duplicate product lines.** When a line auto-saves over and over (each time you collapse or edit it), the system now recognizes the line as the same one and updates it instead of adding a new copy \u2014 even if you collapse lines quickly one after another. Your receipt keeps exactly the lines you entered, no duplicates.',
+      { superAdminOnly: true, text: 'v55.83-DP (NEEDS SQL in chat: ALTER TABLE inventory_stock_receipts ADD COLUMN IF NOT EXISTS line_uid text; + index on (receipt_number, line_uid)). Root issue with DO: insert-vs-update keyed on in-memory L.existing_id, which is only backfilled after an async setLines + re-render \u2014 fast repeated autosaves (collapse two lines before commit) raced and could INSERT duplicates; matching on product_id alone is also unsafe if a product repeats. FIX: every line carries a stable client line_uid (seeded in emptyLine()). saveReceipt persists line_uid in the row payload. The insert branch now, when there is no existing_id, looks the row up at the DB by receipt_number + line_uid and UPDATEs it if found \u2014 only inserting when there is genuinely no row. This is independent of React state timing and safe with repeated products. Autosave rehydrate now backfills existing_id by line_uid (product_id fallback). openEdit reloads r.line_uid onto each line (emptyLine seeds one for legacy rows missing it); blotter query already selects * so line_uid flows back in. Trigger remains line-collapse (kept single, not blur-per-keystroke, to avoid hammering the DB; dedup now makes more triggers safe to add later). Draft-only, never finalizes; Submit validation unchanged. STILL SEPARATE (Issue 1): per-line expected_* + nexpac_breakdown already reload at openEdit (~line 850 for lines, header path sets nexpacPreview); header-only-shell expected ROW remap into Step 1 fields still to confirm in GUI.' },
+    ],
+  },
+  {
+    version: 'v55.83-DO',
+    date: '2026-06-08',
+    label: 'Receiving: Release # optional + auto-save when you collapse a line',
+    items: [
+      '**\u2705 Release # is now optional on each product line.** You can save and submit a receipt without filling in a Release number.',
+      '**\ud83d\udcbe Each product line now auto-saves when you collapse it.** When you click the arrow to collapse a line you have filled in, the receipt is saved as a draft automatically and you will see a small \u201cSaved 10:34\u201d note at the top of the editor. You no longer have to hit Save Draft to keep your work, and the editor stays open so you can keep going. (Auto-save only saves a draft \u2014 it does not finalize the receipt, and Submit still checks the required fields.)',
+      { superAdminOnly: true, text: 'v55.83-DO. (1) Release # optional: removed the per-line "Release # is required" validation block in saveReceipt and dropped the asterisk on the field label (still saved when entered, just no longer blocks submit). (2) Auto-save-on-collapse: saveReceipt(opts) now honors optsSafe.autosave at the success tail \u2014 instead of reload()+closeModal() it KEEPS THE EDITOR OPEN, pins editingReceiptNumber to the receipt just written (so the next save updates, never creates a second receipt), and re-queries inventory_stock_receipts by receipt_number to backfill existing_id onto local lines by product_id (prevents duplicate INSERTs on repeated autosaves), then sets autosaveStatus = Saved HH:MM. toggleLineCollapsed(i) detects the collapse direction and, only when the line has a product_id AND header.warehouse_id AND header.shipment_reference are present (the two things a draft save requires, so NO alert can fire), calls saveReceipt({autosave:true}) after setting status to Saving. New state autosaveStatus + indicator chip in the modal header (blue Saving / green Saved); cleared on every open (new + edit paths). Draft-only \u2014 never sets a submit status. NOT YET (separate, still pending): NEXPAC expected-ROWS reload mapping into Step 1 for shell receipts (Issue 1 totals already reload at openEdit ~line 850; row-level remap still to confirm).' },
+    ],
+  },
+  {
+    version: 'v55.83-DN',
+    date: '2026-06-08',
+    label: 'New Product popup now scrolls — Save button reachable',
+    items: [
+      '**\ud83d\udd27 Fixed: the New / Edit Product popup can now be scrolled to the bottom, so the Save and Cancel buttons are always reachable.** Before, on a scrolled page the popup was anchored to the page instead of the screen, so its bottom (and the Save button) fell off the screen. It now opens centered on the screen with a scrollable middle and the buttons fixed at the bottom.',
+      { superAdminOnly: true, text: 'v55.83-DN. ROOT CAUSE: the product modal markup was already a correct flex-column (header flexShrink:0 / body overflowY:auto flex 1 1 auto minHeight:0 / footer flexShrink:0, container maxHeight calc(100vh-32px)), but position:fixed inset-0 was resolving against a TRANSFORMED/filtered ancestor in the dashboard layout instead of the viewport (classic CSS containing-block trap), so the overlay did not cover the viewport and the modal sat mid-page with its footer off-screen. FIX: render the whole overlay via createPortal(..., document.body) (import { createPortal } from react-dom; guarded by typeof document !== undefined). Now fixed binds to the viewport regardless of ancestor transforms; body scrolls; footer Save/Cancel always visible. Covers New + Edit + Copy (all share modalMode). body scroll-lock effect unchanged. NOTE: still pending from the inbound side (separate component): auto-save-on-collapse + NEXPAC draft reload (DN here is the PRODUCT MASTER modal scroll, not the receiving editor).' },
+    ],
+  },
+  {
+    version: 'v55.83-DM',
+    date: '2026-06-08',
+    label: 'Inbound list: clearer Expected quantity label',
+    items: [
+      '**\ud83d\udccb The inbound list now says "Expected: 236 kg net" instead of the unclear "exp 236."** When a shipment has its NEXPAC expected figures but no actual products received yet, the Total Qty column and the line summary spell out that the number is the expected quantity with its unit (kg net or rolls), so it is not mistaken for an actual received amount.',
+      { superAdminOnly: true, text: 'v55.83-DM. InventoryReceiving blotter: the two places that rendered "exp {n}" (line-summary + Total Qty column for lineCount===0 with hasExpected) now render "Expected: {n} kg net" or "Expected: {n} rolls" with explicit units. No logic/data change. SCOPED DELIBERATELY: this build is ONLY the label clarity (Issue 2). Issue 1 (NEXPAC/draft reload into the editor) and Issue 3 (auto-save each product line on collapse) are the NEXT build and were intentionally NOT rushed here: saveReceipt() calls reload() on success, so auto-save-on-collapse needs a dedicated SILENT draft-save path that does not reload/close the editor (otherwise it would disrupt mid-entry and risk dropping draft lines). openEdit already has a header path that re-fetches nexpac_breakdown + expected_total_* from inventory_shipment_headers (line ~830) for existing receipts; the reload investigation will confirm whether NEXPAC expected ROWS (not just totals) persist + remap into Step 1. Next build DN: silent autosaveDraft (no reload/close) wired to toggleLineCollapsed when a line has a product + header has warehouse + shipment_reference; autosave status indicator (Saving/Saved HH:MM); confirm NEXPAC shell reload shows imported rows.' },
+    ],
+  },
+  {
     version: 'v55.83-DL',
     date: '2026-06-08',
     label: 'Wave Sync Center (test-only) — queue, dry run, settings',

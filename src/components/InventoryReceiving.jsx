@@ -37,6 +37,7 @@ function asNum(v) {
 // Empty line factory
 function emptyLine() {
   return {
+    line_uid: 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10), // v55.83-DP — stable client id for autosave dedup
     product_id: '',
     product: null,        // hydrated product master row when picked
     quickCodeQuery: '',   // what user is typing
@@ -125,6 +126,7 @@ export default function InventoryReceiving(props) {
   // Modal state for new/edit receipt
   var [modalOpen, setModalOpen] = useState(false);
   var [editingReceiptNumber, setEditingReceiptNumber] = useState(null);
+  var [autosaveStatus, setAutosaveStatus] = useState(''); // v55.83-DO — per-line autosave indicator
   // v55.83-A.6.27.56 — collapsible Shipment Info section. Default expanded.
   // Auto-collapses after Save Draft (so user can focus on product lines).
   var [headerCollapsed, setHeaderCollapsed] = useState(false);
@@ -223,7 +225,25 @@ export default function InventoryReceiving(props) {
   // v55.83-BP (A2) — per-line collapse. Keyed by line index; collapsed lines hide
   // their body and show a one-line summary in the header. Default expanded.
   var [collapsedLines, setCollapsedLines] = useState({});
-  function toggleLineCollapsed(i) { setCollapsedLines(function (p) { var n = Object.assign({}, p); n[i] = !n[i]; return n; }); }
+  function toggleLineCollapsed(i) {
+    setCollapsedLines(function (p) {
+      var n = Object.assign({}, p);
+      var collapsingNow = !n[i]; // true when we are about to collapse this line
+      n[i] = !n[i];
+      // v55.83-DO — Autosave the working draft when a product line is collapsed.
+      // Only fires when there is something safe to save: the line has a product and
+      // the header has the two fields a draft save requires (so no alert pops).
+      if (collapsingNow) {
+        var L = lines[i];
+        var canDraft = L && L.product_id && header.warehouse_id && header.shipment_reference && String(header.shipment_reference).trim();
+        if (canDraft) {
+          setAutosaveStatus('Saving…');
+          Promise.resolve().then(function () { return saveReceipt({ autosave: true }); }).catch(function () { setAutosaveStatus(''); });
+        }
+      }
+      return n;
+    });
+  }
   // v55.83-BR (B5) — product search hides family templates by default to prevent
   // picking a template instead of a real product. Admins can opt in.
   var [includeTemplates, setIncludeTemplates] = useState(false);
@@ -648,6 +668,7 @@ export default function InventoryReceiving(props) {
   // ── Modal management ─────────────────────────────────────────────
   function openNew() {
     setEditingReceiptNumber(null);
+    setAutosaveStatus('');
     setHeader({
       receipt_date: new Date().toISOString().substring(0, 10),
       warehouse_id: warehouses[0] ? warehouses[0].id : '',
@@ -676,6 +697,7 @@ export default function InventoryReceiving(props) {
   function closeModal() {
     setModalOpen(false);
     setEditingReceiptNumber(null);
+    setAutosaveStatus('');
     setHeader({
       receipt_date: new Date().toISOString().substring(0, 10),
       warehouse_id: '',
@@ -714,6 +736,7 @@ export default function InventoryReceiving(props) {
       if (grouped.isHeaderOnly && grouped.header) {
         var h = grouped.header;
         setEditingReceiptNumber(grouped.receipt_number);
+        setAutosaveStatus('');
         setHeader({
           receipt_date: h.receipt_date || '',
           warehouse_id: h.warehouse_id || '',
@@ -747,6 +770,7 @@ export default function InventoryReceiving(props) {
       var rows = grouped.lines || [];
       var first = rows[0];
       setEditingReceiptNumber(grouped.receipt_number);
+        setAutosaveStatus('');
       setHeader({
         receipt_date: first.receipt_date || '',
         warehouse_id: first.warehouse_id || '',
@@ -776,6 +800,7 @@ export default function InventoryReceiving(props) {
       var loadedLines = rows.map(function (r) {
         var L = emptyLine();
         L.existing_id = r.id;
+        L.line_uid = r.line_uid || L.line_uid; // v55.83-DP — keep stable id; emptyLine() seeded one for legacy rows
         L.product_id = r.product_id;
         L.product = productById(r.product_id) || null;
         L.quickCodeQuery = L.product ? (L.product.quick_code || L.product.name_en) : '';
@@ -1255,10 +1280,7 @@ export default function InventoryReceiving(props) {
         alert('Line ' + (i + 1) + ': Roll Count is required.');
         return;
       }
-      if (!L.batch_number || !String(L.batch_number).trim()) {
-        alert('Line ' + (i + 1) + ': Release # is required.');
-        return;
-      }
+      // v55.83-DO — Release # is OPTIONAL (Max): no longer blocks submit.
       var uomLow = String(L.uom || '').trim().toLowerCase();
       var uomIsKg = (uomLow === 'kg' || uomLow === 'kgs' || uomLow === 'kilo' || uomLow === 'kilogram' || uomLow === 'kilograms');
       if (uomIsKg) {
@@ -1399,6 +1421,7 @@ export default function InventoryReceiving(props) {
 
         var payload = {
           receipt_number: receiptNumber,
+          line_uid: L2.line_uid || null,
           receipt_type: 'new_shipment',
           receipt_date: header.receipt_date || new Date().toISOString().substring(0, 10),
           status: lineStatus,
@@ -1450,10 +1473,26 @@ export default function InventoryReceiving(props) {
           await dbUpdate('inventory_stock_receipts', L2.existing_id, payload, userProfile && userProfile.id);
           lineId = L2.existing_id;
         } else {
-          // New line: insert
-          payload.created_by = userProfile && userProfile.id;
-          var ins = await dbInsert('inventory_stock_receipts', payload, userProfile && userProfile.id);
-          lineId = ins && ins.id;
+          // v55.83-DP — Timing-proof dedup: even if the in-memory existing_id has not
+          // been backfilled yet (fast repeated autosaves), look the row up by its stable
+          // receipt_number + line_uid at the DB. If it already exists, UPDATE it; only
+          // insert when there is genuinely no row yet. Prevents duplicate product lines.
+          var matchedId = null;
+          if (L2.line_uid) {
+            try {
+              var dupRes = await supabase.from('inventory_stock_receipts').select('id').eq('receipt_number', receiptNumber).eq('line_uid', L2.line_uid).limit(1);
+              if (dupRes && dupRes.data && dupRes.data.length > 0) { matchedId = dupRes.data[0].id; }
+            } catch (eDup) { /* fall through to insert */ }
+          }
+          if (matchedId) {
+            await dbUpdate('inventory_stock_receipts', matchedId, payload, userProfile && userProfile.id);
+            lineId = matchedId;
+          } else {
+            // New line: insert
+            payload.created_by = userProfile && userProfile.id;
+            var ins = await dbInsert('inventory_stock_receipts', payload, userProfile && userProfile.id);
+            lineId = ins && ins.id;
+          }
         }
 
         // v55.83-A.6.27.35 — save rolls if any (delete-then-insert for simplicity)
@@ -1517,6 +1556,36 @@ export default function InventoryReceiving(props) {
       } else {
         var verb = editingReceiptNumber ? 'updated' : 'saved';
         toast.success('Receipt ' + receiptNumber + ' draft ' + verb + ' — ' + lines.length + ' line(s)' + (masterUpdatesQueued.length ? '. Updated ' + masterUpdatesQueued.length + ' master record(s).' : ''));
+      }
+      // v55.83-DO — Autosave keeps the editor OPEN (no reload/close). It also
+      // pins the receipt number and re-hydrates saved line IDs so a second autosave
+      // UPDATES the same rows instead of inserting duplicates.
+      if (optsSafe.autosave) {
+        if (!editingReceiptNumber) { setEditingReceiptNumber(receiptNumber); }
+        try {
+          var rhRes = await supabase.from('inventory_stock_receipts').select('id, product_id, line_uid').eq('receipt_number', receiptNumber);
+          var rhRows = (rhRes && rhRes.data) || [];
+          var idByUid = {};
+          var idByProduct = {};
+          for (var rh = 0; rh < rhRows.length; rh++) {
+            if (rhRows[rh].line_uid != null && idByUid[rhRows[rh].line_uid] == null) { idByUid[rhRows[rh].line_uid] = rhRows[rh].id; }
+            if (rhRows[rh].product_id != null && idByProduct[rhRows[rh].product_id] == null) { idByProduct[rhRows[rh].product_id] = rhRows[rh].id; }
+          }
+          setLines(function (prevLines) {
+            return prevLines.map(function (ln) {
+              if (ln.existing_id) { return ln; }
+              var found = (ln.line_uid != null ? idByUid[ln.line_uid] : null);
+              if (found == null && ln.product_id != null) { found = idByProduct[ln.product_id]; }
+              if (found != null) { var copy = Object.assign({}, ln); copy.existing_id = found; return copy; }
+              return ln;
+            });
+          });
+        } catch (eRehydrate) { /* non-fatal — DB-level line_uid dedup still prevents duplicates */ }
+        var hh = new Date();
+        var hhmm = ('0' + hh.getHours()).slice(-2) + ':' + ('0' + hh.getMinutes()).slice(-2);
+        setAutosaveStatus('Saved ' + hhmm);
+        setBusy(false);
+        return;
       }
       await reload();
       closeModal();
@@ -1962,13 +2031,13 @@ export default function InventoryReceiving(props) {
                       {g.lineCount > 2 && <span className="text-slate-500 italic ml-1">+ {g.lineCount - 2} more</span>}
                       <div className="text-[10px] text-slate-600">
                         {g.lineCount} line{g.lineCount === 1 ? '' : 's'}{g.supplier ? ' · ' + g.supplier : ''}
-                        {hasExpected ? <span className="text-indigo-300"> · exp {expNet != null ? (expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' kg') : (expRolls != null ? (expRolls.toLocaleString() + ' rolls') : 'NEXPAC')}</span> : null}
+                        {hasExpected ? <span className="text-indigo-300"> · Expected: {expNet != null ? (expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' kg net') : (expRolls != null ? (expRolls.toLocaleString() + ' rolls') : 'NEXPAC')}</span> : null}
                       </div>
                     </div>
                   )}
                 </div>
                 <div className={'text-sm font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>
-                  {g.totalQty > 0 ? g.totalQty.toLocaleString() : (hasExpected ? <span className="text-indigo-300 text-xs font-semibold" title="Expected from NEXPAC; no actuals received yet">exp {expNet != null ? expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) : (expRolls != null ? (expRolls + ' r') : '—')}</span> : g.totalQty.toLocaleString())}
+                  {g.totalQty > 0 ? g.totalQty.toLocaleString() : (hasExpected ? <span className="text-indigo-300 text-xs font-semibold" title="Expected from NEXPAC; no actuals received yet">{expNet != null ? ('Expected: ' + expNet.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' kg net') : (expRolls != null ? ('Expected: ' + expRolls + ' rolls') : 'Expected')}</span> : g.totalQty.toLocaleString())}
                 </div>
                 <div className={'text-sm ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-200 font-semibold')}>{wh ? wh.name : <span className="italic text-slate-400">—</span>}</div>
                 {seeCosts && (
@@ -2083,7 +2152,9 @@ export default function InventoryReceiving(props) {
               style={{ background: '#3730a3', padding: '14px 20px', flexShrink: 0 }}
             >
               <div>
-                <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>🚚 {editingReceiptNumber ? 'Edit Receipt ' + editingReceiptNumber : 'New Stock Receipt'}</div>
+                <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>🚚 {editingReceiptNumber ? 'Edit Receipt ' + editingReceiptNumber : 'New Stock Receipt'}
+                  {autosaveStatus ? <span className="ml-2 align-middle text-[11px] font-bold px-2 py-0.5 rounded" style={{ background: autosaveStatus === 'Saving…' ? '#1e3a8a' : '#14532d', color: '#ffffff' }}>{autosaveStatus === 'Saving…' ? '⏳ ' : '✅ '}{autosaveStatus}</span> : null}
+                </div>
                 <div className="text-xs font-semibold" style={{ color: '#e0e7ff' }}>
                   One shipment can contain multiple product lines. Receipt # auto-generated on save.
                 </div>
@@ -2741,7 +2812,7 @@ export default function InventoryReceiving(props) {
                               {UOM_OPTIONS.map(function (u) { return <option key={u} value={u}>{u}</option>; })}
                             </select>
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-300">Release # *
+                          <label className="text-[11px] font-extrabold text-slate-300">Release #
                             <input type="text" value={line.batch_number} onChange={function (e) { updateLineField(lineIdx, 'batch_number', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-600 rounded text-sm bg-slate-800 text-slate-100 placeholder-slate-500" />
                           </label>
                         </div>

@@ -17,6 +17,7 @@
 // upstream. If no rules exist, the child is universal.
 
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import InventoryVariantHistory from './InventoryVariantHistory';
 
@@ -1310,7 +1311,7 @@ export default function InventoryProductMaster(props) {
       </div>
 
       {/* New/Edit modal */}
-      {modalMode && (
+      {modalMode && typeof document !== 'undefined' && createPortal((
         <div
           className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-start justify-center"
           onClick={closeModal}
@@ -1614,7 +1615,7 @@ export default function InventoryProductMaster(props) {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* v55.83-A.6.27.42 — Create Variant modal */}
       {/* v55.83-A.6.27.44d.1 — Variant History modal */}
