@@ -68,13 +68,14 @@ export async function POST(request) {
           wave_customer_id: n.id,
           source: 'wave_import',
           wave_sync_status: 'synced',
-          business_id: internalBusinessId
+          business_id: internalBusinessId,
+          wave_business_id: businessId
         };
         try {
           if (existing[n.id]) {
             var upd = await admin.from('accounting_customers').update({
               company_name: fields.company_name, email: fields.email, phone: fields.phone,
-              source: 'wave_import', wave_sync_status: 'synced'
+              source: 'wave_import', wave_sync_status: 'synced', wave_business_id: businessId
             }).eq('id', existing[n.id]);
             if (upd && upd.error) { report.errors.push('Update ' + n.id + ': ' + upd.error.message); report.skipped++; }
             else { report.updated++; }

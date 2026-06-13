@@ -91,14 +91,14 @@ export default function BankReviewTab(props) {
     Promise.all([
       supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false }).limit(1000),
       supabase.from('payment_matches').select('*'),
-      supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }),
+      fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
     ]).then(function (res) {
       var t = (res[0] && res[0].data) || [];
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
-      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers((res[2] && res[2].data) || []); setAcctInvoices((res[3] && res[3].data) || []);
+      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices((res[3] && res[3].data) || []);
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }
@@ -327,10 +327,22 @@ export default function BankReviewTab(props) {
   }
   if (loading) return <div className="p-6 text-slate-300">Loading bank transactions…</div>;
 
+  // v55.83-BX (Part 7) — find the selected customer so Wave-imported invoices that
+  // link by wave_customer_id (not accounting_customer_id) still appear. Never offer
+  // void/cancelled/archived/deleted invoices to match against.
+  var selectedCust = null; acctCustomers.forEach(function (c) { if (c.id === mCustomerId) selectedCust = c; });
   var invForCustomer = acctInvoices.filter(function (i) {
     if (sel && sel.business_id && i.business_id && sel.business_id !== i.business_id) return false; // guardrail
+    var rs = i.record_status;
+    if (rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted') return false;
     if (!mCustomerId) return true;
-    return i.accounting_customer_id === mCustomerId;
+    if (i.accounting_customer_id === mCustomerId) return true;
+    if (selectedCust && selectedCust.wave_customer_id && i.wave_customer_id && i.wave_customer_id === selectedCust.wave_customer_id) return true;
+    return false;
+  }).sort(function (a, b) {
+    // balance-first so open invoices surface above fully-paid ones
+    var ba = invoiceTotal(a) - (Number(a.amount_paid) || 0); var bb = invoiceTotal(b) - (Number(b.amount_paid) || 0);
+    return bb - ba;
   });
 
   return (
@@ -418,10 +430,10 @@ export default function BankReviewTab(props) {
               <div className="border-t border-slate-700 pt-2 mb-2">
                 <div className="text-[11px] font-bold text-slate-200 mb-1">Match to invoice</div>
                 <Typeahead items={acctCustomers} value={mCustomerId} allowClear={true} placeholder="Search accounting customer…"
-                  getLabel={function (c) { return c.company_name || c.contact_name || c.id; }}
+                  getLabel={function (c) { return (c.company_name || c.contact_name || c.id) + (c.email ? ' · ' + c.email : ''); }}
                   onPick={function (id) { setMCustomerId(id); setMInvoiceId(''); }} />
                 <Typeahead items={invForCustomer} value={mInvoiceId} allowClear={true} placeholder="Search invoice…"
-                  getLabel={function (i) { return (i.invoice_number || i.id) + ' · ' + fmt(invoiceTotal(i)) + (i.amount_paid ? (' · paid ' + fmt(i.amount_paid)) : ''); }}
+                  getLabel={function (i) { return (i.invoice_number || i.id) + ' · ' + (i.currency || 'USD') + ' ' + fmt(invoiceTotal(i)) + (i.wave_status ? ' · ' + i.wave_status : '') + (i.amount_paid ? (' · paid ' + fmt(i.amount_paid)) : ''); }}
                   onPick={function (id) { setMInvoiceId(id); }} />
                 <div className="flex gap-1 mb-1">
                   <input value={mAmount} onChange={function (e) { setMAmount(e.target.value); }} placeholder="Amount to apply" className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs" />
@@ -453,7 +465,7 @@ export default function BankReviewTab(props) {
                             <button onClick={function () { rmSplitRow(i); }} className="text-rose-300 text-[11px] px-1 font-bold">✕</button>
                           </div>
                           <Typeahead items={acctCustomers} value={r.customer_id} allowClear={true} placeholder="accounting customer (optional)"
-                            getLabel={function (c) { return c.company_name || c.contact_name || c.id; }}
+                            getLabel={function (c) { return (c.company_name || c.contact_name || c.id) + (c.email ? ' · ' + c.email : ''); }}
                             onPick={function (id) { updSplitRow(i, 'customer_id', id); }} />
                           <Typeahead items={acctInvoices.filter(function (iv) { if (sel && sel.business_id && iv.business_id && sel.business_id !== iv.business_id) return false; return !r.customer_id || iv.accounting_customer_id === r.customer_id; })} value={r.invoice_id} allowClear={true} placeholder="invoice (optional)"
                             getLabel={function (iv) { return (iv.invoice_number || iv.id) + ' · ' + fmt(invoiceTotal(iv)); }}

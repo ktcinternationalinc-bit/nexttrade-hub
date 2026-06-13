@@ -47,6 +47,10 @@ export async function POST(req) {
       }),
     });
     var data = await plaidRes.json();
+    if (data.error_code === 'PRODUCT_NOT_READY') {
+      try { await supabase.from('bank_connections').update({ last_sync_status: 'preparing', last_sync_error: 'Plaid is still preparing transactions' }).eq('id', conn.id); } catch (ePrep) {}
+      return NextResponse.json({ pending: true, error_code: 'PRODUCT_NOT_READY', message: 'Your bank is connected. Plaid is still preparing the first batch of transactions (usually under a minute). It will retry automatically.' });
+    }
     if (data.error_code) return NextResponse.json({ error: data.error_message || data.error_code }, { status: 400 });
 
     var rawTxns = data.transactions || [];

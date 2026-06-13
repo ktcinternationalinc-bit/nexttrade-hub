@@ -13,6 +13,7 @@ export default function BankTab({ user, supabase }) {
   const [searchInv, setSearchInv] = useState('');
   const [dateRange, setDateRange] = useState('30');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   // v55.83-BU — know which Plaid environment is live (sandbox vs production) and
   // whether the keys are configured, so the UI tells the truth instead of a
   // hardcoded "Sandbox mode" label.
@@ -118,9 +119,11 @@ export default function BankTab({ user, supabase }) {
   };
 
   // Sync transactions from Plaid
-  const syncTransactions = async (connId) => {
+  const syncTransactions = async (connId, attempt) => {
+    attempt = attempt || 0;
     setSyncing(true);
     setError('');
+    setNotice('');
     try {
       const days = parseInt(dateRange) || 30;
       const end = new Date().toISOString().split('T')[0];
@@ -132,8 +135,20 @@ export default function BankTab({ user, supabase }) {
         body: JSON.stringify({ connection_id: connId, start_date: start, end_date: end }),
       });
       const data = await res.json();
+      if (data.pending) {
+        // First-connect: Plaid is still preparing history. Soft message + auto-retry.
+        setSyncing(false);
+        if (attempt < 3) {
+          setNotice((data.message || 'Plaid is still preparing your transactions.') + ' Retrying automatically… (' + (attempt + 1) + '/3)');
+          setTimeout(() => { syncTransactions(connId, attempt + 1); }, 15000);
+        } else {
+          setNotice('Plaid is still preparing your transactions. This can take a few minutes on the first connection — click Sync again shortly.');
+        }
+        return;
+      }
       if (data.error) { setError(data.error); setSyncing(false); return; }
       await loadData();
+      setNotice('');
     } catch (e) { setError(e.message); }
     setSyncing(false);
   };
@@ -193,6 +208,12 @@ export default function BankTab({ user, supabase }) {
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-lg mb-3">
           {error} <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
+        </div>
+      )}
+
+      {notice && (
+        <div className="bg-amber-100 border border-amber-300 text-amber-950 text-xs p-3 rounded-lg mb-3 font-bold">
+          ⏳ {notice} <button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button>
         </div>
       )}
 

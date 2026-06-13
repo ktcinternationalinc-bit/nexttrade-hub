@@ -33,6 +33,45 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BY',
+    date: '2026-06-08',
+    label: 'Wave: tag every record with its business (test/prod safety)',
+    items: [
+      '**\\ud83d\\udd12 Groundwork to keep your real KTC Wave data separate from a test Wave account.** Every customer and invoice imported from Wave is now tagged with which Wave business it came from. This is step one so a test account can never get mixed up with your real KTC records.',
+      { superAdminOnly: true, text: 'v55.83-BY (Wave business separation — STEP 1 of N; needs the SQL pasted in chat). import-invoices/route.js + import-customers/route.js now stamp wave_business_id = chosen Wave businessId on every insert AND update (invoice fields, placeholder customer, customer fields, customer update). SWC-safe (var/string-concat, 0 violations in code). Existing dedup is by globally-unique wave_invoice_id/wave_customer_id so a different Wave business CANNOT overwrite KTC rows; this adds the business tag so views/reconcile can filter. REMAINING (do NOT import the test business until shipped): SQL add wave_business_id columns + backfill KTC rows (delivered in chat); Wave business selector w/ production=read-only guard + UI banner; scope dashboard/customer ledger/AR/reconcile by selected wave_business_id; reconcile compares only same-business records; never match across businesses. Part 1 bank summary labels still queued separately.' },
+    ],
+  },
+  {
+    version: 'v55.83-BX',
+    date: '2026-06-08',
+    label: 'Bank Review: fixed customer/invoice match search',
+    items: [
+      '**\\u2705 Matching finds your invoices now.** In Bank Review, searching a customer to match a deposit now finds Wave-imported customers (search works on company name, contact, or email), and shows ALL their invoices \\u2014 including ones imported from Wave that were previously invisible. Each invoice now shows its currency and status, and open invoices sort to the top.',
+      { superAdminOnly: true, text: 'v55.83-BX (Part 7 match-search fix; NO SQL). BankReviewTab.jsx: (1) accounting_customers now loaded via fetchAllRows (was capped at 1000); (2) customer Typeahead label includes email so search matches company_name/contact_name/email; (3) invForCustomer now also matches invoices by wave_customer_id (selected customer) not just accounting_customer_id \\u2014 THIS is why imported Wave invoices were not appearing; void/cancelled/archived/deleted excluded from matchable list; balance-first sort; (4) invoice label shows currency + wave_status. This is Part 7 only of the larger Bank Classification + Smart Matching spec \\u2014 Parts 1-6/8-10 (summary labels, Wave categorization + chart-of-accounts mapping table, learning rules + suggestions tab, unmatch workflow, sync schedule, transaction tabs) are staged for follow-up builds; foundation SQL (bank_transactions category/wave columns, wave_categories, bank_match_rules) delivered inline in chat.' },
+    ],
+  },
+  {
+    version: 'v55.83-BW',
+    date: '2026-06-08',
+    label: 'Bank: smoother first sync',
+    items: [
+      '**\\u23f3 First sync is no longer a scary error.** When you connect a bank, Plaid needs a minute to prepare your transaction history. Instead of a red error, the Bank tab now shows a friendly "still preparing" notice and retries on its own a few times.',
+      { superAdminOnly: true, text: 'v55.83-BW (Plaid first-sync PRODUCT_NOT_READY handling; NO SQL). transactions/route.js: detects data.error_code===PRODUCT_NOT_READY -> returns {pending:true, message} (200) + sets bank_connections.last_sync_status=preparing, instead of a 400 error (var/string-concat preserved; the only => is in a pre-existing comment). BankTab.jsx: new notice state; syncTransactions(connId, attempt) handles data.pending -> amber notice + auto-retry every 15s up to 3 attempts, then asks user to click Sync again; amber notice banner (bg-amber-100 text-amber-950) added above the env banner. Chase connected successfully in Production after the Data Transparency use case was published in the Plaid dashboard.' },
+    ],
+  },
+  {
+    version: 'v55.83-BV',
+    date: '2026-06-08',
+    label: 'New: Customer AR Ledger / Statement screen',
+    items: [
+      '**\\ud83d\\udcd1 New Customer Ledger.** Under Accounting, pick a customer and see everything in one place: every invoice, every payment, balances, and a running account statement \\u2014 built for daily payment work.',
+      '**\\u2705 Correct balances.** Unsent invoices with a real balance DO count toward what the customer owes; only true Drafts are separated out (shown but not counted). Void/cancelled/archived invoices never count.',
+      '**\\ud83d\\udcb1 Currency-safe.** Each currency is shown on its own \\u2014 USD and EGP are never added together. Switch currency with one click.',
+      '**\\ud83d\\udda8 Print & export.** Print a clean customer statement or export the running ledger to CSV. Payments show their Wave sync status so you can see what still needs to push to Wave.',
+      { superAdminOnly: true, text: 'v55.83-BV (NEW CustomerLedger.jsx; NO SQL \\u2014 reads accounting_customers/accounting_invoices/accounting_invoice_payments via fetchAllRows). AR uses shared isArEligible (Unsent/SAVED INCLUDED; only wave_status===DRAFT + record_status void/cancelled/archived/deleted excluded). Per-invoice balance = total_amount − wave_imported_paid − Σ(non-void accounting_invoice_payments.amount); credits/deductions = 0 (no tables yet, shown honestly). Summary per-currency (no cross-currency sums); currency selector. Filters: status (all/open/paid/overdue), source (wave/hub), pending_wave_sync, date range. Invoice list w/ all spec columns + expand (balance calc + payments applied w/ sync_status + wave_payment_id). Payment history table surfaces source/bank ref/sync/notes. Running statement (Debit=invoice total, Credit=wave-imported paid + hub payments, running balance) + Print (window.open HTML) + CSV. Permission gate: isSuperAdmin || canViewCustomerAr || canViewInvoices. Wired as Accounting sub-tab "ledger". DEFERRED (flagged): inline Record Payment modal (use Bank Review to match for now), FX->USD conversion (currencies kept separate per accuracy rule), credits/deductions tables, company logo in print header. NOTE: existing AccountingCustomerHistory.jsx still has the old isDraft() that wrongly treats SAVED as draft \\u2014 left untouched this build; CustomerLedger is the corrected screen.' },
+    ],
+  },
+  {
     version: 'v55.83-BU',
     date: '2026-06-08',
     label: 'Bank: clearer Plaid connect messages',

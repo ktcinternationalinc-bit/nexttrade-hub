@@ -113,7 +113,7 @@ export async function POST(request) {
               var ph = await admin.from('accounting_customers').insert({
                 company_name: (n.customer.name || 'Unknown (Wave)'),
                 wave_customer_id: n.customer.id, source: 'wave_import', wave_sync_status: 'synced',
-                needs_review: true, business_id: internalBusinessId, created_by: userId
+                needs_review: true, business_id: internalBusinessId, wave_business_id: businessId, created_by: userId
               }).select('id').single();
               if (ph && ph.data) { acctCustomerId = ph.data.id; custMap[n.customer.id] = ph.data.id; report.placeholders.push(n.customer.name || n.customer.id); }
               else if (ph && ph.error) { report.errors.push('Placeholder customer for invoice ' + (n.invoiceNumber || n.id) + ': ' + ph.error.message); }
@@ -184,6 +184,7 @@ export async function POST(request) {
             last_synced_at: startedAt,
             last_synced_hash: fingerprint(n, total, paid),
             business_id: internalBusinessId,
+            wave_business_id: businessId,
             updated_by: userId
           };
 
