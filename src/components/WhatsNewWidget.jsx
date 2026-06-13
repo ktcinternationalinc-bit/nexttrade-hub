@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CI',
+    date: '2026-06-08',
+    label: 'One business selector at the top of Accounting',
+    items: [
+      '**\\ud83e\\udded One clear business selector at the top of Accounting.** Instead of a different toggle on each screen, there is now a single "Wave business" selector at the top of the whole Accounting area. Pick All / your Real company / your Test company once, and every Accounting screen \\u2014 Dashboard, Invoices, Customers, Ledger, AR History, Bank Review \\u2014 follows it. You can always see which business you are looking at.',
+      '**\\ud83c\\udfe6 Easier path to bank matching.** The Dashboard bank-review section now has an **Open Bank Review & Matching** button so you can jump straight to matching deposits to invoices.',
+      { superAdminOnly: true, text: 'v55.83-CI (no SQL). AccountingTab.jsx: single WaveBusinessFilter rendered in the header (below sub-tab buttons); a waveKey state updates on change and is appended to each sub-tab key (acct-dash|, acct-inv|, acct-cus|, acct-led|, acct-arh|, acct-rev|, acct-pf|) so changing business REMOUNTS the active sub-screen -> it re-reads getActiveWaveBusiness() and re-scopes (reactive without prop-drilling). Removed the duplicate in-tab WaveBusinessFilter added in CH from AccountingInvoicesTab + AccountingCustomersTab; those now read waveBiz=getActiveWaveBusiness() and load wave_business_registry into waveReg directly. AccountingDashboard.jsx: "Open Bank Review & Matching" button wired to props.onOpenBankReview (AccountingTab passes setSub("review")). STILL PENDING (separate builds, honestly not in CI): Include Pending toggle + Money In/Out scope labels + Pending In/Out cards (Part 1 bank summary); full Match-to-Invoice modal + Categorize Expense + Unmatch row actions + dashboard deep-link-to-unmatched-filter (Part 3 bank classification/matching). BankReviewTab is already business-scoped (CE) so its picker cannot cross businesses.' },
+    ],
+  },
+  {
+    version: 'v55.83-CH',
+    date: '2026-06-08',
+    label: 'Business toggle on Invoices & Customers',
+    items: [
+      '**\\ud83d\\udd00 A business toggle on your Invoices and Customers lists.** Both lists now have a "Wave business" dropdown at the top: pick **All**, your **Real** company, or your **Test** company, and the list filters to just that. Your test data and real data no longer sit mixed together. Picking your test company shows only test records \\u2014 your real invoices never bleed into the test view.',
+      { superAdminOnly: true, text: 'v55.83-CH (no SQL). NEW src/components/WaveBusinessFilter.jsx (shared toggle: loads wave_business_registry, dropdown All + each business with Real/Test badge, sets shared active business via setActiveWaveBusiness; renders nothing if registry empty -> lists show all). Wired into AccountingInvoicesTab (scopes invoices+proformas via scopeIfRegistered on the rows source) and AccountingCustomersTab (scopes rows before filter). IMPORTANT FIX in wave-business.js: scopeIfRegistered now auto-decides legacy inclusion by the SELECTED business is_production — untagged/legacy-null historical records belong to the REAL/production business, so they are included under a production view and EXCLUDED under a test view. This stops untagged real-KTC records from appearing when you pick the test business (the exact "still see KTC" symptom). CE test updated to the prod/test legacy semantic. Still requires BY SQL + backfill so real KTC gets its tag; until backfill, real KTC is untagged and only shows under the production business or All.' },
+    ],
+  },
+  {
     version: 'v55.83-CG',
     date: '2026-06-08',
     label: 'One-click: register a Wave business',

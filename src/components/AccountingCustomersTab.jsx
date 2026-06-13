@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { customerLifecycle, archivePatch, restorePatch } from '../lib/record-lifecycle';
 import { canViewBank, canEditMappings } from '../lib/bank-permissions';
+import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 
 var BLANK = {
   company_name: '', contact_name: '', email: '', phone: '',
@@ -29,6 +30,9 @@ export default function AccountingCustomersTab(props) {
   var [busy, setBusy] = useState(false);
   var [histSet, setHistSet] = useState({});
   var [showArchived, setShowArchived] = useState(false);
+  var waveBiz = getActiveWaveBusiness() || '';
+  var [waveReg, setWaveReg] = useState([]);
+  useEffect(function () { supabase.from('wave_business_registry').select('*').then(function (r) { setWaveReg((r && r.data) || []); }).catch(function () {}); }, []);
 
   function load() {
     setLoading(true);
@@ -100,7 +104,7 @@ export default function AccountingCustomersTab(props) {
   }
   if (loading) return <div className="p-6 text-slate-300">Loading accounting customers…</div>;
 
-  var filtered = rows.filter(function (r) {
+  var filtered = scopeIfRegistered(rows, waveBiz, waveReg, true).filter(function (r) {
     if (!showArchived && r.record_status === 'archived') return false;
     if (!search.trim()) return true;
     var q = search.trim().toLowerCase();

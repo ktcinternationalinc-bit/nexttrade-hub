@@ -262,6 +262,10 @@ export default function AccountingDashboard(props) {
           <Stat title="Unmatched bank txns" big={d.unmatchedCount} sub="not yet reviewed/matched" tone={d.unmatchedCount ? 'bg-amber-900' : 'bg-slate-800'} />
           <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal)} tone="bg-emerald-900" />
         </div>
+        <div className="flex items-center gap-2 mt-2">
+          <button onClick={function () { if (props.onOpenBankReview) { props.onOpenBankReview(); } }} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold">🏦 Open Bank Review &amp; Matching</button>
+          <span className="text-[10px] text-slate-400">Match deposits to invoices and categorize expenses here.</span>
+        </div>
         <div className="text-[10px] text-slate-400 mt-1">“Deposits awaiting allocation” will appear here once its calculation is verified.</div>
       </Section>
 

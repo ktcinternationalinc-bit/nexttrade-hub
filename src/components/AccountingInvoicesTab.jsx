@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 import { canViewBank, canEditMappings, canReopen } from '../lib/bank-permissions';
 import { roundMoney } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';
@@ -61,6 +62,9 @@ export default function AccountingInvoicesTab(props) {
   var [pmCount, setPmCount] = useState({});
   var [showArchived, setShowArchived] = useState(false);
   var [search, setSearch] = useState('');
+  var waveBiz = getActiveWaveBusiness() || '';
+  var [waveReg, setWaveReg] = useState([]);
+  useEffect(function () { fetchAllRows('wave_business_registry', '*').then(function (r) { setWaveReg((r && r.data) || []); }).catch(function () {}); }, []);
   var [loading, setLoading] = useState(true);
   var [busy, setBusy] = useState(false);
 
@@ -127,7 +131,7 @@ export default function AccountingInvoicesTab(props) {
       .catch(function (e) { console.error('[lifecycle] restore', e); toast.error('Restore failed: ' + ((e && e.message) || 'error')); });
   }
   function isInvoice() { return mode === 'invoices'; }
-  var rows = isInvoice() ? invoices : proformas;
+  var rows = scopeIfRegistered((isInvoice() ? invoices : proformas), waveBiz, waveReg, true);
   var displayRows = rows
     .filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; })
     .filter(function (r) {

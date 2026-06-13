@@ -43,11 +43,15 @@ export function scopeToBusiness(rows, businessId, includeLegacy) {
 // Fail-safe scoping: only filter when the active business is actually one of the
 // REGISTERED businesses. If the wall isn't configured (no registry, or the active
 // id isn't registered), show everything instead of alarming all-zeros. Once the
-// business IS registered, scoping is strict — an empty test business shows empty.
-export function scopeIfRegistered(rows, businessId, registry, includeLegacy) {
+// business IS registered, scoping is strict.
+// Untagged (legacy-null) historical records belong to the REAL/production business,
+// so they are included when viewing a production business and EXCLUDED when viewing
+// a test business — a test view never shows untagged real-KTC data.
+export function scopeIfRegistered(rows, businessId, registry, includeLegacyHint) {
   if (!businessId || businessId === 'all') { return rows; }
-  var known = false;
-  (registry || []).forEach(function (b) { if (b && b.wave_business_id === businessId) { known = true; } });
-  if (!known) { return rows; }
+  var sel = null;
+  (registry || []).forEach(function (b) { if (b && b.wave_business_id === businessId) { sel = b; } });
+  if (!sel) { return rows; }
+  var includeLegacy = sel.is_production !== false;
   return scopeToBusiness(rows, businessId, includeLegacy);
 }

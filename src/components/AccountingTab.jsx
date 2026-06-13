@@ -1,6 +1,7 @@
 // v55.83-AD — Accounting tab: groups the accounting screens under one tab.
 // (The Plaid bank connection/import stays in the Bank tab.)
 import { useState } from 'react';
+import WaveBusinessFilter from './WaveBusinessFilter';
 import AccountingDashboard from './AccountingDashboard';
 import CompanyProfileTab from './CompanyProfileTab';
 import AccountingCustomerHistory from './AccountingCustomerHistory';
@@ -14,6 +15,7 @@ import PurchaseOrdersTab from './PurchaseOrdersTab';
 
 export default function AccountingTab(props) {
   var [sub, setSub] = useState('dashboard');
+  var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
     ['company', '🏢 Company Profile'],
@@ -39,15 +41,18 @@ export default function AccountingTab(props) {
           );
         })}
       </div>
-      {sub === 'dashboard' && <AccountingDashboard {...props} />}
+      <div className="px-3 pt-3">
+        <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
+      </div>
+      {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
       {sub === 'company' && <CompanyProfileTab {...props} />}
-      {sub === 'arhistory' && <AccountingCustomerHistory {...props} />}
-      {sub === 'ledger' && <CustomerLedger {...props} />}
-      {sub === 'customers' && <AccountingCustomersTab {...props} />}
-      {sub === 'invoices' && <AccountingInvoicesTab key="acct-inv" {...props} defaultMode="invoices" />}
-      {sub === 'proformas' && <AccountingInvoicesTab key="acct-pf" {...props} defaultMode="proformas" />}
+      {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
+      {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}
+      {sub === 'customers' && <AccountingCustomersTab key={'acct-cus|' + waveKey} {...props} />}
+      {sub === 'invoices' && <AccountingInvoicesTab key={'acct-inv|' + waveKey} {...props} defaultMode="invoices" />}
+      {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
-      {sub === 'review' && <BankReviewTab {...props} />}
+      {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
       {sub === 'wave' && <WaveConnectionTab {...props} />}
       {sub === 'waveimport' && <WaveImportTab {...props} />}
     </div>
