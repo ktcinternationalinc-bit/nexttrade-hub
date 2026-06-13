@@ -7,7 +7,7 @@ console.log('\n— Confirmation checklist —');
 // 1 all 4 steps exist
 ok(/\{openStep === 1 && \(/.test(r)&&/\{openStep === 2 && \(/.test(r)&&/\{openStep === 3 && \(function/.test(r)&&/\{openStep === 4 && \(\(\) =>/.test(r),'1. All 4 steps exist (shell/Nexpac, actual, variance, submit)');
 // 2 arabic titles
-ok(/ar: '\\u0627\\u0644\\u062e\\u0637\\u0648\\u0629/.test(r)&&/dir="rtl">\{st\.ar\}/.test(r),'2. Arabic titles render under each step');
+ok(/ar: 'الخطوة/.test(r)&&/dir="rtl">\{st\.ar\}/.test(r),'2. Arabic titles render under each step');
 // 3 collapsed by default on NEW
 ok(/setOpenStep\(0\);.*all 4 steps collapsed by default on NEW/.test(r),'3. New receipt: all steps collapsed by default (openStep=0)');
 // 4 existing collapsed unless variance
@@ -34,7 +34,7 @@ ok(/quantity_kg && String\(line\.uom \|\| ''\)\.toLowerCase\(\) !== 'kg'/.test(r
 // 14 variance auto-open
 ok(/var hasExp = !!\(header\.expected_total_rolls/.test(r)&&/setOpenStep\(hasExp \? 3 : 1\)/.test(r),'14. Submit auto-opens relevant step (1 if expected missing, else 3 variance)');
 // 15 step4 readiness summary
-ok(/\{openStep === 4 && \(\(\) =>/.test(r)&&/Ready to submit/.test(r)&&/Before finalizing:/.test(r),'15. Step 4 readiness summary (ready / missing)');
+ok(/\{openStep === 4 && \(\(\) =>/.test(r)&&/Ready to submit/.test(r)&&/Readiness checklist/.test(r),'15. Step 4 readiness summary (ready / missing)');
 
 console.log('\nCT verification: '+pass+' passed, '+fail+' failed');
 if(fail>0)process.exit(1);console.log('ALL CONFIRMED');

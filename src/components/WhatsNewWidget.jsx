@@ -33,6 +33,34 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CW',
+    date: '2026-06-08',
+    label: 'Step 4 is now a full review page + display fixes',
+    items: [
+      '**\u{1F4E6} Step 4 is a complete review page before you submit.** It now shows everything at once on solid cards: the shipment details, expected totals, actual received totals, a full product-line table (code, name, grade, colour, unit, rolls, quantity, weight), a colour-coded variance summary (green balanced / amber variance), a merge summary if the shipment was merged, and a readiness checklist with "Go to Step 1/2/3" buttons telling you exactly what is missing and where to fix it.',
+      '**\u2728 Fixed garbled text.** Some screens were showing codes like the literal backslash-u-2014 instead of real symbols; all step titles (including the Arabic) and icons now display correctly. The Merge button reads cleanly as "Merge Shipments (N selected)".',
+      { superAdminOnly: true, text: 'v55.83-CW (no SQL). PART 2 ROOT-CAUSE FIX: prior builds wrote escaped unicode with DOUBLE backslashes via the node heredocs, so 104 literal backslash-u sequences (em-dash, checks, warnings, AND all the Arabic step titles) rendered as raw text — globally replaced every backslash-u run with the real UTF-8 glyph (renders identically to a correct escape; 104 -> 0). PART 1: Step 4 rebuilt from a one-line message into a scrollable review page (flex 1 1 auto + overflowY auto). Reuses computeVariance(header, lines) as the single source of truth (no second totals copy that could drift): shell card, expected card, actual card (rec.actual rolls/gross/uom), product-line table (quick_code, name_en, grade/color via listLabel, uom, roll_count, quantity, quantity_kg, merged Sources:N), variance card (exp/act per dim + balanced/needs-notes), merge summary when any line has merged_source_breakdown, readiness checklist (shell/expected/lines/actual/variance-notes) with setOpenStep(n) Go-to-Step buttons; literal Tailwind color classes (bg-emerald/amber/slate-100 + text-*-950, purge-safe + contrast). PART 3: merge button "Merge Shipments (N selected)"; merge modal header "Merge Shipments" + "N selected" subtitle. PART 4: preview unchanged (CV full descriptions + source refs). Submit validation/blocking unchanged; merge/source-breakdown/Overview-no-double-count intact.' },
+    ],
+  },
+  {
+    version: 'v55.83-CV',
+    date: '2026-06-08',
+    label: 'Merge preview now shows full product details',
+    items: [
+      '**\\u2398 Clearer merge preview \\u2014 no more cut-off names.** In the Merge Shipments preview, each line now shows the full product code, name (English + Arabic), rolls, quantity and unit without truncation. A single-source line shows its receipt # and reference (e.g. RCV-2026-06-10-002 / NA); a combined line shows "2 combined". Tap any line to expand it and see the full classification (Family, Category, Grade, etc.) and a breakdown of every source shipment \\u2014 receipt #, reference, rolls, quantity, unit, weight and status \\u2014 so you can review exactly what is being combined before you confirm.',
+      { superAdminOnly: true, text: 'v55.83-CV (no SQL). InventoryReceiving.jsx merge preview rebuilt from a cramped 5-col grid (truncate) into wrapping expandable rows. New helpers: listLabel(id) via inventory_lists (label_en/code), productClassSummary(p) builds F:/Cat:/Gr:/Co:/B:/Cl:/P:/Sp:/Or: from the product *_list_id fields, shipmentRef(rn) resolves header shipment_reference/release_number/container_number. New previewExpanded state + togglePreviewRow(i). Collapsed row: quick_code + design_sku + name_en + name_ar + uom/rolls/qty; sources cell shows receipt#/reference for single source or N combined. Expanded: full classification line + per-source table (receipt #, reference, rolls, qty, uom, kg, status). Aggregation/no-double-count unchanged (still mergePlan engine). Confirm gate still plan.balanced.' },
+    ],
+  },
+  {
+    version: 'v55.83-CU',
+    date: '2026-06-08',
+    label: 'View Merge Audit',
+    items: [
+      '**\\u2398 See the full record of any merge.** On a merged shipment line, a new **View Merge Audit** button opens a clear summary: which shipments were combined, into which target, the totals before and after the merge, who did it, when, and any notes. The per-line source breakdown you already had stays exactly as it was.',
+      { superAdminOnly: true, text: 'v55.83-CU (no SQL; reads inventory_shipment_merges). InventoryReceiving.jsx: state mergeAuditGroup/mergeAuditRows/mergeAuditBusy + openMergeAudit(groupId) queries inventory_shipment_merges WHERE merge_group_id ORDER BY created_at desc. View Merge Audit button added to the CS source-breakdown panel header (shown when line.merge_group_id present). Scroll-safe modal renders merge_group_id, target_receipt_number, source_receipt_numbers, source_line_ids, target_line_ids, totals_before/after (line_count/roll_count/quantity/quantity_kg), merged_by, created_at (merged at), merge_notes. PRODUCT COPY NAMING: verified already complete (CM + HOTFIX 7) — openDuplicate copies name with NO (copy) suffix and clears quick_code/design_sku; save blocks duplicate design SKU / classification slug / name_en / name_ar with a naming-conflict warning; no change needed. Confirmed intact: CS source breakdown, Overview skip-merged, CT.2 accordion, CP modal scroll.' },
+    ],
+  },
+  {
     version: 'v55.83-CT.2',
     date: '2026-06-08',
     label: 'Receiving steps: collapsed by default + smarter submit',

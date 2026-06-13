@@ -246,6 +246,22 @@ export default function InventoryReceiving(props) {
   // v55.83-CT — 4-step accordion: which step is expanded (0 = all collapsed) + submit-attempt flag
   var [openStep, setOpenStep] = useState(1);
   var [submitAttempted, setSubmitAttempted] = useState(false);
+  // v55.83-CU — View Merge Audit modal
+  var [mergeAuditGroup, setMergeAuditGroup] = useState(null);
+  var [mergeAuditRows, setMergeAuditRows] = useState([]);
+  var [mergeAuditBusy, setMergeAuditBusy] = useState(false);
+  var [previewExpanded, setPreviewExpanded] = useState({});
+  function togglePreviewRow(i) { setPreviewExpanded(function (p) { var n = Object.assign({}, p); n[i] = !n[i]; return n; }); }
+  async function openMergeAudit(groupId) {
+    if (!groupId) { return; }
+    setMergeAuditGroup(groupId); setMergeAuditRows([]); setMergeAuditBusy(true);
+    try {
+      var res = await supabase.from('inventory_shipment_merges').select('*').eq('merge_group_id', groupId).order('created_at', { ascending: false });
+      if (res.error) { console.error('[merge-audit]', res.error); toast.error('Could not load merge audit: ' + res.error.message); }
+      setMergeAuditRows((res && res.data) || []);
+    } catch (e) { console.error('[merge-audit]', e); toast.error('Could not load merge audit.'); }
+    setMergeAuditBusy(false);
+  }
   function toggleMergeSel(rn) { setMergeSel(function (p) { var n = Object.assign({}, p); if (n[rn]) { delete n[rn]; } else { n[rn] = true; } return n; }); }
   function isMergedSource(g) { var hdrMerged = g.header && g.header.merged_into_shipment_id; var allMerged = g.lines && g.lines.length > 0 && g.lines.every(function (l) { return l.status === 'merged'; }); return !!(hdrMerged || allMerged); }
   function selectedNumbers() { return Object.keys(mergeSel).filter(function (k) { return mergeSel[k]; }); }
@@ -385,6 +401,22 @@ export default function InventoryReceiving(props) {
 
   // ── Product helpers ──────────────────────────────────────────────
   function productById(id) { return products.find(function (p) { return p.id === id; }) || null; }
+  function listLabel(id) { if (!id) { return ''; } var l = lists.find(function (x) { return x.id === id; }); return l ? (l.label_en || l.code || '') : ''; }
+  function productClassSummary(p) {
+    if (!p) { return ''; }
+    var parts = [];
+    if (p.family_list_id) { parts.push('F: ' + listLabel(p.family_list_id)); }
+    if (p.category_list_id) { parts.push('Cat: ' + listLabel(p.category_list_id)); }
+    if (p.grade_list_id) { parts.push('Gr: ' + listLabel(p.grade_list_id)); }
+    if (p.construction_list_id) { parts.push('Co: ' + listLabel(p.construction_list_id)); }
+    if (p.backing_list_id) { parts.push('B: ' + listLabel(p.backing_list_id)); }
+    if (p.color_list_id) { parts.push('Cl: ' + listLabel(p.color_list_id)); }
+    if (p.pattern_list_id) { parts.push('P: ' + listLabel(p.pattern_list_id)); }
+    if (p.spec_class_list_id) { parts.push('Sp: ' + listLabel(p.spec_class_list_id)); }
+    if (p.origin_list_id) { parts.push('Or: ' + listLabel(p.origin_list_id)); }
+    return parts.join(' | ');
+  }
+  function shipmentRef(rn) { var h = headers.find(function (x) { return x.receipt_number === rn; }); return h ? (h.shipment_reference || h.release_number || h.container_number || '') : ''; }
   function warehouseById(id) { return warehouses.find(function (w) { return w.id === id; }) || null; }
 
   // Autocomplete matches for typed quick code (also matches by name)
@@ -1655,7 +1687,7 @@ export default function InventoryReceiving(props) {
             disabled={selectedNumbers().length < 2}
             className={'px-3 py-2 text-xs font-extrabold rounded-lg ' + (selectedNumbers().length >= 2 ? 'bg-violet-600 hover:bg-violet-700 text-white' : 'bg-slate-700 text-slate-400 cursor-not-allowed')}
           >
-            \u2398 Merge Shipments{selectedNumbers().length ? ' (' + selectedNumbers().length + ')' : ''}
+            ⎘ Merge Shipments{selectedNumbers().length ? ' (' + selectedNumbers().length + ' selected)' : ''}
           </button>
         )}
         <label className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
@@ -1906,10 +1938,10 @@ export default function InventoryReceiving(props) {
               var step1Done = !!(header.expected_total_rolls || header.expected_total_gross_kg || header.expected_total_uom || header.supplier || header.shipment_reference || header.container_number);
               var step2Done = lines.some(function (l) { return l.product_id && (Number(l.quantity) > 0 || Number(l.roll_count) > 0 || (l.rolls && l.rolls.length > 0)); });
               var steps = [
-                { n: 1, en: 'STEP 1 \u2014 Nexpac / Expected', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0661 \u2014 \u062a\u0642\u0631\u064a\u0631 \u0646\u0643\u0633\u0628\u0627\u0643 / \u0627\u0644\u0645\u062a\u0648\u0642\u0639', done: step1Done },
-                { n: 2, en: 'STEP 2 \u2014 Actual Received', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0662 \u2014 \u0627\u0644\u0645\u0633\u062a\u0644\u0645 \u0627\u0644\u0641\u0639\u0644\u064a', done: step2Done },
-                { n: 3, en: 'STEP 3 \u2014 Variance / Reconcile', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0663 \u2014 \u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0641\u0631\u0648\u0642\u0627\u062a', done: step2Done },
-                { n: 4, en: 'STEP 4 \u2014 Submit / Finalize', ar: '\u0627\u0644\u062e\u0637\u0648\u0629 \u0664 \u2014 \u0625\u0631\u0633\u0627\u0644 / \u0627\u0639\u062a\u0645\u0627\u062f', done: step1Done && step2Done }
+                { n: 1, en: 'STEP 1 — Nexpac / Expected', ar: 'الخطوة ١ — تقرير نكسباك / المتوقع', done: step1Done },
+                { n: 2, en: 'STEP 2 — Actual Received', ar: 'الخطوة ٢ — المستلم الفعلي', done: step2Done },
+                { n: 3, en: 'STEP 3 — Variance / Reconcile', ar: 'الخطوة ٣ — مراجعة الفروقات', done: step2Done },
+                { n: 4, en: 'STEP 4 — Submit / Finalize', ar: 'الخطوة ٤ — إرسال / اعتماد', done: step1Done && step2Done }
               ];
               return (
                 <div style={{ padding: '10px 20px 0', flexShrink: 0 }}>
@@ -1920,7 +1952,7 @@ export default function InventoryReceiving(props) {
                       return (
                         <button key={st.n} type="button" onClick={function () { setOpenStep(active ? 0 : st.n); }}
                           className={'flex-1 min-w-[150px] text-left rounded-lg px-2.5 py-1.5 border transition-colors ' + (active ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700')}>
-                          <div className="flex items-center gap-1 text-[11px] font-extrabold"><span>{st.done ? '\u2705' : (warn ? '\u26a0\ufe0f' : '\u2b1c')}</span><span className="truncate">{st.en}</span><span className="ml-auto">{active ? '\u25be' : '\u25b8'}</span></div>
+                          <div className="flex items-center gap-1 text-[11px] font-extrabold"><span>{st.done ? '✅' : (warn ? '⚠️' : '⬜')}</span><span className="truncate">{st.en}</span><span className="ml-auto">{active ? '▾' : '▸'}</span></div>
                           <div className="text-[10px] opacity-80" dir="rtl">{st.ar}</div>
                         </button>
                       );
@@ -2206,7 +2238,10 @@ export default function InventoryReceiving(props) {
                       <div className="mb-3 rounded-lg border border-violet-300 bg-violet-50">
                         <div className="px-3 py-1.5 text-[11px] font-extrabold text-violet-900 border-b border-violet-200 flex items-center justify-between">
                           <span>⎘ Merged from {line.merged_source_breakdown.length} source line(s) — read-only audit</span>
-                          {line.merge_group_id ? <span className="font-mono text-[9px] text-violet-700">{line.merge_group_id}</span> : null}
+                          <span className="flex items-center gap-2">
+                            {line.merge_group_id ? <span className="font-mono text-[9px] text-violet-700">{line.merge_group_id}</span> : null}
+                            {line.merge_group_id ? <button type="button" onClick={function () { openMergeAudit(line.merge_group_id); }} className="px-2 py-0.5 bg-violet-700 hover:bg-violet-800 text-white text-[10px] font-bold rounded">View Merge Audit</button> : null}
+                          </span>
                         </div>
                         <div className="overflow-x-auto">
                           <table className="w-full text-[11px] text-slate-900">
@@ -2699,15 +2734,75 @@ export default function InventoryReceiving(props) {
             })()}
 
             {openStep === 4 && (() => {
-              var s1 = !!(header.expected_total_rolls || header.expected_total_gross_kg || header.expected_total_uom || header.supplier || header.shipment_reference || header.container_number);
-              var s2 = lines.some(function (l) { return l.product_id && (Number(l.quantity) > 0 || Number(l.roll_count) > 0 || (l.rolls && l.rolls.length > 0)); });
+              var rec = computeVariance(header, lines);
+              var act = rec.actual || { rolls: 0, gross: 0, uom: 0 };
+              var realLines = lines.filter(function (l) { return l.product_id; });
+              var s1 = !!(header.supplier || header.shipment_reference || header.container_number) && (header.warehouse_id || header.receipt_date);
+              var sExp = rec.has_any_expected;
+              var sLines = realLines.length > 0;
+              var sActual = act.rolls > 0 || act.uom > 0;
+              var needNotes = rec.has_any_expected && !rec.is_balanced && !((header.variance_notes || '').trim());
+              var mergedLines = realLines.filter(function (l) { return l.merged_source_breakdown && l.merged_source_breakdown.length; });
+              var fmtN = function (v) { return (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+              var wh = warehouseById(header.warehouse_id);
+              var expSource = header.nexpac_breakdown || nexpacPreview ? 'Nexpac report' : (sExp ? 'Manual' : '—');
+              var Card = function (title, children) { return <div className="bg-white border border-slate-200 rounded-lg p-3"><div className="text-[11px] font-extrabold text-slate-500 uppercase mb-1.5">{title}</div>{children}</div>; };
+              var Row = function (k, v) { return <div className="flex justify-between gap-3 text-xs py-0.5"><span className="text-slate-500">{k}</span><span className="text-slate-900 font-semibold text-right">{v == null || v === '' ? '—' : v}</span></div>; };
+              var vCardCls = !rec.has_any_expected ? 'bg-slate-100 text-slate-700' : (rec.is_balanced ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-100 text-amber-950');
+              var checklist = [
+                { ok: s1, label: 'Shipment shell complete', step: 1, fix: 'Add supplier / reference / warehouse — go to Step 1' },
+                { ok: sExp, label: 'Expected totals entered', step: 1, fix: 'Enter expected rolls / weight / UOM — go to Step 1' },
+                { ok: sLines, label: 'Product lines entered', step: 2, fix: 'Add at least one product line — go to Step 2' },
+                { ok: sActual, label: 'Actual totals entered', step: 2, fix: 'Enter received rolls / quantity — go to Step 2' },
+                { ok: !needNotes, label: needNotes ? 'Variance notes required' : 'Variance reviewed', step: 3, fix: 'Variance exists — add variance notes in Step 3' }
+              ];
+              var allReady = checklist.every(function (c) { return c.ok; });
               return (
-                <div style={{ padding: '12px 20px', flexShrink: 0 }} className="border-t border-slate-800">
-                  <div className="bg-white text-slate-900 rounded-lg p-3 text-sm font-medium">
-                    <div className="font-extrabold mb-1">STEP 4 \u2014 Submit / Finalize</div>
-                    {s1 && s2
-                      ? <div className="text-emerald-700 font-bold">\u2705 Ready to submit \u2014 use Submit below to validate &amp; finalize.</div>
-                      : <div className="text-amber-800 font-bold">\u26a0\ufe0f Before finalizing: {!s1 ? 'Step 1 shipment/expected info is incomplete. ' : ''}{!s2 ? 'Step 2 has no completed product line. ' : ''}You can still Save Draft.</div>}
+                <div style={{ padding: '14px 20px', flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }} className="border-t border-slate-800 bg-slate-100">
+                  <div className="bg-white text-slate-900 rounded-lg p-2 mb-3">
+                    <div className="font-extrabold text-base">STEP 4 — Review Summary &amp; Submit / Finalize</div>
+                    <div className="text-xs text-slate-600" dir="rtl">الخطوة ٤ — مراجعة الملخص والإرسال / الاعتماد</div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+                    {Card('Shipment', <div>{Row('Receipt #', editingReceiptNumber || '(new)')}{Row('Reference', header.shipment_reference)}{Row('Supplier', header.supplier)}{Row('Warehouse', wh ? wh.name : header.warehouse_id)}{Row('Date', header.receipt_date)}{Row('Container', header.container_number)}{Row('Notes', header.notes)}</div>)}
+                    {Card('Expected', <div>{Row('Rolls', header.expected_total_rolls)}{Row('Gross kg', header.expected_total_gross_kg)}{Row('Net kg', header.expected_total_net_kg)}{Row('UOM total', header.expected_total_uom)}{Row('Source', expSource)}</div>)}
+                    {Card('Actual received', <div>{Row('Product lines', realLines.length)}{Row('Rolls', fmtN(act.rolls))}{Row('Quantity (UOM)', fmtN(act.uom))}{Row('Gross kg', fmtN(act.gross))}</div>)}
+                    {Card('Variance', !rec.has_any_expected
+                      ? <div className="text-xs text-slate-500 italic">No expected totals entered — nothing to reconcile.</div>
+                      : <div className={'text-xs rounded p-2 ' + vCardCls}>
+                          <div className="flex justify-between"><span>Rolls (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_rolls)} / {fmtN(act.rolls)}{rec.variance.rolls ? ' (' + (rec.variance.rolls > 0 ? '-' : '+') + fmtN(Math.abs(rec.variance.rolls)) + ')' : ''}</span></div>
+                          <div className="flex justify-between"><span>Gross (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_gross_kg)} / {fmtN(act.gross)}</span></div>
+                          <div className="flex justify-between"><span>UOM (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_uom)} / {fmtN(act.uom)}</span></div>
+                          <div className="mt-1 font-extrabold">{rec.is_balanced ? '✅ Balanced' : (needNotes ? '⚠️ Variance — notes required' : '⚠️ Variance (noted)')}</div>
+                        </div>)}
+                  </div>
+                  {mergedLines.length > 0 && (
+                    <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-2 text-xs text-violet-950">
+                      <div className="font-extrabold mb-1">⎘ Merged shipment</div>
+                      <div>{mergedLines.length} merged line(s). Merge group: <span className="font-mono">{mergedLines[0].merge_group_id || '—'}</span>. Open Step 2 to expand each line's source breakdown, or use View Merge Audit.</div>
+                    </div>
+                  )}
+                  {Card('Product lines (' + realLines.length + ')',
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-[11px]">
+                        <thead><tr className="bg-slate-100 text-slate-600"><th className="px-2 py-1 text-left">Code</th><th className="px-2 py-1 text-left">Product</th><th className="px-2 py-1 text-left">Grade</th><th className="px-2 py-1 text-left">Color</th><th className="px-2 py-1 text-left">UOM</th><th className="px-2 py-1 text-right">Rolls</th><th className="px-2 py-1 text-right">Qty</th><th className="px-2 py-1 text-right">KG</th><th className="px-2 py-1 text-left">Status</th></tr></thead>
+                        <tbody>
+                          {realLines.map(function (l, li) { var p = l.product || productById(l.product_id);
+                            return <tr key={li} className="border-t border-slate-100"><td className="px-2 py-1 font-mono">{p ? (p.quick_code || '') : ''}</td><td className="px-2 py-1">{p ? (p.name_en || l.product_id) : l.product_id}</td><td className="px-2 py-1">{p ? listLabel(p.grade_list_id) : ''}</td><td className="px-2 py-1">{p ? listLabel(p.color_list_id) : ''}</td><td className="px-2 py-1">{l.uom || '—'}</td><td className="px-2 py-1 text-right">{l.roll_count || 0}</td><td className="px-2 py-1 text-right">{l.quantity || 0}</td><td className="px-2 py-1 text-right">{l.quantity_kg || 0}</td><td className="px-2 py-1">{l.merged_source_breakdown && l.merged_source_breakdown.length ? ('Sources: ' + l.merged_source_breakdown.length) : '—'}</td></tr>;
+                          })}
+                          {realLines.length === 0 && <tr><td colSpan={9} className="px-2 py-2 text-center text-slate-400 italic">No product lines yet — go to Step 2.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>)}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 mt-2">
+                    <div className="text-[11px] font-extrabold text-slate-500 uppercase mb-1.5">Readiness checklist</div>
+                    {checklist.map(function (c, ci) {
+                      return <div key={ci} className="flex items-center justify-between gap-2 text-xs py-1 border-b border-slate-100 last:border-0">
+                        <span className={c.ok ? 'text-emerald-700 font-semibold' : 'text-amber-800 font-semibold'}>{c.ok ? '✅ ' : '⚠️ '}{c.label}</span>
+                        {!c.ok && <button type="button" onClick={function () { setOpenStep(c.step); }} className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded whitespace-nowrap">Go to Step {c.step}</button>}
+                      </div>;
+                    })}
+                    <div className={'mt-2 font-extrabold text-sm ' + (allReady ? 'text-emerald-700' : 'text-amber-800')}>{allReady ? '✅ Ready to submit — use Submit below to finalize.' : '⚠️ Not ready — resolve the items above. You can still Save Draft.'}</div>
                   </div>
                 </div>
               );
@@ -2808,6 +2903,56 @@ export default function InventoryReceiving(props) {
       })()}
 
       {/* Cancel-receipt prompt */}
+      {mergeAuditGroup && (() => {
+        var fmtDt = function (v) { if (!v) return '—'; try { return new Date(v).toLocaleString(); } catch (e) { return String(v); } };
+        var num = function (v) { return (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+        return (
+          <div className="fixed inset-0 z-[220] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16, overflow: 'hidden' }} onClick={function () { setMergeAuditGroup(null); }}>
+            <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 760, width: '100%', maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
+              <div className="rounded-t-2xl flex justify-between items-center" style={{ background: '#6d28d9', padding: '14px 20px', flexShrink: 0 }}>
+                <div className="text-lg font-extrabold text-white">⎘ Merge Audit</div>
+                <button onClick={function () { setMergeAuditGroup(null); }} className="text-white text-xl font-bold" style={{ width: 32, height: 32 }}>✕</button>
+              </div>
+              <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }} className="text-slate-900">
+                <div className="text-[11px] font-bold text-slate-500 mb-1">MERGE GROUP</div>
+                <div className="font-mono text-xs mb-3 break-all">{mergeAuditGroup}</div>
+                {mergeAuditBusy ? <div className="text-sm text-slate-500 italic">Loading audit…</div> : (
+                  mergeAuditRows.length === 0 ? <div className="text-sm text-slate-500 italic">No audit record found for this merge group.</div> : (
+                    mergeAuditRows.map(function (a, ai) {
+                      var tb = a.totals_before || {}; var ta = a.totals_after || {};
+                      return (
+                        <div key={ai} className="border border-violet-200 rounded-lg mb-3 overflow-hidden">
+                          <div className="bg-violet-50 px-3 py-2 text-sm">
+                            <div className="flex flex-wrap gap-x-6 gap-y-1">
+                              <span><b>Target shipment:</b> <span className="font-mono">{a.target_receipt_number || '—'}</span></span>
+                              <span><b>Merged by:</b> {a.merged_by || '—'}</span>
+                              <span><b>Merged at:</b> {fmtDt(a.created_at)}</span>
+                            </div>
+                          </div>
+                          <div className="px-3 py-2 text-xs space-y-1">
+                            <div><b>Source shipments:</b> <span className="font-mono">{(a.source_receipt_numbers || []).join(', ') || '—'}</span></div>
+                            <div><b>Source line IDs:</b> <span className="font-mono text-[10px] text-slate-500 break-all">{(a.source_line_ids || []).join(', ') || '—'}</span></div>
+                            <div><b>Target line IDs:</b> <span className="font-mono text-[10px] text-slate-500 break-all">{(a.target_line_ids || []).join(', ') || '—'}</span></div>
+                            <div className="grid grid-cols-2 gap-3 mt-2">
+                              <div className="bg-slate-100 rounded p-2"><div className="font-bold text-slate-700 mb-0.5">Totals BEFORE</div><div>Lines: {tb.line_count != null ? tb.line_count : '—'}</div><div>Rolls: {num(tb.roll_count)}</div><div>Qty: {num(tb.quantity)} · {num(tb.quantity_kg)} kg</div></div>
+                              <div className="bg-emerald-100 rounded p-2"><div className="font-bold text-emerald-900 mb-0.5">Totals AFTER</div><div>Lines: {ta.line_count != null ? ta.line_count : '—'}</div><div>Rolls: {num(ta.roll_count)}</div><div>Qty: {num(ta.quantity)} · {num(ta.quantity_kg)} kg</div></div>
+                            </div>
+                            {a.merge_notes ? <div className="mt-2"><b>Notes:</b> {a.merge_notes}</div> : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )
+                )}
+              </div>
+              <div className="flex justify-end border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
+                <button onClick={function () { setMergeAuditGroup(null); }} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {mergeModalOpen && (() => {
         var srcLines = mergeSourceLines();
         var srcHeaders = mergeSourceHeaders();
@@ -2819,7 +2964,7 @@ export default function InventoryReceiving(props) {
           <div className="fixed inset-0 z-[210] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16, overflow: 'hidden' }} onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }}>
             <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 820, width: '100%', maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
               <div className="rounded-t-2xl flex justify-between items-center" style={{ background: '#6d28d9', padding: '14px 20px', flexShrink: 0 }}>
-                <div className="text-lg font-extrabold text-white">⎘ Merge {sel.length} Shipments</div>
+                <div><div className="text-lg font-extrabold text-white">⎘ Merge Shipments</div><div className="text-xs font-semibold text-violet-100">{sel.length} selected</div></div>
                 <button onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }} className="text-white text-xl font-bold" style={{ width: 32, height: 32 }}>✕</button>
               </div>
               <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }} className="text-slate-900">
@@ -2842,18 +2987,41 @@ export default function InventoryReceiving(props) {
                   <button onClick={function () { setMergeTarget('new'); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === 'new' ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>＋ New merged shell</button>
                   {sel.map(function (rn) { return <button key={rn} onClick={function () { setMergeTarget(rn); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === rn ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>Into {rn}</button>; })}
                 </div>
-                <div className="text-xs font-bold text-slate-500 mb-1">PREVIEW — AGGREGATED LINES</div>
+                <div className="text-xs font-bold text-slate-500 mb-1">PREVIEW — AGGREGATED LINES (tap a row to see full details &amp; sources)</div>
                 <div className="border border-slate-200 rounded-lg overflow-hidden mb-2">
-                  <div className="grid grid-cols-5 gap-1 bg-slate-100 px-3 py-1.5 text-[10px] font-extrabold text-slate-500 uppercase"><span>Product</span><span>UOM</span><span className="text-right">Rolls</span><span className="text-right">Qty</span><span className="text-right">Sources</span></div>
                   {plan.aggregated.map(function (g, i) {
                     var p = productById(g.product_id);
+                    var code = p ? (p.quick_code || '') + (p.design_sku && p.design_sku !== p.quick_code ? ' / ' + p.design_sku : '') : '';
+                    var single = g.sources.length === 1 ? g.sources[0] : null;
+                    var srcLabel = single ? ((single.receipt_number || '—') + (shipmentRef(single.receipt_number) ? ' / ' + shipmentRef(single.receipt_number) : '')) : (g.sources.length + ' combined');
+                    var open = !!previewExpanded[i];
                     return (
-                      <div key={i} className="grid grid-cols-5 gap-1 px-3 py-1.5 border-t border-slate-100 text-xs">
-                        <span className="font-semibold truncate">{p ? (p.name_en || p.quick_code || g.product_id) : g.product_id}</span>
-                        <span>{g.uom || '—'}</span>
-                        <span className="text-right font-mono">{fmt(g.roll_count)}</span>
-                        <span className="text-right font-mono">{fmt(g.quantity)}{g.quantity_kg ? (' / ' + fmt(g.quantity_kg) + 'kg') : ''}</span>
-                        <span className="text-right">{g.sources.length}{g.sources.length > 1 ? ' ✓combined' : ''}</span>
+                      <div key={i} className="border-t border-slate-100">
+                        <button type="button" onClick={function () { togglePreviewRow(i); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-start gap-2">
+                          <span className="text-slate-400 text-xs mt-0.5">{open ? '▾' : '▸'}</span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-xs font-bold text-slate-900">{code ? code + ' · ' : ''}{p ? (p.name_en || g.product_id) : g.product_id}</span>
+                            {p && p.name_ar ? <span className="block text-[11px] text-slate-600" dir="rtl">{p.name_ar}</span> : null}
+                            <span className="block text-[11px] text-slate-500 mt-0.5">{g.uom || '—'} · {fmt(g.roll_count)} rolls · {fmt(g.quantity)}{g.quantity_kg ? (' / ' + fmt(g.quantity_kg) + ' kg') : ''}</span>
+                          </span>
+                          <span className={'text-[11px] font-bold whitespace-nowrap ' + (g.sources.length > 1 ? 'text-violet-700' : 'text-slate-600')}>{srcLabel}</span>
+                        </button>
+                        {open && (
+                          <div className="px-3 pb-3 pt-1 bg-slate-50 text-[11px] text-slate-800">
+                            {p && productClassSummary(p) ? <div className="mb-2 text-slate-700"><b>Classification:</b> {productClassSummary(p)}</div> : null}
+                            <div className="font-bold text-slate-600 mb-1">Source breakdown ({g.sources.length}):</div>
+                            <div className="overflow-x-auto rounded border border-slate-200 bg-white">
+                              <table className="w-full text-[11px]">
+                                <thead><tr className="bg-slate-100 text-slate-600"><th className="px-2 py-1 text-left">Receipt #</th><th className="px-2 py-1 text-left">Reference</th><th className="px-2 py-1 text-right">Rolls</th><th className="px-2 py-1 text-right">Qty</th><th className="px-2 py-1 text-left">UOM</th><th className="px-2 py-1 text-right">KG</th><th className="px-2 py-1 text-left">Status</th></tr></thead>
+                                <tbody>
+                                  {g.sources.map(function (sb, si) {
+                                    return <tr key={si} className="border-t border-slate-100"><td className="px-2 py-1 font-mono">{sb.receipt_number || '—'}</td><td className="px-2 py-1">{shipmentRef(sb.receipt_number) || '—'}</td><td className="px-2 py-1 text-right">{fmt(sb.roll_count)}</td><td className="px-2 py-1 text-right">{fmt(sb.quantity)}</td><td className="px-2 py-1">{sb.uom || '—'}</td><td className="px-2 py-1 text-right">{fmt(sb.quantity_kg)}</td><td className="px-2 py-1">{sb.status || '—'}</td></tr>;
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
