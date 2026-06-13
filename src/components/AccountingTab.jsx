@@ -8,6 +8,7 @@ import AccountingCustomerHistory from './AccountingCustomerHistory';
 import CustomerLedger from './CustomerLedger';
 import WaveConnectionTab from './WaveConnectionTab';
 import WaveImportTab from './WaveImportTab';
+import WaveSyncCenter from './WaveSyncCenter';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import BankReviewTab from './BankReviewTab';
@@ -28,6 +29,7 @@ export default function AccountingTab(props) {
     ['review', '🏦 Bank Review & Matching'],
     ['wave', '🌊 Wave Connection'],
     ['waveimport', '⬇️ Wave Import'],
+    ['wavesync', '🔄 Wave Sync Center'],
   ];
   return (
     <div>
@@ -55,6 +57,7 @@ export default function AccountingTab(props) {
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
       {sub === 'wave' && <WaveConnectionTab {...props} />}
       {sub === 'waveimport' && <WaveImportTab {...props} />}
+      {sub === 'wavesync' && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} />}
     </div>
   );
 }

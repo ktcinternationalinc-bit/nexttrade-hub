@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DL',
+    date: '2026-06-08',
+    label: 'Wave Sync Center (test-only) — queue, dry run, settings',
+    items: [
+      '**\ud83d\udd04 New Wave Sync Center (Accounting \u2192 Wave Sync Center).** It lists the Hub-created customers and invoices in the selected business that are waiting to go to Wave, lets you Dry Run them first (checks everything without sending anything), and \u2014 for the Test business only \u2014 push the selected ones and read them back to confirm. Settings let you turn each push type on/off for the Test business. The real production business stays read-only: it will refuse any push with a clear message. Payments cannot be pushed because Wave\u2019s system does not allow creating them, and the screen says so rather than pretending.',
+      { superAdminOnly: true, text: 'v55.83-DL (NEEDS SQL in chat: create pending_wave_sync table + RLS; add dry_run bool to wave_sync_log). NEW src/lib/wave-sync-eligibility.js (pure, 12 tests): customerEligible/invoiceEligible/paymentEligible (payment ALWAYS unsupported per Wave public API) + dryRunRecord that combines eligibility with assertCanPush. NEW routes (SWC-safe, service-role): /api/wave/push-customer (customerCreate + read-back -> saves wave_customer_id), /api/wave/push-invoice (requires customer already in Wave; invoiceCreate + read-back -> saves wave_invoice_id), /api/wave/push-payment (returns 422 unsupported, logs, never fakes). All re-enforce the guard server-side (silo match, writes_enabled, allow_*_push, production blocked, no recreate of records with wave ids) and write wave_sync_log. NEW src/components/WaveSyncCenter.jsx wired into AccountingTab (wavesync tab): SiloBanner, tabs Pending/Dry Run/Synced/Failed/Sync Log/Settings, queue of eligible Hub records, Dry Run Selected (pure, no writes), Push Selected (sequential, test-only), Settings toggles for writes_enabled/allow_customer_push/allow_invoice_push (payment+auto locked off). PRODUCTION read-only enforced in UI + every route. HONEST LIMITS: the customerCreate/invoiceCreate GraphQL field shapes follow Wave public schema but are UNTESTED against live Wave \u2014 must be validated in the Wave sandbox before trusting a real push; dry run + guard + queue + settings + production-block are fully functional now. NOT built: read-back diff UI detail, conflict tab logic, daily/auto sync (correctly off).' },
+    ],
+  },
+  {
     version: 'v55.83-DK',
     date: '2026-06-08',
     label: 'Wave silo foundation — every record carries its business, one guard for all pushes',
