@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fmtET } from '../lib/et-time';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
+import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 
 export default function BankTab({ user, supabase }) {
@@ -267,12 +268,13 @@ export default function BankTab({ user, supabase }) {
       {(function () {
         var active = getActiveWaveBusiness();
         var reg = null; bizRegistry.forEach(function (b) { if (b.wave_business_id === active) reg = b; });
-        var label = reg ? reg.label : (active ? ('Business ' + String(active).slice(0, 8)) : 'No business selected');
-        var prod = reg ? (reg.is_production !== false) : true;
         return (
-          <div className={'text-xs font-bold rounded-lg px-3 py-2 mb-3 border ' + (prod ? 'bg-emerald-100 border-emerald-300 text-emerald-950' : 'bg-amber-100 border-amber-300 text-amber-950')}>
-            Current scope: {prod ? '🔒 ' : '🧪 '}{label}{prod ? ' (Real KTC Production)' : ' (Test business)'} — showing only this business's bank transactions &amp; matching.
-          </div>
+          <SiloBanner
+            registered={!!reg}
+            isTest={!!(reg && reg.is_production === false)}
+            canWrite={!!(reg && reg.writes_enabled === true)}
+            label={reg ? (reg.label || active) : (active ? ('Business ' + String(active).slice(0, 8)) : 'No business selected')}
+          />
         );
       })()}
 

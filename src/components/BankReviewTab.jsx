@@ -2,6 +2,7 @@
 // Money math comes from src/lib/payment-matching.js (validated). Permissions from
 // src/lib/bank-permissions.js. No Wave sync here. No deletes. Approved = locked.
 import { useState, useEffect, useMemo } from 'react';
+import SiloBanner from './SiloBanner';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -112,8 +113,17 @@ export default function BankReviewTab(props) {
   }
   useEffect(function () { if (canViewBank(isSuperAdmin, modulePerms)) load(); else setLoading(false); }, []);
 
+  // Build a UNIQUE, readable label per account so two "Chase" accounts are distinguishable.
+  // We don't store the real mask as a column, so we use institution + subtype + a stable
+  // suffix of the account_id (its last 4 chars) as the discriminator.
+  function acctLabel(t) {
+    var src = t.bank_source || 'Account';
+    var sub = t.account_subtype ? (' ' + String(t.account_subtype).charAt(0).toUpperCase() + String(t.account_subtype).slice(1)) : '';
+    var idTail = t.account_id ? (' \u00b7\u00b7' + String(t.account_id).slice(-4)) : '';
+    return src + sub + idTail;
+  }
   var accounts = useMemo(function () {
-    var s = {}; txns.forEach(function (t) { if (t.account_id) s[t.account_id] = (t.bank_source || t.account_id); });
+    var s = {}; txns.forEach(function (t) { if (t.account_id && !s[t.account_id]) { s[t.account_id] = acctLabel(t); } });
     return Object.keys(s).map(function (id) { return { id: id, label: s[id] }; });
   }, [txns]);
 
@@ -386,30 +396,13 @@ export default function BankReviewTab(props) {
       {(function () {
         var activeBiz = getActiveWaveBusiness();
         var entry = registry.find(function (r) { return r.wave_business_id === activeBiz; });
-        var isTest = entry && entry.is_production === false;
-        var canWrite = entry && entry.writes_enabled === true;
-        var label = entry ? (entry.label || activeBiz) : (activeBiz || 'No business selected');
-        var boxCls = entry
-          ? (isTest ? 'bg-amber-100 text-amber-950 border-amber-500' : 'bg-emerald-100 text-emerald-950 border-emerald-500')
-          : 'bg-red-100 text-red-950 border-red-500';
-        var pillCls = isTest ? 'bg-amber-600 text-white' : 'bg-emerald-700 text-white';
         return (
-          <div className={'mb-3 rounded-lg border-2 px-4 py-3 flex flex-wrap items-center justify-between gap-3 ' + boxCls}>
-            <div>
-              <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-70">Current Accounting Silo</div>
-              <div className="text-lg font-extrabold leading-tight">{label}</div>
-              <div className="text-xs font-semibold mt-0.5">
-                {entry
-                  ? 'Bank data, customers & invoices scoped to this silo only'
-                  : '⚠ This business is NOT registered — scoping is OFF and ALL businesses\u2019 data is shown. Register it in Wave Import to silo it.'}
-              </div>
-            </div>
-            {entry && (
-              <div className={'px-3 py-1.5 rounded-lg text-sm font-extrabold whitespace-nowrap ' + pillCls}>
-                {isTest ? 'TEST' : 'PRODUCTION'} · {canWrite ? 'READ-WRITE' : 'READ-ONLY'}
-              </div>
-            )}
-          </div>
+          <SiloBanner
+            registered={!!entry}
+            isTest={!!(entry && entry.is_production === false)}
+            canWrite={!!(entry && entry.writes_enabled === true)}
+            label={entry ? (entry.label || activeBiz) : (activeBiz || 'No business selected')}
+          />
         );
       })()}
 
@@ -431,6 +424,25 @@ export default function BankReviewTab(props) {
         <input placeholder="Search name / amount / class" value={search} onChange={function (e) { setSearch(e.target.value); }} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 flex-1 min-w-[160px]" />
         <label className="flex items-center gap-1 text-amber-300"><input type="checkbox" checked={fUnsupported} onChange={function (e) { setFUnsupported(e.target.checked); }} /> Unsupported only</label>
       </div>
+
+      {(function () {
+        var inSilo = txns.length;
+        var showing = filtered.length;
+        var hidden = inSilo - showing;
+        var acctName = fAccount === 'all' ? 'All accounts' : (function () { var a = accounts.find(function (x) { return x.id === fAccount; }); return a ? a.label : fAccount; })();
+        var unassignedNote = txns.some(function (t) { return !t.wave_business_id; });
+        return (
+          <div className="mb-3 rounded-lg bg-slate-800 border border-slate-600 px-3 py-2 text-xs text-slate-100 flex flex-wrap gap-x-4 gap-y-1">
+            <span>Silo transactions: <b className="text-white">{inSilo}</b></span>
+            <span>Account: <b className="text-white">{acctName}</b></span>
+            <span>Status filter: <b className="text-white">{fStatus === 'all' ? 'All' : fStatus}</b></span>
+            <span>Showing: <b className="text-white">{showing}</b></span>
+            {hidden > 0 && <span className="text-amber-300">Hidden by filters: <b>{hidden}</b>{fAccount !== 'all' ? ' (mostly other accounts — pick All accounts to see them)' : ''}</span>}
+            {accounts.length > 1 && fAccount === 'all' && <span className="text-slate-400">{accounts.length} accounts in this silo</span>}
+            {unassignedNote && <span className="text-amber-300 font-bold">⚠ Some bank transactions are unassigned — assign them on the Bank tab before matching.</span>}
+          </div>
+        );
+      })()}
 
       <div className="grid" style={{ gridTemplateColumns: sel ? '1fr 420px' : '1fr', gap: '12px' }}>
         {/* List */}

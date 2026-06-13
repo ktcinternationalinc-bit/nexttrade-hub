@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DH',
+    date: '2026-06-08',
+    label: 'Readable silo banner + telling two Chase accounts apart',
+    items: [
+      '**\ud83c\udfe6 The silo banner is now white text on a dark background — readable instantly.** Test shows on dark teal, Production on dark slate, and an unregistered business on dark red, each with a bold white mode badge. Same banner on the Bank page and Bank Review.',
+      '**\ud83c\udfe6 Two Chase accounts no longer both just say "Chase."** The account dropdown in Bank Review now labels each account uniquely (bank + account type + last digits), so you can pick a specific account or All accounts and actually know which is which.',
+      '**\ud83d\udd0d A count line now explains what you are seeing.** Below the filters Bank Review shows how many transactions are in the silo, which account and status filter are active, how many are showing, and how many are hidden — so if only 3 show because one account is selected, it says so. It also warns if any transactions are unassigned.',
+      { superAdminOnly: true, text: 'v55.83-DH (no SQL). ROOT CAUSE of 3-vs-88: two Chase connections both labeled bank_source=Chase; account dropdown value was account_id (correct) but the label was just bank_source, so selecting one Chase silently hid the other ~85 txns; status filter also defaults to unreviewed. FIXES: (1) new SiloBanner.jsx uses INLINE styles (dark bg + white text + bright border + white badge) instead of Tailwind amber-100/950 which was being purged/overridden to brown-on-brown in the dark theme; wired into BankReviewTab AND BankTab. TEST=teal #134e4a/#2dd4bf, PRODUCTION=slate #1e293b/#f59e0b, NOT-registered=red #7f1d1d/#f87171. (2) acctLabel(t)=bank_source + capitalized account_subtype + last4 of account_id, used to build the accounts dropdown so the two Chase accounts are distinct; filter still keys on account_id. (3) diagnostic count panel under the filters: silo txn count, active account label, status filter, showing count, hidden count (notes most-hidden=other accounts when a single account is picked), account count, and an unassigned-txn warning. DEFERRED to the Bank Summary Cards build: per-account Money In/Out/Net/matched totals on the Bank page cards, and storing the real Plaid account mask/name as columns (currently using account_id last-4 as the discriminator since mask is not persisted).' },
+    ],
+  },
+  {
     version: 'v55.83-DG',
     date: '2026-06-08',
     label: 'Merge/Unmerge: stop silent failures',
