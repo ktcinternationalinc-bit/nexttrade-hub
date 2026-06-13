@@ -33,6 +33,42 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CF',
+    date: '2026-06-08',
+    label: 'Wave import: per-business safety lock',
+    items: [
+      '**\\ud83d\\udd10 Stronger separation for Wave imports.** When importing one Wave business, the Hub now only ever matches and updates records belonging to that same business \\u2014 it cannot touch or overwrite records from your other Wave business, even by accident. This is the final lock before bringing in a test business.',
+      { superAdminOnly: true, text: 'v55.83-CF per-business dedupe/update lock (no SQL). import-invoices/route.js: fetchAllMap(admin,table,col,businessId) adds q.eq(wave_business_id,businessId); custMap + invMap both scoped to selected businessId; invoice UPDATE now .eq(id).eq(wave_business_id,businessId) so it physically cannot update another business row; placeholder customer uses the scoped custMap (no cross-business reuse) and is stamped wave_business_id. import-customers/route.js: existing-map query .eq(wave_business_id,businessId); customer UPDATE .eq(id).eq(wave_business_id,businessId). Wave IDs are globally unique so this is belt-and-suspenders, but it makes the lock explicit + audit-obvious. Payments/reconcile already business-filtered (BZ). Tests test-v55-83-cf: 20/20 incl. pathological same-Wave-ID-under-both-businesses case + source binding. Legacy-NULL second-import block unchanged (WaveImportTab importBlockReason).' },
+    ],
+  },
+  {
+    version: 'v55.83-CE',
+    date: '2026-06-08',
+    label: 'Fix: dashboard no longer shows zeros before setup',
+    items: [
+      '**\\ud83d\\udd22 Your numbers are back.** The Dashboard, AR History, Bank Review and Bank screens now only filter by business when that business is actually set up (registered). If the Wave business wall is not fully configured yet, they show all your data instead of confusing zeros. Once both businesses are registered, switching between them filters correctly \\u2014 and an empty test business correctly shows empty.',
+      { superAdminOnly: true, text: 'v55.83-CE. Root cause of all-zeros: scopeToBusiness filtered to getActiveWaveBusiness() even when that id was not a registered business / before backfill, so tagged-or-mismatched invoices got filtered out -> 0. Fix: NEW scopeIfRegistered(rows, businessId, registry, includeLegacy) in wave-business.js — returns rows UNSCOPED unless businessId is present in the registry; otherwise strict scopeToBusiness. Applied in AccountingDashboard (loads wave_business_registry as r[5], daily_log shifted to r[6]), AccountingCustomerHistory (res[5]), BankReviewTab (res[4], invoices+txns), BankTab (uses bizRegistry state), CustomerLedger (uses its registry). Net: misconfigured/empty registry => show all (no zeros); registered business => strict scope (empty test business shows empty, correct). Pairs with CD unwrap hotfix. Still need BY SQL + register both businesses for actual separation.' },
+    ],
+  },
+  {
+    version: 'v55.83-CD',
+    date: '2026-06-08',
+    label: 'Hotfix: Accounting tab crash when switching business',
+    items: [
+      '**\\ud83d\\udd27 Fixed the Accounting crash.** Switching Wave business could crash the Accounting tab with a technical error. Fixed \\u2014 the business picker and badges now load correctly.',
+      { superAdminOnly: true, text: 'v55.83-CD HOTFIX for "U.forEach is not a function". Root cause: fetchAllRows returns {data:[...]} (NOT a bare array). CustomerLedger.jsx safe() returned r unwrapped-> customers/invoices/registry were {data} objects; registry.forEach() (banner + default-business loop) crashed on render -> ErrorBoundary. Fix: CustomerLedger safe() now returns r&&r.data?r.data:[] (matches AccountingCustomerHistory). Same unwrap bug fixed in WaveImportTab.jsx (setRegistry((rows&&rows.data)||[]) + legacy-null arr=(rows&&rows.data)||[]) and BankTab.jsx (setBizRegistry((r&&r.data)||[])). AccountingDashboard (uses r[0].data) and AccountingCustomerHistory (safe unwraps) were already correct. NOTE: if wave_business_registry table does not exist yet (BY SQL not run), registry resolves to [] -> picker shows no businesses; run BY SQL + register both businesses for the selector to populate.' },
+    ],
+  },
+  {
+    version: 'v55.83-CC',
+    date: '2026-06-08',
+    label: 'Wave category protection (never overwrite Wave)',
+    items: [
+      '**\\ud83d\\udee1\\ufe0f Your Wave accounting history is protected.** Built a hard safety rule so the Hub can never blank out, clear, or downgrade a category that already exists in Wave. If the Hub does not know a category, it simply leaves Wave alone \\u2014 it never sends an empty value that would wipe Wave history.',
+      { superAdminOnly: true, text: 'v55.83-CC (Wave category protection guard; NEEDS SQL in chat). NEW src/lib/wave-category-guard.js (pure, fully tested): buildWaveCategoryPayload(hubCategory, mappings) -> {skip:true,reason} when blank/unmapped (NEVER emits accountId:null / category:null / Uncategorized), else {fields:{accountId}}; findMapping; categoryConflict()-> match/conflict/hub_missing/wave_missing/needs_mapping/both_unknown; defaultConflictResolution()=keep_wave; canPushCategory(reg,...) enforces production read-only + production-push flag + wave_locked override + skip-on-blank; waveCategoryLabel() never says Uncategorized unless Wave did; categorySyncLogEntry() for wave_sync_log. This is the enforcement layer; the Bank Review category UI + Sync Issues conflict panel + actual Wave pull/push are staged (no Hub->Wave push exists yet). WAVE API FINDING: Chart of Accounts (Account objects) IS readable via GraphQL; categorized money transactions are NOT reliably readable and Create Money Transaction is "not available for public use" -> historical category pull needs the Account Transactions CSV fallback. SQL (chat): bank_transactions category fields + wave_categories full shape + wave_sync_log category columns.' },
+    ],
+  },
+  {
     version: 'v55.83-CB',
     date: '2026-06-08',
     label: 'Bank data now scoped to the selected business too',

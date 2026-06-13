@@ -38,7 +38,7 @@ export async function POST(request) {
 
     // existing wave_customer_id -> accounting_customers.id (for dedupe/update)
     var existing = {};
-    var exRes = await admin.from('accounting_customers').select('id, wave_customer_id').not('wave_customer_id', 'is', null);
+    var exRes = await admin.from('accounting_customers').select('id, wave_customer_id').not('wave_customer_id', 'is', null).eq('wave_business_id', businessId);
     if (exRes && exRes.data) { exRes.data.forEach(function (row) { existing[row.wave_customer_id] = row.id; }); }
 
     var page = 1;
@@ -76,7 +76,7 @@ export async function POST(request) {
             var upd = await admin.from('accounting_customers').update({
               company_name: fields.company_name, email: fields.email, phone: fields.phone,
               source: 'wave_import', wave_sync_status: 'synced', wave_business_id: businessId
-            }).eq('id', existing[n.id]);
+            }).eq('id', existing[n.id]).eq('wave_business_id', businessId);
             if (upd && upd.error) { report.errors.push('Update ' + n.id + ': ' + upd.error.message); report.skipped++; }
             else { report.updated++; }
           } else {

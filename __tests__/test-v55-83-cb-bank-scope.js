@@ -9,10 +9,10 @@ ok(/wave_business_id: conn \? \(conn\.wave_business_id \|\| null\) : null/.test(
 var bt=p('src/components/BankTab.jsx');
 ok(/from '..\/lib\/wave-business'/.test(bt),'BankTab imports wave-business');
 ok(/wave_business_id: getActiveWaveBusiness\(\) \|\| null/.test(bt),'connect passes active business');
-ok(/setTransactions\(scopeToBusiness\(/.test(bt),'BankTab scopes transactions (list + Money In/Out)');
+ok(/setTransactions\(scopeIfRegistered\(/.test(bt),'BankTab scopes transactions (list + Money In/Out)');
 ok(/Current scope:/.test(bt),'Bank screen shows current scope banner');
 var br=p('src/components/BankReviewTab.jsx');
-ok(/var t = scopeToBusiness\(/.test(br),'Bank Review scopes transactions');
+ok(/var t = scopeIfRegistered\(/.test(br),'Bank Review scopes transactions');
 // BEHAVIORAL: cross-scope matching is impossible because both sides are filtered
 function scope(rows,id){return rows.filter(function(r){return r.wave_business_id===id||r.wave_business_id==null;});}
 var txns=[{id:'tA',wave_business_id:'PROD'},{id:'tB',wave_business_id:'TEST'}];

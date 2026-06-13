@@ -8,7 +8,7 @@ ok(/export function scopeToBusiness/.test(lib),'scope helper');
 var led=p('src/components/CustomerLedger.jsx');
 ok(/from '..\/lib\/wave-business'/.test(led),'ledger imports wave-business');
 ok(/fetchAllRows\('wave_business_registry'/.test(led),'ledger loads registry');
-ok(/scopeToBusiness\(mine, activeBiz, true\)/.test(led),'ledger scopes invoices to active business');
+ok(/scopeIfRegistered\(mine, activeBiz, registry, true\)/.test(led),'ledger scopes invoices to active business');
 ok(/REAL KTC production . read-only/.test(led),'production read-only badge');
 ok(/Test business . writes allowed/.test(led),'test badge');
 var rec=p('src/app/api/wave/reconcile/route.js');

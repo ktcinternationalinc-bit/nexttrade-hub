@@ -46,9 +46,9 @@ export default function WaveImportTab(props) {
   // v55.83-CA — load the Wave business registry + count untagged legacy Wave
   // invoices so we can gate imports and keep test data out of real KTC views.
   useEffect(function () {
-    fetchAllRows('wave_business_registry', '*').then(function (rows) { setRegistry(rows || []); }).catch(function () { setRegistry([]); });
+    fetchAllRows('wave_business_registry', '*').then(function (rows) { setRegistry((rows && rows.data) || []); }).catch(function () { setRegistry([]); });
     fetchAllRows('accounting_invoices', 'id,wave_business_id,wave_invoice_id').then(function (rows) {
-      var n = 0; (rows || []).forEach(function (r) { if ((r.wave_business_id == null || r.wave_business_id === '') && r.wave_invoice_id) n++; });
+      var arr = (rows && rows.data) || []; var n = 0; arr.forEach(function (r) { if ((r.wave_business_id == null || r.wave_business_id === '') && r.wave_invoice_id) n++; });
       setLegacyNulls(n);
     }).catch(function () {});
   }, []);

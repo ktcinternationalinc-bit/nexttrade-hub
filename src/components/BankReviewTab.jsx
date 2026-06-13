@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
-import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import {
   canViewBank, canSeeAmounts, canClassify, canMatchPayments, canReopen,
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
@@ -94,12 +94,13 @@ export default function BankReviewTab(props) {
       supabase.from('payment_matches').select('*'),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
+      fetchAllRows('wave_business_registry', '*'),
     ]).then(function (res) {
-      var t = scopeToBusiness((res[0] && res[0].data) || [], getActiveWaveBusiness(), true);
+      var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
-      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices(scopeToBusiness((res[3] && res[3].data) || [], getActiveWaveBusiness(), true));
+      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }

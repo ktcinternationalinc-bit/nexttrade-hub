@@ -9,7 +9,7 @@ import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { canViewBank, canSeeAmounts, canViewCompanyTotals } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
-import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -46,14 +46,15 @@ export default function AccountingDashboard(props) {
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status').catch(function () { return { data: [] }; }),
       supabase.from('bank_transactions').select('id,review_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(12).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
-      var inv = scopeToBusiness((r[0] && r[0].data) || [], getActiveWaveBusiness(), true);
+      var reg = (r[5] && r[5].data) || []; var inv = scopeIfRegistered((r[0] && r[0].data) || [], getActiveWaveBusiness(), reg, true);
       var custs = (r[1] && r[1].data) || [];
       var pays = (r[2] && r[2].data) || [];
       var txns = (r[3] && r[3].data) || [];
       var lastLog = (r[4] && r[4].data && r[4].data[0]) || null;
-      var activity = (r[5] && r[5].data) || [];
+      var activity = (r[6] && r[6].data) || [];
       var custName = {}; custs.forEach(function (c) { custName[c.id] = c.company_name; });
 
       var payByInv = {};

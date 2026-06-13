@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { fmtET } from '../lib/et-time';
-import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 
 export default function BankTab({ user, supabase }) {
@@ -17,7 +17,7 @@ export default function BankTab({ user, supabase }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [bizRegistry, setBizRegistry] = useState([]);
-  useEffect(() => { fetchAllRows('wave_business_registry', '*').then((r) => setBizRegistry(r || [])).catch(() => {}); }, []);
+  useEffect(() => { fetchAllRows('wave_business_registry', '*').then((r) => setBizRegistry((r && r.data) || [])).catch(() => {}); }, []);
   // v55.83-BU — know which Plaid environment is live (sandbox vs production) and
   // whether the keys are configured, so the UI tells the truth instead of a
   // hardcoded "Sandbox mode" label.
@@ -42,7 +42,7 @@ export default function BankTab({ user, supabase }) {
       setConnections(conns || []);
 
       const { data: txns } = await supabase.from('bank_transactions').select('*').order('date', { ascending: false }).limit(500);
-      setTransactions(scopeToBusiness(txns || [], getActiveWaveBusiness(), true));
+      setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));
 
       const { data: invs } = await supabase.from('invoices').select('*').order('date', { ascending: false }).limit(200);
       setInvoices(invs || []);

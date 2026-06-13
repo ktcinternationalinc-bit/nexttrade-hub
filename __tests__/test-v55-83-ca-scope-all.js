@@ -2,11 +2,11 @@ var fs=require('fs');var path=require('path');
 function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 var d=p('src/components/AccountingDashboard.jsx');
-ok(/from '..\/lib\/wave-business'/.test(d)&&/var inv = scopeToBusiness\(/.test(d),'Dashboard scopes invoices');
+ok(/from '..\/lib\/wave-business'/.test(d)&&/var inv = scopeIfRegistered\(/.test(d),'Dashboard scopes invoices');
 var a=p('src/components/AccountingCustomerHistory.jsx');
-ok(/from '..\/lib\/wave-business'/.test(a)&&/setInvoices\(scopeToBusiness\(/.test(a),'AR History scopes invoices');
+ok(/from '..\/lib\/wave-business'/.test(a)&&/setInvoices\(scopeIfRegistered\(/.test(a),'AR History scopes invoices');
 var b=p('src/components/BankReviewTab.jsx');
-ok(/from '..\/lib\/wave-business'/.test(b)&&/setAcctInvoices\(scopeToBusiness\(/.test(b),'Bank Review scopes invoices (picker + matching inherit)');
+ok(/from '..\/lib\/wave-business'/.test(b)&&/setAcctInvoices\(scopeIfRegistered\(/.test(b),'Bank Review scopes invoices (picker + matching inherit)');
 var w=p('src/components/WaveImportTab.jsx');
 ok(/fetchAllRows\('wave_business_registry'/.test(w),'WaveImport loads registry');
 ok(/wave_business_id == null \|\| r\.wave_business_id === ''\) && r\.wave_invoice_id\) n\+\+/.test(w),'WaveImport counts legacy untagged invoices');

@@ -39,3 +39,15 @@ export function scopeToBusiness(rows, businessId, includeLegacy) {
     return false;
   });
 }
+
+// Fail-safe scoping: only filter when the active business is actually one of the
+// REGISTERED businesses. If the wall isn't configured (no registry, or the active
+// id isn't registered), show everything instead of alarming all-zeros. Once the
+// business IS registered, scoping is strict — an empty test business shows empty.
+export function scopeIfRegistered(rows, businessId, registry, includeLegacy) {
+  if (!businessId || businessId === 'all') { return rows; }
+  var known = false;
+  (registry || []).forEach(function (b) { if (b && b.wave_business_id === businessId) { known = true; } });
+  if (!known) { return rows; }
+  return scopeToBusiness(rows, businessId, includeLegacy);
+}

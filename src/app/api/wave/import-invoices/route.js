@@ -36,12 +36,14 @@ function gqlInvoices(token, bid, page) {
   }).then(function (r) { return r.json().then(function (j) { return { status: r.status, ok: r.ok, json: j }; }); });
 }
 
-function fetchAllMap(admin, table, col) {
+function fetchAllMap(admin, table, col, businessId) {
   var map = {}; var from = 0; var pageSize = 1000; var guard = 0;
   function loop() {
     guard++;
     if (guard > 100) { return Promise.resolve(map); }
-    return admin.from(table).select('id, ' + col).not(col, 'is', null).range(from, from + pageSize - 1).then(function (res) {
+    var q = admin.from(table).select('id, ' + col).not(col, 'is', null);
+    if (businessId) { q = q.eq('wave_business_id', businessId); }
+    return q.range(from, from + pageSize - 1).then(function (res) {
       if (res.error || !res.data || res.data.length === 0) { return map; }
       res.data.forEach(function (row) { map[row[col]] = row.id; });
       if (res.data.length < pageSize) { return map; }
@@ -80,8 +82,8 @@ export async function POST(request) {
     var internalBusinessId = bizRes && bizRes.data && bizRes.data[0] ? bizRes.data[0].id : null;
 
     // preload customer + invoice maps (FULLY paginated — not capped at 1000) for linking + dedupe
-    var custMap = await fetchAllMap(admin, 'accounting_customers', 'wave_customer_id');
-    var invMap = await fetchAllMap(admin, 'accounting_invoices', 'wave_invoice_id');
+    var custMap = await fetchAllMap(admin, 'accounting_customers', 'wave_customer_id', businessId);
+    var invMap = await fetchAllMap(admin, 'accounting_invoices', 'wave_invoice_id', businessId);
 
     var page = 1;
     var totalPages = 1;
@@ -190,7 +192,7 @@ export async function POST(request) {
 
           var invoiceId = null;
           if (invMap[n.id]) {
-            var upd = await admin.from('accounting_invoices').update(fields).eq('id', invMap[n.id]);
+            var upd = await admin.from('accounting_invoices').update(fields).eq('id', invMap[n.id]).eq('wave_business_id', businessId);
             if (upd && upd.error) { report.errors.push('Update invoice ' + (n.invoiceNumber || n.id) + ': ' + upd.error.message); report.skipped++; continue; }
             invoiceId = invMap[n.id]; report.updated++;
           } else {

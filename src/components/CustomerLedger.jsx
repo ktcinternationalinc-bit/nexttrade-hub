@@ -9,7 +9,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
-import { getActiveWaveBusiness, setActiveWaveBusiness, scopeToBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, canWriteToWaveBusiness } from '../lib/wave-business';
 
 function num(v) { var n = Number(String(v == null ? 0 : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function money(v, cur) { return (cur || 'USD') + ' ' + num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -49,7 +49,7 @@ export default function CustomerLedger(props) {
 
   var load = useCallback(function () {
     setLoading(true); setErr('');
-    function safe(p) { return p.then(function (r) { return r; }).catch(function (e) { return []; }); }
+    function safe(p) { return p.then(function (r) { return r && r.data ? r.data : []; }).catch(function (e) { return []; }); }
     Promise.all([
       safe(fetchAllRows('accounting_customers', '*', 'company_name', true)),
       safe(fetchAllRows('accounting_invoices', '*')),
@@ -92,7 +92,7 @@ export default function CustomerLedger(props) {
     var mine = invoices.filter(function (i) { return i.accounting_customer_id === selectedId; });
     // Wall off other Wave businesses (test vs real KTC). Untagged legacy rows
     // stay visible under the active business until backfill completes.
-    return scopeToBusiness(mine, activeBiz, true);
+    return scopeIfRegistered(mine, activeBiz, registry, true);
   }, [invoices, selectedId, activeBiz]);
 
   // currencies present for this customer
