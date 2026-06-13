@@ -100,7 +100,7 @@ export default function BankReviewTab(props) {
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
-      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
+      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers((res[2] && res[2].data) || []); setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }
@@ -213,17 +213,35 @@ export default function BankReviewTab(props) {
   // Reads accounting_invoice_payments (NOT payment_matches) so it never clobbers the
   // Wave-imported paid amount and never double-counts.
   function recomputeInvoice(invId) {
-    return supabase.from('accounting_invoice_payments').select('amount').eq('accounting_invoice_id', invId).then(function (r) {
+    return supabase.from('accounting_invoice_payments').select('amount, voided').eq('accounting_invoice_id', invId).then(function (r) {
       var inv = acctInvoices.find(function (i) { return i.id === invId; });
       var total = invoiceTotal(inv);
       var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
       var hubPaid = 0;
-      ((r && r.data) || []).forEach(function (p) { hubPaid += Number(p.amount) || 0; });
+      ((r && r.data) || []).forEach(function (p) { if (!p.voided) { hubPaid += Number(p.amount) || 0; } });
       var amountPaid = Math.round((waveImported + hubPaid) * 100) / 100;
       var balanceDue = Math.round((total - amountPaid) * 100) / 100;
       var status = balanceDue <= 0.0001 ? 'paid' : (amountPaid > 0.0001 ? 'partial' : 'unpaid');
       return dbUpdate('accounting_invoices', invId, { amount_paid: amountPaid, balance_due: balanceDue, payment_status: status }, userProfile && userProfile.id);
     });
+  }
+
+  function unmatch(t) {
+    if (!t || !mayMatch) { toast.error('You do not have Payments: Match permission.'); return; }
+    if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    var ms = matchesByTxn[t.id] || [];
+    if (ms.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
+    if (!window.confirm('Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.')) { return; }
+    var invIds = {}; ms.forEach(function (m) { if (m.invoice_id) { invIds[m.invoice_id] = true; } });
+    var stamp = { voided: true, voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
+    setBusy(true);
+    supabase.from('accounting_invoice_payments').update(stamp).eq('bank_transaction_id', t.id)
+      .then(function () { return supabase.from('payment_matches').update(stamp).eq('bank_transaction_id', t.id); })
+      .then(function () { return patchTxn(t, { linked_type: null, linked_id: null, review_status: t.review_status === 'approved' ? t.review_status : 'reviewed' }, 'Unmatched bank txn ' + (t.name || t.id) + ' (' + ms.length + ' match(es) reversed)'); })
+      .then(function () { var chain = Promise.resolve(); Object.keys(invIds).forEach(function (id) { chain = chain.then(function () { return recomputeInvoice(id); }); }); return chain; })
+      .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })
+      .catch(function (e) { console.error('[unmatch]', e); toast.error('Unmatch failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .finally(function () { setBusy(false); });
   }
 
   function addSplitRow() { setSplitRows(splitRows.concat([{ amount: '', category: '', customer_id: '', invoice_id: '', notes: '' }])); }
@@ -426,6 +444,20 @@ export default function BankReviewTab(props) {
                 {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{labelize(c)}</option>; })}
               </select>
             </div>
+
+            {matchesByTxn[sel.id] && matchesByTxn[sel.id].length > 0 && (
+              <div className="bg-indigo-100 text-indigo-950 rounded p-2 text-xs font-semibold mb-2">
+                <div className="font-bold mb-1">Matched</div>
+                {matchesByTxn[sel.id].map(function (m) {
+                  var inv = acctInvoices.find(function (i) { return i.id === m.invoice_id; });
+                  var cust = inv ? acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; }) : null;
+                  return <div key={m.id} className="flex items-center justify-between gap-2"><span>{cust ? (cust.company_name + ' · ') : ''}Invoice {(inv && (inv.invoice_number || inv.id)) || m.invoice_id} · {fmt(m.matched_amount)}{m.match_type ? (' · ' + labelize(m.match_type)) : ''}</span></div>;
+                })}
+                <div className="text-[10px] mt-0.5">Wave sync: Pending Wave sync (push is a later build).</div>
+                {mayMatch && !isLocked(sel) && <button onClick={function () { unmatch(sel); }} disabled={busy} className="mt-1.5 px-2 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px] font-bold disabled:opacity-50">Unmatch (reverse)</button>}
+                {isLocked(sel) && <div className="text-[10px] mt-1">Reopen the transaction to unmatch.</div>}
+              </div>
+            )}
 
             {/* Match to invoice */}
             {mayMatch && !isLocked(sel) && (

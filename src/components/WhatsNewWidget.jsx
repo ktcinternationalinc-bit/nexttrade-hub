@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CK',
+    date: '2026-06-08',
+    label: 'Hotfix: Bank Review crash',
+    items: [
+      '**\\ud83d\\udd27 Fixed the Bank Review & Matching crash.** Opening Bank Review could crash with a technical error. Fixed \\u2014 it loads correctly now.',
+      { superAdminOnly: true, text: 'v55.83-CK HOTFIX for "g.forEach is not a function" on Bank Review & Matching. Root cause: same {data} class bug — setAcctCustomers(res[2] || []) used the raw fetchAllRows result ({data:[...]}) instead of res[2].data, so the customer list was an object and the typeahead/iteration threw. Fix: setAcctCustomers((res[2] && res[2].data) || []). Verified all five res[] in BankReviewTab.load now unwrap .data (txns/matches via supabase {data}; customers/invoices/registry via fetchAllRows {data}). Scanned the other scoped components (AR History, CustomerLedger, AccountingCustomersTab) — their safe()/then() already unwrap, no other stragglers.' },
+    ],
+  },
+  {
+    version: 'v55.83-CJ',
+    date: '2026-06-08',
+    label: 'Unmatch a payment (reversible)',
+    items: [
+      '**\\u21a9\\ufe0f You can now undo a payment match.** In Bank Review & Matching, a matched transaction now shows which invoice and customer it was applied to, and an **Unmatch (reverse)** button. Unmatching restores the invoice balance and is fully reversible \\u2014 it voids the match and logs it, it does not delete anything.',
+      { superAdminOnly: true, text: 'v55.83-CJ (NEEDS SQL in chat: voided columns). BankReviewTab.jsx: NEW unmatch(t) soft-voids accounting_invoice_payments + payment_matches WHERE bank_transaction_id=t.id (sets voided=true, voided_at, voided_by — NOT a hard delete), clears the txn linked_type/linked_id, sets review_status back to reviewed (unless approved), recomputes each affected invoice, logs via patchTxn, requires Payments:Match + not-locked. recomputeInvoice now selects amount+voided and sums only non-voided rows, so the restored balance propagates everywhere (it writes amount_paid/balance_due/payment_status back to the invoice). Panel shows a Matched card (customer + invoice# + amount + match_type + Unmatch). Picker already business-scoped (CE) so cross-business matches are impossible. STILL PENDING: per-row Match/Categorize primary buttons, Include Pending toggle + Money In/Out scope labels (Part 1), Categorize-Expense flow polish; CustomerLedger payment-history could mark voided rows (follow-up).' },
+    ],
+  },
+  {
     version: 'v55.83-CI',
     date: '2026-06-08',
     label: 'One business selector at the top of Accounting',
