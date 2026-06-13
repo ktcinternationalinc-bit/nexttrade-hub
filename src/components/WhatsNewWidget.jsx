@@ -33,6 +33,79 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CS',
+    date: '2026-06-08',
+    label: 'Merged shipments: see what they were combined from',
+    items: [
+      '**\\u2398 Open a merged shipment and see its sources.** Each combined product line now shows a "Sources: N" badge, and expanding the line reveals a read-only audit table of the original shipment lines it was merged from \\u2014 source shipment number, line ID, rolls, quantity, UOM, KG, status, and notes. Nothing is editable there; it is history you can trust.',
+      { superAdminOnly: true, text: 'v55.83-CS (no SQL; uses CR data). InventoryReceiving.jsx openEdit loadedLines now carries L.merged_source_breakdown + L.merge_group_id from the receipt row. Collapsed line summary shows a violet "Sources: N" badge when merged_source_breakdown.length>0. Expanded line body renders a read-only violet table (source receipt_number, line_id, roll_count, quantity, uom, quantity_kg, status, notes) + the merge_group_id. Confirmed Inventory Overview no-double-count: stats loop (line ~277) skips status cancelled/pending_detail/merged; historyReceipts filter skips cancelled/merged; merged source lines therefore contribute zero and only the aggregated target line counts (once). NOTE: a standalone "View Merge Audit" modal reading inventory_shipment_merges is a small follow-up — the per-line source breakdown + merge_group_id already surface the audit detail, and the audit row is persisted.' },
+    ],
+  },
+  {
+    version: 'v55.83-CR',
+    date: '2026-06-08',
+    label: 'Merge shipments — the button now works',
+    items: [
+      '**\\u2398 Merge inbound shipments for real.** Tick two or more shipments in the Inbound list, click **Merge Shipments**, and a preview shows how they combine \\u2014 the same product across shipments becomes one line (rolls + weight added up), different products/units stay separate. Confirm to merge into a brand-new shell or into one you pick. The original shipments are kept (marked Merged, hidden unless you tick **Show merged**), every original line is preserved inside the merged line, and a full audit record is written. Finalized shipments require typing a confirmation phrase first.',
+      { superAdminOnly: true, text: 'v55.83-CR (uses CQ SQL). InventoryReceiving.jsx: merge state (mergeSel/showMerged/mergeModalOpen/mergeTarget/mergeNotes/mergeConfirmText/mergeBusy) + toggleMergeSel + isMergedSource(g)=header.merged_into_shipment_id||all-lines-status-merged + mergeSourceLines/Headers + mergeAnyFinalized. Row checkboxes (hidden on merged rows) + Merge Shipments button (disabled <2) + Show merged toggle. Merge modal: selected list, target chooser (new shell vs into existing), live mergePlan() preview (aggregated lines, source counts, totals_before->after + balanced gate, uom_conflict warnings), finalized typed-confirm MERGE FINALIZED SHIPMENTS, notes. executeMerge(): inserts aggregated lines under target receipt_number with merged_source_breakdown jsonb + merge_group_id; for new target inserts a header w/ combined expected totals (existing target gets totals updated); marks every original source line status=merged + merged_into_shipment_id + source_receipt_number/source_line_id; marks source headers merged_into/merged_at/by/notes; writes inventory_shipment_merges audit row (source/target receipt #s + line ids + totals before/after). Double-count guard: list hides merged sources unless Show merged; InventoryOverview now skips merged status in the receipts loop AND in historyReceipts. Confirm Merge disabled unless plan.balanced. Modal is scroll-safe. NOTE: expandable per-line source breakdown view in the OPENED shipment is stored (merged_source_breakdown) but the in-editor expand UI is a small follow-up; the data + audit are preserved now.' },
+    ],
+  },
+  {
+    version: 'v55.83-CQ',
+    date: '2026-06-08',
+    label: 'Merge shipments — aggregation engine (foundation)',
+    items: [
+      '**\\ud83d\\udd00 Groundwork for merging shipments.** Built and tested the core logic that combines several inbound shipments into one: the same product across shipments adds up into a single line (rolls + weight + quantity), genuinely different products or units stay separate, totals never double-count, and every original shipment line is preserved so nothing is lost. The on-screen merge buttons come next, on top of this tested core.',
+      { superAdminOnly: true, text: 'v55.83-CQ (NEEDS SQL in chat). Part 1 of merge build = the pure, tested engine + schema. NEW src/lib/shipment-merge.js: productIdentityKey(line)=product_id|uom (product_id already encodes family/grade/color/etc); aggregateLines() sums quantity/quantity_kg/roll_count/expected_* per identity and preserves every contributing line under .sources[]; mergeWarnings() flags uom_conflict (same product, >1 UOM kept separate); mergeHeaderTotals() combines expected shell totals; mergePlan() returns aggregated + warnings + totals_before/after + balanced (conservation guarantee). 15 QA assertions incl. 2/3-shipment aggregation (257 rolls / 10,958.62 kg), different-UOM separate + warn, different-product separate, no-double-count, source breakdown preserved. NOT YET wired: list checkboxes + Merge modal + DB execution (move lines to target receipt_number, write merged_source_breakdown, mark sources merged, audit) + Show-merged filter + finalized-merge typed confirm — that is the next build on this engine. SQL below adds the tracking/source/audit columns + inventory_shipment_merges table.' },
+    ],
+  },
+  {
+    version: 'v55.83-CP',
+    date: '2026-06-08',
+    label: 'Fix: Product edit popup now scrolls to the bottom',
+    items: [
+      '**\\ud83d\\udcdc You can reach the bottom of the product editor again.** The Add / Edit / Copy Product popup now fits any screen: the purple header stays put on top, the form scrolls in the middle, and the Save / Cancel buttons are always visible at the bottom \\u2014 even on a small laptop screen. The page behind the popup no longer scrolls by accident.',
+      { superAdminOnly: true, text: 'v55.83-CP (no SQL). InventoryProductMaster.jsx product modal made scroll-safe (one modalMode block covers New/Edit/Copy/Clone; classification is in-modal, no separate dialog). Overlay: removed overflow-y-auto, now flex items-start justify-center + overflow hidden (kills dual-scroll). Container: display flex / flexDirection column / maxHeight calc(100vh - 32px) / width 100%. Header: flexShrink 0 (stays visible). Body: dropped fixed maxHeight calc(100vh-140px); now flex 1 1 auto + minHeight 0 + overflowY auto (scrolls within remaining space). Footer: flexShrink 0 (Save/Cancel always reachable). Added useEffect background scroll-lock: document.body.style.overflow=hidden while modalMode set, restored on close. Verified at laptop heights — all classification levels + Save/Cancel reachable; wheel/trackpad scroll the body, not the page.' },
+    ],
+  },
+  {
+    version: 'v55.83-CO',
+    date: '2026-06-08',
+    label: 'Inventory Overview: correct UOM + sort by UOM',
+    items: [
+      '**\\ud83d\\udccf Overview now shows the UOM you actually received in.** If a product was received in KG, the Overview "Sold in", the UOM column, and the stock-summary buckets now follow the received-shipment UOM \\u2014 not a stale product-master default. So a product corrected to KG no longer shows as "unit".',
+      '**\\u2195\\ufe0f Sort by UOM.** A "Sort by UOM" button now orders product rows by unit (KG, meters, units, rolls\\u2026), ascending/descending, and works alongside your filters.',
+      { superAdminOnly: true, text: 'v55.83-CO (no SQL required for the fix; optional backfill below). InventoryOverview.jsx root cause: "Sold in" + UOM column + family/stock-summary by_uom grouping all read p.default_uom (product master). Fix: NEW effUom(p) returns the dominant received-line UOM (productStats.recv_uom_primary, computed as the max-qty key of recv_by_uom over non-cancelled inventory_stock_receipts) and falls back to p.default_uom only when there are no receipts. Replaced all 7 display/grouping reads (pUomKey, gUom, byUnit u, uomN, uomNorm, Sold-in badge, UOM column cell) with effUom(p). So a stale master "unit" can never override a receipt corrected to "kg". Sort: NEW uomSort state ("/asc/desc) + uomRank (kg<sqm<meter<yard<unit<roll, others last) injected into per-family g.products.sort (deps + uomSort); toggle button beside Show-zero-stock. NOTE: if LUX-DU still shows unit after deploy, the receipt LINE itself is still uom=unit in the DB — diagnostic + label-only backfill provided in chat (no number conversion). Inventory layers carry no uom column, so receipts are the source.' },
+    ],
+  },
+  {
+    version: 'v55.83-CN',
+    date: '2026-06-08',
+    label: 'Receiving: open a shipment with products collapsed',
+    items: [
+      '**\\ud83d\\udce6 Shipments open clean now.** When you open an existing inbound shipment to view or edit, all the products you already entered start **collapsed** (and the container shell collapses too), so you see a tidy summary list instead of every product expanded at once. Click any product to expand just that one.',
+      { superAdminOnly: true, text: 'v55.83-CN (no SQL). InventoryReceiving.jsx openEdit: after setLines(loadedLines), collapse every loaded line index (setCollapsedLines all-true) + setShellCollapsed(true) when lines exist, so opening an existing shipment defaults to collapsed. openNew unchanged (new entry stays expanded). This is the collapse-on-view piece of the Part 3 request. The FULL 4-step Arabic accordion restructure (Step 1 shell+expected / Step 2 actuals / Step 3 variance / Step 4 finalize, collapsed-by-default with green checks) is a large rewrite of this 2,673-line modal and is deliberately deferred to its own build to avoid breaking the working receiving flow. Draft-save-anytime vs validate-on-Submit already exists. Reports (organized inventory report; sales-by-date/customer) are separate report builds, not started.' },
+    ],
+  },
+  {
+    version: 'v55.83-CM',
+    date: '2026-06-08',
+    label: 'Product copy: no more "(copy)" in the name',
+    items: [
+      '**\\ud83e\\uddfc Copying a product keeps the name clean.** When you copy a product, the new form is prefilled but the name is no longer changed to add "(copy)". You decide the final name. When you save, if the name / code / color / spec combination matches an existing product, you get a clear message asking you to change an identifying field \\u2014 nothing is saved as a duplicate and the original is never overwritten.',
+      { superAdminOnly: true, text: 'v55.83-CM (no SQL). Part 2 of inventory request. InventoryProductMaster.jsx openDuplicate: name_en/name_ar prefill clean (removed + " (copy)" / " (نسخة)"). Removed the endsWith("(copy)") + blank-quick-code save gate (obsolete now). Uniqueness is enforced by the existing comprehensive checks (design_sku unique, classification slug, name_en, name_ar) which block + name the conflict; classification + name messages reworded to the requested friendly wording ("Please change the product name, SKU, color, spec, or another identifying field before saving."). Copy toast reworded. PARTS 1 (merge shipments + same-product aggregation + audit + source preservation) and 3 (4-step collapsed accordion receiving UX with Arabic titles + draft-vs-finalize validation) are NOT in this build — each is a large standalone build; deferred to keep this one correct.' },
+    ],
+  },
+  {
+    version: 'v55.83-CL',
+    date: '2026-06-08',
+    label: 'Fix: classifying a bank transaction now sticks',
+    items: [
+      '**\\u2705 Classifying a bank transaction now works.** Choosing a category for a bank transaction in Bank Review now saves and shows the new category immediately, instead of snapping back to blank.',
+      { superAdminOnly: true, text: 'v55.83-CL (no SQL). Bug: setClassification did dbUpdate(classification) + load(), but the open detail panel reads sel.classification and sel was never refreshed, so the dropdown reverted to the stale value -> looked like classify "did nothing". super_admin passes canClassify and CLASSIFICATIONS is populated, so it was a stale-state bug, not permissions/options. Fix: (1) setClassification now setSel(Object.assign({}, t, {classification, review_status})) on success so the panel reflects the choice immediately; (2) load() now re-syncs the open panel — after setTxns it does setSel(functional) to re-point sel to the fresh row by id, so every panel action (classify/match/unmatch/status) reflects after reload. Crash + customer-search bug from CK unchanged.' },
+    ],
+  },
+  {
     version: 'v55.83-CK',
     date: '2026-06-08',
     label: 'Hotfix: Bank Review crash',

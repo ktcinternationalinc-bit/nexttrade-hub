@@ -20,6 +20,7 @@ import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 import InventoryFinalizeCostDialog from './InventoryFinalizeCostDialog';
 import { parseNexpac, NEXPAC_DEFAULTS } from '../lib/nexpac-parse';
+import { mergePlan } from '../lib/shipment-merge';
 
 var NEXPAC_PDFJS_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 var NEXPAC_PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -233,6 +234,79 @@ export default function InventoryReceiving(props) {
   // Cancel-receipt prompt
   var [cancelTarget, setCancelTarget] = useState(null);
   var [cancelReason, setCancelReason] = useState('');
+
+  // v55.83-CR — Merge shipments
+  var [mergeSel, setMergeSel] = useState({});            // { receipt_number: true }
+  var [showMerged, setShowMerged] = useState(false);     // reveal merged source shipments
+  var [mergeModalOpen, setMergeModalOpen] = useState(false);
+  var [mergeTarget, setMergeTarget] = useState('new');   // 'new' | existing receipt_number
+  var [mergeNotes, setMergeNotes] = useState('');
+  var [mergeConfirmText, setMergeConfirmText] = useState('');
+  var [mergeBusy, setMergeBusy] = useState(false);
+  function toggleMergeSel(rn) { setMergeSel(function (p) { var n = Object.assign({}, p); if (n[rn]) { delete n[rn]; } else { n[rn] = true; } return n; }); }
+  function isMergedSource(g) { var hdrMerged = g.header && g.header.merged_into_shipment_id; var allMerged = g.lines && g.lines.length > 0 && g.lines.every(function (l) { return l.status === 'merged'; }); return !!(hdrMerged || allMerged); }
+  function selectedNumbers() { return Object.keys(mergeSel).filter(function (k) { return mergeSel[k]; }); }
+  function mergeSourceLines() { var sel = selectedNumbers(); return receipts.filter(function (r) { return sel.indexOf(r.receipt_number) >= 0 && r.status !== 'cancelled' && r.status !== 'merged'; }); }
+  function mergeSourceHeaders() { var sel = selectedNumbers(); return headers.filter(function (h) { return sel.indexOf(h.receipt_number) >= 0; }); }
+  function mergeAnyFinalized() { return mergeSourceLines().some(function (r) { return r.status === 'finalized'; }) || mergeSourceHeaders().some(function (h) { return h.status === 'finalized'; }); }
+  async function executeMerge() {
+    var sel = selectedNumbers();
+    if (sel.length < 2) { toast.error('Select at least 2 shipments to merge.'); return; }
+    var srcLines = mergeSourceLines();
+    var srcHeaders = mergeSourceHeaders();
+    if (mergeAnyFinalized() && mergeConfirmText.trim() !== 'MERGE FINALIZED SHIPMENTS') { toast.error('Type MERGE FINALIZED SHIPMENTS to confirm merging finalized shipments.'); return; }
+    var plan = mergePlan(srcLines, srcHeaders);
+    var uid = userProfile && userProfile.id;
+    var targetRn = mergeTarget === 'new' ? ('MERGE-' + Date.now()) : mergeTarget;
+    var groupId = 'mg-' + Date.now();
+    var base = srcLines[0] || {};
+    setMergeBusy(true);
+    try {
+      var targetLineIds = [];
+      for (var i = 0; i < plan.aggregated.length; i++) {
+        var g = plan.aggregated[i];
+        var ins = await dbInsert('inventory_stock_receipts', {
+          receipt_number: targetRn, product_id: g.product_id, uom: g.uom,
+          quantity: g.quantity, quantity_kg: g.quantity_kg, roll_count: g.roll_count,
+          status: 'received', receipt_date: base.receipt_date || new Date().toISOString().slice(0, 10),
+          warehouse_id: base.warehouse_id || null, supplier: base.supplier || null,
+          merge_group_id: groupId, merged_source_breakdown: g.sources
+        }, uid);
+        if (ins && ins.id) { targetLineIds.push(ins.id); }
+      }
+      if (mergeTarget === 'new') {
+        await dbInsert('inventory_shipment_headers', {
+          receipt_number: targetRn, supplier: base.supplier || null, status: 'received', merge_group_id: groupId,
+          expected_total_rolls: plan.header_totals.expected_total_rolls || null,
+          expected_total_gross_kg: plan.header_totals.expected_total_gross_kg || null,
+          expected_total_net_kg: plan.header_totals.expected_total_net_kg || null
+        }, uid);
+      } else {
+        await supabase.from('inventory_shipment_headers').update({ merge_group_id: groupId,
+          expected_total_rolls: plan.header_totals.expected_total_rolls || null,
+          expected_total_gross_kg: plan.header_totals.expected_total_gross_kg || null,
+          expected_total_net_kg: plan.header_totals.expected_total_net_kg || null }).eq('receipt_number', targetRn);
+      }
+      // Mark every original source line merged (incl. the target's own originals, which were aggregated in)
+      for (var s2 = 0; s2 < srcLines.length; s2++) {
+        await supabase.from('inventory_stock_receipts').update({ status: 'merged', merged_into_shipment_id: targetRn, merge_group_id: groupId, source_receipt_number: srcLines[s2].receipt_number, source_line_id: srcLines[s2].id, updated_by: uid }).eq('id', srcLines[s2].id);
+      }
+      // Mark source shipment shells merged (not the target)
+      for (var h = 0; h < sel.length; h++) {
+        if (sel[h] === targetRn) { continue; }
+        await supabase.from('inventory_shipment_headers').update({ merged_into_shipment_id: targetRn, merge_group_id: groupId, merged_at: new Date().toISOString(), merged_by: uid, merge_notes: mergeNotes || null }).eq('receipt_number', sel[h]);
+      }
+      await dbInsert('inventory_shipment_merges', {
+        merge_group_id: groupId, target_receipt_number: targetRn, source_receipt_numbers: sel,
+        source_line_ids: srcLines.map(function (r) { return r.id; }), target_line_ids: targetLineIds,
+        totals_before: plan.totals_before, totals_after: plan.totals_after, merged_by: uid, merge_notes: mergeNotes || null
+      }, uid);
+      toast.success('Merged ' + sel.length + ' shipments into ' + targetRn);
+      setMergeModalOpen(false); setMergeSel({}); setMergeConfirmText(''); setMergeNotes('');
+      load();
+    } catch (e) { console.error('[merge] failed:', e); toast.error('Merge failed: ' + ((e && e.message) || 'unknown — check console')); }
+    setMergeBusy(false);
+  }
 
   // v55.83-A.6.27.33 — Finalize Cost dialog target
   var [finalizeTarget, setFinalizeTarget] = useState(null);
@@ -536,6 +610,8 @@ export default function InventoryReceiving(props) {
         L.currency = r.currency || 'USD';
         L.rack = r.rack || '';
         L.line_notes = r.line_notes || '';
+        L.merged_source_breakdown = r.merged_source_breakdown || null;
+        L.merge_group_id = r.merge_group_id || null;
         L.rolls = (rollsByReceipt[r.id] || []).map(function (rl) {
           return {
             existing_id: rl.id,
@@ -551,6 +627,12 @@ export default function InventoryReceiving(props) {
       });
 
       setLines(loadedLines.length ? loadedLines : [emptyLine()]);
+      // When opening an EXISTING shipment, default every already-entered product
+      // line (and the container shell) to collapsed so the screen opens clean.
+      var _collapseAll = {};
+      loadedLines.forEach(function (_, i) { _collapseAll[i] = true; });
+      setCollapsedLines(_collapseAll);
+      setShellCollapsed(loadedLines.length > 0);
       var hdrBd = await supabase.from('inventory_shipment_headers').select('expected_total_rolls, expected_total_gross_kg, expected_total_net_kg, expected_total_uom, expected_uom_type, nexpac_breakdown').eq('receipt_number', grouped.receipt_number).maybeSingle();
       var hRow = (hdrBd && hdrBd.data) || {};
       setHeader(function (prev) {
@@ -1558,6 +1640,19 @@ export default function InventoryReceiving(props) {
             + New Receipt
           </button>
         )}
+        {canEdit && (
+          <button
+            onClick={function () { if (selectedNumbers().length < 2) { toast.error('Tick at least 2 shipments to merge.'); return; } setMergeTarget('new'); setMergeConfirmText(''); setMergeNotes(''); setMergeModalOpen(true); }}
+            disabled={selectedNumbers().length < 2}
+            className={'px-3 py-2 text-xs font-extrabold rounded-lg ' + (selectedNumbers().length >= 2 ? 'bg-violet-600 hover:bg-violet-700 text-white' : 'bg-slate-700 text-slate-400 cursor-not-allowed')}
+          >
+            \u2398 Merge Shipments{selectedNumbers().length ? ' (' + selectedNumbers().length + ')' : ''}
+          </button>
+        )}
+        <label className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
+          <input type="checkbox" checked={showMerged} onChange={function (e) { setShowMerged(e.target.checked); }} className="w-4 h-4" />
+          Show merged
+        </label>
       </div>
 
       {/* Receipts list */}
@@ -1581,7 +1676,7 @@ export default function InventoryReceiving(props) {
               : 'No receipts yet — click "+ New Receipt" to record one'}
           </div>
         ) : (
-          grouped.map(function (g) {
+          grouped.filter(function (g) { return showMerged || !isMergedSource(g); }).map(function (g) {
             var wh = warehouseById(g.warehouse_id);
             var isCancelled = g.status === 'cancelled';
             var isFinalized = g.status === 'finalized';
@@ -1618,7 +1713,10 @@ export default function InventoryReceiving(props) {
               <div key={g.receipt_number} className={rowClass}
                    style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '12px 12px' }}>
                 <div>
-                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.receipt_number}</div>
+                  <div className="flex items-center gap-2">
+                    {canEdit && !isMergedSource(g) && <input type="checkbox" checked={!!mergeSel[g.receipt_number]} onClick={function (e) { e.stopPropagation(); }} onChange={function () { toggleMergeSel(g.receipt_number); }} className="w-4 h-4 flex-shrink-0" title="Select to merge" />}
+                    <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.receipt_number}{isMergedSource(g) ? <span className="ml-1 px-1 py-0.5 bg-slate-600 text-white text-[8px] rounded align-middle">MERGED</span> : null}</div>
+                  </div>
                   {g.shipment_reference && <div className={'text-[10px] font-mono ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-600')}>{g.shipment_reference}</div>}
                 </div>
                 <div className={'text-sm font-semibold ' + (isCancelled ? 'text-slate-600 line-through' : 'text-slate-100')}>{g.receipt_date}</div>
@@ -2054,6 +2152,7 @@ export default function InventoryReceiving(props) {
                           <span className="text-[11px] font-bold text-indigo-100">
                             · {(line.roll_count === '' || line.roll_count == null) ? 0 : line.roll_count} rolls · {(line.quantity === '' || line.quantity == null) ? 0 : line.quantity} {line.uom || ''}
                             {line.quantity_kg && String(line.uom || '').toLowerCase() !== 'kg' ? ' · ' + line.quantity_kg + ' kg' : ''}
+                            {line.merged_source_breakdown && line.merged_source_breakdown.length ? <span className="ml-1 px-1.5 py-0.5 bg-violet-500/40 text-violet-50 rounded text-[10px]">⎘ Sources: {line.merged_source_breakdown.length}</span> : null}
                           </span>
                         )}
                       </div>
@@ -2065,6 +2164,24 @@ export default function InventoryReceiving(props) {
                       </div>
                     </div>
                     <div className="p-4" style={collapsedLines[lineIdx] ? { display: 'none' } : undefined}>
+                    {line.merged_source_breakdown && line.merged_source_breakdown.length > 0 && (
+                      <div className="mb-3 rounded-lg border border-violet-300 bg-violet-50">
+                        <div className="px-3 py-1.5 text-[11px] font-extrabold text-violet-900 border-b border-violet-200 flex items-center justify-between">
+                          <span>⎘ Merged from {line.merged_source_breakdown.length} source line(s) — read-only audit</span>
+                          {line.merge_group_id ? <span className="font-mono text-[9px] text-violet-700">{line.merge_group_id}</span> : null}
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[11px] text-slate-900">
+                            <thead><tr className="bg-violet-100 text-violet-900"><th className="px-2 py-1 text-left">Source shipment</th><th className="px-2 py-1 text-left">Line ID</th><th className="px-2 py-1 text-right">Rolls</th><th className="px-2 py-1 text-right">Qty</th><th className="px-2 py-1 text-left">UOM</th><th className="px-2 py-1 text-right">KG</th><th className="px-2 py-1 text-left">Status</th><th className="px-2 py-1 text-left">Notes</th></tr></thead>
+                            <tbody>
+                              {line.merged_source_breakdown.map(function (sb, si) {
+                                return <tr key={si} className="border-t border-violet-200"><td className="px-2 py-1 font-mono">{sb.receipt_number || '—'}</td><td className="px-2 py-1 font-mono text-[9px] text-slate-500">{sb.line_id || '—'}</td><td className="px-2 py-1 text-right">{sb.roll_count || 0}</td><td className="px-2 py-1 text-right">{sb.quantity || 0}</td><td className="px-2 py-1">{sb.uom || '—'}</td><td className="px-2 py-1 text-right">{sb.quantity_kg || 0}</td><td className="px-2 py-1">{sb.status || '—'}</td><td className="px-2 py-1">{sb.notes || ''}</td></tr>;
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Quick-code field with autocomplete.
                         v55.83-F (Max Jun 1 2026) — dropdown was rendering BEHIND the form
@@ -2640,6 +2757,75 @@ export default function InventoryReceiving(props) {
       })()}
 
       {/* Cancel-receipt prompt */}
+      {mergeModalOpen && (() => {
+        var srcLines = mergeSourceLines();
+        var srcHeaders = mergeSourceHeaders();
+        var plan = mergePlan(srcLines, srcHeaders);
+        var sel = selectedNumbers();
+        var anyFinal = mergeAnyFinalized();
+        var fmt = function (n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+        return (
+          <div className="fixed inset-0 z-[210] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16, overflow: 'hidden' }} onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }}>
+            <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 820, width: '100%', maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
+              <div className="rounded-t-2xl flex justify-between items-center" style={{ background: '#6d28d9', padding: '14px 20px', flexShrink: 0 }}>
+                <div className="text-lg font-extrabold text-white">⎘ Merge {sel.length} Shipments</div>
+                <button onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }} className="text-white text-xl font-bold" style={{ width: 32, height: 32 }}>✕</button>
+              </div>
+              <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }} className="text-slate-900">
+                <div className="text-xs font-bold text-slate-500 mb-1">SELECTED SHIPMENTS</div>
+                <div className="border border-slate-200 rounded-lg overflow-hidden mb-3">
+                  {srcHeaders.concat(sel.filter(function (rn) { return !srcHeaders.some(function (h) { return h.receipt_number === rn; }); }).map(function (rn) { return { receipt_number: rn }; })).map(function (h) {
+                    var ls = srcLines.filter(function (r) { return r.receipt_number === h.receipt_number; });
+                    return (
+                      <div key={h.receipt_number} className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-slate-100 text-xs">
+                        <span className="font-mono font-bold">{h.receipt_number}</span>
+                        <span className="text-slate-600">{h.supplier || '—'}</span>
+                        <span className="text-slate-600">{ls.length} line(s)</span>
+                        <span className="text-slate-600">{fmt(ls.reduce(function (a, b) { return a + (Number(b.roll_count) || 0); }, 0))} rolls</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-xs font-bold text-slate-500 mb-1">MERGE INTO</div>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <button onClick={function () { setMergeTarget('new'); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === 'new' ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>＋ New merged shell</button>
+                  {sel.map(function (rn) { return <button key={rn} onClick={function () { setMergeTarget(rn); }} className={'px-3 py-1.5 rounded text-xs font-bold border ' + (mergeTarget === rn ? 'bg-violet-600 text-white border-violet-700' : 'bg-slate-100 text-slate-800 border-slate-300')}>Into {rn}</button>; })}
+                </div>
+                <div className="text-xs font-bold text-slate-500 mb-1">PREVIEW — AGGREGATED LINES</div>
+                <div className="border border-slate-200 rounded-lg overflow-hidden mb-2">
+                  <div className="grid grid-cols-5 gap-1 bg-slate-100 px-3 py-1.5 text-[10px] font-extrabold text-slate-500 uppercase"><span>Product</span><span>UOM</span><span className="text-right">Rolls</span><span className="text-right">Qty</span><span className="text-right">Sources</span></div>
+                  {plan.aggregated.map(function (g, i) {
+                    var p = productById(g.product_id);
+                    return (
+                      <div key={i} className="grid grid-cols-5 gap-1 px-3 py-1.5 border-t border-slate-100 text-xs">
+                        <span className="font-semibold truncate">{p ? (p.name_en || p.quick_code || g.product_id) : g.product_id}</span>
+                        <span>{g.uom || '—'}</span>
+                        <span className="text-right font-mono">{fmt(g.roll_count)}</span>
+                        <span className="text-right font-mono">{fmt(g.quantity)}{g.quantity_kg ? (' / ' + fmt(g.quantity_kg) + 'kg') : ''}</span>
+                        <span className="text-right">{g.sources.length}{g.sources.length > 1 ? ' ✓combined' : ''}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-slate-600 mb-2">{plan.totals_before.line_count} source line(s) → <b>{plan.totals_after.line_count}</b> line(s). {plan.balanced ? '✓ totals conserved (no double-count)' : '⚠ total mismatch — do not proceed'}</div>
+                {plan.warnings.map(function (w, i) { return <div key={i} className="bg-amber-100 text-amber-950 rounded px-2 py-1 text-xs font-semibold mb-1">⚠ Product {w.product_id} appears in multiple UOMs ({w.uoms.join(', ')}) — kept as separate lines.</div>; })}
+                {anyFinal && (
+                  <div className="bg-red-100 text-red-950 rounded-lg p-2 text-xs font-semibold my-2">
+                    You are merging finalized shipments. This will move/aggregate product lines and affect reporting.
+                    <input value={mergeConfirmText} onChange={function (e) { setMergeConfirmText(e.target.value); }} placeholder="Type: MERGE FINALIZED SHIPMENTS" className="w-full mt-1 bg-white border border-red-300 rounded px-2 py-1 text-slate-900" />
+                  </div>
+                )}
+                <textarea value={mergeNotes} onChange={function (e) { setMergeNotes(e.target.value); }} placeholder="Merge notes (optional)" className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs text-slate-900 mt-1" rows={2} />
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
+                <button onClick={function () { if (!mergeBusy) setMergeModalOpen(false); }} disabled={mergeBusy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Cancel</button>
+                <button onClick={executeMerge} disabled={mergeBusy || !plan.balanced} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg">{mergeBusy ? 'Merging…' : 'Confirm Merge'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {cancelTarget && (
         <div className="fixed inset-0 z-[210] bg-black/70 flex items-center justify-center" style={{ padding: 16 }}>
           <div className="bg-slate-950 text-slate-100 rounded-xl shadow-2xl border border-slate-800" style={{ maxWidth: 480, padding: 20 }}>

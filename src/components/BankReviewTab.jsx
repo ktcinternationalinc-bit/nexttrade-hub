@@ -101,6 +101,7 @@ export default function BankReviewTab(props) {
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
       setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers((res[2] && res[2].data) || []); setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
+      setSel(function (cur) { if (!cur) { return cur; } var fr = null; t.forEach(function (x) { if (x.id === cur.id) { fr = x; } }); return fr || cur; });
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }
@@ -149,7 +150,7 @@ export default function BankReviewTab(props) {
     setBusy(true);
     patchTxn(t, { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
       'Classified bank txn ' + (t.name || t.id) + ' as ' + cls)
-      .then(function () { toast.success('Classified as ' + labelize(cls)); load(); })
+      .then(function () { toast.success('Classified as ' + labelize(cls)); setSel(Object.assign({}, t, { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status })); load(); })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }

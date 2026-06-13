@@ -208,6 +208,10 @@ export default function InventoryProductMaster(props) {
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
+  // Lock background scroll while a product modal is open so only the modal body scrolls.
+  useEffect(function () {
+    if (modalMode) { var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }
+  }, [modalMode]);
   // v55.83-A.6.27.71 (Phase 4) — Removed dead variant modal state.
   // The variant modal was replaced by openCloneTemplate() in v55.83-A.6.27.42
   // but the JSX + state + helpers were left in place. None of variantModalOpen,
@@ -612,8 +616,8 @@ export default function InventoryProductMaster(props) {
     setEditLocked(false);              // a new copy can't be "locked"
     setEditIsTemplate(p.is_family_template === true);
     setForm({
-      name_en: (p.name_en || '') + ' (copy)',
-      name_ar: (p.name_ar || '') + ' (نسخة)',
+      name_en: p.name_en || '',
+      name_ar: p.name_ar || '',
       quick_code: '',                  // user must enter a new quick code (uniqueness)
       design_sku: '',
       family_list_id: p.family_list_id || '',
@@ -638,7 +642,7 @@ export default function InventoryProductMaster(props) {
       notes: p.notes || '',
     });
     // Immediate user feedback so it's obvious the copy happened.
-    toast.success('✓ Copied — change the Quick Code, then Save / تم النسخ — غيّر الكود ثم احفظ');
+    toast.success('✓ Copied — fields prefilled. Change the name, code, color or spec to make it unique, then Save / تم النسخ — غيّر الاسم أو الكود أو اللون لجعله فريدًا ثم احفظ');
   }
 
   function closeModal() {
@@ -742,11 +746,6 @@ export default function InventoryProductMaster(props) {
 
     // Quick code uniqueness (client-side; DB also enforces)
     var quickCode = (form.quick_code || '').trim();
-    if (modalMode === 'new' && (form.name_en || '').endsWith('(copy)') && !quickCode) {
-      fail('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
-      return;
-    }
-
     // v55.83-A.6.27.72 HOTFIX 7 — Comprehensive duplicate detection.
     // Checks quick_code, classification_slug, name_en, AND name_ar against
     // ALL products (active + inactive). NAMES the conflicting product.
@@ -783,7 +782,7 @@ export default function InventoryProductMaster(props) {
       fail('DUPLICATE CLASSIFICATION — cannot save.\n\nA product with the EXACT same Family/Category/Grade/Construction/Backing/Color/Pattern/Spec' + (form.origin_list_id ? '/Country' : '') + ' combination already exists:\n' +
            describeConflict(dupSlug, 'classification_slug') +
            '\n\nClassification slug: ' + slug +
-           '\n\nNo duplicates allowed. Change at least one of your level selections, or open the existing product and edit it.');
+           '\n\nA product with this identity already exists. Please change the product name, SKU, color, spec, or another identifying field before saving.');
       return;
     }
 
@@ -795,7 +794,7 @@ export default function InventoryProductMaster(props) {
     if (dupNameEn) {
       fail('DUPLICATE ENGLISH NAME — cannot save.\n\nA product named "' + nameEn + '" already exists:\n' +
            describeConflict(dupNameEn, 'name_en') +
-           '\n\nNo duplicates allowed. Adjust the name slightly to differentiate (e.g. add a thickness, color shade, or roll-length suffix), or open the existing product and edit it.');
+           '\n\nA product with this name already exists. Please change the product name, SKU, color, spec, or another identifying field before saving.');
       return;
     }
 
@@ -1313,19 +1312,19 @@ export default function InventoryProductMaster(props) {
       {/* New/Edit modal */}
       {modalMode && (
         <div
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-start justify-center"
           onClick={closeModal}
-          style={{ padding: 16 }}
+          style={{ padding: 16, overflow: 'hidden' }}
         >
           <div
             className="bg-white rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ maxWidth: 900, padding: 0 }}
+            style={{ maxWidth: 900, width: '100%', padding: 0, maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}
           >
             {/* Modal header — dark indigo with inline color (defensive readability) */}
             <div
               className="rounded-t-2xl flex justify-between items-center gap-2"
-              style={{ background: '#3730a3', padding: '14px 20px' }}
+              style={{ background: '#3730a3', padding: '14px 20px', flexShrink: 0 }}
             >
               <div>
                 <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>
@@ -1344,7 +1343,7 @@ export default function InventoryProductMaster(props) {
               </button>
             </div>
 
-            <div style={{ padding: 20, maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
+            <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
               {/* v55.83-A.6.27.43 — Edit lock banner: shown when this product has references
                   (used in receipts/movements/layers/adjustments). Spec dropdowns are read-only.
                   Name + notes + defaults remain editable. To change specs, create a new variant. */}
@@ -1595,7 +1594,7 @@ export default function InventoryProductMaster(props) {
             </div>
 
             {/* Modal footer */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px' }}>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
               <button
                 onClick={closeModal}
                 disabled={busy}

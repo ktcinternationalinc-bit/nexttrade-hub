@@ -129,7 +129,7 @@ export default function InventoryOverview(props) {
         .select('*')
         .eq('product_id', product.id)
         .order('receipt_date', { ascending: false });
-      if (!inbRes.error) setHistoryReceipts((inbRes.data || []).filter(function (r) { return r.status !== 'cancelled'; }));
+      if (!inbRes.error) setHistoryReceipts((inbRes.data || []).filter(function (r) { return r.status !== 'cancelled' && r.status !== 'merged'; }));
       else console.warn('[history] receipts query failed:', inbRes.error.message);
     } catch (e) { console.warn('[history] receipts threw:', e); }
     try {
@@ -274,7 +274,7 @@ export default function InventoryOverview(props) {
       // just to satisfy the >0 check. Counting it here showed expected/unverified
       // goods as real on-hand stock AND inflated Original. On-hand = only what has
       // actually arrived: 'active' / 'received' (pending cost) or 'finalized'.
-      if (r.status === 'cancelled' || r.status === 'pending_detail') return;
+      if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged') return;
       var q = Number(r.quantity || 0);
       s.original_qty += q;
       var uom = (r.uom || 'unit').toLowerCase();
@@ -303,8 +303,27 @@ export default function InventoryOverview(props) {
       s.cogs_total += Number(it.cogs_total || 0);
       s.gross_profit += Number(it.gross_profit || 0);
     });
+    // v55.83-CO — derive each product's REAL UOM from its received lines (the
+    // corrected source of truth). The product master default_uom is only a fallback;
+    // a stale master 'unit' must NOT override a receipt line corrected to 'kg'.
+    Object.keys(stats).forEach(function (pid) {
+      var s2 = stats[pid]; var best = ''; var bestQ = -1;
+      Object.keys(s2.recv_by_uom).forEach(function (u) { if (s2.recv_by_uom[u] > bestQ) { bestQ = s2.recv_by_uom[u]; best = u; } });
+      s2.recv_uom_primary = best; // '' when there are no (non-cancelled) receipts
+    });
     return stats;
   }, [products, layers, receipts, salesItems]);
+
+  // UOM source of truth: received-line UOM first, product-master default only as fallback.
+  function effUom(p) {
+    var s3 = productStats && productStats[p.id];
+    if (s3 && s3.recv_uom_primary) { return s3.recv_uom_primary; }
+    return (p.default_uom || 'unit');
+  }
+  // UOM sort: '', 'asc', or 'desc'. Ordered kg < meter < yard < unit < roll, others last.
+  var UOM_RANK = { kg: 0, sqm: 1, meter: 2, meters: 2, yard: 3, yards: 3, unit: 4, units: 4, piece: 4, pieces: 4, roll: 5, rolls: 5 };
+  function uomRank(u) { var k = String(u || '').toLowerCase().trim(); return UOM_RANK[k] != null ? UOM_RANK[k] : 90; }
+  var [uomSort, setUomSort] = useState('');
 
   // Filter products by search term + zero-stock toggle + classification filters
   var filteredProducts = useMemo(function () {
@@ -418,13 +437,13 @@ export default function InventoryOverview(props) {
       groups[familyId].totals.gross_profit += s.gross_profit || 0;
       // v55.83 — break each product's qty out by its own unit of measure so the
       // family line never adds kg + meters + units into one meaningless number.
-      var pUomKey = (p.default_uom || 'unit').toLowerCase().trim();
+      var pUomKey = effUom(p).toLowerCase().trim();
       if (!groups[familyId].totals.by_uom[pUomKey]) groups[familyId].totals.by_uom[pUomKey] = { current: 0, original: 0, sold: 0 };
       groups[familyId].totals.by_uom[pUomKey].current += s.current_qty || 0;
       groups[familyId].totals.by_uom[pUomKey].original += s.original_qty || 0;
       groups[familyId].totals.by_uom[pUomKey].sold += s.sold_qty || 0;
       // v55.83-H — roll totals per family (goods received in rolls but sold by weight/length)
-      var gUom = (p.default_uom || 'unit').toLowerCase().trim();
+      var gUom = effUom(p).toLowerCase().trim();
       if (gUom !== 'roll' && gUom !== 'rolls') {
         var gOrig = s.recv_rolls || 0;
         var gSold = s.sold_rolls || 0;
@@ -440,6 +459,12 @@ export default function InventoryOverview(props) {
     // then by name so zero-stock items settle at the bottom in a stable order.
     arr.forEach(function (g) {
       g.products.sort(function (pa, pb) {
+        if (uomSort) {
+          var ra = uomRank(effUom(pa)), rb = uomRank(effUom(pb));
+          if (ra !== rb) { return uomSort === 'desc' ? (rb - ra) : (ra - rb); }
+          var la = effUom(pa).toLowerCase(), lb = effUom(pb).toLowerCase();
+          if (la !== lb) { return uomSort === 'desc' ? lb.localeCompare(la) : la.localeCompare(lb); }
+        }
         var sa = productStats[pa.id] || {};
         var sb = productStats[pb.id] || {};
         var ca = Number(sa.current_qty || 0), cb = Number(sb.current_qty || 0);
@@ -455,7 +480,7 @@ export default function InventoryOverview(props) {
       return (a.label_en || '').localeCompare(b.label_en || '');
     });
     return arr;
-  }, [filteredProducts, productStats, listsById]);
+  }, [filteredProducts, productStats, listsById, uomSort]);
 
   // Grand totals across all visible products
   var grandTotals = useMemo(function () {
@@ -480,14 +505,14 @@ export default function InventoryOverview(props) {
     products.forEach(function (p) {
       var s = productStats[p.id];
       if (!s) return;
-      var u = (p.default_uom || 'unit');
+      var u = effUom(p);
       var b = bucket(u);
       b.current_qty += s.current_qty || 0;
       b.original_qty += s.original_qty || 0;
       b.sold_qty += s.sold_qty || 0;
       // v55.83-H — roll totals for goods received in rolls but sold by kg/meter.
       // (Products sold IN rolls already appear under the 'roll' unit block above.)
-      var uomN = (p.default_uom || 'unit').toLowerCase().trim();
+      var uomN = effUom(p).toLowerCase().trim();
       if (uomN !== 'roll' && uomN !== 'rolls') {
         var oRolls = s.recv_rolls || 0;
         var sRolls = s.sold_rolls || 0;
@@ -606,6 +631,10 @@ export default function InventoryOverview(props) {
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
         </label>
+        <button type="button" onClick={function () { setUomSort(uomSort === 'asc' ? 'desc' : (uomSort === 'desc' ? '' : 'asc')); }}
+          className={'flex items-center gap-1 text-xs font-bold rounded px-2.5 py-1 border ' + (uomSort ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-800 text-slate-200 border-slate-600')}>
+          Sort by UOM {uomSort === 'asc' ? '▲' : uomSort === 'desc' ? '▼' : ''}
+        </button>
         {/* status dot legend */}
         <span className="inline-flex items-center gap-3 text-[11px] font-bold text-slate-300">
           <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>Cost finalized</span>
@@ -897,7 +926,7 @@ export default function InventoryOverview(props) {
                       //   • current rolls  = received − rolls sold (real depletion; never below 0)
                       //   • sold rolls     = rolls entered on sales lines
                       // For products SOLD in rolls, the main qty IS rolls, so no sub-line.
-                      var uomNorm = String(p.default_uom || '').toLowerCase().trim();
+                      var uomNorm = String(effUom(p) || '').toLowerCase().trim();
                       var isRollUnit = uomNorm === 'roll' || uomNorm === 'rolls';
                       var origRolls = s.recv_rolls || 0;
                       var soldRolls = s.sold_rolls || 0;
@@ -914,7 +943,7 @@ export default function InventoryOverview(props) {
                             <div onClick={function () { openHistory(p); }} className="font-bold text-white text-[13px] cursor-pointer hover:text-indigo-200 transition-colors" title="Open drill-down — inbound orders + sales">{displayNameEn}</div>
                             {displayNameAr && <div className="text-xs text-slate-300" style={{ direction: 'rtl' }}>{displayNameAr}</div>}
                             <div className="mt-0.5">
-                              <span className="inline-block px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px] font-bold tracking-wide">Sold in: {p.default_uom || 'unit'}</span>
+                              <span className="inline-block px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px] font-bold tracking-wide">Sold in: {effUom(p)}</span>
                             </div>
                             {/* v55.83-A.6.27.60 — All 9 classification levels inline under name */}
                             {levelLabels.length > 0 && (
@@ -969,7 +998,7 @@ export default function InventoryOverview(props) {
                               <td className={'px-3 py-3 text-right font-mono font-extrabold bg-slate-800/60 ' + (s.gross_profit >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fmtNum(s.gross_profit, 2)}</td>
                             </>
                           )}
-                          <td className="px-3 py-3 text-xs font-bold text-slate-200">{p.default_uom || 'unit'}</td>
+                          <td className="px-3 py-3 text-xs font-bold text-slate-200">{effUom(p)}</td>
                         </tr>
                       );
                     })}
