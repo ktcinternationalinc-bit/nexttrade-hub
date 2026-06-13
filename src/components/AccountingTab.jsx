@@ -9,6 +9,7 @@ import WaveImportTab from './WaveImportTab';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import BankReviewTab from './BankReviewTab';
+import PurchaseOrdersTab from './PurchaseOrdersTab';
 
 export default function AccountingTab(props) {
   var [sub, setSub] = useState('dashboard');
@@ -19,6 +20,7 @@ export default function AccountingTab(props) {
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
     ['proformas', '📄 Proformas'],
+    ['purchaseorders', '📦 Purchase Orders'],
     ['review', '🏦 Bank Review & Matching'],
     ['wave', '🌊 Wave Connection'],
     ['waveimport', '⬇️ Wave Import'],
@@ -41,6 +43,7 @@ export default function AccountingTab(props) {
       {sub === 'customers' && <AccountingCustomersTab {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key="acct-inv" {...props} defaultMode="invoices" />}
       {sub === 'proformas' && <AccountingInvoicesTab key="acct-pf" {...props} defaultMode="proformas" />}
+      {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab {...props} />}
       {sub === 'wave' && <WaveConnectionTab {...props} />}
       {sub === 'waveimport' && <WaveImportTab {...props} />}

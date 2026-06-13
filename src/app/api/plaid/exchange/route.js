@@ -46,6 +46,44 @@ export async function POST(req) {
     }, { onConflict: 'plaid_item_id' }).select().single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Pull accounts so we can show account names/masks. Balances are stored here but
+    // only shown to admins (bank.view_account_balances) at display time. Non-fatal.
+    try {
+      const accRes = await fetch(`${base}/accounts/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.PLAID_CLIENT_ID,
+          secret: process.env.PLAID_SECRET,
+          access_token,
+        }),
+      });
+      const accData = await accRes.json();
+      if (accData && Array.isArray(accData.accounts) && conn && conn.id) {
+        const accRows = accData.accounts.map((a) => ({
+          connection_id: conn.id,
+          business_id: conn.business_id || null,
+          plaid_account_id: a.account_id,
+          name: a.name || null,
+          official_name: a.official_name || null,
+          mask: a.mask || null,
+          type: a.type || null,
+          subtype: a.subtype || null,
+          iso_currency: (a.balances && a.balances.iso_currency_code) || 'USD',
+          current_balance: a.balances ? a.balances.current : null,
+          available_balance: a.balances ? a.balances.available : null,
+          is_read_only: true,
+          updated_at: new Date().toISOString(),
+        }));
+        if (accRows.length) {
+          await supabase.from('plaid_accounts').upsert(accRows, { onConflict: 'plaid_account_id' });
+        }
+      }
+    } catch (accErr) {
+      // Connection still succeeds even if account pull fails; accounts refresh on next sync.
+    }
+
     return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name } });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });

@@ -216,6 +216,19 @@ export default function InventoryReceiving(props) {
   // v55.83-A.6.27.43 — Variance prompt modal (shown on Submit click when variance exists)
   var [variancePromptOpen, setVariancePromptOpen] = useState(false);
   var [variancePromptData, setVariancePromptData] = useState(null);  // { rolls, gross, net, uom }
+  // v55.83-BO — reconciliation panel collapsed by default to give back screen space;
+  // auto-expands on Submit / Save Draft (see those handlers).
+  var [varExpanded, setVarExpanded] = useState(false);
+  // v55.83-BP (A2) — per-line collapse. Keyed by line index; collapsed lines hide
+  // their body and show a one-line summary in the header. Default expanded.
+  var [collapsedLines, setCollapsedLines] = useState({});
+  function toggleLineCollapsed(i) { setCollapsedLines(function (p) { var n = Object.assign({}, p); n[i] = !n[i]; return n; }); }
+  // v55.83-BR (B5) — product search hides family templates by default to prevent
+  // picking a template instead of a real product. Admins can opt in.
+  var [includeTemplates, setIncludeTemplates] = useState(false);
+  // v55.83-BS (B4) — let the Container Shell collapse to a one-line summary so the
+  // product-entry area can take most of the screen. Default expanded.
+  var [shellCollapsed, setShellCollapsed] = useState(false);
 
   // Cancel-receipt prompt
   var [cancelTarget, setCancelTarget] = useState(null);
@@ -334,6 +347,9 @@ export default function InventoryReceiving(props) {
 
     var matches = products.filter(function (p) {
       if (!p.active) return false;
+      // B5: hide family templates (and archived) from the picker by default.
+      if (p.is_family_template === true && !includeTemplates) return false;
+      if ((p.is_archived === true || p.status === 'archived') && !includeTemplates) return false;
       // Build the expanded searchable string for this product
       var searchable = (
         (p.quick_code || '') + ' ' +
@@ -664,6 +680,19 @@ export default function InventoryReceiving(props) {
           line.fromMaster = newFromMaster;
         }
       }
+      // v55.83-BP (B6): when UoM is kg, auto-fill Quantity in Kilos from Quantity
+      // Received. Stays EDITABLE (not read-only) — a manual override is preserved and
+      // only re-mirrored if the kg field is still in sync with the received qty.
+      var uomNow = String(line.uom || '').trim().toLowerCase();
+      if (uomNow === 'kg') {
+        if (field === 'uom') {
+          line.quantity_kg = String(line.quantity == null ? '' : line.quantity);
+        } else if (field === 'quantity') {
+          var oldQty = prev[lineIdx] && prev[lineIdx].quantity != null ? String(prev[lineIdx].quantity) : '';
+          var oldKg = prev[lineIdx] && prev[lineIdx].quantity_kg != null ? String(prev[lineIdx].quantity_kg) : '';
+          if (oldKg === '' || oldKg === oldQty) { line.quantity_kg = String(value == null ? '' : value); }
+        }
+      }
       next[lineIdx] = line;
       return next;
     });
@@ -854,6 +883,7 @@ export default function InventoryReceiving(props) {
   // the save actually fires. If notes are filled, status becomes submitted_unbalanced (yellow).
   // If no variance, status becomes submitted_balanced (green).
   async function submitReceipt() {
+    setVarExpanded(true);
     var rec = computeVariance(header, lines);
     if (!rec.has_any_expected) {
       // No expected totals filled in — can't reconcile, force user back to fill them
@@ -1867,7 +1897,15 @@ export default function InventoryReceiving(props) {
                   Big, prominent, can't-miss. Optional during Draft, required at Submit.
                   v55.83-A.6.27.48 — widened: more padding + larger inputs to use the full modal width.
                   v55.83-A.6.27.56 — NOT collapsible (small and important; stays visible). */}
-              <div className="bg-slate-900/70 border border-slate-700 border-l-4 border-l-violet-500 rounded-xl p-6 mt-4">
+              <div className="bg-slate-800/50 border border-violet-500/40 border-l-4 border-l-violet-500 rounded-xl p-6 mt-4">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-[10px] font-extrabold tracking-widest text-violet-300">🅰 CONTAINER SHELL · FROM SHIPPING DOCUMENTS</div>
+                  <button type="button" onClick={function () { setShellCollapsed(!shellCollapsed); }} className="text-[10px] font-bold bg-violet-700 hover:bg-violet-600 text-white rounded px-2 py-0.5">{shellCollapsed ? 'Expand ▾' : 'Collapse ▴'}</button>
+                </div>
+                {shellCollapsed && (
+                  <div className="text-sm font-bold text-slate-200">📦 Expected: {header.expected_total_rolls === '' ? '—' : header.expected_total_rolls} rolls · {header.expected_total_gross_kg === '' ? '—' : header.expected_total_gross_kg} kg gross · {header.expected_total_uom === '' ? '—' : header.expected_total_uom} {header.expected_uom_type || 'kg'}</div>
+                )}
+                <div style={shellCollapsed ? { display: 'none' } : undefined}>
                 <div className="flex items-baseline justify-between mb-4">
                   <div>
                     <div className="text-lg font-extrabold text-slate-100">📦 Shipment Expected Totals</div>
@@ -1976,23 +2014,48 @@ export default function InventoryReceiving(props) {
                   </div>
                 )}
                 </div>
+                </div>
               </div>
             </div>
 
             {/* v55.83-A.6.27.56 — Region 2: scrollable middle. ONLY product lines scroll here.
                 The Shipment Info form above stays put. The footer below stays put. */}
-            <div style={{ padding: '12px 20px', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <div className="bg-slate-950/50 border-t-2 border-indigo-500/30" style={{ padding: '12px 20px', flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {/* Lines */}
-              <div className="text-[11px] font-extrabold text-slate-300 tracking-wider mb-2">PRODUCT LINES ({lines.length})</div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="text-[10px] font-extrabold tracking-widest text-indigo-300">🅱 PRODUCTS RECEIVED · PER-PRODUCT DETAIL</div>
+                  <div className="text-[11px] font-extrabold text-slate-300 tracking-wider">PRODUCT LINES ({lines.length})</div>
+                </div>
+                {lines.length > 1 && (
+                  <div className="flex gap-1.5">
+                    <button type="button" onClick={function () { var m = {}; lines.forEach(function (_, i) { m[i] = true; }); setCollapsedLines(m); }} className="text-[10px] font-bold bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-0.5">Collapse all</button>
+                    <button type="button" onClick={function () { setCollapsedLines({}); }} className="text-[10px] font-bold bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-0.5">Expand all</button>
+                  </div>
+                )}
+              </div>
+              {isSuperAdmin && (
+                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-2 cursor-pointer w-fit">
+                  <input type="checkbox" checked={includeTemplates} onChange={function (e) { setIncludeTemplates(e.target.checked); }} />
+                  Include templates &amp; archived in product search (admin)
+                </label>
+              )}
 
               {lines.map(function (line, lineIdx) {
                 var suggestions = suggestionsFor(line.quickCodeQuery);
                 return (
                   <div key={lineIdx} className="bg-slate-900/70 rounded-xl mb-4 shadow-md border border-slate-700">
                     <div className="flex justify-between items-center px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 rounded-t-xl">
-                      <div className="text-sm font-extrabold text-white flex items-center gap-2">
+                      <div className="text-sm font-extrabold text-white flex items-center gap-2 flex-wrap">
+                        <button type="button" onClick={function () { toggleLineCollapsed(lineIdx); }} title={collapsedLines[lineIdx] ? 'Expand line' : 'Collapse line'} className="inline-flex items-center justify-center w-5 h-5 rounded bg-white/20 hover:bg-white/35 text-white text-xs">{collapsedLines[lineIdx] ? '►' : '▼'}</button>
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-white/20 text-white text-xs">{lineIdx + 1}</span>
                         {line.product ? (line.product.name_en || line.product.quick_code) : 'New product line'}
+                        {collapsedLines[lineIdx] && (
+                          <span className="text-[11px] font-bold text-indigo-100">
+                            · {(line.roll_count === '' || line.roll_count == null) ? 0 : line.roll_count} rolls · {(line.quantity === '' || line.quantity == null) ? 0 : line.quantity} {line.uom || ''}
+                            {line.quantity_kg && String(line.uom || '').toLowerCase() !== 'kg' ? ' · ' + line.quantity_kg + ' kg' : ''}
+                          </span>
+                        )}
                       </div>
                       <div className="flex gap-1.5">
                         {lines.length > 1 && (
@@ -2001,7 +2064,7 @@ export default function InventoryReceiving(props) {
                         <button onClick={function () { duplicateLine(lineIdx); }} className="px-2.5 py-1 text-[10px] bg-white/15 hover:bg-white/30 text-white rounded font-bold transition-colors">Duplicate</button>
                       </div>
                     </div>
-                    <div className="p-4">
+                    <div className="p-4" style={collapsedLines[lineIdx] ? { display: 'none' } : undefined}>
 
                     {/* Quick-code field with autocomplete.
                         v55.83-F (Max Jun 1 2026) — dropdown was rendering BEHIND the form
@@ -2427,10 +2490,30 @@ export default function InventoryReceiving(props) {
               }
               var bgClass = rec.is_balanced ? 'bg-emerald-100 border-emerald-500' : 'bg-amber-100 border-amber-500';
               var titleColor = rec.is_balanced ? 'text-emerald-900' : 'text-amber-900';
+              function vtxt(v, dec) { if (v == null) { return '—'; } if (v === 0) { return '✓'; } var a = dec ? Math.abs(v).toFixed(2) : Math.abs(v); return (v > 0 ? '-' : '+') + a; }
+              // Collapsed status bar by default (gives back screen space). Auto-expands on
+              // Submit / Save Draft. Balanced always stays compact.
+              if (!varExpanded) {
+                return (
+                  <div className={'border-t-4 ' + bgClass + ' px-5 py-2 flex items-center justify-between gap-3 flex-wrap'}>
+                    <div className={'text-sm font-extrabold ' + titleColor}>
+                      {rec.is_balanced
+                        ? '✓ Reconciliation: Balanced (all totals match)'
+                        : '⚠ Reconciliation Variance — Rolls: ' + vtxt(rec.variance.rolls, false) + ' · Weight: ' + vtxt(rec.variance.gross, true) + ' kg · UOM: ' + vtxt(rec.variance.uom, true)}
+                    </div>
+                    {!rec.is_balanced && (
+                      <button type="button" onClick={function () { setVarExpanded(true); }} className="text-xs font-extrabold bg-amber-800 text-white rounded px-3 py-1 hover:bg-amber-700">Expand ▾</button>
+                    )}
+                  </div>
+                );
+              }
               return (
                 <div className={'border-t-4 ' + bgClass + ' px-5 py-3'}>
-                  <div className={'text-base font-extrabold ' + titleColor + ' mb-2'}>
-                    {rec.is_balanced ? '✓ Reconciliation: Balanced (all totals match)' : '⚠ Reconciliation: Variance detected (yellow status on submit)'}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={'text-base font-extrabold ' + titleColor}>
+                      {rec.is_balanced ? '✓ Reconciliation: Balanced (all totals match)' : '⚠ Reconciliation: Variance detected (yellow status on submit)'}
+                    </div>
+                    <button type="button" onClick={function () { setVarExpanded(false); }} className={'text-xs font-extrabold rounded px-3 py-1 ' + (rec.is_balanced ? 'bg-emerald-700 text-white hover:bg-emerald-600' : 'bg-amber-800 text-white hover:bg-amber-700')}>Collapse ▴</button>
                   </div>
                   <div className="grid grid-cols-4 gap-3 text-sm">
                     <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
@@ -2481,7 +2564,7 @@ export default function InventoryReceiving(props) {
               </button>
               {/* v55.83-A.6.27.43 — Save Draft (no submission, no reconciliation gate, no variance check) */}
               <button
-                onClick={function () { saveReceipt(); }}
+                onClick={function () { setVarExpanded(true); saveReceipt(); }}
                 disabled={busy}
                 title="Save your work-in-progress. Can be reopened and edited freely. Does not generate inventory layers or submit."
                 className="px-4 py-2 bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow">

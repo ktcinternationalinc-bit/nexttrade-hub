@@ -33,6 +33,100 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BT',
+    date: '2026-06-08',
+    label: 'Inventory menu redesigned (enterprise look)',
+    items: [
+      '**\\ud83c\\udfe2 New inventory menu.** The inventory navigation is now a clean set of cards \\u2014 **\\ud83d\\udce6 Core Inventory**, **\\ud83d\\udea2 Import Operations**, **\\ud83d\\udcca Financial Intelligence**, and a dedicated **\\u2699\\ufe0f Administration** card \\u2014 each item with its own icon. The screen you\'re on now stands out clearly (stronger highlight), so it\'s always obvious where you are.',
+      '**\\u2699\\ufe0f Admin tools grouped together.** Master Lists and Import Products moved into their own Administration card, separate from everyday inventory.',
+      '**\\ud83d\\udcc5 Cutoff at a glance.** The header now reads \\u201cInventory Management\\u201d with your **Last Inventory Cutoff** shown right there, plus a quick **Set Cutoff** button.',
+      { superAdminOnly: true, text: 'v55.83-BT (Sprint C menu redesign; UI-only, NO logic/permission/SQL change). InventoryTab.jsx: masterlists + importproducts moved group core->admin; SUBTAB_GROUPS gains admin + per-group icon field (📦/🚢/📊/⚙️). Nav container -> responsive card grid (grid-cols-1 sm:2 lg:4 gap-3); each group renders as a bg-white card w/ icon+label header + vertical button list using st.label (icon+name); active state strengthened to bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300. Header strip retitled "📦 Inventory Management" + new Last Inventory Cutoff chip (cutoffDate || Not Set) + Set Cutoff button (canManageCutoff -> setCutoffPanelOpen(true)). All visFor() permission gating preserved verbatim. THIS COMPLETES THE INVENTORY-RECEIVING UI TICKET (A1-A3, B4-B6, C).' },
+    ],
+  },
+  {
+    version: 'v55.83-BS',
+    date: '2026-06-08',
+    label: 'Receiving: more room for product entry',
+    items: [
+      '**\\ud83d\\udcd0 Product entry can take over the screen.** The Container Shell (Expected Totals) now collapses to a one-line summary \\u2014 \\u201c\\ud83d\\udce6 Expected: 483 rolls \\u00b7 23659.36 kg gross\\u201d \\u2014 so once you\'ve entered the container totals you can fold them away and give the product lines most of the screen. Combined with the collapsible variance bar and Shipment Info, the product area is now the dominant element.',
+      { superAdminOnly: true, text: 'v55.83-BS (Sprint B4; UI-only, NO calc, NO SQL). InventoryReceiving.jsx: new shellCollapsed state (default false). Container-Shell eyebrow row gets Collapse ▴ / Expand ▾ toggle; when collapsed shows a one-line summary (expected rolls / gross kg / uom) and the shell body (title, description, NEXPAC import, the 5 expected-total inputs, NEXPAC preview table) is wrapped in a display:none div \\u2014 span was already balanced so the wrap is safe (parse verified). Shipment Info already collapsible; variance collapses (BO) \\u2014 together the product-lines region gets the screen. SPRINT B COMPLETE (B4 shell collapse, B5 hide templates, B6 kg auto-fill). REMAINING: Sprint C inventory master menu redesign (card nav + icons + stronger active state + separate Administration section + ERP header).' },
+    ],
+  },
+  {
+    version: 'v55.83-BR',
+    date: '2026-06-08',
+    label: 'Receiving: hide templates from product search',
+    items: [
+      '**\\u2705 Fewer wrong-product mistakes.** When searching for a product on a receipt line, family templates and archived items are now hidden by default \\u2014 you only see real, active products. Admins get a small checkbox to include templates when they need to.',
+      { superAdminOnly: true, text: 'v55.83-BR (Sprint B5; UI/filter only, NO calc, NO SQL). InventoryReceiving.jsx suggestionsFor(): products.filter now drops p.is_family_template===true and (is_archived===true || status===archived) unless includeTemplates. New includeTemplates state (default false). Admin-only checkbox (isSuperAdmin) in the Section B header: "Include templates & archived in product search". Non-admins always get active-real-products only. REMAINING: B4 product-entry screen real estate (collapse shipment info/expected totals to give lines 70-80% height), C inventory menu redesign.' },
+    ],
+  },
+  {
+    version: 'v55.83-BQ',
+    date: '2026-06-08',
+    label: 'Receiving: clear Container vs Products separation',
+    items: [
+      '**\\ud83e\\uddf1 Easier to read at a glance.** The receive-shipment screen now clearly separates the two parts: a labeled **Container Shell** section up top (what the shipping documents say) and a distinct, darker **Products Received** panel below (per-product detail). No more guessing where the container info ends and the product lines begin.',
+      { superAdminOnly: true, text: 'v55.83-BQ (Sprint A3; CSS/labels only, NO logic, NO SQL). InventoryReceiving.jsx: Shipment Expected Totals card -> lighter bg-slate-800/50 + violet accent + eyebrow "🅰 CONTAINER SHELL · FROM SHIPPING DOCUMENTS". Product-lines region container -> bg-slate-950/50 + top indigo accent border + eyebrow "🅱 PRODUCTS RECEIVED · PER-PRODUCT DETAIL" above the PRODUCT LINES (n) label. Purely visual; no field, calc, or save change. REMAINING in ticket: B4 product-entry screen real estate, B5 hide templates from product search (default active-only + admin include-templates checkbox), C inventory menu redesign (card nav + icons + active state + admin section + header).' },
+    ],
+  },
+  {
+    version: 'v55.83-BP',
+    date: '2026-06-08',
+    label: 'Receiving: collapsible product lines + kg auto-fill',
+    items: [
+      '**\\ud83d\\udce6 Product lines now collapse.** Each line has a \\u25b6/\\u25bc toggle; collapsed it shows a one-line summary (product \\u00b7 rolls \\u00b7 quantity + unit) so a container with many products no longer means endless scrolling. There are also Collapse all / Expand all buttons.',
+      '**\\u2696\\ufe0f Kg fills itself.** When a line\'s unit is kg, Quantity in Kilos auto-fills from Quantity Received \\u2014 but stays editable so you can still override it.',
+      { superAdminOnly: true, text: 'v55.83-BP (Sprint A2 + B6; UI/entry only, NO calc change, NO SQL). InventoryReceiving.jsx: (A2) new collapsedLines state {idx:bool} + toggleLineCollapsed; per-line purple header gets a chevron toggle + collapsed summary (roll_count rolls / quantity uom / +kg when uom!=kg); line body div gets style display:none when collapsed (avoids touching the large body close); Collapse all / Expand all controls by the PRODUCT LINES header. (B6) updateLineField: when uom===kg, mirrors Quantity Received -> quantity_kg on quantity/uom change, EDITABLE (preserves manual override: only re-mirrors when old kg was empty or still equal to old qty). computeVariance + save/validation untouched. REMAINING in ticket: A3 shell-vs-product visual separation, B4 product-entry real estate, B5 hide templates from product search, C inventory menu redesign. Color not shown in summary (no per-line color field; product name shown instead).' },
+    ],
+  },
+  {
+    version: 'v55.83-BO',
+    date: '2026-06-08',
+    label: 'Receiving: variance panel collapses by default',
+    items: [
+      '**\\ud83e\\uddfe More room to enter products.** On the receive-shipment screen the reconciliation/variance panel is now collapsed into a small status bar by default \\u2014 e.g. \\u201c\\u26a0 Variance \\u2014 Rolls: -483 \\u00b7 Weight: -23,659 kg [Expand]\\u201d \\u2014 giving back about a quarter of the screen. It opens automatically when you click Submit or Save Draft, and you can Expand/Collapse it anytime.',
+      { superAdminOnly: true, text: 'v55.83-BO (Sprint A #1 of the inventory-receiving UI ticket; UI-only, NO calc change, NO SQL). InventoryReceiving.jsx: new varExpanded state (default false). Reconciliation panel IIFE: when !varExpanded renders a compact status bar (balanced = green compact; variance = amber one-liner Rolls/Weight/UOM deltas via vtxt() + Expand button); when varExpanded renders the full 3-card grid + Collapse button. Auto-expand: setVarExpanded(true) at top of submitReceipt() and in Save Draft onClick. computeVariance + all reconciliation math untouched. REMAINING in ticket (queued, separate tested passes): A2 collapsible product lines w/ summary bar (Grade|Color|Rolls|Qty+UOM|Status), A3 shell-vs-product visual separation, B4 product-entry screen real estate, B5 hide templates from product search (active-only default + admin include-templates), B6 UOM=kg auto-fill Quantity-in-Kilos read-only, C menu redesign (card nav + icons + active state + admin section + header). Doing these in order, not all at once, to protect the receiving flow.' },
+    ],
+  },
+  {
+    version: 'v55.83-BN',
+    date: '2026-06-08',
+    label: 'Plaid bank feed — accounts + balances captured',
+    items: [
+      '**\\ud83c\\udfe6 Bank connection now captures your accounts.** Connecting a bank through Plaid now also records the account names and balances behind the scenes; balances stay owner/admin-only. Pulling transactions, the Sync button, last-sync time, and matching payments to invoices all continue to work.',
+      { superAdminOnly: true, text: 'v55.83-BN. SQL sql/v55-83-bn-plaid-accounts.sql: NEW plaid_accounts (connection_id, business_id, plaid_account_id UNIQUE, name, official_name, mask, type, subtype, iso_currency, current_balance, available_balance, is_read_only default true, updated_at) + RLS 4 policies; bank_connections += last_sync_status + last_sync_error. exchange/route.js: after storing the connection it now calls Plaid /accounts/get and upserts plaid_accounts (onConflict plaid_account_id); non-fatal (connection still succeeds if account pull errors). transactions/route.js: success update now also sets last_sync_status=ok + clears last_sync_error. CONFIRMED EXISTING (no change needed): Link + exchange (item->access_token in bank_connections), transactions via /transactions/get + upsert dedupe on plaid_transaction_id + removes pending-now-posted, BankTab Sync button + syncing state + error + Last synced display (does NOT show balances), matching in BankReviewTab creates accounting_invoice_payments (source plaid_match, sync_status pending_wave_sync, wave_payment_id null, wave_invoice_id/wave_customer_id carried) + payment_matches + recompute + AR history. Balance DISPLAY gating uses canViewBankBalances (BL). REMAINS: hourly cron (/api/plaid/sync), upgrade /transactions/get -> /transactions/sync (cursor), an accounts panel that shows balances to admins only, server-side AR/totals endpoint, Wave push. Plaid keys: Vercel env PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV=sandbox.' },
+    ],
+  },
+  {
+    version: 'v55.83-BM',
+    date: '2026-06-08',
+    label: 'Purchase Orders (create + print)',
+    items: [
+      '**\\ud83d\\udce6 New: Purchase Orders.** Under Accounting there is a new Purchase Orders tab to create, edit, and print/Save-PDF purchase orders for suppliers, with line items and totals. These are internal documents only \\u2014 they do not affect Wave, AR, customer balances, or any report.',
+      '**\\u2705 Proformas confirmed working.** Create, edit, Convert-to-invoice (keeps customer, line items, pricing, notes), and Print/Save-PDF are all in place; proformas don\'t affect AR until converted.',
+      { superAdminOnly: true, text: 'v55.83-BM. SQL sql/v55-83-bm-purchase-orders.sql: purchase_orders + purchase_order_items (+ ix_po_items_po), RLS enabled + 4 open policies each (RULE 9, DO-block idempotent). NEW PurchaseOrdersTab.jsx: list+search, create/edit modal w/ line items (qty*unit_price), Print (window.open + window.print HTML), delete (items-first). mayView = bank.view OR invoice.create OR super; mayEdit = super OR admin/owner OR edit_mappings OR invoice.create. Uses dbInsert/dbUpdate/dbDelete/logActivity (category purchase_orders). NO Wave fields, NO AR coupling, NO wave_sync. Wired as Accounting sub-tab purchaseorders. Proforma verified existing: convertProforma() (line ~276) + printDoc() in AccountingInvoicesTab. NEXT per Max: AR composition report, then Plaid automation. STILL FROZEN beyond that: product master, price history, Hub->Wave push, advanced reports.' },
+    ],
+  },
+  {
+    version: 'v55.83-BL',
+    date: '2026-06-08',
+    label: 'Financial visibility permissions',
+    items: [
+      '**\\ud83d\\udd10 Staff can do payment work without seeing owner-level totals.** Invoice and payment users can create invoices, view invoice balances, see amount due, and match bank deposits to invoices \\u2014 but company-wide totals (Open AR, overdue, aging, top-customer balances) and bank account balances now show \\u201cRestricted\\u201d unless the user has the matching Finance permission.',
+      { superAdminOnly: true, text: 'v55.83-BL (permissions; NO SQL \\u2014 flags read from existing module_permissions map). bank-permissions.js NEW flags: OPERATIONAL invoice.create/invoice.view/invoice.view_balance/payments.view/customer.view_ar/bank.view_transactions/bank.view_transaction_amounts (aliases incl existing bank.view + bank.see_amounts so current grants keep working). ADMIN-ONLY (super_admin OR role admin|owner OR explicit flag): finance.admin (umbrella), bank.view_account_balances, finance.view_company_totals, finance.view_all_customer_balances, finance.view_yearly_sales. AccountingDashboard: seeTotals = canViewCompanyTotals(isSuperAdmin, modulePerms, role); tmoney() => Restricted when !seeTotals; applied to Section A (Open/Overdue/Credits/non-USD), Section B upcoming-due, Section C aging buckets, Top customer balances; AR data-audit panel now requires isSuperAdmin && seeTotals. money()/seeAmounts (per-txn/per-invoice amounts) unchanged so matching + per-invoice work stays available. canViewBankBalances ready to gate bank account cards when the accounts UI ships (BK-bank). RULE enforced: a user can match a bank txn to an invoice without seeing bank account balance. NEXT: server-side ar-summary endpoint (strip totals in API for non-finance users) + plaid_accounts/balance gating + AR composition report. STILL FROZEN: product master, price history, Hub->Wave push, reports.' },
+    ],
+  },
+  {
+    version: 'v55.83-BK',
+    date: '2026-06-08',
+    label: 'One AR rule everywhere — only drafts excluded',
+    items: [
+      '**\\u2705 Unsent invoices now count as receivables again.** Only true Drafts are excluded from AR; unsent, sent, overdue, partial, and unpaid invoices all count \\u2014 with a single shared rule used by the dashboard, aging, overdue, customer balances, and Customer AR History so no screen can disagree.',
+      { superAdminOnly: true, text: 'v55.83-BK (dashboard/query logic; NO SQL). Clarified by Max: AR-eligible = approved = NOT DRAFT (unsent/SAVED INCLUDED). BJ had over-excluded SAVED. NEW src/lib/ar-eligibility.js isArEligible(inv): false if record_status void/cancelled/archived/deleted; if wave_status present -> eligible iff wave_status !== DRAFT (SAVED/SENT/OVERDUE/PARTIAL/UNPAID/OVERPAID all eligible); else Hub-created -> approval_status===approved. Keys off wave_status so AR is correct on EXISTING data without re-import. Applied: AccountingDashboard arInv filter -> isArEligible (removed approval+SAVED inline); AccountingCustomerHistory summary -> !isArEligible (replaced isDead+isDraft), currency guard kept. import-invoices isDraftStatus -> DRAFT only (SAVED imports as approved; list badge corrects on next re-import). reconcile isDraftWave -> DRAFT only + waveAR_nonDraft excludes DRAFT only (so it now includes unsent; figure rises by SAVED balances). Invoice LIST (AccountingInvoicesTab) intentionally unchanged \\u2014 it shows ALL statuses incl drafts. Currency separation (BJ) intact. NEXT (optional): AR composition report listing the invoices that sum to the AR figure. STILL FROZEN: product master, price history, Hub->Wave push, reports.' },
+    ],
+  },
+  {
     version: 'v55.83-BJ',
     date: '2026-06-08',
     label: 'Dashboard AR fix — drafts out, currencies separated',

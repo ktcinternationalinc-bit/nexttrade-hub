@@ -3,6 +3,7 @@
 //   open = total_amount - wave_imported_paid - SUM(hub/plaid payment rows)
 // Wave imported paid is NEVER turned into payment rows -> no double-count.
 import { useState, useEffect } from 'react';
+import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
@@ -62,8 +63,7 @@ export default function AccountingCustomerHistory(props) {
     var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, open: 0, openCount: 0, paidCount: 0, partialCount: 0, overdueCount: 0 };
     var today = new Date().toISOString().substring(0, 10);
     invs.forEach(function (i) {
-      if (isDead(i)) return;   // void/cancelled/archived/deleted excluded from AR
-      if (isDraft(i)) return;  // Wave drafts excluded from AR (still visible in Invoices)
+      if (!isArEligible(i)) return;  // shared rule: drafts + void/cancelled/archived/deleted excluded; unsent INCLUDED
       if ((i.currency || 'USD') !== 'USD') return; // keep currencies separate — USD summary only
       var total = n(i.total_amount);
       var wave = n(i.wave_imported_paid);

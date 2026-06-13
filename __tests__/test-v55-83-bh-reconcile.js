@@ -6,7 +6,7 @@ ok(!/`|\blet \b|\bconst |=>/.test(r),'reconcile route SWC-safe (no let/const/tem
 ok(/replace\(\/,\/g, ''\)/.test(r),'reconcile uses comma-stripped num()');
 ok(/wave_invoice_id/.test(r)&&/hubByWave\[n\.id\]/.test(r),'joins Wave to Hub on wave_invoice_id');
 ok(/Math\.abs\(wTotal - hTotal\) < 0\.01/.test(r)&&/Math\.abs\(wDue - hBal\) < 0\.01/.test(r)&&/Math\.abs\(wPaid - hPaid\) < 0\.01/.test(r),'match = total+due+paid within $0.01');
-ok(/waveAR_nonDraft/.test(r)&&/status !== 'DRAFT' && n\.status !== 'SAVED'/.test(r),'computes Wave AR excluding draft/unsent');
+ok(/waveAR_nonDraft/.test(r)&&/n\.status !== 'DRAFT'/.test(r),'computes Wave AR excluding DRAFT only (unsent included)');
 ok(/byYear/.test(r)&&/statusWave/.test(r)&&/topMismatches/.test(r)&&/missingInHub/.test(r)&&/missingInWave/.test(r),'reports by-year, status, mismatches, missing both ways');
 ok(/arDifference: r2\(hubAR - waveAR\)/.test(r),'reports Hub-Wave AR difference');
 ok(/return Response\.json\(report\)/.test(r)&&!/\.insert\(|\.update\(|\.delete\(/.test(r),'read-only: returns report, writes nothing');

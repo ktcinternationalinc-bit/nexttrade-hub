@@ -45,8 +45,8 @@ var SUBTABS = [
   // reports) remain imported in code but have no nav entry.
   { id: 'overview',        group: 'core',      name: 'Overview',          label: '📊 Overview', stage: 'View', desc: 'One-screen view of current stock by Family, with cascading multi-level classification filters.' },
   { id: 'productmaster',   group: 'core',      name: 'Product List',      label: '🏷️ Product List', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
-  { id: 'masterlists',     group: 'core',      name: 'Master Lists',      label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
-  { id: 'importproducts',  group: 'core',      name: 'Import Products',   label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
+  { id: 'masterlists',     group: 'admin',      name: 'Master Lists',      label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
+  { id: 'importproducts',  group: 'admin',      name: 'Import Products',   label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
   { id: 'warehouses',      group: 'core',      name: 'Warehouses',        label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
   { id: 'movementsledger', group: 'core',      name: 'Movements',         label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
   { id: 'adjustments',     group: 'core',      name: 'Adjustments',       label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
@@ -62,9 +62,10 @@ var SUBTABS = [
 ];
 
 var SUBTAB_GROUPS = [
-  { key: 'core',      label: 'Core Inventory' },
-  { key: 'import',    label: 'Import Operations' },
-  { key: 'financial', label: 'Financial Intelligence' },
+  { key: 'core',      label: 'Core Inventory',          icon: '📦' },
+  { key: 'import',    label: 'Import Operations',        icon: '🚢' },
+  { key: 'financial', label: 'Financial Intelligence',  icon: '📊' },
+  { key: 'admin',     label: 'Administration',          icon: '⚙️' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -208,12 +209,21 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       <div className="bg-gradient-to-r from-slate-800 via-indigo-900 to-slate-800 rounded-xl p-4 border border-indigo-500/30 shadow-lg">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-xl font-extrabold text-white">📦 Inventory</h2>
+            <h2 className="text-xl font-extrabold text-white">📦 Inventory Management</h2>
             <p className="text-xs text-indigo-200 font-medium">
               Track every shipment from arrival through sale. Costs, stock, and profit in one place.
             </p>
           </div>
           <div className="flex items-center gap-1 text-[11px]">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-indigo-400/30 mr-1">
+              <div className="text-right">
+                <div className="text-[9px] uppercase tracking-wider text-indigo-300 font-bold">Last Inventory Cutoff</div>
+                <div className="text-xs font-extrabold text-white">{cutoffLoading ? 'Loading…' : (cutoffDate ? cutoffDate : 'Not Set')}</div>
+              </div>
+              {canManageCutoff && (
+                <button type="button" onClick={function () { setCutoffPanelOpen(true); }} className="text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded px-2 py-1">Set Cutoff</button>
+              )}
+            </div>
             <span className="px-2 py-1 rounded bg-emerald-600 text-white font-extrabold ring-1 ring-emerald-700/50 shadow-sm">
               v55.83-A.6.27.45 · Invoice variant picker
             </span>
@@ -309,7 +319,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* Subtab nav — v55.83-H: grouped into Core Inventory / Import Operations /
           Financial Intelligence with clean (emoji-free) labels. All permission
           gating is preserved via the visibility helper below. */}
-      <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 space-y-2">
+      <div className="bg-slate-100 rounded-xl p-3 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {(function () {
           // Returns { hidden, available } for a subtab, applying the same
           // permission rules as before.
@@ -332,9 +342,12 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
               .filter(function (x) { return !x.vis.hidden; });
             if (tabsInGroup.length === 0) return null;
             return (
-              <div key={grp.key}>
-                <div className="text-[9px] font-extrabold uppercase tracking-[0.18em] text-slate-400 px-1 mb-1">{grp.label}</div>
-                <div className="flex gap-1 flex-wrap">
+              <div key={grp.key} className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
+                <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-slate-100">
+                  <span className="text-sm">{grp.icon}</span>
+                  <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">{grp.label}</span>
+                </div>
+                <div className="flex flex-col gap-1">
                   {tabsInGroup.map(function (x) {
                     var st = x.st;
                     var available = x.vis.available !== false;
@@ -344,14 +357,14 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
                         onClick={function () { if (available) setSubtab(st.id); }}
                         disabled={!available}
                         title={available ? st.desc : (st.id === 'pnl' ? 'Requires P&L permission' : st.id === 'layers' ? 'Requires cost access' : 'Coming in Stage ' + st.stage)}
-                        className={'px-3 py-1.5 rounded-md text-xs font-bold transition '
+                        className={'w-full text-left px-2.5 py-2 rounded-md text-xs font-bold transition flex items-center gap-1.5 '
                           + (isActive
-                            ? 'bg-indigo-600 text-white shadow'
+                            ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
                             : available
-                              ? 'text-slate-700 hover:bg-white border border-transparent hover:border-slate-200'
+                              ? 'text-slate-700 hover:bg-slate-100 border border-transparent hover:border-slate-200'
                               : 'text-slate-400 cursor-not-allowed')}>
-                        {st.name}
-                        {!available && <span className="ml-1 text-[9px] opacity-60">· Stage {st.stage}</span>}
+                        <span>{st.label}</span>
+                        {!available && <span className="ml-auto text-[9px] opacity-60">Stage {st.stage}</span>}
                       </button>
                     );
                   })}

@@ -11,7 +11,7 @@ function curOf(n) {
   if (n.total && n.total.currency && n.total.currency.code) { return n.total.currency.code; }
   return 'USD';
 }
-function isDraftStatus(st) { return st === 'DRAFT' || st === 'SAVED'; }
+function isDraftStatus(st) { return st === 'DRAFT'; }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function payStatus(total, due, paid) {
   if (due != null && due <= 0.0001) return 'paid';

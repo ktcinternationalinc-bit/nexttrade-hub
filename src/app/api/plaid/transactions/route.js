@@ -76,7 +76,7 @@ export async function POST(req) {
       catch (e) { console.warn('[plaid] supersede cleanup failed:', (e && e.message) || e); }
     }
 
-    await supabase.from('bank_connections').update({ last_synced: new Date().toISOString() }).eq('id', conn.id);
+    await supabase.from('bank_connections').update({ last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null }).eq('id', conn.id);
 
     return NextResponse.json({ synced: synced, superseded: superseded.length, accounts: data.accounts || [], total: data.total_transactions });
   } catch (e) {

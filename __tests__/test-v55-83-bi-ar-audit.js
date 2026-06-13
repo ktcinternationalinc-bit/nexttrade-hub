@@ -5,7 +5,7 @@ var r=p('src/app/api/wave/reconcile/route.js');var ui=p('src/components/WaveImpo
 ok(!/`|\blet \b|\bconst |=>/.test(r),'reconcile route still SWC-safe');
 ok(/total\{ value currency\{ code \} \}/.test(r)&&/customer\{ id name \}/.test(r),'Wave query pulls currency + customer');
 ok(/function buildConverter/.test(r)&&/idx\['USD>' \+ cur\]/.test(r)&&/amount \/ rUsdToCur/.test(r),'date-matched FX converter (USD>cur => divide)');
-ok(/isDraftWave/.test(r)&&/st === 'DRAFT' \|\| st === 'SAVED'/.test(r),'identifies Wave drafts (DRAFT/SAVED)');
+ok(/isDraftWave/.test(r)&&/function isDraftWave\(st\) \{ return st === 'DRAFT';/.test(r),'identifies Wave drafts (DRAFT only; unsent counts)');
 ok(/h\.approval_status !== 'approved'/.test(r)&&/hubLive\(h\)/.test(r),'AR scope = Hub live + approved (mirrors dashboard)');
 ok(/currentNative/.test(r)&&/draftNative/.test(r)&&/exDraftNative/.test(r)&&/voidishNative/.test(r)&&/normalizedUsd/.test(r),'AR ladder: current/drafts/exDraft/voidish/normalizedUsd');
 ok(/byCurrencyNative/.test(r)&&/unconvertibleNative/.test(r),'reports by-currency + unconvertible');

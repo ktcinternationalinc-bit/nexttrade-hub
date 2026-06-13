@@ -6,7 +6,8 @@
 // of overdue totals unless the toggle is on.
 import { useState, useEffect } from 'react';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
-import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
+import { canViewBank, canSeeAmounts, canViewCompanyTotals } from '../lib/bank-permissions';
+import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -19,7 +20,9 @@ export default function AccountingDashboard(props) {
   var modulePerms = props.modulePerms || {};
   var mayView = canViewBank(isSuperAdmin, modulePerms);
   var seeAmounts = canSeeAmounts(isSuperAdmin, modulePerms);
+  var seeTotals = canViewCompanyTotals(isSuperAdmin, modulePerms, userProfile && userProfile.role);
   function money(n) { return seeAmounts ? ('$' + fmt(n)) : '•••••'; }
+  function tmoney(n) { return seeTotals ? ('$' + fmt(n)) : 'Restricted'; }
 
   var [d, setD] = useState(null);
   var [loading, setLoading] = useState(true);
@@ -64,7 +67,7 @@ export default function AccountingDashboard(props) {
       function isLive(i) { var st = i.record_status; return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'; }
       function paidOf(i) { return r2((Number(i.wave_imported_paid) || 0) + (payByInv[i.id] || 0)); }
       function openOf(i) { return r2((Number(i.total_amount) || 0) - (Number(i.wave_imported_paid) || 0) - (payByInv[i.id] || 0)); }
-      var arInv = inv.filter(function (i) { return isLive(i) && i.approval_status === 'approved' && i.wave_status !== 'DRAFT' && i.wave_status !== 'SAVED'; });
+      var arInv = inv.filter(function (i) { return isArEligible(i); });
 
       var overdueRows = [], currentRows = [];
       var openTotal = 0, openCount = 0, creditTotal = 0;
@@ -179,16 +182,16 @@ export default function AccountingDashboard(props) {
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title="Open AR (USD)" big={money(d.openTotal)} sub={d.openCount + ' open · drafts excluded'} tone="bg-slate-800" />
-          <Stat title="Overdue AR (USD)" big={money(overdueTotal)} sub={shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
-          <Stat title="Customer credits (USD)" big={money(d.creditTotal)} sub="overpaid / not AR" tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
+          <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={d.openCount + ' open · drafts excluded'} tone="bg-slate-800" />
+          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
+          <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub="overpaid / not AR" tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
           <Stat title="Approvals pending" big={d.pendingApproval} sub="invoices in review" tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
         </div>
         {d.nonUsd && d.nonUsd.length > 0 && (
           <div className="mt-2">
             <div className="text-[11px] font-bold text-amber-300 mb-1">Receivables in other currencies (shown separately — never added to USD):</div>
             <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-              {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeAmounts ? (n.cur + ' ' + fmt(n.open)) : '•••••'} sub={n.count + ' invoice(s) · native'} tone="bg-amber-900" />; })}
+              {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeTotals ? (n.cur + ' ' + fmt(n.open)) : 'Restricted'} sub={n.count + ' invoice(s) · native'} tone="bg-amber-900" />; })}
             </div>
             <div className="text-[10px] text-slate-400 mt-1">To fold these into one USD figure, log the USD↔currency rate in FX Rates and they’ll convert; until then they stay in their own currency.</div>
           </div>
@@ -198,10 +201,10 @@ export default function AccountingDashboard(props) {
       {/* B — Upcoming Due */}
       <Section title="B · Upcoming due (not overdue)">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-          <Stat title="Due now" big={money(nowB.t)} sub={nowB.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 1–30 days" big={money(d30.t)} sub={d30.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 31–60 days" big={money(d60.t)} sub={d60.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 61–90 days" big={money(d90.t)} sub={d90.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due now" big={tmoney(nowB.t)} sub={nowB.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 1–30 days" big={tmoney(d30.t)} sub={d30.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 31–60 days" big={tmoney(d60.t)} sub={d60.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 61–90 days" big={tmoney(d90.t)} sub={d90.c + ' invoice(s)'} tone="bg-slate-800" />
         </div>
       </Section>
 
@@ -209,10 +212,10 @@ export default function AccountingDashboard(props) {
       <Section title="C · Overdue aging">
         <div className="flex items-center justify-between mb-2">
           <div className="grid gap-2 flex-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
-            <Stat title="Overdue 1–30" big={money(o30.t)} sub={o30.c + ' inv'} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 31–60" big={money(o60.t)} sub={o60.c + ' inv'} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 61–90" big={money(o90.t)} sub={o90.c + ' inv'} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 90+" big={money(o90p.t)} sub={o90p.c + ' inv'} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
+            <Stat title="Overdue 1–30" big={tmoney(o30.t)} sub={o30.c + ' inv'} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 31–60" big={tmoney(o60.t)} sub={o60.c + ' inv'} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 61–90" big={tmoney(o90.t)} sub={o90.c + ' inv'} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 90+" big={tmoney(o90p.t)} sub={o90p.c + ' inv'} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
           </div>
         </div>
         <label className="text-[11px] text-slate-200 font-bold flex items-center gap-2 mb-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer w-fit">
@@ -276,13 +279,13 @@ export default function AccountingDashboard(props) {
         <div className="bg-white text-slate-900 rounded-lg p-3">
           {d.custBalances.length === 0 ? <div className="text-xs text-slate-500 italic">No outstanding balances.</div> :
             d.custBalances.map(function (c, i) {
-              return <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100 last:border-0"><span className="font-medium text-slate-900 truncate">{c.name}</span><span className="font-mono font-bold text-slate-900">{money(c.bal)}</span></div>;
+              return <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100 last:border-0"><span className="font-medium text-slate-900 truncate">{c.name}</span><span className="font-mono font-bold text-slate-900">{tmoney(c.bal)}</span></div>;
             })}
           <div className="text-[10px] text-slate-500 mt-1">total − Wave paid − bank payments · void/cancelled/archived excluded</div>
         </div>
       </Section>
 
-      {isSuperAdmin && (
+      {isSuperAdmin && seeTotals && (
         <div className="mt-4 bg-slate-950 text-slate-100 rounded-lg p-3 border border-slate-700 text-[11px]">
           <div className="font-extrabold text-amber-300 mb-1">🔬 AR data audit (super-admin)</div>
           <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))' }}>

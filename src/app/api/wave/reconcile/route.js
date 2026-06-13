@@ -138,7 +138,7 @@ export async function POST(request) {
       var wPaid = r2(num(n.amountPaid));
       var wDue = r2(num(n.amountDue));
       waveTotalSum += wTotal; wavePaidSum += wPaid; waveAR += wDue;
-      if (n.status !== 'DRAFT' && n.status !== 'SAVED') { waveAR_nonDraft += wDue; }
+      if (n.status !== 'DRAFT') { waveAR_nonDraft += wDue; }
 
       var h = hubByWave[n.id];
       if (!h) { missingInHub += 1; mism.push({ num: n.invoiceNumber, year: y, in: 'wave_only', wStatus: n.status, wTotal: wTotal, wPaid: wPaid, wDue: wDue }); return; }
@@ -177,7 +177,7 @@ export async function POST(request) {
     var fxRes = await admin.from('fx_rates').select('from_currency,to_currency,rate,rate_date').then(function (x) { return x; }).catch(function () { return { data: [] }; });
     var convert = buildConverter((fxRes && fxRes.data) || []);
 
-    function isDraftWave(st) { return st === 'DRAFT' || st === 'SAVED'; }
+    function isDraftWave(st) { return st === 'DRAFT'; }
     function hubLive(h) { var rs = h && h.record_status; return rs !== 'void' && rs !== 'cancelled' && rs !== 'archived' && rs !== 'deleted'; }
     function hubVoidish(h) { var rs = h && h.record_status; return rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted'; }
 
