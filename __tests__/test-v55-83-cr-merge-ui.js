@@ -8,7 +8,7 @@ ok(/Merge Shipments\{selectedNumbers\(\)\.length/.test(r),'Merge button (count) 
 ok(/disabled=\{selectedNumbers\(\)\.length < 2\}/.test(r),'button disabled until 2 selected');
 ok(/Show merged/.test(r) && /setShowMerged/.test(r),'Show merged toggle');
 ok(/function isMergedSource\(g\)/.test(r),'merged-source detection');
-ok(/grouped\.filter\(function \(g\) \{ return showMerged \|\| !isMergedSource\(g\)/.test(r),'list hides merged sources unless Show merged');
+ok(/grouped\.filter\(function \(g\) \{ return showMerged \|\| \(!isMergedSource\(g\)/.test(r),'list hides merged sources unless Show merged');
 ok(/merged_source_breakdown: g\.sources/.test(r),'aggregated line stores source breakdown jsonb');
 ok(/status: 'merged', merged_into_shipment_id: targetRn/.test(r),'source lines marked merged + linked (not deleted)');
 ok(/from\('inventory_shipment_merges'\)|'inventory_shipment_merges'/.test(r),'writes audit row');

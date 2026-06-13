@@ -265,6 +265,59 @@ export default function InventoryReceiving(props) {
   var [mergeAuditBusy, setMergeAuditBusy] = useState(false);
   var [previewExpanded, setPreviewExpanded] = useState({});
   function togglePreviewRow(i) { setPreviewExpanded(function (p) { var n = Object.assign({}, p); n[i] = !n[i]; return n; }); }
+  // v55.83-DA — Unmerge (reverse a merge)
+  var [unmergeTarget, setUnmergeTarget] = useState(null); // the grouped row being unmerged
+  var [unmergeConfirmText, setUnmergeConfirmText] = useState('');
+  var [unmergeNotes, setUnmergeNotes] = useState('');
+  var [unmergeBusy, setUnmergeBusy] = useState(false);
+  function mergeGroupOf(g) { var grp = null; (g.lines || []).forEach(function (l) { if (l.merge_group_id && l.merged_source_breakdown) { grp = l.merge_group_id; } }); return grp; }
+  function isMergeTarget(g) { return !!mergeGroupOf(g); }
+  function isUnmergedTarget(g) { var hdrUn = g.header && g.header.unmerged_at; var allRev = g.lines && g.lines.length > 0 && g.lines.every(function (l) { return l.status === 'reversed'; }); return !!(hdrUn || allRev); }
+  async function executeUnmerge(g) {
+    var groupId = mergeGroupOf(g);
+    if (!groupId) { toast.error('This shipment is not a merge target — nothing to unmerge.'); return; }
+    var targetRn = g.receipt_number;
+    var targetLines = receipts.filter(function (r) { return r.merge_group_id === groupId && r.status !== 'merged' && r.status !== 'reversed' && r.merged_source_breakdown; });
+    var srcLines = receipts.filter(function (r) { return r.merge_group_id === groupId && r.status === 'merged'; });
+    if (srcLines.length === 0) { toast.error('No preserved source lines found for this merge — cannot safely unmerge.'); return; }
+    var anyFinal = targetLines.some(function (r) { return r.status === 'finalized'; });
+    if (anyFinal && unmergeConfirmText.trim() !== 'UNMERGE SHIPMENT') { toast.error('This merged shipment is finalized/costed — type UNMERGE SHIPMENT to confirm.'); return; }
+    var uid = userProfile && userProfile.id;
+    // Original per-line status preserved in each target line's merged_source_breakdown
+    var origStatus = {};
+    targetLines.forEach(function (tl) { (tl.merged_source_breakdown || []).forEach(function (sb) { if (sb.line_id) { origStatus[sb.line_id] = sb.status || 'received'; } }); });
+    setUnmergeBusy(true);
+    try {
+      for (var i = 0; i < srcLines.length; i++) {
+        var sl = srcLines[i];
+        await supabase.from('inventory_stock_receipts').update({ status: origStatus[sl.id] || 'received', merged_into_shipment_id: null, merge_group_id: null, updated_by: uid }).eq('id', sl.id);
+      }
+      var rnSet = {};
+      srcLines.forEach(function (sl) { var rn = sl.source_receipt_number || sl.receipt_number; if (rn && rn !== targetRn) { rnSet[rn] = true; } });
+      var rns = Object.keys(rnSet);
+      for (var h = 0; h < rns.length; h++) {
+        await supabase.from('inventory_shipment_headers').update({ merged_into_shipment_id: null, merged_at: null, merged_by: null, merge_group_id: null }).eq('receipt_number', rns[h]);
+      }
+      var reversedIds = [];
+      for (var t = 0; t < targetLines.length; t++) {
+        await supabase.from('inventory_stock_receipts').update({ status: 'reversed', updated_by: uid }).eq('id', targetLines[t].id);
+        reversedIds.push(targetLines[t].id);
+      }
+      await supabase.from('inventory_shipment_headers').update({ unmerged_at: new Date().toISOString(), unmerged_by: uid, unmerge_notes: unmergeNotes || null }).eq('receipt_number', targetRn);
+      await dbInsert('inventory_shipment_unmerges', {
+        original_merge_group_id: groupId, unmerge_type: 'full_shipment', target_receipt_number: targetRn,
+        restored_source_receipt_numbers: rns, restored_source_line_ids: srcLines.map(function (x) { return x.id; }),
+        reversed_target_line_ids: reversedIds,
+        totals_before_unmerge: { target_lines: targetLines.length },
+        totals_after_unmerge: { restored_source_lines: srcLines.length, restored_shipments: rns.length },
+        unmerged_by: uid, notes: unmergeNotes || null
+      }, uid);
+      toast.success('Unmerged — ' + rns.length + ' source shipment(s) restored to the list.');
+      setUnmergeTarget(null); setUnmergeConfirmText(''); setUnmergeNotes('');
+      load();
+    } catch (e) { console.error('[unmerge] failed', e); toast.error('Unmerge failed: ' + ((e && e.message) || 'unknown — check console')); }
+    setUnmergeBusy(false);
+  }
   async function openMergeAudit(groupId) {
     if (!groupId) { return; }
     setMergeAuditGroup(groupId); setMergeAuditRows([]); setMergeAuditBusy(true);
@@ -1747,7 +1800,7 @@ export default function InventoryReceiving(props) {
               : 'No receipts yet — click "+ New Receipt" to record one'}
           </div>
         ) : (
-          grouped.filter(function (g) { return showMerged || !isMergedSource(g); }).map(function (g) {
+          grouped.filter(function (g) { return showMerged || (!isMergedSource(g) && !isUnmergedTarget(g)); }).map(function (g) {
             var wh = warehouseById(g.warehouse_id);
             var isCancelled = g.status === 'cancelled';
             var isFinalized = g.status === 'finalized';
@@ -1848,6 +1901,15 @@ export default function InventoryReceiving(props) {
                       title="Edit this receipt — change header, lines, rolls, costs"
                     >
                       ✏️ Edit
+                    </button>
+                  )}
+                  {canEdit && isMergeTarget(g) && !isUnmergedTarget(g) && (
+                    <button
+                      onClick={function (e) { e.stopPropagation(); setUnmergeConfirmText(''); setUnmergeNotes(''); setUnmergeTarget(g); }}
+                      className="px-2 py-1 text-[10px] bg-violet-500/20 hover:bg-violet-500/30 text-violet-200 rounded font-bold border border-violet-600/40"
+                      title="Reverse this merge — restore the original source shipments"
+                    >
+                      ⎘ Unmerge
                     </button>
                   )}
                   {/* v55.83-A.6.27.35 — Reopen button: finalized receipts only, super_admin only */}
@@ -2999,6 +3061,51 @@ export default function InventoryReceiving(props) {
               </div>
               <div className="flex justify-end border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
                 <button onClick={function () { setMergeAuditGroup(null); }} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {unmergeTarget && (() => {
+        var g = unmergeTarget;
+        var groupId = mergeGroupOf(g);
+        var targetLines = receipts.filter(function (r) { return r.merge_group_id === groupId && r.status !== 'merged' && r.status !== 'reversed' && r.merged_source_breakdown; });
+        var srcLines = receipts.filter(function (r) { return r.merge_group_id === groupId && r.status === 'merged'; });
+        var rnSet = {}; srcLines.forEach(function (sl) { var rn = sl.source_receipt_number || sl.receipt_number; if (rn && rn !== g.receipt_number) { rnSet[rn] = true; } });
+        var rns = Object.keys(rnSet);
+        var anyFinal = targetLines.some(function (r) { return r.status === 'finalized'; });
+        var fmt = function (n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+        var sumRolls = srcLines.reduce(function (a, b) { return a + (Number(b.roll_count) || 0); }, 0);
+        var sumQty = srcLines.reduce(function (a, b) { return a + (Number(b.quantity) || 0); }, 0);
+        return (
+          <div className="fixed inset-0 z-[215] bg-black/70 backdrop-blur-sm flex items-start justify-center" style={{ padding: 16, overflow: 'hidden' }} onClick={function () { if (!unmergeBusy) setUnmergeTarget(null); }}>
+            <div className="bg-white rounded-2xl shadow-2xl" onClick={function (e) { e.stopPropagation(); }} style={{ maxWidth: 620, width: '100%', maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
+              <div className="rounded-t-2xl flex justify-between items-center" style={{ background: '#6d28d9', padding: '14px 20px', flexShrink: 0 }}>
+                <div className="text-lg font-extrabold text-white">⎘ Unmerge shipment {g.receipt_number}</div>
+                <button onClick={function () { if (!unmergeBusy) setUnmergeTarget(null); }} className="text-white text-xl font-bold" style={{ width: 32, height: 32 }}>✕</button>
+              </div>
+              <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }} className="text-slate-900 text-sm">
+                <p className="mb-3">You are about to unmerge this shipment. The original source shipments will be restored as separate shipments on the list, and this merged shipment will be marked reversed (kept for audit under <b>Show merged</b>).</p>
+                <div className="bg-slate-100 rounded-lg p-3 mb-3 text-xs space-y-1">
+                  <div><b>Merged shipment:</b> <span className="font-mono">{g.receipt_number}</span></div>
+                  <div><b>Merge group:</b> <span className="font-mono text-[10px]">{groupId || '—'}</span></div>
+                  <div><b>Source shipments to restore:</b> <span className="font-mono">{rns.join(', ') || '—'}</span></div>
+                  <div><b>Source lines to restore:</b> {srcLines.length} · <b>{fmt(sumRolls)}</b> rolls · <b>{fmt(sumQty)}</b> qty</div>
+                  <div><b>Aggregated lines to reverse:</b> {targetLines.length}</div>
+                </div>
+                <div className="bg-amber-100 text-amber-950 rounded-lg p-2 text-xs font-semibold mb-2">⚠️ Inventory totals will change: after unmerge the Overview counts the restored source shipments again and stops counting this merged shipment. No double-count.</div>
+                {anyFinal && (
+                  <div className="bg-red-100 text-red-950 rounded-lg p-2 text-xs font-semibold mb-2">
+                    This merged shipment is finalized/costed and may already affect inventory, costing or sales. Unmerge may change reporting.
+                    <input value={unmergeConfirmText} onChange={function (e) { setUnmergeConfirmText(e.target.value); }} placeholder="Type: UNMERGE SHIPMENT" className="w-full mt-1 bg-white border border-red-300 rounded px-2 py-1 text-slate-900" />
+                  </div>
+                )}
+                <textarea value={unmergeNotes} onChange={function (e) { setUnmergeNotes(e.target.value); }} placeholder="Unmerge notes (optional)" rows={2} className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs text-slate-900" />
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
+                <button onClick={function () { if (!unmergeBusy) setUnmergeTarget(null); }} disabled={unmergeBusy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg">Cancel</button>
+                <button onClick={function () { executeUnmerge(g); }} disabled={unmergeBusy} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg">{unmergeBusy ? 'Unmerging…' : 'Confirm Unmerge'}</button>
               </div>
             </div>
           </div>

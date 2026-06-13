@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DA',
+    date: '2026-06-08',
+    label: 'Unmerge — reverse a merged shipment',
+    items: [
+      '**⎘ You can now undo a merge.** A merged shipment shows an **Unmerge** button. Confirm, and the original source shipments come back to the list as separate shipments, while the merged shipment is marked reversed and kept for audit (visible under Show merged). The Inventory Overview goes back to counting the original shipments and stops counting the merged one — no double-count. If the merged shipment was finalized/costed, you must type UNMERGE SHIPMENT to confirm.',
+      { superAdminOnly: true, text: 'v55.83-DA (NEEDS SQL in chat). Full-shipment unmerge. NEW state unmergeTarget/unmergeConfirmText/unmergeNotes/unmergeBusy + mergeGroupOf(g)/isMergeTarget(g)/isUnmergedTarget(g). Unmerge button on blotter rows that are merge targets (line has merge_group_id + merged_source_breakdown) and not already unmerged. executeUnmerge(g) reverses purely from preserved data: restores each source line (status from the target line\u2019s merged_source_breakdown[].status, else received; clears merged_into_shipment_id + merge_group_id), clears merged_into/merged_at/merge_group_id on the source HEADERS, sets the aggregated target lines status=reversed, stamps target header unmerged_at/by/notes, writes inventory_shipment_unmerges audit row. Blotter hides unmerged targets unless Show merged (isUnmergedTarget = header.unmerged_at or all-lines-reversed). InventoryOverview now also skips status=reversed in the stats loop AND historyReceipts -> restored sources count, reversed target does not (no double-count). Finalized merge requires typed UNMERGE SHIPMENT. DEFERRED (Part 3, honestly not built): product-LINE-level unmerge (riskier — partial reversal of one aggregated line); and sold/movement-after-merge hard block beyond the finalized gate. SQL below adds header unmerge cols + inventory_shipment_unmerges table + RLS.' },
+    ],
+  },
+  {
     version: 'v55.83-CZ',
     date: '2026-06-08',
     label: 'Bank Review: test/production silo leak fixed',

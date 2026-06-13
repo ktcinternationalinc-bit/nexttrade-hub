@@ -129,7 +129,7 @@ export default function InventoryOverview(props) {
         .select('*')
         .eq('product_id', product.id)
         .order('receipt_date', { ascending: false });
-      if (!inbRes.error) setHistoryReceipts((inbRes.data || []).filter(function (r) { return r.status !== 'cancelled' && r.status !== 'merged'; }));
+      if (!inbRes.error) setHistoryReceipts((inbRes.data || []).filter(function (r) { return r.status !== 'cancelled' && r.status !== 'merged' && r.status !== 'reversed'; }));
       else console.warn('[history] receipts query failed:', inbRes.error.message);
     } catch (e) { console.warn('[history] receipts threw:', e); }
     try {
@@ -274,7 +274,7 @@ export default function InventoryOverview(props) {
       // just to satisfy the >0 check. Counting it here showed expected/unverified
       // goods as real on-hand stock AND inflated Original. On-hand = only what has
       // actually arrived: 'active' / 'received' (pending cost) or 'finalized'.
-      if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged') return;
+      if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged' || r.status === 'reversed') return;
       var q = Number(r.quantity || 0);
       s.original_qty += q;
       var uom = (r.uom || 'unit').toLowerCase();
