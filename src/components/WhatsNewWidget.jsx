@@ -33,6 +33,33 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DD',
+    date: '2026-06-08',
+    label: 'Unmerge fix — source lines now load, Confirm guarded',
+    items: [
+      '**\u2398 Unmerge now actually loads the original shipments.** Before, the unmerge window showed "Source shipments to restore: —" and "0 rolls" because it read from an in-memory list capped at 1,000 rows, so the older source lines were missing. It now loads the source shipments directly, so you see exactly which shipments and how many lines/rolls/quantity will be restored. If nothing can be found to restore, Confirm Unmerge is disabled with a clear red message instead of doing nothing. Unmerging does not change your total inventory — it only restores the original shipments and stops counting the merged one.',
+      { superAdminOnly: true, text: 'v55.83-DD (no SQL). ROOT CAUSE: the unmerge modal + executeUnmerge filtered the in-memory receipts array (loaded with a plain select capped at 1000 rows) for status=merged source lines; those source lines are older (created before the merge) so on a table with more than 1000 rows they fall outside the cap, giving srcLines=0 while the newest target aggregated lines loaded fine — the Source dash / 0 rolls / 10 aggregated screenshot; Confirm stayed enabled and the click only hit a guard toast = looked like a no-op. FIX: new loadUnmergeData(g) queries inventory_stock_receipts filtered by merge_group_id directly (scoped query returns only that group, no 1000 cap), splits into srcLines status=merged and targetLines (has merged_source_breakdown, not merged/reversed); stored in unmergeData state with loading/error; the Unmerge button calls it on open. Modal renders loading/error/lists from unmergeData, lists each source receipt number and lines/rolls/qty/kg; Confirm disabled when loading or srcLines.length is 0 with a red message. executeUnmerge now consumes unmergeData instead of receipts. Overview still skips merged and reversed, so the total quantity is constant across unmerge.' },
+    ],
+  },
+  {
+    version: 'v55.83-DC',
+    date: '2026-06-08',
+    label: 'Bank Review silo banner now clearly readable',
+    items: [
+      '**🏷️ You can tell Test from Production at a glance.** The silo banner at the top of Bank Review is now larger and clearer: the business name is big and bold, with a coloured mode pill (amber TEST / green PRODUCTION, plus READ-WRITE or READ-ONLY) and a line confirming the data is scoped to that silo. If the selected business is not registered, the whole banner turns red and tells you scoping is off — no more low-contrast text you cannot read.',
+      { superAdminOnly: true, text: 'v55.83-DC (no SQL). BankReviewTab silo banner restyled: was a single cramped text-xs line whose not-registered variant used text-amber-300 on bg-slate-800 (low contrast = the unreadable case). Now a border-2 box, two-tier (uppercase label + text-lg business name + scope sub-line) with a bold mode pill (bg-amber-600/bg-emerald-700 white text). Registered TEST=amber-100/950, PRODUCTION=emerald-100/950; NOT registered=red-100/950 border-red-500 (high contrast). Real apostrophe via JS-string \u2019 (renders correctly, not raw text). Purge-safe literal classes. No logic change to scoping (CZ/DB).' },
+    ],
+  },
+  {
+    version: 'v55.83-DB',
+    date: '2026-06-08',
+    label: 'Bank data: assign connections to a silo + block stray syncs',
+    items: [
+      '**🏦 Every bank connection now belongs to one accounting silo.** Connecting a bank requires a Wave business selected first (the connection is assigned to it). An **Unassigned Bank Data** panel on the Bank tab lists any old/untagged connections, shows how many transactions they have, and lets you assign each to a silo — which tags all its transactions at once and logs it. A connection that has no silo can no longer be synced (you get a clear message instead of leaking untagged transactions).',
+      { superAdminOnly: true, text: 'v55.83-DB (NEEDS SQL in chat). Builds on CB (exchange stamps bank_connections.wave_business_id; bank-ingest mapPlaidTransaction inherits it onto every bank_transaction) and CZ (Bank Review customer+invoice scoping + silo banner). NEW: (1) /api/plaid/transactions blocks sync with 409 if conn.wave_business_id is null. (2) BankTab.connectBank guards: requires getActiveWaveBusiness() or it refuses to open Plaid Link. (3) Unassigned Bank Data panel: connections.filter(!wave_business_id); per-connection silo <select> from wave_business_registry; assignConnection() counts txns, updates bank_connections (wave_business_id + assigned_by + assigned_at), updates ALL bank_transactions.wave_business_id WHERE connection_id, inserts bank_data_assignment_audit row, reloads. Bank lists already scoped via scopeIfRegistered. NOT built (honest): a separate full-page Unassigned admin route (this is an inline panel on the Bank tab); the explicit pre-Plaid multi-option chooser modal (connection assigns to the ACTIVE silo + guard instead); per-account (vs per-connection) assignment. SQL below: bank_connections assigned_by/assigned_at + bank_data_assignment_audit + RLS.' },
+    ],
+  },
+  {
     version: 'v55.83-DA',
     date: '2026-06-08',
     label: 'Unmerge — reverse a merged shipment',

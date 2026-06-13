@@ -19,7 +19,7 @@ ok(/from\('inventory_shipment_unmerges'\)|'inventory_shipment_unmerges'/.test(r)
 ok(/unmerge_type: 'full_shipment'/.test(r) && /restored_source_receipt_numbers: rns/.test(r) && /reversed_target_line_ids: reversedIds/.test(r),'audit captures restored + reversed ids');
 // safety
 ok(/anyFinal && unmergeConfirmText\.trim\(\) !== 'UNMERGE SHIPMENT'/.test(r),'finalized requires typed UNMERGE SHIPMENT');
-ok(/No preserved source lines found for this merge/.test(r),'blocks if no preserved source lines (no guessing)');
+ok(/No source shipment lines were found for this merge/.test(r),'blocks if no preserved source lines (no guessing)');
 // blotter + overview no double count
 ok(/showMerged \|\| \(!isMergedSource\(g\) && !isUnmergedTarget\(g\)\)/.test(r),'blotter hides unmerged target unless Show merged');
 ok(/r\.status === 'cancelled' \|\| r\.status === 'pending_detail' \|\| r\.status === 'merged' \|\| r\.status === 'reversed'/.test(o),'Overview skips reversed (no double-count)');

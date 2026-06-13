@@ -30,6 +30,8 @@ export async function POST(req) {
     var connRes = await supabase.from('bank_connections').select('*').eq('id', connection_id).single();
     if (connRes.error || !connRes.data) return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     var conn = connRes.data;
+    // v55.83-DB — never sync an unassigned bank connection (would create untagged transactions that leak across silos)
+    if (!conn.wave_business_id) { return NextResponse.json({ error: 'This bank connection is not assigned to an accounting silo. Assign it (Bank tab -> Unassigned Bank Data) before syncing.' }, { status: 409 }); }
 
     var today = new Date().toISOString().split('T')[0];
     var thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];

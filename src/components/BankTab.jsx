@@ -17,6 +17,23 @@ export default function BankTab({ user, supabase }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [bizRegistry, setBizRegistry] = useState([]);
+  const [assignSel, setAssignSel] = useState({}); // { connId: wave_business_id }
+  const [assigning, setAssigning] = useState(false);
+  const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
+  const assignConnection = async (conn) => {
+    const bizId = assignSel[conn.id];
+    if (!bizId) { setError('Choose an accounting silo to assign this bank connection to.'); return; }
+    setAssigning(true); setError('');
+    try {
+      let cnt = 0;
+      try { const cr = await supabase.from('bank_transactions').select('id', { count: 'exact', head: true }).eq('connection_id', conn.id); cnt = (cr && cr.count) || 0; } catch (eC) {}
+      await supabase.from('bank_connections').update({ wave_business_id: bizId, assigned_by: (user && user.id) || null, assigned_at: new Date().toISOString() }).eq('id', conn.id);
+      await supabase.from('bank_transactions').update({ wave_business_id: bizId }).eq('connection_id', conn.id);
+      try { await supabase.from('bank_data_assignment_audit').insert({ record_type: 'bank_connection', bank_connection_id: conn.id, transaction_count: cnt, old_wave_business_id: conn.wave_business_id || null, new_wave_business_id: bizId, assigned_by: (user && user.id) || null }); } catch (eA) { console.error('[bank-assign] audit', eA); }
+      await loadData();
+    } catch (e) { console.error('[bank-assign]', e); setError('Assign failed: ' + ((e && e.message) || e)); }
+    setAssigning(false);
+  };
   useEffect(() => { fetchAllRows('wave_business_registry', '*').then((r) => setBizRegistry((r && r.data) || [])).catch(() => {}); }, []);
   // v55.83-BU — know which Plaid environment is live (sandbox vs production) and
   // whether the keys are configured, so the UI tells the truth instead of a
@@ -55,6 +72,8 @@ export default function BankTab({ user, supabase }) {
   // Connect bank via Plaid Link
   const connectBank = async () => {
     setError('');
+    const activeBiz = getActiveWaveBusiness();
+    if (!activeBiz) { setError('Select a Wave business (accounting silo) at the top first — the new bank connection will be assigned to it so its transactions stay siloed.'); return; }
     try {
       const linkRes = await fetch('/api/plaid/link', {
         method: 'POST',
@@ -291,6 +310,36 @@ export default function BankTab({ user, supabase }) {
       </div>
 
       {/* Summary Cards */}
+      {(function () {
+        var unassigned = connections.filter(function (c) { return !c.wave_business_id; });
+        if (unassigned.length === 0) { return null; }
+        return (
+          <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+            <div className="text-sm font-extrabold text-amber-950 mb-1">⚠ Unassigned Bank Data ({unassigned.length})</div>
+            <div className="text-[11px] text-amber-900 mb-2">These bank connections are not assigned to an accounting silo. Their transactions are hidden from normal Bank Review and cannot be synced until assigned. Assign each to a registered Wave business.</div>
+            <div className="space-y-2">
+              {unassigned.map(function (c) {
+                return (
+                  <div key={c.id} className="bg-white rounded-lg border border-amber-200 p-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs text-slate-900">
+                      <div className="font-bold">{c.institution_name || 'Unknown Bank'}</div>
+                      <div className="text-[10px] text-slate-500">Connected {c.created_at ? fmtET(c.created_at, 'date') : '—'} · last sync {c.last_synced ? fmtET(c.last_synced, 'date') : 'never'}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select value={assignSel[c.id] || ''} onChange={function (e) { var v = e.target.value; setAssignSel(function (p) { var n = Object.assign({}, p); n[c.id] = v; return n; }); }} className="px-2 py-1 border border-slate-300 rounded text-xs text-slate-900 bg-white">
+                        <option value="">— assign to silo —</option>
+                        {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Production)')}</option>; })}
+                      </select>
+                      <button onClick={function () { assignConnection(c); }} disabled={assigning || !assignSel[c.id]} className="px-3 py-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">{assigning ? 'Assigning…' : 'Assign'}</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {bizRegistry.length === 0 && <div className="mt-2 text-[10px] text-amber-800">No Wave businesses are registered yet — register one in Accounting → Wave Import before assigning.</div>}
+          </div>
+        );
+      })()}
       {transactions.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-3">
           <div className="bg-green-50 rounded-xl p-3 border border-green-200">

@@ -389,13 +389,26 @@ export default function BankReviewTab(props) {
         var isTest = entry && entry.is_production === false;
         var canWrite = entry && entry.writes_enabled === true;
         var label = entry ? (entry.label || activeBiz) : (activeBiz || 'No business selected');
-        var cls = entry ? (isTest ? 'bg-amber-100 text-amber-950 border-amber-400' : 'bg-emerald-100 text-emerald-950 border-emerald-400') : 'bg-slate-800 text-amber-300 border-amber-600';
+        var boxCls = entry
+          ? (isTest ? 'bg-amber-100 text-amber-950 border-amber-500' : 'bg-emerald-100 text-emerald-950 border-emerald-500')
+          : 'bg-red-100 text-red-950 border-red-500';
+        var pillCls = isTest ? 'bg-amber-600 text-white' : 'bg-emerald-700 text-white';
         return (
-          <div className={'mb-3 rounded-lg px-3 py-2 text-xs font-bold border ' + cls}>
-            Current Accounting Silo: {label}
-            {entry
-              ? ' · Mode: ' + (isTest ? 'TEST' : 'PRODUCTION') + ' / ' + (canWrite ? 'READ-WRITE ENABLED' : 'READ-ONLY')
-              : ' · ⚠ This business is NOT registered — scoping is OFF and ALL businesses\u2019 data is shown. Register it (Wave Import → Register) to silo it.'}
+          <div className={'mb-3 rounded-lg border-2 px-4 py-3 flex flex-wrap items-center justify-between gap-3 ' + boxCls}>
+            <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-widest opacity-70">Current Accounting Silo</div>
+              <div className="text-lg font-extrabold leading-tight">{label}</div>
+              <div className="text-xs font-semibold mt-0.5">
+                {entry
+                  ? 'Bank data, customers & invoices scoped to this silo only'
+                  : '⚠ This business is NOT registered — scoping is OFF and ALL businesses\u2019 data is shown. Register it in Wave Import to silo it.'}
+              </div>
+            </div>
+            {entry && (
+              <div className={'px-3 py-1.5 rounded-lg text-sm font-extrabold whitespace-nowrap ' + pillCls}>
+                {isTest ? 'TEST' : 'PRODUCTION'} · {canWrite ? 'READ-WRITE' : 'READ-ONLY'}
+              </div>
+            )}
           </div>
         );
       })()}
