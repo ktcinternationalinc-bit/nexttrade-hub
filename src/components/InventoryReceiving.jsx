@@ -1885,6 +1885,7 @@ export default function InventoryReceiving(props) {
             var wh = warehouseById(g.warehouse_id);
             var isCancelled = g.status === 'cancelled';
             var isFinalized = g.status === 'finalized';
+            var isUnmerged = isUnmergedTarget(g);
             var rowClass = 'grid items-center border-t border-slate-100 ' +
               (isCancelled ? 'bg-slate-100 opacity-60' : '');
             var typeBadge = g.receipt_type === 'legacy_import' ? 'bg-purple-700 text-white' :
@@ -1893,6 +1894,7 @@ export default function InventoryReceiving(props) {
             // v55.83-A.6.27.43 — High-contrast status badges. Solid bg + white text.
             // Statuses: draft / pending_detail / received / submitted_balanced / submitted_unbalanced / finalized / cancelled
             var statusBadge = isCancelled ? 'bg-red-700 text-white' :
+                              isUnmerged ? 'bg-violet-700 text-white' :
                               isFinalized ? 'bg-blue-700 text-white' :
                               g.status === 'submitted_balanced' ? 'bg-emerald-600 text-white' :
                               g.status === 'submitted_unbalanced' ? 'bg-amber-500 text-white' :
@@ -1901,6 +1903,7 @@ export default function InventoryReceiving(props) {
                               g.status === 'draft' ? 'bg-slate-600 text-white' :
                               'bg-slate-500 text-white';
             var statusLabel = isCancelled ? 'CANCELLED' :
+                              isUnmerged ? '⎘ UNMERGED' :
                               isFinalized ? 'FINALIZED' :
                               g.status === 'submitted_balanced' ? '✓ SUBMITTED' :
                               g.status === 'submitted_unbalanced' ? '⚠ VARIANCE' :

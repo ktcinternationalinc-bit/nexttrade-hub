@@ -3,6 +3,7 @@
 // src/lib/bank-permissions.js. No Wave sync here. No deletes. Approved = locked.
 import { useState, useEffect, useMemo } from 'react';
 import SiloBanner from './SiloBanner';
+import { assertMatchSameSilo } from '../lib/wave-silo-guard';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -68,6 +69,7 @@ export default function BankReviewTab(props) {
   var [acctCustomers, setAcctCustomers] = useState([]);
   var [acctInvoices, setAcctInvoices] = useState([]);
   var [registry, setRegistry] = useState([]);
+  var [plaidAccts, setPlaidAccts] = useState({});
   function bizLabel(id) { if (!id) { return 'All businesses'; } var e = registry.find(function (r) { return r.wave_business_id === id; }); return e ? (e.label || id) : id; }
   var [loading, setLoading] = useState(true);
   var [sel, setSel] = useState(null);            // selected transaction
@@ -98,11 +100,14 @@ export default function BankReviewTab(props) {
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('wave_business_registry', '*'),
+      supabase.from('plaid_accounts').select('*'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
+      var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
+      setPlaidAccts(pa);
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn);
       setAcctCustomers(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), reg, true));
@@ -113,19 +118,25 @@ export default function BankReviewTab(props) {
   }
   useEffect(function () { if (canViewBank(isSuperAdmin, modulePerms)) load(); else setLoading(false); }, []);
 
-  // Build a UNIQUE, readable label per account so two "Chase" accounts are distinguishable.
-  // We don't store the real mask as a column, so we use institution + subtype + a stable
-  // suffix of the account_id (its last 4 chars) as the discriminator.
+  // Label an account using the REAL Plaid account data (name + mask), joined by
+  // account_id -> plaid_accounts.plaid_account_id. Falls back to subtype + a short
+  // id suffix only if the account isn't in plaid_accounts yet.
   function acctLabel(t) {
     var src = t.bank_source || 'Account';
+    var a = plaidAccts[t.account_id];
+    if (a) {
+      var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
+      var mask = a.mask ? (' \u00b7\u00b7' + a.mask) : '';
+      return src + ' \u2014 ' + nm + mask;
+    }
     var sub = t.account_subtype ? (' ' + String(t.account_subtype).charAt(0).toUpperCase() + String(t.account_subtype).slice(1)) : '';
     var idTail = t.account_id ? (' \u00b7\u00b7' + String(t.account_id).slice(-4)) : '';
-    return src + sub + idTail;
+    return src + sub + idTail + ' (mask pending re-sync)';
   }
   var accounts = useMemo(function () {
     var s = {}; txns.forEach(function (t) { if (t.account_id && !s[t.account_id]) { s[t.account_id] = acctLabel(t); } });
     return Object.keys(s).map(function (id) { return { id: id, label: s[id] }; });
-  }, [txns]);
+  }, [txns, plaidAccts]);
 
   var filtered = useMemo(function () {
     var list = txns.slice();
@@ -300,12 +311,11 @@ export default function BankReviewTab(props) {
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
     var inv = acctInvoices.find(function (i) { return i.id === mInvoiceId; });
     if (!inv) { toast.error('Pick an invoice.'); return; }
-    // Guardrail: never match across Wave businesses (silo). The real key is wave_business_id.
+    // Guardrail: never match across Wave businesses (silo). Routed through the shared
+    // wave-silo guard so match + future push enforcement use ONE source of truth.
     var activeBiz = getActiveWaveBusiness();
-    if (activeBiz && inv.wave_business_id && inv.wave_business_id !== activeBiz) {
-      toast.error('This transaction belongs to ' + bizLabel(activeBiz) + ' and cannot be matched to an invoice from ' + bizLabel(inv.wave_business_id) + '.');
-      return;
-    }
+    var siloCheck = assertMatchSameSilo({ activeBusinessId: activeBiz, bankTxn: t, invoice: inv, customer: null, labelFor: bizLabel });
+    if (!siloCheck.ok) { toast.error(siloCheck.message); return; }
     if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('That invoice belongs to another business.'); return; }
     var apply = roundMoney(Number(mAmount));
     if (!(apply > 0)) { toast.error('Enter an amount greater than zero.'); return; }

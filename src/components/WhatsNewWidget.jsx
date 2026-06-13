@@ -33,6 +33,34 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DK',
+    date: '2026-06-08',
+    label: 'Wave silo foundation — every record carries its business, one guard for all pushes',
+    items: [
+      '**\ud83d\udd12 Groundwork so Wave sync can never mix businesses.** Every accounting and bank record now carries which business (silo) it belongs to, and there is now one shared safety check that every future Wave push must pass: it refuses if no business is selected, if the record belongs to a different business, if writes are off for that business, if that push type is not enabled, or \u2014 for the real production business \u2014 unless you type the exact unlock phrase. The same check now powers the block that stops matching a bank transaction to an invoice from another business.',
+      { superAdminOnly: true, text: 'v55.83-DK (SQL already run in chat: added wave_business_id to accounting_invoice_items, payment_matches, plaid_accounts, customer_credits, unapplied_deposits with parent backfill + index; added allow_customer_push/allow_invoice_push/allow_payment_push/allow_category_push/allow_auto_push to wave_business_registry, all DEFAULT false). NEW src/lib/wave-silo-guard.js (pure, var+concat, importable by API routes): assertSiloSelected, assertRecordInSilo, assertMatchSameSilo (returns the exact cross-silo wording with both labels), assertCanPush (action customer|invoice|payment|category -> requires registry row, record.wave_business_id===selected, not-already-in-Wave via wave_invoice_id/wave_customer_id, writes_enabled, the matching allow_*_push flag, and for is_production!==false the typed UNLOCK PHRASE "PUSH TO REAL KTC WAVE"), assertCategoryNotErasing (blank Hub category cannot overwrite a Wave category unless adminOverride), buildSyncLogRow (always logs wave_business_id + outcome). BankReviewTab.applyToInvoice now routes its cross-silo block through assertMatchSameSilo so match + future push share ONE source of truth. 19 behavioral guard tests green. NOT yet built (correctly deferred): the actual /api/wave/push-* routes, the pending_wave_sync queue + Wave Sync Center UI, the registry allow_* toggle UI, and wave_accounts (table does not exist). Those routes must call assertCanPush + write buildSyncLogRow; they are born compliant because the guard exists first.' },
+    ],
+  },
+  {
+    version: 'v55.83-DJ',
+    date: '2026-06-08',
+    label: 'Bank accounts now show real names & masks (not just Chase)',
+    items: [
+      '**\ud83c\udfe6 Each bank account now shows its real name and last digits.** Instead of two accounts both saying "Chase," Bank Review and the Bank page now label them with the actual account name and mask, e.g. "Chase \u2014 Checking \u00b7\u00b76338" vs "Chase \u2014 Savings \u00b7\u00b71759." The account dropdown lists All accounts plus each account separately, and picking one shows only that account.',
+      '**\ud83c\udfe6 The Bank page lists each account under its bank, with its own transaction count** \u2014 so if one Chase login has two accounts, you see both, each with how many transactions it holds and which silo it belongs to.',
+      { superAdminOnly: true, text: 'v55.83-DJ (no SQL). ROOT CAUSE accounts were not separated: plaid/exchange already stores real account name/official_name/mask/subtype into the plaid_accounts table (keyed by plaid_account_id) at connect, but nothing joined to it \u2014 the txn mapper only kept account_id + account_subtype, so labels fell back to the account_id tail (the meaningless j8zd). FIX: BankReviewTab.load now also loads plaid_accounts into a map (account_id -> {name, official_name, mask, subtype}); acctLabel(t) builds bank_source + name + mask from that map (fallback to subtype + id-tail + (mask pending re-sync) only if the account is not in plaid_accounts). accounts useMemo depends on plaidAccts. Filter value remains account_id; All accounts vs specific unchanged. BankTab.loadData loads plaid_accounts; Connected Accounts now renders ONE ROW PER ACCOUNT under each connection (name + ··mask + subtype + per-account transaction count from scoped transactions + Assigned-to silo), Sync relabeled Sync connection; connections with no plaid_accounts rows show account-details-pending hint. Counts reconcile because both pages count transactions by account_id. NOTE if a connection predates account storage, click Sync connection / reconnect to populate plaid_accounts masks. DEFERRED still: per-account Money In/Out/Net summary card math (the Bank Summary Cards build) \u2014 this build fixes identity + labels + per-account counts, not the aggregate card totals.' },
+    ],
+  },
+  {
+    version: 'v55.83-DI',
+    date: '2026-06-08',
+    label: 'Unmerged shipments show as UNMERGED (not blank/active)',
+    items: [
+      '**\u2398 An unmerged shipment now clearly reads UNMERGED.** When you reverse a merge, the merged shipment shows a purple UNMERGED badge and stays out of the active list (visible under Show merged for history), while the original shipments come back as active. This makes it obvious which is the reversed record and which are the restored originals.',
+      { superAdminOnly: true, text: 'v55.83-DI (recovery SQL for the stuck MERGE-1781358331979 is in chat; no app SQL). The in-app executeUnmerge was already complete: it restores source LINES (status from breakdown, clears merged_into_shipment_id + merge_group_id), restores source HEADERS (clears merged_into_shipment_id/merged_at/merged_by/merge_group_id by receipt_number), sets target lines status=reversed, stamps target header unmerged_at, writes inventory_shipment_unmerges. The blotter hides isMergedSource (header.merged_into_shipment_id OR all-lines-merged) and isUnmergedTarget (header.unmerged_at OR all-lines-reversed) unless Show merged. WHY MERGE-1781358331979 was stuck with sources not returning: it was recovered earlier via manual SQL that updated only inventory_stock_receipts (lines) and left the source HEADERS still tagged merged_into_shipment_id, so isMergedSource kept hiding them; the target was also left as cancelled rather than reversed/unmerged. This build adds the UNMERGED status badge/label (isUnmergedTarget -> violet UNMERGED) so reversed targets are not shown as ACTIVE/blank. The chat SQL clears the 10 source headers and converts the target to reversed+unmerged_at so the originals reappear and the target becomes audit-only. Going forward the GUI Unmerge button does all of this in one click (schema columns + merged/reversed statuses are now valid as of DG).' },
+    ],
+  },
+  {
     version: 'v55.83-DH',
     date: '2026-06-08',
     label: 'Readable silo banner + telling two Chase accounts apart',

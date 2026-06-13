@@ -7,6 +7,7 @@ import { fetchAllRows } from '../lib/fetch-all-rows';
 
 export default function BankTab({ user, supabase }) {
   const [connections, setConnections] = useState([]);
+  const [plaidAccts, setPlaidAccts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -60,6 +61,7 @@ export default function BankTab({ user, supabase }) {
     try {
       const { data: conns } = await supabase.from('bank_connections').select('*').order('created_at', { ascending: false });
       setConnections(conns || []);
+      try { const pa = await supabase.from('plaid_accounts').select('*'); setPlaidAccts((pa && pa.data) || []); } catch (ePA) { setPlaidAccts([]); }
 
       const { data: txns } = await supabase.from('bank_transactions').select('*').order('date', { ascending: false }).limit(500);
       setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));
@@ -322,27 +324,46 @@ export default function BankTab({ user, supabase }) {
             )}
           </div>
         ) : (
-          <div className="space-y-2">
-            {connections.map(c => (
-              <div key={c.id} className="flex items-center justify-between bg-slate-50 rounded-lg p-3">
-                <div>
-                  <div className="font-semibold text-sm">{c.institution_name}</div>
-                  <div className="text-[10px] text-slate-500">
-                    Last synced: {c.last_synced ? fmtET(c.last_synced, 'datetime') : 'Never'}
-                    <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      {c.status}
-                    </span>
+          <div className="space-y-3">
+            {connections.map(c => {
+              var accts = plaidAccts.filter(function (a) { return a.connection_id === c.id; });
+              var siloName = bizLabel(c.wave_business_id);
+              return (
+                <div key={c.id} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <div className="font-bold text-sm">{c.institution_name || 'Bank'}</div>
+                      <div className="text-[10px] text-slate-500">
+                        Assigned to: <span className="font-semibold">{siloName}</span> · Last synced: {c.last_synced ? fmtET(c.last_synced, 'datetime') : 'Never'}
+                        <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.status}</span>
+                      </div>
+                    </div>
+                    <button onClick={() => syncTransactions(c.id)} disabled={syncing} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
+                      {syncing ? '⏳ Syncing...' : '🔄 Sync connection'}
+                    </button>
                   </div>
+                  {accts.length === 0 ? (
+                    <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">Account details pending — click Sync connection to pull account names &amp; masks.</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {accts.map(function (a) {
+                        var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
+                        var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
+                        return (
+                          <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100">
+                            <div className="text-xs text-slate-900">
+                              <span className="font-semibold">{nm}</span>{a.mask ? <span className="font-mono text-slate-600"> ··{a.mask}</span> : null}
+                              {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
+                            </div>
+                            <div className="text-[10px] text-slate-500">{cnt} transaction{cnt === 1 ? '' : 's'}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={() => syncTransactions(c.id)}
-                  disabled={syncing}
-                  className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50"
-                >
-                  {syncing ? '⏳ Syncing...' : '🔄 Sync'}
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

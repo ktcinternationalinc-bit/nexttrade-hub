@@ -1,6 +1,7 @@
 var fs=require('fs');var path=require('path');
 function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var r=p('src/components/BankReviewTab.jsx');
+var guard=p('src/lib/wave-silo-guard.js');
 var sb=p('src/components/SiloBanner.jsx');
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 // the leak fix
@@ -8,8 +9,8 @@ ok(/setAcctCustomers\(scopeIfRegistered\(\(res\[2\] && res\[2\]\.data\) \|\| \[\
 ok(/setAcctInvoices\(scopeIfRegistered\(\(res\[3\]/.test(r),'acctInvoices still scoped');
 ok(!/setAcctCustomers\(\(res\[2\] && res\[2\]\.data\) \|\| \[\]\)/.test(r),'old unscoped acctCustomers load removed');
 // cross-business guard
-ok(/var activeBiz = getActiveWaveBusiness\(\);\s*\n\s*if \(activeBiz && inv\.wave_business_id && inv\.wave_business_id !== activeBiz\)/.test(r),'apply guard blocks cross-business by wave_business_id');
-ok(/This transaction belongs to ' \+ bizLabel\(activeBiz\) \+ ' and cannot be matched to an invoice from ' \+ bizLabel\(inv\.wave_business_id\)/.test(r),'exact cross-business error message');
+ok(/assertMatchSameSilo\(\{ activeBusinessId: activeBiz, bankTxn: t, invoice: inv/.test(r) && /if \(!siloCheck\.ok\) \{ toast\.error\(siloCheck\.message\)/.test(r),'apply guard blocks cross-business via shared silo guard');
+ok(/cannot be matched to records from ' \+ labelFor\(active\)/.test(guard) && /belongs to ' \+ labelFor\(other\)/.test(guard),'exact cross-business error message (in shared guard)');
 // banner
 ok(/<SiloBanner/.test(r) && /Current Accounting Silo/.test(sb),'silo banner present (SiloBanner component)');
 ok(/isTest \? 'TEST' : 'PRODUCTION'/.test(sb) && /canWrite \? 'READ-WRITE' : 'READ-ONLY'/.test(sb),'banner shows mode (test/prod + rw/ro)');
