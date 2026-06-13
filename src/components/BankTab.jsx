@@ -13,6 +13,21 @@ export default function BankTab({ user, supabase }) {
   const [searchInv, setSearchInv] = useState('');
   const [dateRange, setDateRange] = useState('30');
   const [error, setError] = useState('');
+  // v55.83-BU — know which Plaid environment is live (sandbox vs production) and
+  // whether the keys are configured, so the UI tells the truth instead of a
+  // hardcoded "Sandbox mode" label.
+  const [plaidEnv, setPlaidEnv] = useState('');
+  const [plaidStatus, setPlaidStatus] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/plaid/env').then((r) => r.json()).then((d) => {
+      if (!alive) return;
+      setPlaidStatus(d);
+      if (d && d.env) setPlaidEnv(d.env);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Load connections and transactions from Supabase
   const loadData = useCallback(async () => {
@@ -43,6 +58,8 @@ export default function BankTab({ user, supabase }) {
       });
       const linkData = await linkRes.json();
       if (linkData.error) { setError(linkData.error); return; }
+      const linkEnv = linkData.env || plaidEnv || 'sandbox';
+      if (linkData.env) setPlaidEnv(linkData.env);
 
       // Load Plaid Link script dynamically
       if (!window.Plaid) {
@@ -69,7 +86,32 @@ export default function BankTab({ user, supabase }) {
           // Auto-sync after connecting
           if (exData.connection?.id) await syncTransactions(exData.connection.id);
         },
-        onExit: (err) => { if (err) setError(err.display_message || 'Connection cancelled'); },
+        onExit: (err, metadata) => {
+          // v55.83-BU — surface the REAL reason. Plaid's onExit gives an error
+          // object (error_code / error_message / display_message) and metadata
+          // (status, institution, request_id). Log it all, then show a clear,
+          // sandbox-aware message instead of a blanket "Connection cancelled".
+          try { console.log('[plaid] Link exit', { error: err, metadata: metadata }); } catch (e2) {}
+          const status = metadata && metadata.status ? metadata.status : '';
+          const inst = metadata && metadata.institution && metadata.institution.name ? metadata.institution.name : '';
+          const reqId = metadata && metadata.request_id ? metadata.request_id : '';
+          if (err && (err.error_code || err.error_message || err.display_message)) {
+            const parts = [];
+            if (err.display_message || err.error_message) parts.push(err.display_message || err.error_message);
+            if (err.error_code) parts.push('(' + err.error_code + ')');
+            if (inst) parts.push('· ' + inst);
+            if (reqId) parts.push('· ref ' + reqId);
+            let m = 'Plaid could not connect: ' + parts.join(' ');
+            if (linkEnv === 'sandbox') m += ' — Sandbox only accepts Plaid test logins (user_good / pass_good); a real bank will not work here.';
+            setError(m);
+          } else {
+            // Clean exit — user closed the window before finishing.
+            let m = 'You closed the Plaid window before finishing — nothing was connected.';
+            if (linkEnv === 'sandbox') m += ' This Hub is in Sandbox mode: pick any bank, then log in with user_good / pass_good. Real banks need Production keys.';
+            if (status) m += ' [' + status + ']';
+            setError(m);
+          }
+        },
       });
       handler.open();
     } catch (e) { setError(e.message); }
@@ -154,6 +196,17 @@ export default function BankTab({ user, supabase }) {
         </div>
       )}
 
+      {plaidStatus && (
+        <div className={'text-[11px] font-bold p-2.5 rounded-lg mb-3 border ' + (plaidEnv === 'production' ? 'bg-emerald-100 border-emerald-300 text-emerald-950' : 'bg-amber-100 border-amber-300 text-amber-950')}>
+          {plaidEnv === 'production'
+            ? '🔒 Production mode — "Connect Bank" will link your real bank accounts.'
+            : '🧪 Sandbox mode (testing). Real banks will NOT connect here. Pick any bank in the Plaid window, then log in with username user_good and password pass_good. To connect real KTC accounts you need Production keys from Plaid.'}
+          {plaidStatus.hasKeys === false && (
+            <span className="block mt-1 bg-red-100 text-red-950 rounded px-2 py-1">⚠ Plaid keys are not fully set in Vercel{plaidStatus.hasClientId === false ? ' — missing Client ID' : ''}{plaidStatus.hasSecret === false ? ' — missing Secret' : ''}. Connect Bank will fail until they're added and the app is redeployed.</span>
+          )}
+        </div>
+      )}
+
       {/* Connected Banks */}
       <div className="bg-white rounded-xl p-4 mb-3 shadow-sm border">
         <div className="flex items-center justify-between mb-3">
@@ -167,7 +220,12 @@ export default function BankTab({ user, supabase }) {
           <div className="text-center py-6 text-slate-400">
             <div className="text-3xl mb-2">🔗</div>
             <p className="text-xs">No banks connected yet. Click "Connect Bank" to link your account via Plaid.</p>
-            <p className="text-[10px] mt-1 text-slate-300">Sandbox mode — use test credentials to try it out</p>
+            {plaidEnv === 'sandbox' && (
+              <p className="text-[10px] mt-1 text-slate-300">Sandbox mode — log in with user_good / pass_good (not a real bank)</p>
+            )}
+            {plaidEnv === 'production' && (
+              <p className="text-[10px] mt-1 text-slate-300">Production mode — use your real bank login</p>
+            )}
           </div>
         ) : (
           <div className="space-y-2">

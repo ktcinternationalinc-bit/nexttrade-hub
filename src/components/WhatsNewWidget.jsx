@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-BU',
+    date: '2026-06-08',
+    label: 'Bank: clearer Plaid connect messages',
+    items: [
+      '**\\ud83c\\udfe6 The Bank tab now tells you the truth.** It shows whether Plaid is in **Sandbox (testing)** or **Production (real banks)** mode \\u2014 no more hardcoded label \\u2014 and warns you right there if the Plaid keys aren\'t set in Vercel yet.',
+      '**\\ud83e\\uddea Sandbox guidance.** In Sandbox mode it clearly says to log in with the test credentials user_good / pass_good and that real banks won\'t connect until you have Production keys.',
+      '**\\u2139\\ufe0f Real reason instead of \\u201cConnection cancelled.\\u201d** If a bank connection stops, the tab now shows the actual reason from Plaid (the error and a reference code), or tells you plainly that you closed the window before finishing.',
+      { superAdminOnly: true, text: 'v55.83-BU (Plaid connect diagnostics; NO SQL). plaid/link/route.js now returns env in success + error responses. NEW plaid/env/route.js GET -> {env, hasClientId, hasSecret, hasKeys} (no token created, never returns the secret). BankTab.jsx: plaidEnv + plaidStatus state, mount probe of /api/plaid/env; connectBank captures linkEnv; onExit(err, metadata) rewritten -> logs {error, metadata}, shows display_message/error_message + error_code + institution + request_id when present, else a clean "you closed the window" message; both append sandbox guidance when env===sandbox. New truthful env banner (bg-emerald-100/amber-100 + 950 text per contrast rule) + missing-keys red sub-banner. Empty-state "Sandbox mode" label de-hardcoded -> env-driven. ROOT CAUSE of the screenshot: PLAID_ENV=sandbox (or unset->sandbox) so a real bank + phone code could never complete; old onExit collapsed all exits to "Connection cancelled". To connect real KTC banks: add Production secret + set PLAID_ENV=production + redeploy.' },
+    ],
+  },
+  {
     version: 'v55.83-BT',
     date: '2026-06-08',
     label: 'Inventory menu redesigned (enterprise look)',

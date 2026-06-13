@@ -27,8 +27,8 @@ export async function POST(req) {
     });
 
     const data = await res.json();
-    if (data.error_code) return NextResponse.json({ error: data.error_message }, { status: 400 });
-    return NextResponse.json({ link_token: data.link_token });
+    if (data.error_code) return NextResponse.json({ error: data.error_message, env: env }, { status: 400 });
+    return NextResponse.json({ link_token: data.link_token, env: env });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
