@@ -2,6 +2,8 @@
 // (by ID, so the two same-named KTC LLCs can't be confused), then preview the
 // real customer/invoice records. NOTHING is written to the Hub yet.
 import { useState, useEffect } from 'react';
+import { fetchAllRows } from '../lib/fetch-all-rows';
+import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
 
 function money(m) { return m && m.value != null ? m.value : ''; }
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -26,6 +28,8 @@ export default function WaveImportTab(props) {
   var [diagBusy, setDiagBusy] = useState(false);
   var [recon, setRecon] = useState(null);
   var [reconBusy, setReconBusy] = useState(false);
+  var [registry, setRegistry] = useState([]);
+  var [legacyNulls, setLegacyNulls] = useState(0);
 
   function loadBusinesses() {
     setLoadingBiz(true);
@@ -38,6 +42,24 @@ export default function WaveImportTab(props) {
     }).finally(function () { setLoadingBiz(false); });
   }
   useEffect(function () { loadBusinesses(); }, []);
+
+  // v55.83-CA — load the Wave business registry + count untagged legacy Wave
+  // invoices so we can gate imports and keep test data out of real KTC views.
+  useEffect(function () {
+    fetchAllRows('wave_business_registry', '*').then(function (rows) { setRegistry(rows || []); }).catch(function () { setRegistry([]); });
+    fetchAllRows('accounting_invoices', 'id,wave_business_id,wave_invoice_id').then(function (rows) {
+      var n = 0; (rows || []).forEach(function (r) { if ((r.wave_business_id == null || r.wave_business_id === '') && r.wave_invoice_id) n++; });
+      setLegacyNulls(n);
+    }).catch(function () {});
+  }, []);
+
+  function selReg() { var reg = null; registry.forEach(function (b) { if (b.wave_business_id === bizId) reg = b; }); return reg; }
+  function importBlockReason() {
+    if (!bizId) { return 'Choose a Wave business first.'; }
+    if (!selReg()) { return 'This Wave business is not registered yet. Add it to wave_business_registry (with its production/test flag) before importing, so its records stay walled off from your other Wave business.'; }
+    if (legacyNulls > 0) { return 'Legacy Wave records need backfill before importing another Wave business — ' + legacyNulls + ' existing invoice(s) have no business tag. Run the backfill SQL first so old KTC data does not get mixed in.'; }
+    return null;
+  }
 
   function preview(t, p) {
     if (!bizId) return;
@@ -60,7 +82,7 @@ export default function WaveImportTab(props) {
   }
 
   function runImportInvoices() {
-    if (!bizId) return;
+    var blkI = importBlockReason(); if (blkI) { window.alert(blkI); return; }
     if (!window.confirm('Import ALL invoices (and their line items) from the selected Wave business into the Hub? Safe and re-runnable — it matches on Wave invoice ID, so re-running updates instead of duplicating. Make sure you imported customers first.')) return;
     setImportingInv(true); setInvReport(null);
     fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
@@ -71,7 +93,7 @@ export default function WaveImportTab(props) {
   }
 
   function runImportCustomers() {
-    if (!bizId) return;
+    var blkC = importBlockReason(); if (blkC) { window.alert(blkC); return; }
     if (!window.confirm('Import customers from the selected Wave business into the Hub? This is safe and re-runnable (no duplicates), and customers carry no balances.')) return;
     setImporting(true); setReport(null);
     fetch('/api/wave/import-customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
@@ -130,7 +152,7 @@ export default function WaveImportTab(props) {
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <label className="text-xs text-slate-300">Business:</label>
-        <select value={bizId} onChange={function (e) { setBizId(e.target.value); setData(null); }} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs min-w-[280px]">
+        <select value={bizId} onChange={function (e) { setBizId(e.target.value); setActiveWaveBusiness(e.target.value); setData(null); }} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs min-w-[280px]">
           <option value="">{loadingBiz ? 'Loading…' : '— choose a business —'}</option>
           {businesses.map(function (b, i) {
             return <option key={i} value={b.id}>{b.name + '  ·  id ' + String(b.id).slice(0, 10) + '…'}</option>;
@@ -140,6 +162,26 @@ export default function WaveImportTab(props) {
         <button disabled={!bizId || busy} onClick={function () { preview('invoices', 1); }} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded text-xs font-bold disabled:opacity-50">Preview invoices</button>
       </div>
       <div className="text-[11px] text-slate-400 mb-3">Two of your businesses share the name "KTC INTERNATIONAL ENTERPRISES LLC" — the ID after each name tells them apart. Choose the one with your real invoices.</div>
+
+      {bizId && (function () {
+        var reg = selReg();
+        var blk = importBlockReason();
+        return (
+          <div className="mb-3 space-y-2">
+            <div className={'rounded-lg p-2.5 text-xs font-bold border ' + (!reg ? 'bg-red-100 border-red-300 text-red-950' : (reg.is_production !== false ? 'bg-emerald-100 border-emerald-300 text-emerald-950' : 'bg-amber-100 border-amber-300 text-amber-950'))}>
+              <div>Current Wave business: <b>{(reg && reg.label) || (businesses.find(function (b) { return b.id === bizId; }) || {}).name || bizId}</b></div>
+              <div className="font-mono text-[10px] opacity-80">id {String(bizId).slice(0, 16)}…</div>
+              {!reg && <div className="mt-1">⚠ NOT REGISTERED — add this business to wave_business_registry before importing.</div>}
+              {reg && reg.is_production !== false && <div className="mt-1">🔒 REAL KTC PRODUCTION — READ ONLY — WRITES {canWriteToWaveBusiness(reg) ? 'ENABLED' : 'DISABLED'}. Import pulls from Wave (read-only); no pushes/deletes to Wave.</div>}
+              {reg && reg.is_production === false && <div className="mt-1">🧪 TEST BUSINESS — WRITES ALLOWED. Imported records are tagged to this test business and stay out of your real KTC views.</div>}
+            </div>
+            {legacyNulls > 0 && (
+              <div className="rounded-lg p-2.5 text-xs font-bold bg-amber-100 border border-amber-300 text-amber-950">⚠ {legacyNulls} existing Wave invoice(s) have no business tag. Run the backfill SQL before importing another business, or real and test data could mix.</div>
+            )}
+            {blk && <div className="rounded-lg p-2 text-[11px] font-bold bg-red-100 border border-red-300 text-red-950">Import is blocked: {blk}</div>}
+          </div>
+        );
+      })()}
 
       {busy && <div className="text-slate-300 text-sm">Loading from Wave…</div>}
 

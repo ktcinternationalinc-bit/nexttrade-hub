@@ -4,6 +4,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
 import {
   canViewBank, canSeeAmounts, canClassify, canMatchPayments, canReopen,
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
@@ -94,11 +95,11 @@ export default function BankReviewTab(props) {
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
     ]).then(function (res) {
-      var t = (res[0] && res[0].data) || [];
+      var t = scopeToBusiness((res[0] && res[0].data) || [], getActiveWaveBusiness(), true);
       var m = (res[1] && res[1].data) || [];
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
-      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices((res[3] && res[3].data) || []);
+      setTxns(t); setMatchesByTxn(byTxn); setAcctCustomers(res[2] || []); setAcctInvoices(scopeToBusiness((res[3] && res[3].data) || [], getActiveWaveBusiness(), true));
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }

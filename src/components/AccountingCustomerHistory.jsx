@@ -7,6 +7,7 @@ import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
 
 function n(v) { return v == null || v === '' ? 0 : Number(v) || 0; }
 function money(v, show) { if (!show) return '•••'; var x = n(v); return x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -41,7 +42,7 @@ export default function AccountingCustomerHistory(props) {
       safe(fetchAllRows('accounting_proformas', '*')),
       safe(fetchAllRows('bank_transactions', 'id, posted_date, name, amount_abs, direction'))
     ]).then(function (res) {
-      setCustomers(res[0]); setInvoices(res[1]); setPayments(res[2]); setProformas(res[3]);
+      setCustomers(res[0]); setInvoices(scopeToBusiness(res[1] || [], getActiveWaveBusiness(), true)); setPayments(res[2]); setProformas(res[3]);
       var bt = {}; (res[4] || []).forEach(function (t) { bt[t.id] = t; }); setBankTxns(bt);
     }).catch(function (e) { console.error('[ar] load', e); toast.error('Failed to load AR history'); })
       .finally(function () { setLoading(false); });

@@ -9,6 +9,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
+import { getActiveWaveBusiness, setActiveWaveBusiness, scopeToBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
 
 function num(v) { var n = Number(String(v == null ? 0 : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function money(v, cur) { return (cur || 'USD') + ' ' + num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -33,6 +34,8 @@ export default function CustomerLedger(props) {
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [payments, setPayments] = useState([]);
+  var [registry, setRegistry] = useState([]);
+  var [activeBiz, setActiveBiz] = useState(getActiveWaveBusiness());
   var [search, setSearch] = useState('');
   var [selectedId, setSelectedId] = useState('');
   var [currency, setCurrency] = useState('');
@@ -51,10 +54,19 @@ export default function CustomerLedger(props) {
       safe(fetchAllRows('accounting_customers', '*', 'company_name', true)),
       safe(fetchAllRows('accounting_invoices', '*')),
       safe(fetchAllRows('accounting_invoice_payments', '*')),
+      safe(fetchAllRows('wave_business_registry', '*')),
     ]).then(function (res) {
       setCustomers(res[0] || []);
       setInvoices(res[1] || []);
       setPayments(res[2] || []);
+      var reg = res[3] || [];
+      setRegistry(reg);
+      // Default to the production business if nothing chosen yet.
+      if (!getActiveWaveBusiness() && reg.length) {
+        var prod = null; reg.forEach(function (b) { if (!prod && b.is_production !== false) prod = b; });
+        var pick = (prod || reg[0]).wave_business_id;
+        setActiveBiz(pick); setActiveWaveBusiness(pick);
+      }
       setLoading(false);
     }).catch(function (e) { setErr('Could not load accounting data.'); setLoading(false); });
   }, []);
@@ -77,8 +89,11 @@ export default function CustomerLedger(props) {
 
   var custInvoices = useMemo(function () {
     if (!selectedId) return [];
-    return invoices.filter(function (i) { return i.accounting_customer_id === selectedId; });
-  }, [invoices, selectedId]);
+    var mine = invoices.filter(function (i) { return i.accounting_customer_id === selectedId; });
+    // Wall off other Wave businesses (test vs real KTC). Untagged legacy rows
+    // stay visible under the active business until backfill completes.
+    return scopeToBusiness(mine, activeBiz, true);
+  }, [invoices, selectedId, activeBiz]);
 
   // currencies present for this customer
   var currencies = useMemo(function () {
@@ -224,6 +239,23 @@ export default function CustomerLedger(props) {
         )}
       </div>
       {err && <div className="bg-red-100 text-red-950 rounded p-2 text-xs font-bold">{err}</div>}
+
+      {registry.length > 0 && (
+        <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-2 flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-bold text-slate-300">Wave business:</span>
+          <select value={activeBiz} onChange={function (e) { setActiveBiz(e.target.value); setActiveWaveBusiness(e.target.value); }} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs">
+            {isSuperAdmin && <option value="all">All businesses</option>}
+            {registry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{b.label || b.wave_business_id}</option>; })}
+          </select>
+          {(function () {
+            var reg = null; registry.forEach(function (b) { if (b.wave_business_id === activeBiz) reg = b; });
+            if (reg && reg.is_production !== false) { return <span className="text-[11px] font-bold bg-emerald-100 text-emerald-950 rounded px-2 py-1">🔒 REAL KTC production — read-only{canWriteToWaveBusiness(reg) ? ' · writes ENABLED' : ''}</span>; }
+            if (reg) { return <span className="text-[11px] font-bold bg-amber-100 text-amber-950 rounded px-2 py-1">🧪 Test business — writes allowed</span>; }
+            if (activeBiz === 'all') { return <span className="text-[11px] font-bold bg-slate-700 text-slate-200 rounded px-2 py-1">Showing all businesses</span>; }
+            return null;
+          })()}
+        </div>
+      )}
 
       {/* Customer select */}
       <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">

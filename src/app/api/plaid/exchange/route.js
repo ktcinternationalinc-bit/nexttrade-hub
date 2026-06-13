@@ -14,7 +14,7 @@ const supabase = createClient(
 
 export async function POST(req) {
   try {
-    const { public_token, metadata } = await req.json();
+    const { public_token, metadata, wave_business_id } = await req.json();
     const env = process.env.PLAID_ENV || 'sandbox';
     const base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
@@ -42,6 +42,7 @@ export async function POST(req) {
       institution_id: institution.institution_id || null,
       institution_name: institution.name || 'Unknown Bank',
       status: 'active',
+      wave_business_id: wave_business_id || null,
       last_synced: new Date().toISOString(),
     }, { onConflict: 'plaid_item_id' }).select().single();
 

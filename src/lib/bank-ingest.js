@@ -46,6 +46,7 @@ export function mapPlaidTransaction(t, conn, accountsById) {
   return {
     connection_id: conn ? conn.id : null,
     business_id: conn ? (conn.business_id || null) : null,
+    wave_business_id: conn ? (conn.wave_business_id || null) : null,
     bank_source: conn ? (conn.institution_name || conn.bank_name || null) : null,
     plaid_transaction_id: t.transaction_id,
     account_id: t.account_id,

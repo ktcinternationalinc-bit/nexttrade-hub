@@ -1,6 +1,8 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { fmtET } from '../lib/et-time';
+import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
+import { fetchAllRows } from '../lib/fetch-all-rows';
 
 export default function BankTab({ user, supabase }) {
   const [connections, setConnections] = useState([]);
@@ -14,6 +16,8 @@ export default function BankTab({ user, supabase }) {
   const [dateRange, setDateRange] = useState('30');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [bizRegistry, setBizRegistry] = useState([]);
+  useEffect(() => { fetchAllRows('wave_business_registry', '*').then((r) => setBizRegistry(r || [])).catch(() => {}); }, []);
   // v55.83-BU — know which Plaid environment is live (sandbox vs production) and
   // whether the keys are configured, so the UI tells the truth instead of a
   // hardcoded "Sandbox mode" label.
@@ -38,7 +42,7 @@ export default function BankTab({ user, supabase }) {
       setConnections(conns || []);
 
       const { data: txns } = await supabase.from('bank_transactions').select('*').order('date', { ascending: false }).limit(500);
-      setTransactions(txns || []);
+      setTransactions(scopeToBusiness(txns || [], getActiveWaveBusiness(), true));
 
       const { data: invs } = await supabase.from('invoices').select('*').order('date', { ascending: false }).limit(200);
       setInvoices(invs || []);
@@ -79,7 +83,7 @@ export default function BankTab({ user, supabase }) {
           const exRes = await fetch('/api/plaid/exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ public_token, metadata }),
+            body: JSON.stringify({ public_token, metadata, wave_business_id: getActiveWaveBusiness() || null }),
           });
           const exData = await exRes.json();
           if (exData.error) { setError(exData.error); return; }
@@ -204,6 +208,18 @@ export default function BankTab({ user, supabase }) {
   return (
     <div>
       <h2 className="text-xl font-extrabold mb-3">🏦 Bank / البنك</h2>
+
+      {(function () {
+        var active = getActiveWaveBusiness();
+        var reg = null; bizRegistry.forEach(function (b) { if (b.wave_business_id === active) reg = b; });
+        var label = reg ? reg.label : (active ? ('Business ' + String(active).slice(0, 8)) : 'No business selected');
+        var prod = reg ? (reg.is_production !== false) : true;
+        return (
+          <div className={'text-xs font-bold rounded-lg px-3 py-2 mb-3 border ' + (prod ? 'bg-emerald-100 border-emerald-300 text-emerald-950' : 'bg-amber-100 border-amber-300 text-amber-950')}>
+            Current scope: {prod ? '🔒 ' : '🧪 '}{label}{prod ? ' (Real KTC Production)' : ' (Test business)'} — showing only this business's bank transactions &amp; matching.
+          </div>
+        );
+      })()}
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-lg mb-3">

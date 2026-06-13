@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-CB',
+    date: '2026-06-08',
+    label: 'Bank data now scoped to the selected business too',
+    items: [
+      '**\\ud83c\\udfe6 Bank transactions follow the business you picked.** The Bank screen now shows a "Current scope" banner and only displays transactions for the selected Wave business. When you connect a bank while a test business is selected, every transaction from it is tagged as test — so test bank data and real KTC bank data never mix, and you can never match a test deposit to a real KTC invoice.',
+      { superAdminOnly: true, text: 'v55.83-CB (bank/Plaid scoping). NEEDS SQL (in chat): add wave_business_id to bank_connections + bank_transactions. plaid/exchange/route.js stamps the new bank_connections row with wave_business_id from the client (active business). bank-ingest.js mapPlaidTransaction inherits wave_business_id from conn -> every synced transaction carries it. BankTab.jsx: connectBank passes wave_business_id: getActiveWaveBusiness(); transactions list scoped via scopeToBusiness(..., includeLegacy=true) so Money In/Out + list follow scope; loads wave_business_registry; Current-scope banner (green production / amber test). BankReviewTab.jsx: bank_transactions scoped at load -> with invoices already scoped (CA), matching is same-business on BOTH sides so cross-scope matching is impossible. Untagged legacy bank txns show under active business until tagged. STAGED NEXT (CC): Production Wave read-write enablement flow (Wave Sync Center, typed PUSH TO REAL KTC WAVE confirm, writes_enabled flip, manual-push stages, feature flags) — Hub->Wave push routes do not exist yet; feature-flag SQL delivered in chat. Historical wave_invoice_id invoices will NEVER be pushed back (push will only send Hub-created records with no wave id).' },
+    ],
+  },
+  {
+    version: 'v55.83-CA',
+    date: '2026-06-08',
+    label: 'Wave safety wall complete — test imports now safe',
+    items: [
+      '**\\ud83e\\uddf1 Real and test Wave data are now fully walled off.** Every accounting screen \\u2014 Dashboard, Customer AR History, and the Bank Review invoice picker \\u2014 now only shows the Wave business you have selected. Switching business changes the totals and lists; real KTC and a test business never appear together.',
+      '**\\ud83d\\udeab Safer Wave Import.** The Wave Import tab now shows exactly which business you are importing (with a REAL KTC PRODUCTION — READ ONLY or TEST BUSINESS — WRITES ALLOWED banner) and refuses to import if the business is not registered or if old records still need a backfill \\u2014 so a test import can never pollute your real KTC numbers.',
+      { superAdminOnly: true, text: 'v55.83-CA (Wave separation STEP 3 / safety wall complete). Scoped at the set-point (cascades to all downstream math): AccountingDashboard.jsx (inv = scopeToBusiness(... getActiveWaveBusiness, includeLegacy)), AccountingCustomerHistory.jsx (setInvoices scoped), BankReviewTab.jsx (setAcctInvoices scoped -> invForCustomer + split typeahead both inherit it, so payment matching cannot cross businesses). WaveImportTab.jsx: loads wave_business_registry + counts untagged legacy Wave invoices; business <select> onChange also setActiveWaveBusiness so the whole app follows what you import; importBlockReason() gate blocks runImportInvoices/runImportCustomers if (no business | not registered | legacyNulls>0); banner shows registered/production/test + writes status + READ-ONLY note. NO SQL (uses BY columns/registry). REMAINING (lower risk / not yet built): AR aging widget, Pending Wave Sync + Sync Issues panels (Hub->Wave push not built yet so nothing pending), live cross-tab switch (active business is read on mount/load — switching in one tab reflects in others on their next load). With registry + backfill done, importing KTC HUB TEST is now safe.' },
+    ],
+  },
+  {
+    version: 'v55.83-BZ',
+    date: '2026-06-08',
+    label: 'Wave: pick a business; real KTC stays read-only',
+    items: [
+      '**\\ud83c\\udfe2 Choose which Wave business you are looking at.** The Customer Ledger now has a Wave business picker. Real KTC shows a green "REAL KTC production — read-only" badge; a test business shows an amber "test — writes allowed" badge. The ledger only shows the customers/invoices for the business you pick, so real and test data never mix on screen.',
+      '**\\ud83d\\udd12 Reconcile stays inside one business.** The Wave-vs-Hub reconcile now only ever compares records from the same Wave business \\u2014 a test business can never be compared against your real KTC numbers.',
+      { superAdminOnly: true, text: 'v55.83-BZ (Wave business separation STEP 2). NEW src/lib/wave-business.js: getActiveWaveBusiness/setActiveWaveBusiness (localStorage), canWriteToWaveBusiness(reg)=!is_production||writes_enabled (production locked by default), scopeToBusiness(rows,id,includeLegacy). CustomerLedger.jsx: loads wave_business_registry, activeBiz state (defaults to first production business), custInvoices scoped via scopeToBusiness(..., includeLegacy=true) so untagged legacy KTC rows still show until backfill; business <select> (super_admin gets All) + green production / amber test badge. reconcile/route.js: select adds wave_business_id; hub array filtered to businessId (legacy null included) so reconcile never crosses businesses (SWC-safe). REQUIRES the BY SQL (wave_business_id columns + wave_business_registry + backfill) to be live. REMAINING (staged): scope AccountingDashboard + AccountingCustomerHistory + AR aging + BankReview invoice list by activeBiz; Wave business selector + write-lock enforcement in WaveImportTab (block pull/push to production unless writes_enabled); Hub->Wave push still not built (so no write risk yet). Until dashboard/AR are scoped, prefer the Customer Ledger for per-business views.' },
+    ],
+  },
+  {
     version: 'v55.83-BY',
     date: '2026-06-08',
     label: 'Wave: tag every record with its business (test/prod safety)',

@@ -59,7 +59,7 @@ function fetchAllHub(admin) {
     guard++;
     if (guard > 100) { return Promise.resolve(rows); }
     return admin.from('accounting_invoices')
-      .select('id, wave_invoice_id, invoice_number, invoice_date, due_date, total_amount, amount_paid, wave_imported_paid, balance_due, record_status, approval_status, payment_status, source')
+      .select('id, wave_invoice_id, wave_business_id, invoice_number, invoice_date, due_date, total_amount, amount_paid, wave_imported_paid, balance_due, record_status, approval_status, payment_status, source')
       .range(from, from + pageSize - 1)
       .then(function (res) {
         if (res.error || !res.data || res.data.length === 0) { return rows; }
@@ -107,6 +107,10 @@ export async function POST(request) {
 
     // 2) Pull ALL Hub invoices
     var hub = await fetchAllHub(admin);
+    // v55.83-BZ — only ever compare Hub records belonging to the SAME Wave
+    // business. Untagged legacy rows (pre-backfill) are included so existing KTC
+    // reconcile keeps working until wave_business_id is backfilled.
+    hub = hub.filter(function (h) { return !businessId || h.wave_business_id === businessId || h.wave_business_id == null; });
     var hubByWave = {};
     var hubNoWave = 0;
     hub.forEach(function (h) { if (h.wave_invoice_id) { hubByWave[h.wave_invoice_id] = h; } else { hubNoWave++; } });

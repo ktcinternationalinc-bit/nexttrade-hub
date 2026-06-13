@@ -9,6 +9,7 @@ import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { canViewBank, canSeeAmounts, canViewCompanyTotals } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { getActiveWaveBusiness, scopeToBusiness } from '../lib/wave-business';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -47,7 +48,7 @@ export default function AccountingDashboard(props) {
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(12).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
-      var inv = (r[0] && r[0].data) || [];
+      var inv = scopeToBusiness((r[0] && r[0].data) || [], getActiveWaveBusiness(), true);
       var custs = (r[1] && r[1].data) || [];
       var pays = (r[2] && r[2].data) || [];
       var txns = (r[3] && r[3].data) || [];
