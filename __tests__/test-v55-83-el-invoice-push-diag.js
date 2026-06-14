@@ -11,6 +11,6 @@ ok(/customer_row_missing/.test(pi),'distinct missing-row branch');
 ok(/customer_no_wave_id/.test(pi),'distinct no-wave-id branch');
 ok(/reason:/.test(pi),'logs a reason code in payload');
 ok(!/\bconst \b/.test(pi) && !/ => /.test(pi),'SWC-safe');
-ok(/version: 'v55\.83-EL'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew EL');
+ok(/no_customer_link/.test(pi) && /customer_query_error/.test(pi),'EL diagnostic branches present in route');
 console.log('\nv55.83-EL invoice push diag: '+pass+' passed, '+fail+' failed');
 if(fail>0)process.exit(1);console.log('ALL PASS');

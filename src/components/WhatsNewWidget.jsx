@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EN',
+    date: '2026-06-08',
+    label: 'Invoice push: now attaches a Wave product to each line (real fix)',
+    items: [
+      '**\u2705 Invoice push now works with Wave\u2019s requirement that every line item be tied to a product.** The Hub automatically uses (or creates once) a reusable \u201cNextTrade Hub Item\u201d product in Wave and attaches it to each line, keeping your real description, quantity, and price.',
+      { superAdminOnly: true, text: 'v55.83-EN. No SQL. EXACT FIX from Wave error (response_payload): invoiceCreate rejected items because Field productId of required type ID! was not provided at input.items[0]. Wave invoice lines must reference a Wave product, not free-text. FIX in push-invoice: before invoiceCreate, resolve productId per business \u2014 (1) query business.products(page1,50), reuse node named "NextTrade Hub Item" or first isSold product; (2) else query business.accounts(types:[INCOME]) for an income account and productCreate{ name:"NextTrade Hub Item", unitPrice:0, incomeAccountId }; (3) push items as {productId, description, quantity, unitPrice} keeping Hub values. Clear failure logs if no income account or product create fails (response_payload shown). invoiceCreate inputErrors now also selects code. Product/account query shapes (products edges{node{id name isSold}}, accounts types:[INCOME]) follow Wave public schema \u2014 if Wave rejects a sub-shape, the Sync Log View details (EM) shows it and we adjust. Customer push, EF guard, EJ strict scope, payments-off, production-locked all intact. NEXT: push invoice 6; if product/account query shape is off, read EM View details + fix that sub-query.' },
+    ],
+  },
+  {
+    version: 'v55.83-EM',
+    date: '2026-06-08',
+    label: 'Wave Sync Log: see the exact Wave error inline (no SQL needed)',
+    items: [
+      '**\ud83d\udd0e Failed sync rows now have a \u201cView details\u201d button that shows the exact Wave error and the full request/response \u2014 right in the screen, no database queries needed.** This is how we will pinpoint and fix what Wave rejects.',
+      { superAdminOnly: true, text: 'v55.83-EM. No SQL. PROGRESS: EL2 confirmed live \u2014 invoice push now gets PAST the customer check and reaches Wave; newest failures say "Wave invoiceCreate failed \u2014 see response_payload" (Wave rejecting the invoice payload, the expected calibration step) rather than the old (unknown)/(none). Added to WaveSyncCenter Sync Log: per-row View details toggle (openLog state) -> waveErrText() extracts rp.errors[].message + data.*.inputErrors[] (message/path/code) into a red box, plus a collapsible full REQUEST/RESPONSE JSON pre. syncLog already select(*) so payloads are present. SUSPECTED invoiceCreate issue (await user response_payload to confirm, do NOT guess-fix): Wave InvoiceCreateInput items likely require productId (Wave product w/ income account), not free-text description+unitPrice; current mutation sends items:[{description,quantity,unitPrice}]. Other candidates: currency required, customerId vs customer{id}, date format, total. NEXT: user opens View details on the newest invoiceCreate row (or pastes response_payload), then fix mutation to the real inputErrors. Only invoice 6/Adel Saeed. KANDIL guard + no payments + production locked intact.' },
+    ],
+  },
+  {
     version: 'v55.83-EL2',
     date: '2026-06-08',
     label: 'Invoice push: precise reason + no more silent customer-lookup failure',

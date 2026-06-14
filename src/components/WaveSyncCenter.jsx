@@ -5,6 +5,28 @@ import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import { dryRunRecord } from '../lib/wave-sync-eligibility';
 import SiloBanner from './SiloBanner';
 
+// v55.83-EM — pull the human-readable Wave error out of a response payload.
+function waveErrText(rp) {
+  if (!rp) { return ''; }
+  try {
+    var parts = [];
+    if (rp.errors && rp.errors.length) {
+      rp.errors.forEach(function (e) { parts.push(e.message || JSON.stringify(e)); });
+    }
+    var d = rp.data || {};
+    var keys = Object.keys(d);
+    keys.forEach(function (k) {
+      var node = d[k];
+      if (node && node.inputErrors && node.inputErrors.length) {
+        node.inputErrors.forEach(function (ie) {
+          parts.push((ie.message || 'error') + (ie.path ? (' [field: ' + (Array.isArray(ie.path) ? ie.path.join('.') : ie.path) + ']') : '') + (ie.code ? (' (' + ie.code + ')') : ''));
+        });
+      }
+    });
+    return parts.join('\n');
+  } catch (e) { return ''; }
+}
+
 export default function WaveSyncCenter(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var userProfile = props.userProfile || null;
@@ -16,6 +38,7 @@ export default function WaveSyncCenter(props) {
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [syncLog, setSyncLog] = useState([]);
+  var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -193,11 +216,23 @@ export default function WaveSyncCenter(props) {
           {syncLog.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No sync log entries for this silo yet.</div> :
             syncLog.map(function (l) {
               return (
-                <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs flex gap-2 flex-wrap">
-                  <span className="font-bold">{l.entity_type}</span>
-                  <span>{l.action}{l.dry_run ? ' (dry run)' : ''}</span>
-                  <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
-                  {l.error_message && <span className="text-slate-400">{l.error_message}</span>}
+                <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <span className="font-bold">{l.entity_type}</span>
+                    <span>{l.action}{l.dry_run ? ' (dry run)' : ''}</span>
+                    <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
+                    {l.error_message && <span className="text-slate-400">{l.error_message}</span>}
+                    {(l.response_payload || l.request_payload) && <button onClick={function () { setOpenLog(openLog === l.id ? null : l.id); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{openLog === l.id ? 'Hide details' : 'View details'}</button>}
+                  </div>
+                  {openLog === l.id && (
+                    <div className="mt-1 space-y-1">
+                      {waveErrText(l.response_payload) && <div className="bg-rose-950 border border-rose-700 rounded p-2 text-rose-200 font-mono text-[10px] whitespace-pre-wrap">Wave error: {waveErrText(l.response_payload)}</div>}
+                      <details className="bg-slate-950 border border-slate-700 rounded p-2"><summary className="cursor-pointer text-slate-300 text-[10px]">Full request/response payload</summary>
+                        {l.request_payload && <pre className="text-[9px] text-cyan-200 whitespace-pre-wrap overflow-auto mt-1">REQUEST: {JSON.stringify(l.request_payload, null, 2)}</pre>}
+                        {l.response_payload && <pre className="text-[9px] text-amber-200 whitespace-pre-wrap overflow-auto mt-1">RESPONSE: {JSON.stringify(l.response_payload, null, 2)}</pre>}
+                      </details>
+                    </div>
+                  )}
                 </div>
               );
             })}
