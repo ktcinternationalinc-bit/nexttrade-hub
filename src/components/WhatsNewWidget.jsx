@@ -33,7 +33,7 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
-    version: 'v55.83-EL',
+    version: 'v55.83-EL2',
     date: '2026-06-08',
     label: 'Invoice push: precise reason + no more silent customer-lookup failure',
     items: [
