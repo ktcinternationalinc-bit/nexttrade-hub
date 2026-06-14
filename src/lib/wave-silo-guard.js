@@ -10,6 +10,9 @@
 
 var UNLOCK_PHRASE = 'PUSH TO REAL KTC WAVE';
 
+// v55.83-EF — the ONLY Wave business a real push may currently target. Hard backend guard.
+var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
+
 function fail(code, message) { return { ok: false, code: code, message: message }; }
 function pass(extra) { var r = { ok: true, code: 'ok', message: 'ok' }; if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { r[k] = extra[k]; } } } return r; }
 
@@ -77,6 +80,13 @@ function assertCanPush(opts) {
 
   var reg = findRegistry(opts.registry, opts.waveBusinessId);
   if (!reg) { return fail('not_registered', 'This Wave business is not registered. Register it in Wave Import before any push.'); }
+
+  // v55.83-EF — HARD GUARD: a REAL push may only target the approved KANDIL EGYPT test business.
+  // Dry runs are allowed against any registered silo for inspection (opts.dryRun === true),
+  // but an actual write is blocked unless the target id matches exactly.
+  if (opts.dryRun !== true && opts.waveBusinessId !== APPROVED_PUSH_BUSINESS_ID) {
+    return fail('not_approved_target', 'Push blocked: target Wave business is not the approved KANDIL EGYPT test business.');
+  }
 
   // record must belong to this silo
   var inSilo = assertRecordInSilo(opts.record, opts.waveBusinessId, 'The record being pushed');
@@ -148,6 +158,7 @@ function buildSyncLogRow(opts) {
 
 export {
   UNLOCK_PHRASE,
+  APPROVED_PUSH_BUSINESS_ID,
   findRegistry,
   assertSiloSelected,
   assertRecordInSilo,

@@ -10,9 +10,12 @@ function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-function canPush(reg, record, waveBusinessId, unlockPhrase) {
+function canPush(reg, record, waveBusinessId, unlockPhrase, dryRun) {
   if (!waveBusinessId) { return { ok: false, message: 'No accounting silo selected.' }; }
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
+  // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
+  var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
+  if (dryRun !== true && waveBusinessId !== APPROVED) { return { ok: false, message: 'Push blocked: target Wave business is not the approved KANDIL EGYPT test business.' }; }
   if (!record || !record.wave_business_id) { return { ok: false, message: 'Invoice is not assigned to a silo.' }; }
   if (record.wave_business_id !== waveBusinessId) { return { ok: false, message: 'Invoice belongs to a different silo.' }; }
   if (record.wave_invoice_id) { return { ok: false, message: 'Invoice already exists in Wave.' }; }
@@ -42,7 +45,7 @@ export async function POST(req) {
     var inv = invRes && invRes.data;
     if (!inv) { return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 }); }
 
-    var verdict = canPush(reg, inv, waveBusinessId, body.unlock_phrase || '');
+    var verdict = canPush(reg, inv, waveBusinessId, body.unlock_phrase || '', dryRun);
     if (!verdict.ok) {
       await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: verdict.message, attempted_by: by });
       return NextResponse.json({ error: verdict.message, blocked: true }, { status: 409 });

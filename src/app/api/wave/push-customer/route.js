@@ -14,9 +14,12 @@ function admin() {
 
 // Minimal inline copy of the silo guard's push rules (server cannot import the JSX-tree
 // component, but the rules must match wave-silo-guard.assertCanPush exactly).
-function canPush(reg, record, waveBusinessId, action, unlockPhrase) {
+function canPush(reg, record, waveBusinessId, action, unlockPhrase, dryRun) {
   if (!waveBusinessId) { return { ok: false, message: 'No accounting silo selected.' }; }
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
+  // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
+  var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
+  if (dryRun !== true && waveBusinessId !== APPROVED) { return { ok: false, message: 'Push blocked: target Wave business is not the approved KANDIL EGYPT test business.' }; }
   if (!record || !record.wave_business_id) { return { ok: false, message: 'Record is not assigned to a silo.' }; }
   if (record.wave_business_id !== waveBusinessId) { return { ok: false, message: 'Record belongs to a different silo.' }; }
   if (action === 'customer' && record.wave_customer_id) { return { ok: false, message: 'Customer already exists in Wave.' }; }
@@ -51,7 +54,7 @@ export async function POST(req) {
     var cust = custRes && custRes.data;
     if (!cust) { return NextResponse.json({ error: 'Customer not found.' }, { status: 404 }); }
 
-    var verdict = canPush(reg, cust, waveBusinessId, 'customer', unlockPhrase);
+    var verdict = canPush(reg, cust, waveBusinessId, 'customer', unlockPhrase, dryRun);
     if (!verdict.ok) {
       await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'customer', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: verdict.message, attempted_by: by });
       return NextResponse.json({ error: verdict.message, blocked: true }, { status: 409 });

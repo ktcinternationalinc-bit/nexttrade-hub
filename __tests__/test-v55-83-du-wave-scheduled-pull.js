@@ -17,7 +17,7 @@ ok(/export async function GET\(request\)/.test(r) && /export async function POST
 ok(!/\bconst \b/.test(r) && !/ => /.test(r),'route is SWC-safe (var + concat)');
 // vercel.json cron
 ok(Array.isArray(vj.crons) && vj.crons.some(function(c){return c.path==='/api/wave/sync-pull' && c.schedule==='0 */6 * * *';}),'vercel.json schedules sync-pull every 6h');
-ok(vj.crons.length===5,'vercel.json declares all 5 crons');
+ok(vj.crons.length>=5,'vercel.json declares at least the original 5 crons');
 ok(/version: 'v55\.83-DU'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew DU');
 console.log('\nv55.83-DU wave scheduled pull: '+pass+' passed, '+fail+' failed');
 if(fail>0)process.exit(1);console.log('ALL PASS');

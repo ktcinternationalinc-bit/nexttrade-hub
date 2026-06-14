@@ -157,6 +157,7 @@ export default function WaveSyncCenter(props) {
               <div key={i} className="px-3 py-2 border-t border-slate-800 text-sm">
                 <div className="font-bold">{r.label}</div>
                 <div className={'text-xs ' + color}>{r.verdict} — {r.message}</div>
+                {r.targetBusinessId && <div className="text-[10px] text-cyan-300 font-mono mt-0.5">Target: {r.targetBusinessName || ''} · {r.targetBusinessId}</div>}
                 {r.wouldDo && <div className="text-[11px] text-slate-400">Would: {r.wouldDo}</div>}
               </div>
             );

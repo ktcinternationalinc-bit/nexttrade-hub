@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EF',
+    date: '2026-06-08',
+    label: 'Wave push: shows exact target business + hard safety lock',
+    items: [
+      '**\ud83d\udd12 Before anything is sent to Wave, the screen now shows the exact business name and full Wave ID it would go to \u2014 not just \u201cthe selected business.\u201d** And a hard safety lock means a real push can ONLY go to your KANDIL EGYPT test business; any other target is blocked automatically. Production stays locked, and payments/categories are still not pushed.',
+      { superAdminOnly: true, text: 'v55.83-EF. No SQL. Transparency + hard guard before any live Wave push. (1) dryRunRecord (wave-sync-eligibility.js) now returns targetBusinessId + targetBusinessName and message reads "Would push to <label> (<raw wave_business_id>)."; WaveSyncCenter dry-run row shows a cyan Target: <name> · <id> line. (2) HARD GUARD added in 3 places that must agree: wave-silo-guard.assertCanPush + the inline canPush copies in /api/wave/push-customer and /api/wave/push-invoice routes. Rule: if dryRun!==true and waveBusinessId !== QnVz…YjYyMzNmMjI… (KANDIL EGYPT) => block "Push blocked: target Wave business is not the approved KANDIL EGYPT test business." Dry runs pass dryRun:true so they can inspect any registered silo without writing. APPROVED_PUSH_BUSINESS_ID exported from the guard. CONTEXT: investigation of an old import log showed 241 customers imported under an UNREGISTERED business id (QnVz…NWRkNzI3MDc…, a Wave-token-accessible business not in wave_business_registry); 0 Hub records are tagged to it and the push path was already registry-bound, but this lock makes a wrong-target real push impossible regardless. Production push still also blocked by is_production gate. No payment/category push. NEXT: Max re-runs Dry Run (now shows raw KANDIL EGYPT id), then pushes ONE customer, checks wave_sync_log action!=import for success+correct target, then one approved invoice.' },
+    ],
+  },
+  {
+    version: 'v55.83-EE',
+    date: '2026-06-08',
+    label: 'Plaid: automatic transaction sync per business',
+    items: [
+      '**\ud83c\udfe6 Bank transactions now pull from Plaid automatically, every few hours, for each connected account \u2014 separated by business.** You no longer have to click Sync on each bank connection. It only reads from your bank (never changes anything there), and while testing it runs for the TEST business only; the real production accounts are left alone until you turn that on.',
+      { superAdminOnly: true, text: 'v55.83-EE. No SQL. NEW route /api/plaid/sync (GET cron + POST manual; SWC-safe var+concat, service-role). Loops bank_connections; for each connection assigned to an IN-SCOPE silo it re-runs the existing /api/plaid/transactions route via internal fetch (read-only Plaid pull + upsert, reuses proven path incl its wave_business_id enforcement + per-txn silo inheritance). TEST-ONLY by default: a connection runs only if its wave_business_id is a registered is_production===false business; production via ?includeProduction=true / body.includeProduction. Unassigned connections SKIPPED (transactions route rejects them anyway). Per-silo by construction (connections already carry wave_business_id). Writes one wave_sync_log row per connection (entity_type plaid_transactions / action scheduled_sync). CRON_SECRET-protected. vercel.json: added /api/plaid/sync at 0 */3 * * * (every 3h) \u2014 now 6 crons total, all route files verified present. VALIDATE FIRST: POST /api/plaid/sync manually, read returned results[] (connection/silo/ok/inserted) + wave_sync_log, confirm only TEST connections ran, before trusting unattended runs. Set CRON_SECRET in Vercel. Note Plaid handles dedupe/upsert via bank-ingest; production accounts excluded until opted in.' },
+    ],
+  },
+  {
     version: 'v55.83-ED',
     date: '2026-06-08',
     label: 'Invoices: one status helper + on-screen eligibility debug',

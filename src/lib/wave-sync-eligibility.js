@@ -64,7 +64,8 @@ function dryRunRecord(opts) {
     registry: opts.registry,
     record: opts.record,
     action: opts.action,
-    unlockPhrase: opts.unlockPhrase
+    unlockPhrase: opts.unlockPhrase,
+    dryRun: true
   });
   if (!guard.ok) {
     return { verdict: 'dry_run_failed', code: guard.code, message: guard.message, wouldDo: null };
@@ -73,7 +74,12 @@ function dryRunRecord(opts) {
   if (opts.action === 'customer') { wouldDo = 'Create customer: ' + (opts.record.company_name || opts.record.name); }
   else if (opts.action === 'invoice') { wouldDo = 'Create invoice ' + opts.record.invoice_number + ' (total ' + opts.record.total_amount + ')'; }
   else { wouldDo = 'Apply payment'; }
-  return { verdict: 'dry_run_ok', code: 'ok', message: 'Would push to the selected Wave business.', wouldDo: wouldDo };
+  var tgtReg = null;
+  var rlist = opts.registry || [];
+  var ri;
+  for (ri = 0; ri < rlist.length; ri++) { if (rlist[ri] && rlist[ri].wave_business_id === opts.waveBusinessId) { tgtReg = rlist[ri]; } }
+  var tgtName = tgtReg ? (tgtReg.label || opts.waveBusinessId) : opts.waveBusinessId;
+  return { verdict: 'dry_run_ok', code: 'ok', message: 'Would push to ' + tgtName + ' (' + opts.waveBusinessId + ').', wouldDo: wouldDo, targetBusinessId: opts.waveBusinessId, targetBusinessName: tgtName };
 }
 
 export {
