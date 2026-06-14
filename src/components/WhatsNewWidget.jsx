@@ -33,6 +33,42 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DX',
+    date: '2026-06-08',
+    label: 'Wave category pull: match the existing category table',
+    items: [
+      '**\ud83d\udd27 Fixed the Wave category pull to use the existing category table.** An earlier version of the category table already existed with slightly different column names, so the pull needed to be lined up with it. Now it saves the Wave category name and type into the right place and keeps everything that was already there.',
+      { superAdminOnly: true, text: 'v55.83-DX (NEEDS SQL in chat: ALTER wave_categories ADD subtype/raw_payload/last_synced_at/last_synced_hash + UNIQUE(wave_business_id,wave_account_id)). The wave_categories table pre-existed (CC) with columns wave_account_name/wave_account_type (NOT name/type) and lacked subtype/raw_payload/last_synced_*; my DW CREATE TABLE IF NOT EXISTS was therefore skipped and DW wrote to non-existent name/type columns. FIX: sync-categories rowPayload now writes wave_account_name + wave_account_type (plus type kept as alias for forward-compat) + subtype/raw_payload/last_synced_*; ALTER statements add the missing columns without dropping existing rows. Everything else unchanged: test-only default, read-only on Wave, dedupe by (wave_business_id, wave_account_id) via last_synced_hash, CRON_SECRET, wave_sync_log. Validation queries must use wave_account_name (not name). Account GraphQL shape still unverified vs live Wave \u2014 raw_payload + log expose mismatches.' },
+    ],
+  },
+  {
+    version: 'v55.83-DW',
+    date: '2026-06-08',
+    label: 'Wave categories: pull the chart of accounts into Hub (test-only)',
+    items: [
+      '**\ud83d\udcd2 Hub can now pull your Wave categories (chart of accounts) in, so categorization can stay consistent with Wave.** This first step brings the category list from your TEST Wave business into the Hub and keeps it updated without duplicating. It only reads from Wave \u2014 it never changes anything in Wave. The category dropdowns that use this list are the next step once we confirm the pulled list looks right.',
+      { superAdminOnly: true, text: 'v55.83-DW (NEEDS SQL in chat: wave_categories table + RLS). Confirms the spec deliverables: Parts 1\u20135 (Hub match/partial/split/multi/overpayment->customer_credits + cross-silo block) ALREADY EXIST in BankReviewTab; Part 6 (no fake payment push) already DL; Part 7 (Wave invoice balance/status pull) already import-invoices + DV scheduled. WAVE API FACTS (from CC): payment creation NOT supported (public API) -> Manual Wave Action Required is correct/permanent; Chart of Accounts Account objects ARE readable; categorized txns NOT reliably readable. THIS BUILD = Part 9 (categorization foundation): NEW route /api/wave/sync-categories (GET cron-capable + POST manual; SWC-safe service-role) pulls Wave Account objects (business.accounts paginated) and UPSERTs into wave_categories by (wave_business_id, wave_account_id) -> dedupe/update-in-place, last_synced_hash skips unchanged, stores raw_payload + name/type/subtype/is_active(from isArchived). TEST-ONLY by default (is_production===false; production via ?includeProduction=true), read-only on Wave, CRON_SECRET-protected, writes wave_sync_log (entity_type category / action pull). NOT yet wired into vercel.json cron (validate manually first \u2014 the Account GraphQL shape follows Wave public schema but is UNVERIFIED against live Wave; raw_payload + log expose any mismatch). NOT built this pass: Parts 10\u201312 (Bank Review category dropdown scoped to active silo from wave_categories + category_source/category_sync_status write-safety UI) \u2014 the validated follow-on once the pulled list is confirmed. wave-category-guard.js (CC) is the enforcement layer ready for that.' },
+    ],
+  },
+  {
+    version: 'v55.83-DV',
+    date: '2026-06-08',
+    label: 'Wave auto-pull: test data only (production excluded by default)',
+    items: [
+      '**\ud83e\uddea The automatic Wave pull now runs for the TEST business only.** While we are still testing, the scheduled pull will only bring in data from KANDIL EGYPT (Test) and will leave the real production account untouched. Production can be included later, on purpose, once testing is confirmed.',
+      { superAdminOnly: true, text: 'v55.83-DV. No SQL. Hardens DU per \u201ctest data first\u201d: /api/wave/sync-pull now filters wave_business_registry to is_production === false by DEFAULT (test only). Production is included ONLY with explicit opt-in: ?includeProduction=true query param OR body.includeProduction === true. The Vercel cron path stays /api/wave/sync-pull with NO query param, so the scheduled 6-hourly run is TEST-ONLY. Response now returns scope: test_only | all_businesses; empty-test message tells you how to include production. Pull remains read-only on Wave (no writes) and CRON_SECRET-protected. Push (DL) was already production-locked. So both directions now default to test data: pull excludes production unless opted in, push refuses production outright.' },
+    ],
+  },
+  {
+    version: 'v55.83-DU',
+    date: '2026-06-08',
+    label: 'Wave \u2192 Hub: automatic scheduled pull of updates',
+    items: [
+      '**\ud83d\udd04 The Hub now pulls updates from Wave automatically on a schedule** (every 6 hours), so customer and invoice changes made in Wave show up in the Hub on their own \u2014 you no longer have to click Import each time. It matches records by their Wave ID, so it updates the right record and never creates duplicates. This only reads from Wave; it never changes anything in Wave.',
+      { superAdminOnly: true, text: 'v55.83-DU. No SQL. NEW route /api/wave/sync-pull (GET for Vercel cron + POST for manual validation; SWC-safe var+concat, service-role). Reads wave_business_registry, and for EACH registered business re-runs the existing tested import routes via internal fetch (import-customers then import-invoices) using the request origin as base \u2014 reuses the proven dedupe/update-by-wave-id logic, no divergence. Pulling is READ-ONLY on Wave (never writes to Wave) so it is safe for all businesses incl production. Writes one wave_sync_log row per business per run (entity_type pull / action scheduled_pull / response_payload = both import reports). Protected by CRON_SECRET: if the env var is set, caller must send Authorization: Bearer <secret> (else 401); if unset, runs unprotected (set it for production). NEW vercel.json declares 5 crons (existing categorize/generate-occurrences/reminders-dispatch/nadia-watch + the new sync-pull at 0 */6 * * *) \u2014 all five route files verified to exist. NOTE: if crons were previously configured only in the Vercel dashboard, this vercel.json now becomes the source of truth \u2014 confirm schedules match. HONEST: schedule is every 6h (adjustable); validate first by POSTing /api/wave/sync-pull manually and reading the returned per-business reports + wave_sync_log before trusting unattended runs. Separate from Hub->Wave PUSH (DL), which remains test-only + unverified against live Wave.' },
+    ],
+  },
+  {
     version: 'v55.83-DT',
     date: '2026-06-08',
     label: 'Receiving: reopening a receipt always shows your saved lines',

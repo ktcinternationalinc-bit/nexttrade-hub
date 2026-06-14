@@ -1,28 +1,9 @@
 {
   "crons": [
-    {
-      "path": "/api/categorize",
-      "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/events/generate-occurrences",
-      "schedule": "0 2 * * *"
-    },
-    {
-      "path": "/api/reminders/dispatch",
-      "schedule": "*/10 * * * *"
-    },
-    {
-      "path": "/api/nadia/watch",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/phone/transcribe-cron",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/backup/snapshot",
-      "schedule": "0 8 * * *"
-    }
+    { "path": "/api/categorize", "schedule": "0 3 * * *" },
+    { "path": "/api/events/generate-occurrences", "schedule": "0 2 * * *" },
+    { "path": "/api/reminders/dispatch", "schedule": "*/10 * * * *" },
+    { "path": "/api/nadia/watch", "schedule": "*/30 * * * *" },
+    { "path": "/api/wave/sync-pull", "schedule": "0 */6 * * *" }
   ]
 }
