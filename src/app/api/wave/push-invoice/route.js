@@ -52,10 +52,10 @@ export async function POST(req) {
     }
 
     // Customer must already be in Wave (push customer first).
-    var custRes = await db.from('accounting_customers').select('id, company_name, name, wave_customer_id, wave_business_id').eq('id', inv.accounting_customer_id).single();
+    var custRes = await db.from('accounting_customers').select('id, company_name, contact_name, wave_customer_id, wave_business_id').eq('id', inv.accounting_customer_id).single();
     var cust = custRes && custRes.data;
     if (!cust || !cust.wave_customer_id) {
-      var cn = cust ? (cust.company_name || cust.name || cust.id) : '(unknown)';
+      var cn = cust ? (cust.company_name || cust.contact_name || cust.id) : '(unknown)';
       var cid = cust ? cust.id : '(none)';
       var msg = 'Push this customer first: "' + cn + '" (Hub id ' + cid + ') has no Wave customer id yet for this business. Go to Pending Sync, push that customer, then retry the invoice.';
       await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msg, response_payload: { invoice_number: inv.invoice_number, hub_customer_name: cn, hub_customer_id: cid, wave_customer_id: cust ? cust.wave_customer_id : null, wave_business_id: waveBusinessId }, attempted_by: by });
@@ -72,7 +72,7 @@ export async function POST(req) {
 
     if (dryRun) {
       await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, attempted_by: by });
-      return NextResponse.json({ dry_run: true, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.name } });
+      return NextResponse.json({ dry_run: true, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name } });
     }
 
     var token = process.env.WAVE_ACCESS_TOKEN;

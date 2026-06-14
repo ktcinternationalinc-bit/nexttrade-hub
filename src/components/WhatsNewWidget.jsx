@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EK',
+    date: '2026-06-08',
+    label: 'Invoice push: fixed the false "push customer first" error',
+    items: [
+      '**\u2705 Fixed the bug where pushing an invoice wrongly said \u201cpush the customer first\u201d even though the customer was already in Wave.** Invoices linked to a valid Wave customer (like Adel Saeed) now push correctly.',
+      { superAdminOnly: true, text: 'v55.83-EK. No SQL. ROOT CAUSE of invoice 6 / Adel Saeed repeatedly blocking with "(unknown)/(none)" despite diagnostic issue=OK: the push-invoice customer lookup did .select("id, company_name, name, wave_customer_id, wave_business_id").single() but accounting_customers has NO "name" column (only company_name + contact_name). Selecting a non-existent column makes the PostgREST/.single() query ERROR -> custRes.data null -> route reported it as "customer not in Wave" with cust null => cn "(unknown)", cid "(none)". This was a Claude-introduced bug (the bad column was added in EG/EH edits). FIX: select id, company_name, contact_name, wave_customer_id, wave_business_id; replaced both cust.name fallbacks with cust.contact_name (block message + dry-run preview). push-customer route uses select(*) so was unaffected. EJ strict pending scope, EI picker scope, EH link-back, EF hard guard all intact. Adel Saeed (6) and all issue=OK invoices should now push; the 3 contaminated customers (01/02/56666/5656) still need repair separately.' },
+    ],
+  },
+  {
     version: 'v55.83-EJ',
     date: '2026-06-08',
     label: 'Wave Sync: only same-business records can be pushed',
