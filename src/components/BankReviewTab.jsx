@@ -220,6 +220,7 @@ export default function BankReviewTab(props) {
     var cust = acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; });
     return dbInsert('accounting_invoice_payments', {
       business_id: t.business_id || inv.business_id || null,
+      wave_business_id: (inv.wave_business_id || t.wave_business_id || getActiveWaveBusiness() || null), // v55.83-DZ — silo tag
       accounting_invoice_id: inv.id,
       accounting_customer_id: inv.accounting_customer_id || null,
       amount: amt,
@@ -293,7 +294,7 @@ export default function BankReviewTab(props) {
           var inv = acctInvoices.find(function (i) { return i.id === r.invoice_id; });
           if (!inv) return null;
           if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('Skipped an invoice from another business.'); return null; }
-          return dbInsert('payment_matches', { business_id: t.business_id, bank_transaction_id: t.id, invoice_id: r.invoice_id, matched_amount: amt, match_type: 'partial', is_manual_override: true, notes: 'split', matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
+          return dbInsert('payment_matches', { business_id: t.business_id, wave_business_id: (t.wave_business_id || getActiveWaveBusiness() || null), bank_transaction_id: t.id, invoice_id: r.invoice_id, matched_amount: amt, match_type: 'partial', is_manual_override: true, notes: 'split', matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
             .then(function (matchRow) { return createInvPaymentRow(inv, t, amt, matchRow && matchRow.id, 'split'); })
             .then(function () { return recomputeInvoice(r.invoice_id); });
         });
@@ -323,8 +324,9 @@ export default function BankReviewTab(props) {
     var c = classifyApplication(invoiceTotal(inv), paidNow, apply);
     setBusy(true);
     var biz = t.business_id || (inv ? inv.business_id : null);
+    var siloId = activeBiz || (inv && inv.wave_business_id) || t.wave_business_id || null; // v55.83-DZ
     dbInsert('payment_matches', {
-      business_id: biz, bank_transaction_id: t.id, invoice_id: inv.id,
+      business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, invoice_id: inv.id,
       matched_amount: c.applied_to_invoice, match_type: c.type, is_manual_override: false,
       notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
     }, userProfile && userProfile.id)
@@ -336,7 +338,7 @@ export default function BankReviewTab(props) {
       // overpayment -> customer credit (never dropped)
       if (c.overpayment > 0 && mCustomerId) {
         chain = chain.then(function () {
-          return dbInsert('customer_credits', { business_id: biz, accounting_customer_id: mCustomerId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+          return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: mCustomerId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
         });
       }
       return chain;
@@ -359,7 +361,7 @@ export default function BankReviewTab(props) {
     var amt = roundMoney(Number(mAmount));
     if (!(amt > 0)) { toast.error('Enter an amount.'); return; }
     setBusy(true);
-    dbInsert('unapplied_deposits', { business_id: t.business_id, bank_transaction_id: t.id, accounting_customer_id: mCustomerId || null, amount: amt, status: 'open', notes: mNotes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
+    dbInsert('unapplied_deposits', { business_id: t.business_id, wave_business_id: (t.wave_business_id || getActiveWaveBusiness() || null), bank_transaction_id: t.id, accounting_customer_id: mCustomerId || null, amount: amt, status: 'open', notes: mNotes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
       .then(function () { return patchTxn(t, { accounting_customer_id: mCustomerId || t.accounting_customer_id, classification: t.classification || 'customer_payment', review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status }, 'Created unapplied deposit ' + fmt(amt) + ' from bank txn ' + (t.name || t.id)); })
       .then(function () { toast.success('Unapplied deposit created — awaiting allocation'); load(); })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })

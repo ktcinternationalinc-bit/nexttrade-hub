@@ -80,6 +80,8 @@ export default function AccountingCustomersTab(props) {
     var done;
     if (editing === 'new') {
       payload.business_id = businessId;
+      if (waveBiz) { payload.wave_business_id = waveBiz; } // v55.83-DY — tag active silo so it shows in blotter + Sync Center
+      if (!payload.source) { payload.source = 'hub'; }
       payload.created_by = userProfile && userProfile.id;
       done = dbInsert('accounting_customers', payload, userProfile && userProfile.id)
         .then(function () { return logActivity(userProfile && userProfile.id, 'Added accounting customer ' + payload.company_name, 'accounting_customers'); });

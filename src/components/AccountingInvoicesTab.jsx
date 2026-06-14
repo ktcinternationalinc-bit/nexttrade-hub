@@ -217,6 +217,8 @@ export default function AccountingInvoicesTab(props) {
     var getId;
     if (editing === 'new') {
       hpayload.business_id = businessId; hpayload.created_by = userProfile && userProfile.id;
+      if (waveBiz) { hpayload.wave_business_id = waveBiz; } // v55.83-DY — tag active silo
+      if (!hpayload.source) { hpayload.source = 'hub'; }
       getId = dbInsert(tbl, hpayload, userProfile && userProfile.id).then(function (res) { return res && res[0] ? res[0].id : (res && res.id); });
     } else {
       getId = dbUpdate(tbl, editing.id, hpayload, userProfile && userProfile.id).then(function () { return editing.id; });
@@ -286,7 +288,7 @@ export default function AccountingInvoicesTab(props) {
       .then(function (r) {
         var its = (r && r.data) || [];
         var total = roundMoney(its.reduce(function (a, it) { return a + (Number(it.line_total) || 0); }, 0)) || Number(row.total_amount) || 0;
-        var invPayload = { business_id: row.business_id || businessId, accounting_customer_id: row.accounting_customer_id, invoice_number: null, invoice_date: new Date().toISOString().substring(0, 10), due_date: null, notes: row.notes || null, terms: row.terms || null, total_amount: total, amount_paid: 0, balance_due: total, payment_status: 'unpaid', approval_status: 'draft', created_by: userProfile && userProfile.id };
+        var invPayload = { business_id: row.business_id || businessId, wave_business_id: (row.wave_business_id || waveBiz || null), source: (row.source || 'hub'), accounting_customer_id: row.accounting_customer_id, invoice_number: null, invoice_date: new Date().toISOString().substring(0, 10), due_date: null, notes: row.notes || null, terms: row.terms || null, total_amount: total, amount_paid: 0, balance_due: total, payment_status: 'unpaid', approval_status: 'draft', created_by: userProfile && userProfile.id };
         return dbInsert('accounting_invoices', invPayload, userProfile && userProfile.id).then(function (res) {
           var invId = res && res[0] ? res[0].id : (res && res.id);
           var chain = Promise.resolve();

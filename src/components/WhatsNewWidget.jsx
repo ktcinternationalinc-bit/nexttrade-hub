@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-DZ',
+    date: '2026-06-08',
+    label: 'Matching: payments, credits & deposits now tagged to the business',
+    items: [
+      '**\ud83d\udd16 Payment matches, customer credits, and unapplied deposits are now tagged to the active business.** Just like the invoice fix, anything created when you match a bank deposit to an invoice now carries the business tag, so it shows correctly under the right silo and never goes missing. The cross-business safety check (you cannot match a deposit to an invoice from a different business) was already in place and still applies.',
+      { superAdminOnly: true, text: 'v55.83-DZ. No SQL for the code fix (backfill SQL for old untagged rows provided in chat). Extends the DY silo-stamp fix into BankReviewTab matching writes, which previously set business_id but NOT wave_business_id (same disappear-from-silo-view bug): (1) main payment_matches insert in applyToInvoice -> wave_business_id = siloId (activeBiz || inv.wave_business_id || t.wave_business_id); (2) split-flow payment_matches -> t.wave_business_id || getActiveWaveBusiness(); (3) accounting_invoice_payments (createInvPaymentRow) -> inv.wave_business_id || t.wave_business_id || active; (4) customer_credits (overpayment) -> siloId; (5) unapplied_deposits -> t.wave_business_id || active. Cross-silo block (assertMatchSameSilo) unchanged. Payment sync_status stays pending_wave_sync (Wave payment creation still unsupported -> manual-required; NO fake wave_payment_id). NEXT BUILD (separate): Wave Categories/Chart-of-Accounts pull working + Bank Review category dropdown by active silo (DW/DX route exists but unrun; dropdown still hardcoded CLASSIFICATIONS).' },
+    ],
+  },
+  {
+    version: 'v55.83-DY',
+    date: '2026-06-08',
+    label: 'Accounting: new customers/invoices now tagged to the active business',
+    items: [
+      '**\ud83d\udd16 Fixed: customers and invoices you create in Accounting are now tagged to the business you have selected at the top.** Before, new records were saved without a business tag, which is why a new invoice could save but not appear in the list, and why new customers/invoices never showed up in the Wave Sync Center. Now they are stamped with the active business (e.g. KANDIL EGYPT Test) the moment you save, so they appear in the list and become available to push to Wave.',
+      { superAdminOnly: true, text: 'v55.83-DY. No SQL for the code fix (but a one-time backfill is needed for already-created untagged rows \u2014 provided in chat). ROOT CAUSE of \u201csaves but not on blotter\u201d + \u201cnothing in Pending Sync\u201d: AccountingCustomersTab.save + AccountingInvoicesTab.save (main) + proforma->invoice conversion all stamped business_id but NEVER wave_business_id, so new Hub records were untagged; the silo-filtered blotter (scopeIfRegistered) and WaveSyncCenter Pending queue both hid them. FIX: all three inserts now set wave_business_id = waveBiz (getActiveWaveBusiness(), already read in both components) + source=hub when not already set. Existing untagged rows remain hidden until backfilled (UPDATE ... SET wave_business_id = <test id> WHERE wave_business_id IS NULL \u2014 scoped carefully, given in chat after confirming the test silo id). After deploy + backfill, newly-created Hub accounting records appear in the blotter and (if invoice approved / customer has no wave id) in Pending Sync, unblocking the Hub->Wave push test.' },
+    ],
+  },
+  {
     version: 'v55.83-DX',
     date: '2026-06-08',
     label: 'Wave category pull: match the existing category table',
