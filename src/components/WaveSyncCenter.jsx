@@ -112,7 +112,7 @@ export default function WaveSyncCenter(props) {
     var done = 0, failed = 0;
     selectedRows.forEach(function (q) {
       seq = seq.then(function () {
-        var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice' : '/api/wave/push-payment');
+        var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : '/api/wave/push-payment');
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) { if (d && d.success) { done++; } else { failed++; } })
@@ -216,6 +216,7 @@ export default function WaveSyncCenter(props) {
           {syncLog.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No sync log entries for this silo yet.</div> :
             syncLog.map(function (l, idx) {
               var mk = (l.response_payload && l.response_payload.api_build_marker) || (l.request_payload && l.request_payload.api_build_marker) || null;
+              var rt = (l.request_payload && l.request_payload.route) || (l.response_payload && l.response_payload.route) || null;
               return (
                 <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
                   <div className="flex gap-2 flex-wrap items-center">
@@ -226,6 +227,7 @@ export default function WaveSyncCenter(props) {
                     <span>{l.action}{l.dry_run ? ' (dry run)' : ''}</span>
                     <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
                     {mk && <span className="text-[9px] text-cyan-300 font-mono">{mk}</span>}
+                    {rt && <span className="text-[9px] text-violet-300 font-mono">{rt}</span>}
                     {l.error_message && <span className="text-slate-400">{l.error_message}</span>}
                     {(l.response_payload || l.request_payload) && <button onClick={function () { setOpenLog(openLog === l.id ? null : l.id); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{openLog === l.id ? 'Hide details' : 'View details'}</button>}
                   </div>

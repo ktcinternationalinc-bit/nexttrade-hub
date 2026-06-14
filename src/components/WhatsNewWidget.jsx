@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EP',
+    date: '2026-06-08',
+    label: 'Invoice push moved to a brand-new endpoint (proves the fix)',
+    items: [
+      '**\u2705 Invoice push now runs through a brand-new connection to Wave, so there is no chance of an old cached version interfering.** Every line is attached to the required Wave product before anything is sent, and the Sync Log now shows exactly which connection and version handled each push.',
+      { superAdminOnly: true, text: 'v55.83-EP. No SQL. Ends the stale-route deadlock by bypassing /api/wave/push-invoice entirely. NEW endpoint /api/wave/push-invoice-v2 (a brand-new serverless function cannot be a cached copy of the old one). API_BUILD_MARKER=v55.83-EP-push-invoice-v2-productid + API_ROUTE=/api/wave/push-invoice-v2 stamped into GET, POST success/blocked/dry-run responses, request_payload, response_payload, and the Wave response data. WaveSyncCenter invoice push now calls /api/wave/push-invoice-v2 (customer still /api/wave/push-customer). Carries all EO logic: exact-name NextTrade Hub Item product resolution (reuse else create via INCOME account, no any-sold fallback), productMode (reused_existing|created_new|none), LOCAL PREFLIGHT building finalItems with productId and returning 409 LOCAL_PRECHECK_MISSING_PRODUCT_ID before Wave is ever called if any line lacks productId. Sync Log rows show #seq, attempted_at, NEWEST badge, api_build_marker (cyan) AND route (violet). GET /api/wave/push-invoice-v2 returns {route,api_build_marker} for instant version check. PROOF after push: newest row must show route=/api/wave/push-invoice-v2 + marker v55.83-EP-push-invoice-v2-productid + finalItems w/ productId. If absent, UI is calling wrong route. If present and Wave still errors, the Wave error is real and names the next field. KANDIL guard, prod locked, no payments/categories, contaminated 01/02/56666/5656 untouched. Old /api/wave/push-invoice left in place (unused by UI now) for reference.' },
+    ],
+  },
+  {
     version: 'v55.83-EO',
     date: '2026-06-08',
     label: 'Wave Sync Log: timestamps, newest-first, and proof of which build ran',
