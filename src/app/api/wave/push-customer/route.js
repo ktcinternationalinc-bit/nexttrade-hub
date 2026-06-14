@@ -60,17 +60,37 @@ export async function POST(req) {
       return NextResponse.json({ error: verdict.message, blocked: true }, { status: 409 });
     }
     if (dryRun) {
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'customer', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, attempted_by: by });
-      return NextResponse.json({ dry_run: true, would_create: { name: cust.company_name || cust.name } });
+      var pvName = cust.company_name || cust.contact_name || cust.name || '';
+      var pvContact = cust.contact_name || ((cust.first_name || '') + ' ' + (cust.last_name || '')).trim() || null;
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'customer', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, request_payload: { preview: { name: pvName, contact: pvContact, email: cust.email || null } }, attempted_by: by });
+      return NextResponse.json({ dry_run: true, would_create: { name: pvName, contact: pvContact, email: cust.email || null } });
     }
 
     var token = process.env.WAVE_ACCESS_TOKEN;
     if (!token) { return NextResponse.json({ error: 'No Wave token configured (WAVE_ACCESS_TOKEN).' }, { status: 400 }); }
 
-    // Wave GraphQL customerCreate. NOTE: field shape per Wave public schema; must be
-    // validated against the Wave sandbox before relying on it.
-    var mutation = 'mutation($input: CustomerCreateInput!){ customerCreate(input:$input){ didSucceed inputErrors{ message path } customer{ id name email } } }';
-    var variables = { input: { businessId: waveBusinessId, name: cust.company_name || cust.name, email: cust.email || null } };
+    // v55.83-EG — map Hub name fields into Wave's customer + primary-contact fields.
+    // Wave: input.name = display/customer name; firstName/lastName = primary contact.
+    var displayName = cust.company_name || cust.contact_name || cust.name || '';
+    var firstName = '';
+    var lastName = '';
+    if (cust.first_name || cust.last_name) {
+      firstName = cust.first_name || '';
+      lastName = cust.last_name || '';
+    } else if (cust.contact_name && String(cust.contact_name).trim()) {
+      var parts = String(cust.contact_name).trim().split(/\s+/);
+      firstName = parts[0] || '';
+      lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
+    }
+
+    // Wave GraphQL customerCreate. Only include contact fields when we actually have them
+    // (never overwrite with blank strings).
+    var input = { businessId: waveBusinessId, name: displayName };
+    if (cust.email) { input.email = cust.email; }
+    if (firstName) { input.firstName = firstName; }
+    if (lastName) { input.lastName = lastName; }
+    var mutation = 'mutation($input: CustomerCreateInput!){ customerCreate(input:$input){ didSucceed inputErrors{ message path code } customer{ id name firstName lastName email } } }';
+    var variables = { input: input };
     var reqPayload = { query: mutation, variables: variables };
 
     var resp = await fetch(WAVE_URL, {
@@ -92,16 +112,22 @@ export async function POST(req) {
     if (!ok) { return NextResponse.json({ error: 'Wave did not accept the customer. See sync log.', response: data }, { status: 502 }); }
 
     // Read-back verify
-    var readQ = 'query($bid:ID!,$cid:ID!){ business(id:$bid){ customer(id:$cid){ id name email } } }';
+    var readQ = 'query($bid:ID!,$cid:ID!){ business(id:$bid){ customer(id:$cid){ id name firstName lastName email } } }';
     var readResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: readQ, variables: { bid: waveBusinessId, cid: cc.customer.id } }) });
     var readData = await readResp.json();
     var rb = readData && readData.data && readData.data.business && readData.data.business.customer;
-    var verified = rb && rb.id === cc.customer.id && rb.name === (cust.company_name || cust.name);
+    var verified = rb && rb.id === cc.customer.id;
 
-    if (verified) {
-      await db.from('accounting_customers').update({ wave_customer_id: cc.customer.id, wave_sync_status: 'synced' }).eq('id', hubId);
-    }
-    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'customer', hub_record_id: hubId, wave_record_id: cc.customer.id, action: 'read_back', dry_run: false, response_payload: readData, success: !!verified, error_message: verified ? null : 'Read-back mismatch', attempted_by: by });
+    // v55.83-EH — ALWAYS save the Wave customer id back to the exact Hub row once Wave
+    // created it (ok === true above). Previously this was gated on a strict name match,
+    // so a customer with only contact_name (display name != company_name) would push to
+    // Wave but never get linked back, leaving wave_customer_id blank and blocking its
+    // invoice. The id is authoritative; verification is recorded separately.
+    await db.from('accounting_customers').update({
+      wave_customer_id: cc.customer.id,
+      wave_sync_status: verified ? 'synced' : 'pushed_unverified'
+    }).eq('id', hubId);
+    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'customer', hub_record_id: hubId, wave_record_id: cc.customer.id, action: 'read_back', dry_run: false, response_payload: readData, success: !!verified, error_message: verified ? null : 'Read-back name/id check soft-failed (id still linked)', attempted_by: by });
 
     return NextResponse.json({ success: true, wave_customer_id: cc.customer.id, verified: !!verified });
   } catch (e) {

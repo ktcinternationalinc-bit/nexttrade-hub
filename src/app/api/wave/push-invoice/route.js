@@ -52,12 +52,19 @@ export async function POST(req) {
     }
 
     // Customer must already be in Wave (push customer first).
-    var custRes = await db.from('accounting_customers').select('id, company_name, name, wave_customer_id').eq('id', inv.accounting_customer_id).single();
+    var custRes = await db.from('accounting_customers').select('id, company_name, name, wave_customer_id, wave_business_id').eq('id', inv.accounting_customer_id).single();
     var cust = custRes && custRes.data;
     if (!cust || !cust.wave_customer_id) {
-      var msg = 'The invoice customer is not in Wave yet. Push the customer first.';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msg, attempted_by: by });
-      return NextResponse.json({ error: msg, blocked: true }, { status: 409 });
+      var cn = cust ? (cust.company_name || cust.name || cust.id) : '(unknown)';
+      var cid = cust ? cust.id : '(none)';
+      var msg = 'Push this customer first: "' + cn + '" (Hub id ' + cid + ') has no Wave customer id yet for this business. Go to Pending Sync, push that customer, then retry the invoice.';
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msg, response_payload: { invoice_number: inv.invoice_number, hub_customer_name: cn, hub_customer_id: cid, wave_customer_id: cust ? cust.wave_customer_id : null, wave_business_id: waveBusinessId }, attempted_by: by });
+      return NextResponse.json({ error: msg, blocked: true, needs_customer: { name: cn, hub_id: cid } }, { status: 409 });
+    }
+    if (cust.wave_business_id && cust.wave_business_id !== waveBusinessId) {
+      var msgS = 'The invoice customer belongs to a different business than the one selected. Cannot push across silos.';
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgS, attempted_by: by });
+      return NextResponse.json({ error: msgS, blocked: true }, { status: 409 });
     }
 
     var itemsRes = await db.from('accounting_invoice_items').select('*').eq('invoice_id', hubId);

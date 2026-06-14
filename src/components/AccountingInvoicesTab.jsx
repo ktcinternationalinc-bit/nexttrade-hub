@@ -23,7 +23,9 @@ function MiniTypeahead(props) {
   var st = useState(''); var q = st[0]; var setQ = st[1];
   var os = useState(false); var open = os[0]; var setOpen = os[1];
   var getLabel = props.getLabel; var sel = items.find(function (x) { return x.id === props.value; });
-  var shown = (q.trim() ? items.filter(function (x) { return getLabel(x).toLowerCase().indexOf(q.trim().toLowerCase()) >= 0; }) : items).slice(0, 10);
+  var matched = (q.trim() ? items.filter(function (x) { return getLabel(x).toLowerCase().indexOf(q.trim().toLowerCase()) >= 0; }) : items);
+  var shown = matched.slice(0, 50);
+  var moreCount = matched.length - shown.length;
   return (
     <div className="relative">
       <input value={open ? q : (sel ? getLabel(sel) : '')} placeholder={props.placeholder} disabled={props.disabled}
@@ -34,6 +36,7 @@ function MiniTypeahead(props) {
         <div className="absolute z-30 left-0 right-0 bg-slate-900 border border-slate-600 rounded mt-0.5 max-h-48 overflow-auto shadow-xl">
           {shown.length === 0 ? <div className="px-2 py-1 text-[11px] text-slate-500 italic">no matches</div> :
             shown.map(function (x) { return <div key={x.id} onMouseDown={function () { props.onPick(x.id); setOpen(false); }} className="px-2 py-1 text-[11px] text-slate-100 hover:bg-indigo-600/40 cursor-pointer">{getLabel(x)}</div>; })}
+          {moreCount > 0 && <div className="px-2 py-1 text-[10px] text-amber-300 italic border-t border-slate-700">+{moreCount} more — keep typing to narrow</div>}
         </div>
       )}
     </div>
@@ -146,6 +149,9 @@ export default function AccountingInvoicesTab(props) {
     };
   }
   var rows = scopeIfRegistered((isInvoice() ? invoices : proformas), waveBiz, waveReg, true);
+  // v55.83-EI — the customer picker must only offer customers in the ACTIVE silo,
+  // so an invoice can never be linked to a wrong-/cross-silo customer.
+  var scopedCustomers = scopeIfRegistered(customers, waveBiz, waveReg, true);
   var displayRows = rows
     .filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; })
     .filter(function (r) {
@@ -505,7 +511,7 @@ export default function AccountingInvoicesTab(props) {
           </div>
           <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Accounting customer *</span>
-              <MiniTypeahead items={customers} value={hdr.accounting_customer_id} disabled={locked(editing)} getLabel={function (c) { return c.company_name || c.contact_name || c.id; }} onPick={function (id) { uh('accounting_customer_id', id); }} placeholder="Search customer…" /></label>
+              <MiniTypeahead items={scopedCustomers} value={hdr.accounting_customer_id} disabled={locked(editing)} getLabel={function (c) { return c.company_name || c.contact_name || c.id; }} onPick={function (id) { uh('accounting_customer_id', id); }} placeholder="Search customer…" /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice #' : 'Proforma #'}</span><input value={(isInvoice() ? hdr.invoice_number : hdr.proforma_number) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_number' : 'proforma_number', e.target.value); }} className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice date' : 'Date'}</span><input type="date" value={(isInvoice() ? hdr.invoice_date : hdr.proforma_date) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_date' : 'proforma_date', e.target.value); }} className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Due date' : 'Valid until'}</span><input type="date" value={(isInvoice() ? hdr.due_date : hdr.valid_until) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'due_date' : 'valid_until', e.target.value); }} className={inp} /></label>

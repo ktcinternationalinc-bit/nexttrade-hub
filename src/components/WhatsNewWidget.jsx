@@ -33,6 +33,33 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EI',
+    date: '2026-06-08',
+    label: 'Invoices: customer dropdown shows more + same-business only',
+    items: [
+      '**\ud83d\udc65 When picking a customer for an invoice, you now see far more of your customers (not just the first 10), and the list only shows customers from the business you have selected.** Start typing to find anyone; a note shows when more match. This also prevents accidentally attaching an invoice to a customer from a different business.',
+      { superAdminOnly: true, text: 'v55.83-EI. No SQL. Two fixes in AccountingInvoicesTab. (1) MiniTypeahead was hard-capped at .slice(0,10) so the customer picker only ever showed 10 rows even when searching; raised to 50 + shows "+N more — keep typing" hint (matched.length - shown.length). (2) The picker loaded ALL accounting_customers unscoped, letting a KANDIL EGYPT invoice be linked to a customer in another/placeholder silo \u2014 the exact mechanism behind invoices 01/02/56666 being linked to customers tagged REAL_KTC_WAVE_BUSINESS_ID with wave_customer_ids from the unregistered business QnVz…NWRkNzI3MDc…. Now items={scopedCustomers} = scopeIfRegistered(customers, waveBiz, waveReg, true), same scoping the invoice blotter already uses. SEPARATE DATA ISSUE STILL OPEN (not fixed by this build): those 3 customers are mis-tagged to the production placeholder + carry wrong-business wave_customer_ids; do NOT push invoices 01/02/56666 until repaired. Clean invoices (Ehab 2220A-D, Futtaim 2203A-C) are correctly KANDIL EGYPT and safe to push-test. KANDIL EGYPT hard guard (EF) + customer link-back (EH) intact.' },
+    ],
+  },
+  {
+    version: 'v55.83-EH',
+    date: '2026-06-08',
+    label: 'Wave push: customer link-back fixed (unblocks invoices)',
+    items: [
+      '**\ud83d\udd17 When a customer is pushed to Wave, the Wave link is now always saved back to that exact customer in the Hub.** Before, if the saved name did not exactly match, the link was silently dropped \u2014 so the customer was in Wave but the invoice still said \u201cpush the customer first.\u201d Now the link saves reliably, which unblocks pushing that customer\u2019s invoice.',
+      { superAdminOnly: true, text: 'v55.83-EH. No SQL. ROOT CAUSE of "customer is in Wave but invoice push blocked": push-customer saved wave_customer_id back to the Hub row ONLY when verified===true, and verified required rb.name === (company_name||name). After EG made the pushed display name company_name||contact_name||name, a contact-only customer pushes under a name that fails that strict equality -> verified false -> wave_customer_id never written -> push-invoice (checks accounting_customer_id row .wave_customer_id) correctly blocks. FIX: once Wave returns ok (didSucceed + customer.id), ALWAYS update accounting_customers.wave_customer_id on the exact hub row; verification now only sets wave_sync_status (synced vs pushed_unverified) and logs read_back success, never withholds the id. Link column is accounting_customer_id (NOT customer_id). Re-push affected customers after deploy to backfill their link. PAYMENT PUSH CORRECTION (recorded, NOT built this build): Wave DOES expose invoicePaymentCreateManual (invoiceId, paymentAccountId, amount, paymentDate, paymentMethod, exchangeRate, memo) \u2014 prior "Wave does not support payments" was wrong; it is not-built-yet, not impossible. Needs a Wave paymentAccountId per silo. Build as separate KANDIL-EGYPT-only feature AFTER invoice push works: match->invoicePaymentCreateManual->read back->store real wave_payment_id->synced; never fake id. KANDIL EGYPT hard guard (EF) intact. No production, no category push.' },
+    ],
+  },
+  {
+    version: 'v55.83-EG',
+    date: '2026-06-08',
+    label: 'Wave push: customer name/contact mapping + clearer invoice block',
+    items: [
+      '**\ud83d\udc64 When a customer is pushed to Wave, the contact name now goes too \u2014 not just the email.** The company name fills the customer name, and the contact name is split into first/last for Wave. And if you try to push an invoice whose customer is not in Wave yet, the message now names exactly which customer to push first.',
+      { superAdminOnly: true, text: 'v55.83-EG. No SQL. FIX 1 (customer name mapping): push-customer mutation previously sent only name+email, so Wave showed blank primary contact first/last. Now maps displayName = company_name||contact_name||name; firstName/lastName from first_name/last_name if present else split contact_name on whitespace (first token / rest); only includes firstName/lastName/email when non-empty (never overwrite real values with blanks). Mutation + read-back now select firstName lastName. inputErrors now also returns code. Dry-run preview + log now show {name, contact, email} being sent; real push already logs request_payload. NOTE/UNVERIFIED: firstName/lastName placed at top of CustomerCreateInput \u2014 if Wave rejects, inputErrors will name the real field and we adjust (calibration). FIX 2 (invoice dependency clarity): push-invoice block when invoice customer has no wave_customer_id now reads "Push this customer first: <name> (Hub id <id>) ...", logs response_payload with invoice_number/hub_customer_name/hub_customer_id/wave_customer_id/wave_business_id, and returns needs_customer. Added cross-silo customer check (customer.wave_business_id must match selected). KANDIL EGYPT hard guard (EF) intact. No payments, no category push, production still locked. Customer push already succeeded live (didSucceed true, read-back ok) into KANDIL EGYPT; this only enriches the payload. NEXT: Max pushes ONE new test customer, confirms Wave shows first/last name, THEN invoice push.' },
+    ],
+  },
+  {
     version: 'v55.83-EF',
     date: '2026-06-08',
     label: 'Wave push: shows exact target business + hard safety lock',
