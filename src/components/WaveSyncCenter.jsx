@@ -214,13 +214,18 @@ export default function WaveSyncCenter(props) {
       {tab === 'log' && (
         <div className="border border-slate-700 rounded overflow-hidden">
           {syncLog.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No sync log entries for this silo yet.</div> :
-            syncLog.map(function (l) {
+            syncLog.map(function (l, idx) {
+              var mk = (l.response_payload && l.response_payload.api_build_marker) || (l.request_payload && l.request_payload.api_build_marker) || null;
               return (
                 <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
                   <div className="flex gap-2 flex-wrap items-center">
+                    {idx === 0 && <span className="text-[9px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">NEWEST</span>}
+                    <span className="text-[10px] text-slate-500 font-mono">#{syncLog.length - idx}</span>
+                    <span className="text-[10px] text-slate-400 font-mono">{l.attempted_at ? String(l.attempted_at).replace('T', ' ').substring(0, 19) : ''}</span>
                     <span className="font-bold">{l.entity_type}</span>
                     <span>{l.action}{l.dry_run ? ' (dry run)' : ''}</span>
                     <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
+                    {mk && <span className="text-[9px] text-cyan-300 font-mono">{mk}</span>}
                     {l.error_message && <span className="text-slate-400">{l.error_message}</span>}
                     {(l.response_payload || l.request_payload) && <button onClick={function () { setOpenLog(openLog === l.id ? null : l.id); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{openLog === l.id ? 'Hide details' : 'View details'}</button>}
                   </div>

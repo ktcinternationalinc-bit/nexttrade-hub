@@ -1,10 +1,10 @@
-// BUILD MARKER v55.83-EL2 — force Vercel API route rebuild (cache-bust)
 // /api/wave/push-invoice — push ONE Hub-created, approved invoice to the selected Wave
 // business (TEST only). Requires the invoice's customer to already be in Wave. Same guard
 // + sync_log + read-back pattern as push-customer. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+var API_BUILD_MARKER = 'v55.83-EO-push-invoice-productid-preflight';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() {
@@ -84,8 +84,8 @@ export async function POST(req) {
     var items = (itemsRes && itemsRes.data) || [];
 
     if (dryRun) {
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, attempted_by: by });
-      return NextResponse.json({ dry_run: true, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name, note: 'On real push, each line will be attached to the reusable Wave product "NextTrade Hub Item" (used if it exists, created once if not). No product is created during a dry run.' } });
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, request_payload: { api_build_marker: API_BUILD_MARKER }, attempted_by: by });
+      return NextResponse.json({ dry_run: true, api_build_marker: API_BUILD_MARKER, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name, note: 'On real push, each line will be attached to the reusable Wave product "NextTrade Hub Item" (used if it exists, created once if not). No product is created during a dry run.' } });
     }
 
     var token = process.env.WAVE_ACCESS_TOKEN;
@@ -97,6 +97,7 @@ export async function POST(req) {
     // Resolve ONE reusable Wave product for this business ("NextTrade Hub Item"): find an
     // existing product, else create one (productCreate needs an income account id).
     var productId = null;
+    var productMode = 'none';
     // 1) try to find an existing product on this business
     var listProdQ = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:50){ edges{ node{ id name isSold } } } } }';
     var lpResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: listProdQ, variables: { bid: waveBusinessId } }) });
@@ -105,7 +106,7 @@ export async function POST(req) {
     if (edges && edges.length) {
       var pi2;
       for (pi2 = 0; pi2 < edges.length; pi2++) {
-        if (edges[pi2].node && edges[pi2].node.name === 'NextTrade Hub Item') { productId = edges[pi2].node.id; }
+        if (edges[pi2].node && edges[pi2].node.name === 'NextTrade Hub Item') { productId = edges[pi2].node.id; productMode = 'reused_existing'; }
       }
     }
     // 2) if none usable, create one (needs an income account)
@@ -124,7 +125,7 @@ export async function POST(req) {
       var pcResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: pcMut, variables: pcVars }) });
       var pcData = await pcResp.json();
       var pc = pcData && pcData.data && pcData.data.productCreate;
-      if (pc && pc.didSucceed && pc.product && pc.product.id) { productId = pc.product.id; }
+      if (pc && pc.didSucceed && pc.product && pc.product.id) { productId = pc.product.id; productMode = 'created_new'; }
       if (!productId) {
         await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Could not create a Wave product for line items — see response_payload', response_payload: pcData, request_payload: { query: pcMut, variables: pcVars }, attempted_by: by });
         return NextResponse.json({ error: 'Could not create a Wave product for line items.', response: pcData }, { status: 502 });
@@ -134,14 +135,26 @@ export async function POST(req) {
     var lineItems = [];
     var k;
     for (k = 0; k < items.length; k++) {
-      lineItems.push({ productId: productId, description: items[k].description || 'Item', quantity: Number(items[k].quantity) || 1, unitPrice: Number(items[k].unit_price) || 0 });
+      lineItems.push({ productId: productId, description: items[k].description || 'Hub invoice line', quantity: Number(items[k].quantity) || 1, unitPrice: Number(items[k].unit_price) || 0 });
     }
-    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber total{ value } } } }';
-    var variables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, items: lineItems } };
-    var reqPayload = { query: mutation, variables: variables };
 
-    var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(reqPayload) });
+    // v55.83-EO — LOCAL PREFLIGHT: never call Wave unless every final line item has a productId.
+    var missingProduct = !productId;
+    var ii;
+    for (ii = 0; ii < lineItems.length; ii++) { if (!lineItems[ii].productId) { missingProduct = true; } }
+    if (missingProduct) {
+      var preBlock = { api_build_marker: API_BUILD_MARKER, reason: 'LOCAL_PRECHECK_MISSING_PRODUCT_ID', resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, message: 'Invoice push blocked locally before Wave because finalItems are missing productId.' };
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Blocked locally before Wave: line items missing productId (see response_payload).', response_payload: preBlock, request_payload: { api_build_marker: API_BUILD_MARKER, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems }, attempted_by: by });
+      return NextResponse.json({ error: preBlock.message, blocked: true, api_build_marker: API_BUILD_MARKER, response: preBlock }, { status: 409 });
+    }
+
+    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber total{ value } } } }';
+    var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, items: lineItems } };
+    var reqPayload = { api_build_marker: API_BUILD_MARKER, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, query: mutation, variables: waveMutationVariables };
+
+    var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: mutation, variables: waveMutationVariables }) });
     var data = await resp.json();
+    if (data && typeof data === 'object') { data.api_build_marker = API_BUILD_MARKER; }
     var ic = data && data.data && data.data.invoiceCreate;
     var ok = ic && ic.didSucceed && ic.invoice && ic.invoice.id;
 
@@ -159,4 +172,10 @@ export async function POST(req) {
   } catch (e) {
     return NextResponse.json({ error: (e && e.message) || String(e) }, { status: 500 });
   }
+}
+
+// v55.83-EO — GET returns the build marker so the deployed route version is verifiable
+// by visiting /api/wave/push-invoice directly (proves stale vs fresh without a push).
+export async function GET() {
+  return NextResponse.json({ route: 'push-invoice', api_build_marker: API_BUILD_MARKER });
 }

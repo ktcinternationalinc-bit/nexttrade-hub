@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EO',
+    date: '2026-06-08',
+    label: 'Wave Sync Log: timestamps, newest-first, and proof of which build ran',
+    items: [
+      '**\ud83d\udd52 The Sync Log now shows a timestamp and a NEWEST tag on the latest entry, in order, so you always know which attempt was last.** Each row also shows which build handled it. Invoice push now refuses to contact Wave at all unless every line has its required product attached.',
+      { superAdminOnly: true, text: 'v55.83-EO. No SQL. Ends the productId/stale-route ambiguity with PROOF. push-invoice route: API_BUILD_MARKER=v55.83-EO-push-invoice-productid-preflight stamped into every response + every wave_sync_log request_payload/response_payload; added GET handler returning {api_build_marker} so visiting /api/wave/push-invoice shows the live route version directly. productMode tracked (reused_existing|created_new|none). LOCAL PREFLIGHT: builds finalItems with productId then, BEFORE calling Wave, if !productId or any finalItems[].productId missing -> log reason LOCAL_PRECHECK_MISSING_PRODUCT_ID with finalItems + return 409, Wave never called. Wave request now logs {api_build_marker, resolvedProductId, productResolutionMode, finalItems, query, variables}. Sync Log UI: ordered id desc (newest first), each row shows #seq, attempted_at (trimmed), NEWEST badge on row 0, the api_build_marker, View details with waveErrText + full REQ/RESP JSON. INTERPRETATION after next push: marker present + finalItems has productId -> EO live, any Wave error is real; marker present + no productId -> code bug (not possible by construction now); NO marker on newest row -> deployed route genuinely stale. Product resolution: exact-name NextTrade Hub Item only, else create via income account, no any-sold fallback. KANDIL guard, no payments, production locked, contaminated 01/02/56666/5656 untouched.' },
+    ],
+  },
+  {
     version: 'v55.83-EN',
     date: '2026-06-08',
     label: 'Invoice push: now attaches a Wave product to each line (real fix)',
