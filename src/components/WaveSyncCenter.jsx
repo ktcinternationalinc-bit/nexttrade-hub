@@ -42,21 +42,29 @@ export default function WaveSyncCenter(props) {
   }
   useEffect(function () { load(); }, [active]);
 
-  // Eligible (pushable) Hub records for the active silo
+  // Eligible (pushable) Hub records for the active silo — STRICT same-silo match only.
+  // v55.83-EJ — a record is pushable only if its wave_business_id EXACTLY equals the active
+  // silo. No legacy/null inclusion here (that is fine for viewing, not for pushing), and
+  // never offer placeholder-silo rows (REAL_KTC_WAVE_BUSINESS_ID / TEST_WAVE_BUSINESS_ID).
   var queue = useMemo(function () {
     var rows = [];
+    var bad = { 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 };
     customers.forEach(function (c) {
+      if (c.wave_business_id !== active) { return; }
+      if (bad[c.wave_business_id]) { return; }
       if (!c.wave_customer_id && c.source !== 'wave_import' && (c.company_name || c.name)) {
         rows.push({ key: 'customer:' + c.id, action: 'customer', id: c.id, label: c.company_name || c.name, amount: null, record: c });
       }
     });
     invoices.forEach(function (inv) {
+      if (inv.wave_business_id !== active) { return; }
+      if (bad[inv.wave_business_id]) { return; }
       if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && (!inv.approval_status || inv.approval_status === 'approved')) {
         rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number, amount: inv.total_amount, record: inv });
       }
     });
     return rows;
-  }, [customers, invoices]);
+  }, [customers, invoices, active]);
 
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
   var selectedRows = queue.filter(function (q) { return sel[q.key]; });

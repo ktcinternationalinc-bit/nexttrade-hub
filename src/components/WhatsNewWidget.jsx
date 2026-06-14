@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EJ',
+    date: '2026-06-08',
+    label: 'Wave Sync: only same-business records can be pushed',
+    items: [
+      '**\ud83d\udd12 The Pending Sync list now shows only customers and invoices that truly belong to the business you have selected.** Records mistakenly tagged to another business (or to a setup placeholder) no longer appear and cannot be pushed. This stops cross-business mistakes at the source.',
+      { superAdminOnly: true, text: 'v55.83-EJ. No SQL for the code (data-repair SQL for 4 cross-silo invoices provided separately in chat). WaveSyncCenter already used scopeIfRegistered for display, but that includes legacy/null rows and was letting a customer tagged to the REAL_KTC_WAVE_BUSINESS_ID placeholder ("1 is 3 Company Limited", "ABU FASIF", "A K TRADERS") appear under KANDIL EGYPT. The push queue (useMemo) now requires STRICT equality c.wave_business_id===active / inv.wave_business_id===active and explicitly drops the placeholder ids REAL_KTC_WAVE_BUSINESS_ID + TEST_WAVE_BUSINESS_ID. DIAGNOSIS RESULT: of 40+ approved KANDIL EGYPT invoices, all are issue=OK (valid same-silo customer + KANDIL EGYPT wave_customer_id) EXCEPT invoices 01/02/56666/5656 = CUSTOMER_IN_DIFFERENT_SILO (their 3 customers carry placeholder silo + wave_customer_ids from the unregistered business QnVz…NWRkNzI3MDc…). Adel Saeed (inv 6) is OK in data and should push on a fresh attempt now that EH saved its wave_customer_id. EI customer-picker scope + EH link-back + EF hard guard all intact. NEXT: deploy EJ, repair the 3 mis-tagged customers (re-create clean in KANDIL EGYPT or clear bad wave_customer_id + retag, then re-push), then push a clean invoice (Adel Saeed 6 or Ehab 2220A).' },
+    ],
+  },
+  {
     version: 'v55.83-EI',
     date: '2026-06-08',
     label: 'Invoices: customer dropdown shows more + same-business only',
