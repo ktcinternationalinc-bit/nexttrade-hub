@@ -113,24 +113,35 @@ export async function POST(req) {
     }
     // 2) if none usable, create one (needs an income account)
     if (!productId) {
-      var acctQ = 'query($bid:ID!){ business(id:$bid){ accounts(page:1,pageSize:50,types:[INCOME]){ edges{ node{ id name } } } } }';
+      var acctQ = 'query($bid:ID!){ business(id:$bid){ accounts(page:1,pageSize:50,types:[INCOME]){ edges{ node{ id name subtype{ name value } } } } } }';
       var acResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: acctQ, variables: { bid: waveBusinessId } }) });
       var acData = await acResp.json();
       var acEdges = acData && acData.data && acData.data.business && acData.data.business.accounts && acData.data.business.accounts.edges;
-      var incomeAccountId = (acEdges && acEdges.length && acEdges[0].node) ? acEdges[0].node.id : null;
+      var incomeAccountNode = (acEdges && acEdges.length && acEdges[0].node) ? acEdges[0].node : null;
+      var incomeAccountId = incomeAccountNode ? incomeAccountNode.id : null;
+      var incomeAccountInfo = incomeAccountNode ? { id: incomeAccountNode.id, name: incomeAccountNode.name, subtype: (incomeAccountNode.subtype && (incomeAccountNode.subtype.value || incomeAccountNode.subtype.name)) || null } : null;
       if (!incomeAccountId) {
         await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'No Wave income account found to create a product. Add an income account in Wave first.', response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, stage: 'account_lookup', wave: acData }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, query: acctQ }, attempted_by: by });
         return NextResponse.json({ error: 'No Wave income account available to create a product for invoice line items.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: acData }, { status: 502 });
       }
       var pcMut = 'mutation($input: ProductCreateInput!){ productCreate(input:$input){ didSucceed inputErrors{ message path code } product{ id name } } }';
-      var pcVars = { input: { businessId: waveBusinessId, name: 'NextTrade Hub Item', unitPrice: 0, incomeAccountId: incomeAccountId, isSold: true, isBought: false } };
+      var pcVars = { input: { businessId: waveBusinessId, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId } };
       var pcResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: pcMut, variables: pcVars }) });
       var pcData = await pcResp.json();
       var pc = pcData && pcData.data && pcData.data.productCreate;
       if (pc && pc.didSucceed && pc.product && pc.product.id) { productId = pc.product.id; productMode = 'created_new'; }
       if (!productId) {
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Could not create a Wave product for line items — see response_payload', response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, stage: 'product_create', incomeAccountId: incomeAccountId, wave: pcData }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, query: pcMut, variables: pcVars }, attempted_by: by });
-        return NextResponse.json({ error: 'Could not create a Wave product for line items.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: pcData }, { status: 502 });
+        // Introspect the real ProductCreateInput fields so the next fix is exact (no guessing).
+        var introQ = 'query{ __type(name:"ProductCreateInput"){ inputFields{ name type{ name kind ofType{ name kind } } } } }';
+        var introResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: introQ }) });
+        var introData = await introResp.json();
+        var realFields = [];
+        try {
+          var ifs = introData && introData.data && introData.data.__type && introData.data.__type.inputFields;
+          if (ifs) { var fi; for (fi = 0; fi < ifs.length; fi++) { realFields.push(ifs[fi].name + ':' + ((ifs[fi].type && (ifs[fi].type.name || (ifs[fi].type.ofType && ifs[fi].type.ofType.name))) || ifs[fi].type.kind)); } }
+        } catch (ie) {}
+        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Could not create a Wave product for line items — see response_payload (includes real ProductCreateInput fields)', response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, stage: 'product_create', incomeAccount: incomeAccountInfo, wave: pcData, productCreateInput_real_fields: realFields }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, query: pcMut, variables: pcVars }, attempted_by: by });
+        return NextResponse.json({ error: 'Could not create a Wave product for line items.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: pcData, real_fields: realFields }, { status: 502 });
       }
     }
 

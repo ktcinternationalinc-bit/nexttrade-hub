@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ET',
+    date: '2026-06-08',
+    label: 'Invoice product setup: corrected fields + self-diagnosing',
+    items: [
+      '**\ud83d\udd27 Corrected how the reusable Wave invoice product is created, and if Wave still objects, the system now asks Wave for the exact field list and records it \u2014 so the next fix is precise, not trial-and-error.**',
+      { superAdminOnly: true, text: 'v55.83-ET. No SQL. Wave rejected ES isSold/isBought: "Field isSold is not defined by type ProductCreateInput" (+isBought). Those are NOT Wave fields. ET: removed both; send unitPrice as STRING ("0") per Wave schema (number likely triggered the earlier misleading "indicate buying or selling" message); keep incomeAccountId (Wave accepted it). SELF-DIAGNOSING: if productCreate still fails, route runs introspection query __type(name:"ProductCreateInput"){inputFields{name type}} and logs productCreateInput_real_fields[] into response_payload + returns real_fields, so the NEXT View details shows Wave\u2019s actual accepted field names and the fix is one exact step. All EP/EQ/ES retained: v2 endpoint, marker+route stamping, attempted_at sort, local productId preflight, exact-name resolution, staged error capture. NEXT: push invoice 6 -> if product creates, invoiceCreate proceeds w/ productId -> success or named invoiceCreate error; if product still fails, read productCreateInput_real_fields in View details and I map the exact field. KANDIL guard, prod lock, no payments/categories, contaminated invoices untouched.' },
+    ],
+  },
+  {
     version: 'v55.83-ES',
     date: '2026-06-08',
     label: 'Invoice push fix + correct Sync Log ordering (combined)',
