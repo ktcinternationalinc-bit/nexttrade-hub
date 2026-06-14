@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EL',
+    date: '2026-06-08',
+    label: 'Invoice push: precise reason + no more silent customer-lookup failure',
+    items: [
+      '**\ud83d\udd0d Invoice push now tells you the exact reason if it cannot proceed, and no longer fails silently when reading the customer.** If it still blocks, the message says precisely whether the invoice has no customer linked, the customer row is missing, or the customer is not yet in Wave.',
+      { superAdminOnly: true, text: 'v55.83-EL. No SQL. Hardened push-invoice customer resolution so it cannot misreport. Removed .single() (throws on any anomaly -> was surfacing as null -> false "push customer first"). Now: (1) if inv.accounting_customer_id is empty -> "invoice has no customer linked" (reason no_customer_link); (2) plain .select(...).eq(id) capturing custRes.error -> if error, report db_error text (reason customer_query_error); if zero rows, "linked to id X but no such row" (reason customer_row_missing); (3) if row found but no wave_customer_id -> push-customer-first naming the real customer (reason customer_no_wave_id). Every branch logs accounting_customer_id + reason to response_payload so the log proves the true cause. Columns: id, company_name, contact_name, wave_customer_id, wave_business_id (no phantom name col from EK). NOTE: all prior failing log rows (latest 16:50) predate EK/EL builds (16:53+) so were the old broken-query code. NEXT: deploy EL, retry invoice 6; if it still blocks, the response_payload.reason now pinpoints it exactly.' },
+    ],
+  },
+  {
     version: 'v55.83-EK',
     date: '2026-06-08',
     label: 'Invoice push: fixed the false "push customer first" error',
