@@ -131,6 +131,20 @@ export default function AccountingInvoicesTab(props) {
       .catch(function (e) { console.error('[lifecycle] restore', e); toast.error('Restore failed: ' + ((e && e.message) || 'error')); });
   }
   function isInvoice() { return mode === 'invoices'; }
+
+  // v55.83-ED — ONE normalized status + ONE eligibility helper, used everywhere.
+  function getInvStatus(row) { return String((row && row.approval_status) || 'draft').trim().toLowerCase(); }
+  function invActions(row) {
+    var st = getInvStatus(row);
+    var isInv = isInvoice();
+    return {
+      status: st,
+      canSubmit: isInv && mayEdit && st === 'draft',
+      canApprove: isInv && (mayApprove || isSuperAdmin) && st === 'internal_review',
+      canReopen: isInv && (mayApprove || isSuperAdmin) && st === 'approved',
+      canEditInvoice: isInv && mayEdit && st !== 'approved'
+    };
+  }
   var rows = scopeIfRegistered((isInvoice() ? invoices : proformas), waveBiz, waveReg, true);
   var displayRows = rows
     .filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; })
@@ -197,7 +211,7 @@ export default function AccountingInvoicesTab(props) {
   function addItem() { setItems(items.concat([blankItem()])); }
   function rmItem(i) { var c = items.slice(); c.splice(i, 1); setItems(c.length ? c : [blankItem()]); }
 
-  function locked(row) { return isInvoice() && row && row.approval_status === 'approved'; }
+  function locked(row) { return isInvoice() && getInvStatus(row) === 'approved'; }
 
   function save() {
     if (!mayEdit) { toast.error('You do not have permission to edit.'); return; }
@@ -217,6 +231,7 @@ export default function AccountingInvoicesTab(props) {
     var getId;
     if (editing === 'new') {
       hpayload.business_id = businessId; hpayload.created_by = userProfile && userProfile.id;
+      if (isInvoice()) { hpayload.approval_status = 'draft'; if (hpayload.payment_status == null) { hpayload.payment_status = 'unpaid'; } } // v55.83-EA — never leave status NULL
       if (waveBiz) { hpayload.wave_business_id = waveBiz; } // v55.83-DY — tag active silo
       if (!hpayload.source) { hpayload.source = 'hub'; }
       getId = dbInsert(tbl, hpayload, userProfile && userProfile.id).then(function (res) { return res && res[0] ? res[0].id : (res && res.id); });
@@ -403,9 +418,10 @@ export default function AccountingInvoicesTab(props) {
                   <div className="px-2 py-1.5 flex gap-1 flex-wrap">
                     <button onClick={function () { openView(row); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
                     <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Print / Save PDF">Print</button>
-                    {isInvoice() && mayEdit && row.approval_status === 'draft' && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
-                    {isInvoice() && row.approval_status === 'internal_review' && mayApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
-                    {isInvoice() && row.approval_status === 'approved' && mayApprove && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
+                    {isInvoice() && invActions(row).canSubmit && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
+                    {isInvoice() && invActions(row).canApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
+                    {isInvoice() && invActions(row).canReopen && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
+                    {isSuperAdmin && isInvoice() && <span className="text-[9px] text-amber-300 font-mono w-full mt-0.5">DBG raw={String(row.approval_status)} norm={getInvStatus(row)} edit={String(mayEdit)} appr={String(mayApprove)} sub={String(invActions(row).canSubmit)} app={String(invActions(row).canApprove)} lock={String(locked(row))}</span>}
                     {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
                   </div>
                 </div>
@@ -424,8 +440,11 @@ export default function AccountingInvoicesTab(props) {
             <div className="bg-slate-900 border border-slate-600 rounded-xl w-full" style={{ maxWidth: '840px' }} onClick={function (e) { e.stopPropagation(); }}>
               <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div className="font-extrabold text-slate-100">View {isInvoice() ? 'invoice' : 'proforma'} · {(isInvoice() ? viewing.invoice_number : viewing.proforma_number) || '(no number)'} <span className="text-[10px] text-slate-400 font-medium">(read-only)</span></div>
-                <div className="flex gap-1">
+                <div className="flex gap-1 flex-wrap">
                   <button onClick={function () { printDoc(viewing); }} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Print / Save PDF</button>
+                  {isInvoice() && mayEdit && (viewing.approval_status || 'draft') === 'draft' && <button onClick={function () { var row = viewing; setApproval(row, 'internal_review'); setViewing(null); }} disabled={busy} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Submit for Review</button>}
+                  {isInvoice() && mayApprove && viewing.approval_status === 'internal_review' && <button onClick={function () { var row = viewing; setApproval(row, 'approved'); setViewing(null); }} disabled={busy} className="text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded px-2 py-1 font-bold">Approve</button>}
+                  {isInvoice() && mayApprove && viewing.approval_status === 'approved' && <button onClick={function () { var row = viewing; reopenInvoice(row); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
                   {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
                   <button onClick={function () { setViewing(null); }} className="text-slate-300 hover:text-white text-sm px-2">✕</button>
                 </div>
@@ -512,9 +531,12 @@ export default function AccountingInvoicesTab(props) {
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Terms</span><textarea rows={2} value={hdr.terms || ''} disabled={locked(editing)} onChange={function (e) { uh('terms', e.target.value); }} className={inp} /></label>
           </div>
           {mayEdit && !locked(editing) && (
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button onClick={save} disabled={busy} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
+              {isInvoice() && editing !== 'new' && invActions(editing).canSubmit && <button onClick={function () { var row = editing; setApproval(row, 'internal_review'); }} disabled={busy} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Submit for Review</button>}
+              {isInvoice() && editing !== 'new' && invActions(editing).canApprove && <button onClick={function () { var row = editing; setApproval(row, 'approved'); }} disabled={busy} className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-xs font-bold">Approve</button>}
+              {isSuperAdmin && isInvoice() && editing !== 'new' && <span className="text-[10px] text-amber-300 font-mono w-full">DBG raw={String(editing.approval_status)} norm={getInvStatus(editing)} edit={String(mayEdit)} appr={String(mayApprove)} locked={String(locked(editing))} sub={String(invActions(editing).canSubmit)} app={String(invActions(editing).canApprove)}</span>}
             </div>
           )}
           {mayEdit && editing !== 'new' && (function () {

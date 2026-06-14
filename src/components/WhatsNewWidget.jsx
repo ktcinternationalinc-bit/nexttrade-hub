@@ -33,6 +33,42 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ED',
+    date: '2026-06-08',
+    label: 'Invoices: one status helper + on-screen eligibility debug',
+    items: [
+      '**\ud83d\udd0d Invoice approval buttons now use one shared status rule, and admins see a small diagnostic line on each invoice showing exactly why Submit/Approve do or do not appear.** This pinpoints the issue instead of guessing.',
+      { superAdminOnly: true, text: 'v55.83-ED. No SQL (keep the approval_status IS NULL -> draft cleanup). Stopped moving buttons; fixed eligibility logic. NEW getInvStatus(row)=String(row?.approval_status||draft).trim().toLowerCase() + invActions(row)={canSubmit:draft, canApprove:internal_review, canReopen:approved} \u2014 used for blotter buttons, edit-screen buttons, and locked(row) (now normalized too). Added a super-admin-only DBG span on each blotter row (always renders, regardless of locked) AND on the edit screen showing raw/norm/mayEdit/mayApprove/canSubmit/canApprove/locked. Read the blotter DBG line: if sub=true but no Submit shows -> render/layout; if sub=false -> the line shows which gate failed (norm!=draft, edit=false, etc.). Likely finding: norm is approved (so locked=true, Save+Submit hidden) while the pill mislabels \u2014 or mayEdit=false. The DBG line ends the guessing.' },
+    ],
+  },
+  {
+    version: 'v55.83-EC',
+    date: '2026-06-08',
+    label: 'Invoices: Submit / Approve right on the Edit screen',
+    items: [
+      '**\u2705 Submit for Review and Approve now appear on the invoice Edit screen, next to Save and Cancel.** Open an invoice to edit it and you will see Submit for Review on a draft, or Approve once it has been submitted. This is the screen you already use, so approval is right where you are.',
+      { superAdminOnly: true, text: 'v55.83-EC. No SQL. User reported Submit/Approve were unreachable: blotter row showed only View/Print/Edit (row buttons clipping), View modal had only Edit, and the Edit screen action bar had only Save/Cancel/Void/Delete/Archive \u2014 no approval anywhere they actually go. FIX: added Submit for Review ((editing.approval_status||draft)===draft, editing!==new) and Approve (mayApprove && internal_review) into the Edit screen button row beside Save/Cancel. Kept the EB View-modal buttons and EA blotter-row buttons too. setApproval reloads via lcRefresh/load. Now approval is reachable from all three surfaces; the Edit screen is the guaranteed one. Pairs with EA/DZ/DY.' },
+    ],
+  },
+  {
+    version: 'v55.83-EB',
+    date: '2026-06-08',
+    label: 'Invoices: Submit / Approve now inside the opened invoice',
+    items: [
+      '**\u2705 You can now Submit and Approve an invoice from inside the invoice itself.** Open any invoice and you will see Submit for Review (on a draft) or Approve (after it is submitted) right at the top next to Print and Edit. This is in addition to the buttons on the list row, so approval is always reachable in a roomy place.',
+      { superAdminOnly: true, text: 'v55.83-EB. No SQL. The opened invoice view (viewing modal) previously had ONLY Print + Edit + close \u2014 no Submit/Approve (those existed solely on the blotter row, where a narrow/clipped flex-wrap action cell could hide them). Added Submit for Review ((viewing.approval_status||draft)===draft && mayEdit), Approve (internal_review && mayApprove), Reopen (approved && mayApprove) into the modal header, each closing the modal after setApproval/reopenInvoice. Gates unchanged: canEditMappings/canReopen both return true when isSuperAdmin===true. Blotter row buttons (EA) kept. If row Submit still does not show, it is browser-cache/clip; the in-modal buttons are the reliable path. Pairs with EA (NULL-status->draft) + DY/DZ tagging.' },
+    ],
+  },
+  {
+    version: 'v55.83-EA',
+    date: '2026-06-08',
+    label: 'Invoices: Submit button now shows on draft invoices',
+    items: [
+      '**\ud83d\udd18 Fixed: the Submit button now appears on draft invoices so you can move them through approval.** Some invoices were saved without a status set, which displayed as \u201cdraft\u201d but hid the Submit button. New invoices now always start as a proper draft, and existing ones are recognized as draft so the Submit/Approve buttons appear.',
+      { superAdminOnly: true, text: 'v55.83-EA (one-time backfill SQL in chat for old NULL-status invoices). ROOT CAUSE: the main invoice create payload (AccountingInvoicesTab.save, editing===new) never set approval_status, so new invoices had approval_status=NULL. labelStatus(s)=String(s||draft) DISPLAYED "draft" on the blotter, but the Submit button used a STRICT row.approval_status===draft check (NULL!==draft) so it never rendered \u2014 blotter said draft, no button. FIX: (1) Submit button condition now (row.approval_status || draft) === draft so NULL is treated as draft; (2) create flow now sets hpayload.approval_status=draft + payment_status=unpaid on new invoices so status is never NULL going forward. Approve/Reopen buttons unchanged (internal_review/approved are explicit). Backfill: UPDATE accounting_invoices SET approval_status=draft WHERE approval_status IS NULL. Pairs with DY (silo stamp) + DZ (match tagging).' },
+    ],
+  },
+  {
     version: 'v55.83-DZ',
     date: '2026-06-08',
     label: 'Matching: payments, credits & deposits now tagged to the business',
