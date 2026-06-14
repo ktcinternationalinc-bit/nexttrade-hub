@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ES',
+    date: '2026-06-08',
+    label: 'Invoice push fix + correct Sync Log ordering (combined)',
+    items: [
+      '**\u2705 Two fixes in one: the reusable Wave invoice product is now created correctly (marked as something you sell), and the Sync Log now shows the truly most-recent entry at the top by time.** Invoice push should now complete end to end.',
+      { superAdminOnly: true, text: 'v55.83-ES (combined EQ+ER). No SQL. FIX 1 (Sync Log order): wave_sync_log.id is not time-ordered, so the NEWEST badge previously sat on an old row; now order(attempted_at desc).order(id desc) and NEWEST badge = sorted row 0 = true latest. FIX 2 (productCreate): Wave inputError was "Please indicate whether you will be buying or selling this product or both." -> added isSold:true, isBought:false to the NextTrade Hub Item productCreate input (push-invoice-v2). Confirmed live ladder from logs: customer link OK -> productId resolved (EP) -> incomeAccountId accepted by Wave -> only missing field was the sell/buy flag. ALL safety/diagnostics retained from EP/EQ: endpoint /api/wave/push-invoice-v2 with API_BUILD_MARKER v55.83-EP-push-invoice-v2-productid + route stamped into every response/request_payload/response_payload + GET; LOCAL PREFLIGHT 409 LOCAL_PRECHECK_MISSING_PRODUCT_ID before Wave if any finalItems[].productId missing; exact-name-only NextTrade Hub Item resolution (reuse else create, NO any-sold fallback); productMode reused_existing|created_new|none; staged Wave error capture (account_lookup|product_create) under .wave + waveErrText nested dig; Sync Log rows show #seq, attempted_at, NEWEST, marker (cyan), route (violet), View details with red Wave-error box + full REQ/RESP. KANDIL EGYPT guard (APPROVED_PUSH_BUSINESS_ID QnVz...NzM4OA==), production locked, no payment push, no category push, contaminated invoices 01/02/56666/5656 untouched, test only invoice 6 / Adel Saeed. NEXT: push invoice 6 -> product creates (created_new) -> invoiceCreate w/ productId -> expect success (wave_invoice_id saved) or next named invoiceCreate field error (currency/date) via View details.' },
+    ],
+  },
+  {
+    version: 'v55.83-EQ',
+    date: '2026-06-08',
+    label: 'Sync Log now sorts by real time + clearer Wave errors',
+    items: [
+      '**\ud83d\udd52 Fixed the Sync Log so the newest entry is the one that actually happened most recently (by time), not just the highest row number.** This is why the same old error kept appearing at the top. The View details panel also now shows the precise Wave error for each step, including product setup.',
+      { superAdminOnly: true, text: 'v55.83-EQ. No SQL. ROOT CONFUSION FIXED: Sync Log ordered by id desc, but wave_sync_log.id is not time-ordered, so the NEWEST badge sat on an OLD 17:18 row while the real newest attempts (18:21:44) were lower. Now order(attempted_at desc).order(id desc); NEWEST badge = true latest. KEY FINDING from correct row: EP got PAST the productId error \u2014 invoice push v2 now resolves productId and the real current failure is "Could not create a Wave product for line items" (Wave rejecting productCreate, or no INCOME account). Wrapped both product-stage failures with api_build_marker + route + stage(account_lookup|product_create) + the raw Wave response under .wave, and request_payload (query+vars). waveErrText() now also digs into nested .wave and prepends (stage: ...). SUSPECTED productCreate issues (await response_payload.wave to confirm \u2014 do NOT guess-fix): unitPrice:0 may need string/non-zero; ProductCreateInput may require more fields; income account query types:[INCOME] shape may differ. NEXT: read newest (by time) row View details -> Wave error names the productCreate field -> fix it. push-invoice-v2 marker v55.83-EP-push-invoice-v2-productid still applies (route file unchanged name). KANDIL guard/prod lock/no payments intact.' },
+    ],
+  },
+  {
     version: 'v55.83-EP',
     date: '2026-06-08',
     label: 'Invoice push moved to a brand-new endpoint (proves the fix)',

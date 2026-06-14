@@ -10,19 +10,27 @@ function waveErrText(rp) {
   if (!rp) { return ''; }
   try {
     var parts = [];
-    if (rp.errors && rp.errors.length) {
-      rp.errors.forEach(function (e) { parts.push(e.message || JSON.stringify(e)); });
-    }
-    var d = rp.data || {};
-    var keys = Object.keys(d);
-    keys.forEach(function (k) {
-      var node = d[k];
-      if (node && node.inputErrors && node.inputErrors.length) {
-        node.inputErrors.forEach(function (ie) {
-          parts.push((ie.message || 'error') + (ie.path ? (' [field: ' + (Array.isArray(ie.path) ? ie.path.join('.') : ie.path) + ']') : '') + (ie.code ? (' (' + ie.code + ')') : ''));
-        });
+    var roots = [rp];
+    if (rp.wave) { roots.push(rp.wave); }
+    var r;
+    for (r = 0; r < roots.length; r++) {
+      var root = roots[r];
+      if (!root) { continue; }
+      if (root.errors && root.errors.length) {
+        root.errors.forEach(function (e) { parts.push(e.message || JSON.stringify(e)); });
       }
-    });
+      var d = root.data || {};
+      var keys = Object.keys(d);
+      keys.forEach(function (k) {
+        var node = d[k];
+        if (node && node.inputErrors && node.inputErrors.length) {
+          node.inputErrors.forEach(function (ie) {
+            parts.push((ie.message || 'error') + (ie.path ? (' [field: ' + (Array.isArray(ie.path) ? ie.path.join('.') : ie.path) + ']') : '') + (ie.code ? (' (' + ie.code + ')') : ''));
+          });
+        }
+      });
+    }
+    if (rp.stage) { parts.unshift('(stage: ' + rp.stage + ')'); }
     return parts.join('\n');
   } catch (e) { return ''; }
 }
@@ -53,7 +61,7 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('wave_business_registry', '*'),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
-      supabase.from('wave_sync_log').select('*').order('id', { ascending: false }).limit(100)
+      supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100)
     ]).then(function (res) {
       var rg = (res[0] && res[0].data) || [];
       setRegistry(rg);
