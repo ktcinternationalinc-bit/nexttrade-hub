@@ -6,8 +6,9 @@ var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+
 ok(/order\('attempted_at', \{ ascending: false \}\)\.order\('id', \{ ascending: false \}\)/.test(wsc),'Sync Log sorts by attempted_at then id');
 ok(/idx === 0 && <span[^>]*>NEWEST/.test(wsc),'NEWEST badge on sorted row 0 (true latest)');
 // Fix 2: productCreate isSold
-var pcv = (v2.match(/var pcVars = .*/)||[''])[0];
-ok(!/isSold|isBought/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv),'productCreate uses incomeAccountId, no invalid flags');
+var ps = fs.readFileSync(path.join(__dirname,'..','src/app/api/wave/product-setup/route.js'),'utf8');
+var pcv = (ps.match(/var pcVars = .*/)||[''])[0];
+ok(!/isSold|isBought/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv),'productCreate (now in product-setup) uses incomeAccountId, no invalid flags');
 // safety/diagnostics retained
 ok(/var API_BUILD_MARKER = 'v55\.83-EP-push-invoice-v2-productid';/.test(v2),'v2 marker retained');
 ok(/var API_ROUTE = '\/api\/wave\/push-invoice-v2';/.test(v2),'v2 route retained');

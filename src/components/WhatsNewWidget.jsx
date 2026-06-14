@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EV',
+    date: '2026-06-08',
+    label: 'Default invoice product setup — now with tightened security',
+    items: [
+      '**\ud83d\udd12 Same one-time product setup as before, with stricter protection.** The settings that control Wave sync can only be changed by the system on your behalf (server-side), not by any logged-in user, and the product you pick is verified to actually belong to the selected Wave business before it is saved.',
+      { superAdminOnly: true, text: 'v55.83-EV (security-hardened EU). SQL REQUIRED (wave_business_settings, inline). Per GPT security review: wave_business_settings RLS = SELECT to authenticated (UI display) ONLY; NO authenticated INSERT/UPDATE/DELETE policies -> all writes go through the service-role API route (/api/wave/product-setup) which bypasses RLS; direct client writes are denied. Added source column. product-setup hardening: reject placeholder business ids (REAL_KTC_WAVE_BUSINESS_ID / TEST_WAVE_BUSINESS_ID) + KANDIL-only guard retained; mode=select now RE-QUERIES Wave and verifies the chosen product_id actually belongs to the business and is not archived BEFORE saving (source manual_selected); mode=find exact-name NextTrade Hub Item only (source found_exact_name, no random fallback); mode=create isolated here (source created). Saved row always has wave_business_id + default_invoice_product_id + default_invoice_product_name + source + updated_at. Invoice push (push-invoice-v2) unchanged from EU: reads default_invoice_product_id, else finds exact name, else BLOCKS NO_DEFAULT_PRODUCT_CONFIGURED, never calls productCreate. NOTE TO MAX: you made "test product" \u2014 Find only matches exact name NextTrade Hub Item, so either rename it in Wave or use List products + Use this to select "test product" directly. Markers/route/View details/attempted_at sort retained. KANDIL guard, prod lock, no payments/categories, contaminated invoices untouched.' },
+    ],
+  },
+  {
+    version: 'v55.83-EU',
+    date: '2026-06-08',
+    label: 'Set your Wave invoice product once — invoice push stops fighting product creation',
+    items: [
+      '**\u2705 You now set the Wave invoice product one time in Wave Sync Center \u2192 Settings, and every invoice push uses it.** Invoice push no longer tries to create a product each time (which Wave kept rejecting). Recommended: create a product named exactly \u201cNextTrade Hub Item\u201d in Wave (marked as sold, with an income account), then click \u201cFind\u201d.',
+      '**\ud83d\udee0\ufe0f Needs a quick one-time setup:** run the small database update shown to you, then open Settings and click Find (or Create) for the default invoice product.',
+      { superAdminOnly: true, text: 'v55.83-EU. SQL REQUIRED (wave_business_settings table, inline in chat). Per GPT: STOP auto-creating the Wave product during invoice push (Wave repeatedly rejected productCreate with the misleading "indicate buying or selling" msg even with incomeAccountId + string unitPrice + no isSold/isBought). push-invoice-v2 product resolution REWRITTEN: (1) load wave_business_settings.default_invoice_product_id for active silo -> productMode configured_default; (2) else find Wave product named exactly NextTrade Hub Item -> found_by_name; (3) else BLOCK 409 reason NO_DEFAULT_PRODUCT_CONFIGURED, Wave never called, productCreate fully removed from push path. NEW route /api/wave/product-setup (marker v55.83-EU-product-setup, KANDIL-only guard) with modes list|find|select|create: find/select/create save to wave_business_settings.default_invoice_product_id via upsert(onConflict wave_business_id); create runs productCreate IN ISOLATION here and returns Wave exact error+accepted fields (so product debugging never blocks invoice debugging). Settings tab new Default Invoice Product panel: shows configured product or amber warning, buttons Find/Create/List, list lets you pick a product to use. After product configured, invoice push uses that id, builds finalItems w/ productId, local preflight + marker/route stamping retained, then invoiceCreate. RECOMMENDATION TO MAX: create NextTrade Hub Item in Wave UI (sold + income account), click Find, then push invoice 6. KANDIL guard, prod locked, no payments/categories, contaminated invoices untouched.' },
+    ],
+  },
+  {
     version: 'v55.83-ET',
     date: '2026-06-08',
     label: 'Invoice product setup: corrected fields + self-diagnosing',

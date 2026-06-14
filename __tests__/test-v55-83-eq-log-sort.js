@@ -4,8 +4,9 @@ var wsc=p('src/components/WaveSyncCenter.jsx');var v2=p('src/app/api/wave/push-i
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 ok(/order\('attempted_at', \{ ascending: false \}\)\.order\('id', \{ ascending: false \}\)/.test(wsc),'Sync Log sorts by attempted_at then id');
 ok(!/from\('wave_sync_log'\)\.select\('\*'\)\.order\('id', \{ ascending: false \}\)\.limit/.test(wsc),'old id-only sort removed');
-ok(/stage: 'product_create'/.test(v2) && /stage: 'account_lookup'/.test(v2),'product failures tagged with stage');
-ok(/wave: pcData/.test(v2) && /wave: acData/.test(v2),'raw Wave response nested under .wave');
+var psq = fs.readFileSync(path.join(__dirname,'..','src/app/api/wave/product-setup/route.js'),'utf8');
+ok(!/productCreate/.test(v2),'product create removed from push (EU) — staging now in product-setup');
+ok(/response: pcData/.test(psq),'product-setup returns raw Wave response on create failure');
 ok(/if \(rp\.wave\) \{ roots\.push\(rp\.wave\); \}/.test(wsc),'waveErrText digs into nested wave payload');
 ok(/parts\.unshift\('\(stage: ' \+ rp\.stage/.test(wsc),'waveErrText shows stage');
 ok(/version: 'v55\.83-EQ'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew EQ');

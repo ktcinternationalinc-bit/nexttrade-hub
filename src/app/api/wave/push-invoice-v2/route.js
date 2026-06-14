@@ -95,54 +95,34 @@ export async function POST(req) {
 
     // Wave invoiceCreate. Field shape per public schema — MUST be validated against the
     // Wave sandbox before relying on it (line-item product mapping in particular).
-    // v55.83-EN — Wave requires every invoice line item to reference a productId.
-    // Resolve ONE reusable Wave product for this business ("NextTrade Hub Item"): find an
-    // existing product, else create one (productCreate needs an income account id).
+    // v55.83-EU — Invoice push NEVER creates a Wave product. It uses a productId that was
+    // configured/linked once (in Wave Sync Settings), or finds the exact "NextTrade Hub Item"
+    // product already in Wave. If neither exists, it BLOCKS locally and tells the user to set
+    // it up once. Product creation is handled separately on the settings screen, not here.
     var productId = null;
     var productMode = 'none';
-    // 1) try to find an existing product on this business
-    var listProdQ = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:50){ edges{ node{ id name isSold } } } } }';
-    var lpResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: listProdQ, variables: { bid: waveBusinessId } }) });
-    var lpData = await lpResp.json();
-    var edges = lpData && lpData.data && lpData.data.business && lpData.data.business.products && lpData.data.business.products.edges;
-    if (edges && edges.length) {
-      var pi2;
-      for (pi2 = 0; pi2 < edges.length; pi2++) {
-        if (edges[pi2].node && edges[pi2].node.name === 'NextTrade Hub Item') { productId = edges[pi2].node.id; productMode = 'reused_existing'; }
+    // 1) configured default product for this business
+    var cfgRes = await db.from('wave_business_settings').select('default_invoice_product_id, default_invoice_product_name').eq('wave_business_id', waveBusinessId);
+    var cfg = (cfgRes && cfgRes.data && cfgRes.data.length) ? cfgRes.data[0] : null;
+    if (cfg && cfg.default_invoice_product_id) { productId = cfg.default_invoice_product_id; productMode = 'configured_default'; }
+    // 2) else find an existing Wave product named exactly "NextTrade Hub Item"
+    if (!productId) {
+      var listProdQ = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:50){ edges{ node{ id name isSold } } } } }';
+      var lpResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: listProdQ, variables: { bid: waveBusinessId } }) });
+      var lpData = await lpResp.json();
+      var edges = lpData && lpData.data && lpData.data.business && lpData.data.business.products && lpData.data.business.products.edges;
+      if (edges && edges.length) {
+        var pi2;
+        for (pi2 = 0; pi2 < edges.length; pi2++) {
+          if (edges[pi2].node && edges[pi2].node.name === 'NextTrade Hub Item') { productId = edges[pi2].node.id; productMode = 'found_by_name'; }
+        }
       }
     }
-    // 2) if none usable, create one (needs an income account)
+    // 3) no product -> BLOCK locally, do not call Wave, do not create
     if (!productId) {
-      var acctQ = 'query($bid:ID!){ business(id:$bid){ accounts(page:1,pageSize:50,types:[INCOME]){ edges{ node{ id name subtype{ name value } } } } } }';
-      var acResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: acctQ, variables: { bid: waveBusinessId } }) });
-      var acData = await acResp.json();
-      var acEdges = acData && acData.data && acData.data.business && acData.data.business.accounts && acData.data.business.accounts.edges;
-      var incomeAccountNode = (acEdges && acEdges.length && acEdges[0].node) ? acEdges[0].node : null;
-      var incomeAccountId = incomeAccountNode ? incomeAccountNode.id : null;
-      var incomeAccountInfo = incomeAccountNode ? { id: incomeAccountNode.id, name: incomeAccountNode.name, subtype: (incomeAccountNode.subtype && (incomeAccountNode.subtype.value || incomeAccountNode.subtype.name)) || null } : null;
-      if (!incomeAccountId) {
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'No Wave income account found to create a product. Add an income account in Wave first.', response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, stage: 'account_lookup', wave: acData }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, query: acctQ }, attempted_by: by });
-        return NextResponse.json({ error: 'No Wave income account available to create a product for invoice line items.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: acData }, { status: 502 });
-      }
-      var pcMut = 'mutation($input: ProductCreateInput!){ productCreate(input:$input){ didSucceed inputErrors{ message path code } product{ id name } } }';
-      var pcVars = { input: { businessId: waveBusinessId, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId } };
-      var pcResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: pcMut, variables: pcVars }) });
-      var pcData = await pcResp.json();
-      var pc = pcData && pcData.data && pcData.data.productCreate;
-      if (pc && pc.didSucceed && pc.product && pc.product.id) { productId = pc.product.id; productMode = 'created_new'; }
-      if (!productId) {
-        // Introspect the real ProductCreateInput fields so the next fix is exact (no guessing).
-        var introQ = 'query{ __type(name:"ProductCreateInput"){ inputFields{ name type{ name kind ofType{ name kind } } } } }';
-        var introResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: introQ }) });
-        var introData = await introResp.json();
-        var realFields = [];
-        try {
-          var ifs = introData && introData.data && introData.data.__type && introData.data.__type.inputFields;
-          if (ifs) { var fi; for (fi = 0; fi < ifs.length; fi++) { realFields.push(ifs[fi].name + ':' + ((ifs[fi].type && (ifs[fi].type.name || (ifs[fi].type.ofType && ifs[fi].type.ofType.name))) || ifs[fi].type.kind)); } }
-        } catch (ie) {}
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Could not create a Wave product for line items — see response_payload (includes real ProductCreateInput fields)', response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, stage: 'product_create', incomeAccount: incomeAccountInfo, wave: pcData, productCreateInput_real_fields: realFields }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, query: pcMut, variables: pcVars }, attempted_by: by });
-        return NextResponse.json({ error: 'Could not create a Wave product for line items.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: pcData, real_fields: realFields }, { status: 502 });
-      }
+      var setupMsg = 'Invoice push blocked: no default Wave invoice product configured for this business. Open Wave Sync Center -> Settings -> Default Invoice Product, click Find or Create "NextTrade Hub Item", then retry. (You can also create a product named exactly "NextTrade Hub Item" in Wave, marked as sold with an income account.)';
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', wave_business_id: waveBusinessId }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, attempted_by: by });
+      return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED' }, { status: 409 });
     }
 
     var lineItems = [];

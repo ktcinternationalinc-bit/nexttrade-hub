@@ -47,6 +47,10 @@ export default function WaveSyncCenter(props) {
   var [invoices, setInvoices] = useState([]);
   var [syncLog, setSyncLog] = useState([]);
   var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
+  var ps0 = useState(null); var prodSetup = ps0[0]; var setProdSetup = ps0[1];
+  var ps1 = useState(false); var prodBusy = ps1[0]; var setProdBusy = ps1[1];
+  var ps2 = useState(''); var prodMsg = ps2[0]; var setProdMsg = ps2[1];
+  var ps3 = useState(null); var prodList = ps3[0]; var setProdList = ps3[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -72,6 +76,31 @@ export default function WaveSyncCenter(props) {
       .finally(function () { setLoading(false); });
   }
   useEffect(function () { load(); }, [active]);
+
+  function loadProdSetup() {
+    if (!active) { setProdSetup(null); return; }
+    supabase.from('wave_business_settings').select('*').eq('wave_business_id', active).then(function (r) {
+      setProdSetup((r && r.data && r.data.length) ? r.data[0] : null);
+    }).catch(function () { setProdSetup(null); });
+  }
+  useEffect(function () { loadProdSetup(); }, [active]);
+
+  function runProductSetup(mode, productId, productName) {
+    setProdBusy(true); setProdMsg(''); if (mode !== 'select') { setProdList(null); }
+    var payload = { wave_business_id: active, mode: mode };
+    if (productId) { payload.product_id = productId; payload.product_name = productName; }
+    if (mode === 'select') { payload.mode = 'select'; }
+    fetch('/api/wave/product-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.products) { setProdList(d.products); setProdMsg('Found ' + d.products.length + ' products. Pick one to use as the default invoice product.'); }
+        else if (d && d.saved) { setProdMsg('Saved. Default invoice product set to ' + (d.default_invoice_product_name || d.default_invoice_product_id) + '.'); loadProdSetup(); toast.success('Default invoice product configured'); }
+        else if (d && d.error) { setProdMsg('Error: ' + d.error + (d.response ? ('\n\nWave response:\n' + JSON.stringify(d.response, null, 2)) : '')); }
+        else { setProdMsg(JSON.stringify(d, null, 2)); }
+      })
+      .catch(function (e) { setProdMsg('Request failed: ' + ((e && e.message) || String(e))); })
+      .finally(function () { setProdBusy(false); });
+  }
 
   // Eligible (pushable) Hub records for the active silo — STRICT same-silo match only.
   // v55.83-EJ — a record is pushable only if its wave_business_id EXACTLY equals the active
@@ -256,6 +285,26 @@ export default function WaveSyncCenter(props) {
 
       {tab === 'settings' && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
+          <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
+            <div className="font-bold text-slate-900 mb-1">Default Invoice Product (Wave)</div>
+            <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to be tied to a product. Set one reusable product once and all invoice pushes will use it. We recommend creating a product named exactly <b>NextTrade Hub Item</b> in Wave (marked as sold, with an income account), then click Find.</div>
+            {prodSetup && prodSetup.default_invoice_product_id ? (
+              <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured product: {prodSetup.default_invoice_product_name || 'NextTrade Hub Item'} ({String(prodSetup.default_invoice_product_id).substring(0, 18)}…)</div>
+            ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default product configured yet — invoice push will be blocked until you set one.</div>}
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={function () { runProductSetup('find'); }} disabled={prodBusy} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">Find "NextTrade Hub Item"</button>
+              <button onClick={function () { runProductSetup('create'); }} disabled={prodBusy} className="text-xs bg-slate-700 hover:bg-slate-800 text-white rounded px-2 py-1 font-bold disabled:opacity-50">Create it in Wave</button>
+              <button onClick={function () { runProductSetup('list'); }} disabled={prodBusy} className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-900 rounded px-2 py-1 font-bold disabled:opacity-50">List products</button>
+            </div>
+            {prodMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{prodMsg}</div>}
+            {prodList && prodList.length > 0 && (
+              <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
+                {prodList.map(function (pr) {
+                  return <div key={pr.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100"><span className="text-slate-900">{pr.name}{pr.isSold ? '' : ' (not sold)'}</span><button onClick={function () { runProductSetup('select', pr.id, pr.name); }} className="bg-indigo-600 text-white rounded px-2 py-0.5 font-bold">Use this</button></div>;
+                })}
+              </div>
+            )}
+          </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : isProd ? (
             <div className="text-sm text-red-700 font-semibold">This is a PRODUCTION business. All push flags are locked in this build.</div>
