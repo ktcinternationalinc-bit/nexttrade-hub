@@ -7,7 +7,9 @@ ok(ex('src/app/api/wave/schema-check/route.js'),'schema-check route exists');
 ok(/payment_mutation_details/.test(sc),'reads payment mutation signatures');
 ok(/discovered_input_type_fields/.test(sc),'discovers real input type fields');
 ok(/invoice_has_payments_field/.test(sc),'checks Invoice.payments field');
-ok(!/mutation\s*\(/.test(sc) && !/Create\(input/.test(sc),'no write mutations (read-only)');
+// EZ: a SAFE validation probe mutation is allowed — it sends EMPTY input so Wave creates nothing.
+ok(/variables: \{ input: \{\} \}/.test(sc),'payment probe sends EMPTY input (creates nothing)');
+ok(!/amount:\s*[0-9]/.test(sc) && !/invoiceId:\s*['"]/.test(sc) && !/paymentAccountId:\s*['"]/.test(sc),'no real amount/invoice/account values in any mutation');
 ok(/export async function POST/.test(sc) && /body && body\.user_id/.test(sc),'POST takes user_id from body (not URL)');
 ok(!/searchParams\.get\('user_id'\)/.test(sc),'user_id never read from URL (avoids logging)');
 ok(/isSuperAdmin\(userId\)/.test(sc) && /CRON_SECRET/.test(sc),'protected: super_admin or CRON_SECRET');

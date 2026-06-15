@@ -160,18 +160,34 @@ async function runCheck() {
     if (iff) { var k2; for (k2 = 0; k2 < iff.length; k2++) { invFields.push(iff[k2].name); if (iff[k2].name === 'payments' || iff[k2].name === 'payment') { var pd = describeType(iff[k2].type); invPaymentsFieldType = pd.leaf + ' (tree: ' + pd.tree + ')'; } } }
   } catch (e2) {}
 
-  // If Invoice exposes a payments field type, introspect that type's fields too.
-  var invoicePaymentTypeFields = null;
+  // Introspection of input-type FIELDS is disabled on Wave (inputFields came back empty even
+  // though the type name resolved). So discover required fields the reliable way: send a
+  // deliberately-empty invoicePaymentCreateManual and read Wave's field-level validation
+  // errors. This creates NOTHING (it fails validation) but names every required field.
+  var paymentProbe = null;
   try {
-    if (invPaymentsFieldType) {
-      var leafName = invPaymentsFieldType.split(' ')[0];
-      if (leafName && leafName !== 'null') {
-        var ipData = await gql(token, 'query{ __type(name:"' + leafName + '"){ fields{ name type{ kind name ofType{ kind name } } } } }');
-        var ipf = ipData && ipData.data && ipData.data.__type && ipData.data.__type.fields;
-        if (ipf) { invoicePaymentTypeFields = []; var ip; for (ip = 0; ip < ipf.length; ip++) { invoicePaymentTypeFields.push({ name: ipf[ip].name, type: flattenType(ipf[ip].type) }); } }
-      }
-    }
-  } catch (e3) {}
+    var probeMut = 'mutation($input: InvoicePaymentCreateManualInput!){ invoicePaymentCreateManual(input:$input){ didSucceed inputErrors{ message code path } } }';
+    var probeResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: probeMut, variables: { input: {} } }) });
+    var probeData = await probeResp.json();
+    paymentProbe = probeData;
+  } catch (eP) { paymentProbe = { probe_error: (eP && eP.message) || String(eP) }; }
+
+  // Probe whether invoice payment DETAIL is queryable. amountPaid/amountDue are known-good;
+  // payments{} may not exist (introspection said false) so we run it separately and capture
+  // any error rather than letting a bad subfield mask the aggregate fields.
+  var invoiceAggregateProbe = null;
+  try {
+    var aq = 'query($bid:ID!){ business(id:$bid){ invoices(page:1,pageSize:1){ edges{ node{ id invoiceNumber status amountPaid{ value } amountDue{ value } total{ value } } } } } }';
+    var ar2 = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: aq, variables: { bid: APPROVED_BUSINESS_ID } }) });
+    invoiceAggregateProbe = await ar2.json();
+  } catch (eAg) { invoiceAggregateProbe = { probe_error: (eAg && eAg.message) || String(eAg) }; }
+
+  var invoicePaymentsProbe = null;
+  try {
+    var ipq = 'query($bid:ID!){ business(id:$bid){ invoices(page:1,pageSize:1){ edges{ node{ id payments{ id } } } } } }';
+    var ipr = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: ipq, variables: { bid: APPROVED_BUSINESS_ID } }) });
+    invoicePaymentsProbe = await ipr.json();
+  } catch (eIP) { invoicePaymentsProbe = { probe_error: (eIP && eIP.message) || String(eIP) }; }
 
   // candidate payment accounts: bank/cash from Chart of Accounts (read-only)
   var acctQ = 'query($bid:ID!){ business(id:$bid){ isClassicAccounting accounts(page:1,pageSize:100){ edges{ node{ id name type{ value } subtype{ name value } } } } } }';
@@ -207,6 +223,9 @@ async function runCheck() {
     invoice_has_payments_field: invFields.indexOf('payments') >= 0,
     invoice_payments_field_type: invPaymentsFieldType,
     invoice_payment_type_fields: invoicePaymentTypeFields,
+    payment_input_required_fields_probe: paymentProbe,
+    invoice_aggregate_probe: invoiceAggregateProbe,
+    invoice_payments_query_probe: invoicePaymentsProbe,
     invoice_fields: invFields,
     candidate_payment_accounts: candidates,
     isClassicAccounting_context_only: isClassic
