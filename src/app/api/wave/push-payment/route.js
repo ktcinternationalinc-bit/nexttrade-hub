@@ -112,7 +112,7 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, error: 'Payment is already syncing or no longer pending (it may have been pushed already). Refresh and check.', api_build_marker: API_BUILD_MARKER }, { status: 409 });
     }
 
-    var mutation = 'mutation($input: InvoicePaymentCreateManualInput!){ invoicePaymentCreateManual(input:$input){ didSucceed inputErrors{ message code path } payment{ id amount paymentDate paymentMethod } } }';
+    var mutation = 'mutation($input: InvoicePaymentCreateManualInput!){ invoicePaymentCreateManual(input:$input){ didSucceed inputErrors{ message code path } invoicePayment{ id } } }';
     var resp = await gql(token, mutation, { input: inputObj });
 
     // Top-level GraphQL errors (e.g. invalid enum) — surface accepted values when possible.
@@ -141,7 +141,7 @@ export async function POST(req) {
     }
 
     // Success — save the REAL wave_payment_id, never a fake one.
-    var wavePaymentId = result.payment && result.payment.id ? result.payment.id : null;
+    var wavePaymentId = result.invoicePayment && result.invoicePayment.id ? result.invoicePayment.id : null;
     if (!wavePaymentId) {
       // Succeeded but no id returned — do NOT fabricate one; flag for review.
       try { await db.from('accounting_invoice_payments').update({ sync_status: 'sync_failed', sync_error: 'Wave reported success but returned no payment id.' }).eq('id', hubId); } catch (e5) {}
