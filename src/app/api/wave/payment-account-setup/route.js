@@ -5,6 +5,7 @@
 // except the settings upsert. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var API_BUILD_MARKER = 'v55.83-FH-payment-account-setup';
 var API_ROUTE = '/api/wave/payment-account-setup';
@@ -35,8 +36,15 @@ function listAccounts(token, bid) {
           if (!n) { continue; }
           var st = (n.subtype && (n.subtype.value || n.subtype.name)) || '';
           var stU = String(st).toUpperCase();
-          var payable = (stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0 || stU.indexOf('CREDIT') >= 0);
-          out.push({ id: n.id, name: n.name, subtype: st, payment_capable: payable });
+          var ty = (n.type && n.type.value) || '';
+          var tyU = String(ty).toUpperCase();
+          // A payment-capable account is a real bank/cash/money account Wave can deposit
+          // received payments into. Receivables/payables/income/expense accounts are NOT
+          // valid deposit targets and must be excluded.
+          var isReceivableOrPayable = (stU.indexOf('RECEIVABLE') >= 0 || stU.indexOf('PAYABLE') >= 0);
+          var looksCashBank = (stU === 'CASH_AND_BANK' || stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0);
+          var payable = looksCashBank && !isReceivableOrPayable;
+          out.push({ id: n.id, name: n.name, subtype: st, type: ty, payment_capable: payable });
         }
       }
     } catch (e) {}
@@ -64,6 +72,10 @@ export async function POST(req) {
     var mode = body.mode || 'list';
     var token = process.env.WAVE_ACCESS_TOKEN;
 
+    // SECURITY: service-role route — requires wave.settings.manage (super_admin = all).
+    var _perm = await assertPermission(db, body.user_id, 'wave.settings.manage', req);
+    if (!_perm.ok) { return NextResponse.json({ error: _perm.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: _perm.status }); }
+
     if (!bid) { return NextResponse.json({ error: 'No Wave business selected.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
     if (BAD_BIDS[bid]) { return NextResponse.json({ error: 'That is a placeholder business id, not a connected Wave business.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
     if (!token) { return NextResponse.json({ error: 'Wave token not configured.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
@@ -83,6 +95,7 @@ export async function POST(req) {
       var j;
       for (j = 0; j < accounts.length; j++) { if (accounts[j].id === accId) { match = accounts[j]; break; } }
       if (!match) { return NextResponse.json({ error: 'That account does not belong to the selected Wave business. Refresh the list and try again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+      if (!match.payment_capable) { return NextResponse.json({ error: 'That account is not a bank/cash account and cannot receive payments. Pick a Cash on Hand or bank account (not Accounts Receivable).', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
       var saved = await saveDefault(db, bid, match.id, match.name);
       if (!saved.ok) { return NextResponse.json({ db_error: saved.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 }); }
       return NextResponse.json({ saved: true, default_payment_account_id: match.id, default_payment_account_name: match.name, saved_row: saved.row, api_build_marker: API_BUILD_MARKER, route: API_ROUTE });

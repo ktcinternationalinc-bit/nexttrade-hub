@@ -35,6 +35,14 @@ export function canReopen(isSuperAdmin, mp, role) {
   return has(mp, ['Accounting Manager', 'Bank: Reopen', 'accounting.reopen']);
 }
 
+// ---- AR (Accounts Receivable) — FIRST-CLASS permissions, NOT bundled into invoice view ----
+// Invoice-level balance (needed for payment matching) is separate from company-wide AR.
+export function canViewArSummary(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Summary', 'ar.view_summary', 'AR: Full', 'ar.full', 'Finance: View Company Totals', 'finance.view_company_totals']); }
+export function canViewArCustomerBalances(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Customer Balances', 'ar.view_customer_balances', 'AR: Full', 'ar.full', 'Finance: View All Customer Balances', 'finance.view_all_customer_balances']); }
+export function canViewArInvoiceBalances(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Invoice Balances', 'ar.view_invoice_balances', 'AR: Full', 'ar.full', 'Invoice: View Balance', 'invoice.view_balance', 'Payments: Match', 'payments.match']); }
+export function canViewArOverdue(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Overdue', 'ar.view_overdue', 'AR: Full', 'ar.full', 'AR: View Summary', 'ar.view_summary']); }
+export function canExportAr(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: Export', 'ar.export', 'AR: Full', 'ar.full']); }
+
 export var CLASSIFICATIONS = [
   'customer_payment', 'vendor_payment', 'transfer', 'refund', 'owner_contribution',
   'loan', 'payroll', 'bank_fee', 'other_income', 'other_expense', 'needs_clarification',

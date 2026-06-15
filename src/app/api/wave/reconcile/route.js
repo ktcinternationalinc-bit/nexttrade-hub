@@ -3,6 +3,7 @@
 // counts (Wave vs Hub), Wave-vs-Hub AR totals + difference, status breakdown,
 // and the worst mismatches. Writes NOTHING. Service-role. SWC-safe (var/concat).
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -85,6 +86,9 @@ export async function POST(request) {
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
+  var reconUserId = (body && body.userId) || (body && body.user_id) || null;
+  var _gate = await assertPermission(admin, reconUserId, 'wave.import.run', request);
+  if (!_gate.ok) { return Response.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
 
   try {
     // 1) Pull ALL Wave invoices

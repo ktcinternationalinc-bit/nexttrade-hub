@@ -59,6 +59,8 @@ export default function WaveSyncCenter(props) {
   var ca0 = useState(false); var catBusy = ca0[0]; var setCatBusy = ca0[1];
   var ca1 = useState(''); var catMsg = ca1[0]; var setCatMsg = ca1[1];
   var ca2 = useState(0); var catCount = ca2[0]; var setCatCount = ca2[1];
+  var sp0 = useState(false); var schemaBusy = sp0[0]; var setSchemaBusy = sp0[1];
+  var sp1 = useState(null); var schemaResult = sp1[0]; var setSchemaResult = sp1[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -107,7 +109,7 @@ export default function WaveSyncCenter(props) {
 
   function runProductSetup(mode, productId, productName) {
     setProdBusy(true); setProdMsg(''); if (mode !== 'select') { setProdList(null); }
-    var payload = { wave_business_id: active, mode: mode };
+    var payload = { wave_business_id: active, mode: mode, user_id: (userProfile && userProfile.id) || null };
     if (productId) { payload.product_id = productId; payload.product_name = productName; }
     if (mode === 'select') { payload.mode = 'select'; }
     fetch('/api/wave/product-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -125,7 +127,7 @@ export default function WaveSyncCenter(props) {
 
   function runPaymentAccountSetup(mode, accountId, accountName) {
     setPayBusy(true); setPayMsg(''); if (mode !== 'select') { setPayList(null); }
-    var payload = { wave_business_id: active, mode: mode };
+    var payload = { wave_business_id: active, mode: mode, user_id: (userProfile && userProfile.id) || null };
     if (accountId) { payload.account_id = accountId; payload.account_name = accountName; }
     fetch('/api/wave/payment-account-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
@@ -147,6 +149,15 @@ export default function WaveSyncCenter(props) {
       .catch(function () { setCatCount(0); });
   }
   useEffect(function () { loadCatCount(); }, [active]);
+
+  function runSchemaCheck() {
+    setSchemaBusy(true); setSchemaResult(null);
+    fetch('/api/wave/preflight-schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.text().then(function (t) { var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || ''; if (!r.ok || ct.indexOf('application/json') < 0) { throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 200)); } return JSON.parse(t); }); })
+      .then(function (d) { setSchemaResult(d); if (d && d.all_green) { toast.success('Database setup looks complete'); } else { toast.error('Some database columns are missing — see list'); } })
+      .catch(function (e) { setSchemaResult({ ok: false, error: (e && e.message) || String(e) }); })
+      .finally(function () { setSchemaBusy(false); });
+  }
 
   function runCategoryPull() {
     if (!active) { toast.error('Select a Wave business first.'); return; }
@@ -283,9 +294,16 @@ export default function WaveSyncCenter(props) {
   // without faking a wave_payment_id). Logged to audit_log via dbUpdate.
   function markManualDone(paymentId) {
     if (!paymentId) { return; }
-    if (!window.confirm('Mark this payment as already entered in Wave manually?\n\nIt will leave the pending queue. Use this only if you actually recorded the payment in Wave.')) { return; }
-    dbUpdate('accounting_invoice_payments', paymentId, { sync_status: 'manual_done', last_synced_at: new Date().toISOString() }, (userProfile && userProfile.id))
-      .then(function () { toast.success('Marked as entered in Wave manually'); load(); })
+    if (!isSuperAdmin) { toast.error('Only a super admin can mark a payment as manually entered in Wave.'); return; }
+    var ref = window.prompt('Enter the Wave reference / receipt # for the payment you recorded in Wave (required). This is logged. Leave blank to cancel.');
+    if (ref == null) { return; }
+    ref = String(ref).trim();
+    if (!ref) { toast.error('A Wave reference is required to mark a payment as manually done.'); return; }
+    dbUpdate('accounting_invoice_payments', paymentId, { sync_status: 'manual_done', last_synced_at: new Date().toISOString(), sync_error: 'MANUAL WAVE ENTRY by ' + ((userProfile && (userProfile.full_name || userProfile.email || userProfile.id)) || 'super_admin') + ' - Wave ref: ' + ref }, (userProfile && userProfile.id))
+      .then(function () {
+        try { supabase.from('wave_sync_log').insert({ wave_business_id: active, entity_type: 'payment', hub_record_id: paymentId, action: 'manual_done', dry_run: false, success: true, response_payload: { wave_reference: ref, by: (userProfile && userProfile.id) || null }, error_message: null, attempted_at: new Date().toISOString() }); } catch (eLog) {}
+        toast.success('Marked as entered in Wave manually (ref: ' + ref + ')'); load();
+      })
       .catch(function (e) { toast.error('Could not update: ' + ((e && e.message) || 'error')); });
   }
   var selectedRows = queue.filter(function (q) { return sel[q.key] && !q.blocked; });
@@ -305,6 +323,18 @@ export default function WaveSyncCenter(props) {
   function pushSelected() {
     if (isProd) { toast.error('Production writes are disabled. Use read-only reconcile or unlock production in a future controlled build.'); return; }
     if (selectedRows.length === 0) { toast.error('Select records and Dry Run first.'); return; }
+    // PAYMENT-PUSH SAFETY (launch): payments go one at a time until Wave's behavior (incl. the
+    // paymentMethod enum) is fully confirmed on live data. Customer/invoice pushes are proven
+    // and may still go in a batch.
+    var selectedPayments = selectedRows.filter(function (q) { return q.action === 'payment'; });
+    if (selectedPayments.length > 1) {
+      toast.error('Push payments ONE at a time for now. Select a single payment, Dry Run, then Push. (This limit is lifted once the first live payments are confirmed in Wave.)');
+      return;
+    }
+    if (selectedPayments.length === 1 && selectedRows.length > 1) {
+      toast.error('Push a payment by itself (do not mix it with other records). Select just the one payment.');
+      return;
+    }
     setBusy(true);
     var seq = Promise.resolve();
     var done = 0, failed = 0;
@@ -447,6 +477,26 @@ export default function WaveSyncCenter(props) {
 
       {tab === 'settings' && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
+          <div className="mb-4 border border-slate-300 bg-slate-50 rounded-lg p-3">
+            <div className="font-bold text-slate-900 mb-1">Database setup check</div>
+            <div className="text-xs text-slate-700 mb-2">Confirms the database has every column the Wave payment, settings, and category features need. Run this first if anything fails to save with a "column not found" error.</div>
+            <button onClick={runSchemaCheck} disabled={schemaBusy} className="text-xs bg-slate-700 hover:bg-slate-800 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{schemaBusy ? 'Checking…' : 'Check database setup'}</button>
+            {schemaResult && schemaResult.results && (
+              <div className="mt-2 space-y-1">
+                {schemaResult.all_green
+                  ? <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 font-medium">✓ All required database columns are present.</div>
+                  : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 font-medium">Some columns are missing — run the migration pack, then re-check.</div>}
+                {schemaResult.results.map(function (r) {
+                  return <div key={r.table} className="flex items-start gap-2 text-xs text-slate-900">
+                    <span className={r.ok ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>{r.ok ? '✓' : '✗'}</span>
+                    <span className="font-mono text-slate-700">{r.table}</span>
+                    {!r.ok && <span className="text-rose-700">missing: {r.missing.join(', ')}</span>}
+                  </div>;
+                })}
+              </div>
+            )}
+            {schemaResult && schemaResult.error && <div className="text-xs mt-2 bg-rose-100 text-rose-950 rounded px-2 py-1 font-medium">{schemaResult.error}</div>}
+          </div>
           <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Default Invoice Product (Wave)</div>
             <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to be tied to a product. Set one reusable product once and all invoice pushes will use it. We recommend creating a product named exactly <b>NextTrade Hub Item</b> in Wave (marked as sold, with an income account), then click Find.</div>
@@ -468,8 +518,8 @@ export default function WaveSyncCenter(props) {
             )}
           </div>
           <div className="mb-4 border border-teal-200 bg-teal-50 rounded-lg p-3">
-            <div className="font-bold text-slate-900 mb-1">Wave Payment Account</div>
-            <div className="text-xs text-slate-700 mb-2">When Hub pushes a matched payment to Wave, Wave records it against this bank/cash account. Pick the account where these payments should land (e.g. <b>Cash on Hand</b> to start, or your real bank account).</div>
+            <div className="font-bold text-slate-900 mb-1">Payment Deposit Account (Wave)</div>
+            <div className="text-xs text-slate-700 mb-2">Pick the Wave bank/cash account where received invoice payments should land — usually <b>Cash on Hand</b> to start, or your real bank account. This is <b>not</b> Accounts Receivable. Only valid bank/cash accounts can be selected.</div>
             {prodSetup && prodSetup.default_payment_account_id ? (
               <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured payment account: {prodSetup.default_payment_account_name || prodSetup.default_payment_account_id}</div>
             ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No payment account configured yet — payment push will be blocked until you set one.</div>}
@@ -479,8 +529,17 @@ export default function WaveSyncCenter(props) {
             {payMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{payMsg}</div>}
             {payList && payList.length > 0 && (
               <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
-                {payList.map(function (ac) {
-                  return <div key={ac.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100"><span className="text-slate-900">{ac.name}{ac.subtype ? <span className="text-slate-500"> · {ac.subtype}</span> : null}{ac.payment_capable ? null : <span className="text-amber-700"> (not bank/cash)</span>}</span><button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 text-white rounded px-2 py-0.5 font-bold">Use this</button></div>;
+                {payList.filter(function (ac) { return ac.payment_capable; }).length === 0 && (
+                  <div className="px-2 py-2 text-xs bg-amber-100 text-amber-950 font-medium">No bank/cash accounts found in Wave. In Wave, create a Cash on Hand or bank account, then refresh this list.</div>
+                )}
+                {payList.slice().sort(function (a, b) { return (b.payment_capable ? 1 : 0) - (a.payment_capable ? 1 : 0); }).map(function (ac) {
+                  var capable = ac.payment_capable === true;
+                  return <div key={ac.id} className={'flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100 ' + (capable ? '' : 'bg-slate-50')}>
+                    <span className={capable ? 'text-slate-900' : 'text-slate-400'}>{ac.name}{ac.subtype ? <span className={capable ? 'text-slate-500' : 'text-slate-400'}> · {ac.subtype}</span> : null}{capable ? null : <span className="text-amber-700"> — not a deposit account</span>}</span>
+                    {capable
+                      ? <button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-0.5 font-bold">Use this</button>
+                      : <span className="text-slate-300 text-[10px] px-2">can't use</span>}
+                  </div>;
                 })}
               </div>
             )}
@@ -495,6 +554,29 @@ export default function WaveSyncCenter(props) {
             {catMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{catMsg}</div>}
           </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
+          {reg && !isProd && (function () {
+            var checks = [
+              ['Writes enabled', reg.writes_enabled === true],
+              ['Payment push enabled', reg.allow_payment_push === true],
+              ['Payment deposit account set', !!(prodSetup && prodSetup.default_payment_account_id)],
+              ['Invoice product set', !!(prodSetup && prodSetup.default_invoice_product_id)],
+              ['Wave categories loaded', catCount > 0]
+            ];
+            return <div className="mb-3 border border-slate-300 rounded-lg p-3 bg-white">
+              <div className="font-bold text-slate-900 mb-2 text-sm">Payment push readiness</div>
+              <div className="space-y-1">
+                {checks.map(function (c) {
+                  return <div key={c[0]} className="flex items-center gap-2 text-xs text-slate-900">
+                    <span className={c[1] ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>{c[1] ? '✓' : '✗'}</span>
+                    <span className={c[1] ? 'text-slate-700' : 'text-rose-700 font-semibold'}>{c[0]}</span>
+                  </div>;
+                })}
+              </div>
+              {checks.every(function (c) { return c[1]; })
+                ? <div className="mt-2 text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 font-medium">All set — you can dry-run and push one payment.</div>
+                : <div className="mt-2 text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 font-medium">Finish the red items above before pushing payments.</div>}
+            </div>;
+          })()}
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : isProd ? (
             <div className="text-sm text-red-700 font-semibold">This is a PRODUCTION business. All push flags are locked in this build.</div>
           ) : (

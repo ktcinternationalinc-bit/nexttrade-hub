@@ -11,7 +11,7 @@ ok(/BAD_BIDS\[bid\]/.test(rt),'rejects placeholder business ids');
 ok(/payment_capable/.test(rt),'flags bank/cash/credit accounts');
 ok(!/\bconst \b/.test(rt) && !/=>/.test(rt),'route SWC-safe');
 ok(/runPaymentAccountSetup/.test(wsc),'UI handler present');
-ok(/Wave Payment Account/.test(wsc),'payment account settings card present');
+ok(/Payment Deposit Account/.test(wsc),'payment account settings card present (FO relabel)');
 ok(/markManualDone/.test(wsc) && /sync_status: 'manual_done'/.test(wsc),'mark-manual-done sets manual_done');
 ok(/Mark manual done/.test(wsc),'manual-done button on payment rows');
 ok(/Push permissions for:/.test(wsc),'push permissions section intact');

@@ -7,6 +7,7 @@ import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { isPaymentVoid } from '../lib/payment-matching';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 
 function n(v) { return v == null || v === '' ? 0 : Number(v) || 0; }
@@ -53,7 +54,7 @@ export default function AccountingCustomerHistory(props) {
 
   // payments grouped by invoice
   function hubPaidForInvoice(invId) {
-    var sum = 0; payments.forEach(function (p) { if (p.accounting_invoice_id === invId) sum += n(p.amount); }); return sum;
+    var sum = 0; payments.forEach(function (p) { if (p.accounting_invoice_id === invId && !isPaymentVoid(p)) sum += n(p.amount); }); return sum;
   }
   function invoicesFor(custId) { return invoices.filter(function (i) { return i.accounting_customer_id === custId; }); }
   function proformasFor(custId) { return proformas.filter(function (p) { return p.accounting_customer_id === custId; }); }

@@ -5,6 +5,7 @@
 // wave_customer_id + marks synced. SWC-safe: var + string concat, no template literals.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
@@ -45,6 +46,8 @@ export async function POST(req) {
     var dryRun = body.dry_run === true;
     var unlockPhrase = body.unlock_phrase || '';
     var by = body.user_id || null;
+    var _gate = await assertPermission(db, by, 'wave.customers.push', req);
+    if (!_gate.ok) { return NextResponse.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
 
     if (!waveBusinessId || !hubId) { return NextResponse.json({ error: 'wave_business_id and hub_record_id are required.' }, { status: 400 }); }
 

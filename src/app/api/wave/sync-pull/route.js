@@ -15,9 +15,13 @@ function admin() {
 }
 
 function callImport(base, routePath, businessId) {
+  var headers = { 'Content-Type': 'application/json' };
+  // The import routes now require authorization. The scheduled pull authenticates with the
+  // CRON_SECRET, so forward it as a bearer token, else the protected imports would 403.
+  if (process.env.CRON_SECRET) { headers['Authorization'] = 'Bearer ' + process.env.CRON_SECRET; }
   return fetch(base + routePath, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify({ businessId: businessId, userId: null, scheduled: true })
   }).then(function (r) { return r.json(); }).catch(function (e) { return { ok: false, error: (e && e.message) || String(e) }; });
 }

@@ -88,7 +88,7 @@ export default function AccountingInvoicesTab(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('accounting_proformas', '*', 'created_at', false),
       supabase.from('company_profile').select('*').limit(1),
-      supabase.from('payment_matches').select('accounting_invoice_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('payment_matches').select('invoice_id, voided').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
@@ -96,7 +96,7 @@ export default function AccountingInvoicesTab(props) {
       setCustomers((r[1] && r[1].data) || []);
       setInvoices((r[2] && r[2].data) || []);
       setProformas((r[3] && r[3].data) || []); setCompany((r[4] && r[4].data && r[4].data[0]) || null);
-      var pm = {}; ((r[5] && r[5].data) || []).forEach(function (row) { if (row && row.accounting_invoice_id) pm[row.accounting_invoice_id] = true; }); setPmCount(pm);
+      var pm = {}; ((r[5] && r[5].data) || []).forEach(function (row) { if (row && row.invoice_id && row.voided !== true) pm[row.invoice_id] = true; }); setPmCount(pm);
       // Per-invoice hub-paid map (non-void) so the LIST shows real Paid/Balance even when the
       // stored amount_paid is stale. Keyed by accounting_invoice_id.
       var paidMap = {};
@@ -254,8 +254,13 @@ export default function AccountingInvoicesTab(props) {
     var tbl = isInvoice() ? 'accounting_invoices' : 'accounting_proformas';
     var itemTbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var fk = isInvoice() ? 'invoice_id' : 'proforma_id';
+    // Recompute paid from ACTUAL non-void payments (not the stale header amount_paid), so
+    // editing line items on an invoice that already has payments can't drift the balance.
+    var realPaid = (editing && editing !== 'new') ? (Number(hubPaidMap[editing]) || 0) : 0;
+    var newBalance = roundMoney(Math.max(0, total - realPaid));
+    var newStatus = realPaid <= 0.0001 ? 'unpaid' : (newBalance <= 0.0001 ? 'paid' : 'partial');
     var hpayload = isInvoice()
-      ? { invoice_number: hdr.invoice_number || null, accounting_customer_id: hdr.accounting_customer_id, invoice_date: hdr.invoice_date || null, due_date: hdr.due_date || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, balance_due: roundMoney(total - (Number(hdr.amount_paid) || 0)), updated_by: userProfile && userProfile.id }
+      ? { invoice_number: hdr.invoice_number || null, accounting_customer_id: hdr.accounting_customer_id, invoice_date: hdr.invoice_date || null, due_date: hdr.due_date || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, amount_paid: roundMoney(realPaid), balance_due: newBalance, payment_status: newStatus, updated_by: userProfile && userProfile.id }
       : { proforma_number: hdr.proforma_number || null, accounting_customer_id: hdr.accounting_customer_id, proforma_date: hdr.proforma_date || null, valid_until: hdr.valid_until || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, updated_by: userProfile && userProfile.id };
 
     var getId;

@@ -3,6 +3,7 @@
 // creates/updates accounting_customers, writes an import report + wave_sync_log.
 // Server-side service-role client (bypasses RLS for bulk import). Re-runnable.
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 function gqlCustomers(token, bid, page) {
   var query = 'query($bid: ID!, $page: Int!) { business(id:$bid){ id customers(page:$page,pageSize:50){'
@@ -28,6 +29,8 @@ export async function POST(request) {
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
+  var _gate = await assertPermission(admin, userId, 'wave.import.run', request);
+  if (!_gate.ok) { return Response.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
 
   var report = { created: 0, updated: 0, skipped: 0, errors: [], total: 0, businessId: businessId, timestamp: new Date().toISOString() };
 

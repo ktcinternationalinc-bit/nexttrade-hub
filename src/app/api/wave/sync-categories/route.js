@@ -10,6 +10,7 @@
 // against live Wave; the raw response is stored in raw_payload + logged so any shape
 // mismatch is visible without guessing.
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
@@ -55,19 +56,11 @@ async function runSync(request) {
     return Response.json({ ok: false, error: 'Server database key missing.' }, { status: 500 });
   }
 
-  // Auth: either CRON_SECRET bearer (cron) OR a super_admin user_id in the POST body (UI button).
-  var authed = false;
-  var secret = process.env.CRON_SECRET;
-  var auth = request.headers.get('authorization') || '';
-  if (secret && auth === ('Bearer ' + secret)) { authed = true; }
+  // Auth: CRON bearer OR a user with wave.categories.pull (super_admin = all).
   var bodyJson = null;
   try { bodyJson = await request.clone().json(); } catch (eB) { bodyJson = null; }
-  if (!authed && bodyJson && bodyJson.user_id) {
-    var who = await db.from('profiles').select('id, role').eq('id', bodyJson.user_id).limit(1);
-    var prof = who && who.data && who.data[0];
-    if (prof && prof.role === 'super_admin') { authed = true; }
-  }
-  if (!authed) { return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 }); }
+  var _perm = await assertPermission(db, (bodyJson && bodyJson.user_id) || null, 'wave.categories.pull', request);
+  if (!_perm.ok) { return Response.json({ ok: false, error: _perm.error }, { status: _perm.status }); }
 
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) { return Response.json({ ok: false, error: 'No Wave token configured (WAVE_ACCESS_TOKEN).' }, { status: 400 }); }

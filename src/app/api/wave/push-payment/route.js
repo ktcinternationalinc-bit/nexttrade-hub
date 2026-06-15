@@ -10,6 +10,7 @@
 // silo guard; this route also re-checks the approved business id. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -32,6 +33,12 @@ export async function POST(req) {
     var by = body.user_id || null;
     var isDry = body.dry_run === true;
     var token = process.env.WAVE_ACCESS_TOKEN;
+
+    // SECURITY: this route uses the service role, so it MUST verify the caller has the
+    // specific permission server-side. super_admin resolves to all permissions; other users
+    // need wave.payments.push (via grant or role). CRON bearer bypasses for scheduled use.
+    var _perm = await assertPermission(db, by, 'wave.payments.push', req);
+    if (!_perm.ok) { return NextResponse.json({ ok: false, error: _perm.error, api_build_marker: API_BUILD_MARKER }, { status: _perm.status }); }
 
     if (!token) { return NextResponse.json({ ok: false, error: 'Wave token not configured.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (!hubId) { return NextResponse.json({ ok: false, error: 'No payment row id provided.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

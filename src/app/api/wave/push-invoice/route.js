@@ -3,6 +3,7 @@
 // + sync_log + read-back pattern as push-customer. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var API_BUILD_MARKER = 'v55.83-EO-push-invoice-productid-preflight';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
@@ -38,6 +39,8 @@ export async function POST(req) {
     var hubId = body.hub_record_id;
     var dryRun = body.dry_run === true;
     var by = body.user_id || null;
+    var _gate = await assertPermission(db, by, 'wave.invoices.push', req);
+    if (!_gate.ok) { return NextResponse.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
     if (!waveBusinessId || !hubId) { return NextResponse.json({ error: 'wave_business_id and hub_record_id are required.' }, { status: 400 }); }
 
     var regRes = await db.from('wave_business_registry').select('*').eq('wave_business_id', waveBusinessId).single();

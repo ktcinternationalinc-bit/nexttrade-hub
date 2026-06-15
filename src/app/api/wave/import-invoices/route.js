@@ -5,6 +5,7 @@
 // wave_imported_paid (NO phantom payment rows), stamps sync fields, writes a
 // report + wave_sync_log. Server-side service-role client. SWC-safe.
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
 function curOf(n) {
@@ -68,6 +69,8 @@ export async function POST(request) {
   if (!businessId) { return Response.json({ ok: false, error: 'Missing businessId.' }); }
 
   var admin = createClient(supaUrl, serviceKey, { auth: { persistSession: false } });
+  var _gate = await assertPermission(admin, userId, 'wave.import.run', request);
+  if (!_gate.ok) { return Response.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
   var startedAt = new Date().toISOString();
   var report = { created: 0, updated: 0, skipped: 0, errors: [], lineItems: 0, placeholders: [], total: 0, businessId: businessId, timestamp: startedAt, samples: [] };
 
@@ -84,6 +87,27 @@ export async function POST(request) {
     // preload customer + invoice maps (FULLY paginated — not capped at 1000) for linking + dedupe
     var custMap = await fetchAllMap(admin, 'accounting_customers', 'wave_customer_id', businessId);
     var invMap = await fetchAllMap(admin, 'accounting_invoices', 'wave_invoice_id', businessId);
+
+    // DOUBLE-COUNT GUARD: payments Hub PUSHED to Wave (have a wave_payment_id) are already
+    // counted in Hub's canonical paid via their payment rows. When we re-import an invoice,
+    // Wave's amountPaid INCLUDES those same payments. So wave_imported_paid must EXCLUDE the
+    // Hub-pushed portion, else paid = wave_imported_paid + SUM(hub rows) counts them twice.
+    // Build a map: accounting_invoice_id -> SUM(amount) of non-void payments WITH a wave_payment_id.
+    var hubPushedByInv = {};
+    try {
+      var ppRes = await admin.from('accounting_invoice_payments')
+        .select('accounting_invoice_id, amount, voided, sync_status, wave_payment_id')
+        .not('wave_payment_id', 'is', null);
+      var ppRows = (ppRes && ppRes.data) || [];
+      var ppi;
+      for (ppi = 0; ppi < ppRows.length; ppi++) {
+        var pr = ppRows[ppi];
+        var isVoid = (pr.voided === true) || (pr.sync_status === 'void' || pr.sync_status === 'voided' || pr.sync_status === 'cancelled' || pr.sync_status === 'reversed' || pr.sync_status === 'deleted');
+        if (isVoid) { continue; }
+        if (!pr.accounting_invoice_id) { continue; }
+        hubPushedByInv[pr.accounting_invoice_id] = (hubPushedByInv[pr.accounting_invoice_id] || 0) + (Number(pr.amount) || 0);
+      }
+    } catch (ePP) { /* if this fails, fall back to non-subtracted (logged below) */ }
 
     var page = 1;
     var totalPages = 1;
@@ -161,6 +185,14 @@ export async function POST(request) {
           if (paid < 0) { paid = 0; }
           var balance = (due != null) ? due : r2(total - paid);
 
+          // DOUBLE-COUNT GUARD: subtract any Hub-pushed payments (already counted via hub rows)
+          // from the imported paid figure, so wave_imported_paid holds ONLY the Wave-native
+          // portion. Hub canonical: paid = wave_imported_paid + SUM(non-void hub rows).
+          var existingInvId = invMap[n.id] || null;
+          var hubPushed = existingInvId ? (hubPushedByInv[existingInvId] || 0) : 0;
+          var waveImportedPaid = r2(paid - hubPushed);
+          if (waveImportedPaid < 0) { waveImportedPaid = 0; }
+
           if (report.samples.length < 6) {
             report.samples.push({ invoice: n.invoiceNumber, waveTotal: waveTotal, sumLines: sumLines, total: total, wavePaid: wavePaid, paid: paid, due: due, balance: balance, lines: items.length });
           }
@@ -172,7 +204,7 @@ export async function POST(request) {
             notes: n.memo || null,
             total_amount: total,
             amount_paid: paid,
-            wave_imported_paid: paid,
+            wave_imported_paid: waveImportedPaid,
             balance_due: balance,
             payment_status: payStatus(total, balance, paid),
             approval_status: isDraftStatus(n.status) ? 'draft' : 'approved',

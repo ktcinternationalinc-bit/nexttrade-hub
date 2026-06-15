@@ -4,6 +4,7 @@
 // creates products itself. SWC-safe: var + concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { assertPermission } from '../../../../lib/server-permissions';
 
 var API_BUILD_MARKER = 'v55.83-EU-product-setup';
 var API_ROUTE = '/api/wave/product-setup';
@@ -33,6 +34,10 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var bid = body.wave_business_id;
+
+    // SECURITY: service-role route — requires wave.settings.manage (super_admin = all).
+    var _perm = await assertPermission(db, body.user_id, 'wave.settings.manage', req);
+    if (!_perm.ok) { return NextResponse.json({ error: _perm.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: _perm.status }); }
     var mode = body.mode || 'find';
     if (!bid) { return NextResponse.json({ error: 'wave_business_id is required.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
     if (bid === 'REAL_KTC_WAVE_BUSINESS_ID' || bid === 'TEST_WAVE_BUSINESS_ID') { return NextResponse.json({ error: 'Placeholder business id is not a real Wave business. Connect a real Wave business first.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }

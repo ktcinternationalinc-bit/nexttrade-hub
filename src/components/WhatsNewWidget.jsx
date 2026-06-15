@@ -33,6 +33,68 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FS',
+    date: '2026-06-08',
+    label: 'Permission-based access: staff can do delegated work without owner keys',
+    items: [
+      '**\ud83d\udd11 Wave and accounting actions are now permission-based, not owner-only.** Each action (push customers, push invoices, push payments, import, manage settings, pull categories) checks a specific permission \u2014 so an accounting manager or payment matcher can do their job without being a full owner.',
+      '**\ud83d\udcca Accounts Receivable is its own permission now.** Seeing total company receivables, customer balances, and overdue totals is separate from creating invoices or matching payments \u2014 staff only see the financial picture they\u2019re allowed to.',
+      { superAdminOnly: true, text: 'v55.83-FS. Optional SQL (role grants below; can also grant per-user in Settings). Replaces FR\u2019s emergency super_admin-only lockdown with the FINAL permission model (per Max/GPT). NEW src/lib/server-permissions.js: loadUserPermissions(db,userId) reads users.role + module_permissions; userHasPermission(ctx,perm) = super_admin?all : explicit grant : temporary ROLE_DEFAULTS map; assertPermission(db,userId,perm,request) is the route guard. PERMISSION_ALIASES maps each canonical key to module_permissions names (existing grants keep working). CRON bypass SCOPED to wave.import.run + wave.categories.pull ONLY (scheduled jobs) \u2014 staff push actions are NEVER cron-bypassable (GPT). Routes now check EXACT perms: push-customer=wave.customers.push, push-invoice/v2=wave.invoices.push, push-payment=wave.payments.push, import-customers/import-invoices/reconcile=wave.import.run, sync-categories=wave.categories.pull, product-setup/payment-account-setup/preflight=wave.settings.manage. AR FIRST-CLASS (bank-permissions.js): canViewArSummary/ArCustomerBalances/ArInvoiceBalances/ArOverdue/canExportAr. KEY DISTINCTION: ar.view_invoice_balances allows payments.match holders (matchers need invoice balance) but ar.view_summary (company totals) + ar.view_customer_balances are separate. AccountingDashboard: AR totals gated by canViewArSummary; customer balances by canViewArCustomerBalances (hidden w/ message if not). ROLE_DEFAULTS: owner/admin=all; accounting_manager=AR+invoices+matching+wave push/import/categories+log; ar_lead=summary+invoice-bal+invoice-push+payment-push+dry-run; bank_reviewer=txn-view+match+classify+invoice-bal; viewer=read-only. super_admin still = all (you are never blocked). NOTE (honest, deferred): dashboard still computes balances client-side from loaded invoices \u2014 UI gating prevents display but a future server AR endpoint should strip totals at the data layer for full enforcement; bank balances already not surfaced to staff in BankTab.' },
+    ],
+  },
+  {
+    version: 'v55.83-FR',
+    date: '2026-06-08',
+    label: 'Team-safe lockdown: all Wave routes admin-protected + database setup checker',
+    items: [
+      '**\ud83d\udd10 Every Wave action is now protected on the server,** not just hidden in the screen. Pushing customers/invoices/payments to Wave, and importing from Wave, all require an admin behind the scenes.',
+      '**\u2705 New \u201cCheck database setup\u201d button** in Wave Sync settings shows green/red so a missing database column is caught before it breaks a save.',
+      { superAdminOnly: true, text: 'v55.83-FR. No SQL. Goal B (team-safe) per Max/GPT. NEW src/lib/wave-route-auth.js assertWaveAuthorized(request, db, userId): CRON_SECRET bearer OR users.role===super_admin; SWC-safe. Applied to the 6 previously-OPEN routes: push-customer, push-invoice, push-invoice-v2, import-customers, import-invoices, reconcile (each returns 403 _gate.error before any Wave/service-role action). import-customers/import-invoices use existing body.userId; reconcile now reads userId + UI passes it; sync-pull cron path still works (forwards nothing but import routes accept CRON bearer too via the same helper... note: sync-pull calls imports WITHOUT bearer, so imports authed via... ACTUALLY imports require auth now — sync-pull must forward CRON bearer; FLAG: verify sync-pull forwards Authorization to import calls, else scheduled pull 403s). NEW /api/wave/preflight-schema (GET/POST, auth-gated): probes required columns per table (wave_business_settings pay/product cols, accounting_invoice_payments wave+void cols, payment_matches void+invoice_id, accounting_invoices wave/paid cols, wave_categories) by select+limit(1), returns all_green + per-table missing[]. WaveSyncCenter Settings: "Database setup check" panel (green/red per table). Combined with FP/FQ this closes the P0 auth + schema-drift gaps from the QA review. DEFERRED still: reconcile write-back, category wave_account_id model, contaminated DB flags, delete old push-invoice + schema-check, currency/FX on push.' },
+    ],
+  },
+  {
+    version: 'v55.83-FQ',
+    date: '2026-06-08',
+    label: 'Launch-critical: correct balances everywhere + no double-counting after Wave import',
+    items: [
+      '**\ud83d\udcb0 Invoice paid/balance/status is now consistent everywhere** \u2014 the blotter, invoice view, customer AR history, and dashboard all calculate from the real, non-cancelled payments.',
+      '**\ud83d\udeab No more double-counting:** when a payment Hub sent to Wave comes back on a later Wave import, it is counted once \u2014 not twice.',
+      { superAdminOnly: true, text: 'v55.83-FQ. No NEW SQL (uses FP migration pack). Launch-critical close-out (Max trimmed list). #5 paid/balance void-aware on ALL surfaces: AccountingCustomerHistory.hubPaidForInvoice now skips isPaymentVoid (was summing voided too); AccountingDashboard payByInv now uses isPaymentVoid (was only sync_status string check, missed voided boolean col); blotter/view already void-aware (FD/FC). #6 DOUBLE-COUNT GUARD (the key one for Wave->Hub): import-invoices preloads hubPushedByInv = SUM(non-void accounting_invoice_payments WHERE wave_payment_id NOT NULL) per invoice; on import, wave_imported_paid = Wave amountPaid MINUS hubPushed (clamped >=0), so canonical paid = wave_imported_paid + SUM(hub rows) counts Hub-pushed payments ONCE; amount_paid still stores full paid. #7 one-at-a-time payments (FP). #8 failed pushes stay in queue (sync_failed/failed in ACTIONABLE) with exact sync_error (FP/FI). Items 1-3 (migration, bank/cash-only acct, server-side super_admin auth on push-payment/payment-account-setup/product-setup) + #4 (categories 401 users-table) all from FP/FO. DEFERRED per Max: wave_payment_id detail import, normalized category model, contaminated-ID DB flags, bulk push, RLS redesign. LAUNCH PATH: run FP migration pack -> deploy FQ -> set Cash on Hand -> enable payment push -> dry-run+push ONE clean payment -> verify in Wave -> later run Wave import and confirm paid not doubled.' },
+    ],
+  },
+  {
+    version: 'v55.83-FP',
+    date: '2026-06-08',
+    label: 'Release-candidate stabilization: Wave security + balance + safety fixes',
+    items: [
+      '**\ud83d\udd10 Wave controls are now properly locked to admins on the server,** not just hidden in the screen. Staff working in the Hub cannot reach Wave setup or payment push behind the scenes.',
+      '**\u2696\ufe0f Editing an invoice no longer risks changing its paid/balance by mistake** \u2014 the balance is recalculated from the actual recorded payments every time you save.',
+      '**\ud83d\udee1\ufe0f Safer payment launch:** payments push one at a time, only real bank/cash accounts can be chosen, and marking a payment \u201centered in Wave manually\u201d now requires an admin and a reference.',
+      '**\u2705 New readiness checklist** shows at a glance whether everything needed for payment push is set up.',
+      { superAdminOnly: true, text: 'v55.83-FP RELEASE CANDIDATE (bundled, per GPT QA). HAS SQL (consolidated migration pack \u2014 run once). P0 SECURITY: push-payment, payment-account-setup, AND product-setup now verify super_admin SERVER-SIDE via db.from(users).role (CRON bearer OR user_id) before any service-role Wave action \u2014 frontend hiding is no longer the only gate; UI passes user_id on all three. P0 payment account: capable = CASH_AND_BANK/cash/bank/money AND not RECEIVABLE/PAYABLE; API select rejects non-capable; UI only shows Use this on capable (FO). P0 schema drift: ONE migration pack (wave_business_settings pay-acct+product+source cols; accounting_invoice_payments wave/void cols; payment_matches void cols; wave_categories table+RLS; indexes; verify query). P1 #4: sync-categories auth fixed profiles->users (was the 401). P1 #5: AccountingInvoicesTab read payment_matches.accounting_invoice_id (nonexistent) -> fixed to invoice_id + skip voided (pmCount was always empty). P1 #6: invoice save wrote balance_due from STALE hdr.amount_paid -> now recomputes realPaid from hubPaidMap (non-void payments) and writes amount_paid+balance_due+payment_status; editing line items on a paid invoice can no longer drift balance. P1 #7: payments forced ONE-at-a-time (bulk blocked; payment cannot be mixed with other records). P1 #8: Mark manual done now super_admin-only + requires Wave reference (prompt) + loud wave_sync_log action=manual_done audit. Preflight readiness panel (writes/payment-push/pay-acct/product/categories green-check). NEXT: run migration pack -> deploy -> set Cash on Hand -> enable payment push -> dry-run+push ONE clean payment -> confirm paymentMethod enum.' },
+    ],
+  },
+  {
+    version: 'v55.83-FO',
+    date: '2026-06-08',
+    label: 'Wave Settings fixes: valid payment accounts only, categories button works, clearer layout',
+    items: [
+      '**\ud83c\udfe6 The payment account picker now only lets you choose real bank/cash accounts.** Accounts Receivable and similar are greyed out and can\u2019t be selected \u2014 they\u2019re not places a payment lands.',
+      '**\ud83c\udff7\ufe0f \u201cPull Wave categories\u201d now works for admins** instead of failing with an error.',
+      '**\ud83d\udcdd Clearer wording** so it\u2019s obvious the deposit account is where received payments land (usually Cash on Hand), not Accounts Receivable.',
+      { superAdminOnly: true, text: 'v55.83-FO. HAS SQL (payment account columns). Fixes from Max screenshot. (1) payment-account-setup listAccounts: payment_capable now requires CASH_AND_BANK/cash/bank/money subtype AND excludes RECEIVABLE/PAYABLE; returns type too. select mode rejects non-capable server-side. (2) WaveSyncCenter payment list: capable accounts sorted first + only they show "Use this"; non-capable greyed (text-slate-400) + "can\u2019t use", with empty-state amber hint. Relabeled "Payment Deposit Account" + clearer copy (not Accounts Receivable). (3) 401 ROOT CAUSE: sync-categories super_admin check queried profiles table but the app stores role in USERS table (schema-check uses users) -> always failed. Fixed to db.from(users). Now Pull Wave categories works for super_admin. SQL REQUIRED (FH used the column without shipping migration \u2014 my miss): ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text, ADD COLUMN IF NOT EXISTS default_payment_account_name text. Acceptance: Cash on Hand selectable + saves; Accounts Receivable cannot; categories pull succeeds; no raw schema error.' },
+    ],
+  },
+  {
+    version: 'v55.83-FN',
+    date: '2026-06-08',
+    label: 'Fix: saving a Stock Mix Lot (virtual) now keeps its name and Design Code',
+    items: [
+      '**\ud83d\udd27 Fixed saving a virtual Stock Mix Lot.** You can now name it and give it a Design Code and Save will actually keep them \u2014 a mix lot no longer wrongly demands all the classification levels that only apply to real stock products.',
+      { superAdminOnly: true, text: 'v55.83-FN. No SQL. Inventory bug (Max-reported): saving a product marked is_virtual_mix did not persist the changed name or design_sku (ref). ROOT CAUSE (QA): InventoryProductMaster.save() required Levels 1-8 + UOM + a classification slug for EVERY product; a virtual mix (Stock Mix Lot) holds no stock and has no levels, so it always failed the "fill in required fields" gate and returned BEFORE the insert/update ran \u2014 name + design_sku never written; modal reset lost them. The payload was always correct (carries name_en/name_ar/quick_code/design_sku/is_virtual_mix). FIX: isVirtual = form.is_virtual_mix===true; when virtual, skip Levels 1-8, skip UOM requirement, skip computeSlug + slug-conflict check (two virtual mixes both null-slug must not collide). Name dup + design_sku dup checks RETAINED. Also: name_en/name_ar inputs were readOnly until levels filled (locked forever for a virtual mix) \u2014 now editable directly when is_virtual_mix. NOT changed: real classified products still require all levels + UOM exactly as before. NEXT STEP for Max: deploy FN, create/edit a Stock Mix Lot, set name + Design Code, Save \u2014 should persist; then map colors in Inventory Mix Composition.' },
+    ],
+  },
+  {
     version: 'v55.83-FM',
     date: '2026-06-08',
     label: 'Wave Categories: pull your Chart of Accounts + use it for bank categorization',

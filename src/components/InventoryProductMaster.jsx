@@ -719,24 +719,31 @@ export default function InventoryProductMaster(props) {
     // thing, then they fixed it and got another error, and another. Now: one
     // message lists EVERY field they missed.
     var missing = [];
+    var isVirtual = form.is_virtual_mix === true;
     var nameEn = (form.name_en || '').trim();
     var nameAr = (form.name_ar || '').trim();
     if (!nameEn) missing.push('• English name (name_en)');
     if (!nameAr) missing.push('• Arabic name (name_ar)');
 
-    // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
-    // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
-    // most installs have no L9 options to pick. If/when L9 options exist
-    // and the user picks one, it's included in the slug and payload.
-    for (var lvl = 1; lvl <= 8; lvl++) {
-      if (!form[LEVEL_FIELD_MAP[lvl]]) {
-        missing.push('• Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
+    // A VIRTUAL MIX (Stock Mix Lot) holds no stock of its own and has no classification
+    // levels — the real colors keep their own inventory. So Levels 1-8, the classification
+    // slug, and UOM are NOT required for a virtual mix. It only needs a name (+ optional
+    // Quick Code / Design Code). Enforcing levels here is what silently blocked saving a
+    // virtual mix's name and Design Code.
+    if (!isVirtual) {
+      // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
+      // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
+      // most installs have no L9 options to pick. If/when L9 options exist
+      // and the user picks one, it's included in the slug and payload.
+      for (var lvl = 1; lvl <= 8; lvl++) {
+        if (!form[LEVEL_FIELD_MAP[lvl]]) {
+          missing.push('• Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
+        }
       }
+      // v55.83 (Max Jun 7 2026) — Unit of Measure is REQUIRED. A blank UOM made
+      // products silently land in the "units" bucket on the inventory overview.
+      if (!(form.default_uom || '').trim()) missing.push('• Unit of Measure (default_uom)');
     }
-
-    // v55.83 (Max Jun 7 2026) — Unit of Measure is REQUIRED. A blank UOM made
-    // products silently land in the "units" bucket on the inventory overview.
-    if (!(form.default_uom || '').trim()) missing.push('• Unit of Measure (default_uom)');
 
     if (missing.length > 0) {
       fail('Cannot save — please fill in these required fields:\n\n' + missing.join('\n') +
@@ -744,8 +751,9 @@ export default function InventoryProductMaster(props) {
       return;
     }
 
-    var slug = computeSlug(form);
-    if (!slug) { fail('Could not compute classification slug — please re-check selections'); return; }
+    // Slug only applies to real classified products. A virtual mix has no classification.
+    var slug = isVirtual ? null : computeSlug(form);
+    if (!isVirtual && !slug) { fail('Could not compute classification slug — please re-check selections'); return; }
 
     // Quick code uniqueness (client-side; DB also enforces)
     var quickCode = (form.quick_code || '').trim();
@@ -777,8 +785,11 @@ export default function InventoryProductMaster(props) {
     }
 
     // 2) Classification slug conflict (same exact combo of Family/Category/Grade/...etc)
-    var dupSlug = products.find(function (p) {
+    // Skipped for virtual mixes — they have no classification slug, so two virtual mixes
+    // both having a null slug must NOT be treated as a conflict.
+    var dupSlug = isVirtual ? null : products.find(function (p) {
       if (modalMode === 'edit' && p.id === modalProductId) return false;
+      if (!p.classification_slug) return false;
       return p.classification_slug === slug;
     });
     if (dupSlug) {
@@ -1425,10 +1436,10 @@ export default function InventoryProductMaster(props) {
                       type="text"
                       value={form.name_en}
                       onChange={function (e) { setForm(Object.assign({}, form, { name_en: e.target.value, _name_manually_edited: true })); }}
-                      placeholder="Auto-builds from level selections"
-                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      placeholder={form.is_virtual_mix === true ? 'Enter mix lot name' : 'Auto-builds from level selections'}
+                      readOnly={form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
                       className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
-                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                        (form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
                           ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                           : 'bg-white')}
                     />
@@ -1439,9 +1450,9 @@ export default function InventoryProductMaster(props) {
                       value={form.name_ar}
                       onChange={function (e) { setForm(Object.assign({}, form, { name_ar: e.target.value, _name_manually_edited: true })); }}
                       placeholder="يُبنى تلقائياً من المستويات"
-                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      readOnly={form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
                       className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
-                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                        (form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
                           ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                           : 'bg-white')}
                       style={{ direction: 'rtl' }}

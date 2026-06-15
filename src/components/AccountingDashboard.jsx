@@ -6,7 +6,8 @@
 // of overdue totals unless the toggle is on.
 import { useState, useEffect } from 'react';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
-import { canViewBank, canSeeAmounts, canViewCompanyTotals } from '../lib/bank-permissions';
+import { isPaymentVoid } from '../lib/payment-matching';
+import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -21,7 +22,10 @@ export default function AccountingDashboard(props) {
   var modulePerms = props.modulePerms || {};
   var mayView = canViewBank(isSuperAdmin, modulePerms);
   var seeAmounts = canSeeAmounts(isSuperAdmin, modulePerms);
-  var seeTotals = canViewCompanyTotals(isSuperAdmin, modulePerms, userProfile && userProfile.role);
+  // AR summary/totals are now their own first-class permission (ar.view_summary), no longer
+  // bundled into generic company-totals/invoice-view.
+  var seeTotals = canViewArSummary(isSuperAdmin, modulePerms, userProfile && userProfile.role);
+  var seeCustBalances = canViewArCustomerBalances(isSuperAdmin, modulePerms, userProfile && userProfile.role);
   function money(n) { return seeAmounts ? ('$' + fmt(n)) : '•••••'; }
   function tmoney(n) { return seeTotals ? ('$' + fmt(n)) : 'Restricted'; }
 
@@ -59,8 +63,7 @@ export default function AccountingDashboard(props) {
 
       var payByInv = {};
       pays.forEach(function (p) {
-        var st = p.sync_status;
-        if (st === 'void' || st === 'cancelled' || st === 'reversed' || st === 'deleted') return;
+        if (isPaymentVoid(p)) return;
         payByInv[p.accounting_invoice_id] = (payByInv[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0);
       });
       var paidTodayTotal = 0, paidTodayCount = 0;
@@ -280,14 +283,15 @@ export default function AccountingDashboard(props) {
         <div className="text-[10px] text-slate-400 mt-1">Hub→Wave push is staged (payments carry wave IDs + pending_wave_sync); the scheduled sync job is a later build.</div>
       </Section>
 
-      {/* Top customers */}
+      {/* Top customers — separate permission: ar.view_customer_balances */}
       <Section title="Top customer balances">
         <div className="bg-white text-slate-900 rounded-lg p-3">
-          {d.custBalances.length === 0 ? <div className="text-xs text-slate-500 italic">No outstanding balances.</div> :
+          {!seeCustBalances ? <div className="text-xs text-slate-500 italic">You don't have permission to view customer balances.</div> :
+            d.custBalances.length === 0 ? <div className="text-xs text-slate-500 italic">No outstanding balances.</div> :
             d.custBalances.map(function (c, i) {
-              return <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100 last:border-0"><span className="font-medium text-slate-900 truncate">{c.name}</span><span className="font-mono font-bold text-slate-900">{tmoney(c.bal)}</span></div>;
+              return <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100 last:border-0"><span className="font-medium text-slate-900 truncate">{c.name}</span><span className="font-mono font-bold text-slate-900">{'$' + fmt(c.bal)}</span></div>;
             })}
-          <div className="text-[10px] text-slate-500 mt-1">total − Wave paid − bank payments · void/cancelled/archived excluded</div>
+          {seeCustBalances && <div className="text-[10px] text-slate-500 mt-1">total − Wave paid − bank payments · void/cancelled/archived excluded</div>}
         </div>
       </Section>
 

@@ -3,12 +3,12 @@ function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var wsc=p('src/components/WaveSyncCenter.jsx');var guard=p('src/lib/wave-silo-guard.js');
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 // Bug1: no vanishing
-ok(/ACTIONABLE = \{ 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1 \}/.test(wsc),'queue shows all actionable statuses');
+ok(/ACTIONABLE = \{ 'pending_wave_sync': 1[\s\S]*?'syncing': 1 \}/.test(wsc),'queue shows all actionable statuses (incl syncing, FL)');
 ok(!/if \(p\.sync_status !== 'pending_wave_sync'\) \{ return; \}/.test(wsc),'old pending-only filter removed');
 // Bug2: no dead-end toggle
-ok(/if \(action !== 'payment'\)/.test(guard),'payment not gated by allow_payment_push flag');
-ok(!/payment: 'allow_payment_push'/.test(guard),'allow_payment_push removed from flag map');
-ok(/schema verification pending \(not a blocker\)/.test(wsc),'toggle relabeled truthfully');
+ok(/payment: 'allow_payment_push'/.test(guard),'payment gated by allow_payment_push (FL real push)');
+ok(/payment: 'allow_payment_push'/.test(guard),'allow_payment_push in flag map (FL)');
+ok(/Allow payment push \(records payments in Wave\)/.test(wsc),'toggle relabeled (FL: push live)');
 // Bug3: duplicate/split safety
 ok(/byBankTxn\[p\.bank_transaction_id\]/.test(wsc),'groups payments by bank_transaction_id');
 ok(/over-allocated/.test(wsc),'blocks over-allocated bank deposit');

@@ -129,7 +129,7 @@ export default function WaveImportTab(props) {
   function runReconcile() {
     if (!bizId) { return; }
     setReconBusy(true); setRecon(null);
-    fetch('/api/wave/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId }) })
+    fetch('/api/wave/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { setRecon(j); })
       .catch(function (e) { setRecon({ ok: false, error: String(e) }); })
