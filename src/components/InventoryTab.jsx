@@ -32,6 +32,8 @@ import WarehouseAdvancesTab from './WarehouseAdvancesTab';
 // v55.83-A.6.27.63 — FX rates admin + FX P&L report
 import FxRatesPanel from './FxRatesPanel';
 import FxPnLReport from './FxPnLReport';
+// v55.83-FW — bilingual Inventory Report Center (reusable report engine)
+import InventoryReportCenter from './InventoryReportCenter';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -58,6 +60,7 @@ var SUBTABS = [
   { id: 'costlayers',      group: 'import',    name: 'Cost Layers',       label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
   { id: 'advances',        group: 'import',    name: 'Advances',          label: '💵 Advances', stage: 'Reports', desc: 'Issue cash advances; track spending against each advance.' },
 
+  { id: 'reportcenter',    group: 'financial', name: 'Reports',           label: '📋 Reports', stage: 'Reports', desc: 'Bilingual (EN/AR) inventory report center: stock snapshot + virtual mix composition, with export and print.' },
   { id: 'pnlreports',      group: 'financial', name: 'P&L Reports',       label: '💹 P&L Reports', stage: 'Reports', desc: 'Profit and Loss by product, category, warehouse, or period. Top movers + export.' },
   { id: 'fxrates',         group: 'financial', name: 'FX Rates',          label: '💱 FX Rates', stage: 'Reports', desc: 'Daily USD/EGP and other exchange rates. Used by FX P&L report.' },
   { id: 'fxpnl',           group: 'financial', name: 'FX P&L',            label: '💱 FX P&L', stage: 'Reports', desc: 'Separates real margin from currency-movement gain/loss.' },
@@ -446,6 +449,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         <InventoryAdjustments userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
+      {/* v55.83-FW — Bilingual Inventory Report Center (snapshot + virtual mix) */}
+      {subtab === 'reportcenter' && (
+        <InventoryReportCenter userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
       {/* v55.83-A.6.27.62 — Inventory P&L Reports */}
       {subtab === 'pnlreports' && (
         <InventoryPnLReports userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />

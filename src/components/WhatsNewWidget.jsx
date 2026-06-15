@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FW',
+    date: '2026-06-15',
+    label: 'Inventory Report Center (English / Arabic) — Snapshot + Stock Mix',
+    items: [
+      '**📋 New Inventory → Reports tab with English/Arabic reports.** Two reports to start: a **Stock Snapshot** (current quantity on hand by product, with classification, warehouse, and — if permitted — cost and total value), and **Stock Mix (Virtual) Composition** (what each virtual mix is made of from real product stock). Toggle English/Arabic (Arabic shows right-to-left), search, **Export to Excel**, and **Print**.',
+      '**🧮 Virtual mixes are shown as composition only** — never counted as physical stock — and **cost/value columns are hidden ("Restricted")** for users without valuation permission.',
+      { superAdminOnly: true, text: 'v55.83-FW. No SQL required (reads existing tables). New reusable report engine, not hard-coded reports: src/lib/inventory-report-defs.js (REPORTS with per-column label_en/label_ar/align/format/total/valuation), src/components/ReportTable.jsx (generic RTL-aware renderer: formats cells, computes sum totals, renders valuation columns as Restricted/مقيّد when not permitted), src/components/InventoryReportCenter.jsx (selector + EN/AR toggle + search + CSV export with UTF-8 BOM for Arabic + own-window Print). Data sources: inventory_products (active), inventory_layers (qty_remaining + cost_per_uom -> on-hand qty, avg cost = value/qty, total value), inventory_lists (label_en/label_ar for family/category/grade/color/origin), inv_warehouses, inventory_stock_receipts (max receipt_date = last received), inventory_mix_components + availByProduct from layers for virtual composition. New nav subtab id reportcenter under the financial group in InventoryTab (separate from the dead, nav-less legacy InventoryReports). New permissions in inventory-permissions.js: canViewInventoryReports (inventory.reports.view; falls back to basic inventory view), canExportInventoryReports (inventory.reports.export; admin+), canSeeValuationInReports (inventory.valuation.view; falls back to canSeeInventoryCosts). These keys are not yet in the Settings permissions UI (super_admin already has all) — exposing them is part of the upcoming permissions build. Movement report deferred (per Max). SWC-safe libs (var + concat); component uses standard JSX.' },
+    ],
+  },
+  {
     version: 'v55.83-FV',
     date: '2026-06-15',
     label: 'Accounting Dashboard numbers now scoped to the active Wave business',
