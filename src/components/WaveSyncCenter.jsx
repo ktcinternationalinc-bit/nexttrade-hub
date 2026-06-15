@@ -349,7 +349,7 @@ export default function WaveSyncCenter(props) {
             <div className="text-sm text-red-700 font-semibold">This is a PRODUCTION business. All push flags are locked in this build.</div>
           ) : (
             <div className="space-y-2 text-sm">
-              {[['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (Wave does not support — stays off)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
+              {[['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (verifying Wave fields — stays off for now)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
                 var disabled = savingFlags || f[0] === 'allow_payment_push' || f[0] === 'allow_auto_push';
                 return (
                   <label key={f[0]} className="flex items-center gap-2">

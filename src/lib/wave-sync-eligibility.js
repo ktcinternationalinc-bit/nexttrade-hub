@@ -28,19 +28,27 @@ function invoiceEligible(inv) {
   return { eligible: true, reason: 'Hub-created approved invoice, not yet in Wave' };
 }
 
-// Payment push (§4/§8). Wave's public API does NOT reliably support creating money
-// transactions, so payments are flagged UNSUPPORTED here rather than faked.
+// Payment push: invoicePaymentCreateManual records a payment against an existing Wave
+// invoice. Eligibility uses the invoice's wave_invoice_id (carried on the payment row by the
+// sync queue) as the source of truth — never reject solely because the payment's own cached
+// wave_invoice_id is null. paymentAccountId is required by the push but configured per
+// business in settings, so its absence is a "needs setup" blocker, not ineligibility.
 function paymentEligible(pay, invoice, customer) {
   if (!pay) { return { eligible: false, reason: 'no record' }; }
   if (pay.wave_payment_id) { return { eligible: false, reason: 'already in Wave (has wave_payment_id)' }; }
+  if (pay.voided === true) { return { eligible: false, reason: 'payment is voided/reversed' }; }
   if (pay.sync_status !== 'pending_wave_sync') { return { eligible: false, reason: 'not queued (sync_status ' + (pay.sync_status || 'none') + ')' }; }
-  if (!invoice || !invoice.wave_invoice_id) { return { eligible: false, reason: 'invoice is not in Wave yet (no wave_invoice_id)' }; }
-  if (!customer || !customer.wave_customer_id) { return { eligible: false, reason: 'customer is not in Wave yet (no wave_customer_id)' }; }
+  // Source of truth: invoice's wave id, falling back to the payment row's carried copy.
+  var invWaveId = (invoice && invoice.wave_invoice_id) || pay.wave_invoice_id || null;
+  var custWaveId = (customer && customer.wave_customer_id) || pay.wave_customer_id || null;
+  if (!invWaveId) { return { eligible: false, reason: 'invoice is not in Wave yet (no wave_invoice_id)' }; }
+  if (!custWaveId) { return { eligible: false, reason: 'customer is not in Wave yet (no wave_customer_id)' }; }
   if (!(Number(pay.amount) > 0)) { return { eligible: false, reason: 'amount must be positive' }; }
   if (!pay.payment_date) { return { eligible: false, reason: 'payment date required' }; }
   if (pay.source !== 'plaid_match' && pay.source !== 'manual' && pay.source !== 'manual_payment') { return { eligible: false, reason: 'source must be a Hub match or manual payment' }; }
-  // Eligible by Hub rules, but Wave can't accept it:
-  return { eligible: false, reason: 'Wave public API does not support creating payments — unsupported', unsupported: true };
+  // Eligible by Hub rules. Actual Wave push readiness (paymentAccountId configured + field
+  // schema verified) is enforced in the push route, which returns a truthful blocker.
+  return { eligible: true, reason: 'Ready for payment push (invoicePaymentCreateManual)', invWaveId: invWaveId, custWaveId: custWaveId };
 }
 
 function eligibilityFor(action, record, related) {
@@ -73,7 +81,7 @@ function dryRunRecord(opts) {
   var wouldDo;
   if (opts.action === 'customer') { wouldDo = 'Create customer: ' + (opts.record.company_name || opts.record.name); }
   else if (opts.action === 'invoice') { wouldDo = 'Create invoice ' + opts.record.invoice_number + ' (total ' + opts.record.total_amount + ')'; }
-  else { wouldDo = 'Apply payment'; }
+  else { wouldDo = 'Record payment ' + (opts.record.amount != null ? opts.record.amount : '') + ' on invoice ' + (opts.record._invoice_number || opts.record.wave_invoice_id || '?') + ' (invoicePaymentCreateManual)'; }
   var tgtReg = null;
   var rlist = opts.registry || [];
   var ri;

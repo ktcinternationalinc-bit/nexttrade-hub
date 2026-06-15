@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FF',
+    date: '2026-06-08',
+    label: 'Cleaned debug text; payment sync uses invoice Wave ID; truthful payment status',
+    items: [
+      '**\ud83e\uddf9 Removed leftover diagnostic text** that was showing in the invoice list and edit screen.',
+      '**\u2705 A payment on an already-synced invoice is now correctly recognized.** The Wave Sync Center uses the invoice\u2019s Wave ID, so payments for invoices like #6 no longer say \u201cinvoice not in Wave.\u201d',
+      '**\ud83d\udce2 Replaced the misleading \u201cWave does not support payments\u201d message** with the truth: invoice payments are supported and being finalized; until then a queued payment is marked \u201center in Wave manually.\u201d',
+      { superAdminOnly: true, text: 'v55.83-FF. HAS SQL (backfill below). (1) Removed two DBG <span> blocks (raw=/norm=/edit=...) from AccountingInvoicesTab list Actions + edit modal. (2) PAYMENT ELIGIBILITY: wave-sync-eligibility.paymentEligible took invoice/customer args but WaveSyncCenter passes the merged payment row; rewrote to use invWaveId = invoice.wave_invoice_id || pay.wave_invoice_id (queue already carries it) and custWaveId similarly \u2014 NEVER reject solely on a null payment-row wave_invoice_id. Now returns eligible:true (Ready for payment push) instead of the old unsupported verdict; dry-run shows "Record payment X on invoice N (invoicePaymentCreateManual)". (3) KILLED the unsupported stub: /api/wave/push-payment no longer returns "Wave does not support creating payments"; returns truthful schema-pending blocker, sets row sync_status=manual_wave_action_required + sync_error, logs action=payment_schema_pending (200 not 422). Settings toggle relabeled "verifying Wave fields". (Historical WhatsNew note about the old message left as-is.) SQL: backfill payment rows wave_invoice_id from their invoice + wave_customer_id from the invoice customer. After SQL+deploy: invoice 6 payment dry run = ready (or blocked only if paymentAccountId not configured), no "invoice not in Wave". Real invoicePaymentCreateManual still pending field probe; queued payments are the Needs-Wave-Entry list.' },
+    ],
+  },
+  {
     version: 'v55.83-FE',
     date: '2026-06-08',
     label: 'Root-cause fix: payment columns + matched payments now show in Wave Sync',

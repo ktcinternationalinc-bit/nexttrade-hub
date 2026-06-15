@@ -452,7 +452,7 @@ export default function AccountingInvoicesTab(props) {
                     {isInvoice() && invActions(row).canSubmit && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
                     {isInvoice() && invActions(row).canApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
                     {isInvoice() && invActions(row).canReopen && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
-                    {isSuperAdmin && isInvoice() && <span className="text-[9px] text-amber-300 font-mono w-full mt-0.5">DBG raw={String(row.approval_status)} norm={getInvStatus(row)} edit={String(mayEdit)} appr={String(mayApprove)} sub={String(invActions(row).canSubmit)} app={String(invActions(row).canApprove)} lock={String(locked(row))}</span>}
+                    {null}
                     {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
                   </div>
                 </div>
@@ -568,7 +568,7 @@ export default function AccountingInvoicesTab(props) {
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
               {isInvoice() && editing !== 'new' && invActions(editing).canSubmit && <button onClick={function () { var row = editing; setApproval(row, 'internal_review'); }} disabled={busy} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Submit for Review</button>}
               {isInvoice() && editing !== 'new' && invActions(editing).canApprove && <button onClick={function () { var row = editing; setApproval(row, 'approved'); }} disabled={busy} className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-xs font-bold">Approve</button>}
-              {isSuperAdmin && isInvoice() && editing !== 'new' && <span className="text-[10px] text-amber-300 font-mono w-full">DBG raw={String(editing.approval_status)} norm={getInvStatus(editing)} edit={String(mayEdit)} appr={String(mayApprove)} locked={String(locked(editing))} sub={String(invActions(editing).canSubmit)} app={String(invActions(editing).canApprove)}</span>}
+              {null}
             </div>
           )}
           {mayEdit && editing !== 'new' && (function () {
