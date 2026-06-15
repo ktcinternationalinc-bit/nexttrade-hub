@@ -37,7 +37,11 @@ function paymentEligible(pay, invoice, customer) {
   if (!pay) { return { eligible: false, reason: 'no record' }; }
   if (pay.wave_payment_id) { return { eligible: false, reason: 'already in Wave (has wave_payment_id)' }; }
   if (pay.voided === true) { return { eligible: false, reason: 'payment is voided/reversed' }; }
-  if (pay.sync_status !== 'pending_wave_sync') { return { eligible: false, reason: 'not queued (sync_status ' + (pay.sync_status || 'none') + ')' }; }
+  // Queueable statuses mirror the Wave Sync queue's ACTIONABLE set: a fresh payment plus any
+  // retryable state (a prior push that FAILED is retryable, not permanently skipped). 'syncing'
+  // is excluded (in flight); synced/voided are already excluded by the checks above.
+  var QUEUEABLE_STATUS = { 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1 };
+  if (!QUEUEABLE_STATUS[pay.sync_status]) { return { eligible: false, reason: 'not queued (sync_status ' + (pay.sync_status || 'none') + ')' }; }
   // Source of truth: invoice's wave id, falling back to the payment row's carried copy.
   var invWaveId = (invoice && invoice.wave_invoice_id) || pay.wave_invoice_id || null;
   var custWaveId = (customer && customer.wave_customer_id) || pay.wave_customer_id || null;

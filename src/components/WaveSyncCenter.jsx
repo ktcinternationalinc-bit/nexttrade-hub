@@ -36,6 +36,58 @@ function waveErrText(rp) {
   } catch (e) { return ''; }
 }
 
+// Turns a wave_sync_log row into a human, accounting-readable label + detail line. Reads the
+// rich context saved from v55.83-FU forward (nested response_payload, or flat request_payload);
+// old rows lack it, so it falls back to entity/action and never renders blank.
+function syncLogParts(l) {
+  var rp = (l && l.response_payload) || {};
+  var rq = (l && l.request_payload) || {};
+  var pmt = rp.payment || {};
+  var inv = rp.invoice || {};
+  var cust = rp.customer || {};
+  var wv = rp.wave || {};
+  var customerName = cust.customer_name || rq.customer_name || null;
+  var invoiceNumber = inv.invoice_number || rq.invoice_number || null;
+  var amount = (pmt.amount != null) ? pmt.amount : ((rq.amount != null) ? rq.amount : null);
+  var paymentDate = pmt.payment_date || rq.payment_date || null;
+  var wavePaymentId = wv.wave_payment_id || rp.wave_payment_id || null;
+  var bankTxn = pmt.bank_transaction_id || rq.bank_transaction_id || null;
+  var matchId = pmt.payment_match_id || rq.payment_match_id || null;
+  var acctName = wv.payment_account_name || rq.payment_account_name || null;
+  var et = (l && l.entity_type) || 'record';
+  var hasCtx = !!(customerName || invoiceNumber || amount != null);
+
+  var primary;
+  if (et === 'payment' && hasCtx) {
+    var pb = ['Payment'];
+    if (customerName) { pb.push(customerName); }
+    if (invoiceNumber) { pb.push('Invoice ' + invoiceNumber); }
+    if (amount != null) { pb.push(Number(amount).toLocaleString()); }
+    if (paymentDate) { pb.push(paymentDate); }
+    primary = pb.join(' · ');
+  } else if (et === 'invoice' && hasCtx) {
+    var ib = ['Invoice'];
+    if (invoiceNumber) { ib.push(invoiceNumber); }
+    if (customerName) { ib.push(customerName); }
+    if (amount != null) { ib.push(Number(amount).toLocaleString()); }
+    primary = ib.join(' · ');
+  } else if (et === 'customer' && customerName) {
+    primary = 'Customer · ' + customerName;
+  } else {
+    // Old row / no context — fall back so it is never just "payment · push · error".
+    primary = (et.charAt(0).toUpperCase() + et.slice(1)) + ' · ' + ((l && l.action) || '') + ((l && l.hub_record_id) ? (' · ' + String(l.hub_record_id).substring(0, 8)) : '');
+  }
+
+  var detail = [];
+  if (et === 'payment') {
+    if (wavePaymentId) { detail.push('Wave payment: ' + wavePaymentId); }
+    if (bankTxn) { detail.push('Bank txn: ' + String(bankTxn).substring(0, 8)); }
+    if (matchId) { detail.push('Match: ' + String(matchId).substring(0, 8)); }
+    if (acctName) { detail.push('Account: ' + acctName); }
+  }
+  return { primary: primary, detail: detail.join(' · ') };
+}
+
 export default function WaveSyncCenter(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var userProfile = props.userProfile || null;
@@ -353,7 +405,7 @@ export default function WaveSyncCenter(props) {
         var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : '/api/wave/push-payment');
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
-          .then(function (d) { if (d && d.success) { done++; } else { failed++; } })
+          .then(function (d) { if (d && (d.success || d.ok)) { done++; } else { failed++; } })
           .catch(function () { failed++; });
       });
     });
@@ -445,7 +497,14 @@ export default function WaveSyncCenter(props) {
         <div className="border border-slate-700 rounded overflow-hidden">
           {syncLog.filter(function (l) { return l.success === false; }).length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No failures logged for this silo.</div> :
             syncLog.filter(function (l) { return l.success === false; }).map(function (l) {
-              return <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs"><b>{l.entity_type}</b> · {l.action} · <span className="text-red-300">{l.error_message}</span></div>;
+              var fp = syncLogParts(l);
+              return (
+                <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
+                  <div className="font-bold text-slate-100">{fp.primary}</div>
+                  {fp.detail ? <div className="text-[10px] text-slate-400">{fp.detail}</div> : null}
+                  <div className="text-[10px] text-red-300 mt-0.5">{l.error_message || 'failed'}</div>
+                </div>
+              );
             })}
         </div>
       )}
@@ -456,14 +515,16 @@ export default function WaveSyncCenter(props) {
             syncLog.map(function (l, idx) {
               var mk = (l.response_payload && l.response_payload.api_build_marker) || (l.request_payload && l.request_payload.api_build_marker) || null;
               var rt = (l.request_payload && l.request_payload.route) || (l.response_payload && l.response_payload.route) || null;
+              var parts = syncLogParts(l);
               return (
                 <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
-                  <div className="flex gap-2 flex-wrap items-center">
+                  <div className="font-bold text-slate-100">{parts.primary}</div>
+                  {parts.detail ? <div className="text-[10px] text-slate-400">{parts.detail}</div> : null}
+                  <div className="flex gap-2 flex-wrap items-center mt-0.5">
                     {idx === 0 && <span className="text-[9px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">NEWEST</span>}
                     <span className="text-[10px] text-slate-500 font-mono">#{syncLog.length - idx}</span>
                     <span className="text-[10px] text-slate-400 font-mono">{l.attempted_at ? String(l.attempted_at).replace('T', ' ').substring(0, 19) : ''}</span>
-                    <span className="font-bold">{l.entity_type}</span>
-                    <span>{l.action}{l.dry_run ? ' (dry run)' : ''}</span>
+                    <span className="text-[10px] text-slate-500">{l.entity_type} · {l.action}{l.dry_run ? ' (dry run)' : ''}</span>
                     <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
                     {mk && <span className="text-[9px] text-cyan-300 font-mono">{mk}</span>}
                     {rt && <span className="text-[9px] text-violet-300 font-mono">{rt}</span>}

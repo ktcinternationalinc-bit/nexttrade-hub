@@ -14,7 +14,8 @@ import { assertPermission } from '../../../../lib/server-permissions';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
-var API_BUILD_MARKER = 'v55.83-FL-push-payment-real';
+var API_BUILD_MARKER = 'v55.83-FU-push-payment-real';
+var API_ROUTE = '/api/wave/push-payment';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -22,6 +23,28 @@ function admin() {
 
 function gql(token, query, variables) {
   return fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: variables || {} }) }).then(function (r) { return r.json(); });
+}
+
+// Builds the accounting-grade sync-log payload (who / which invoice / which payment / Wave ids),
+// so the Sync Log reads like an accounting record, not a developer dump. extra carries the
+// result-specific fields: wave_payment_id, error, wave_errors, input_errors, sync_status_after.
+function buildLogPayload(ctx, extra) {
+  var p = {
+    api_build_marker: ctx.api_build_marker,
+    route: ctx.route,
+    payment: { hub_payment_id: ctx.hub_payment_id, amount: ctx.amount, payment_date: ctx.payment_date, source: ctx.source, bank_transaction_id: ctx.bank_transaction_id, payment_match_id: ctx.payment_match_id },
+    invoice: { accounting_invoice_id: ctx.accounting_invoice_id, invoice_number: ctx.invoice_number, wave_invoice_id: ctx.wave_invoice_id },
+    customer: { accounting_customer_id: ctx.accounting_customer_id, customer_name: ctx.customer_name, wave_customer_id: ctx.wave_customer_id },
+    wave: { wave_payment_id: (extra && extra.wave_payment_id) || null, payment_account_id: ctx.payment_account_id, payment_account_name: ctx.payment_account_name },
+    sync_status_before: ctx.sync_status_before
+  };
+  if (extra) {
+    if (extra.sync_status_after != null) { p.sync_status_after = extra.sync_status_after; }
+    if (extra.error != null) { p.error = extra.error; }
+    if (extra.wave_errors != null) { p.wave_errors = extra.wave_errors; }
+    if (extra.input_errors != null) { p.input_errors = extra.input_errors; }
+  }
+  return p;
 }
 
 export async function POST(req) {
@@ -86,6 +109,40 @@ export async function POST(req) {
     var paymentMethod = body.payment_method || 'OTHER';
     var exchangeRate = body.exchange_rate != null ? body.exchange_rate : 1;
 
+    // Accounting-grade context for the sync log: resolve invoice number + customer identity.
+    var invoiceNumber = null;
+    var custWaveId = pay.wave_customer_id || null;
+    if (pay.accounting_invoice_id) {
+      var invMeta = await db.from('accounting_invoices').select('invoice_number, wave_customer_id').eq('id', pay.accounting_invoice_id);
+      var invMetaRow = (invMeta && invMeta.data && invMeta.data.length) ? invMeta.data[0] : null;
+      if (invMetaRow) { invoiceNumber = invMetaRow.invoice_number || null; if (!custWaveId) { custWaveId = invMetaRow.wave_customer_id || null; } }
+    }
+    var customerName = null;
+    if (pay.accounting_customer_id) {
+      var custRes = await db.from('accounting_customers').select('company_name, name, wave_customer_id').eq('id', pay.accounting_customer_id);
+      var custRow = (custRes && custRes.data && custRes.data.length) ? custRes.data[0] : null;
+      if (custRow) { customerName = custRow.company_name || custRow.name || null; if (!custWaveId) { custWaveId = custRow.wave_customer_id || null; } }
+    }
+    var logCtx = {
+      api_build_marker: API_BUILD_MARKER,
+      route: API_ROUTE,
+      hub_payment_id: hubId,
+      accounting_invoice_id: pay.accounting_invoice_id || null,
+      invoice_number: invoiceNumber,
+      wave_invoice_id: invWaveId,
+      accounting_customer_id: pay.accounting_customer_id || null,
+      customer_name: customerName,
+      wave_customer_id: custWaveId,
+      amount: amount,
+      payment_date: paymentDate,
+      source: pay.source || null,
+      bank_transaction_id: pay.bank_transaction_id || null,
+      payment_match_id: pay.payment_match_id || null,
+      payment_account_id: paymentAccountId,
+      payment_account_name: settings ? (settings.default_payment_account_name || null) : null,
+      sync_status_before: pay.sync_status || null
+    };
+
     var inputObj = {
       invoiceId: invWaveId,
       paymentAccountId: paymentAccountId,
@@ -122,7 +179,7 @@ export async function POST(req) {
       for (ei = 0; ei < resp.errors.length; ei++) { msgs.push(resp.errors[ei].message); }
       var joined = msgs.join(' | ');
       try { await db.from('accounting_invoice_payments').update({ sync_status: 'sync_failed', sync_error: joined }).eq('id', hubId); } catch (e1) {}
-      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: joined, attempted_by: by }); } catch (e2) {}
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: joined, request_payload: logCtx, response_payload: buildLogPayload(logCtx, { error: joined, wave_errors: resp.errors, sync_status_after: 'sync_failed' }), attempted_by: by }); } catch (e2) {}
       return NextResponse.json({ ok: false, error: joined, wave_errors: resp.errors, api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
@@ -136,7 +193,7 @@ export async function POST(req) {
       for (ii = 0; ii < inputErrors.length; ii++) { ieMsgs.push(inputErrors[ii].message + (inputErrors[ii].path ? (' [' + inputErrors[ii].path + ']') : '')); }
       var ieJoined = ieMsgs.length ? ieMsgs.join(' | ') : 'Wave did not confirm the payment (didSucceed false).';
       try { await db.from('accounting_invoice_payments').update({ sync_status: 'sync_failed', sync_error: ieJoined }).eq('id', hubId); } catch (e3) {}
-      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: ieJoined, attempted_by: by }); } catch (e4) {}
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: ieJoined, request_payload: logCtx, response_payload: buildLogPayload(logCtx, { error: ieJoined, input_errors: inputErrors, sync_status_after: 'sync_failed' }), attempted_by: by }); } catch (e4) {}
       return NextResponse.json({ ok: false, error: ieJoined, input_errors: inputErrors, api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
@@ -145,6 +202,7 @@ export async function POST(req) {
     if (!wavePaymentId) {
       // Succeeded but no id returned — do NOT fabricate one; flag for review.
       try { await db.from('accounting_invoice_payments').update({ sync_status: 'sync_failed', sync_error: 'Wave reported success but returned no payment id.' }).eq('id', hubId); } catch (e5) {}
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Wave reported success but returned no payment id.', request_payload: logCtx, response_payload: buildLogPayload(logCtx, { error: 'Wave reported success but returned no payment id.', sync_status_after: 'sync_failed' }), attempted_by: by }); } catch (e5b) {}
       return NextResponse.json({ ok: false, error: 'Wave reported success but returned no payment id.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
@@ -176,7 +234,7 @@ export async function POST(req) {
       } catch (eRecomp) {}
     }
     try {
-      await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: true, response_payload: { wave_payment_id: wavePaymentId, amount: amount }, attempted_by: by });
+      await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'push', dry_run: false, success: true, request_payload: logCtx, response_payload: buildLogPayload(logCtx, { wave_payment_id: wavePaymentId, sync_status_after: 'synced' }), attempted_by: by });
     } catch (e7) {}
 
     return NextResponse.json({ ok: true, synced: true, wave_payment_id: wavePaymentId, api_build_marker: API_BUILD_MARKER });

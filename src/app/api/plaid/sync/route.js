@@ -20,6 +20,10 @@ function callTransactions(base, connectionId, bearer) {
   var url = base + '/api/plaid/transactions';
   var headers = { 'Content-Type': 'application/json' };
   if (bearer) { headers['Authorization'] = 'Bearer ' + bearer; }
+  // Vercel Deployment Protection gates our own URL behind a 401 HTML login page for server-to-
+  // server calls. If a Protection-Bypass-for-Automation secret is configured, forward it so the
+  // cron's internal call is allowed through instead of bouncing off the auth wall.
+  if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) { headers['x-vercel-protection-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET; }
   return fetch(url, {
     method: 'POST',
     headers: headers,

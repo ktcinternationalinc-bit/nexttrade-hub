@@ -19,6 +19,9 @@ function callImport(base, routePath, businessId) {
   // The import routes now require authorization. The scheduled pull authenticates with the
   // CRON_SECRET, so forward it as a bearer token, else the protected imports would 403.
   if (process.env.CRON_SECRET) { headers['Authorization'] = 'Bearer ' + process.env.CRON_SECRET; }
+  // Vercel Deployment Protection returns a 401 HTML login page for internal server-to-server
+  // calls. Forward the automation-bypass secret if configured so the import call gets through.
+  if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) { headers['x-vercel-protection-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET; }
   return fetch(base + routePath, {
     method: 'POST',
     headers: headers,
@@ -44,9 +47,14 @@ async function runPull(request) {
     return Response.json({ ok: false, error: 'No Wave token configured (WAVE_ACCESS_TOKEN).' }, { status: 400 });
   }
 
-  // Derive the deployment origin so we can call our own import routes.
+  // Derive the origin so we can call our own import routes. Prefer a STABLE PUBLIC domain
+  // (NEXT_PUBLIC_APP_URL/SITE_URL). Falling back to the request host means the per-deployment
+  // URL, which Vercel Deployment Protection gates behind a 401 login page — the usual cause of
+  // "One or both imports reported an error" on the scheduled pull.
   var base;
-  try { var u = new URL(request.url); base = u.protocol + '//' + u.host; } catch (eUrl) { base = ''; }
+  if (process.env.NEXT_PUBLIC_APP_URL) { base = String(process.env.NEXT_PUBLIC_APP_URL).replace(/\/+$/, ''); }
+  else if (process.env.NEXT_PUBLIC_SITE_URL) { base = String(process.env.NEXT_PUBLIC_SITE_URL).replace(/\/+$/, ''); }
+  else { try { var u = new URL(request.url); base = u.protocol + '//' + u.host; } catch (eUrl) { base = ''; } }
 
   var regRes = await db.from('wave_business_registry').select('wave_business_id, label, is_production');
   var allBusinesses = (regRes && regRes.data) || [];
