@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EY',
+    date: '2026-06-08',
+    label: 'Cleaner views: Customer AR History by business, Bank by account + date',
+    items: [
+      '**\ud83d\udd0d Customer AR History now shows only the customers, payments, and proformas for the Wave business you have selected** \u2014 not a mix across businesses.',
+      '**\ud83c\udfe6 The Bank screen now lets you filter the transaction list by a specific bank account and by date (last 7/30/60/90 days or all),** so you can focus on one account and time window.',
+      { superAdminOnly: true, text: 'v55.83-EY. No SQL. Visibility fixes before payment sync (clean separation first). BUG 1 AccountingCustomerHistory: only invoices were scopeIfRegistered; customers/payments/proformas were set raw -> cross-silo leak. Now all four scoped via scopeIfRegistered(rows, getActiveWaveBusiness(), registry, true). Deps stay [] because AccountingTab remounts via key=acct-arh|+waveKey (WaveBusinessFilter onChange->setWaveKey) on silo switch. BUG 2 BankTab: transaction list filtered only by matched/unmatched view; the 7/30/60/90 selector controlled the PLAID PULL only, not display, and there was no per-account filter. Added acctFilter (all|plaid_account_id, options from plaidAccts w/ name+mask) and viewRange (all|7|30|60|90 by t.date) applied to filtered; relabeled the pull selector "Sync pull:" to disambiguate. Counts, cards (in/out), and tab badges ALL derive from scopedTxns (account+range, excluding matched/unmatched view) so the whole screen stays consistent; All-tab badge = scopedTxns.length. SYNC PULL selector visually separated (amber ⟳ box) from VIEW filters (slate eye box). NEXT (unchanged): run schema-check (bearer), paste JSON -> build Priority-1 payment sync (invoicePaymentCreateManual push w/ per-business paymentAccountId + Wave->Hub payments pull, no double-count wave_imported_paid). KANDIL guard/prod lock intact.' },
+    ],
+  },
+  {
+    version: 'v55.83-EX',
+    date: '2026-06-08',
+    label: 'Wave payment sync — groundwork (read-only schema check)',
+    items: [
+      '**\ud83c\udf89 Invoice push to Wave is working end to end.** Next up is the payment + category loop. This build adds a safe, read-only check of what Wave actually supports for recording payments, so the real payment sync is built on confirmed facts.',
+      { superAdminOnly: true, text: 'v55.83-EX. No SQL. Invoice push CONFIRMED WORKING (customer->product(default via wave_business_settings)->invoiceCreate w/ productId->wave_invoice_id saved). Starting Priority-1 payment sync per corrected GPT plan: use invoicePaymentCreateManual (records payment against an invoice, moves balance) NOT moneyTransactionCreate (general BETA txn, needs isClassicAccounting:false, not invoice-linked). Before building, added PROTECTED READ-ONLY introspection route /api/wave/schema-check (GET; requires CRON_SECRET bearer OR super_admin user_id via POST BODY (never URL, to keep id out of logs); GET=bearer-only; no-store; fixed introspection only, no arbitrary GraphQL; token never echoed; delete after payment build): lists payment-related mutation names, introspects InvoicePaymentCreateManualInput + MoneyTransactionCreateInput inputFields (real names/types), confirms Invoice.payments field exists for Wave->Hub pull. Existing pieces verified present: push-payment (currently a stub that marks unsupported + sets sync_failed), sync-categories (pulls Chart of Accounts -> wave_categories, read-only), wave-category-guard.js, accounting_invoice_payments (used across Bank Review/ledgers). PLAN: P1 invoicePaymentCreateManual push + Wave->Hub payments pull (upsert by wave_payment_id, no double-count wave_imported_paid, recompute balances); P2 categories from wave_categories (store wave_account_id+name, never blank-overwrite); P3 bank match suggestions+rules w/ confirmation. NEXT: deploy EX, visit /api/wave/schema-check, paste result -> I build push-payment on the real field names. Payment-push Settings toggle still OFF until real impl. KANDIL guard, prod lock, contaminated invoices untouched.' },
+    ],
+  },
+  {
     version: 'v55.83-EW',
     date: '2026-06-08',
     label: 'Default product save now confirmed (no more silent failures)',

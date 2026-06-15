@@ -43,7 +43,9 @@ export default function AccountingCustomerHistory(props) {
       safe(fetchAllRows('bank_transactions', 'id, posted_date, name, amount_abs, direction')),
       safe(fetchAllRows('wave_business_registry', '*'))
     ]).then(function (res) {
-      setCustomers(res[0]); setInvoices(scopeIfRegistered(res[1] || [], getActiveWaveBusiness(), res[5] || [], true)); setPayments(res[2]); setProformas(res[3]);
+      var reg = res[5] || [];
+      var act = getActiveWaveBusiness();
+      setCustomers(scopeIfRegistered(res[0] || [], act, reg, true)); setInvoices(scopeIfRegistered(res[1] || [], act, reg, true)); setPayments(scopeIfRegistered(res[2] || [], act, reg, true)); setProformas(scopeIfRegistered(res[3] || [], act, reg, true));
       var bt = {}; (res[4] || []).forEach(function (t) { bt[t.id] = t; }); setBankTxns(bt);
     }).catch(function (e) { console.error('[ar] load', e); toast.error('Failed to load AR history'); })
       .finally(function () { setLoading(false); });

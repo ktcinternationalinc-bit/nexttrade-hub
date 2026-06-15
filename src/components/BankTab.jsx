@@ -16,6 +16,8 @@ export default function BankTab({ user, supabase }) {
   const [matchingTxn, setMatchingTxn] = useState(null);
   const [searchInv, setSearchInv] = useState('');
   const [dateRange, setDateRange] = useState('30');
+  const [acctFilter, setAcctFilter] = useState('all');
+  const [viewRange, setViewRange] = useState('all');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [bizRegistry, setBizRegistry] = useState([]);
@@ -205,17 +207,33 @@ export default function BankTab({ user, supabase }) {
     } catch (e) { setError(e.message); }
   };
 
-  // Filter transactions
-  const filtered = transactions.filter(t => {
+  // Filter transactions: matched/unmatched view + selected account + display date range.
+  const rangeCutoff = (function () {
+    if (viewRange === 'all') return null;
+    const d = new Date();
+    d.setDate(d.getDate() - (parseInt(viewRange) || 0));
+    return d;
+  })();
+  // Account + display-range scope (NOT matched/unmatched) — counts, cards, and tab badges
+  // all derive from this so the whole screen reflects the selected account and date window.
+  const scopedTxns = transactions.filter(t => {
+    if (acctFilter !== 'all' && t.account_id !== acctFilter) return false;
+    if (rangeCutoff) {
+      const td = t.date ? new Date(t.date) : null;
+      if (!td || td < rangeCutoff) return false;
+    }
+    return true;
+  });
+  const filtered = scopedTxns.filter(t => {
     if (view === 'matched') return t.matched_invoice_id;
     if (view === 'unmatched') return !t.matched_invoice_id;
     return true;
   });
 
-  const matchedCount = transactions.filter(t => t.matched_invoice_id).length;
-  const unmatchedCount = transactions.filter(t => !t.matched_invoice_id).length;
-  const totalIn = transactions.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
-  const totalOut = transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const matchedCount = scopedTxns.filter(t => t.matched_invoice_id).length;
+  const unmatchedCount = scopedTxns.filter(t => !t.matched_invoice_id).length;
+  const totalIn = scopedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
+  const totalOut = scopedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
 
   // Invoice search for matching modal
   const matchableInvoices = invoices.filter(inv => {
@@ -420,19 +438,39 @@ export default function BankTab({ user, supabase }) {
         </div>
       )}
 
-      {/* Date Range + Filter Tabs */}
+      {/* Pull range (changes Plaid import) vs display filters (change only what you see) */}
       {transactions.length > 0 && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <select value={dateRange} onChange={e => setDateRange(e.target.value)} className="text-xs border rounded-lg px-2 py-1.5">
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="60">60 days</option>
-            <option value="90">90 days</option>
-          </select>
+          <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+            <label className="text-[10px] text-amber-800 font-bold">⟳ SYNC PULL</label>
+            <select value={dateRange} onChange={e => setDateRange(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-amber-900 font-semibold" title="How far back the NEXT Plaid sync will import. Does not change what is shown below.">
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="60">60 days</option>
+              <option value="90">90 days</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+            <label className="text-[10px] text-slate-500 font-bold">👁 VIEW</label>
+            <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-slate-700" title="Show only transactions for one bank account">
+              <option value="all">All accounts</option>
+              {plaidAccts.map(function (a) {
+                return <option key={a.plaid_account_id} value={a.plaid_account_id}>{(a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')}</option>;
+              })}
+            </select>
+            <span className="text-slate-300">·</span>
+            <select value={viewRange} onChange={e => setViewRange(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-slate-700" title="Filter the visible list by date (does not re-sync)">
+              <option value="all">All dates</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="60">Last 60 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
           {['all', 'unmatched', 'matched'].map(v => (
             <button key={v} onClick={() => setView(v)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${view === v ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              {v === 'all' ? `All (${transactions.length})` : v === 'unmatched' ? `Unmatched (${unmatchedCount})` : `Matched (${matchedCount})`}
+              {v === 'all' ? `All (${scopedTxns.length})` : v === 'unmatched' ? `Unmatched (${unmatchedCount})` : `Matched (${matchedCount})`}
             </button>
           ))}
         </div>
