@@ -18,7 +18,10 @@ function admin() {
 
 function saveDefault(db, bid, pid, pname, source) {
   var row = { wave_business_id: bid, default_invoice_product_id: pid, default_invoice_product_name: pname, source: source, updated_at: new Date().toISOString() };
-  return db.from('wave_business_settings').upsert(row, { onConflict: 'wave_business_id' }).then(function () { return source; }).catch(function () { return source; });
+  return db.from('wave_business_settings').upsert(row, { onConflict: 'wave_business_id' }).select().then(function (r) {
+    if (r && r.error) { return { ok: false, error: r.error.message || String(r.error) }; }
+    return { ok: true, row: (r && r.data && r.data.length) ? r.data[0] : row };
+  }).catch(function (e) { return { ok: false, error: (e && e.message) || String(e) }; });
 }
 
 export async function GET() {
@@ -61,7 +64,8 @@ export async function POST(req) {
         if (!match) { return NextResponse.json({ error: 'That product does not belong to the selected Wave business. Refresh the product list and try again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
         if (match.isArchived === true) { return NextResponse.json({ error: 'That product is archived in Wave. Pick an active, sold product.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
         var savedSel = await saveDefault(db, bid, match.id, match.name, 'manual_selected');
-        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: match.id, default_invoice_product_name: match.name, source: savedSel });
+        if (!savedSel.ok) { return NextResponse.json({ error: 'Could not save the default product to the database: ' + savedSel.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: false, db_error: savedSel.error }, { status: 500 }); }
+        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: match.id, default_invoice_product_name: match.name, source: 'manual_selected', saved_row: savedSel.row });
       }
       var fq = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:100){ edges{ node{ id name isSold isArchived } } } } }';
       var fr = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: fq, variables: { bid: bid } }) });
@@ -72,7 +76,8 @@ export async function POST(req) {
       if (fedges) { var fi; for (fi = 0; fi < fedges.length; fi++) { if (fedges[fi].node && fedges[fi].node.name === 'NextTrade Hub Item' && fedges[fi].node.isArchived !== true) { foundId = fedges[fi].node.id; foundName = fedges[fi].node.name; } } }
       if (!foundId) { return NextResponse.json({ error: 'No product named exactly "NextTrade Hub Item" found in Wave. Create it in Wave (marked as sold, with an income account) or use Create, then try again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, found: false, wave: fd }, { status: 404 }); }
       var savedF = await saveDefault(db, bid, foundId, foundName, 'found_exact_name');
-      return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: foundId, default_invoice_product_name: foundName, mode: savedF });
+      if (!savedF.ok) { return NextResponse.json({ error: 'Could not save the default product to the database: ' + savedF.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: false, db_error: savedF.error }, { status: 500 }); }
+      return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: foundId, default_invoice_product_name: foundName, source: 'found_exact_name', saved_row: savedF.row });
     }
 
     // CREATE: attempt productCreate HERE (isolated from invoice push), report exact Wave error
@@ -90,7 +95,8 @@ export async function POST(req) {
       var pc = pcData && pcData.data && pcData.data.productCreate;
       if (pc && pc.didSucceed && pc.product && pc.product.id) {
         var savedC = await saveDefault(db, bid, pc.product.id, pc.product.name || 'NextTrade Hub Item', 'created');
-        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: pc.product.id, mode: savedC });
+        if (!savedC.ok) { return NextResponse.json({ error: 'Product created in Wave but could not save default to database: ' + savedC.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: false, db_error: savedC.error, default_invoice_product_id: pc.product.id }, { status: 500 }); }
+        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: pc.product.id, source: 'created', saved_row: savedC.row });
       }
       return NextResponse.json({ error: 'Wave rejected product creation. See response for the exact reason and accepted fields.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, request: { query: pcMut, variables: pcVars }, response: pcData, accounts: acData }, { status: 502 });
     }

@@ -102,8 +102,10 @@ export async function POST(req) {
     var productId = null;
     var productMode = 'none';
     // 1) configured default product for this business
-    var cfgRes = await db.from('wave_business_settings').select('default_invoice_product_id, default_invoice_product_name').eq('wave_business_id', waveBusinessId);
-    var cfg = (cfgRes && cfgRes.data && cfgRes.data.length) ? cfgRes.data[0] : null;
+    var cfgRes = await db.from('wave_business_settings').select('default_invoice_product_id, default_invoice_product_name, source').eq('wave_business_id', waveBusinessId);
+    var cfgErr = cfgRes && cfgRes.error ? (cfgRes.error.message || String(cfgRes.error)) : null;
+    var cfgRows = (cfgRes && cfgRes.data) || [];
+    var cfg = cfgRows.length ? cfgRows[0] : null;
     if (cfg && cfg.default_invoice_product_id) { productId = cfg.default_invoice_product_id; productMode = 'configured_default'; }
     // 2) else find an existing Wave product named exactly "NextTrade Hub Item"
     if (!productId) {
@@ -121,8 +123,8 @@ export async function POST(req) {
     // 3) no product -> BLOCK locally, do not call Wave, do not create
     if (!productId) {
       var setupMsg = 'Invoice push blocked: no default Wave invoice product configured for this business. Open Wave Sync Center -> Settings -> Default Invoice Product, click Find or Create "NextTrade Hub Item", then retry. (You can also create a product named exactly "NextTrade Hub Item" in Wave, marked as sold with an income account.)';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', wave_business_id: waveBusinessId }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, attempted_by: by });
-      return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED' }, { status: 409 });
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', wave_business_id: waveBusinessId, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr, default_invoice_product_id: cfg ? cfg.default_invoice_product_id : null, default_invoice_product_name: cfg ? cfg.default_invoice_product_name : null, source: cfg ? cfg.source : null } }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, attempted_by: by });
+      return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr } }, { status: 409 });
     }
 
     var lineItems = [];

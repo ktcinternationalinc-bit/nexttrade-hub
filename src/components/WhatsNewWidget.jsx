@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EW',
+    date: '2026-06-08',
+    label: 'Default product save now confirmed (no more silent failures)',
+    items: [
+      '**\u2705 When you pick the default invoice product, the system now confirms it truly saved and tells you the exact reason if it did not.** The Settings banner updates immediately, and invoice push reports exactly what it read.',
+      { superAdminOnly: true, text: 'v55.83-EW. MAYBE SQL: if the table was created before EV (no source column), run ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS source text; (the EW UI tells you if so). ROOT CAUSE of "Saved" yet push still NO_DEFAULT_PRODUCT_CONFIGURED: saveDefault swallowed db errors (.catch returned source regardless), so a failed upsert (e.g. missing source column from pre-EV SQL) reported optimistic success while nothing persisted. FIX: saveDefault now .upsert(...).select() and returns {ok,error,row}; all 3 callers (manual_selected/found_exact_name/created) check saved.ok and return 500 + db_error if the write failed; UI shows the db_error incl the exact ALTER TABLE to run, refreshes loadProdSetup() + clears list on success. push-invoice-v2 NO_DEFAULT_PRODUCT_CONFIGURED response now includes settings_lookup{row_found, settings_table_error, default_invoice_product_id, name, source} so the log proves whether the row exists and what was read. No product-create logic changed; markers/route/sort/guards intact. NEXT: SELECT * FROM wave_business_settings WHERE wave_business_id=KANDIL to confirm row; if missing source col, run ALTER; re-pick Test product via List+Use this; push invoice 6.' },
+    ],
+  },
+  {
     version: 'v55.83-EV',
     date: '2026-06-08',
     label: 'Default invoice product setup — now with tightened security',

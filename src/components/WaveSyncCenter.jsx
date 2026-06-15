@@ -94,7 +94,8 @@ export default function WaveSyncCenter(props) {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.products) { setProdList(d.products); setProdMsg('Found ' + d.products.length + ' products. Pick one to use as the default invoice product.'); }
-        else if (d && d.saved) { setProdMsg('Saved. Default invoice product set to ' + (d.default_invoice_product_name || d.default_invoice_product_id) + '.'); loadProdSetup(); toast.success('Default invoice product configured'); }
+        else if (d && d.saved) { setProdMsg('Saved. Default invoice product set to ' + (d.default_invoice_product_name || d.default_invoice_product_id) + '. (source: ' + (d.source || '') + ')'); loadProdSetup(); setProdList(null); toast.success('Default invoice product configured'); }
+        else if (d && d.db_error) { setProdMsg('Database save FAILED: ' + d.db_error + '\n\nIf this mentions a missing column (e.g. "source"), run:\nALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS source text;'); toast.error('Save failed — see message'); }
         else if (d && d.error) { setProdMsg('Error: ' + d.error + (d.response ? ('\n\nWave response:\n' + JSON.stringify(d.response, null, 2)) : '')); }
         else { setProdMsg(JSON.stringify(d, null, 2)); }
       })
