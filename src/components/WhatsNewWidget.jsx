@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FV',
+    date: '2026-06-15',
+    label: 'Accounting Dashboard numbers now scoped to the active Wave business',
+    items: [
+      '**🔒 The Accounting Dashboard now shows only the selected Wave business.** Its bank numbers — unmatched bank transactions and payments received today — were being counted across ALL businesses regardless of the silo selector. They are now scoped to the active Wave business, so switching businesses changes them correctly.',
+      { superAdminOnly: true, text: 'v55.83-FV. No SQL. Silo-leak fix in AccountingDashboard. It loaded bank_transactions (id,review_status) and accounting_invoice_payments with NO wave_business_id filter, so the unmatched-bank count and paid-today total summed every silo while the header said one business. Fix: bank_transactions select now includes wave_business_id and is scoped via scopeIfRegistered (the same fail-safe helper invoices already used: strict when the active business is registered, includes legacy-null only for production silos). accounting_invoice_payments has no wave_business_id column, so payments are scoped by whether their parent invoice is in the already-scoped invoice set (invIdSet) — this fixes paid-today; per-invoice AR was already effectively scoped because payByInv is only read for scoped invoices. BankReviewTab was already scoping bank_transactions/customers/invoices/categories via scopeIfRegistered (verified — no change). Customers name-map left unscoped (display-only, read only for scoped invoices). Next silo items still open: per-silo default bank account, and broadening explicit scoping to any future bank widgets.' },
+    ],
+  },
+  {
     version: 'v55.83-FU',
     date: '2026-06-15',
     label: 'Payment push now reports success correctly; Dry Run previews retryable payments',

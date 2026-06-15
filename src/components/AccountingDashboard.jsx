@@ -48,15 +48,21 @@ export default function AccountingDashboard(props) {
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status').catch(function () { return { data: [] }; }),
-      supabase.from('bank_transactions').select('id,review_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('bank_transactions').select('id,review_status,wave_business_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(12).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
-      var reg = (r[5] && r[5].data) || []; var inv = scopeIfRegistered((r[0] && r[0].data) || [], getActiveWaveBusiness(), reg, true);
+      var reg = (r[5] && r[5].data) || []; var activeBiz = getActiveWaveBusiness(); var inv = scopeIfRegistered((r[0] && r[0].data) || [], activeBiz, reg, true);
       var custs = (r[1] && r[1].data) || [];
-      var pays = (r[2] && r[2].data) || [];
-      var txns = (r[3] && r[3].data) || [];
+      // SILO SCOPING (v55.83-FV): bank transactions and payments must be scoped to the ACTIVE
+      // Wave business, never summed across all silos. bank_transactions carries wave_business_id
+      // (set on ingest/assignment), so it scopes directly via the same fail-safe helper as
+      // invoices. accounting_invoice_payments has NO wave_business_id column, so a payment is
+      // scoped by whether its parent invoice belongs to this silo (invoices are already scoped).
+      var txns = scopeIfRegistered((r[3] && r[3].data) || [], activeBiz, reg, true);
+      var invIdSet = {}; inv.forEach(function (i) { invIdSet[i.id] = true; });
+      var pays = ((r[2] && r[2].data) || []).filter(function (p) { return invIdSet[p.accounting_invoice_id]; });
       var lastLog = (r[4] && r[4].data && r[4].data[0]) || null;
       var activity = (r[6] && r[6].data) || [];
       var custName = {}; custs.forEach(function (c) { custName[c.id] = c.company_name; });
