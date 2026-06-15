@@ -63,6 +63,7 @@ export default function AccountingInvoicesTab(props) {
   var [invoices, setInvoices] = useState([]);
   var [proformas, setProformas] = useState([]);
   var [pmCount, setPmCount] = useState({});
+  var [hubPaidMap, setHubPaidMap] = useState({});
   var [showArchived, setShowArchived] = useState(false);
   var [search, setSearch] = useState('');
   var waveBiz = getActiveWaveBusiness() || '';
@@ -88,6 +89,7 @@ export default function AccountingInvoicesTab(props) {
       fetchAllRows('accounting_proformas', '*', 'created_at', false),
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('accounting_invoice_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
       if (b) { setBusinessId(b.id); if (b.name) setBusinessName(b.name); }
@@ -95,6 +97,15 @@ export default function AccountingInvoicesTab(props) {
       setInvoices((r[2] && r[2].data) || []);
       setProformas((r[3] && r[3].data) || []); setCompany((r[4] && r[4].data && r[4].data[0]) || null);
       var pm = {}; ((r[5] && r[5].data) || []).forEach(function (row) { if (row && row.accounting_invoice_id) pm[row.accounting_invoice_id] = true; }); setPmCount(pm);
+      // Per-invoice hub-paid map (non-void) so the LIST shows real Paid/Balance even when the
+      // stored amount_paid is stale. Keyed by accounting_invoice_id.
+      var paidMap = {};
+      ((r[6] && r[6].data) || []).forEach(function (p) {
+        if (!p || !p.accounting_invoice_id) { return; }
+        if (p.voided || p.sync_status === 'void') { return; }
+        paidMap[p.accounting_invoice_id] = (paidMap[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0);
+      });
+      setHubPaidMap(paidMap);
     }).catch(function (e) { console.error('[acctinv] load', e); toast.error('Failed to load'); })
       .finally(function () { setLoading(false); });
   }
@@ -196,6 +207,17 @@ export default function AccountingInvoicesTab(props) {
       : Promise.resolve([]);
     Promise.all([pItems, pPays]).then(function (res) { setViewItems(res[0]); setViewPayments(res[1]); }).finally(function () { setViewLoading(false); });
   }
+  // List-row paid/balance/status derived from loaded payment rows (+ wave_imported_paid),
+  // so the blotter is correct even when the stored amount_paid/balance_due are stale.
+  function rowCalc(row) {
+    var total = row.total_amount != null ? roundMoney(Number(row.total_amount)) : 0;
+    var waveImp = Number(row.wave_imported_paid) || 0;
+    var hub = Number(hubPaidMap[row.id]) || 0;
+    var paid = roundMoney(waveImp + hub);
+    var balance = roundMoney(Math.max(0, total - paid));
+    var status = paid <= 0.0001 ? 'unpaid' : (balance <= 0.0001 ? 'paid' : 'partial');
+    return { total: total, paid: paid, balance: balance, paymentStatus: status };
+  }
   function viewCalc() {
     var lineSum = 0;
     viewItems.forEach(function (it) {
@@ -207,10 +229,12 @@ export default function AccountingInvoicesTab(props) {
     var adjustment = roundMoney(docTot - lineSum);
     var waveImported = viewing ? (Number(viewing.wave_imported_paid) || 0) : 0;
     var hubPaid = 0;
-    viewPayments.forEach(function (p) { if (p.sync_status !== 'void') { hubPaid += Number(p.amount) || 0; } });
+    viewPayments.forEach(function (p) { if (!p.voided && p.sync_status !== 'void') { hubPaid += Number(p.amount) || 0; } });
     hubPaid = roundMoney(hubPaid);
-    var balance = (viewing && viewing.balance_due != null) ? Number(viewing.balance_due) : roundMoney(docTot - waveImported - hubPaid);
-    return { lineSum: lineSum, docTot: docTot, adjustment: adjustment, waveImported: waveImported, hubPaid: hubPaid, balance: balance };
+    var paid = roundMoney(waveImported + hubPaid);
+    var balance = roundMoney(Math.max(0, docTot - paid));
+    var paymentStatus = paid <= 0.0001 ? 'unpaid' : (balance <= 0.0001 ? 'paid' : 'partial');
+    return { lineSum: lineSum, docTot: docTot, adjustment: adjustment, waveImported: waveImported, hubPaid: hubPaid, paid: paid, balance: balance, paymentStatus: paymentStatus };
   }
   function uh(k, v) { var c = Object.assign({}, hdr); c[k] = v; setHdr(c); }
   function ui(i, k, v) { var c = items.slice(); c[i] = Object.assign({}, c[i]); c[i][k] = v; setItems(c); }
@@ -410,6 +434,7 @@ export default function AccountingInvoicesTab(props) {
           <div style={{ maxHeight: '58vh', overflowY: 'auto' }}>
           {displayRows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'}{search.trim() ? ' match your search' : ' yet'}.</div> :
             displayRows.map(function (row) {
+              var rc = rowCalc(row);
               return (
                 <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
                   <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
@@ -417,10 +442,10 @@ export default function AccountingInvoicesTab(props) {
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.invoice_date : row.proforma_date) || '—'}</div>
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.due_date : row.valid_until) || '—'}</div>
                   <div className="px-2 py-1.5 text-right text-xs font-mono font-bold">{fmt(row.total_amount)}</div>
-                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-300">{isInvoice() ? fmt(row.amount_paid) : '—'}</div>
-                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-200">{isInvoice() ? fmt(row.balance_due != null ? row.balance_due : row.total_amount) : '—'}</div>
+                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-300">{isInvoice() ? fmt(rc.paid) : '—'}</div>
+                  <div className="px-2 py-1.5 text-right text-[11px] font-mono text-slate-200">{isInvoice() ? fmt(rc.balance) : '—'}</div>
                   <div className="px-2 py-1.5">{isInvoice() ? <span className={'text-[9px] rounded px-1 py-0.5 font-bold ' + (row.source === 'wave_import' ? 'bg-sky-700 text-white' : 'bg-emerald-700 text-white')}>{row.source === 'wave_import' ? 'Wave' : 'Hub'}</span> : '—'}</div>
-                  <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{row.record_status && row.record_status !== 'active' ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1 font-bold">{String(row.record_status).toUpperCase()}</span> : null}</div>
+                  <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + statusColor(isInvoice() ? row.approval_status : row.status)}>{labelStatus(isInvoice() ? row.approval_status : row.status)}</span>{isInvoice() ? <span className={'ml-1 text-[9px] px-1 py-0.5 rounded font-bold ' + (rc.paymentStatus === 'paid' ? 'bg-emerald-700 text-white' : (rc.paymentStatus === 'partial' ? 'bg-amber-200 text-amber-950' : 'bg-slate-600 text-white'))}>{rc.paymentStatus}</span> : null}{row.record_status && row.record_status !== 'active' ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1 font-bold">{String(row.record_status).toUpperCase()}</span> : null}</div>
                   <div className="px-2 py-1.5 flex gap-1 flex-wrap">
                     <button onClick={function () { openView(row); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
                     <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Print / Save PDF">Print</button>
@@ -442,8 +467,8 @@ export default function AccountingInvoicesTab(props) {
         var src = viewing.source === 'wave_import' ? 'Wave import' : 'Hub-created';
         var editable = isInvoice() ? (viewing.approval_status !== 'approved') : (viewing.status !== 'converted');
         return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '24px' }} onClick={function () { setViewing(null); }}>
-            <div className="bg-slate-900 border border-slate-600 rounded-xl w-full" style={{ maxWidth: '840px' }} onClick={function (e) { e.stopPropagation(); }}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '88px 16px 32px' }} onClick={function () { setViewing(null); }}>
+            <div className="bg-slate-900 border border-slate-600 rounded-xl w-full" style={{ maxWidth: '840px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }} onClick={function (e) { e.stopPropagation(); }}>
               <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div className="font-extrabold text-slate-100">View {isInvoice() ? 'invoice' : 'proforma'} · {(isInvoice() ? viewing.invoice_number : viewing.proforma_number) || '(no number)'} <span className="text-[10px] text-slate-400 font-medium">(read-only)</span></div>
                 <div className="flex gap-1 flex-wrap">
@@ -460,7 +485,7 @@ export default function AccountingInvoicesTab(props) {
                   <Field label="Customer" value={custName(viewing.accounting_customer_id)} />
                   <Field label={isInvoice() ? 'Invoice date' : 'Date'} value={(isInvoice() ? viewing.invoice_date : viewing.proforma_date) || '—'} />
                   <Field label={isInvoice() ? 'Due date' : 'Valid until'} value={(isInvoice() ? viewing.due_date : viewing.valid_until) || '—'} />
-                  <Field label="Status" value={labelStatus(isInvoice() ? viewing.approval_status : viewing.status) + (viewing.payment_status ? ' · ' + viewing.payment_status : '')} />
+                  <Field label="Status" value={labelStatus(isInvoice() ? viewing.approval_status : viewing.status) + (isInvoice() ? ' · ' + vc.paymentStatus : (viewing.payment_status ? ' · ' + viewing.payment_status : ''))} />
                   <Field label="Source" value={src + (viewing.is_historical ? ' · historical' : '')} />
                   {isInvoice() && <Field label="Wave sync" value={viewing.wave_sync_status || '—'} />}
                 </div>
@@ -504,8 +529,9 @@ export default function AccountingInvoicesTab(props) {
       })()}
 
       {editing && (
-        <div className="border border-slate-700 rounded bg-slate-900/60 p-3 mb-2">
-          <div className="flex items-center justify-between mb-2">
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '88px 16px 32px' }} onClick={function () { if (!busy) setEditing(null); }}>
+        <div className="border border-slate-700 rounded bg-slate-900 p-3 w-full" style={{ maxWidth: '900px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }} onClick={function (e) { e.stopPropagation(); }}>
+          <div className="flex items-center justify-between mb-2 sticky top-0 bg-slate-900 py-1 z-10">
             <div className="font-extrabold">{editing === 'new' ? 'New' : 'Edit'} {isInvoice() ? 'invoice' : 'proforma'}{editing !== 'new' && locked(editing) ? ' (approved — locked)' : ''}</div>
             <button onClick={function () { setEditing(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
           </div>
@@ -559,6 +585,7 @@ export default function AccountingInvoicesTab(props) {
               </div>
             );
           })()}
+        </div>
         </div>
       )}
     </div>

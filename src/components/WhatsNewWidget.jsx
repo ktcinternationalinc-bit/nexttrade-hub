@@ -33,6 +33,27 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FD',
+    date: '2026-06-08',
+    label: 'Invoice list shows real Paid/Balance; edit opens as a popup',
+    items: [
+      '**\u2705 The invoice list now shows the correct Paid, Balance, and Paid/Partial/Unpaid status** based on actual matched payments \u2014 no more Paid 0 when a payment exists.',
+      '**\ud83d\uddb1\ufe0f Editing or creating an invoice now opens as a popup in the middle of the screen** instead of appearing at the bottom of the page where it was easy to miss.',
+      '**\ud83d\udd27 One-time cleanup:** run the provided repair so older invoices that were paid before this fix also show correct balances in the list and reports.',
+      { superAdminOnly: true, text: 'v55.83-FD. HAS SQL (one-time backfill below). LIST FIX: AccountingInvoicesTab list rendered fmt(row.amount_paid)/row.balance_due straight from the (stale) invoice row, and payments were only loaded for the open modal -> Paid showed 0. Now load() also fetches accounting_invoice_payments (accounting_invoice_id, amount, voided, sync_status) into hubPaidMap (non-void only); new rowCalc(row) = {paid: wave_imported_paid + hubPaidMap[id], balance: max(0,total-paid), paymentStatus}; list Paid/Balance cells + a new payment-status pill use rc.*. EDIT MODAL: edit/new form was an inline <div class=border...mb-2> in page flow (appeared at page bottom). Wrapped in fixed overlay (padding 88px 16px 32px, centered, overflow auto) + container maxHeight calc(100vh-120px)+scroll + sticky header with close; click-outside closes (unless busy). Pairs with FC View-modal position fix. BACKFILL SQL (run once in Supabase): recomputes accounting_invoices.amount_paid = wave_imported_paid + SUM(non-void accounting_invoice_payments.amount), balance_due = max(0,total_amount-paid), payment_status = paid/partial/unpaid \u2014 so list+reports match the modal, not just the modal. After running it the stored 1245 invoice persists correct values too.' },
+    ],
+  },
+  {
+    version: 'v55.83-FC',
+    date: '2026-06-08',
+    label: 'Invoice balance now updates from matched payments + modal position fixed',
+    items: [
+      '**\u2705 When you match a bank payment to an invoice, the invoice balance and status now update correctly** \u2014 the View Invoice screen shows the right Balance due and Paid/Partial/Paid status based on the actual payments, not a stale saved value.',
+      '**\ud83d\uddb1\ufe0f Fixed the View Invoice popup sitting too high and covering the top buttons.** It now opens below the top bar and scrolls if long.',
+      { superAdminOnly: true, text: 'v55.83-FC. No SQL. Fixes the screenshot bug (payment row 1245 present but invoice showed unpaid / balance 66660). ROOT CAUSE (display): AccountingInvoicesTab viewCalc() preferred stale viewing.balance_due over the freshly-loaded viewPayments. FIX: viewCalc now ALWAYS derives paid = wave_imported_paid + SUM(non-void viewPayments), balance = max(0, total - paid), paymentStatus = unpaid/partial/paid; excludes both voided=true AND sync_status=void; returns paid + paymentStatus. Modal Status field now shows approval + vc.paymentStatus (not stale viewing.payment_status); Balance due already used vc.balance. ROOT CAUSE (match math): BankReviewTab.applyToInvoice classified partial/full/overpayment from stale inv.amount_paid; now reads live accounting_invoice_payments (non-void) + wave_imported_paid to get paidNow before classify (correct for 2nd+ deposit on one invoice). recomputeInvoice persistence already hardened in FB (DB fetch fallback, clamp >=0, no write if invoice unknown). Also sets/clears matched_invoice_id (FB) so both bank views agree. MODAL POSITION: overlay padding 24px -> 88px 16px 32px; container maxHeight calc(100vh-120px)+overflowY auto so it clears the top bar. NOTE: the existing 1245 payment\u2019s stored balance_due may still be old in the DB until its next recompute, but the View modal now shows correct derived numbers immediately; re-matching or any new payment will persist the corrected values. Acceptance: 66660 invoice + 1245 payment -> modal shows paid 1245, balance 65415, status approved-partial.' },
+    ],
+  },
+  {
     version: 'v55.83-FB',
     date: '2026-06-08',
     label: 'Payment matching: 3 reliability fixes for launch',

@@ -331,41 +331,46 @@ export default function BankReviewTab(props) {
     if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('That invoice belongs to another business.'); return; }
     var apply = roundMoney(Number(mAmount));
     if (!(apply > 0)) { toast.error('Enter an amount greater than zero.'); return; }
-    var paidNow = Number(inv.amount_paid) || 0;
-    var c = classifyApplication(invoiceTotal(inv), paidNow, apply);
     setBusy(true);
     var biz = t.business_id || (inv ? inv.business_id : null);
     var siloId = activeBiz || (inv && inv.wave_business_id) || t.wave_business_id || null; // v55.83-DZ
-    dbInsert('payment_matches', {
-      business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, invoice_id: inv.id,
-      matched_amount: c.applied_to_invoice, match_type: c.type, is_manual_override: false,
-      notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
-    }, userProfile && userProfile.id)
-    .then(function (matchRow) {
-      return createInvPaymentRow(inv, t, c.applied_to_invoice, matchRow && matchRow.id, mNotes);
-    })
-    .then(function () {
-      var chain = recomputeInvoice(inv.id);
-      // overpayment -> customer credit (never dropped)
-      if (c.overpayment > 0 && mCustomerId) {
-        chain = chain.then(function () {
-          return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: mCustomerId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
-        });
-      }
-      return chain;
-    })
-    .then(function () {
-      return patchTxn(t, { classification: t.classification || 'customer_payment', accounting_customer_id: mCustomerId || t.accounting_customer_id, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
-        'Matched ' + fmt(c.applied_to_invoice) + ' from bank txn to invoice ' + (inv.invoice_number || inv.id) + (c.overpayment > 0 ? (' (+' + fmt(c.overpayment) + ' credit)') : ''));
-    })
-    .then(function () {
-      toast.success('Matched ' + fmt(c.applied_to_invoice) + (c.type === 'partial' ? ' (partial)' : '') + (c.overpayment > 0 ? ' · ' + fmt(c.overpayment) + ' to customer credit' : ''));
-      onReload(); load();
+    // Compute CURRENT paid from live payment rows (not stale inv.amount_paid) so a second
+    // deposit against the same invoice classifies partial/full/overpayment correctly.
+    supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv.id).then(function (pr) {
+      var waveImp = Number(inv.wave_imported_paid) || 0;
+      var existingHub = 0;
+      ((pr && pr.data) || []).forEach(function (p) { if (!p.voided && p.sync_status !== 'void') { existingHub += Number(p.amount) || 0; } });
+      var paidNow = roundMoney(waveImp + existingHub);
+      var c = classifyApplication(invoiceTotal(inv), paidNow, apply);
+      return dbInsert('payment_matches', {
+        business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, invoice_id: inv.id,
+        matched_amount: c.applied_to_invoice, match_type: c.type, is_manual_override: false,
+        notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
+      }, userProfile && userProfile.id)
+      .then(function (matchRow) {
+        return createInvPaymentRow(inv, t, c.applied_to_invoice, matchRow && matchRow.id, mNotes);
+      })
+      .then(function () {
+        var chain = recomputeInvoice(inv.id);
+        if (c.overpayment > 0 && mCustomerId) {
+          chain = chain.then(function () {
+            return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: mCustomerId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+          });
+        }
+        return chain;
+      })
+      .then(function () {
+        return patchTxn(t, { classification: t.classification || 'customer_payment', accounting_customer_id: mCustomerId || t.accounting_customer_id, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
+          'Matched ' + fmt(c.applied_to_invoice) + ' from bank txn to invoice ' + (inv.invoice_number || inv.id) + (c.overpayment > 0 ? (' (+' + fmt(c.overpayment) + ' credit)') : ''));
+      })
+      .then(function () {
+        toast.success('Matched ' + fmt(c.applied_to_invoice) + (c.type === 'partial' ? ' (partial)' : '') + (c.overpayment > 0 ? ' · ' + fmt(c.overpayment) + ' to customer credit' : ''));
+        onReload(); load();
+      });
     })
     .catch(function (e) { console.error('[save] Match failed: ', e); toast.error('Match failed: ' + ((e && e.message) || 'unknown error — check console')); })
     .finally(function () { setBusy(false); });
   }
-
   function createUnapplied() {
     var t = sel; if (!t || !mayMatch) return;
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
