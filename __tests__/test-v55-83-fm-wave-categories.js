@@ -1,0 +1,24 @@
+var fs=require('fs');var path=require('path');
+function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
+var rt=p('src/app/api/wave/sync-categories/route.js');var wsc=p('src/components/WaveSyncCenter.jsx');var br=p('src/components/BankReviewTab.jsx');
+var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
+// route auth
+ok(/bodyJson\.user_id/.test(rt) && /role === 'super_admin'/.test(rt),'route accepts super_admin user_id');
+ok(/auth === \('Bearer ' \+ secret\)/.test(rt),'route still accepts CRON_SECRET bearer');
+ok(/onlyBiz/.test(rt) && /wave_business_id === onlyBiz/.test(rt),'route scopes to active business');
+ok(!/\bconst \b/.test(rt) && !/=>/.test(rt),'route SWC-safe');
+// UI pull
+ok(/runCategoryPull/.test(wsc) && /sync-categories/.test(wsc),'pull handler present');
+ok(/Wave Categories \(Chart of Accounts\)/.test(wsc),'category card present');
+ok(/loadCatCount/.test(wsc) && /count: 'exact'/.test(wsc),'shows loaded count');
+ok(/user_id: \(userProfile && userProfile\.id\)/.test(wsc),'sends user_id for auth');
+ok(/Push permissions for:/.test(wsc),'push permissions intact');
+// bank review dropdown
+ok(/setWaveCategories/.test(br) && /from\('wave_categories'\)/.test(br),'bank review loads wave categories');
+ok(/c\.wave_business_id === activeBiz/.test(br),'categories scoped to active silo');
+ok(/optgroup label="Wave categories"/.test(br),'wave categories optgroup in dropdown');
+ok(/optgroup label="General"/.test(br),'general fallback preserved');
+ok(/value=\{'wave:' \+ c\.wave_account_id\}/.test(br),'stores wave account id reference');
+ok(/version: 'v55\.83-FM'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew FM');
+console.log('\nv55.83-FM wave categories: '+pass+' passed, '+fail+' failed');
+if(fail>0)process.exit(1);console.log('ALL PASS');

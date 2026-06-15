@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FM',
+    date: '2026-06-08',
+    label: 'Wave Categories: pull your Chart of Accounts + use it for bank categorization',
+    items: [
+      '**\ud83d\udcd2 New: pull your Wave categories into Hub** (Wave Sync \u2192 Settings \u2192 Wave Categories). This reads your Wave Chart of Accounts so Hub uses the exact same category names \u2014 it never changes anything in Wave.',
+      '**\ud83c\udff7\ufe0f Bank Review categorization now offers your real Wave categories** in the dropdown (with the general options kept as a fallback), so what you tag in Hub lines up with Wave.',
+      { superAdminOnly: true, text: 'v55.83-FM. HAS SQL (wave_categories table + RLS). Priority 4 Wave categories \u2014 independent of payment push (safe to ship while FL is being tested). Existing /api/wave/sync-categories (read-only Wave Chart-of-Accounts pull, dedupe by wave_business_id+wave_account_id) + wave-category-guard.js were already present. ADDED: (1) wave_categories table SQL with RLS (4 policies authenticated). (2) sync-categories route now accepts super_admin user_id in POST body (profiles.role check, same pattern as schema-check) IN ADDITION to CRON_SECRET bearer, and accepts wave_business_id in body to scope the pull to the active silo \u2014 so a UI button can trigger it. (3) WaveSyncCenter Settings: violet "Wave Categories" card shows loaded count + Pull button (defensive fetch: text-first, content-type check). (4) BankReviewTab loads wave_categories (active silo, is_active) and the split category dropdown now has a "Wave categories" optgroup (value wave:<account_id>) above the General CLASSIFICATIONS fallback. Blank Hub category does NOT erase Wave (dropdown additive; empty value just leaves it unset). NEXT: store wave_account_id on the split when a wave: option is chosen + later push categorization to Wave if safe (Priority 5); then Wave->Hub aggregate reconcile (Priority 6). Run table SQL before using the Pull button.' },
+    ],
+  },
+  {
     version: 'v55.83-FL',
     date: '2026-06-08',
     label: 'Wave payment push is LIVE (records matched payments in Wave)',

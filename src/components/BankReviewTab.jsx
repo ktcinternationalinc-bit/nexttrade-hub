@@ -91,6 +91,7 @@ export default function BankReviewTab(props) {
   var [mNotes, setMNotes] = useState('');
   var [splitMode, setSplitMode] = useState(false);
   var [splitRows, setSplitRows] = useState([]);
+  var [waveCategories, setWaveCategories] = useState([]);
 
   function load() {
     setLoading(true);
@@ -101,6 +102,7 @@ export default function BankReviewTab(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('wave_business_registry', '*'),
       supabase.from('plaid_accounts').select('*'),
+      supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       var m = (res[1] && res[1].data) || [];
@@ -108,6 +110,10 @@ export default function BankReviewTab(props) {
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
       setPlaidAccts(pa);
+      // Wave categories scoped to the active silo, for the categorization dropdown.
+      var activeBiz = getActiveWaveBusiness();
+      var cats = ((res[6] && res[6].data) || []).filter(function (c) { return !activeBiz || c.wave_business_id === activeBiz; });
+      setWaveCategories(cats);
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn);
       setAcctCustomers(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), reg, true));
@@ -585,7 +591,12 @@ export default function BankReviewTab(props) {
                             <input value={r.amount} onChange={function (e) { updSplitRow(i, 'amount', e.target.value); }} placeholder="Amount" className="w-24 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-slate-100 text-[11px]" />
                             <select value={r.category} onChange={function (e) { updSplitRow(i, 'category', e.target.value); }} className="flex-1 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-slate-100 text-[11px]">
                               <option value="">category…</option>
-                              {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{labelize(c)}</option>; })}
+                              {waveCategories.length > 0 && <optgroup label="Wave categories">
+                                {waveCategories.map(function (c) { return <option key={c.wave_account_id} value={'wave:' + c.wave_account_id}>{c.wave_account_name}{c.subtype ? (' (' + c.subtype + ')') : ''}</option>; })}
+                              </optgroup>}
+                              <optgroup label="General">
+                                {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{labelize(c)}</option>; })}
+                              </optgroup>
                             </select>
                             <button onClick={function () { rmSplitRow(i); }} className="text-rose-300 text-[11px] px-1 font-bold">✕</button>
                           </div>

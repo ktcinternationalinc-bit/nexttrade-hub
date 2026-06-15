@@ -50,26 +50,39 @@ async function fetchAccounts(token, businessId) {
 }
 
 async function runSync(request) {
-  var secret = process.env.CRON_SECRET;
-  if (secret) {
-    var auth = request.headers.get('authorization') || '';
-    if (auth !== ('Bearer ' + secret)) { return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 }); }
-  }
+  var db = admin();
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return Response.json({ ok: false, error: 'Server database key missing.' }, { status: 500 });
   }
+
+  // Auth: either CRON_SECRET bearer (cron) OR a super_admin user_id in the POST body (UI button).
+  var authed = false;
+  var secret = process.env.CRON_SECRET;
+  var auth = request.headers.get('authorization') || '';
+  if (secret && auth === ('Bearer ' + secret)) { authed = true; }
+  var bodyJson = null;
+  try { bodyJson = await request.clone().json(); } catch (eB) { bodyJson = null; }
+  if (!authed && bodyJson && bodyJson.user_id) {
+    var who = await db.from('profiles').select('id, role').eq('id', bodyJson.user_id).limit(1);
+    var prof = who && who.data && who.data[0];
+    if (prof && prof.role === 'super_admin') { authed = true; }
+  }
+  if (!authed) { return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 }); }
+
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) { return Response.json({ ok: false, error: 'No Wave token configured (WAVE_ACCESS_TOKEN).' }, { status: 400 }); }
 
-  var db = admin();
-
   var includeProduction = false;
   try { var u = new URL(request.url); if (u.searchParams.get('includeProduction') === 'true') { includeProduction = true; } } catch (eUrl) {}
-  if (!includeProduction) { try { var b = await request.clone().json(); if (b && b.includeProduction === true) { includeProduction = true; } } catch (eBody) {} }
+  if (!includeProduction && bodyJson && bodyJson.includeProduction === true) { includeProduction = true; }
+
+  // Optional: scope to a single business id from the body (UI passes the active silo).
+  var onlyBiz = (bodyJson && bodyJson.wave_business_id) ? bodyJson.wave_business_id : null;
 
   var regRes = await db.from('wave_business_registry').select('wave_business_id, label, is_production');
   var allBiz = (regRes && regRes.data) || [];
   var businesses = includeProduction ? allBiz : allBiz.filter(function (x) { return x.is_production === false; });
+  if (onlyBiz) { businesses = businesses.filter(function (x) { return x.wave_business_id === onlyBiz; }); }
   if (businesses.length === 0) {
     return Response.json({ ok: true, scope: includeProduction ? 'all_businesses' : 'test_only', message: 'No matching Wave businesses to sync categories for.', results: [] });
   }

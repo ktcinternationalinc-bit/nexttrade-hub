@@ -56,6 +56,9 @@ export default function WaveSyncCenter(props) {
   var pa0 = useState(false); var payBusy = pa0[0]; var setPayBusy = pa0[1];
   var pa1 = useState(''); var payMsg = pa1[0]; var setPayMsg = pa1[1];
   var pa2 = useState(null); var payList = pa2[0]; var setPayList = pa2[1];
+  var ca0 = useState(false); var catBusy = ca0[0]; var setCatBusy = ca0[1];
+  var ca1 = useState(''); var catMsg = ca1[0]; var setCatMsg = ca1[1];
+  var ca2 = useState(0); var catCount = ca2[0]; var setCatCount = ca2[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -135,6 +138,35 @@ export default function WaveSyncCenter(props) {
       })
       .catch(function (e) { setPayMsg('Request failed: ' + ((e && e.message) || String(e))); })
       .finally(function () { setPayBusy(false); });
+  }
+
+  function loadCatCount() {
+    if (!active) { setCatCount(0); return; }
+    supabase.from('wave_categories').select('id', { count: 'exact', head: true }).eq('wave_business_id', active)
+      .then(function (r) { setCatCount((r && r.count) || 0); })
+      .catch(function () { setCatCount(0); });
+  }
+  useEffect(function () { loadCatCount(); }, [active]);
+
+  function runCategoryPull() {
+    if (!active) { toast.error('Select a Wave business first.'); return; }
+    setCatBusy(true); setCatMsg('Pulling Wave Chart of Accounts…');
+    fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.text().then(function (t) { var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || ''; if (!r.ok || ct.indexOf('application/json') < 0) { throw new Error('Got HTTP ' + r.status + ': ' + t.slice(0, 200)); } return JSON.parse(t); }); })
+      .then(function (d) {
+        if (d && d.results && d.results.length) {
+          var sum = d.results[0].summary || d.results[0];
+          setCatMsg('Done. ' + (sum.created || 0) + ' new, ' + (sum.updated || 0) + ' updated, ' + (sum.skipped || 0) + ' unchanged.');
+          toast.success('Wave categories synced'); loadCatCount();
+        } else if (d && (d.created != null || d.updated != null)) {
+          setCatMsg('Done. ' + (d.created || 0) + ' new, ' + (d.updated || 0) + ' updated, ' + (d.skipped || 0) + ' unchanged.');
+          toast.success('Wave categories synced'); loadCatCount();
+        } else if (d && d.message) { setCatMsg(d.message); loadCatCount(); }
+        else if (d && d.error) { setCatMsg('Error: ' + d.error); toast.error('Category sync failed'); }
+        else { setCatMsg(JSON.stringify(d).slice(0, 300)); loadCatCount(); }
+      })
+      .catch(function (e) { setCatMsg('Request failed: ' + ((e && e.message) || String(e))); toast.error('Category sync failed'); })
+      .finally(function () { setCatBusy(false); });
   }
 
   // Eligible (pushable) Hub records for the active silo — STRICT same-silo match only.
@@ -452,6 +484,15 @@ export default function WaveSyncCenter(props) {
                 })}
               </div>
             )}
+          </div>
+          <div className="mb-4 border border-violet-200 bg-violet-50 rounded-lg p-3">
+            <div className="font-bold text-slate-900 mb-1">Wave Categories (Chart of Accounts)</div>
+            <div className="text-xs text-slate-700 mb-2">Pull your Wave categories into Hub so bank transactions can be categorized with the exact same names Wave uses. This only reads from Wave — it never changes anything in Wave.</div>
+            <div className="text-xs bg-white border border-violet-200 text-slate-900 rounded px-2 py-1 mb-2 font-medium">{catCount > 0 ? (catCount + ' Wave categories loaded for this business.') : 'No Wave categories loaded yet for this business.'}</div>
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={runCategoryPull} disabled={catBusy} className="text-xs bg-violet-600 hover:bg-violet-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{catBusy ? 'Pulling…' : 'Pull Wave categories'}</button>
+            </div>
+            {catMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{catMsg}</div>}
           </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : isProd ? (
