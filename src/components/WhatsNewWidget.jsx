@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FA',
+    date: '2026-06-08',
+    label: 'Wave payment field discovery (safe validation probe)',
+    items: [
+      '**\ud83d\udd0e Read-only check now safely asks Wave which fields a payment needs, by sending an intentionally-empty request that Wave rejects without creating anything.** This reveals the exact field names so payment sync can be built precisely.',
+      { superAdminOnly: true, text: 'v55.83-FA (was EZ-probe; bumped so the deployed build is unmistakable \u2014 the EZ-introspection build kept getting deployed instead of the probe build). schema-check response now includes schema_check_build:v55.83-FA-probe so the JSON proves the version. Wave has input-type FIELD introspection DISABLED (InvoicePaymentCreateManualInput resolves but inputFields=[]). SAFE PROBE added: invoicePaymentCreateManual with EMPTY input {} (creates nothing, fails validation) -> Wave inputErrors NAME required fields (payment_input_required_fields_probe). Plus read-only invoice_aggregate_probe (amountPaid/amountDue/total) + invoice_payments_query_probe (tests payments{} subfield). Confirmed: invoicePaymentCreateManual real; Cash on Hand CASH_AND_BANK candidate; isClassicAccounting false. PLAN unchanged: build Hub->Wave push only once probe names fields; Wave->Hub stays AGGREGATE-only unless invoice_payments_query_probe proves detail readable. NEXT: deploy FA, re-run schema-check (bearer), paste JSON containing schema_check_build + payment_input_required_fields_probe.' },
+    ],
+  },
+  {
     version: 'v55.83-EZ',
     date: '2026-06-08',
     label: 'Wave payment schema discovery (reads real field names)',

@@ -215,6 +215,7 @@ async function runCheck() {
 
   return noStore({
     ok: true,
+    schema_check_build: 'v55.83-FA-probe',
     note: 'Read-only introspection. Nothing was written to Wave. Token never exposed.',
     payment_mutation_details: paymentMutationDetails,
     discovered_input_type_fields: inputTypeFields,
