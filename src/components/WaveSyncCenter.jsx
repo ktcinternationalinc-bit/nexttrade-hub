@@ -268,7 +268,15 @@ export default function WaveSyncCenter(props) {
       else if (!custWaveId) { blocked = 'Customer not yet in Wave'; }
       else if (dupBlock) { blocked = dupBlock; }
       else if (p.sync_status === 'syncing') { blocked = 'Currently syncing to Wave…'; }
-      else if (p.sync_status === 'sync_failed' || p.sync_status === 'failed') { blocked = p.sync_error || 'Previous push failed'; }
+      // A push that FAILED is retryable — it is NOT a hard data block. Only the real guards above
+      // (orphan, contaminated/wrong silo, missing Wave invoice/customer id, over-allocated deposit,
+      // currently syncing) prevent a push. A sync_failed/failed row with none of those stays
+      // selectable so it can be retried (e.g. after a code fix deploys), instead of being lumped in
+      // with truly blocked/contaminated records.
+      var retryFail = null;
+      if (!blocked && (p.sync_status === 'sync_failed' || p.sync_status === 'failed')) {
+        retryFail = p.sync_error || 'Previous push failed';
+      }
       var subBits = [];
       if (p.payment_date) { subBits.push(p.payment_date); }
       subBits.push('status: ' + (p.sync_status || '?'));
@@ -276,12 +284,14 @@ export default function WaveSyncCenter(props) {
       if (p.payment_match_id) { subBits.push('match ' + String(p.payment_match_id).substring(0, 8)); }
       if (shareNote) { subBits.push('⚠ ' + shareNote); }
       if (blocked) { subBits.push('⛔ ' + blocked); }
+      else if (retryFail) { subBits.push('↻ Failed (retryable): ' + retryFail); }
       rows.push({
         key: 'payment:' + p.id, action: 'payment', id: p.id,
         label: 'Payment · ' + custName + ' · Invoice ' + invNo,
         amount: Number(p.amount) || 0,
         sub: subBits.join(' · '),
         blocked: blocked,
+        retryable: !!retryFail,
         record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
       });
     });
@@ -400,7 +410,7 @@ export default function WaveSyncCenter(props) {
                     <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
                     {q.action === 'payment' && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
-                    <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : 'text-slate-500')}>{q.blocked ? 'blocked' : 'not synced'}</span>
+                    <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500'))}>{q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced')}</span>
                   </div>
                 );
               })}

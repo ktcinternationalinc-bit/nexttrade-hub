@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FT',
+    date: '2026-06-15',
+    label: 'Wave payment push fixed + failed payments are retryable (not "blocked")',
+    items: [
+      '**💳 Pushing a payment to Wave now works.** A wrong field name was making Wave reject every payment push. Payments you push from the Hub now post to Wave and save the real Wave payment id.',
+      '**↻ A payment whose push failed is now shown as "failed · retry" and can be retried** — instead of being lumped in with truly blocked records. Real problems (orphaned deposit, wrong Wave business, missing Wave invoice, over-allocated deposit) still block as before.',
+      { superAdminOnly: true, text: 'v55.83-FT. No SQL. (1) /api/wave/push-payment: invoicePaymentCreateManual returns InvoicePaymentCreateManualOutput, which has NO payment field — selecting payment{ id amount paymentDate paymentMethod } caused the top-level error "Cannot query field payment on type InvoicePaymentCreateManualOutput" and blocked every push. Changed the mutation selection to invoicePayment{ id } and read result.invoicePayment.id. Existing safety unchanged: never fakes wave_payment_id, sets sync_failed with the exact Wave error on failure, never marks synced without a real id, leaves the row in the queue for retry. SWC-safe (var + string concat). (2) WaveSyncCenter queue: sync_failed/failed was being folded into the same blocked flag as the hard data guards, so a failed push could not be re-selected or retried and was labeled "blocked". Now blocked only covers orphan, contaminated/wrong silo, missing wave invoice/customer id, over-allocated deposit, and syncing; a failed row with none of those gets a separate retryable flag, stays selectable, shows "↻ Failed (retryable): <error>" in its subline and a rose "failed · retry" status. So invoice 2134 / Ali Arasia (a valid match that only failed on the old field bug) is retryable after this deploy — it was never contaminated. The paymentMethod=OTHER enum is still unconfirmed, so the first real push remains the probe.' },
+    ],
+  },
+  {
     version: 'v55.83-FS',
     date: '2026-06-08',
     label: 'Permission-based access: staff can do delegated work without owner keys',
