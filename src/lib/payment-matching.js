@@ -79,3 +79,14 @@ export function allocatePayment(paymentAmount, applications) {
     over_allocated: spill < 0,
   };
 }
+
+// Canonical "is this payment row void/reversed" test. A row counts as void if the boolean
+// voided flag is set OR its sync_status is in the reversed set. Used everywhere paid amounts
+// are summed so reversed payments are never counted. SWC-safe.
+export function isPaymentVoid(p) {
+  if (!p) { return true; }
+  if (p.voided === true) { return true; }
+  var s = (p.sync_status || '').toLowerCase();
+  if (s === 'void' || s === 'voided' || s === 'cancelled' || s === 'reversed' || s === 'deleted') { return true; }
+  return false;
+}

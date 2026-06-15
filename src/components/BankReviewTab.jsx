@@ -11,7 +11,7 @@ import {
   canViewBank, canSeeAmounts, canClassify, canMatchPayments, canReopen,
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
 } from '../lib/bank-permissions';
-import { classifyApplication, computeInvoiceBalance, validateSplit, roundMoney } from '../lib/payment-matching';
+import { classifyApplication, computeInvoiceBalance, validateSplit, roundMoney, isPaymentVoid } from '../lib/payment-matching';
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -246,11 +246,11 @@ export default function BankReviewTab(props) {
     var inMem = acctInvoices.find(function (i) { return i.id === invId; });
     function compute(inv) {
       if (!inv) { return Promise.resolve(); } // safety: never write balances for an unknown invoice
-      return supabase.from('accounting_invoice_payments').select('amount, voided').eq('accounting_invoice_id', invId).then(function (r) {
+      return supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', invId).then(function (r) {
         var total = invoiceTotal(inv);
         var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
         var hubPaid = 0;
-        ((r && r.data) || []).forEach(function (p) { if (!p.voided) { hubPaid += Number(p.amount) || 0; } });
+        ((r && r.data) || []).forEach(function (p) { if (!isPaymentVoid(p)) { hubPaid += Number(p.amount) || 0; } });
         var amountPaid = Math.round((waveImported + hubPaid) * 100) / 100;
         var balanceDue = Math.round((total - amountPaid) * 100) / 100;
         if (balanceDue < 0) { balanceDue = 0; } // overpayment goes to customer_credits, not negative balance
@@ -272,7 +272,7 @@ export default function BankReviewTab(props) {
     if (ms.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
     if (!window.confirm('Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.')) { return; }
     var invIds = {}; ms.forEach(function (m) { if (m.invoice_id) { invIds[m.invoice_id] = true; } });
-    var stamp = { voided: true, voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
+    var stamp = { voided: true, sync_status: 'void', voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
     setBusy(true);
     supabase.from('accounting_invoice_payments').update(stamp).eq('bank_transaction_id', t.id)
       .then(function () { return supabase.from('payment_matches').update(stamp).eq('bank_transaction_id', t.id); })
@@ -339,7 +339,7 @@ export default function BankReviewTab(props) {
     supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv.id).then(function (pr) {
       var waveImp = Number(inv.wave_imported_paid) || 0;
       var existingHub = 0;
-      ((pr && pr.data) || []).forEach(function (p) { if (!p.voided && p.sync_status !== 'void') { existingHub += Number(p.amount) || 0; } });
+      ((pr && pr.data) || []).forEach(function (p) { if (!isPaymentVoid(p)) { existingHub += Number(p.amount) || 0; } });
       var paidNow = roundMoney(waveImp + existingHub);
       var c = classifyApplication(invoiceTotal(inv), paidNow, apply);
       return dbInsert('payment_matches', {

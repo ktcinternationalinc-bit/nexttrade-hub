@@ -6,7 +6,7 @@ import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 import { canViewBank, canEditMappings, canReopen } from '../lib/bank-permissions';
-import { roundMoney } from '../lib/payment-matching';
+import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
 
@@ -102,7 +102,7 @@ export default function AccountingInvoicesTab(props) {
       var paidMap = {};
       ((r[6] && r[6].data) || []).forEach(function (p) {
         if (!p || !p.accounting_invoice_id) { return; }
-        if (p.voided || p.sync_status === 'void') { return; }
+        if (isPaymentVoid(p)) { return; }
         paidMap[p.accounting_invoice_id] = (paidMap[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0);
       });
       setHubPaidMap(paidMap);
@@ -229,7 +229,7 @@ export default function AccountingInvoicesTab(props) {
     var adjustment = roundMoney(docTot - lineSum);
     var waveImported = viewing ? (Number(viewing.wave_imported_paid) || 0) : 0;
     var hubPaid = 0;
-    viewPayments.forEach(function (p) { if (!p.voided && p.sync_status !== 'void') { hubPaid += Number(p.amount) || 0; } });
+    viewPayments.forEach(function (p) { if (!isPaymentVoid(p)) { hubPaid += Number(p.amount) || 0; } });
     hubPaid = roundMoney(hubPaid);
     var paid = roundMoney(waveImported + hubPaid);
     var balance = roundMoney(Math.max(0, docTot - paid));

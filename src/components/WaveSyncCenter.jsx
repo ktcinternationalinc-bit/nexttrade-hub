@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, dbUpdate } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { isPaymentVoid } from '../lib/payment-matching';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import { dryRunRecord } from '../lib/wave-sync-eligibility';
 import SiloBanner from './SiloBanner';
@@ -45,6 +46,7 @@ export default function WaveSyncCenter(props) {
   var [registry, setRegistry] = useState([]);
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
+  var [payments, setPayments] = useState([]);
   var [syncLog, setSyncLog] = useState([]);
   var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
   var ps0 = useState(null); var prodSetup = ps0[0]; var setProdSetup = ps0[1];
@@ -65,11 +67,13 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('wave_business_registry', '*'),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
-      supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100)
+      supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
+      fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false)
     ]).then(function (res) {
       var rg = (res[0] && res[0].data) || [];
       setRegistry(rg);
       setCustomers(scopeIfRegistered((res[1] && res[1].data) || [], getActiveWaveBusiness(), rg, true));
+      setPayments(scopeIfRegistered((res[4] && res[4].data) || [], getActiveWaveBusiness(), rg, true));
       setInvoices(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), rg, true));
       setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active; }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
@@ -124,8 +128,42 @@ export default function WaveSyncCenter(props) {
         rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number, amount: inv.total_amount, record: inv });
       }
     });
+    // Pending PAYMENT rows: a matched payment is its own Wave action (invoicePaymentCreateManual),
+    // even when the invoice is already in Wave. Without this, a payment matched to an
+    // already-synced invoice (e.g. Adel Saeed / invoice 6) would never appear here.
+    var invById = {};
+    invoices.forEach(function (i) { invById[i.id] = i; });
+    var custById = {};
+    customers.forEach(function (c) { custById[c.id] = c; });
+    payments.forEach(function (p) {
+      if (!p) { return; }
+      if (p.wave_business_id !== active) { return; }
+      if (bad[p.wave_business_id]) { return; }
+      if (isPaymentVoid(p)) { return; }
+      if (p.sync_status !== 'pending_wave_sync') { return; } // already synced or voided are excluded
+      if (p.wave_payment_id) { return; } // already pushed
+      if (!(Number(p.amount) > 0)) { return; }
+      if (!p.payment_date) { return; }
+      var inv = invById[p.accounting_invoice_id];
+      var cust = custById[p.accounting_customer_id];
+      var invWaveId = p.wave_invoice_id || (inv && inv.wave_invoice_id) || null;
+      var custWaveId = p.wave_customer_id || (cust && cust.wave_customer_id) || null;
+      var invNo = inv ? (inv.invoice_number || inv.id) : (p.accounting_invoice_id || '?');
+      var custName = cust ? (cust.company_name || cust.contact_name || cust.name || '(customer)') : '(customer)';
+      var blocked = null;
+      if (!invWaveId) { blocked = 'Invoice not yet in Wave'; }
+      else if (!custWaveId) { blocked = 'Customer not yet in Wave'; }
+      rows.push({
+        key: 'payment:' + p.id, action: 'payment', id: p.id,
+        label: 'Payment · ' + custName + ' · Invoice ' + invNo,
+        amount: Number(p.amount) || 0,
+        sub: (p.payment_date || '') + (blocked ? (' · ⚠ ' + blocked) : ' · ' + (p.sync_status || '')),
+        blocked: blocked,
+        record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
+      });
+    });
     return rows;
-  }, [customers, invoices, active]);
+  }, [customers, invoices, payments, active]);
 
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
   var selectedRows = queue.filter(function (q) { return sel[q.key]; });
@@ -194,22 +232,22 @@ export default function WaveSyncCenter(props) {
       {tab === 'pending' && (
         <div className="border border-slate-700 rounded overflow-hidden">
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
-            <div className="text-xs font-bold">Pushable Hub records in this silo: {queue.length}</div>
+            <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments)</span></div>
             <div className="flex gap-2">
               <button onClick={runDryRun} disabled={isProd || selectedRows.length === 0} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
               <button onClick={pushSelected} disabled={isProd || busy || selectedRows.length === 0} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
             </div>
           </div>
-          {queue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub-created customers/invoices in this silo are waiting to go to Wave.</div> : (
+          {queue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
             <div>
               {queue.map(function (q) {
                 return (
                   <div key={q.key} className="flex items-center gap-2 px-3 py-2 border-t border-slate-800 text-sm">
-                    <input type="checkbox" checked={!!sel[q.key]} onChange={function () { toggle(q.key); }} className="w-4 h-4" />
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-700">{q.action}</span>
-                    <span className="flex-1">{q.label}</span>
+                    <input type="checkbox" checked={!!sel[q.key]} disabled={!!q.blocked} onChange={function () { toggle(q.key); }} className="w-4 h-4" />
+                    <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (q.action === 'payment' ? 'bg-emerald-700 text-white' : (q.action === 'invoice' ? 'bg-sky-700 text-white' : 'bg-slate-700 text-white'))}>{q.action}</span>
+                    <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
-                    <span className="text-[10px] text-slate-500">not synced</span>
+                    <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : 'text-slate-500')}>{q.blocked ? 'blocked' : 'not synced'}</span>
                   </div>
                 );
               })}

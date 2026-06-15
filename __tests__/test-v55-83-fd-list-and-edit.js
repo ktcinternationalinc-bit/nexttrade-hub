@@ -4,7 +4,7 @@ var ai=p('src/components/AccountingInvoicesTab.jsx');
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 ok(/fetchAllRows\('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status'\)/.test(ai),'list loads payment rows');
 ok(/setHubPaidMap\(paidMap\)/.test(ai),'builds hubPaidMap');
-ok(/if \(p\.voided \|\| p\.sync_status === 'void'\) \{ return; \}/.test(ai),'excludes voided payments from map');
+ok(/if \(isPaymentVoid\(p\)\) \{ return; \}/.test(ai),'excludes voided payments from map (via isPaymentVoid)');
 ok(/function rowCalc\(row\)/.test(ai),'rowCalc helper exists');
 ok(/\{isInvoice\(\) \? fmt\(rc\.paid\) : '\u2014'\}/.test(ai),'list Paid uses rc.paid');
 ok(/\{isInvoice\(\) \? fmt\(rc\.balance\) : '\u2014'\}/.test(ai),'list Balance uses rc.balance');

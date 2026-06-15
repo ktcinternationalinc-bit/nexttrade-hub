@@ -7,7 +7,7 @@ ok(/var balance = roundMoney\(Math\.max\(0, docTot - paid\)\)/.test(ai),'viewCal
 ok(!/viewing && viewing\.balance_due != null\) \? Number\(viewing\.balance_due\)/.test(ai),'stale balance_due preference removed');
 ok(/var paymentStatus = paid <= 0\.0001/.test(ai),'viewCalc computes payment status');
 ok(/isInvoice\(\) \? ' \xb7 ' \+ vc\.paymentStatus/.test(ai),'modal status uses vc.paymentStatus');
-ok(/!p\.voided && p\.sync_status !== 'void'/.test(ai),'excludes voided + void payments');
+ok(/!isPaymentVoid\(p\)/.test(ai),'excludes voided payments (via isPaymentVoid)');
 ok(/padding: '88px 16px 32px'/.test(ai),'modal overlay padding leaves top room');
 ok(/maxHeight: 'calc\(100vh - 120px\)'/.test(ai),'modal container max height + scroll');
 ok(/select\('amount, voided, sync_status'\)\.eq\('accounting_invoice_id', inv\.id\)/.test(br),'applyToInvoice reads live paid before classify');

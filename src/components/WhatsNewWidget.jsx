@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FE',
+    date: '2026-06-08',
+    label: 'Root-cause fix: payment columns + matched payments now show in Wave Sync',
+    items: [
+      '**\u2705 Fixed the real reason paid invoices still showed unpaid.** The payments table was missing the fields the app relied on; they have been added and the app now reads them correctly everywhere (list, invoice view, sync).',
+      '**\ud83d\udce4 Matched payments now appear in the Wave Sync Center as their own \u201cPayment\u201d items** \u2014 even when the invoice was already sent to Wave (this is why Adel Saeed / invoice 6 had vanished from the queue).',
+      '**\ud83d\udd27 Run the one-time database update below** so older paid invoices and reversed payments are corrected.',
+      { superAdminOnly: true, text: 'v55.83-FE. HAS SQL (run FIRST). ROOT CAUSE of "paid invoice shows unpaid" + backfill error: accounting_invoice_payments had NO voided column (and no wave_invoice_id/wave_customer_id/last_synced_at/sync_error). Code filtered on p.voided (no-op/err) and unmatch wrote voided:true to a missing column. FIX (additive, per GPT): ALTER TABLE accounting_invoice_payments ADD voided bool default false, voided_at, voided_by, wave_invoice_id, wave_customer_id, last_synced_at, sync_error; backfill voided=true where sync_status in (void,voided,cancelled,reversed,deleted). CODE: new shared isPaymentVoid(p) in payment-matching.js (voided===true OR sync_status in that set) used in BankReviewTab recompute + applyToInvoice live-paid, AccountingInvoicesTab hubPaidMap (list) + viewCalc (modal), WaveSyncCenter payment queue. recompute/applyToInvoice selects now include sync_status. unmatch stamp sets BOTH voided:true AND sync_status:void (+voided_at/by). WAVE SYNC CENTER GAP: queue only listed customers w/o wave_customer_id + invoices w/o wave_invoice_id; a payment matched to an already-synced invoice never appeared. Now load() fetches accounting_invoice_payments (silo-scoped); queue adds action=payment rows where sync_status=pending_wave_sync, not voided, amount>0, payment_date set, wave_payment_id null; shows customer/invoice#/amount/date/sync_status; blocked badge if invoice/customer not yet in Wave (checkbox disabled); header breakdown counts customers/invoices/payments; push route already maps payment->/api/wave/push-payment. After SQL+deploy: invoice 6 list shows Paid 1245/Balance 0/paid; Sync Center Pending shows Payment · Adel Saeed · Invoice 6 · 1245.' },
+    ],
+  },
+  {
     version: 'v55.83-FD',
     date: '2026-06-08',
     label: 'Invoice list shows real Paid/Balance; edit opens as a popup',
