@@ -223,7 +223,6 @@ async function runCheck() {
     paymentMethod_enum: pmFound,
     invoice_has_payments_field: invFields.indexOf('payments') >= 0,
     invoice_payments_field_type: invPaymentsFieldType,
-    invoice_payment_type_fields: invoicePaymentTypeFields,
     payment_input_required_fields_probe: paymentProbe,
     invoice_aggregate_probe: invoiceAggregateProbe,
     invoice_payments_query_probe: invoicePaymentsProbe,

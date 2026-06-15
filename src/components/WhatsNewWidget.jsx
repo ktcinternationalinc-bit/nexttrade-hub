@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FB',
+    date: '2026-06-08',
+    label: 'Payment matching: 3 reliability fixes for launch',
+    items: [
+      '**\u2705 Strengthened bank-deposit-to-invoice matching for daily use.** A matched deposit now consistently shows as matched in BOTH the Bank screen and Bank Review, balances can never go negative, and an invoice balance is never recalculated from incomplete data.',
+      { superAdminOnly: true, text: 'v55.83-FB. No SQL. Bug hunt on the core match path (the make-or-break launch feature). FIX 1: recomputeInvoice could write amount_paid/balance_due using total=0 when the invoice was not in the loaded acctInvoices set (different page/silo) -> corrupt balance + false paid. Now: if not in memory, fetch the invoice from DB; if still not found, DO NOT write balances (safe no-op). FIX 2: balance_due clamped to >=0 (overpayment already routed to customer_credits; no more negative balances). FIX 3: CROSS-VIEW CONSISTENCY \u2014 BankReviewTab matched via linked_type/linked_id but BankTab (Plaid view) decides matched/unmatched by matched_invoice_id, so a Bank-Review match still showed UNMATCHED in the Plaid Bank tab. applyToInvoice now also sets matched_invoice_id; unmatch clears it. Confirmed matched_invoice_id is a real bank_transactions column (used by BankTab read + EgyptBankTab writes). Existing flow already correct: createInvPaymentRow (pending_wave_sync), recompute = wave_imported_paid + SUM(non-void hub payments), unmatch voids+reverses+recomputes, overpayment->customer_credits, silo guard (assertMatchSameSilo), audit_log via dbInsert/dbUpdate. Acceptance test (invoice 1000 + deposit 1000 -> match -> paid -> AR 0 -> bank matched -> logged -> amounts gated by canSeeAmounts) now consistent across both bank views. schema-check invoicePaymentTypeFields crash also fixed (FA). Wave payment push still pending field-probe; matched rows sit pending_wave_sync = the Needs-Wave-Entry queue.' },
+    ],
+  },
+  {
     version: 'v55.83-FA',
     date: '2026-06-08',
     label: 'Wave payment field discovery (safe validation probe)',

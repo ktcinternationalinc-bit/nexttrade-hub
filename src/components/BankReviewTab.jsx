@@ -241,16 +241,27 @@ export default function BankReviewTab(props) {
   // Reads accounting_invoice_payments (NOT payment_matches) so it never clobbers the
   // Wave-imported paid amount and never double-counts.
   function recomputeInvoice(invId) {
-    return supabase.from('accounting_invoice_payments').select('amount, voided').eq('accounting_invoice_id', invId).then(function (r) {
-      var inv = acctInvoices.find(function (i) { return i.id === invId; });
-      var total = invoiceTotal(inv);
-      var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
-      var hubPaid = 0;
-      ((r && r.data) || []).forEach(function (p) { if (!p.voided) { hubPaid += Number(p.amount) || 0; } });
-      var amountPaid = Math.round((waveImported + hubPaid) * 100) / 100;
-      var balanceDue = Math.round((total - amountPaid) * 100) / 100;
-      var status = balanceDue <= 0.0001 ? 'paid' : (amountPaid > 0.0001 ? 'partial' : 'unpaid');
-      return dbUpdate('accounting_invoices', invId, { amount_paid: amountPaid, balance_due: balanceDue, payment_status: status }, userProfile && userProfile.id);
+    // Resolve the invoice from memory; if missing (different page/silo not loaded), fetch it
+    // from the DB so we never compute against total=0 and corrupt amount_paid/balance_due.
+    var inMem = acctInvoices.find(function (i) { return i.id === invId; });
+    function compute(inv) {
+      if (!inv) { return Promise.resolve(); } // safety: never write balances for an unknown invoice
+      return supabase.from('accounting_invoice_payments').select('amount, voided').eq('accounting_invoice_id', invId).then(function (r) {
+        var total = invoiceTotal(inv);
+        var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
+        var hubPaid = 0;
+        ((r && r.data) || []).forEach(function (p) { if (!p.voided) { hubPaid += Number(p.amount) || 0; } });
+        var amountPaid = Math.round((waveImported + hubPaid) * 100) / 100;
+        var balanceDue = Math.round((total - amountPaid) * 100) / 100;
+        if (balanceDue < 0) { balanceDue = 0; } // overpayment goes to customer_credits, not negative balance
+        var status = balanceDue <= 0.0001 ? 'paid' : (amountPaid > 0.0001 ? 'partial' : 'unpaid');
+        return dbUpdate('accounting_invoices', invId, { amount_paid: amountPaid, balance_due: balanceDue, payment_status: status }, userProfile && userProfile.id);
+      });
+    }
+    if (inMem) { return compute(inMem); }
+    return supabase.from('accounting_invoices').select('*').eq('id', invId).then(function (r) {
+      var inv = (r && r.data && r.data.length) ? r.data[0] : null;
+      return compute(inv);
     });
   }
 
@@ -265,7 +276,7 @@ export default function BankReviewTab(props) {
     setBusy(true);
     supabase.from('accounting_invoice_payments').update(stamp).eq('bank_transaction_id', t.id)
       .then(function () { return supabase.from('payment_matches').update(stamp).eq('bank_transaction_id', t.id); })
-      .then(function () { return patchTxn(t, { linked_type: null, linked_id: null, review_status: t.review_status === 'approved' ? t.review_status : 'reviewed' }, 'Unmatched bank txn ' + (t.name || t.id) + ' (' + ms.length + ' match(es) reversed)'); })
+      .then(function () { return patchTxn(t, { linked_type: null, linked_id: null, matched_invoice_id: null, review_status: t.review_status === 'approved' ? t.review_status : 'reviewed' }, 'Unmatched bank txn ' + (t.name || t.id) + ' (' + ms.length + ' match(es) reversed)'); })
       .then(function () { var chain = Promise.resolve(); Object.keys(invIds).forEach(function (id) { chain = chain.then(function () { return recomputeInvoice(id); }); }); return chain; })
       .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })
       .catch(function (e) { console.error('[unmatch]', e); toast.error('Unmatch failed: ' + ((e && e.message) || 'unknown error — check console')); })
@@ -344,7 +355,7 @@ export default function BankReviewTab(props) {
       return chain;
     })
     .then(function () {
-      return patchTxn(t, { classification: t.classification || 'customer_payment', accounting_customer_id: mCustomerId || t.accounting_customer_id, linked_type: 'invoice', linked_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
+      return patchTxn(t, { classification: t.classification || 'customer_payment', accounting_customer_id: mCustomerId || t.accounting_customer_id, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
         'Matched ' + fmt(c.applied_to_invoice) + ' from bank txn to invoice ' + (inv.invoice_number || inv.id) + (c.overpayment > 0 ? (' (+' + fmt(c.overpayment) + ' credit)') : ''));
     })
     .then(function () {
