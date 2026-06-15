@@ -42,6 +42,39 @@ function flattenType(t) {
   return (name || k);
 }
 
+// Full recursive unwrap: returns { leaf, kind, required, list, tree } walking NON_NULL/LIST/ofType.
+function describeType(t) {
+  var required = false;
+  var list = false;
+  var cur = t;
+  var tree = [];
+  var guard = 0;
+  while (cur && guard < 12) {
+    guard = guard + 1;
+    tree.push(cur.kind + (cur.name ? (':' + cur.name) : ''));
+    if (cur.kind === 'NON_NULL') { required = true; }
+    if (cur.kind === 'LIST') { list = true; }
+    if (cur.name && cur.kind !== 'NON_NULL' && cur.kind !== 'LIST') { break; }
+    cur = cur.ofType;
+  }
+  var leaf = (cur && cur.name) || null;
+  var leafKind = (cur && cur.kind) || null;
+  return { leaf: leaf, kind: leafKind, required: required, list: list, tree: tree.join(' > ') };
+}
+
+function describeInputFields(data) {
+  var out = [];
+  try {
+    var ifs = data && data.data && data.data.__type && data.data.__type.inputFields;
+    if (ifs) { var i; for (i = 0; i < ifs.length; i++) { var d = describeType(ifs[i].type); out.push({ name: ifs[i].name, leaf: d.leaf, kind: d.kind, required: d.required, list: d.list, tree: d.tree }); } }
+  } catch (e) {}
+  return out;
+}
+
+function fullTypeQuery(typeName) {
+  return 'query{ __type(name:"' + typeName + '"){ name kind enumValues{ name } inputFields{ name type{ kind name ofType{ kind name ofType{ kind name ofType{ kind name } } } } } } }';
+}
+
 function inputFieldsQuery(typeName) {
   return 'query{ __type(name:"' + typeName + '"){ name inputFields{ name type{ name kind ofType{ name kind ofType{ name kind } } } } } }';
 }
@@ -59,32 +92,86 @@ async function runCheck() {
   var token = process.env.WAVE_ACCESS_TOKEN;
   if (!token) { return noStore({ error: 'No Wave token configured.' }, 400); }
 
-  // payment-related mutation names
-  var mutListResp = await gql(token, 'query{ __schema{ mutationType{ fields{ name } } } }');
-  var mutNames = [];
+  // Discover the REAL input type names + fields straight from the mutation signatures, so we
+  // never guess type names. For each payment mutation, read its args and the arg's input type.
+  var mutMeta = await gql(token, 'query{ __schema{ mutationType{ fields{ name args{ name type{ name kind ofType{ name kind ofType{ name kind } } } } } } } }');
+  var targetMutations = { invoicePaymentCreateManual: 1, invoicePaymentPatch: 1 };
+  var paymentMutationDetails = [];
+  var inputTypeNames = {};
   try {
-    var mf = mutListResp && mutListResp.data && mutListResp.data.__schema && mutListResp.data.__schema.mutationType && mutListResp.data.__schema.mutationType.fields;
-    if (mf) { var j; for (j = 0; j < mf.length; j++) { if (mf[j] && mf[j].name && mf[j].name.toLowerCase().indexOf('payment') >= 0) { mutNames.push(mf[j].name); } } }
+    var mf = mutMeta && mutMeta.data && mutMeta.data.__schema && mutMeta.data.__schema.mutationType && mutMeta.data.__schema.mutationType.fields;
+    if (mf) {
+      var mi;
+      for (mi = 0; mi < mf.length; mi++) {
+        var fld = mf[mi];
+        if (fld && fld.name && (targetMutations[fld.name] || fld.name.toLowerCase().indexOf('payment') >= 0)) {
+          var args = [];
+          if (fld.args) { var ai; for (ai = 0; ai < fld.args.length; ai++) { var ad = describeType(fld.args[ai].type); args.push({ name: fld.args[ai].name, leaf: ad.leaf, required: ad.required, list: ad.list, tree: ad.tree }); if (targetMutations[fld.name] && ad.leaf) { inputTypeNames[ad.leaf] = 1; } } }
+          paymentMutationDetails.push({ name: fld.name, args: args });
+        }
+      }
+    }
   } catch (e) {}
 
-  var manualInput = await gql(token, inputFieldsQuery('InvoicePaymentCreateManualInput'));
-  var moneyInput = await gql(token, inputFieldsQuery('MoneyInput'));
+  // Now introspect the actual input types found above (recursive describe + required flags).
+  var inputTypeFields = {};
+  var nestedToProbe = {};
+  var keys = Object.keys(inputTypeNames);
+  var ki;
+  for (ki = 0; ki < keys.length; ki++) {
+    var tName = keys[ki];
+    var tData = await gql(token, fullTypeQuery(tName));
+    var described = describeInputFields(tData);
+    inputTypeFields[tName] = described;
+    // queue nested INPUT_OBJECT leaves (e.g. an amount/money input) to introspect one level deep
+    var di;
+    for (di = 0; di < described.length; di++) {
+      if (described[di].kind === 'INPUT_OBJECT' && described[di].leaf && !inputTypeNames[described[di].leaf]) { nestedToProbe[described[di].leaf] = 1; }
+    }
+  }
+  // one level of nested input objects (money/amount shapes)
+  var nestedFields = {};
+  var nk = Object.keys(nestedToProbe);
+  var nki;
+  for (nki = 0; nki < nk.length; nki++) {
+    var nName = nk[nki];
+    var nData = await gql(token, fullTypeQuery(nName));
+    nestedFields[nName] = describeInputFields(nData);
+  }
 
-  // paymentMethod enum values, if it is an enum
-  var pmEnum = await gql(token, 'query{ __type(name:"PaymentMethod"){ kind enumValues{ name } } }');
-  var pmValues = [];
-  try {
-    var ev = pmEnum && pmEnum.data && pmEnum.data.__type && pmEnum.data.__type.enumValues;
-    if (ev) { var e2; for (e2 = 0; e2 < ev.length; e2++) { pmValues.push(ev[e2].name); } }
-  } catch (e) {}
+  // paymentMethod enum: try several names; report whichever is actually an ENUM with values.
+  var pmTry = ['InvoicePaymentMethod', 'PaymentMethod', 'PaymentMethodType', 'PaymentMethodEnum'];
+  var pmFound = { type: null, kind: null, values: [] };
+  var pmi;
+  for (pmi = 0; pmi < pmTry.length; pmi++) {
+    var pmResp = await gql(token, 'query{ __type(name:"' + pmTry[pmi] + '"){ kind enumValues{ name } } }');
+    try {
+      var node = pmResp && pmResp.data && pmResp.data.__type;
+      if (node && node.kind === 'ENUM' && node.enumValues && node.enumValues.length) { pmFound = { type: pmTry[pmi], kind: 'ENUM', values: [] }; var ei; for (ei = 0; ei < node.enumValues.length; ei++) { pmFound.values.push(node.enumValues[ei].name); } break; }
+    } catch (e) {}
+  }
 
-  // Invoice.payments existence + payment field shape
-  var invType = await gql(token, 'query{ __type(name:"Invoice"){ fields{ name } } }');
+  // Invoice type fields + the real type of its payments field (for Wave -> Hub pull).
+  var invType = await gql(token, 'query{ __type(name:"Invoice"){ kind fields{ name type{ kind name ofType{ kind name ofType{ kind name } } } } } }');
   var invFields = [];
+  var invPaymentsFieldType = null;
   try {
     var iff = invType && invType.data && invType.data.__type && invType.data.__type.fields;
-    if (iff) { var k2; for (k2 = 0; k2 < iff.length; k2++) { invFields.push(iff[k2].name); } }
+    if (iff) { var k2; for (k2 = 0; k2 < iff.length; k2++) { invFields.push(iff[k2].name); if (iff[k2].name === 'payments' || iff[k2].name === 'payment') { var pd = describeType(iff[k2].type); invPaymentsFieldType = pd.leaf + ' (tree: ' + pd.tree + ')'; } } }
   } catch (e2) {}
+
+  // If Invoice exposes a payments field type, introspect that type's fields too.
+  var invoicePaymentTypeFields = null;
+  try {
+    if (invPaymentsFieldType) {
+      var leafName = invPaymentsFieldType.split(' ')[0];
+      if (leafName && leafName !== 'null') {
+        var ipData = await gql(token, 'query{ __type(name:"' + leafName + '"){ fields{ name type{ kind name ofType{ kind name } } } } }');
+        var ipf = ipData && ipData.data && ipData.data.__type && ipData.data.__type.fields;
+        if (ipf) { invoicePaymentTypeFields = []; var ip; for (ip = 0; ip < ipf.length; ip++) { invoicePaymentTypeFields.push({ name: ipf[ip].name, type: flattenType(ipf[ip].type) }); } }
+      }
+    }
+  } catch (e3) {}
 
   // candidate payment accounts: bank/cash from Chart of Accounts (read-only)
   var acctQ = 'query($bid:ID!){ business(id:$bid){ isClassicAccounting accounts(page:1,pageSize:100){ edges{ node{ id name type{ value } subtype{ name value } } } } } }';
@@ -97,13 +184,13 @@ async function runCheck() {
     isClassic = biz ? biz.isClassicAccounting : null;
     var aedges = biz && biz.accounts && biz.accounts.edges;
     if (aedges) {
-      var ai;
-      for (ai = 0; ai < aedges.length; ai++) {
-        var n = aedges[ai].node;
+      var aci;
+      for (aci = 0; aci < aedges.length; aci++) {
+        var n = aedges[aci].node;
         if (!n) { continue; }
         var st = (n.subtype && (n.subtype.value || n.subtype.name)) || '';
         var stU = String(st).toUpperCase();
-        if (stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0) {
+        if (stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0 || stU.indexOf('CREDIT') >= 0) {
           candidates.push({ id: n.id, name: n.name, subtype: st });
         }
       }
@@ -113,11 +200,13 @@ async function runCheck() {
   return noStore({
     ok: true,
     note: 'Read-only introspection. Nothing was written to Wave. Token never exposed.',
-    payment_related_mutations: mutNames,
-    invoicePaymentCreateManualInput_fields: listInputFields(manualInput),
-    moneyInput_fields: listInputFields(moneyInput),
-    paymentMethod_enum_values: pmValues,
+    payment_mutation_details: paymentMutationDetails,
+    discovered_input_type_fields: inputTypeFields,
+    nested_input_type_fields: nestedFields,
+    paymentMethod_enum: pmFound,
     invoice_has_payments_field: invFields.indexOf('payments') >= 0,
+    invoice_payments_field_type: invPaymentsFieldType,
+    invoice_payment_type_fields: invoicePaymentTypeFields,
     invoice_fields: invFields,
     candidate_payment_accounts: candidates,
     isClassicAccounting_context_only: isClassic

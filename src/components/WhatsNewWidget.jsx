@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-EZ',
+    date: '2026-06-08',
+    label: 'Wave payment schema discovery (reads real field names)',
+    items: [
+      '**\ud83d\udd0e Confirmed Wave supports recording invoice payments via the API.** This build improves the read-only schema check so it discovers the exact fields Wave needs, so the upcoming payment sync is built precisely.',
+      { superAdminOnly: true, text: 'v55.83-EZ. No SQL. First schema-check (EX/EY) CONFIRMED invoicePaymentCreateManual EXISTS (+invoicePaymentPatch/Delete/ReceiptSend) and isClassicAccounting=false and a CASH_AND_BANK account "Cash on Hand" exists as a paymentAccountId candidate. BUT the guessed input type names (InvoicePaymentCreateManualInput / MoneyInput / PaymentMethod) returned [] \u2014 wrong type names. EZ rewrites runCheck to read the REAL types from the mutation SIGNATURE: introspect mutationType.fields[].args[].type for invoicePaymentCreateManual + invoicePaymentPatch, collect the actual input type name(s), then introspect those for fields (discovered_input_type_fields). Also: paymentMethod enum tries InvoicePaymentMethod/PaymentMethod/PaymentMethodType and reports whichever has values; Invoice introspection reports payments field + its type; candidate accounts now include CREDIT subtypes too. NEXT: re-run schema-check (same bearer/body POST) -> paste discovered_input_type_fields + paymentMethod_enum + invoice_payments_field_type -> I build push-payment (invoicePaymentCreateManual) + Wave->Hub pull on REAL fields. schema-check still bearer/super_admin-only, no-store, read-only, temporary. EY visibility fixes (AR silo scope, Bank account+range filters) intact.' },
+    ],
+  },
+  {
     version: 'v55.83-EY',
     date: '2026-06-08',
     label: 'Cleaner views: Customer AR History by business, Bank by account + date',
