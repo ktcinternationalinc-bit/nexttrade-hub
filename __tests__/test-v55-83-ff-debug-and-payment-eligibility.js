@@ -17,7 +17,7 @@ ok(/payment_schema_pending/.test(rt),'push-payment logs truthful action');
 ok(/sync_error: msg/.test(rt),'push-payment saves sync_error');
 // settings label
 ok(!/Wave does not support — stays off/.test(wsc),'settings toggle no longer says unsupported');
-ok(/verifying Wave fields/.test(wsc),'settings toggle truthful label');
+ok(/schema verification pending/.test(wsc),'settings toggle truthful label (FI relabel)');
 ok(/version: 'v55\.83-FF'/.test(p('src/components/WhatsNewWidget.jsx')),'WhatsNew FF');
 console.log('\nv55.83-FF debug + payment eligibility: '+pass+' passed, '+fail+' failed');
 if(fail>0)process.exit(1);console.log('ALL PASS');

@@ -107,7 +107,9 @@ function assertCanPush(opts) {
     return fail('writes_disabled', 'Writes to ' + (reg.label || opts.waveBusinessId) + ' are disabled. Enable writes for this silo first.');
   }
 
-  // the specific push type must be allowed (§6) — default false
+  // the specific push type must be allowed (§6) — default false. Payment push now has a real
+  // implementation (invoicePaymentCreateManual), so it IS gated by allow_payment_push again
+  // as a deliberate safety switch the admin turns on per silo.
   var flagByAction = {
     customer: 'allow_customer_push',
     invoice: 'allow_invoice_push',
@@ -117,7 +119,7 @@ function assertCanPush(opts) {
   var flag = flagByAction[action];
   if (!flag) { return fail('bad_action', 'Unknown push action: ' + action); }
   if (reg[flag] !== true) {
-    return fail('push_type_disabled', (action.charAt(0).toUpperCase() + action.slice(1)) + ' push is not enabled for ' + (reg.label || opts.waveBusinessId) + '.');
+    return fail('push_type_disabled', (action.charAt(0).toUpperCase() + action.slice(1)) + ' push is not enabled for ' + (reg.label || opts.waveBusinessId) + '. Enable it in Wave Sync > Settings.');
   }
 
   // production requires the typed unlock phrase EVERY push (§7)

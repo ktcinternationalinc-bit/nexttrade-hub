@@ -33,6 +33,66 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FL',
+    date: '2026-06-08',
+    label: 'Wave payment push is LIVE (records matched payments in Wave)',
+    items: [
+      '**\ud83c\udf89 Hub can now record a matched payment directly in Wave.** Once you set the Wave payment account and turn on payment push, a confirmed bank match posts to Wave and marks the Wave invoice paid/partial \u2014 then Hub updates to match.',
+      '**\ud83d\udd12 Safety first:** push one payment at a time, with clear status (ready / missing account / syncing / synced / failed). Nothing is faked \u2014 if Wave rejects it, you see the exact reason.',
+      { superAdminOnly: true, text: 'v55.83-FL. No SQL. REAL invoicePaymentCreateManual push (field probe confirmed required fields: invoiceId ID!, paymentAccountId ID!, amount Decimal!, paymentDate Date!, paymentMethod InvoicePaymentMethod!, exchangeRate Decimal!). /api/wave/push-payment fully rewritten (was truthful stub). Sources: invoiceId=wave_invoice_id, paymentAccountId=wave_business_settings.default_payment_account_id, amount/paymentDate from row, paymentMethod default OTHER (configurable; if Wave rejects enum the exact accepted-values error is returned + row->sync_failed, no guessing), exchangeRate=1. SAFETY (per GPT): (1) idempotency \u2014 refuses if wave_payment_id set / synced / voided / amount<=0; claims row as sync_status=syncing via conditional update (.is wave_payment_id null + .in pending set) so concurrent/double-click cannot double-push (409 if already claimed). (2) Blocks missing wave_invoice_id / paymentAccountId / amount / paymentDate clearly. (2b) orphan guard: refuses if bank_transaction_id no longer exists. KANDIL-only hard guard (business id check). (5) success -> save REAL wave_payment_id, sync_status=synced, last_synced_at, sync_error=null, wave_sync_log, AND recompute Hub invoice amount_paid/balance/status. (6) failure -> sync_status=sync_failed + exact Wave error in sync_error, never fake id, never mark synced. dry_run returns would_send without sending. Payment toggle RE-ENABLED (allow_payment_push now meaningful; silo guard gates payment on it again; auto-push still locked). Queue: syncing status visible+blocked; removed schema-pending block. FIRST TEST: configure Cash on Hand, enable allow_payment_push for KANDIL, push ONE clean payment (NOT invoice 6 \u2014 it is DRAFT/contaminated; pick a clean approved invoice with wave_invoice_id), verify in Wave, then more. Do NOT bulk push. NEXT: paymentMethod enum confirm on first real attempt; then categories; then Wave->Hub reconcile.' },
+    ],
+  },
+  {
+    version: 'v55.83-FK',
+    date: '2026-06-08',
+    label: 'Lock prevention: fix unmatch reversal + block contaminated invoices from sync',
+    items: [
+      '**\ud83d\udd13 Fixed reversing a match so the invoice balance is always restored,** even when the older match record is missing fields.',
+      '**\ud83d\udeab Invoices tied to a wrong/unregistered Wave account are now blocked from the sync queue** with a clear reason, so they can never be pushed by accident.',
+      { superAdminOnly: true, text: 'v55.83-FK. SQL run separately by Max (void invoice 01 ABU FASIF orphan + full orphan sweep + recompute). Prevention LOCK + one more real bug. UNMATCH BUG (found while confirming GPT prevention list): unmatch applied ONE shared stamp to BOTH accounting_invoice_payments AND payment_matches, but the stamp included sync_status:void and payment_matches has NO sync_status column -> that update errored, the .then chain hit .catch, and recomputeInvoice AFTER it never ran -> invoice balance silently not restored on unmatch. FIX: separate payStamp (voided+sync_status:void+voided_at/by) vs matchStamp (voided+voided_at/by only); payment_matches void made NON-FATAL (caught, warns) so recompute always runs. CONTAMINATED GUARD (GPT): WaveSyncCenter queue now has explicit contaminatedCust set (3 Company Limited e17b9405, ABU FASIF 46bfbd33, A K TRADERS f00a1fff \u2014 invoices 01/02/56666/5656) -> any payment for them blocked "Invoice/customer belongs to a wrong or unregistered Wave silo \u2014 do not push" (on top of existing placeholder-bid exclusion). CONFIRMED FJ guards still in place: applyToInvoice + saveSplits block direction===out; orphan payments blocked via _orphan_bank; recompute excludes voided via isPaymentVoid; blocked rows excluded from selectedRows. Tests added: outgoing txn cannot match invoice; orphaned/contaminated payment cannot be selected for push. After Max runs sweep SQL, orphan verify must return ZERO rows.' },
+    ],
+  },
+  {
+    version: 'v55.83-FJ',
+    date: '2026-06-08',
+    label: 'Guards: money-in-only matching + block orphaned/deleted-deposit payments',
+    items: [
+      '**\ud83d\udee1\ufe0f Outgoing bank transfers can no longer be matched to a customer invoice.** Only incoming deposits count as customer payments \u2014 this prevents the kind of bad match we just cleaned up.',
+      '**\ud83d\udd0d Payments tied to a deposit that no longer exists are now flagged and blocked** from syncing to Wave, so a stale match can\u2019t quietly inflate an invoice.',
+      { superAdminOnly: true, text: 'v55.83-FJ. SQL already run by Max (added voided/voided_at/voided_by to payment_matches; voided orphaned Ahmed/2187 payment + match; recomputed 2187 to unpaid/306360). CODE GUARDS so it cannot recur: (1) BankReviewTab.applyToInvoice now rejects t.direction===out ("outgoing, only incoming deposits can pay a customer invoice"); saveSplits rejects out-direction when any split line targets an invoice. This is the root of the bogus duplicate 250s \u2014 outgoing transfer sides were matchable. (2) WaveSyncCenter queue: payment rows carry _orphan_bank (bank_transaction_id set but not found in loaded bank_transactions); such rows are blocked "Bank deposit not found (stale/deleted match)" and (FI) blocked rows have checkbox disabled + excluded from selectedRows so they can never push. NOTE schema-drift found: payment_matches had NO voided column, so unmatch\u2019s payment_matches void was silently failing until the ALTER \u2014 now functional. Ali Arasia/2134 untouched. Still parked: real invoicePaymentCreateManual push (needs field probe). NEXT after this: consider sweeping for other orphaned payment rows (any accounting_invoice_payments.bank_transaction_id with no matching bank_transactions row) + recompute affected invoices.' },
+    ],
+  },
+  {
+    version: 'v55.83-FI',
+    date: '2026-06-08',
+    label: 'Payment queue fixes: nothing vanishes, no dead-end toggle, duplicate-deposit safety',
+    items: [
+      '**\ud83d\udc41\ufe0f Payments no longer disappear from the Wave Sync queue.** Anything still needing action (waiting, manual entry needed, or previously failed) stays visible.',
+      '**\ud83d\udd13 Removed the dead-end:** payment sync is no longer blocked by a switch you could not turn on. The queue now shows the real reason a payment is not ready.',
+      '**\u26a0\ufe0f New safety check:** if one bank deposit is linked to more than one invoice, the queue flags it as a split or a possible duplicate, and blocks pushing if the amounts add up to more than the actual deposit.',
+      { superAdminOnly: true, text: 'v55.83-FI. No SQL. Three payment-queue bugs. BUG1 (vanishing): queue filtered sync_status===pending_wave_sync only, so a push attempt moving the row to manual_wave_action_required hid it. Now ACTIONABLE set = pending_wave_sync|manual_wave_action_required|payment_schema_pending|sync_failed|failed all show; synced/manual_done/void excluded; removed duplicate wave_payment_id check. BUG2 (impossible toggle loop): wave-silo-guard required allow_payment_push but the UI locks that toggle -> no path. Removed payment from the flag gate (action!==payment); customer/invoice/category still gated; real readiness (wave ids, payment account, schema) enforced separately; push route truthful. Settings label -> "Payment push: schema verification pending (not a blocker)". BUG3 (duplicate/split deposit safety, the Ahmed 2187 / Ali 2134 both 250 case): load() now also pulls bank_transactions(amount_abs) and attaches _bank_amount to each payment; queue pre-pass groups actionable payments by bank_transaction_id; if same deposit on >1 invoice -> Split note (total / deposit) when total<=deposit, or BLOCK "over-allocated" when total>deposit. Row sub-line now shows bank txn id + match id for identity. blocked rows: checkbox disabled AND excluded from selectedRows (queue.filter sel && !blocked) so they can never be pushed. Diagnostic SQL (run to inspect the 250 case) provided in chat. NEXT (still parked): real invoicePaymentCreateManual once field probe done.' },
+    ],
+  },
+  {
+    version: 'v55.83-FH',
+    date: '2026-06-08',
+    label: 'Wave Payment Account setup + pending payments queue actions',
+    items: [
+      '**\u2699\ufe0f New: choose the Wave bank/cash account** where pushed invoice payments should be recorded (Accounting \u2192 Wave Sync \u2192 Settings). Start with Cash on Hand or your real bank account.',
+      '**\ud83d\udce4 The Pending list now lets you mark a payment as \u201centered in Wave manually\u201d** so it leaves the queue cleanly while automatic payment push is being finalized.',
+      { superAdminOnly: true, text: 'v55.83-FH. HAS SQL (1 column). Wave operational-sync Priority 1 + 3 (push call still gated on field probe \u2014 NOT guessing fields). NEW /api/wave/payment-account-setup (mode list|select): lists Wave Chart-of-Accounts bank/cash/credit accounts for the active business (read-only), verifies the picked account belongs to that business, saves wave_business_settings.default_payment_account_id + default_payment_account_name; rejects placeholder bids; super_admin via existing Settings gating. WaveSyncCenter Settings: new teal Payment Account card (List accounts -> Use this), shows configured account or amber "not configured" warning. Pending payment rows get a "Mark manual done" button -> sets accounting_invoice_payments.sync_status=manual_done + last_synced_at (audit-logged via dbUpdate, no fake wave_payment_id). push-payment route already truthful (FF). SQL: ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_name text. NEXT (blocked): real invoicePaymentCreateManual push needs the empty-input field probe completed (payment_input_required_fields_probe) \u2014 once we have invoiceId/paymentAccountId/amount/paymentDate/paymentMethod field names, wire push-payment to call Wave w/ default_payment_account_id, save real wave_payment_id, sync_status=synced. Then Priority 4 categories, Priority 6 Wave->Hub aggregate reconcile.' },
+    ],
+  },
+  {
+    version: 'v55.83-FG',
+    date: '2026-06-08',
+    label: 'Scheduled bank sync no longer crashes on an HTML error page',
+    items: [
+      '**\ud83d\udd27 Fixed the automatic bank sync failing with a confusing \u201cUnexpected token\u201d error.** It now detects when it gets a web page instead of data, records the real status and reason, and keeps syncing your other bank connections.',
+      { superAdminOnly: true, text: 'v55.83-FG. No SQL. Plaid scheduled sync (/api/plaid/sync) failed with "Unexpected token <, <!doctype..." = got HTML, not JSON. ROOT CAUSE: callTransactions did r.json() blindly, and base URL was derived from request.url host (wrong on Vercel cron -> HTML 404). FIX per GPT: callTransactions now reads r.text() first, checks r.ok + content-type includes application/json; if not, returns {error: "Expected JSON but got HTTP <status> (<ct>) from <url> :: <first 500 chars>", http_status, content_type, non_json} instead of throwing. base URL now prefers NEXT_PUBLIC_APP_URL / NEXT_PUBLIC_SITE_URL / https://VERCEL_URL, request host only as last resort; forwards CRON_SECRET bearer (harmless: transactions route has no auth guard). Per-connection loop already continues on failure and logs connection_id+institution+silo+wave_business_id+error to wave_sync_log; logged payload now capped to 800 chars so a huge HTML page does not bloat the log; no secrets/tokens logged. This was an HTTP/route/parse issue, not a Plaid data issue \u2014 the log will now name the failing URL + status so we can finish diagnosis if it recurs.' },
+    ],
+  },
+  {
     version: 'v55.83-FF',
     date: '2026-06-08',
     label: 'Cleaned debug text; payment sync uses invoice Wave ID; truthful payment status',

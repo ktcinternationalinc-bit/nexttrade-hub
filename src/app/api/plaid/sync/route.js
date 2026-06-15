@@ -16,12 +16,27 @@ function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-function callTransactions(base, connectionId) {
-  return fetch(base + '/api/plaid/transactions', {
+function callTransactions(base, connectionId, bearer) {
+  var url = base + '/api/plaid/transactions';
+  var headers = { 'Content-Type': 'application/json' };
+  if (bearer) { headers['Authorization'] = 'Bearer ' + bearer; }
+  return fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify({ connection_id: connectionId, scheduled: true })
-  }).then(function (r) { return r.json(); }).catch(function (e) { return { error: (e && e.message) || String(e) }; });
+  }).then(function (r) {
+    var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+    return r.text().then(function (text) {
+      // Got an HTML page (404/500/redirect/login) instead of JSON — surface the real cause
+      // instead of letting JSON.parse throw an opaque "Unexpected token '<'".
+      if (!r.ok || ct.indexOf('application/json') < 0) {
+        var preview = (text || '').slice(0, 500);
+        return { error: 'Expected JSON but got HTTP ' + r.status + ' (' + (ct || 'no content-type') + ') from ' + url + ' :: ' + preview, http_status: r.status, content_type: ct, non_json: true };
+      }
+      try { return JSON.parse(text); }
+      catch (eParse) { return { error: 'JSON parse failed from ' + url + ': ' + ((eParse && eParse.message) || 'parse error') + ' :: ' + (text || '').slice(0, 500), non_json: true }; }
+    });
+  }).catch(function (e) { return { error: 'fetch failed for ' + url + ': ' + ((e && e.message) || String(e)) }; });
 }
 
 async function runSync(request) {
@@ -56,9 +71,17 @@ async function runSync(request) {
   var connRes = await db.from('bank_connections').select('id, institution_name, wave_business_id');
   var conns = (connRes && connRes.data) || [];
 
-  // Derive the deployment origin so we can call our own transactions route.
-  var base;
-  try { var ur = new URL(request.url); base = ur.protocol + '//' + ur.host; } catch (eU) { base = ''; }
+  // Derive the deployment origin so we can call our own transactions route. Prefer an
+  // explicitly configured absolute URL; fall back to VERCEL_URL, then the request host.
+  // A wrong host is the usual cause of an HTML 404 coming back instead of JSON.
+  var base = '';
+  if (process.env.NEXT_PUBLIC_APP_URL) { base = String(process.env.NEXT_PUBLIC_APP_URL).replace(/\/+$/, ''); }
+  else if (process.env.NEXT_PUBLIC_SITE_URL) { base = String(process.env.NEXT_PUBLIC_SITE_URL).replace(/\/+$/, ''); }
+  else if (process.env.VERCEL_URL) { base = 'https://' + String(process.env.VERCEL_URL).replace(/\/+$/, ''); }
+  else { try { var ur = new URL(request.url); base = ur.protocol + '//' + ur.host; } catch (eU) { base = ''; } }
+
+  // If the transactions route is CRON_SECRET-protected, forward the bearer.
+  var forwardBearer = process.env.CRON_SECRET || null;
 
   var results = [];
   var skippedUnassigned = 0;
@@ -69,8 +92,8 @@ async function runSync(request) {
     if (!c.wave_business_id) { skippedUnassigned = skippedUnassigned + 1; continue; }
     if (!inScope[c.wave_business_id]) { skippedOutOfScope = skippedOutOfScope + 1; continue; }
 
-    var rep = await callTransactions(base, c.id);
-    var okPull = !(rep && (rep.error || rep.error_code)) ;
+    var rep = await callTransactions(base, c.id, forwardBearer);
+    var okPull = !(rep && (rep.error || rep.error_code));
     results.push({
       connection_id: c.id,
       institution: c.institution_name || null,
@@ -83,13 +106,18 @@ async function runSync(request) {
     });
 
     try {
+      var logPayload = rep || null;
+      // Avoid storing a huge HTML error page in the log; keep a bounded preview.
+      if (logPayload && logPayload.error && String(logPayload.error).length > 800) {
+        logPayload = { error: String(logPayload.error).slice(0, 800), http_status: logPayload.http_status || null, content_type: logPayload.content_type || null, non_json: true };
+      }
       await db.from('wave_sync_log').insert({
         wave_business_id: c.wave_business_id,
         entity_type: 'plaid_transactions',
         action: 'scheduled_sync',
         dry_run: false,
         success: okPull,
-        response_payload: rep || null,
+        response_payload: logPayload,
         error_message: okPull ? null : ((rep && (rep.error || rep.error_code)) || 'sync failed'),
         attempted_at: new Date().toISOString()
       });

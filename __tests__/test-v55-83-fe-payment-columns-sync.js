@@ -19,7 +19,7 @@ ok(/viewPayments\.forEach\(function \(p\) \{ if \(!isPaymentVoid\(p\)\)/.test(ai
 ok(/import \{ isPaymentVoid \}/.test(wsc),'WaveSyncCenter imports helper');
 ok(/fetchAllRows\('accounting_invoice_payments', '\*', 'payment_date', false\)/.test(wsc),'WaveSyncCenter loads payments');
 ok(/action: 'payment'/.test(wsc),'queue has payment action rows');
-ok(/p\.sync_status !== 'pending_wave_sync'/.test(wsc),'queue only pending_wave_sync payments');
+ok(/ACTIONABLE\[p\.sync_status\]/.test(wsc),'queue includes all actionable payment statuses (FI)');
 ok(/if \(p\.wave_payment_id\) \{ return; \}/.test(wsc),'queue excludes already-pushed payments');
 ok(/Invoice not yet in Wave/.test(wsc) && /Customer not yet in Wave/.test(wsc),'blocked reasons surfaced');
 ok(/q\.action === 'payment'/.test(wsc),'payment count in header breakdown');

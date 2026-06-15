@@ -272,10 +272,11 @@ export default function BankReviewTab(props) {
     if (ms.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
     if (!window.confirm('Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.')) { return; }
     var invIds = {}; ms.forEach(function (m) { if (m.invoice_id) { invIds[m.invoice_id] = true; } });
-    var stamp = { voided: true, sync_status: 'void', voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
+    var payStamp = { voided: true, sync_status: 'void', voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
+    var matchStamp = { voided: true, voided_at: payStamp.voided_at, voided_by: payStamp.voided_by }; // payment_matches has no sync_status column
     setBusy(true);
-    supabase.from('accounting_invoice_payments').update(stamp).eq('bank_transaction_id', t.id)
-      .then(function () { return supabase.from('payment_matches').update(stamp).eq('bank_transaction_id', t.id); })
+    supabase.from('accounting_invoice_payments').update(payStamp).eq('bank_transaction_id', t.id)
+      .then(function () { return supabase.from('payment_matches').update(matchStamp).eq('bank_transaction_id', t.id).then(function (r) { return r; }, function (e) { console.warn('[unmatch] payment_matches void non-fatal:', (e && e.message) || e); return null; }); })
       .then(function () { return patchTxn(t, { linked_type: null, linked_id: null, matched_invoice_id: null, review_status: t.review_status === 'approved' ? t.review_status : 'reviewed' }, 'Unmatched bank txn ' + (t.name || t.id) + ' (' + ms.length + ' match(es) reversed)'); })
       .then(function () { var chain = Promise.resolve(); Object.keys(invIds).forEach(function (id) { chain = chain.then(function () { return recomputeInvoice(id); }); }); return chain; })
       .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })
@@ -289,6 +290,11 @@ export default function BankReviewTab(props) {
   function saveSplits() {
     var t = sel; if (!t || !mayMatch) return;
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    // Money-in only for invoice-linked splits: an outgoing transfer cannot pay a customer invoice.
+    if (t.direction === 'out') {
+      var hasInvoiceLine = splitRows.some(function (r) { return r.invoice_id; });
+      if (hasInvoiceLine) { toast.error('This is an OUTGOING transaction. Split lines cannot be linked to a customer invoice on money-out.'); return; }
+    }
     var txnAmt = Number(t.amount_abs || Math.abs(Number(t.amount)));
     var v = validateSplit(txnAmt, splitRows.map(function (r) { return { split_amount: r.amount }; }));
     if (!v.valid) { toast.error('Splits must be > 0 and not exceed ' + fmt(txnAmt) + ' (allocated ' + fmt(v.allocated) + ').'); return; }
@@ -321,6 +327,10 @@ export default function BankReviewTab(props) {
     var t = sel; if (!t) return;
     if (!mayMatch) { toast.error('You do not have Payments: Match permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    // Money-in only: a customer invoice payment must come from an INCOMING deposit. Outgoing
+    // transfers (direction 'out') are money leaving and must never be matched to a customer
+    // invoice — that is what produced the bogus duplicate $250 rows.
+    if (t.direction === 'out') { toast.error('This is an OUTGOING transaction (money out). Only incoming deposits can be matched to a customer invoice.'); return; }
     var inv = acctInvoices.find(function (i) { return i.id === mInvoiceId; });
     if (!inv) { toast.error('Pick an invoice.'); return; }
     // Guardrail: never match across Wave businesses (silo). Routed through the shared

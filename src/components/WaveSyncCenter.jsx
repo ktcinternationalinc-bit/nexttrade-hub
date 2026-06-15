@@ -53,6 +53,9 @@ export default function WaveSyncCenter(props) {
   var ps1 = useState(false); var prodBusy = ps1[0]; var setProdBusy = ps1[1];
   var ps2 = useState(''); var prodMsg = ps2[0]; var setProdMsg = ps2[1];
   var ps3 = useState(null); var prodList = ps3[0]; var setProdList = ps3[1];
+  var pa0 = useState(false); var payBusy = pa0[0]; var setPayBusy = pa0[1];
+  var pa1 = useState(''); var payMsg = pa1[0]; var setPayMsg = pa1[1];
+  var pa2 = useState(null); var payList = pa2[0]; var setPayList = pa2[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -68,12 +71,22 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
-      fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false)
+      fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
+      fetchAllRows('bank_transactions', 'id, amount_abs, name')
     ]).then(function (res) {
       var rg = (res[0] && res[0].data) || [];
       setRegistry(rg);
       setCustomers(scopeIfRegistered((res[1] && res[1].data) || [], getActiveWaveBusiness(), rg, true));
-      setPayments(scopeIfRegistered((res[4] && res[4].data) || [], getActiveWaveBusiness(), rg, true));
+      // Attach the originating bank deposit amount onto each payment row (for split/duplicate
+      // detection in the queue) without changing what is stored.
+      var btMap = {};
+      ((res[5] && res[5].data) || []).forEach(function (bt) { if (bt && bt.id) { btMap[bt.id] = bt; } });
+      var pays = ((res[4] && res[4].data) || []).map(function (p) {
+        var bt = p && p.bank_transaction_id ? btMap[p.bank_transaction_id] : null;
+        var orphanBank = !!(p && p.bank_transaction_id && !bt); // points to a missing bank txn
+        return Object.assign({}, p, { _bank_amount: bt ? (Number(bt.amount_abs) || null) : null, _bank_name: bt ? (bt.name || null) : null, _orphan_bank: orphanBank });
+      });
+      setPayments(scopeIfRegistered(pays, getActiveWaveBusiness(), rg, true));
       setInvoices(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), rg, true));
       setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active; }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
@@ -107,6 +120,23 @@ export default function WaveSyncCenter(props) {
       .finally(function () { setProdBusy(false); });
   }
 
+  function runPaymentAccountSetup(mode, accountId, accountName) {
+    setPayBusy(true); setPayMsg(''); if (mode !== 'select') { setPayList(null); }
+    var payload = { wave_business_id: active, mode: mode };
+    if (accountId) { payload.account_id = accountId; payload.account_name = accountName; }
+    fetch('/api/wave/payment-account-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.accounts) { setPayList(d.accounts); setPayMsg('Found ' + d.accounts.length + ' accounts. Pick the bank/cash account where Wave should record invoice payments.'); }
+        else if (d && d.saved) { setPayMsg('Saved. Payment account set to ' + (d.default_payment_account_name || d.default_payment_account_id) + '.'); loadProdSetup(); setPayList(null); toast.success('Wave payment account configured'); }
+        else if (d && d.db_error) { setPayMsg('Database save FAILED: ' + d.db_error + '\n\nIf this mentions a missing column, run:\nALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_name text;'); toast.error('Save failed — see message'); }
+        else if (d && d.error) { setPayMsg('Error: ' + d.error); }
+        else { setPayMsg(JSON.stringify(d, null, 2)); }
+      })
+      .catch(function (e) { setPayMsg('Request failed: ' + ((e && e.message) || String(e))); })
+      .finally(function () { setPayBusy(false); });
+  }
+
   // Eligible (pushable) Hub records for the active silo — STRICT same-silo match only.
   // v55.83-EJ — a record is pushable only if its wave_business_id EXACTLY equals the active
   // silo. No legacy/null inclusion here (that is fine for viewing, not for pushing), and
@@ -114,6 +144,13 @@ export default function WaveSyncCenter(props) {
   var queue = useMemo(function () {
     var rows = [];
     var bad = { 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 };
+    // Known contaminated customers (wrong/unregistered Wave silo) — never push their records.
+    // Invoices 01/02/56666/5656 link to these; kept here so payments show a clear blocked reason.
+    var contaminatedCust = {
+      'e17b9405-275a-45ec-b5f3-8461a2f5d2c0': 1,
+      '46bfbd33-47e0-442b-9a51-98ba19b3ed3d': 1,
+      'f00a1fff-23bc-4899-9472-576e0f214dbc': 1
+    };
     customers.forEach(function (c) {
       if (c.wave_business_id !== active) { return; }
       if (bad[c.wave_business_id]) { return; }
@@ -135,13 +172,29 @@ export default function WaveSyncCenter(props) {
     invoices.forEach(function (i) { invById[i.id] = i; });
     var custById = {};
     customers.forEach(function (c) { custById[c.id] = c; });
+    // Pre-pass: group actionable payments by bank_transaction_id to detect a single bank
+    // deposit allocated to multiple invoices (split) vs the SAME deposit duplicated (error).
+    var ACTIONABLE = { 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1, 'syncing': 1 };
+    var byBankTxn = {};
+    payments.forEach(function (p) {
+      if (!p || p.wave_business_id !== active || bad[p.wave_business_id]) { return; }
+      if (isPaymentVoid(p) || p.wave_payment_id) { return; }
+      if (!ACTIONABLE[p.sync_status]) { return; }
+      if (!p.bank_transaction_id) { return; }
+      if (!byBankTxn[p.bank_transaction_id]) { byBankTxn[p.bank_transaction_id] = { count: 0, total: 0, bankAmount: null }; }
+      byBankTxn[p.bank_transaction_id].count += 1;
+      byBankTxn[p.bank_transaction_id].total = Math.round((byBankTxn[p.bank_transaction_id].total + (Number(p.amount) || 0)) * 100) / 100;
+      if (p._bank_amount != null) { byBankTxn[p.bank_transaction_id].bankAmount = Number(p._bank_amount); }
+    });
     payments.forEach(function (p) {
       if (!p) { return; }
       if (p.wave_business_id !== active) { return; }
       if (bad[p.wave_business_id]) { return; }
       if (isPaymentVoid(p)) { return; }
-      if (p.sync_status !== 'pending_wave_sync') { return; } // already synced or voided are excluded
-      if (p.wave_payment_id) { return; } // already pushed
+      if (p.wave_payment_id) { return; } // already pushed to Wave
+      // Show every payment that still needs action — not only pending_wave_sync. Otherwise a
+      // payment that a push attempt moved to manual_wave_action_required would vanish.
+      if (!ACTIONABLE[p.sync_status]) { return; } // synced / manual_done / void excluded
       if (!(Number(p.amount) > 0)) { return; }
       if (!p.payment_date) { return; }
       var inv = invById[p.accounting_invoice_id];
@@ -150,14 +203,41 @@ export default function WaveSyncCenter(props) {
       var custWaveId = p.wave_customer_id || (cust && cust.wave_customer_id) || null;
       var invNo = inv ? (inv.invoice_number || inv.id) : (p.accounting_invoice_id || '?');
       var custName = cust ? (cust.company_name || cust.contact_name || cust.name || '(customer)') : '(customer)';
+      // Bank-transaction sharing: is this deposit linked to more than one payment row?
+      var grp = p.bank_transaction_id ? byBankTxn[p.bank_transaction_id] : null;
+      var shareNote = null;
+      var dupBlock = null;
+      if (grp && grp.count > 1) {
+        var bankAmt = grp.bankAmount;
+        if (bankAmt != null && grp.total > bankAmt + 0.0001) {
+          dupBlock = 'Same bank deposit over-allocated (' + grp.total + ' across ' + grp.count + ' invoices > deposit ' + bankAmt + ') — review before syncing';
+        } else {
+          shareNote = 'Split: same bank deposit on ' + grp.count + ' invoices (total ' + grp.total + (bankAmt != null ? ' / deposit ' + bankAmt : '') + ')';
+        }
+      }
       var blocked = null;
-      if (!invWaveId) { blocked = 'Invoice not yet in Wave'; }
+      // Orphaned payment guard: the row references a bank transaction that no longer exists
+      // (deleted or replaced by a Plaid re-sync). Never push these to Wave.
+      var orphanBank = p._orphan_bank === true;
+      if (orphanBank) { blocked = 'Bank deposit not found (stale/deleted match) — review or void'; }
+      else if (contaminatedCust[p.accounting_customer_id]) { blocked = 'Invoice/customer belongs to a wrong or unregistered Wave silo — do not push'; }
+      else if (!invWaveId) { blocked = 'Invoice not yet in Wave'; }
       else if (!custWaveId) { blocked = 'Customer not yet in Wave'; }
+      else if (dupBlock) { blocked = dupBlock; }
+      else if (p.sync_status === 'syncing') { blocked = 'Currently syncing to Wave…'; }
+      else if (p.sync_status === 'sync_failed' || p.sync_status === 'failed') { blocked = p.sync_error || 'Previous push failed'; }
+      var subBits = [];
+      if (p.payment_date) { subBits.push(p.payment_date); }
+      subBits.push('status: ' + (p.sync_status || '?'));
+      if (p.bank_transaction_id) { subBits.push('bank txn ' + String(p.bank_transaction_id).substring(0, 8)); }
+      if (p.payment_match_id) { subBits.push('match ' + String(p.payment_match_id).substring(0, 8)); }
+      if (shareNote) { subBits.push('⚠ ' + shareNote); }
+      if (blocked) { subBits.push('⛔ ' + blocked); }
       rows.push({
         key: 'payment:' + p.id, action: 'payment', id: p.id,
         label: 'Payment · ' + custName + ' · Invoice ' + invNo,
         amount: Number(p.amount) || 0,
-        sub: (p.payment_date || '') + (blocked ? (' · ⚠ ' + blocked) : ' · ' + (p.sync_status || '')),
+        sub: subBits.join(' · '),
         blocked: blocked,
         record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
       });
@@ -166,7 +246,17 @@ export default function WaveSyncCenter(props) {
   }, [customers, invoices, payments, active]);
 
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
-  var selectedRows = queue.filter(function (q) { return sel[q.key]; });
+
+  // Mark a queued payment as entered-in-Wave-manually (clears it from the pending queue
+  // without faking a wave_payment_id). Logged to audit_log via dbUpdate.
+  function markManualDone(paymentId) {
+    if (!paymentId) { return; }
+    if (!window.confirm('Mark this payment as already entered in Wave manually?\n\nIt will leave the pending queue. Use this only if you actually recorded the payment in Wave.')) { return; }
+    dbUpdate('accounting_invoice_payments', paymentId, { sync_status: 'manual_done', last_synced_at: new Date().toISOString() }, (userProfile && userProfile.id))
+      .then(function () { toast.success('Marked as entered in Wave manually'); load(); })
+      .catch(function (e) { toast.error('Could not update: ' + ((e && e.message) || 'error')); });
+  }
+  var selectedRows = queue.filter(function (q) { return sel[q.key] && !q.blocked; });
 
   function runDryRun() {
     if (isProd) { toast.error('Production is read-only in this build. Dry run is available for the Test business only.'); return; }
@@ -247,6 +337,7 @@ export default function WaveSyncCenter(props) {
                     <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (q.action === 'payment' ? 'bg-emerald-700 text-white' : (q.action === 'invoice' ? 'bg-sky-700 text-white' : 'bg-slate-700 text-white'))}>{q.action}</span>
                     <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
+                    {q.action === 'payment' && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : 'text-slate-500')}>{q.blocked ? 'blocked' : 'not synced'}</span>
                   </div>
                 );
@@ -344,17 +435,35 @@ export default function WaveSyncCenter(props) {
               </div>
             )}
           </div>
+          <div className="mb-4 border border-teal-200 bg-teal-50 rounded-lg p-3">
+            <div className="font-bold text-slate-900 mb-1">Wave Payment Account</div>
+            <div className="text-xs text-slate-700 mb-2">When Hub pushes a matched payment to Wave, Wave records it against this bank/cash account. Pick the account where these payments should land (e.g. <b>Cash on Hand</b> to start, or your real bank account).</div>
+            {prodSetup && prodSetup.default_payment_account_id ? (
+              <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured payment account: {prodSetup.default_payment_account_name || prodSetup.default_payment_account_id}</div>
+            ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No payment account configured yet — payment push will be blocked until you set one.</div>}
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={function () { runPaymentAccountSetup('list'); }} disabled={payBusy} className="text-xs bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">List bank/cash accounts</button>
+            </div>
+            {payMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{payMsg}</div>}
+            {payList && payList.length > 0 && (
+              <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
+                {payList.map(function (ac) {
+                  return <div key={ac.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100"><span className="text-slate-900">{ac.name}{ac.subtype ? <span className="text-slate-500"> · {ac.subtype}</span> : null}{ac.payment_capable ? null : <span className="text-amber-700"> (not bank/cash)</span>}</span><button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 text-white rounded px-2 py-0.5 font-bold">Use this</button></div>;
+                })}
+              </div>
+            )}
+          </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : isProd ? (
             <div className="text-sm text-red-700 font-semibold">This is a PRODUCTION business. All push flags are locked in this build.</div>
           ) : (
             <div className="space-y-2 text-sm">
-              {[['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (verifying Wave fields — stays off for now)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
-                var disabled = savingFlags || f[0] === 'allow_payment_push' || f[0] === 'allow_auto_push';
+              {[['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (records payments in Wave)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
+                var disabled = savingFlags || f[0] === 'allow_auto_push';
                 return (
                   <label key={f[0]} className="flex items-center gap-2">
                     <input type="checkbox" checked={reg[f[0]] === true} disabled={disabled} onChange={function (e) { setFlag(f[0], e.target.checked); }} />
-                    <span className={disabled && (f[0] === 'allow_payment_push' || f[0] === 'allow_auto_push') ? 'text-slate-400' : ''}>{f[1]}</span>
+                    <span className={disabled && f[0] === 'allow_auto_push' ? 'text-slate-400' : ''}>{f[1]}</span>
                   </label>
                 );
               })}
