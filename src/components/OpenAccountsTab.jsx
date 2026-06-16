@@ -2064,6 +2064,11 @@ export default function OpenAccountsTab(props) {
                         var totalCols = 4 + 3 + s.currencies.length + (canEdit ? 1 : 0);
                         // First currency block has a heavier top border; subsequent blocks have a subtle one
                         var headerBorder = sumIdx === 0 ? 'border-t-4 border-amber-400' : 'border-t-2 border-slate-700';
+                        // v55.83-GP — summary footer labels follow the same perspective toggle as the
+                        // headers (labels-only; the numbers are identical in both views).
+                        var sPersp = ledgerPerspective[a.id] === 'customer' ? 'customer' : 'internal';
+                        var arSumLabel = sPersp === 'customer' ? 'Total You Owe Us' : 'Total AR (They Owe Us)';
+                        var apSumLabel = sPersp === 'customer' ? 'Total Owed to You' : 'Total AP (We Owe Them)';
                         return [
                           // Spacer row between consecutive Summary blocks (visual breathing room)
                           sumIdx > 0 ? (
@@ -2080,7 +2085,7 @@ export default function OpenAccountsTab(props) {
                           </tr>,
                           // Total AR row — value sits in AR Side column for visual alignment
                           <tr key={cur + '-ar'} className="bg-slate-800 text-white">
-                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AR (They Owe Us)</td>
+                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">{arSumLabel}</td>
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-emerald-900/40 text-emerald-100">
                               {totalAR > 0.005 ? fmtNum(totalAR) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
@@ -2088,7 +2093,7 @@ export default function OpenAccountsTab(props) {
                           </tr>,
                           // Total AP row — value sits in AP Side column for visual alignment
                           <tr key={cur + '-ap'} className="bg-slate-800 text-white">
-                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">Total AP (We Owe Them)</td>
+                            <td colSpan={4} className="px-3 py-1.5 text-right text-xs text-slate-200">{apSumLabel}</td>
                             <td className="px-3 py-1.5"></td>
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-red-900/40 text-red-100">
                               {totalAP > 0.005 ? fmtNum(totalAP) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
@@ -2099,8 +2104,8 @@ export default function OpenAccountsTab(props) {
                           <tr key={cur + '-net'} className="bg-slate-950 text-white">
                             <td colSpan={4} className="px-3 py-2.5 text-right text-xs font-extrabold uppercase tracking-wider">
                               {hasOverpayment
-                                ? <span>Net {cur} Position — (AR − cust credit) − (AP − vend credit) →</span>
-                                : <span>Net {cur} Position — Total AR − Total AP →</span>}
+                                ? <span>Net {cur} Position {sPersp === 'customer' ? '' : '— (AR − cust credit) − (AP − vend credit) '}→</span>
+                                : <span>Net {cur} Position {sPersp === 'customer' ? '' : '— Total AR − Total AP '}→</span>}
                             </td>
                             <td colSpan={3} className={'px-3 py-2.5 text-right font-mono font-extrabold text-base ' + netCls}>
                               {hasOverpayment ? (

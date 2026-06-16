@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GP',
+    date: '2026-06-16',
+    label: 'Open Accounts: summary footer + Excel follow the Customer/Internal toggle',
+    items: [
+      '**🔁 Customer-statement wording is now consistent everywhere.** When the toggle is on Customer Statement, the ledger summary footer reads "Total You Owe Us / Total Owed to You" (and the Net line drops the internal AR/AP wording), and the Excel export uses the same customer-facing labels. Print invoice colors no longer flip between views (color is by document type only).',
+      { superAdminOnly: true, text: 'v55.83-GP. No SQL. Open Accounts only. OpenAccountsTab summary footer: arSumLabel/apSumLabel + the Net Position line now switch on ledgerPerspective[a.id] (Total You Owe Us / Total Owed to You; Net line omits "Total AR − Total AP" in customer view). open-account-export.js Excel: the per-currency summary rows ("Total AR/AP") and the final balance label ("They owe us / We owe them") now use the perspective param (You Owe Us / Owed to You / You owe us / Owed to you). open-account-export.js print: removed the customer-perspective invoiceColor swap — sales_invoice stays blue, vendor_bill stays purple regardless of view (true labels-only). Completes the GM/GN/GO QA follow-ups. Still pending: your El Sayad direction trace (data verification) before Phase 2.' },
+    ],
+  },
+  {
     version: 'v55.83-GO',
     date: '2026-06-16',
     label: 'Open Accounts: on-screen Internal / Customer Statement toggle',

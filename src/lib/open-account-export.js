@@ -226,11 +226,12 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       // sales_invoice → BLUE (#1d4ed8) — we're billing them
       // vendor_bill   → PURPLE (#7e22ce) — they're billing us  (changed from orange)
       // Customer perspective swaps interpretation (their AR is our AP).
+      // v55.83-GP — labels-only: colors are by transaction TYPE and do NOT flip with perspective.
       var invoiceColor = null;
       if (e.transaction_type === 'sales_invoice') {
-        invoiceColor = perspective === 'customer' ? '#7e22ce' : '#1d4ed8';
+        invoiceColor = '#1d4ed8';
       } else if (e.transaction_type === 'vendor_bill') {
-        invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#7e22ce';
+        invoiceColor = '#7e22ce';
       }
       // v55.83-A.6.27.72 HOTFIX 30 — color by transaction TYPE not blanket-by-column.
       // sales_invoice/payment_received in AR column → green (asset)
@@ -915,8 +916,8 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
     var netP = totAR - totAP;
     var subLabel = netP > 0.005 ? 'in our favor' : netP < -0.005 ? 'against us' : 'settled';
     rows.push([cur + ' Summary:', '', '', '', '', '', '', '']);
-    rows.push(['', '', 'Total AR (They Owe Us):', '', cur, totAR, '', '']);
-    rows.push(['', '', 'Total AP (We Owe Them):', '', cur, '', totAP, '']);
+    rows.push(['', '', (perspective === 'customer' ? 'Total You Owe Us:' : 'Total AR (They Owe Us):'), '', cur, totAR, '', '']);
+    rows.push(['', '', (perspective === 'customer' ? 'Total Owed to You:' : 'Total AP (We Owe Them):'), '', cur, '', totAP, '']);
     rows.push(['', '', 'Net ' + cur + ' Position:', subLabel, cur, '', '', netP]);
     rows.push(['', '', '', '', '', '', '', '']);
   });
@@ -924,7 +925,7 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
   rows.push(['', '', '', '', '', '', '', '']);
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { balance: 0 };
-    var label = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
+    var label = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us') : cs.balance < 0 ? (perspective === 'customer' ? 'Owed to you' : 'We owe them') : 'Settled';
     rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '', '']);
   });
 
