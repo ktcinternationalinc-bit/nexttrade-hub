@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GA',
+    date: '2026-06-16',
+    label: 'Wave & Accounting permissions are now assignable to staff',
+    items: [
+      '**🔑 You can now grant staff specific Wave & Accounting permissions.** In Settings → Permissions → Action Permissions, each team member can be granted (all default OFF): Wave actions (view Sync Center, dry run, view log, push customers / invoices / payments, run import, pull categories, manage settings); AR visibility (company summary, customer balances, invoice balances, overdue, export — each separate); payment match / unmatch / mark-manual-done; and bank view / view balances / categorize. Super admin still has everything automatically.',
+      { superAdminOnly: true, text: 'v55.83-GA. No SQL. Added 20 keys to SettingsTab ACTION_PERMS (default OFF, rendered with ?? false). Key strings chosen to be recognized by BOTH the server route guard (server-permissions PERMISSION_ALIASES) and the client helpers (bank-permissions): wave.* and ar.* and payments.* canonical keys are self-included in their alias arrays; for bank, used bank.view / bank.view_account_balances / bank.classify because the canonical bank_transactions.* keys are NOT self-included in their server alias VALUE lists (would not match). Server routes already enforce these via assertPermission; client AR/bank helpers already check ar.*/payments.match/bank.view(_account_balances). REMAINING (next): the Wave Sync Center screen is still gated on isSuperAdmin — granting wave.sync.view lets the server honor the action but the screen wont show for non-super-admins until the gate is changed to wave.sync.view + per-button gates (dry_run/log/settings); and splitting the dashboard Upcoming Due into its own permission. Dashboard AR summary already shows Restricted (not 0/hidden) via tmoney when ar.view_summary is absent.' },
+    ],
+  },
+  {
     version: 'v55.83-FZ',
     date: '2026-06-16',
     label: 'Bank Review: main Wave Category dropdown (not just split mode)',

@@ -449,6 +449,29 @@ const ACTION_PERMS = [
   { key: 'Delete Shipping Bubbles',      label: 'Delete Shipping Bubbles',      desc: 'Use bulk-delete inside a shipping route bubble (Detail view) to remove multiple historical rates at once. Without this, the bulk-select toolbar and per-row checkboxes are hidden. Super-admin always has this.' },
   // v55.83-I (Max Jun 3 2026) — single-rate delete permission (matches the bubble one).
   { key: 'Delete Shipping Rates',        label: 'Delete Shipping Rates',        desc: 'Delete an individual shipping rate (the red Del button on each rate row). Previously admin-only; this lets a non-admin user delete single rates. Admins and super-admin always have this.' },
+  // v55.83-GA — Wave Sync & Accounting permissions, assignable to staff. Default OFF.
+  // The key strings match what BOTH the server route guard (server-permissions PERMISSION_ALIASES)
+  // and the client helpers (bank-permissions) recognize, so granting one here is honored everywhere.
+  { key: 'wave.sync.view',              label: 'Wave: View Sync Center',         desc: 'See the Wave Sync Center screen (pending sync queue, status). Required before any other Wave action is usable from the UI.' },
+  { key: 'wave.sync.dry_run',           label: 'Wave: Dry Run',                  desc: 'Run a dry run (preview what would be sent to Wave) without actually pushing.' },
+  { key: 'wave.sync.log.view',          label: 'Wave: View Sync Log',            desc: 'View the Wave sync log (history of pushes/imports, successes and failures).' },
+  { key: 'wave.customers.push',         label: 'Wave: Push Customers',           desc: 'Push Hub customers up to Wave.' },
+  { key: 'wave.invoices.push',          label: 'Wave: Push Invoices',            desc: 'Push approved Hub invoices up to Wave.' },
+  { key: 'wave.payments.push',          label: 'Wave: Push Payments',            desc: 'Push matched invoice payments to Wave (records the payment in Wave).' },
+  { key: 'wave.import.run',             label: 'Wave: Run Import',               desc: 'Pull customers/invoices from Wave into the Hub (import / reconcile).' },
+  { key: 'wave.categories.pull',        label: 'Wave: Pull Categories',          desc: 'Pull the Wave chart of accounts (categories) into the Hub.' },
+  { key: 'wave.settings.manage',        label: 'Wave: Manage Settings',          desc: 'Change Wave Sync settings: default product, payment deposit account, default bank account, run the database check.' },
+  { key: 'ar.view_summary',             label: 'AR: View Company Summary',       desc: 'See company-wide Accounts Receivable totals on the dashboard (total owed). Separate from seeing individual invoice balances.' },
+  { key: 'ar.view_customer_balances',   label: 'AR: View Customer Balances',     desc: 'See how much each customer owes across all their invoices (top customer balances).' },
+  { key: 'ar.view_invoice_balances',    label: 'AR: View Invoice Balances',      desc: 'See the balance due on individual invoices (needed by payment matchers). Does NOT reveal company-wide totals.' },
+  { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },
+  { key: 'ar.export',                   label: 'AR: Export',                     desc: 'Export AR reports to Excel/CSV.' },
+  { key: 'payments.match',              label: 'Payments: Match to Invoice',     desc: 'Match a bank deposit to a customer invoice (records a payment in the Hub).' },
+  { key: 'payments.unmatch',            label: 'Payments: Unmatch',              desc: 'Reverse a payment match. Audit-logged.' },
+  { key: 'payments.mark_manual_done',   label: 'Payments: Mark Manual Done',     desc: 'Mark a queued payment as already entered in Wave by hand (clears it from the queue without faking a Wave id).' },
+  { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
+  { key: 'bank.view_account_balances',  label: 'Bank: View Account Balances',    desc: 'See bank account balances / net cash. Sensitive — keep limited to finance/management.' },
+  { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
 ];
 
 const NOTIF_TYPES = [
