@@ -112,6 +112,7 @@ export default function WaveSyncCenter(props) {
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [payments, setPayments] = useState([]);
+  var [bankTxns, setBankTxns] = useState([]);
   var [syncLog, setSyncLog] = useState([]);
   var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
   var ps0 = useState(null); var prodSetup = ps0[0]; var setProdSetup = ps0[1];
@@ -146,7 +147,7 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
       fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
-      fetchAllRows('bank_transactions', 'id, amount_abs, name')
+      fetchAllRows('bank_transactions', 'id, amount_abs, name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status')
     ]).then(function (res) {
       var rg = (res[0] && res[0].data) || [];
       setRegistry(rg);
@@ -161,6 +162,7 @@ export default function WaveSyncCenter(props) {
         return Object.assign({}, p, { _bank_amount: bt ? (Number(bt.amount_abs) || null) : null, _bank_name: bt ? (bt.name || null) : null, _orphan_bank: orphanBank });
       });
       setPayments(scopeIfRegistered(pays, getActiveWaveBusiness(), rg, true));
+      setBankTxns(scopeIfRegistered((res[5] && res[5].data) || [], getActiveWaveBusiness(), rg, true));
       setInvoices(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), rg, true));
       setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active; }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
@@ -409,8 +411,29 @@ export default function WaveSyncCenter(props) {
         record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
       });
     });
+    // v55.83-GS — bank transactions categorized/classified for Wave must STILL appear here
+    // (truthful), not silently vanish because they aren't a customer/invoice/payment. There is no
+    // generic Wave transaction push route yet, so they are shown BLOCKED ("Hub-only — not
+    // implemented yet") — visible and never pushed. category_status is the bank-txn sync flag.
+    bankTxns.forEach(function (bt) {
+      if (!bt || bt.wave_business_id !== active) { return; }
+      if (bt.category_status !== 'pending_wave_sync') { return; }
+      var bb = [];
+      if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
+      if (bt.classification) { bb.push('class: ' + bt.classification); }
+      if (bt.wave_account_name) { bb.push('→ ' + bt.wave_account_name); }
+      bb.push('⛔ Hub-only — Wave transaction/category sync is not implemented yet');
+      rows.push({
+        key: 'banktxn:' + bt.id, action: 'bank_transaction', id: bt.id,
+        label: 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
+        amount: Number(bt.amount_abs) || 0,
+        sub: bb.join(' · '),
+        blocked: 'Wave transaction/category sync is not implemented yet — this is categorized in the Hub only.',
+        record: bt
+      });
+    });
     return rows;
-  }, [customers, invoices, payments, active]);
+  }, [customers, invoices, payments, bankTxns, active]);
 
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
 
@@ -520,7 +543,7 @@ export default function WaveSyncCenter(props) {
       {tab === 'pending' && (
         <div className="border border-slate-700 rounded overflow-hidden">
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
-            <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments)</span></div>
+            <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments · {queue.filter(function (q) { return q.action === 'bank_transaction'; }).length} bank txns)</span></div>
             <div className="flex gap-2">
               <button onClick={runDryRun} disabled={isProd || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
               <button onClick={pushSelected} disabled={isProd || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GS',
+    date: '2026-06-16',
+    label: 'Wave Sync Center now truthfully lists pending bank transactions',
+    items: [
+      '**🧾 Bank transactions you classify or categorize no longer silently disappear.** When you classify a bank transaction (transfer / customer payment / expense / etc.) or assign it a Wave category, it now shows up in the **Wave Sync Center** under "Pending in this silo". Because pushing generic transactions to Wave isn\'t built yet, each is shown clearly as **"Hub-only — Wave transaction/category sync not implemented yet"** (visible and flagged, not hidden). The pending breakdown now counts bank txns too.',
+      { superAdminOnly: true, text: 'v55.83-GS. No SQL (reuses category_status as the bank-txn Wave-sync flag). WaveSyncCenter: load now selects the bank_transactions sync fields and stores scoped bankTxns; the queue pushes a row (action: bank_transaction) for each bank txn with category_status==="pending_wave_sync" in the active silo, marked blocked with reason "Wave transaction/category sync is not implemented yet — Hub-only" so it is visible but never pushed (blocked rows are excluded from selection/push). Breakdown shows a bank-txn count. BankReviewTab.setClassification now also sets category_status="pending_wave_sync" (+ category_source) so a classification change queues the txn (review status stays separate). Honest scope: this makes the Sync Center TRUTHFUL; it does NOT implement a real Wave push for generic transactions (no such Wave route yet) — that remains future work. Audit trail already captured via dbUpdate→audit_log on every patchTxn.' },
+    ],
+  },
+  {
     version: 'v55.83-GR',
     date: '2026-06-16',
     label: 'Bank Review: clean Wave category dropdown + separate Wave-sync badge',

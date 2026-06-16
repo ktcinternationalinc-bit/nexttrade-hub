@@ -206,9 +206,13 @@ export default function BankReviewTab(props) {
     if (!mayClassify) { toast.error('You do not have Bank: Classify permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first to edit.'); return; }
     setBusy(true);
-    patchTxn(t, { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
-      'Classified bank txn ' + (t.name || t.id) + ' as ' + cls)
-      .then(function () { toast.success('Classified as ' + labelize(cls)); setSel(Object.assign({}, t, { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status })); load(); })
+    // v55.83-GS — a classification change is Wave-impacting, so mark the txn pending Wave sync
+    // (category_status doubles as the bank-txn Wave-sync flag). This is what makes it appear in
+    // the Wave Sync Center (as Hub-only/unsupported for now) instead of silently staying hidden.
+    var clsPatch = { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status, category_status: 'pending_wave_sync', category_source: t.category_source || 'classification' };
+    patchTxn(t, clsPatch,
+      'Classified bank txn ' + (t.name || t.id) + ' as ' + cls + ' (queued for Wave sync)')
+      .then(function () { toast.success('Classified as ' + labelize(cls)); setSel(Object.assign({}, t, clsPatch)); load(); })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
