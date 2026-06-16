@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GL',
+    date: '2026-06-16',
+    label: 'Open Accounts statement: balance columns no longer wrap vertically',
+    items: [
+      '**📊 The Open Accounts ledger balance columns now stay on one line.** "They Owe Us / We Owe Them / Open Balance" and the running-balance columns were wrapping digit-by-digit when several currency columns were shown; they’re now right-aligned and non-wrapping.',
+      { superAdminOnly: true, text: 'v55.83-GL. No SQL, NO accounting/sign-logic change. Added whitespace-nowrap to the numeric headers (open_balance, running_bal) and the AR/AP/open-balance/running-balance <td>s in OpenAccountsTab. IMPORTANT QA finding (honest): the bulk of the customer-ledger QA was already satisfied in the code and was NOT changed, to avoid inverting correct accounting — direction is data-driven by transaction_type (sales_invoice/vendor_bill/payment_received/payment_sent/credit_adjustment/offset) via the locked FIFO 4-pot model in open-account-ledger.js (NOT inferred from the words Invoice/Bill); the internal-vs-customer perspective already exists in open-account-i18n.js (they_owe_us→customer_en "You Owe Us", we_owe_them→"Owed to You", sales_invoice/vendor_bill flip) and is applied in print + Excel export via the perspective param; entry/invoice notes already save + render under the description. DELIBERATELY NOT DONE: rewriting sign/mapping/perspective (already correct), and adding an ON-SCREEN customer-perspective toggle (on-screen ledger is internal-only by design; print/export already produce the customer-facing statement) — that is a UX decision for Max. CustomerLedger.jsx is a separate AR-only report and was not touched.' },
+    ],
+  },
+  {
     version: 'v55.83-GK',
     date: '2026-06-16',
     label: 'Bank: admins view all accounts; payments-today labeled; dead-route cleanup',

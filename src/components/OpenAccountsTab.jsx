@@ -1784,9 +1784,9 @@ export default function OpenAccountsTab(props) {
                                 Keep header text in pastel color hint so the eye finds the right column. */}
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-700 border-b-2 border-slate-300" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang)}</th>
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-red-700 border-b-2 border-slate-300" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang)}</th>
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-700 border-b-2 border-slate-300" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-700 border-b-2 border-slate-300 whitespace-nowrap" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
                             {s.currencies.map(function (cur) {
-                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
+                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 whitespace-nowrap" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
                             })}
                             {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                           </tr>
@@ -1903,7 +1903,7 @@ export default function OpenAccountsTab(props) {
                                 text only. payment_sent gets a "reduces what we owe" subtag below
                                 its green number in the We Owe Them column so green-in-AP doesn't
                                 look like a column-meaning bug. */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold whitespace-nowrap">
                               {(function () {
                                 var s = arApSide(entry);
                                 return s.ar > 0.005
@@ -1911,7 +1911,7 @@ export default function OpenAccountsTab(props) {
                                   : <span className="text-slate-300">—</span>;
                               })()}
                             </td>
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold whitespace-nowrap">
                               {(function () {
                                 var s = arApSide(entry);
                                 if (s.ap <= 0.005) return <span className="text-slate-300">—</span>;
@@ -1928,7 +1928,7 @@ export default function OpenAccountsTab(props) {
                               })()}
                             </td>
                             {/* Open Balance — strip the bg-amber-50 background per HOTFIX 33 */}
-                            <td className="px-3 py-1.5 text-right font-mono font-extrabold">
+                            <td className="px-3 py-1.5 text-right font-mono font-extrabold whitespace-nowrap">
                               {(function () {
                                 if (txnType !== 'sales_invoice' && txnType !== 'vendor_bill') {
                                   return <span className="text-slate-400">—</span>;
@@ -1972,7 +1972,7 @@ export default function OpenAccountsTab(props) {
                                 : 'text-slate-500 font-medium';
                               var styleObj = undefined;
                               return (
-                                <td key={cur} className={'px-3 py-1.5 text-right font-mono ' + cls} style={styleObj}>
+                                <td key={cur} className={'px-3 py-1.5 text-right font-mono whitespace-nowrap ' + cls} style={styleObj}>
                                   {fmtSigned(rbForCur)}
                                 </td>
                               );
