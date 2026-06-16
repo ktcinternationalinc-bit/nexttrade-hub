@@ -209,17 +209,18 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
     setSyncing(false);
   };
 
-  // Match transaction to invoice
-  const matchToInvoice = async (txnId, invoiceId) => {
-    try {
-      await fetch('/api/plaid/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_id: txnId, invoice_id: invoiceId }),
-      });
-      setMatchingTxn(null);
-      await loadData();
-    } catch (e) { setError(e.message); }
+  // v55.83-GU — DISABLED. The old /api/plaid/match route only stamped
+  // bank_transactions.matched_invoice_id; it never created payment_matches or
+  // accounting_invoice_payments, never recomputed balances, and never queued a
+  // Wave payment. That silently corrupted the books (a "matched" txn that
+  // posted nothing). Matching now lives in Accounting → Bank Review & Matching,
+  // which runs the accounting-safe flow (payment_matches +
+  // accounting_invoice_payments + balance recompute + Wave sync queue + silo).
+  // This quick-match is neutered so it can no longer bypass the ledger.
+  const matchToInvoice = async () => {
+    setMatchingTxn(null);
+    setError('');
+    setNotice('Matching has moved to Accounting → Bank Review & Matching, which posts the payment to the books correctly. The old quick-match here was disabled because it did not record the payment.');
   };
 
   // Unmatch
@@ -543,8 +544,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
                       {isInflow ? '+' : '-'}{fmtMoney(t.amount)}
                     </div>
                     {!t.matched_invoice_id && (
-                      <button onClick={() => setMatchingTxn(t)} className="text-[10px] text-blue-500 font-semibold mt-1">
-                        🔗 Match
+                      <button
+                        onClick={() => setNotice('To match this transaction to an invoice, go to Accounting → Bank Review & Matching. That screen posts the payment to the books (ledger + Wave); the old quick-match here did not and was disabled.')}
+                        className="text-[10px] text-slate-400 font-semibold mt-1"
+                        title="Matching moved to Accounting → Bank Review & Matching (accounting-safe)">
+                        🔗 Match in Bank Review →
                       </button>
                     )}
                   </div>

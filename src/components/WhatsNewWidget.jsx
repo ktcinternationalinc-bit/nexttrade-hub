@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GU',
+    date: '2026-06-16',
+    label: 'Open Accounts printing for view-only staff + safer Bank tab matching',
+    items: [
+      '**🖨️ View-only staff can now print & export statements.** Printing the internal view and the customer statement now only needs Open Accounts *view* access, and Excel export needs *view + export* — you no longer have to grant full edit rights just so someone can print or download a statement. Creating entries/invoices, attaching files, editing and deleting still require edit access.',
+      '**🔗 Bank tab "Match" now points to the right place.** The quick "Match" button on the raw Bank tab used to record a match that never actually posted the payment to the books. It has been disabled and now sends you to **Accounting → Bank Review & Matching**, which records the payment correctly (ledger + Wave). No more matches that look done but post nothing.',
+      { superAdminOnly: true, text: 'v55.83-GU. No SQL. OpenAccountsTab: the per-card button row was entirely behind canEdit; split it — the row wrapper is now gated on !collapsed only, Print(Internal) and Customer Statement details require canView (the tab gate), Excel details require new canExport (isSuperAdmin || modulePerms[Export Data]===true || canEdit), and +Entry/+Invoice plus Files/Edit/Delete are each wrapped in canEdit fragments. BankTab: matchToInvoice no longer POSTs to /api/plaid/match (that route only stamped matched_invoice_id, never created payment_matches/accounting_invoice_payments, never recomputed balances, never queued Wave — it corrupted the books); it is neutered to a notice, and the per-txn Match button now sets a notice routing the user to Accounting → Bank Review & Matching (the accounting-safe flow). The old match modal stays in code but is unreachable (matchingTxn never set). Wave generic-transaction push still NOT implemented (see GS) — no Wave money-transaction create mutation exists to build against.' },
+    ],
+  },
+  {
     version: 'v55.83-GT',
     date: '2026-06-16',
     label: 'Open Accounts statement: no system notes, payments shown as reductions',

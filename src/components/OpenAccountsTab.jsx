@@ -214,6 +214,11 @@ export default function OpenAccountsTab(props) {
   var canEdit = isSuperAdmin
     || newEdit === true
     || (newEdit === undefined && legacyOpenAccts === true);
+  // v55.83-GU — canExport: dedicated "Export Data" key, else anyone who can edit.
+  // Lets a view+export user download Excel without granting edit rights.
+  var canExport = isSuperAdmin
+    || modulePerms['Export Data'] === true
+    || canEdit;
   var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
 
   // Data
@@ -1561,10 +1566,15 @@ export default function OpenAccountsTab(props) {
                     <div className="text-slate-700 text-[10px]">({s.totalEntryCount} {s.totalEntryCount === 1 ? 'entry' : 'entries'})</div>
                   </div>
                 </button>
-                {canEdit && !collapsed && (
+                {!collapsed && (
                   <div className="flex gap-1 flex-wrap">
+                    {/* v55.83-GU — print/statement need only VIEW; Excel needs EXPORT; create/edit
+                        need EDIT. Previously the whole row was behind canEdit, so a view/export user
+                        couldn't even print a statement. */}
+                    {canEdit && (<>
                     <button onClick={function () { openNewEntry(a.id); }} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow">+ Entry</button>
                     <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
+                    </>)}
                     {/* v55.83-A.6.27.72 HOTFIX 12 — Manual Offset button REMOVED.
                         Auto-cascade now handles offsetting silently after any save (invoice,
                         bill, payment). When a state arises with simultaneous open AR + open AP
@@ -1599,6 +1609,7 @@ export default function OpenAccountsTab(props) {
                         <button onClick={function () { handlePrintLedger(a, 'customer', true); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">Stacked EN/AR headers + labels</div></button>
                       </div>
                     </details>
+                    {canExport && (
                     <details className="relative inline-block">
                       <summary className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow cursor-pointer list-none ring-1 ring-amber-400/60 hover:ring-amber-400 flex items-center gap-1" title="Download Excel file — choose English or Bilingual">
                         📊 Excel
@@ -1610,15 +1621,18 @@ export default function OpenAccountsTab(props) {
                         <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">.xlsx with stacked EN/AR headers</div></button>
                       </div>
                     </details>
+                    )}
                     {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — account-level
                         attachments. Stores files (contracts, master agreements,
                         signed docs) against the customer card itself, separate
                         from per-entry and per-invoice attachments. parent_type
                         used is 'open_account' — attachments table is extensible
                         by parent_type per the .61 migration, no SQL needed. */}
+                    {canEdit && (<>
                     <button onClick={function () { setAttachAccountId(a.id); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-700 text-white text-[10px] font-extrabold rounded shadow" title="Attach files to this customer (contracts, master agreements, etc.)">📎 Files</button>
                     <button onClick={function () { openEditAccount(a); }} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-extrabold rounded shadow">Edit</button>
                     <button onClick={function () { deleteAccount(a); }} className="px-2 py-1 bg-red-700 hover:bg-red-800 text-white text-[10px] font-extrabold rounded shadow">Delete</button>
+                    </>)}
                   </div>
                 )}
               </div>
