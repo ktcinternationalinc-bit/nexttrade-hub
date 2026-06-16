@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbDelete } from '../lib/supabase';
 import { buildComposition } from '../lib/mix-composition';
+import { canEditInventory } from '../lib/inventory-permissions';
 
 // PHASE 1 (READ-ONLY): Stock Mix Lot composition.
 // - Pick a product flagged is_virtual_mix = true (the sellable "Stock Mix Lot").
@@ -12,7 +13,10 @@ import { buildComposition } from '../lib/mix-composition';
 export default function InventoryMixComposition(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var isSuperAdmin = props.isSuperAdmin === true;
-  var canEdit = isSuperAdmin || (props.modulePerms && props.modulePerms.edit_inventory === true);
+  // v55.83-GW — FIX: was checking modulePerms.edit_inventory (wrong key), which never
+  // matched the real "Edit Inventory" permission, so only super-admins could map mix
+  // components. Use the shared canEditInventory helper (super_admin/admin/inv.edit/Edit Inventory).
+  var canEdit = isSuperAdmin || canEditInventory(props.userProfile, props.modulePerms);
 
   var [loading, setLoading] = useState(true);
   var [mixProducts, setMixProducts] = useState([]);     // is_virtual_mix = true

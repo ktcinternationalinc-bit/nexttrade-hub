@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GW',
+    date: '2026-06-16',
+    label: 'Inventory reports tell you WHY they are empty + fix mix-edit permission',
+    items: [
+      '**🔎 Inventory reports no longer show a silent blank.** If a report comes back empty, it now tells you exactly why: "No active products," "Products exist but no positive stock layers," "Stock is in receipts but not finalized into cost layers," or — if the database query actually failed — a red error box with the real reason. Before, any of these just showed "No data" with no explanation.',
+      '**🧩 Staff with "Edit Inventory" can now map Stock Mix components.** The Stock Mix composition screen was checking the wrong permission name, so only super-admins could add/remove components. It now honors the standard Edit Inventory permission.',
+      '**⚙️ Inventory report permissions are now in Settings.** Three new toggles under Action Permissions: View Reports, Export Reports, and See Valuation in Reports — so you can let staff view/print inventory reports without exposing costs or granting full edit.',
+      { superAdminOnly: true, text: 'v55.83-GW. No SQL. InventoryReportCenter: load() rewritten — each Supabase query wrapped in q(source,builder) capturing {source,data,error}; per-table errors collected into loadErrors state and shown in a red banner; super-admin Diagnostics <details> shows row counts per source (products/layers/receipts/movements/etc). Flat empty-state replaced with a branching message (load error / no movements / search miss / no products / products-but-no-layers / products+receipts-but-unfinalized / no data). Root cause was the old per-query .catch(()=>({data:[]})) plus .then(x=>x) never inspecting x.error, so a missing column or RLS denial silently became empty data. InventoryMixComposition: canEdit was modulePerms.edit_inventory (nonexistent key) → now canEditInventory(userProfile, modulePerms) (super_admin/admin/inv.edit/Edit Inventory). SettingsTab ACTION_PERMS: added inventory.reports.view, inventory.reports.export, inventory.valuation.view (keys match inventory-permissions.js; saved like the existing wave.*/ar.* action keys, no MODULES entry needed). STILL OPEN: virtual-mix sale engine (Phase 2, intentionally parked), Wave generic-transaction push (no Wave mutation exists).' },
+    ],
+  },
+  {
     version: 'v55.83-GV',
     date: '2026-06-16',
     label: 'Bank tab can no longer corrupt the books + customer-statement Excel',

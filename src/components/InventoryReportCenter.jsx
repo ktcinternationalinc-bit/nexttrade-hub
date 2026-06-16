@@ -35,28 +35,54 @@ export default function InventoryReportCenter(props) {
   var [search, setSearch] = useState('');
   var [raw, setRaw] = useState(null);
   var [loading, setLoading] = useState(true);
+  // v55.83-GW — surface load failures instead of silently showing an empty report.
+  var [loadErrors, setLoadErrors] = useState([]);   // [{source, message}]
+  var [diag, setDiag] = useState(null);             // counts for super-admin diagnostic
+  var isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
 
   var isRtl = lang === 'ar';
   var report = getReport(reportId);
 
+  // v55.83-GW — wrap a Supabase query so a failure (missing column, RLS denial,
+  // missing table) is CAPTURED and reported, not silently turned into empty data.
+  // Each entry resolves to { source, data, error } — never rejects.
+  function q(source, builder) {
+    return builder.then(function (x) {
+      return { source: source, data: (x && x.data) || [], error: x && x.error ? (x.error.message || String(x.error)) : null };
+    }).catch(function (e) {
+      return { source: source, data: [], error: (e && e.message) || String(e) };
+    });
+  }
+
   function load() {
     setLoading(true);
+    setLoadErrors([]);
     Promise.all([
-      supabase.from('inventory_products').select('id,name_en,name_ar,quick_code,design_sku,default_uom,family_list_id,category_list_id,grade_list_id,color_list_id,origin_list_id,is_virtual_mix,active').eq('active', true).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_layers').select('product_id,qty_remaining,cost_per_uom,warehouse_id,receipt_date').gt('qty_remaining', 0).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_lists').select('id,label_en,label_ar').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inv_warehouses').select('id,name,code').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_stock_receipts').select('product_id,receipt_date').eq('status', 'finalized').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000).then(function (x) { return x; }).catch(function () { return { data: [] }; })
+      q('inventory_products', supabase.from('inventory_products').select('id,name_en,name_ar,quick_code,design_sku,default_uom,family_list_id,category_list_id,grade_list_id,color_list_id,origin_list_id,is_virtual_mix,active').eq('active', true)),
+      q('inventory_layers', supabase.from('inventory_layers').select('product_id,qty_remaining,cost_per_uom,warehouse_id,receipt_date').gt('qty_remaining', 0)),
+      q('inventory_lists', supabase.from('inventory_lists').select('id,label_en,label_ar')),
+      q('inv_warehouses', supabase.from('inv_warehouses').select('id,name,code')),
+      q('inventory_stock_receipts', supabase.from('inventory_stock_receipts').select('product_id,receipt_date').eq('status', 'finalized')),
+      q('inventory_mix_components', supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true)),
+      q('inventory_movements', supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000))
     ]).then(function (res) {
-      var products = (res[0] && res[0].data) || [];
-      var layers = (res[1] && res[1].data) || [];
-      var lists = (res[2] && res[2].data) || [];
-      var whs = (res[3] && res[3].data) || [];
-      var receipts = (res[4] && res[4].data) || [];
-      var comps = (res[5] && res[5].data) || [];
-      var movements = (res[6] && res[6].data) || [];
+      var products = res[0].data;
+      var layers = res[1].data;
+      var lists = res[2].data;
+      var whs = res[3].data;
+      var receipts = res[4].data;
+      var comps = res[5].data;
+      var movements = res[6].data;
+
+      // Collect any per-table errors so the UI can show exactly what failed.
+      var errs = [];
+      res.forEach(function (r) { if (r.error) { errs.push({ source: r.source, message: r.error }); } });
+      setLoadErrors(errs);
+      setDiag({
+        products: products.length, layers: layers.length, lists: lists.length,
+        warehouses: whs.length, receipts: receipts.length, mixComponents: comps.length,
+        movements: movements.length, errors: errs.length
+      });
 
       var listMap = {}; lists.forEach(function (l) { listMap[l.id] = { en: l.label_en || '', ar: l.label_ar || '' }; });
       var whMap = {}; whs.forEach(function (w) { whMap[w.id] = w.name || w.code || ''; });
@@ -257,6 +283,29 @@ export default function InventoryReportCenter(props) {
 
       {report && <div className="text-xs text-slate-500">{isRtl ? report.desc_ar : report.desc_en}</div>}
 
+      {/* v55.83-GW — surface real load failures (missing table/column, RLS) instead of
+          silently rendering an empty report. */}
+      {loadErrors.length > 0 && (
+        <div className="p-3 rounded border border-red-300 bg-red-50 text-red-800 text-xs">
+          <div className="font-bold mb-1">{isRtl ? 'تعذّر تحميل بعض بيانات المخزون — التقرير قد يكون ناقصًا:' : 'Some inventory data failed to load — this report may be incomplete:'}</div>
+          <ul className="list-disc ml-5 space-y-0.5">
+            {loadErrors.map(function (er, i) { return <li key={i}><span className="font-mono font-bold">{er.source}</span>: {er.message}</li>; })}
+          </ul>
+          <div className="mt-1 text-[11px] text-red-700">{isRtl ? 'هذا غالبًا عمود/جدول مفقود في قاعدة البيانات. أبلغ المسؤول.' : 'This usually means a missing DB column/table. Report this to your administrator.'}</div>
+        </div>
+      )}
+
+      {/* Super-admin diagnostic — how many rows each source returned, so an empty report
+          can be told apart from a broken query. */}
+      {isSuperAdmin && diag && !loading && (
+        <details className="text-[11px] text-slate-500">
+          <summary className="cursor-pointer font-bold">{isRtl ? 'تشخيص (مسؤول)' : 'Diagnostics (super-admin)'}</summary>
+          <div className="mt-1 font-mono">
+            products: {diag.products} · layers(qty&gt;0): {diag.layers} · receipts(finalized): {diag.receipts} · movements: {diag.movements} · mixComponents: {diag.mixComponents} · lists: {diag.lists} · warehouses: {diag.warehouses} · errors: {diag.errors}
+          </div>
+        </details>
+      )}
+
       {!report.grouped && (
         <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={reportId === 'movement' ? (isRtl ? 'بحث بالمنتج أو المرجع' : 'Search product or reference') : (isRtl ? 'بحث بالكود أو الاسم' : 'Search code or name')} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-full max-w-xs" />
       )}
@@ -264,7 +313,33 @@ export default function InventoryReportCenter(props) {
       {loading ? (
         <div className="p-4 text-slate-400 italic text-sm">{isRtl ? 'جارٍ التحميل…' : 'Loading…'}</div>
       ) : !report.grouped ? (
-        <ReportTable columns={report.columns} rows={flatRows()} lang={lang} showValuation={showValuation} />
+        (function () {
+          var rows = flatRows();
+          if (rows.length > 0) {
+            return <ReportTable columns={report.columns} rows={rows} lang={lang} showValuation={showValuation} />;
+          }
+          // v55.83-GW — distinguish WHY a snapshot is empty instead of always "No data".
+          var hasProducts = raw && raw.nonVirtual && raw.nonVirtual.length > 0;
+          var hasLayers = diag && diag.layers > 0;
+          var hasReceipts = diag && diag.receipts > 0;
+          var msg;
+          if (loadErrors.length > 0) {
+            msg = isRtl ? 'تعذّر تحميل البيانات (انظر الخطأ أعلاه).' : 'Inventory data could not be loaded (see the error above).';
+          } else if (reportId === 'movement') {
+            msg = isRtl ? 'لا توجد حركات مخزون مسجّلة.' : 'No inventory movements recorded yet.';
+          } else if (search && search.trim()) {
+            msg = isRtl ? 'لا توجد نتائج مطابقة لبحثك.' : 'No products match your search.';
+          } else if (!hasProducts) {
+            msg = isRtl ? 'لا توجد منتجات مفعّلة.' : 'No active products found.';
+          } else if (!hasLayers && hasReceipts) {
+            msg = isRtl ? 'توجد منتجات وإيصالات استلام، لكن لا توجد طبقات تكلفة موجبة — قد يكون المخزون مستلَمًا ولم يُرحَّل إلى طبقات بعد.' : 'Products and stock receipts exist, but no positive cost layers were found — stock may have been received but not yet finalized into cost layers.';
+          } else if (!hasLayers) {
+            msg = isRtl ? 'توجد منتجات لكن لا توجد كميات مخزون موجبة.' : 'Products exist, but no positive inventory layers (qty on hand) were found.';
+          } else {
+            msg = isRtl ? 'لا توجد بيانات.' : 'No data.';
+          }
+          return <div className="p-4 text-slate-500 text-sm bg-slate-50 border border-slate-200 rounded">{msg}</div>;
+        })()
       ) : (
         <div className="space-y-4">
           {mixSections().length === 0 ? (
