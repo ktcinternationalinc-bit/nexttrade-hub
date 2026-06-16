@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GQ',
+    date: '2026-06-16',
+    label: 'Inventory Report Center: new Movement report (EN/AR)',
+    items: [
+      '**📦 New "Inventory Movement" report** in Inventory → Reports. Per-product movement history — receipts, sales, adjustments, transfers, reversals — with Qty In / Qty Out and a running Balance After, in English or Arabic, with Export + Print like the other reports. Search by product or reference.',
+      { superAdminOnly: true, text: 'v55.83-GQ. No SQL (read-only, reads inventory_movements). Added MOVEMENT_COLUMNS + a movement report to inventory-report-defs.js, exported it. InventoryReportCenter: loads inventory_movements (order by movement_date, limit 5000), movementRows() computes a per-product running balance in chronological order then displays newest-first; movement_type localized via MOVEMENT_TYPE_LABELS (receipt/sale/transfer_in/out/adjustment_in/out/reversal). Refactored export/print/render to be generic over report.grouped + report.columns + a flatRows() dispatcher (snapshot + movement = flat; virtual_mix = grouped). Running balance reflects the loaded 5000-row window (noted in the report description). No sale/inventory-deduction logic touched. Standalone of the parked Phase 2.' },
+    ],
+  },
+  {
     version: 'v55.83-GP',
     date: '2026-06-16',
     label: 'Open Accounts: summary footer + Excel follow the Customer/Internal toggle',

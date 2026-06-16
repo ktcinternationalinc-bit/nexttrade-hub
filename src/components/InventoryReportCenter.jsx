@@ -7,7 +7,18 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import ReportTable, { formatCell } from './ReportTable';
-import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS } from '../lib/inventory-report-defs';
+import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS } from '../lib/inventory-report-defs';
+
+// Bilingual labels for inventory_movements.movement_type (data-driven, not inferred from text).
+var MOVEMENT_TYPE_LABELS = {
+  receipt: { en: 'Receipt', ar: 'استلام' },
+  sale: { en: 'Sale', ar: 'بيع' },
+  transfer_in: { en: 'Transfer In', ar: 'تحويل وارد' },
+  transfer_out: { en: 'Transfer Out', ar: 'تحويل صادر' },
+  adjustment_in: { en: 'Adjustment +', ar: 'تسوية +' },
+  adjustment_out: { en: 'Adjustment −', ar: 'تسوية −' },
+  reversal: { en: 'Reversal', ar: 'عكس' }
+};
 import { canViewInventoryReports, canExportInventoryReports, canSeeValuationInReports } from '../lib/inventory-permissions';
 
 export default function InventoryReportCenter(props) {
@@ -36,7 +47,8 @@ export default function InventoryReportCenter(props) {
       supabase.from('inventory_lists').select('id,label_en,label_ar').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('inv_warehouses').select('id,name,code').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('inventory_stock_receipts').select('product_id,receipt_date').eq('status', 'finalized').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true).then(function (x) { return x; }).catch(function () { return { data: [] }; })
+      supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000).then(function (x) { return x; }).catch(function () { return { data: [] }; })
     ]).then(function (res) {
       var products = (res[0] && res[0].data) || [];
       var layers = (res[1] && res[1].data) || [];
@@ -44,6 +56,7 @@ export default function InventoryReportCenter(props) {
       var whs = (res[3] && res[3].data) || [];
       var receipts = (res[4] && res[4].data) || [];
       var comps = (res[5] && res[5].data) || [];
+      var movements = (res[6] && res[6].data) || [];
 
       var listMap = {}; lists.forEach(function (l) { listMap[l.id] = { en: l.label_en || '', ar: l.label_ar || '' }; });
       var whMap = {}; whs.forEach(function (w) { whMap[w.id] = w.name || w.code || ''; });
@@ -70,7 +83,8 @@ export default function InventoryReportCenter(props) {
         nonVirtual: products.filter(function (p) { return p.is_virtual_mix !== true; }),
         mixes: products.filter(function (p) { return p.is_virtual_mix === true; }),
         listMap: listMap, whMap: whMap, nameMap: nameMap,
-        layerAgg: layerAgg, availByProduct: availByProduct, lastRecv: lastRecv, compsByMix: compsByMix
+        layerAgg: layerAgg, availByProduct: availByProduct, lastRecv: lastRecv, compsByMix: compsByMix,
+        movements: movements
       });
     }).catch(function (e) { console.error('[inv-reports] load', e); toast.error('Failed to load inventory data'); })
       .finally(function () { setLoading(false); });
@@ -126,6 +140,47 @@ export default function InventoryReportCenter(props) {
     });
   }
 
+  function movementRows() {
+    if (!raw || !raw.movements) { return []; }
+    var q = (search || '').trim().toLowerCase();
+    // Chronological per product so the running balance accumulates correctly.
+    var sorted = raw.movements.slice().sort(function (a, b) {
+      if (a.product_id !== b.product_id) { return String(a.product_id || '').localeCompare(String(b.product_id || '')); }
+      var ad = (a.movement_date || '') + '|' + (a.created_at || '');
+      var bd = (b.movement_date || '') + '|' + (b.created_at || '');
+      return ad < bd ? -1 : ad > bd ? 1 : 0;
+    });
+    var running = {};
+    var rows = sorted.map(function (m) {
+      var pid = m.product_id;
+      var qty = Number(m.quantity) || 0;       // signed: + in, − out
+      running[pid] = (running[pid] || 0) + qty;
+      var tm = MOVEMENT_TYPE_LABELS[m.movement_type] || { en: m.movement_type || '', ar: m.movement_type || '' };
+      var prod = raw.nameMap[pid];
+      return {
+        _sort: (m.movement_date || '') + '|' + (m.created_at || ''),
+        date: m.movement_date || '',
+        product: pname(prod) || (prod && prod.quick_code) || '',
+        type: isRtl ? tm.ar : tm.en,
+        qty_in: qty > 0 ? qty : 0,
+        qty_out: qty < 0 ? -qty : 0,
+        balance_after: running[pid],
+        warehouse: (m.warehouse_id && raw.whMap[m.warehouse_id]) || '',
+        reference: m.reference_number || ''
+      };
+    });
+    if (q) { rows = rows.filter(function (r) { return String(r.product).toLowerCase().indexOf(q) >= 0 || String(r.reference).toLowerCase().indexOf(q) >= 0; }); }
+    // Display newest first (balance_after was already computed in chronological order).
+    rows.sort(function (a, b) { return a._sort < b._sort ? 1 : a._sort > b._sort ? -1 : 0; });
+    return rows;
+  }
+
+  // Flat (non-grouped) reports share one row dispatcher.
+  function flatRows() {
+    if (reportId === 'movement') { return movementRows(); }
+    return snapshotRows();
+  }
+
   // ---- Export (CSV, Excel-readable, UTF-8 BOM so Arabic renders) ----
   function csvEscape(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
   function colHeader(c) { return isRtl ? c.label_ar : c.label_en; }
@@ -144,9 +199,10 @@ export default function InventoryReportCenter(props) {
   function doExport() {
     if (!mayExport) { toast.error(isRtl ? 'لا تملك صلاحية التصدير' : 'You do not have export permission'); return; }
     var lines = [];
-    if (reportId === 'snapshot') {
-      lines.push(SNAPSHOT_COLUMNS.map(colHeader).map(csvEscape).join(','));
-      snapshotRows().forEach(function (r) { lines.push(SNAPSHOT_COLUMNS.map(function (c) { return csvEscape(cellExport(r, c)); }).join(',')); });
+    if (!report.grouped) {
+      var cols = report.columns;
+      lines.push(cols.map(colHeader).map(csvEscape).join(','));
+      flatRows().forEach(function (r) { lines.push(cols.map(function (c) { return csvEscape(cellExport(r, c)); }).join(',')); });
     } else {
       var mixHead = isRtl ? 'المزيج' : 'Mix';
       lines.push([csvEscape(mixHead)].concat(MIX_COLUMNS.map(colHeader).map(csvEscape)).join(','));
@@ -154,7 +210,7 @@ export default function InventoryReportCenter(props) {
         s.rows.forEach(function (r) { lines.push([csvEscape(s.title)].concat(MIX_COLUMNS.map(function (c) { return csvEscape(cellExport(r, c)); })).join(',')); });
       });
     }
-    download((reportId === 'snapshot' ? 'inventory-snapshot' : 'stock-mix') + '-' + lang + '.csv', lines.join('\n'));
+    download(reportId + '-' + lang + '.csv', lines.join('\n'));
     toast.success(isRtl ? 'تم التصدير' : 'Exported');
   }
 
@@ -164,8 +220,8 @@ export default function InventoryReportCenter(props) {
     function th(cols) { return cols.map(function (c) { return '<th style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-bottom:2px solid #333">' + colHeader(c) + '</th>'; }).join(''); }
     function tr(r, cols) { return '<tr>' + cols.map(function (c) { return '<td style="text-align:' + (c.align || 'left') + ';padding:3px 8px;border-bottom:1px solid #ccc">' + formatCell(r[c.key], c, lang, showValuation) + '</td>'; }).join('') + '</tr>'; }
     var body = '';
-    if (reportId === 'snapshot') {
-      body = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(SNAPSHOT_COLUMNS) + '</tr></thead><tbody>' + snapshotRows().map(function (r) { return tr(r, SNAPSHOT_COLUMNS); }).join('') + '</tbody></table>';
+    if (!report.grouped) {
+      body = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(report.columns) + '</tr></thead><tbody>' + flatRows().map(function (r) { return tr(r, report.columns); }).join('') + '</tbody></table>';
     } else {
       mixSections().forEach(function (s) {
         body += '<h3 style="margin:16px 0 4px">' + s.title + '</h3>';
@@ -201,14 +257,14 @@ export default function InventoryReportCenter(props) {
 
       {report && <div className="text-xs text-slate-500">{isRtl ? report.desc_ar : report.desc_en}</div>}
 
-      {reportId === 'snapshot' && (
-        <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={isRtl ? 'بحث بالكود أو الاسم' : 'Search code or name'} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-full max-w-xs" />
+      {!report.grouped && (
+        <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={reportId === 'movement' ? (isRtl ? 'بحث بالمنتج أو المرجع' : 'Search product or reference') : (isRtl ? 'بحث بالكود أو الاسم' : 'Search code or name')} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-full max-w-xs" />
       )}
 
       {loading ? (
         <div className="p-4 text-slate-400 italic text-sm">{isRtl ? 'جارٍ التحميل…' : 'Loading…'}</div>
-      ) : reportId === 'snapshot' ? (
-        <ReportTable columns={SNAPSHOT_COLUMNS} rows={snapshotRows()} lang={lang} showValuation={showValuation} />
+      ) : !report.grouped ? (
+        <ReportTable columns={report.columns} rows={flatRows()} lang={lang} showValuation={showValuation} />
       ) : (
         <div className="space-y-4">
           {mixSections().length === 0 ? (

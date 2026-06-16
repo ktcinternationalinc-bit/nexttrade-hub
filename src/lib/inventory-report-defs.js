@@ -37,6 +37,17 @@ var MIX_COLUMNS = [
   { key: 'pct', label_en: '% of Mix', label_ar: 'نسبة المزيج', align: 'right', format: 'percent' }
 ];
 
+var MOVEMENT_COLUMNS = [
+  { key: 'date', label_en: 'Date', label_ar: 'التاريخ', align: 'center', format: 'date' },
+  { key: 'product', label_en: 'Product', label_ar: 'المنتج', align: 'left', format: 'text' },
+  { key: 'type', label_en: 'Movement', label_ar: 'الحركة', align: 'left', format: 'text' },
+  { key: 'qty_in', label_en: 'Qty In', label_ar: 'وارد', align: 'right', format: 'number', total: 'sum' },
+  { key: 'qty_out', label_en: 'Qty Out', label_ar: 'صادر', align: 'right', format: 'number', total: 'sum' },
+  { key: 'balance_after', label_en: 'Balance After', label_ar: 'الرصيد بعد', align: 'right', format: 'number' },
+  { key: 'warehouse', label_en: 'Warehouse', label_ar: 'المخزن', align: 'left', format: 'text' },
+  { key: 'reference', label_en: 'Reference', label_ar: 'المرجع', align: 'left', format: 'text' }
+];
+
 var REPORTS = [
   {
     id: 'snapshot',
@@ -57,6 +68,16 @@ var REPORTS = [
     permission: 'inventory.reports.view',
     grouped: true,
     columns: MIX_COLUMNS
+  },
+  {
+    id: 'movement',
+    title_en: 'Inventory Movement',
+    title_ar: 'حركة المخزون',
+    desc_en: 'Movement history per product — receipts, sales, adjustments, transfers, reversals — with a running balance. Shows the most recent loaded movements.',
+    desc_ar: 'سجل حركة كل منتج: استلام، بيع، تسويات، تحويلات، عكوسات، مع الرصيد الجاري. يعرض أحدث الحركات المحمّلة.',
+    permission: 'inventory.reports.view',
+    grouped: false,
+    columns: MOVEMENT_COLUMNS
   }
 ];
 
@@ -66,4 +87,4 @@ function getReport(id) {
   return null;
 }
 
-export { REPORTS, SNAPSHOT_COLUMNS, MIX_COLUMNS, getReport };
+export { REPORTS, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS, getReport };
