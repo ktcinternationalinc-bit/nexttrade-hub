@@ -1911,7 +1911,7 @@ export default function OpenAccountsTab(props) {
                               ) : (
                                 <div className={'font-bold ' + (typeMeta.descCls || 'text-slate-900')}>{entry.description}</div>
                               )}
-                              {entry.notes && <div className="text-[10px] text-slate-600 italic">{entry.notes}</div>}
+                              {(function () { var un = entry.notes ? String(entry.notes).replace(/Auto-synced from invoice[\s\S]*?Edit the invoice to change this entry\.?/gi, '').trim() : ''; return un ? <div className="text-[10px] text-slate-600 italic">{un}</div> : null; })()}
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
                             <td className="px-3 py-1.5 text-center font-mono font-bold text-[11px]">
@@ -1932,9 +1932,18 @@ export default function OpenAccountsTab(props) {
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold whitespace-nowrap">
                               {(function () {
                                 var s = arApSide(entry);
-                                return s.ar > 0.005
-                                  ? <span className={typeMeta.amountCls || 'text-emerald-700'}>{fmtNum(s.ar)}</span>
-                                  : <span className="text-slate-300">—</span>;
+                                if (s.ar <= 0.005) return <span className="text-slate-300">—</span>;
+                                // v55.83-GT — payment received reduces what they owe; show as a
+                                // reduction (− / teal), not a positive that reads like new debt.
+                                if (txnType === 'payment_received') {
+                                  return (
+                                    <span>
+                                      <span className="text-teal-600">− {fmtNum(s.ar)}</span>
+                                      <div className="text-[9px] text-teal-600 italic font-medium opacity-75 mt-0.5">reduces what they owe</div>
+                                    </span>
+                                  );
+                                }
+                                return <span className={typeMeta.amountCls || 'text-emerald-700'}>{fmtNum(s.ar)}</span>;
                               })()}
                             </td>
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold whitespace-nowrap">

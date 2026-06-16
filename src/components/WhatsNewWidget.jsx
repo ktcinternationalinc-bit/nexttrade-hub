@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GT',
+    date: '2026-06-16',
+    label: 'Open Accounts statement: no system notes, payments shown as reductions',
+    items: [
+      '**📝 No more system text on statements.** The internal "Auto-synced from invoice… Edit the invoice to change this entry." note no longer appears anywhere (screen, customer/internal print, Excel). Only notes you actually typed on the invoice show; a blank notes field shows nothing.',
+      '**➖ Payments now read as reductions, not new debt.** A payment received shows as "− amount" (with "reduces what they owe"), and a payment sent reduces the other side — instead of a positive number that looked like more was owed.',
+      { superAdminOnly: true, text: 'v55.83-GT. No SQL. open-account-export.js + OpenAccountsTab: notes are run through a strip of /Auto-synced from invoice…Edit the invoice to change this entry\\.?/ before rendering (both render paths + on-screen); empty result → no note line, no "Notes:" label. Payment amounts: payment_received in the AR column and payment_sent in the AP column now render as "− amount" in teal (both export render paths + the on-screen AR/AP cells; payment_sent already had the green "reduces what we owe" subtag). Invoices/bills unchanged (positive charges). Column PLACEMENT is unchanged from GM (sales_invoice → "You Owe Us" = X owes KTC; vendor_bill → "Owed to You" = KTC owes X) — that already matches the agreed rule on the LIVE build; if a statement still shows the invoice under "Owed to You", it is being generated from the stale nextrade-hubA build, not the deployed nexttrade-hub. Existing entries with old auto-sync notes are now suppressed at render; re-saving an invoice also overwrites its linked entry note (GN).' },
+    ],
+  },
+  {
     version: 'v55.83-GS',
     date: '2026-06-16',
     label: 'Wave Sync Center now truthfully lists pending bank transactions',

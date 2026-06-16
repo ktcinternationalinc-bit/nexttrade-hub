@@ -241,10 +241,14 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var apColor = '#b91c1c';  // red default for vendor bills
       if (e.transaction_type === 'payment_sent') apColor = '#15803d';  // green
       if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
+      // v55.83-GT — a payment REDUCES a balance; render it as "− amount" (teal) so it never reads
+      // as new debt on a statement. Invoices/bills stay positive charges.
+      var arIsPmt = (e.transaction_type === 'payment_received');
+      var apIsPmt = (e.transaction_type === 'payment_sent');
       var arCellHtml = arSide > 0.005
-        ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+        ? '<span style="color:' + (arIsPmt ? '#0d9488' : (invoiceColor || arColor)) + '">' + (arIsPmt ? '− ' : '') + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
-        ? '<span style="color:' + (invoiceColor || apColor) + '">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
+        ? '<span style="color:' + (apIsPmt ? '#0d9488' : (invoiceColor || apColor)) + '">' + (apIsPmt ? '− ' : '') + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
       // Single Remaining column — fills only on invoice/bill rows, colored by invoice color
       var remainingCellHtml = '';
       if (isInvoiceOrBill) {
@@ -298,10 +302,13 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var hasAutoSync = !!autoSyncMatch;
       // v55.83-GN \u2014 show entry notes (incl. invoice notes) under the description in ANY language,
       // not only Arabic. RTL styling only when the note is actually Arabic.
+      // v55.83-GT \u2014 only REAL user notes belong on a statement. Strip the system "Auto-synced from
+      // invoice \u2026 Edit the invoice to change this entry." text; if nothing real is left, show nothing.
       var arNoteHtml = '';
-      if (e.notes && String(e.notes).trim()) {
-        var _isArNote = /[\u0600-\u06FF]/.test(e.notes);
-        arNoteHtml = '<div class="' + (_isArNote ? 'ar-sub' : '') + '"' + (_isArNote ? ' dir="rtl"' : '') + ' style="font-size:10px;color:#64748b">Notes: ' + escapeHtml(e.notes) + '</div>';
+      var _userNote = e.notes ? String(e.notes).replace(/Auto-synced from invoice[\s\S]*?Edit the invoice to change this entry\.?/gi, '').trim() : '';
+      if (_userNote) {
+        var _isArNote = /[\u0600-\u06FF]/.test(_userNote);
+        arNoteHtml = '<div class="' + (_isArNote ? 'ar-sub' : '') + '"' + (_isArNote ? ' dir="rtl"' : '') + ' style="font-size:10px;color:#64748b">' + escapeHtml(_userNote) + '</div>';
       }
       var autoSyncHtml = hasAutoSync ? '<div class="auto-sync-note">auto-synced from invoice</div>' : '';
       rowsHtml += '<tr>'
@@ -490,7 +497,8 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
       var invoiceColor = e.transaction_type === 'sales_invoice' ? '#1d4ed8'
                        : e.transaction_type === 'vendor_bill' ? '#7e22ce' : null;
-      var arCellHtml = arSide > 0.005 ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+      var arIsPmt = (e.transaction_type === 'payment_received'); // v55.83-GT — payment = reduction
+      var arCellHtml = arSide > 0.005 ? '<span style="color:' + (arIsPmt ? '#0d9488' : (invoiceColor || arColor)) + '">' + (arIsPmt ? '− ' : '') + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
         ? (apColor === '#15803d'
             ? '<span style="color:' + apColor + '">' + escapeHtml(fmtMoney(apSide)) + '</span><div style="font-size:9px;color:#0f766e;font-style:italic;opacity:0.75;margin-top:2px;">reduces what we owe</div>'
