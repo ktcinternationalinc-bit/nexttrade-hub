@@ -256,8 +256,16 @@ export default function WaveSyncCenter(props) {
     invoices.forEach(function (inv) {
       if (inv.wave_business_id !== active) { return; }
       if (bad[inv.wave_business_id]) { return; }
-      if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && (!inv.approval_status || inv.approval_status === 'approved')) {
+      // STRICT (v55.83-FY): only an exactly-approved invoice is pushable. Blank/null/'draft'/
+      // 'review' never appears as pushable.
+      if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status === 'approved') {
         rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number, amount: inv.total_amount, record: inv });
+      }
+      // DRAFT REPAIR (v55.83-FY): an approved invoice already in Wave but stuck as DRAFT must be
+      // surfaced (not hidden just because it has a wave_invoice_id). Shown as a blocked item with a
+      // clear reason — payments to it are refused until the Wave invoice is saved/approved.
+      if (inv.wave_invoice_id && inv.approval_status === 'approved' && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) {
+        rows.push({ key: 'invrepair:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number + ' · needs Wave status repair', amount: inv.total_amount, sub: '⛔ Wave invoice is DRAFT — open/save (approve) it in Wave, then run Wave Import/Reconcile so the Hub records it as SAVED.', blocked: 'Wave invoice is DRAFT — save/approve it in Wave first.', record: inv });
       }
     });
     // Pending PAYMENT rows: a matched payment is its own Wave action (invoicePaymentCreateManual),

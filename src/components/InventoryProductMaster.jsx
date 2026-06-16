@@ -832,18 +832,20 @@ export default function InventoryProductMaster(props) {
         name_ar: nameAr,
         quick_code: quickCode || null,
         design_sku: (form.design_sku || '').trim() || null,
-        family_list_id: form.family_list_id,
-        category_list_id: form.category_list_id,
-        grade_list_id: form.grade_list_id,
-        construction_list_id: form.construction_list_id,
-        backing_list_id: form.backing_list_id,
-        color_list_id: form.color_list_id,
-        pattern_list_id: form.pattern_list_id,
-        spec_class_list_id: form.spec_class_list_id,
+        // v55.83-FY — a virtual mix has NO physical classification. Send every classification
+        // UUID as null (never '' — empty string fails the uuid columns), and no UOM/slug.
+        family_list_id: isVirtual ? null : (form.family_list_id || null),
+        category_list_id: isVirtual ? null : (form.category_list_id || null),
+        grade_list_id: isVirtual ? null : (form.grade_list_id || null),
+        construction_list_id: isVirtual ? null : (form.construction_list_id || null),
+        backing_list_id: isVirtual ? null : (form.backing_list_id || null),
+        color_list_id: isVirtual ? null : (form.color_list_id || null),
+        pattern_list_id: isVirtual ? null : (form.pattern_list_id || null),
+        spec_class_list_id: isVirtual ? null : (form.spec_class_list_id || null),
         // v55.83-A.6.27.NEXT (Issue 11) — origin_list_id was missing!
-        origin_list_id: form.origin_list_id,
+        origin_list_id: isVirtual ? null : (form.origin_list_id || null),
         classification_slug: slug,
-        default_uom: form.default_uom || null,
+        default_uom: isVirtual ? null : (form.default_uom || null),
         default_thickness_mm: form.default_thickness_mm ? Number(form.default_thickness_mm) : null,
         default_width_m: form.default_width_m ? Number(form.default_width_m) : null,
         default_gsm: form.default_gsm ? Number(form.default_gsm) : null,
@@ -1195,6 +1197,9 @@ export default function InventoryProductMaster(props) {
                   {p.is_family_template === false && p.variant_suffix && (
                     <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">PRODUCT</div>
                   )}
+                  {p.is_virtual_mix === true && (
+                    <div className="text-[9px] bg-violet-200 text-violet-900 font-extrabold rounded px-1.5 inline-block mt-0.5">VIRTUAL MIX</div>
+                  )}
                   {Number(p.use_count || 0) > 0 && (
                     <div className="text-[9px] text-slate-500 mt-0.5">used {p.use_count}×</div>
                   )}
@@ -1215,6 +1220,9 @@ export default function InventoryProductMaster(props) {
                     Each level shows label + value with high contrast (slate-900 on white). */}
                 <div className="text-xs">
                   {(function () {
+                    if (p.is_virtual_mix === true) {
+                      return <span className="text-violet-700 italic">Virtual Stock Mix — no physical inventory classification</span>;
+                    }
                     var bullets = describeProductBullets(p);
                     if (bullets.length === 0) {
                       return <span className="text-slate-500 italic">No classification set</span>;
@@ -1610,7 +1618,23 @@ export default function InventoryProductMaster(props) {
               {/* Section 6: Stock Mix Lot (virtual) — v55.83-DQ */}
               <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
                 <label className="flex items-start gap-2 cursor-pointer">
-                  <input type="checkbox" checked={form.is_virtual_mix === true} onChange={function (e) { setForm(Object.assign({}, form, { is_virtual_mix: e.target.checked })); }} className="mt-0.5 w-4 h-4" />
+                  <input type="checkbox" checked={form.is_virtual_mix === true} onChange={function (e) {
+                    // v55.83-FX — checking "virtual" must also NAME it clearly as virtual and lock the
+                    // name (_name_manually_edited) so the auto-classification namer can't overwrite it.
+                    // Unchecking only clears the flag — it never strips the name (could destroy a custom name).
+                    var checked = e.target.checked;
+                    var next = Object.assign({}, form, { is_virtual_mix: checked });
+                    if (checked) {
+                      var en = String(next.name_en || '').trim();
+                      var ar = String(next.name_ar || '').trim();
+                      if (!en) { en = 'Stock Mix Virtual'; } else if (!/virtual/i.test(en)) { en = en + ' - Virtual'; }
+                      if (!ar) { ar = 'Stock Mix Virtual'; } else if (!/virtual/i.test(ar)) { ar = ar + ' - Virtual'; }
+                      next.name_en = en;
+                      next.name_ar = ar;
+                      next._name_manually_edited = true;
+                    }
+                    setForm(next);
+                  }} className="mt-0.5 w-4 h-4" />
                   <span>
                     <span className="text-[12px] font-extrabold text-indigo-900">This is a Stock Mix Lot (virtual)</span>
                     <span className="block text-[11px] text-indigo-800 font-medium">A sellable mixed lot that holds no stock of its own. Its colors are mapped under Inventory → Stock Mix. Leave unchecked for normal products that hold real inventory.</span>

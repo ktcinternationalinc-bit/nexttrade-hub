@@ -22,7 +22,8 @@ function invoiceEligible(inv) {
   if (!inv) { return { eligible: false, reason: 'no record' }; }
   if (inv.wave_invoice_id) { return { eligible: false, reason: 'already in Wave (has wave_invoice_id)' }; }
   if (inv.source === 'wave_import' || inv.is_historical === true) { return { eligible: false, reason: 'historical / imported from Wave' }; }
-  if (inv.approval_status && inv.approval_status !== 'approved') { return { eligible: false, reason: 'not approved (status ' + inv.approval_status + ')' }; }
+  // STRICT (v55.83-FY): blank/null approval_status is NOT pushable. Only an exact 'approved'.
+  if (inv.approval_status !== 'approved') { return { eligible: false, reason: 'Invoice must be approved in Hub before it can be pushed to Wave.' }; }
   if (!(inv.invoice_number)) { return { eligible: false, reason: 'missing invoice number' }; }
   if (inv.total_amount == null) { return { eligible: false, reason: 'missing total' }; }
   return { eligible: true, reason: 'Hub-created approved invoice, not yet in Wave' };

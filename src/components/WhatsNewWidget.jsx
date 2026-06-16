@@ -33,6 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FY',
+    date: '2026-06-15',
+    label: 'Strict invoice approval + Wave DRAFT handling; virtual mix saves cleanly',
+    items: [
+      '**✅ Only an APPROVED Hub invoice can be pushed to Wave.** Previously an invoice with a blank approval status could slip through. Now it must be exactly "approved" — draft and under-review invoices no longer appear as pushable.',
+      '**📝 The Hub now tracks the Wave invoice status (DRAFT vs saved).** If Wave keeps a pushed invoice as DRAFT, it shows in Wave Sync as "Invoice … needs Wave status repair", and a payment to that invoice is blocked with a clear message ("Wave invoice is still DRAFT — save/approve it in Wave first") instead of a confusing failure.',
+      '**🎨 Virtual Stock Mix products save cleanly and are clearly marked.** Saving a virtual mix sends no physical classification (no more save errors), the Product List shows a VIRTUAL MIX badge, and its classification reads "Virtual Stock Mix — no physical inventory classification".',
+      { superAdminOnly: true, text: 'v55.83-FY. No SQL (wave_status / wave_sync_status columns already exist). PART 1 (Wave): strict approval gate — replaced (!approval_status || ==="approved") and (approval_status && !=="approved") with a hard approval_status==="approved" check in wave-sync-eligibility.invoiceEligible, push-invoice.canPush, push-invoice-v2.canPush, and the WaveSyncCenter invoice queue. push-invoice + push-invoice-v2 now request invoice{ status } on invoiceCreate (Invoice type exposes status — confirmed via import-invoices reading n.status, so no schema guess) and save accounting_invoices.wave_status + wave_sync_status = pushed_draft when DRAFT else synced/pushed_unverified. push-payment loads the invoice wave_status/wave_sync_status before claiming and returns ok:false with a clear DRAFT message (row stays pending, never claimed). WaveSyncCenter adds an invoice_status_repair row (action invoice, blocked, with reason) for approved invoices that have a wave_invoice_id but wave_status DRAFT / wave_sync_status pushed_draft — surfaced, not hidden. PART 2 (virtual mix): save payload sends every classification UUID as isVirtual?null:(form.x||null) + null UOM/slug (no empty-string uuid errors); Product List VIRTUAL MIX badge + "Virtual Stock Mix — no physical inventory classification" text. PART 2-A (auto-name on checkbox) shipped in the same batch; PART 2-D (mix mapping: virtual-only picker, non-virtual components, dup-block, virtual-never-a-component) was already implemented in InventoryMixComposition — verified, no change. Read-back-by-id query intentionally omitted: status comes from the create response, and Wave has no confirmed single-invoice-by-id query — if status is absent we mark pushed_unverified rather than guess a query shape.' },
+    ],
+  },
+  {
+    version: 'v55.83-FX',
+    date: '2026-06-15',
+    label: 'Stock Mix Lot checkbox now auto-names the product as Virtual',
+    items: [
+      '**🎨 Marking a product as a Stock Mix Lot (virtual) now names it clearly.** When you check "This is a Stock Mix Lot (virtual)", the product name automatically shows it is virtual (blank name becomes "Stock Mix Virtual"; an existing name gets " - Virtual" added). Unchecking only clears the flag — it never erases your name.',
+      { superAdminOnly: true, text: 'v55.83-FX. No SQL. InventoryProductMaster.jsx Section 6 checkbox previously only did setForm({...form, is_virtual_mix: checked}). Now on check: name_en/name_ar that are blank become "Stock Mix Virtual"; non-blank names without /virtual/i get " - Virtual" appended; sets _name_manually_edited=true so the auto-classification namer (buildAutoName) does not overwrite it; is_virtual_mix=true. On uncheck: only is_virtual_mix=false (name left intact to preserve custom names). Idempotent — re-checking a name already containing "virtual" does not append again. Logic inlined in the onChange (behavior identical to the proposed applyVirtualMixFlag helper).' },
+    ],
+  },
+  {
     version: 'v55.83-FW',
     date: '2026-06-15',
     label: 'Inventory Report Center (English / Arabic) — Snapshot + Stock Mix',

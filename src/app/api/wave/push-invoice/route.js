@@ -22,7 +22,7 @@ function canPush(reg, record, waveBusinessId, unlockPhrase, dryRun) {
   if (record.wave_business_id !== waveBusinessId) { return { ok: false, message: 'Invoice belongs to a different silo.' }; }
   if (record.wave_invoice_id) { return { ok: false, message: 'Invoice already exists in Wave.' }; }
   if (record.is_historical === true || record.source === 'wave_import') { return { ok: false, message: 'Historical/imported invoice cannot be pushed.' }; }
-  if (record.approval_status && record.approval_status !== 'approved') { return { ok: false, message: 'Invoice is not approved.' }; }
+  if (record.approval_status !== 'approved') { return { ok: false, message: 'Invoice must be approved in Hub before it can be pushed to Wave.' }; }
   if (reg.writes_enabled !== true) { return { ok: false, message: 'Writes are disabled for ' + (reg.label || waveBusinessId) + '.' }; }
   if (reg.allow_invoice_push !== true) { return { ok: false, message: 'Invoice push is not enabled for ' + (reg.label || waveBusinessId) + '.' }; }
   if (reg.is_production !== false) { return { ok: false, message: 'Production writes are disabled in this build. Test business only.' }; }
@@ -151,7 +151,7 @@ export async function POST(req) {
       return NextResponse.json({ error: preBlock.message, blocked: true, api_build_marker: API_BUILD_MARKER, response: preBlock }, { status: 409 });
     }
 
-    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber total{ value } } } }';
+    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber status total{ value } } } }';
     var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, items: lineItems } };
     var reqPayload = { api_build_marker: API_BUILD_MARKER, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, query: mutation, variables: waveMutationVariables };
 
@@ -166,9 +166,11 @@ export async function POST(req) {
     if (!ok) { return NextResponse.json({ error: 'Wave did not accept the invoice. See sync log.', response: data }, { status: 502 }); }
 
     var verified = String(ic.invoice.invoiceNumber) === String(inv.invoice_number);
-    // v55.83-EN — always link the Wave invoice id once Wave created it (Wave returned ic.invoice.id);
-    // verification only sets the status flag, it never withholds the link.
-    await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_sync_status: verified ? 'synced' : 'pushed_unverified' }).eq('id', hubId);
+    // v55.83-FY — capture Wave's own invoice status (DRAFT vs SAVED). pushed_draft when DRAFT
+    // (surfaced for repair + blocks payment push), else synced. wave_invoice_id always linked.
+    var waveStatus = (ic.invoice && ic.invoice.status) ? ic.invoice.status : null;
+    var newSyncStatus = (waveStatus === 'DRAFT') ? 'pushed_draft' : (verified ? 'synced' : 'pushed_unverified');
+    await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: waveStatus, wave_sync_status: newSyncStatus }).eq('id', hubId);
     await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'read_back', dry_run: false, response_payload: data, success: !!verified, error_message: verified ? null : 'Read-back number mismatch (invoice still linked)', attempted_by: by });
 
     return NextResponse.json({ success: true, wave_invoice_id: ic.invoice.id, verified: !!verified });
