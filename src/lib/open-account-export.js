@@ -295,9 +295,12 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var autoSyncMatch = rawDesc.match(/^(.+?)\s*Auto-synced from invoice .+?\.\s*Edit the invoice to change this entry\.\s*$/i);
       var mainDesc = autoSyncMatch ? autoSyncMatch[1].trim() : rawDesc;
       var hasAutoSync = !!autoSyncMatch;
+      // v55.83-GN \u2014 show entry notes (incl. invoice notes) under the description in ANY language,
+      // not only Arabic. RTL styling only when the note is actually Arabic.
       var arNoteHtml = '';
-      if (bilingual && e.notes && /[\u0600-\u06FF]/.test(e.notes)) {
-        arNoteHtml = '<div class="ar-sub" dir="rtl" style="font-size:10px;color:#64748b">' + escapeHtml(e.notes) + '</div>';
+      if (e.notes && String(e.notes).trim()) {
+        var _isArNote = /[\u0600-\u06FF]/.test(e.notes);
+        arNoteHtml = '<div class="' + (_isArNote ? 'ar-sub' : '') + '"' + (_isArNote ? ' dir="rtl"' : '') + ' style="font-size:10px;color:#64748b">Notes: ' + escapeHtml(e.notes) + '</div>';
       }
       var autoSyncHtml = hasAutoSync ? '<div class="auto-sync-note">auto-synced from invoice</div>' : '';
       rowsHtml += '<tr>'

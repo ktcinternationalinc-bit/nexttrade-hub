@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GN',
+    date: '2026-06-16',
+    label: 'Open Accounts: invoice notes now show on the statement',
+    items: [
+      '**📝 Invoice notes now appear on the statement.** When you add notes to an Open Accounts invoice, they now show under the invoice line — on screen and in the printed/exported statement, in any language (not only Arabic). Previously the linked ledger line stored a generic "Auto-synced…" message and dropped your notes.',
+      { superAdminOnly: true, text: 'v55.83-GN. No SQL. OpenAccountsTab: the auto-synced ledger entry for an invoice now stores the invoice\'s actual notes (invoiceDraft.notes) instead of the boilerplate "Auto-synced from invoice…" text — so on-screen (entry.notes already rendered) and export both show them. The "edit via the invoice" hint is still implied by the description ("Invoice INV-x — Counterparty") + the Open Inv button. open-account-export.js: the description-cell note now renders for ANY language with a "Notes:" prefix (was gated to Arabic-only + bilingual). Re-save an invoice to refresh its linked entry\'s notes for pre-existing rows. NEXT (GO): on-screen Internal/Customer perspective toggle.' },
+    ],
+  },
+  {
     version: 'v55.83-GM',
     date: '2026-06-16',
     label: 'Fix customer statement: sales invoices were showing under the wrong column',

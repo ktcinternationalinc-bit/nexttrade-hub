@@ -1190,7 +1190,7 @@ export default function OpenAccountsTab(props) {
         credit_amount: invoiceDraft.direction === 'credit' ? totals.total : null,
         debit_amount: invoiceDraft.direction === 'debit' ? totals.total : null,
         currency: cur,
-        notes: 'Auto-synced from invoice ' + invNum + '. Edit the invoice to change this entry.',
+        notes: (invoiceDraft.notes || '').trim() || null,
         linked_open_invoice_id: invoiceId,
       };
 
