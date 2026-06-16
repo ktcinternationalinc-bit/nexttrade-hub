@@ -113,14 +113,24 @@ export async function POST(req) {
     var invoiceNumber = null;
     var custWaveId = pay.wave_customer_id || null;
     var invDraftBlocked = false;
+    var invSilo = null;
     if (pay.accounting_invoice_id) {
-      var invMeta = await db.from('accounting_invoices').select('invoice_number, wave_customer_id, wave_status, wave_sync_status').eq('id', pay.accounting_invoice_id);
+      var invMeta = await db.from('accounting_invoices').select('invoice_number, wave_customer_id, wave_status, wave_sync_status, wave_business_id').eq('id', pay.accounting_invoice_id);
       var invMetaRow = (invMeta && invMeta.data && invMeta.data.length) ? invMeta.data[0] : null;
       if (invMetaRow) {
         invoiceNumber = invMetaRow.invoice_number || null;
         if (!custWaveId) { custWaveId = invMetaRow.wave_customer_id || null; }
+        invSilo = invMetaRow.wave_business_id || null;
         if (invMetaRow.wave_status === 'DRAFT' || invMetaRow.wave_sync_status === 'pushed_draft') { invDraftBlocked = true; }
       }
+    }
+    // v55.83-GE — SILO GUARD: never push a payment whose invoice (or payment row) belongs to a
+    // DIFFERENT Wave business than the requested one. Defense beyond the approved-business check.
+    if (invSilo && invSilo !== waveBusinessId) {
+      return NextResponse.json({ ok: false, error: 'This payment\'s invoice belongs to a different Wave business than the selected one — cannot push across silos.', api_build_marker: API_BUILD_MARKER }, { status: 400 });
+    }
+    if (pay.wave_business_id && pay.wave_business_id !== waveBusinessId) {
+      return NextResponse.json({ ok: false, error: 'This payment belongs to a different Wave business than the selected one — cannot push across silos.', api_build_marker: API_BUILD_MARKER }, { status: 400 });
     }
     // v55.83-FY — Wave refuses payments on DRAFT invoices. Block with a clear message (before
     // claiming/mutating) instead of letting Wave reject it cryptically. Row stays pending for retry.

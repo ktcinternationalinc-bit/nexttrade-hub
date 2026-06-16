@@ -460,6 +460,9 @@ export default function App() {
   // inventoryCutoffDate: loaded from app_settings.inventory_cutoff_date.
   //   When set, invoices on/after this date force inventory mode (enforced in 44c). Today it's just a guide.
   const [inventoryProducts, setInventoryProducts] = useState([]);
+  // v55.83-GE — ids of virtual Stock Mix products. They are excluded from the invoice picker and
+  // blocked from FIFO consumption until Phase 2 (component drawdown) is built.
+  const [virtualMixIds, setVirtualMixIds] = useState(function () { return {}; });
   const [inventoryCutoffDate, setInventoryCutoffDate] = useState(null);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -1548,7 +1551,15 @@ export default function App() {
       // Safe to fail silently — invoice form falls back to legacy/manual mode.
       try {
         const { data: ipRows } = await supabase.from('inventory_products').select('*').eq('active', true).order('name_en');
-        setInventoryProducts(ipRows || []);
+        // v55.83-GE — SAFETY GATE: exclude virtual Stock Mix products from the invoice "From
+        // Inventory" picker (they hold no stock of their own and selling them is not yet wired to
+        // expand into real component colors — that is Phase 2). Track their ids to also block
+        // FIFO consumption if one somehow reaches save.
+        const allActiveProducts = ipRows || [];
+        const vmix = {};
+        allActiveProducts.forEach(function (p) { if (p && p.is_virtual_mix === true) { vmix[p.id] = true; } });
+        setVirtualMixIds(vmix);
+        setInventoryProducts(allActiveProducts.filter(function (p) { return p.is_virtual_mix !== true; }));
       } catch (e) { setInventoryProducts([]); }
       // v55.83-A.6.27.44b — load cutoff date setting.
       // When null/missing, both modes always available. When set, future-dated invoices force inventory mode (in 44c).
@@ -5371,7 +5382,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-GD</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-GE</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -9182,7 +9193,12 @@ export default function App() {
                       // creates an inventory_backorders row if sale qty > available stock.
                       // Failure here does NOT fail the whole invoice — operator gets a
                       // toast warning and can review/fix manually.
-                      if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
+                      if (item.uses_inventory === true && item.variant_id && virtualMixIds[item.variant_id]) {
+                        // v55.83-GE — SAFETY GATE: never run FIFO against a virtual Stock Mix product
+                        // (it has no stock layers of its own). Phase 2 will expand it into real
+                        // component colors; until then, do not deduct and warn clearly.
+                        toast.warning('Virtual Stock Mix cannot be sold yet (component drawdown not enabled) — stock NOT deducted for "' + (item.inv_desc || '?').substring(0, 50) + '". Remove this line or sell the real color products. / لا يمكن بيع المزيج الافتراضي بعد');
+                      } else if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
                         try {
                           const consumeRes = await supabase.rpc('consume_invoice_item_inventory', { p_item_id: insertedItem.id });
                           if (consumeRes.error) {

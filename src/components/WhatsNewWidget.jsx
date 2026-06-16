@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GE',
+    date: '2026-06-16',
+    label: 'Safety: virtual mixes not sellable yet + payment silo guard + mark-done permission',
+    items: [
+      '**🛡️ Virtual Stock Mix products can no longer be sold on an invoice yet.** They are hidden from the invoice "From Inventory" picker, and if one somehow reaches save, stock is NOT deducted (you get a clear warning). Selling a mix needs the component-drawdown step (Phase 2), which is being built next — this prevents wrong stock/COGS in the meantime.',
+      '**✅ Staff granted "Payments: Mark Manual Done" can now use it** (was super-admin-only). **🔒 And a payment can no longer be pushed to a different Wave business than its invoice** (cross-silo guard on payment push).',
+      { superAdminOnly: true, text: 'v55.83-GE. No SQL. PRIORITY A safety gate (page.jsx): inventory_products with is_virtual_mix=true are filtered out of the invoice picker (setInventoryProducts) and their ids tracked in virtualMixIds; at invoice save, if item.variant_id is a virtual mix, consume_invoice_item_inventory is SKIPPED with a clear toast (never run FIFO against a product with no layers). QA fixes: (#4) WaveSyncCenter markManualDone now allows isSuperAdmin || payments.mark_manual_done (button hidden without it). (#1) push-payment adds a cross-silo guard — blocks if the invoice wave_business_id (or payment wave_business_id) != the requested business, beyond the existing approved-business check. Verified the rest of the GC QA accurate; #5 (per-silo default account) was already shipped in GD. STILL OPEN: Phase 2 virtual-mix sale expansion (component proportional FIFO + COGS + audit table + reversal) — next dedicated build; dashboard AR gating (#2/#3 — gate on AR perms + server-side AR endpoint); split-line real Wave account fields (#7); Upcoming Due own permission (#6); per-row checkbox gating (#8); delete schema-check (#9).' },
+    ],
+  },
+  {
     version: 'v55.83-GD',
     date: '2026-06-16',
     label: 'Per-silo default bank account (Bank Review auto-loads it)',
