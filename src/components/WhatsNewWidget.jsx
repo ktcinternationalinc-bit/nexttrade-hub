@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GM',
+    date: '2026-06-16',
+    label: 'Fix customer statement: sales invoices were showing under the wrong column',
+    items: [
+      '**🧾 Fixed the customer-facing printed/exported statement (was double-flipped).** Sales invoices now correctly appear under "You Owe Us" and vendor bills under "Owed to You" (they were reversed). The summary boxes were also mislabeled in customer view and are corrected. Printed/PDF balance numbers no longer wrap vertically.',
+      { superAdminOnly: true, text: 'v55.83-GM. No SQL. open-account-export.js: the customer-facing statement is now LABELS-ONLY — the column headers/type names already flip via the i18n perspective param, so the code additionally swapping the AR/AP amounts (and negating the running/net balance) was a DOUBLE flip that put sales invoices under "Owed to You". Removed: both AR/AP amount swaps (main + second render path), the per-row running-balance negation, the summary tfoot asAR perspective swap, and the net "-cs.balance" negation. Fixed the summary card strings (theirOpenInvoices → customer "You owe us"; ourOpenBills → "We owe you"). Print CSS: added td.num/.col-money/.col-open/.col-run { white-space:nowrap } so numeric cells stop wrapping under the global word-break rule (description cells keep wrapping). On-screen ledger was internal-only and already correct. VERIFY on live data: print the El Sayad CUSTOMER statement — sales invoice 1,119,502 must read under "You Owe Us"; vendor bill 560,000 under "Owed to You". Still pending (GN): carry invoice notes into the linked ledger entry description; add an on-screen Internal/Customer toggle.' },
+    ],
+  },
+  {
     version: 'v55.83-GL',
     date: '2026-06-16',
     label: 'Open Accounts statement: balance columns no longer wrap vertically',

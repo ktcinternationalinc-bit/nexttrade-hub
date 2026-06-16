@@ -192,7 +192,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var debit  = Number(e.debit_amount  || 0);
       // Running net walks signed amounts (matches Running Balance column)
       var signed = signedAmount(e);
-      if (perspective === 'customer') signed = -signed;
+      // v55.83-GM — customer statement is LABELS-ONLY: same amounts/columns/signs as internal,
+      // only the wording changes (headers flip via i18n). Do NOT negate/swap — that double-flipped
+      // sales invoices into the wrong column.
       running += signed;
       var paid = applications[e.id] || 0;
       var remaining = 0;
@@ -217,7 +219,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         default: arSide = credit; apSide = debit;
       }
       // Customer perspective: AR ↔ AP swap (their receivable = our payable)
-      if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
+      /* v55.83-GM: removed AR/AP amount swap — customer perspective is labels-only; the column
+         headers already flip via i18n (they_owe_us → "You Owe Us", we_owe_them → "Owed to You"),
+         so swapping the amounts too double-flipped (sales invoice showed under "Owed to You"). */
       // v55.83-A.6.27.72 HOTFIX 14 (refined HOTFIX 15) — Per Max's exact spec:
       // sales_invoice → BLUE (#1d4ed8) — we're billing them
       // vendor_bill   → PURPLE (#7e22ce) — they're billing us  (changed from orange)
@@ -326,11 +330,11 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'
         + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bfdbfe;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#1e3a8a;font-weight:700;text-transform:uppercase">'
-        + (perspective === 'customer' ? 'We owe you' : 'They owe us')
+        + (perspective === 'customer' ? 'You owe us' : 'They owe us')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#1e3a8a">' + fmtMoney(simCur.theirOpenInvoices) + '</div></div>'
         + '<div style="flex:1;min-width:90px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#78350f;font-weight:700;text-transform:uppercase">'
-        + (perspective === 'customer' ? 'You owe us' : 'We owe them')
+        + (perspective === 'customer' ? 'We owe you' : 'We owe them')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#78350f">' + fmtMoney(simCur.ourOpenBills) + '</div></div>'
         + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#14532d;font-weight:700;text-transform:uppercase">'
@@ -374,10 +378,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
                   var pp = applications[e.id] || 0;
                   var fa = Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
                   var rem = Math.max(0, fa - pp);
-                  // AR/AP swap in customer perspective
-                  var asAR = perspective === 'customer'
-                    ? (e.transaction_type === 'vendor_bill')
-                    : (e.transaction_type === 'sales_invoice');
+                  // v55.83-GM — a sales invoice is ALWAYS the AR side (customer owes us); only the
+                  // labels flip for customer perspective, never the amount routing.
+                  var asAR = (e.transaction_type === 'sales_invoice');
                   if (asAR) totAR += rem; else totAP += rem;
                 }
               });
@@ -394,7 +397,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
                 + escapeHtml(fmtMoney(totAR)) + ' − ' + escapeHtml(fmtMoney(totAP)) + ' = ' + escapeHtml(fmtSignedMoney(netP)) + ' ' + escapeHtml(cur)
                 + '<div style="font-size:9px; opacity:0.85; margin-top:2px; text-transform:uppercase; letter-spacing:1px">' + escapeHtml(subLabel) + '</div>'
                 + '</td>'
-                + '<td class="num" style="color:' + netColor + '">' + escapeHtml(fmtSignedMoney(perspective === 'customer' ? -cs.balance : cs.balance)) + '</td>'
+                + '<td class="num" style="color:' + netColor + '">' + escapeHtml(fmtSignedMoney(cs.balance)) + '</td>'
                 + '</tr>'
                 + '</tfoot>';
             })()
@@ -474,7 +477,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         case 'credit_adjustment': arSide = credit; apSide = debit; break;
         case 'offset':           arSide = credit; apSide = debit; break;
       }
-      if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
+      /* v55.83-GM: removed AR/AP amount swap — customer perspective is labels-only; the column
+         headers already flip via i18n (they_owe_us → "You Owe Us", we_owe_them → "Owed to You"),
+         so swapping the amounts too double-flipped (sales invoice showed under "Owed to You"). */
       // Colors by type — payment_sent green not red
       var arColor = '#15803d', apColor = '#b91c1c';
       if (e.transaction_type === 'payment_sent') apColor = '#15803d';
@@ -668,6 +673,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + 'th.col-open    { width: 12%; text-align: right; }'
     + 'th.col-run     { text-align: right; }'  /* claims remainder */
     + 'td { word-break: break-word; overflow-wrap: anywhere; }'
+    + 'td.num, th.num, .col-money, .col-open, .col-run { white-space: nowrap !important; word-break: normal !important; overflow-wrap: normal !important; }'
     + 'td.desc-cell .desc-main { font-weight: 600; }'
     + 'td.desc-cell .auto-sync-note { font-size: 9px; color: #94a3b8; margin-top: 2px; font-style: italic; }'
     + 'td.desc-cell .desc-ref { font-size: 10px; color: #64748b; font-family: "SF Mono", Menlo, monospace; margin-top: 2px; }'
