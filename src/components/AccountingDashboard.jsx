@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { isPaymentVoid } from '../lib/payment-matching';
-import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances } from '../lib/bank-permissions';
+import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -26,8 +26,20 @@ export default function AccountingDashboard(props) {
   // bundled into generic company-totals/invoice-view.
   var seeTotals = canViewArSummary(isSuperAdmin, modulePerms, userProfile && userProfile.role);
   var seeCustBalances = canViewArCustomerBalances(isSuperAdmin, modulePerms, userProfile && userProfile.role);
+  // v55.83-GF — AR is permission-split: summary / upcoming-due / overdue / invoice-balances are
+  // SEPARATE permissions, and AR money is NOT tied to bank-amount permission. The dashboard is no
+  // longer all-or-nothing on bank access — any AR permission lets the user in, and each card shows
+  // "Restricted" individually.
+  var _role = userProfile && userProfile.role;
+  var seeUpcoming = canViewArUpcomingDue(isSuperAdmin, modulePerms, _role);
+  var seeOverdue = canViewArOverdue(isSuperAdmin, modulePerms, _role);
+  var seeInvoiceBal = canViewArInvoiceBalances(isSuperAdmin, modulePerms, _role);
+  var anyAccess = mayView || seeTotals || seeUpcoming || seeOverdue || seeInvoiceBal || seeCustBalances;
   function money(n) { return seeAmounts ? ('$' + fmt(n)) : '•••••'; }
   function tmoney(n) { return seeTotals ? ('$' + fmt(n)) : 'Restricted'; }
+  function tdue(n) { return seeUpcoming ? ('$' + fmt(n)) : 'Restricted'; }
+  function tover(n) { return seeOverdue ? ('$' + fmt(n)) : 'Restricted'; }
+  function armoney(n) { return seeInvoiceBal ? ('$' + fmt(n)) : 'Restricted'; }
 
   var [d, setD] = useState(null);
   var [loading, setLoading] = useState(true);
@@ -142,7 +154,7 @@ export default function AccountingDashboard(props) {
       });
     }).catch(function (e) { console.error('[acctdash]', e); }).finally(function () { setLoading(false); });
   }
-  useEffect(function () { if (mayView) load(); else setLoading(false); }, []);
+  useEffect(function () { if (anyAccess) load(); else setLoading(false); }, []);
 
   function toggleIgnore(row, ignore) {
     if (busy) return;
@@ -164,7 +176,7 @@ export default function AccountingDashboard(props) {
       .then(function (r) { setViewItems((r && r.data) || []); }).catch(function () { setViewItems([]); });
   }
 
-  if (!mayView) return null;
+  if (!anyAccess) return <div className="p-4 text-sm bg-amber-50 border border-amber-200 rounded text-amber-900 m-3">You don&#39;t have permission to view the Accounting dashboard. Ask an admin for an AR or Bank viewing permission.</div>;
   if (loading || !d) return <div className="p-4 text-slate-400 text-sm">Loading dashboard…</div>;
 
   // overdue filter: default hide <$200 and ignored; toggle shows all
@@ -212,10 +224,10 @@ export default function AccountingDashboard(props) {
       {/* B — Upcoming Due */}
       <Section title="B · Upcoming due (not overdue)">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-          <Stat title="Due now" big={tmoney(nowB.t)} sub={nowB.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 1–30 days" big={tmoney(d30.t)} sub={d30.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 31–60 days" big={tmoney(d60.t)} sub={d60.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 61–90 days" big={tmoney(d90.t)} sub={d90.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due now" big={tdue(nowB.t)} sub={nowB.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 1–30 days" big={tdue(d30.t)} sub={d30.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 31–60 days" big={tdue(d60.t)} sub={d60.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due in 61–90 days" big={tdue(d90.t)} sub={d90.c + ' invoice(s)'} tone="bg-slate-800" />
         </div>
       </Section>
 
@@ -223,10 +235,10 @@ export default function AccountingDashboard(props) {
       <Section title="C · Overdue aging">
         <div className="flex items-center justify-between mb-2">
           <div className="grid gap-2 flex-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
-            <Stat title="Overdue 1–30" big={tmoney(o30.t)} sub={o30.c + ' inv'} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 31–60" big={tmoney(o60.t)} sub={o60.c + ' inv'} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 61–90" big={tmoney(o90.t)} sub={o90.c + ' inv'} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 90+" big={tmoney(o90p.t)} sub={o90p.c + ' inv'} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
+            <Stat title="Overdue 1–30" big={tover(o30.t)} sub={o30.c + ' inv'} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 31–60" big={tover(o60.t)} sub={o60.c + ' inv'} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 61–90" big={tover(o90.t)} sub={o90.c + ' inv'} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 90+" big={tover(o90p.t)} sub={o90p.c + ' inv'} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
           </div>
         </div>
         <label className="text-[11px] text-slate-200 font-bold flex items-center gap-2 mb-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer w-fit">
@@ -246,7 +258,7 @@ export default function AccountingDashboard(props) {
                       <div className="py-1 text-slate-900 truncate">{t.cust}</div>
                       <div className="py-1 text-rose-700 font-bold">{t.due_date || '—'}</div>
                       <div className="py-1 text-right text-rose-700 font-bold">{-t.du}</div>
-                      <div className="py-1 text-right font-mono font-bold text-slate-900">{money(t.balance)}</div>
+                      <div className="py-1 text-right font-mono font-bold text-slate-900">{armoney(t.balance)}</div>
                       <div className="py-1"><span className={'text-[9px] rounded px-1 py-0.5 font-bold text-white ' + (t.source === 'Wave' ? 'bg-sky-700' : 'bg-emerald-700')}>{t.source}</span></div>
                       <div className="py-1 flex gap-1">
                         <button onClick={function () { openView(t); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
@@ -268,8 +280,8 @@ export default function AccountingDashboard(props) {
       {/* D — Bank Review */}
       <Section title="D · Bank review">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title="Unmatched bank txns" big={d.unmatchedCount} sub="not yet reviewed/matched" tone={d.unmatchedCount ? 'bg-amber-900' : 'bg-slate-800'} />
-          <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal)} tone="bg-emerald-900" />
+          {mayView ? <Stat title="Unmatched bank txns" big={d.unmatchedCount} sub="not yet reviewed/matched" tone={d.unmatchedCount ? 'bg-amber-900' : 'bg-slate-800'} /> : <Stat title="Unmatched bank txns" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
+          {mayView ? <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal)} tone="bg-emerald-900" /> : <Stat title="Payments received today" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
         </div>
         <div className="flex items-center gap-2 mt-2">
           <button onClick={function () { if (props.onOpenBankReview) { props.onOpenBankReview(); } }} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold">🏦 Open Bank Review &amp; Matching</button>
@@ -338,9 +350,9 @@ export default function AccountingDashboard(props) {
                 })}</tbody>
               </table>
               <div className="flex justify-end gap-4 text-right">
-                <div><div className="text-[10px] text-slate-400">Total</div><b>{money(viewing.total)}</b></div>
-                <div><div className="text-[10px] text-slate-400">Paid</div>{money(viewing.paid)}</div>
-                <div><div className="text-[10px] text-slate-400">Balance</div><b className="text-rose-300">{money(viewing.balance)}</b></div>
+                <div><div className="text-[10px] text-slate-400">Total</div><b>{armoney(viewing.total)}</b></div>
+                <div><div className="text-[10px] text-slate-400">Paid</div>{armoney(viewing.paid)}</div>
+                <div><div className="text-[10px] text-slate-400">Balance</div><b className="text-rose-300">{armoney(viewing.balance)}</b></div>
               </div>
               <div className="text-[10px] text-slate-500 mt-2">To edit this invoice, open it from Accounting → Invoices (Reopen if approved).</div>
             </div>

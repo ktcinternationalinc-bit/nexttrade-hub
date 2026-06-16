@@ -464,6 +464,7 @@ const ACTION_PERMS = [
   { key: 'ar.view_summary',             label: 'AR: View Company Summary',       desc: 'See company-wide Accounts Receivable totals on the dashboard (total owed). Separate from seeing individual invoice balances.' },
   { key: 'ar.view_customer_balances',   label: 'AR: View Customer Balances',     desc: 'See how much each customer owes across all their invoices (top customer balances).' },
   { key: 'ar.view_invoice_balances',    label: 'AR: View Invoice Balances',      desc: 'See the balance due on individual invoices (needed by payment matchers). Does NOT reveal company-wide totals.' },
+  { key: 'ar.view_upcoming_due',        label: 'AR: View Upcoming Due',          desc: 'See the upcoming-due buckets (due now / 1-30 / 31-60 / 61-90 days) on the dashboard. Separate from the overall AR summary.' },
   { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },
   { key: 'ar.export',                   label: 'AR: Export',                     desc: 'Export AR reports to Excel/CSV.' },
   { key: 'payments.match',              label: 'Payments: Match to Invoice',     desc: 'Match a bank deposit to a customer invoice (records a payment in the Hub).' },
@@ -471,6 +472,7 @@ const ACTION_PERMS = [
   { key: 'payments.mark_manual_done',   label: 'Payments: Mark Manual Done',     desc: 'Mark a queued payment as already entered in Wave by hand (clears it from the queue without faking a Wave id).' },
   { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
   { key: 'bank.view_account_balances',  label: 'Bank: View Account Balances',    desc: 'See bank account balances / net cash. Sensitive — keep limited to finance/management.' },
+  { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
 ];
 

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GF',
+    date: '2026-06-16',
+    label: 'Accounting Dashboard permissions split out (AR ≠ bank); per-card Restricted',
+    items: [
+      '**🔐 The Accounting Dashboard now respects separate permissions instead of all-or-nothing.** An AR person with no bank access now sees the AR sections (it used to show a blank screen). Each card shows "Restricted" on its own when you lack that specific permission. AR Summary, Upcoming Due, Overdue Aging, Customer Balances, Invoice Balances, and the Bank widgets are each controlled independently.',
+      '**💵 AR money is no longer tied to bank-amount permission.** Overdue invoice balances and the invoice popup totals now require AR invoice-balance permission, not the bank "see amounts" permission. New permission: AR: View Upcoming Due (separate from the AR summary).',
+      { superAdminOnly: true, text: 'v55.83-GF. No SQL. AccountingDashboard: removed the hard `if (!canViewBank) return null` gate — now `anyAccess = mayView || seeTotals || seeUpcoming || seeOverdue || seeInvoiceBal || seeCustBalances` gates load() + render, and each card uses its own money fn: tmoney(ar.view_summary) for the A summary, tdue(ar.view_upcoming_due) for B, tover(ar.view_overdue) for C aging, armoney(ar.view_invoice_balances) for overdue row balances + the invoice modal totals/paid/balance (previously the bank `money()`/canSeeAmounts). Bank widget (D) cards show Restricted unless canViewBank. New bank-permissions.canViewArUpcomingDue (falls back to ar.full/ar.view_summary). New SettingsTab ACTION_PERMS: ar.view_upcoming_due, bank.see_amounts. Note: data is still loaded client-side then gated (server-side AR/RLS enforcement remains a P2 follow-up).' },
+    ],
+  },
+  {
     version: 'v55.83-GE',
     date: '2026-06-16',
     label: 'Safety: virtual mixes not sellable yet + payment silo guard + mark-done permission',
