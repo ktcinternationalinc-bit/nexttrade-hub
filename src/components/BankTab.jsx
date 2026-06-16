@@ -28,7 +28,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
   // v55.83-GJ — without bank.view_all_accounts, staff are locked to the silo default account and
   // can't pick "All accounts" or see other silos' connections.
   const isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
-  const canViewAllAccounts = isSuperAdmin || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
+  const canViewAllAccounts = isSuperAdmin || (userProfile && (userProfile.role === 'admin' || userProfile.role === 'owner')) || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
   const assignConnection = async (conn) => {
     const bizId = assignSel[conn.id];

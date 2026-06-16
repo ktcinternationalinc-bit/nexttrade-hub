@@ -165,7 +165,7 @@ export default function AccountingDashboard(props) {
         openTotal: r2(openTotal), openCount: openCount, creditTotal: r2(creditTotal),
         overdueRows: overdueRows, currentRows: currentRows, custBalances: custBalances,
         unmatchedCount: unmatched.length, pendingApproval: pendingApproval.length,
-        paidTodayTotal: r2(paidTodayTotal), paidTodayCount: paidTodayCount,
+        paidTodayTotal: r2(paidTodayTotal), paidTodayCount: paidTodayCount, paidTodayDefaultScoped: !!defAcctD,
         nonUsd: nonUsdList,
         ws: ws, lastLog: lastLog, activity: activity, diag: diag
       });
@@ -301,7 +301,7 @@ export default function AccountingDashboard(props) {
       <Section title="D · Bank review">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
           {mayView ? <Stat title="Unmatched bank txns" big={d.unmatchedCount} sub="not yet reviewed/matched" tone={d.unmatchedCount ? 'bg-amber-900' : 'bg-slate-800'} /> : <Stat title="Unmatched bank txns" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
-          {mayView ? <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal)} tone="bg-emerald-900" /> : <Stat title="Payments received today" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
+          {mayView ? <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal) + (d.paidTodayDefaultScoped ? ' · default account' : ' · all silo accounts')} tone="bg-emerald-900" /> : <Stat title="Payments received today" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
         </div>
         <div className="flex items-center gap-2 mt-2">
           {mayView && <button onClick={function () { if (props.onOpenBankReview) { props.onOpenBankReview(); } }} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold">🏦 Open Bank Review &amp; Matching</button>}

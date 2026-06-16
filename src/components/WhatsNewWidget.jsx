@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GK',
+    date: '2026-06-16',
+    label: 'Bank: admins view all accounts; payments-today labeled; dead-route cleanup',
+    items: [
+      '**🏦 Admins and owners can now view all bank accounts** (not just super-admin), matching the new "Bank: View All Accounts" permission. **The "Payments received today" card now says whether it reflects the default account or all silo accounts**, so it’s unambiguous.',
+      { superAdminOnly: true, text: 'v55.83-GK. No SQL. BankTab canViewAllAccounts now also true for role admin/owner (#5). AccountingDashboard: setD carries paidTodayDefaultScoped (!!defAcctD); the card sub appends " · default account" or " · all silo accounts" (#6). CLEANUP: deleted dead routes /api/wave/schema-check (superseded by preflight-schema) and /api/wave/push-invoice (superseded by push-invoice-v2) — both were unreferenced by live callers (verified). Badge -> v55.83-GK.' },
+    ],
+  },
+  {
     version: 'v55.83-GJ',
     date: '2026-06-16',
     label: 'Bank tab locked to silo + default account; payments-today account-scoped',
