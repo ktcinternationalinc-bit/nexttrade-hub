@@ -187,6 +187,44 @@ export default function BankReviewTab(props) {
       .finally(function () { setBusy(false); });
   }
 
+  // v55.83-FZ — main Wave-category (Chart of Accounts) selector for a whole transaction (not just
+  // inside split mode). Stores the REAL Wave account fields so it can later be pushed to Wave.
+  // Requires bank_transactions category columns (see SQL handed to Max).
+  function setWaveCategory(t, accountId) {
+    if (!mayClassify) { toast.error('You do not have Bank: Classify permission.'); return; }
+    if (isLocked(t)) { toast.error('Approved — reopen first to edit.'); return; }
+    var patch;
+    if (!accountId) {
+      patch = { wave_account_id: null, wave_account_name: null, wave_account_type: null, wave_account_subtype: null, category_source: null, category_status: 'local_only' };
+    } else {
+      var cat = null; waveCategories.forEach(function (c) { if (c.wave_account_id === accountId) { cat = c; } });
+      if (!cat) { return; }
+      patch = { wave_account_id: cat.wave_account_id, wave_account_name: cat.wave_account_name, wave_account_type: cat.type || null, wave_account_subtype: cat.subtype || null, category_source: 'wave', category_status: 'pending_wave_sync', review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status };
+    }
+    setBusy(true);
+    patchTxn(t, patch, 'Set Wave category on bank txn ' + (t.name || t.id) + (accountId ? (' = ' + patch.wave_account_name) : ' (cleared)'))
+      .then(function () { setSel(Object.assign({}, t, patch)); toast.success(accountId ? ('Wave category: ' + patch.wave_account_name) : 'Category cleared'); load(); })
+      .catch(function (e) { console.error('[wave-cat] save', e); toast.error('Could not save category — has the bank_transactions category SQL been run? ' + ((e && e.message) || '')); })
+      .finally(function () { setBusy(false); });
+  }
+
+  // Group loaded (already silo-scoped) Wave categories by account type, ordering the groups by
+  // relevance to the transaction direction (money-out shows EXPENSE/COGS first; money-in INCOME).
+  function orderedCatGroups(direction) {
+    var groups = {};
+    waveCategories.forEach(function (c) { var ty = c.type || 'OTHER'; if (!groups[ty]) { groups[ty] = []; } groups[ty].push(c); });
+    var order = direction === 'out'
+      ? ['EXPENSE', 'COST_OF_GOODS_SOLD', 'LIABILITY', 'ASSET', 'INCOME', 'EQUITY']
+      : ['INCOME', 'ASSET', 'LIABILITY', 'EXPENSE', 'EQUITY'];
+    var keys = Object.keys(groups).sort(function (a, b) {
+      var ia = order.indexOf(a); var ib = order.indexOf(b);
+      if (ia < 0) { ia = 99; } if (ib < 0) { ib = 99; }
+      if (ia !== ib) { return ia - ib; }
+      return a.localeCompare(b);
+    });
+    return keys.map(function (k) { return { type: k, items: groups[k].slice().sort(function (x, y) { return String(x.wave_account_name).localeCompare(String(y.wave_account_name)); }) }; });
+  }
+
   function setStatus(t, status, reasonRequired) {
     if (isLocked(t) && status !== 'approved') { toast.error('Approved — reopen first.'); return; }
     var reason = '';
@@ -540,6 +578,31 @@ export default function BankReviewTab(props) {
                 <option value="">— choose —</option>
                 {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{labelize(c)}</option>; })}
               </select>
+            </div>
+
+            {/* v55.83-FZ — Wave Category (Chart of Accounts). Real Wave accounts, scoped to the
+                active silo. Separate from invoice matching: for a customer payment matched to an
+                invoice you don't need a category; this is for expenses/transfers/other income. */}
+            <div className="mb-2">
+              <div className="text-[11px] text-slate-400 mb-1">Wave Category (Chart of Accounts)</div>
+              {waveCategories.length > 0 ? (
+                <div>
+                  <select value={sel.wave_account_id || ''} disabled={!mayClassify || isLocked(sel)} onChange={function (e) { setWaveCategory(sel, e.target.value); }} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs disabled:opacity-50">
+                    <option value="">— none —</option>
+                    {orderedCatGroups(sel.direction).map(function (grp) {
+                      return (
+                        <optgroup key={grp.type} label={grp.type}>
+                          {grp.items.map(function (c) { return <option key={c.wave_account_id} value={c.wave_account_id}>{c.wave_account_name}{c.subtype ? (' (' + c.subtype + ')') : ''}</option>; })}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                  {sel.wave_account_id && <div className="text-[10px] text-violet-300 mt-0.5">Selected: {sel.wave_account_name}{sel.category_status ? (' · ' + sel.category_status) : ''}</div>}
+                  {sel.direction === 'in' && <div className="text-[10px] text-slate-500 mt-0.5">Money-in: if this is a customer invoice payment, match it to the invoice below instead of categorizing.</div>}
+                </div>
+              ) : (
+                <div className="text-[10px] text-amber-300">No Wave categories loaded for this business. Pull them in Wave Sync Center → Settings → Pull Wave categories.</div>
+              )}
             </div>
 
             {matchesByTxn[sel.id] && matchesByTxn[sel.id].length > 0 && (

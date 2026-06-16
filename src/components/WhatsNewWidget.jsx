@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-FZ',
+    date: '2026-06-16',
+    label: 'Bank Review: main Wave Category dropdown (not just split mode)',
+    items: [
+      '**🏷️ You can now categorize a whole bank transaction with your real Wave categories.** Open Accounting → Bank Review & Matching, click a transaction, and use the new **Wave Category (Chart of Accounts)** dropdown on the detail panel — previously Wave categories were only reachable inside Split mode. Categories are scoped to the active Wave business, and for money-out transactions the expense categories are shown first.',
+      '**↔️ Categorizing is separate from invoice matching.** For a customer payment, match it to the invoice (no category needed); use the category dropdown for expenses, transfers, and other income.',
+      { superAdminOnly: true, text: 'v55.83-FZ. REQUIRES SQL (handed to Max): add wave_account_id / wave_account_name / wave_account_type / wave_account_subtype / category_source / category_status to bank_transactions (splits already have these). BankReviewTab: new setWaveCategory(t, accountId) patches the real Wave fields (category_source=wave, category_status=pending_wave_sync) onto the bank_transactions row, or clears to local_only; orderedCatGroups(direction) groups the already-silo-scoped waveCategories by type, ordering EXPENSE/COGS/LIABILITY/ASSET first for money-out and INCOME first for money-in. New main dropdown on the selected-transaction panel beside Classification, with empty-state pointing to Wave Sync Center -> Settings -> Pull Wave categories. Split-line dropdown already used the same categories. Save shows a clear error if the bank_transactions category columns are missing (SQL not yet run). Not pushed to Wave yet — storing the wave_account_id cleanly is the prerequisite for a future category push.' },
+    ],
+  },
+  {
     version: 'v55.83-FY',
     date: '2026-06-15',
     label: 'Strict invoice approval + Wave DRAFT handling; virtual mix saves cleanly',
