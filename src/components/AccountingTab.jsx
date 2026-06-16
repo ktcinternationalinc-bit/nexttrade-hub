@@ -31,6 +31,13 @@ export default function AccountingTab(props) {
     ['waveimport', '⬇️ Wave Import'],
     ['wavesync', '🔄 Wave Sync Center'],
   ];
+  // v55.83-GB — Wave Sync Center is now permission-gated: only super_admin OR a user granted
+  // wave.sync.view sees the tab and can mount the screen. (Server routes already enforce the
+  // specific push/import/settings permissions; this controls the screen itself.)
+  var mp = props.modulePerms || {};
+  var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+  var canWaveSync = isSuper || mp['wave.sync.view'] === true;
+  tabs = tabs.filter(function (t) { return t[0] !== 'wavesync' || canWaveSync; });
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
@@ -57,7 +64,7 @@ export default function AccountingTab(props) {
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
       {sub === 'wave' && <WaveConnectionTab {...props} />}
       {sub === 'waveimport' && <WaveImportTab {...props} />}
-      {sub === 'wavesync' && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} />}
+      {sub === 'wavesync' && canWaveSync && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} />}
     </div>
   );
 }

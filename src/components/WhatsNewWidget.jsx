@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GB',
+    date: '2026-06-16',
+    label: 'Wave Sync Center is now permission-gated (not super-admin-only)',
+    items: [
+      '**🔐 The Wave Sync Center tab now shows only to a super admin or a staff member granted "Wave: View Sync Center".** Combined with the new permissions, you can let specific staff run Wave sync without making them full admins. Other Accounting tabs are unchanged.',
+      { superAdminOnly: true, text: 'v55.83-GB. No SQL. AccountingTab now filters out the wavesync tab and guards its render unless isSuperAdmin || modulePerms["wave.sync.view"]. Server routes already enforce the specific push/import/settings permissions (defense in depth), so a wave.sync.view holder who lacks e.g. wave.payments.push still gets a 403 from the route. REMAINING (small follow-up): in-screen per-button gates (grey out Dry Run unless wave.sync.dry_run, Sync Log tab unless wave.sync.log.view, Settings unless wave.settings.manage, Pull Categories unless wave.categories.pull) — currently those affordances show to anyone who can see the screen, but the underlying routes/actions remain server-enforced.' },
+    ],
+  },
+  {
     version: 'v55.83-GA',
     date: '2026-06-16',
     label: 'Wave & Accounting permissions are now assignable to staff',
