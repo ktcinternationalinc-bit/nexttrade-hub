@@ -62,7 +62,7 @@ export default function AccountingDashboard(props) {
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
-      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,bank_transaction_id').catch(function () { return { data: [] }; }),
       supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
@@ -94,7 +94,15 @@ export default function AccountingDashboard(props) {
         payByInv[p.accounting_invoice_id] = (payByInv[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0);
       });
       var paidTodayTotal = 0, paidTodayCount = 0;
-      pays.forEach(function (p) { if (p.payment_date === today && p.sync_status !== 'void') { paidTodayTotal += Number(p.amount) || 0; paidTodayCount++; } });
+      // v55.83-GJ — when a default bank account is set, count only payments deposited to it
+      // (linked to a bank transaction in that account), so the bank section is fully consistent.
+      var defAcctTxnIds = null;
+      if (defAcctD) { defAcctTxnIds = {}; txns.forEach(function (t) { defAcctTxnIds[t.id] = true; }); }
+      pays.forEach(function (p) {
+        if (p.payment_date !== today || p.sync_status === 'void') { return; }
+        if (defAcctTxnIds && !(p.bank_transaction_id && defAcctTxnIds[p.bank_transaction_id])) { return; }
+        paidTodayTotal += Number(p.amount) || 0; paidTodayCount++;
+      });
 
       function isLive(i) { var st = i.record_status; return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'; }
       function paidOf(i) { return r2((Number(i.wave_imported_paid) || 0) + (payByInv[i.id] || 0)); }

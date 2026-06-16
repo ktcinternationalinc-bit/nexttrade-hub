@@ -474,6 +474,7 @@ const ACTION_PERMS = [
   { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
   { key: 'bank.view_account_balances',  label: 'Bank: View Account Balances',    desc: 'See bank account balances / net cash. Sensitive — keep limited to finance/management.' },
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
+  { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
   { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
 ];
 

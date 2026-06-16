@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GJ',
+    date: '2026-06-16',
+    label: 'Bank tab locked to silo + default account; payments-today account-scoped',
+    items: [
+      '**🏦 The Bank tab now stays inside the active Wave business.** The Connected Accounts list and the account dropdown only show this silo’s accounts (no more other-silo bank names). Staff without the new "Bank: View All Accounts" permission are locked to the silo’s default account — no "All accounts" option — while managers/super-admin granted it keep full flexibility.',
+      '**💵 "Payments received today" on the dashboard now matches the default bank account** when one is set (it was silo-wide before), so the whole bank section is consistent.',
+      { superAdminOnly: true, text: 'v55.83-GJ. No SQL. New permission bank.view_all_accounts (SettingsTab). BankTab now receives modulePerms + userProfile (threaded from page.jsx); canViewAllAccounts = super_admin || bank.view_all_accounts. Connected Accounts list filtered to canViewAllAccounts || unassigned || active silo. Account dropdown: "All accounts" option only shown to canViewAllAccounts; loadData lock — users without it can never sit on "all" (forced to the silo default, else the first silo account); manual picks preserved. AccountingDashboard: pays select now includes bank_transaction_id; "Payments received today" filtered to payments whose bank_transaction_id is in the default account’s txn set when a default is configured (was the deliberate GI non-change — now scoped per your call). REMAINING P2 (unchanged): still client-side load + UI gating; true enforcement needs the server-side AR endpoint / RLS.' },
+    ],
+  },
+  {
     version: 'v55.83-GI',
     date: '2026-06-16',
     label: 'QA round 2: close remaining dashboard/bank permission leaks',

@@ -5,7 +5,7 @@ import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 
-export default function BankTab({ user, supabase }) {
+export default function BankTab({ user, supabase, modulePerms, userProfile }) {
   const [connections, setConnections] = useState([]);
   const [plaidAccts, setPlaidAccts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -25,6 +25,10 @@ export default function BankTab({ user, supabase }) {
   const [assigning, setAssigning] = useState(false);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [connectBizSel, setConnectBizSel] = useState('');
+  // v55.83-GJ — without bank.view_all_accounts, staff are locked to the silo default account and
+  // can't pick "All accounts" or see other silos' connections.
+  const isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
+  const canViewAllAccounts = isSuperAdmin || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
   const assignConnection = async (conn) => {
     const bizId = assignSel[conn.id];
@@ -75,9 +79,17 @@ export default function BankTab({ user, supabase }) {
           const { data: bsRows } = await supabase.from('wave_business_settings').select('default_plaid_account_id').eq('wave_business_id', activeBizB);
           const defAcctB = (bsRows && bsRows[0] && bsRows[0].default_plaid_account_id) || null;
           const scopedB = scopeIfRegistered(txns || [], activeBizB, bizRegistry, true);
-          if (defAcctB && scopedB.some(t => t.account_id === defAcctB)) {
-            setAcctFilter(function (cur) { return cur === 'all' ? defAcctB : cur; });
-          }
+          var firstAcctB = null;
+          for (var fi = 0; fi < scopedB.length; fi++) { if (scopedB[fi].account_id) { firstAcctB = scopedB[fi].account_id; break; } }
+          var defOk = defAcctB && scopedB.some(t => t.account_id === defAcctB);
+          // v55.83-GJ — prefer the silo default; users without view-all can't sit on "All accounts"
+          // (fall back to the default, else the first silo account).
+          setAcctFilter(function (cur) {
+            if (cur !== 'all') return cur;
+            if (defOk) return defAcctB;
+            if (!canViewAllAccounts && firstAcctB) return firstAcctB;
+            return cur;
+          });
         }
       } catch (eDefB) {}
 
@@ -358,7 +370,7 @@ export default function BankTab({ user, supabase }) {
           </div>
         ) : (
           <div className="space-y-3">
-            {connections.map(c => {
+            {connections.filter(function (c) { return canViewAllAccounts || !c.wave_business_id || c.wave_business_id === getActiveWaveBusiness(); }).map(c => {
               var accts = plaidAccts.filter(function (a) { return a.connection_id === c.id; });
               var siloName = bizLabel(c.wave_business_id);
               return (
@@ -468,7 +480,7 @@ export default function BankTab({ user, supabase }) {
           <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
             <label className="text-[10px] text-slate-500 font-bold">👁 VIEW</label>
             <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-slate-700" title="Show only transactions for one bank account">
-              <option value="all">All accounts</option>
+              {canViewAllAccounts && <option value="all">All accounts</option>}
               {(function () {
                 // v55.83-GI — only list accounts present in THIS silo's (already-scoped) transactions,
                 // not every Plaid account, so staff don't see other silos' accounts.
