@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GH',
+    date: '2026-06-16',
+    label: 'Dashboard permission hardening — no count/row/button leaks',
+    items: [
+      '**🔒 The Accounting Dashboard no longer leaks data around "Restricted" cards.** Restricted cards no longer show invoice counts; the overdue table itself is hidden (not just the dollar amount) without overdue permission; the Wave Sync section and the "Open Bank Review" button are hidden without their permissions; and Ignore/Un-ignore on overdue invoices now needs a new "AR: Manage Overdue" permission. Upcoming Due and Overdue are now truly separate from the AR summary.',
+      { superAdminOnly: true, text: 'v55.83-GH. No SQL. QA fixes on GF: (1) A/B/C card subtext counts gated on seeTotals/seeUpcoming/seeOverdue (no more "5 open" under a Restricted value). (2) Overdue table body hidden behind seeOverdue (not just armoney on the balance). (3) Ignore/Un-ignore buttons + toggleIgnore() write-guard on new canManageOverdueDashboard (ar.manage_overdue_dashboard / admin / super). (4,5) STRICT separation: canViewArOverdue + canViewArUpcomingDue no longer fall back to ar.view_summary (only the specific key, ar.full, or admin/super). (6) "Open Bank Review & Matching" button gated on canViewBank. (7) Wave Sync dashboard section (E) gated on seeWaveSync (wave.sync.view / super). New SettingsTab perm: ar.manage_overdue_dashboard. STILL P2 (acknowledged): invoices/payments/bank data are loaded client-side then gated — true enforcement needs a server-side AR endpoint / RLS; UI gating reduces accidental exposure only.' },
+    ],
+  },
+  {
     version: 'v55.83-GG',
     date: '2026-06-16',
     label: 'Dashboard & Bank tab now respect each silo’s default bank account',

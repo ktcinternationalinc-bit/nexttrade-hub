@@ -466,6 +466,7 @@ const ACTION_PERMS = [
   { key: 'ar.view_invoice_balances',    label: 'AR: View Invoice Balances',      desc: 'See the balance due on individual invoices (needed by payment matchers). Does NOT reveal company-wide totals.' },
   { key: 'ar.view_upcoming_due',        label: 'AR: View Upcoming Due',          desc: 'See the upcoming-due buckets (due now / 1-30 / 31-60 / 61-90 days) on the dashboard. Separate from the overall AR summary.' },
   { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },
+  { key: 'ar.manage_overdue_dashboard', label: 'AR: Manage Overdue',            desc: 'Ignore / un-ignore invoices on the overdue dashboard (writes to the invoice). Separate from just viewing overdue.' },
   { key: 'ar.export',                   label: 'AR: Export',                     desc: 'Export AR reports to Excel/CSV.' },
   { key: 'payments.match',              label: 'Payments: Match to Invoice',     desc: 'Match a bank deposit to a customer invoice (records a payment in the Hub).' },
   { key: 'payments.unmatch',            label: 'Payments: Unmatch',              desc: 'Reverse a payment match. Audit-logged.' },

@@ -40,8 +40,12 @@ export function canReopen(isSuperAdmin, mp, role) {
 export function canViewArSummary(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Summary', 'ar.view_summary', 'AR: Full', 'ar.full', 'Finance: View Company Totals', 'finance.view_company_totals']); }
 export function canViewArCustomerBalances(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Customer Balances', 'ar.view_customer_balances', 'AR: Full', 'ar.full', 'Finance: View All Customer Balances', 'finance.view_all_customer_balances']); }
 export function canViewArInvoiceBalances(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Invoice Balances', 'ar.view_invoice_balances', 'AR: Full', 'ar.full', 'Invoice: View Balance', 'invoice.view_balance', 'Payments: Match', 'payments.match']); }
-export function canViewArOverdue(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Overdue', 'ar.view_overdue', 'AR: Full', 'ar.full', 'AR: View Summary', 'ar.view_summary']); }
-export function canViewArUpcomingDue(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Upcoming Due', 'ar.view_upcoming_due', 'AR: Full', 'ar.full', 'AR: View Summary', 'ar.view_summary']); }
+// STRICT separation (v55.83-GH): overdue and upcoming-due are their OWN permissions. The general
+// AR summary no longer grants them — only the specific key, AR: Full, or an admin/super role.
+export function canViewArOverdue(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Overdue', 'ar.view_overdue', 'AR: Full', 'ar.full']); }
+export function canViewArUpcomingDue(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: View Upcoming Due', 'ar.view_upcoming_due', 'AR: Full', 'ar.full']); }
+// Manage (write) the overdue dashboard — Ignore / Un-ignore. Admin/super or explicit grant.
+export function canManageOverdueDashboard(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: Manage Overdue', 'ar.manage_overdue_dashboard']); }
 export function canExportAr(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['AR: Export', 'ar.export', 'AR: Full', 'ar.full']); }
 
 export var CLASSIFICATIONS = [

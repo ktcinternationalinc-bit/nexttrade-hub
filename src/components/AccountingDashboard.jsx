@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { isPaymentVoid } from '../lib/payment-matching';
-import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances } from '../lib/bank-permissions';
+import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances, canManageOverdueDashboard } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -40,6 +40,9 @@ export default function AccountingDashboard(props) {
   function tdue(n) { return seeUpcoming ? ('$' + fmt(n)) : 'Restricted'; }
   function tover(n) { return seeOverdue ? ('$' + fmt(n)) : 'Restricted'; }
   function armoney(n) { return seeInvoiceBal ? ('$' + fmt(n)) : 'Restricted'; }
+  // v55.83-GH — gate the Wave-sync dashboard section + overdue write actions.
+  var seeWaveSync = isSuperAdmin || (modulePerms['wave.sync.view'] === true);
+  var canManageOverdue = canManageOverdueDashboard(isSuperAdmin, modulePerms, _role);
 
   var [d, setD] = useState(null);
   var [loading, setLoading] = useState(true);
@@ -164,6 +167,7 @@ export default function AccountingDashboard(props) {
 
   function toggleIgnore(row, ignore) {
     if (busy) return;
+    if (!canManageOverdue) { return; } // v55.83-GH — write-guard alongside the hidden buttons
     var note = '';
     if (ignore) { note = window.prompt('Hide ' + (row.num || 'invoice') + ' from overdue dashboard. Optional note:') ; if (note === null) return; }
     setBusy(true);
@@ -211,9 +215,9 @@ export default function AccountingDashboard(props) {
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={d.openCount + ' open · drafts excluded'} tone="bg-slate-800" />
-          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
-          <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub="overpaid / not AR" tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
+          <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · drafts excluded') : ''} tone="bg-slate-800" />
+          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
+          <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
           <Stat title="Approvals pending" big={d.pendingApproval} sub="invoices in review" tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
         </div>
         {d.nonUsd && d.nonUsd.length > 0 && (
@@ -230,10 +234,10 @@ export default function AccountingDashboard(props) {
       {/* B — Upcoming Due */}
       <Section title="B · Upcoming due (not overdue)">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-          <Stat title="Due now" big={tdue(nowB.t)} sub={nowB.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 1–30 days" big={tdue(d30.t)} sub={d30.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 31–60 days" big={tdue(d60.t)} sub={d60.c + ' invoice(s)'} tone="bg-slate-800" />
-          <Stat title="Due in 61–90 days" big={tdue(d90.t)} sub={d90.c + ' invoice(s)'} tone="bg-slate-800" />
+          <Stat title="Due now" big={tdue(nowB.t)} sub={seeUpcoming ? (nowB.c + ' invoice(s)') : ''} tone="bg-slate-800" />
+          <Stat title="Due in 1–30 days" big={tdue(d30.t)} sub={seeUpcoming ? (d30.c + ' invoice(s)') : ''} tone="bg-slate-800" />
+          <Stat title="Due in 31–60 days" big={tdue(d60.t)} sub={seeUpcoming ? (d60.c + ' invoice(s)') : ''} tone="bg-slate-800" />
+          <Stat title="Due in 61–90 days" big={tdue(d90.t)} sub={seeUpcoming ? (d90.c + ' invoice(s)') : ''} tone="bg-slate-800" />
         </div>
       </Section>
 
@@ -241,17 +245,17 @@ export default function AccountingDashboard(props) {
       <Section title="C · Overdue aging">
         <div className="flex items-center justify-between mb-2">
           <div className="grid gap-2 flex-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
-            <Stat title="Overdue 1–30" big={tover(o30.t)} sub={o30.c + ' inv'} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 31–60" big={tover(o60.t)} sub={o60.c + ' inv'} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 61–90" big={tover(o90.t)} sub={o90.c + ' inv'} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 90+" big={tover(o90p.t)} sub={o90p.c + ' inv'} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
+            <Stat title="Overdue 1–30" big={tover(o30.t)} sub={seeOverdue ? (o30.c + ' inv') : ''} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 31–60" big={tover(o60.t)} sub={seeOverdue ? (o60.c + ' inv') : ''} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 61–90" big={tover(o90.t)} sub={seeOverdue ? (o90.c + ' inv') : ''} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Overdue 90+" big={tover(o90p.t)} sub={seeOverdue ? (o90p.c + ' inv') : ''} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
           </div>
         </div>
         <label className="text-[11px] text-slate-200 font-bold flex items-center gap-2 mb-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer w-fit">
           <input type="checkbox" checked={showSmall} onChange={function (e) { setShowSmall(e.target.checked); }} /> Show small (under $200) &amp; ignored overdue invoices
         </label>
         <div className="bg-white text-slate-900 rounded-lg p-3">
-          {shownOverdue.length === 0 ? <div className="text-xs text-slate-500 italic">No overdue invoices{showSmall ? '' : ' at or above $200'}.</div> : (
+          {!seeOverdue ? <div className="text-xs text-slate-500 italic">Restricted — you don&#39;t have permission to view overdue invoices.</div> : shownOverdue.length === 0 ? <div className="text-xs text-slate-500 italic">No overdue invoices{showSmall ? '' : ' at or above $200'}.</div> : (
             <div style={{ overflowX: 'auto' }}><div style={{ minWidth: '760px' }}>
               <div className="grid text-[11px] font-extrabold text-slate-600 border-b border-slate-200" style={{ gridTemplateColumns: '90px 1fr 84px 70px 84px 64px 150px' }}>
                 <div className="py-1">Number</div><div className="py-1">Customer</div><div className="py-1">Due date</div><div className="py-1 text-right">Days</div><div className="py-1 text-right">Balance</div><div className="py-1">Source</div><div className="py-1">Actions</div>
@@ -268,9 +272,9 @@ export default function AccountingDashboard(props) {
                       <div className="py-1"><span className={'text-[9px] rounded px-1 py-0.5 font-bold text-white ' + (t.source === 'Wave' ? 'bg-sky-700' : 'bg-emerald-700')}>{t.source}</span></div>
                       <div className="py-1 flex gap-1">
                         <button onClick={function () { openView(t); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
-                        {t.ignored
+                        {canManageOverdue && (t.ignored
                           ? <button disabled={busy} onClick={function () { toggleIgnore(t, false); }} className="text-[10px] bg-amber-600 hover:bg-amber-500 text-white rounded px-1.5 py-0.5 font-bold">Un-ignore</button>
-                          : <button disabled={busy} onClick={function () { toggleIgnore(t, true); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold">Ignore</button>}
+                          : <button disabled={busy} onClick={function () { toggleIgnore(t, true); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold">Ignore</button>)}
                         {t.ignored ? <span className="text-[9px] text-slate-500 self-center">ignored</span> : null}
                       </div>
                     </div>
@@ -290,7 +294,7 @@ export default function AccountingDashboard(props) {
           {mayView ? <Stat title="Payments received today" big={d.paidTodayCount} sub={money(d.paidTodayTotal)} tone="bg-emerald-900" /> : <Stat title="Payments received today" big="Restricted" sub="bank view permission required" tone="bg-slate-800" />}
         </div>
         <div className="flex items-center gap-2 mt-2">
-          <button onClick={function () { if (props.onOpenBankReview) { props.onOpenBankReview(); } }} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold">🏦 Open Bank Review &amp; Matching</button>
+          {mayView && <button onClick={function () { if (props.onOpenBankReview) { props.onOpenBankReview(); } }} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold">🏦 Open Bank Review &amp; Matching</button>}
           <span className="text-[10px] text-slate-400">Match deposits to invoices and categorize expenses here.</span>
         </div>
         <div className="text-[10px] text-slate-400 mt-1">“Deposits awaiting allocation” will appear here once its calculation is verified.</div>
@@ -298,13 +302,17 @@ export default function AccountingDashboard(props) {
 
       {/* E — Wave Sync */}
       <Section title="E · Wave sync">
-        <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
-          <Stat title="Pending sync" big={d.ws.pending} sub="awaiting push" tone={d.ws.pending ? 'bg-blue-900' : 'bg-slate-800'} />
-          <Stat title="Failed sync" big={d.ws.failed} sub="need attention" tone={d.ws.failed ? 'bg-rose-900' : 'bg-slate-800'} />
-          <Stat title="Conflicts" big={d.ws.conflict} sub="changed both sides" tone={d.ws.conflict ? 'bg-amber-900' : 'bg-slate-800'} />
-          <Stat title="Last sync" big={d.lastLog ? (d.lastLog.success ? 'OK' : 'Failed') : '—'} sub={d.lastLog ? String(d.lastLog.completed_at || d.lastLog.attempted_at || '').substring(0, 16).replace('T', ' ') : 'no runs yet'} tone={d.lastLog && !d.lastLog.success ? 'bg-rose-900' : 'bg-slate-800'} />
+        {!seeWaveSync ? <div className="text-xs text-slate-500 italic bg-white rounded-lg p-3">Restricted — requires the Wave: View Sync Center permission.</div> : (
+        <div>
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
+            <Stat title="Pending sync" big={d.ws.pending} sub="awaiting push" tone={d.ws.pending ? 'bg-blue-900' : 'bg-slate-800'} />
+            <Stat title="Failed sync" big={d.ws.failed} sub="need attention" tone={d.ws.failed ? 'bg-rose-900' : 'bg-slate-800'} />
+            <Stat title="Conflicts" big={d.ws.conflict} sub="changed both sides" tone={d.ws.conflict ? 'bg-amber-900' : 'bg-slate-800'} />
+            <Stat title="Last sync" big={d.lastLog ? (d.lastLog.success ? 'OK' : 'Failed') : '—'} sub={d.lastLog ? String(d.lastLog.completed_at || d.lastLog.attempted_at || '').substring(0, 16).replace('T', ' ') : 'no runs yet'} tone={d.lastLog && !d.lastLog.success ? 'bg-rose-900' : 'bg-slate-800'} />
+          </div>
+          <div className="text-[10px] text-slate-400 mt-1">Hub→Wave push is staged (payments carry wave IDs + pending_wave_sync); the scheduled sync job is a later build.</div>
         </div>
-        <div className="text-[10px] text-slate-400 mt-1">Hub→Wave push is staged (payments carry wave IDs + pending_wave_sync); the scheduled sync job is a later build.</div>
+        )}
       </Section>
 
       {/* Top customers — separate permission: ar.view_customer_balances */}
