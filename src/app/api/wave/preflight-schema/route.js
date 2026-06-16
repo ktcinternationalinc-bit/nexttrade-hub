@@ -11,10 +11,12 @@ function admin() {
 
 // table -> required columns
 var REQUIRED = {
-  wave_business_settings: ['default_invoice_product_id', 'default_invoice_product_name', 'default_payment_account_id', 'default_payment_account_name', 'source'],
-  accounting_invoice_payments: ['wave_payment_id', 'wave_invoice_id', 'wave_customer_id', 'last_synced_at', 'sync_error', 'voided', 'voided_at', 'voided_by'],
+  wave_business_settings: ['default_invoice_product_id', 'default_invoice_product_name', 'default_payment_account_id', 'default_payment_account_name', 'default_plaid_account_id', 'default_plaid_account_name', 'default_bank_connection_id', 'source'],
+  accounting_invoice_payments: ['wave_payment_id', 'wave_invoice_id', 'wave_customer_id', 'wave_business_id', 'last_synced_at', 'sync_error', 'voided', 'voided_at', 'voided_by'],
   payment_matches: ['voided', 'voided_at', 'voided_by', 'invoice_id', 'bank_transaction_id'],
-  accounting_invoices: ['wave_invoice_id', 'wave_imported_paid', 'amount_paid', 'balance_due', 'payment_status'],
+  accounting_invoices: ['wave_invoice_id', 'wave_imported_paid', 'amount_paid', 'balance_due', 'payment_status', 'wave_status', 'wave_sync_status'],
+  bank_transactions: ['wave_business_id', 'wave_account_id', 'wave_account_name', 'wave_account_type', 'wave_account_subtype', 'category_source', 'category_status'],
+  bank_transaction_splits: ['wave_business_id', 'wave_account_id', 'wave_account_name', 'category_source', 'category_status'],
   wave_categories: ['wave_business_id', 'wave_account_id', 'wave_account_name', 'is_active']
 };
 

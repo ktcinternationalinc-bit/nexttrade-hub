@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GI',
+    date: '2026-06-16',
+    label: 'QA round 2: close remaining dashboard/bank permission leaks',
+    items: [
+      '**🔒 More permission tightening (from QA).** The Wave Sync cards now show "Restricted" without permission (the section gate was defined but not actually applied); non-USD AR and "Approvals pending" no longer leak counts when restricted; a user with only Wave-sync permission can now reach the dashboard; the Bank tab’s account dropdown lists only the active silo’s accounts (no more cross-silo accounts) and no longer mis-scopes on first load; and the Database Setup check now verifies the new default-bank-account and bank-category columns.',
+      { superAdminOnly: true, text: 'v55.83-GI. No SQL. AccountingDashboard: seeWaveSync now computed before anyAccess and INCLUDED in it (wave-sync-only users get in) and the Wave Sync section already gates on it (GH); non-USD AR card subtext + Approvals-pending big/sub gated on seeTotals; overdue "show small" toggle gated on seeOverdue. BankTab: account dropdown options now derived from the already-silo-scoped transactions (not all plaid_accounts); loadData dep now [supabase, bizRegistry] so the first scope isn\'t computed against an empty registry (fixes the race). preflight-schema REQUIRED now includes wave_business_settings.default_plaid_account_id/name + default_bank_connection_id, accounting_invoice_payments.wave_business_id, accounting_invoices.wave_status/wave_sync_status, and new bank_transactions + bank_transaction_splits category columns. DELIBERATE non-change: "Payments received today" stays silo+bank-perm scoped (it is a payment metric, not a single-bank-account metric) — flagged, not account-scoped. STILL P2: client-side load + UI gating (server AR endpoint/RLS pending).' },
+    ],
+  },
+  {
     version: 'v55.83-GH',
     date: '2026-06-16',
     label: 'Dashboard permission hardening — no count/row/button leaks',

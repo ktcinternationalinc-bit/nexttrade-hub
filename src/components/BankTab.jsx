@@ -85,8 +85,10 @@ export default function BankTab({ user, supabase }) {
       setInvoices(invs || []);
     } catch (e) { console.error(e); }
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, bizRegistry]);
 
+  // v55.83-GI — re-runs when bizRegistry loads, so the first scope isn't computed against an empty
+  // registry (which would briefly show all silos' transactions).
   useEffect(() => { loadData(); }, [loadData]);
 
   // Connect bank via Plaid Link
@@ -467,9 +469,20 @@ export default function BankTab({ user, supabase }) {
             <label className="text-[10px] text-slate-500 font-bold">👁 VIEW</label>
             <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-slate-700" title="Show only transactions for one bank account">
               <option value="all">All accounts</option>
-              {plaidAccts.map(function (a) {
-                return <option key={a.plaid_account_id} value={a.plaid_account_id}>{(a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')}</option>;
-              })}
+              {(function () {
+                // v55.83-GI — only list accounts present in THIS silo's (already-scoped) transactions,
+                // not every Plaid account, so staff don't see other silos' accounts.
+                var seen = {}; var opts = []; var paMap = {};
+                plaidAccts.forEach(function (a) { if (a && a.plaid_account_id) { paMap[a.plaid_account_id] = a; } });
+                transactions.forEach(function (t) {
+                  if (!t.account_id || seen[t.account_id]) { return; }
+                  seen[t.account_id] = true;
+                  var a = paMap[t.account_id];
+                  var label = a ? ((a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')) : ('Account ••' + String(t.account_id).slice(-4));
+                  opts.push(<option key={t.account_id} value={t.account_id}>{label}</option>);
+                });
+                return opts;
+              })()}
             </select>
             <span className="text-slate-300">·</span>
             <select value={viewRange} onChange={e => setViewRange(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-slate-700" title="Filter the visible list by date (does not re-sync)">

@@ -34,14 +34,14 @@ export default function AccountingDashboard(props) {
   var seeUpcoming = canViewArUpcomingDue(isSuperAdmin, modulePerms, _role);
   var seeOverdue = canViewArOverdue(isSuperAdmin, modulePerms, _role);
   var seeInvoiceBal = canViewArInvoiceBalances(isSuperAdmin, modulePerms, _role);
-  var anyAccess = mayView || seeTotals || seeUpcoming || seeOverdue || seeInvoiceBal || seeCustBalances;
+  var seeWaveSync = isSuperAdmin || (modulePerms['wave.sync.view'] === true);
+  var anyAccess = mayView || seeTotals || seeUpcoming || seeOverdue || seeInvoiceBal || seeCustBalances || seeWaveSync;
   function money(n) { return seeAmounts ? ('$' + fmt(n)) : '•••••'; }
   function tmoney(n) { return seeTotals ? ('$' + fmt(n)) : 'Restricted'; }
   function tdue(n) { return seeUpcoming ? ('$' + fmt(n)) : 'Restricted'; }
   function tover(n) { return seeOverdue ? ('$' + fmt(n)) : 'Restricted'; }
   function armoney(n) { return seeInvoiceBal ? ('$' + fmt(n)) : 'Restricted'; }
-  // v55.83-GH — gate the Wave-sync dashboard section + overdue write actions.
-  var seeWaveSync = isSuperAdmin || (modulePerms['wave.sync.view'] === true);
+  // v55.83-GH — overdue write actions (seeWaveSync is computed above, before anyAccess).
   var canManageOverdue = canManageOverdueDashboard(isSuperAdmin, modulePerms, _role);
 
   var [d, setD] = useState(null);
@@ -218,13 +218,13 @@ export default function AccountingDashboard(props) {
           <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · drafts excluded') : ''} tone="bg-slate-800" />
           <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
           <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
-          <Stat title="Approvals pending" big={d.pendingApproval} sub="invoices in review" tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
+          <Stat title="Approvals pending" big={seeTotals ? d.pendingApproval : 'Restricted'} sub={seeTotals ? 'invoices in review' : ''} tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
         </div>
         {d.nonUsd && d.nonUsd.length > 0 && (
           <div className="mt-2">
             <div className="text-[11px] font-bold text-amber-300 mb-1">Receivables in other currencies (shown separately — never added to USD):</div>
             <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-              {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeTotals ? (n.cur + ' ' + fmt(n.open)) : 'Restricted'} sub={n.count + ' invoice(s) · native'} tone="bg-amber-900" />; })}
+              {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeTotals ? (n.cur + ' ' + fmt(n.open)) : 'Restricted'} sub={seeTotals ? (n.count + ' invoice(s) · native') : ''} tone="bg-amber-900" />; })}
             </div>
             <div className="text-[10px] text-slate-400 mt-1">To fold these into one USD figure, log the USD↔currency rate in FX Rates and they’ll convert; until then they stay in their own currency.</div>
           </div>
@@ -251,9 +251,11 @@ export default function AccountingDashboard(props) {
             <Stat title="Overdue 90+" big={tover(o90p.t)} sub={seeOverdue ? (o90p.c + ' inv') : ''} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
           </div>
         </div>
+        {seeOverdue && (
         <label className="text-[11px] text-slate-200 font-bold flex items-center gap-2 mb-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer w-fit">
           <input type="checkbox" checked={showSmall} onChange={function (e) { setShowSmall(e.target.checked); }} /> Show small (under $200) &amp; ignored overdue invoices
         </label>
+        )}
         <div className="bg-white text-slate-900 rounded-lg p-3">
           {!seeOverdue ? <div className="text-xs text-slate-500 italic">Restricted — you don&#39;t have permission to view overdue invoices.</div> : shownOverdue.length === 0 ? <div className="text-xs text-slate-500 italic">No overdue invoices{showSmall ? '' : ' at or above $200'}.</div> : (
             <div style={{ overflowX: 'auto' }}><div style={{ minWidth: '760px' }}>
