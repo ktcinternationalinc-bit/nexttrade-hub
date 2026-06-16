@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GO',
+    date: '2026-06-16',
+    label: 'Open Accounts: on-screen Internal / Customer Statement toggle',
+    items: [
+      '**🔀 New View toggle on each Open Accounts ledger: Internal vs Customer Statement.** Internal shows "They Owe Us / We Owe Them" (and Sales Invoice / Vendor Bill); Customer Statement shows "You Owe Us / Owed to You" (and the customer-facing Invoice/Bill wording). The amounts, columns, and totals are identical — only the labels change — so you can show a customer their statement on screen without confusion.',
+      { superAdminOnly: true, text: 'v55.83-GO. No SQL. OpenAccountsTab: new per-account ledgerPerspective state (internal|customer) + renderPerspectiveToggle() shown next to the language toggle in both the multi-currency and single-currency header rows. The column headers (they_owe_us / we_owe_them) and the row transaction-type labels now pass perspective into ledgerLabel()/t18n() (which already had customer_en/customer_ar variants). LABELS-ONLY: arApSide amount routing, columns, signs, and totals are unchanged — matching the GM export fix, so on-screen and the printed customer statement now agree. Added whitespace-nowrap to the they_owe_us/we_owe_them headers too.' },
+    ],
+  },
+  {
     version: 'v55.83-GN',
     date: '2026-06-16',
     label: 'Open Accounts: invoice notes now show on the statement',

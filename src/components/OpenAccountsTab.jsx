@@ -250,6 +250,9 @@ export default function OpenAccountsTab(props) {
   // separate EN/Bilingual toggle (output format vs on-screen display are
   // independent so you can review in English but print bilingual for a customer).
   var [ledgerLangFilter, setLedgerLangFilter] = useState({}); // { account_id: 'EN'|'AR'|'BOTH' }
+  // v55.83-GO — on-screen perspective per account: 'internal' (KTC view) vs 'customer' (statement
+  // wording: You Owe Us / Owed to You). LABELS ONLY — amounts/columns/signs never change.
+  var [ledgerPerspective, setLedgerPerspective] = useState({}); // { account_id: 'internal'|'customer' }
   // Helper: render a stacked EN-on-top, AR-below label when lang='BOTH'.
   function ledgerLabel(key, lang, perspective) {
     if (lang === 'EN') return t18n(key, 'en', perspective);
@@ -261,6 +264,25 @@ export default function OpenAccountsTab(props) {
         <br />
         <span dir="rtl" className="text-[10px] text-slate-600 font-normal" style={{ fontFamily: 'Tahoma, "Arial Unicode MS", sans-serif' }}>{t18n(key, 'ar', perspective)}</span>
       </span>
+    );
+  }
+  function renderPerspectiveToggle(acctId) {
+    var curP = ledgerPerspective[acctId] === 'customer' ? 'customer' : 'internal';
+    return (
+      <div className="flex items-center gap-1 mr-3 mb-1">
+        <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider mr-1">View:</span>
+        {[{ id: 'internal', label: '🏢 Internal' }, { id: 'customer', label: '🧾 Customer Statement' }].map(function (opt) {
+          var active = curP === opt.id;
+          return (
+            <button key={opt.id}
+              onClick={function () { var n = Object.assign({}, ledgerPerspective); n[acctId] = opt.id; setLedgerPerspective(n); }}
+              className={'px-2 py-1 rounded text-[10px] font-extrabold ' + (active ? 'bg-amber-600 text-white shadow ring-1 ring-amber-300' : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-300')}
+              title={opt.id === 'internal' ? 'KTC internal view (They Owe Us / We Owe Them)' : 'Customer-facing wording (You Owe Us / Owed to You). Same amounts & columns — only the labels change.'}>
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
     );
   }
   var [accountModalOpen, setAccountModalOpen] = useState(false);
@@ -1712,6 +1734,7 @@ export default function OpenAccountsTab(props) {
                         })}
                         {/* Spacer pushes language toggle to the right */}
                         <div className="flex-1" />
+                        {renderPerspectiveToggle(a.id)}
                         <div className="flex items-center gap-1 mb-1">
                           <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider mr-1">Language:</span>
                           {[
@@ -1742,6 +1765,7 @@ export default function OpenAccountsTab(props) {
                     {/* When only one currency, the tabs strip is hidden, so the Language toggle goes in its own thin row */}
                     {s.currencies.length <= 1 && (
                       <div className="bg-slate-100 border-b border-slate-200 px-3 py-1.5 flex items-center justify-end gap-1">
+                        {renderPerspectiveToggle(a.id)}
                         <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider mr-1">Display Language:</span>
                         {[
                           { id: 'EN', label: '🇺🇸 EN' },
@@ -1773,6 +1797,7 @@ export default function OpenAccountsTab(props) {
                           "AR Side" → "They Owe Us / لنا عليهم", "AP Side" → "We Owe Them / لهم علينا". */}
                       {(function () {
                         var lang = ledgerLangFilter[a.id] || 'EN';
+                        var persp = ledgerPerspective[a.id] === 'customer' ? 'customer' : 'internal';
                         return (
                           <tr>
                             <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">{ledgerLabel('date', lang)}</th>
@@ -1782,8 +1807,8 @@ export default function OpenAccountsTab(props) {
                             <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Currency</th>
                             {/* v55.83-A.6.27.72 HOTFIX 33 — strip vertical column backgrounds entirely.
                                 Keep header text in pastel color hint so the eye finds the right column. */}
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-700 border-b-2 border-slate-300" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang)}</th>
-                            <th className="px-3 py-2 text-right text-xs font-extrabold text-red-700 border-b-2 border-slate-300" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-700 border-b-2 border-slate-300 whitespace-nowrap" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang, persp)}</th>
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-red-700 border-b-2 border-slate-300 whitespace-nowrap" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang, persp)}</th>
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-700 border-b-2 border-slate-300 whitespace-nowrap" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
                             {s.currencies.map(function (cur) {
                               return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 whitespace-nowrap" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
@@ -1849,9 +1874,10 @@ export default function OpenAccountsTab(props) {
                                     "/ Deposit" suffix (Max May 28 feedback). */}
                                 <span>{(function () {
                                   var lang = ledgerLangFilter[a.id] || 'EN';
+                                  var persp = ledgerPerspective[a.id] === 'customer' ? 'customer' : 'internal';
                                   // i18n keys match transaction_type values from the DB
-                                  var en = t18n(txnType, 'en');
-                                  var ar = t18n(txnType, 'ar');
+                                  var en = t18n(txnType, 'en', persp);
+                                  var ar = t18n(txnType, 'ar', persp);
                                   var depositSuffix = '';
                                   if (txnType === 'payment_sent' || txnType === 'payment_received') {
                                     var applied = (simResult.applications && simResult.applications[entry.id]) || 0;
