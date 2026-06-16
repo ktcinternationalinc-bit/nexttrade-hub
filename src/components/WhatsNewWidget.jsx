@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GC',
+    date: '2026-06-16',
+    label: 'Wave Sync Center: per-action permissions (buttons hide/disable)',
+    items: [
+      '**🔏 Inside the Wave Sync Center, each action now respects its own permission.** Dry Run needs Wave: Dry Run; the Sync Log tab needs Wave: View Sync Log; the Settings tab needs Wave: Manage Settings; Pull Wave Categories needs Wave: Pull Categories; and Push Selected needs the matching push permission for the selected record types. Restricted actions are hidden or disabled, not just rejected with an error.',
+      { superAdminOnly: true, text: 'v55.83-GC. No SQL. WaveSyncCenter computes per-action flags from modulePerms (super_admin = all): canDryRun/canViewLog/canManageSettings/canPullCats/canPush{Customer,Invoice,Payment}. Log + Settings tabs filtered out of the tab bar (and their render blocks guarded) unless permitted; Dry Run button disabled without wave.sync.dry_run; Pull Categories disabled without wave.categories.pull; Push Selected disabled unless the user holds at least one push perm, and pushSelected() blocks if any selected row is a type they cannot push (customer/invoice/payment). Server routes still enforce independently (defense in depth).' },
+    ],
+  },
+  {
     version: 'v55.83-GB',
     date: '2026-06-16',
     label: 'Wave Sync Center is now permission-gated (not super-admin-only)',

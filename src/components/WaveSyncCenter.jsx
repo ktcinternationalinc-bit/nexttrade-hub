@@ -92,6 +92,18 @@ export default function WaveSyncCenter(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
+  // v55.83-GC — per-action permission flags (super_admin has all). The UI hides/disables
+  // restricted actions; the server routes still enforce each permission independently.
+  var _mp = props.modulePerms || {};
+  function _can(p) { return isSuperAdmin || _mp[p] === true; }
+  var canDryRun = _can('wave.sync.dry_run');
+  var canViewLog = _can('wave.sync.log.view');
+  var canManageSettings = _can('wave.settings.manage');
+  var canPullCats = _can('wave.categories.pull');
+  var canPushCustomer = _can('wave.customers.push');
+  var canPushInvoice = _can('wave.invoices.push');
+  var canPushPayment = _can('wave.payments.push');
+  var canPushAny = canPushCustomer || canPushInvoice || canPushPayment;
 
   var [tab, setTab] = useState('pending');
   var [loading, setLoading] = useState(true);
@@ -393,6 +405,14 @@ export default function WaveSyncCenter(props) {
   function pushSelected() {
     if (isProd) { toast.error('Production writes are disabled. Use read-only reconcile or unlock production in a future controlled build.'); return; }
     if (selectedRows.length === 0) { toast.error('Select records and Dry Run first.'); return; }
+    // v55.83-GC — per-action permission gate (defense alongside the server route checks).
+    var lacksPerm = selectedRows.some(function (q) {
+      if (q.action === 'customer') { return !canPushCustomer; }
+      if (q.action === 'invoice') { return !canPushInvoice; }
+      if (q.action === 'payment') { return !canPushPayment; }
+      return false;
+    });
+    if (lacksPerm) { toast.error('You do not have permission to push one or more of the selected record types.'); return; }
     // PAYMENT-PUSH SAFETY (launch): payments go one at a time until Wave's behavior (incl. the
     // paymentMethod enum) is fully confirmed on live data. Customer/invoice pushes are proven
     // and may still go in a batch.
@@ -432,7 +452,11 @@ export default function WaveSyncCenter(props) {
 
   if (loading) { return <div className="p-4 text-slate-400 italic">Loading Wave Sync Center…</div>; }
 
-  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['settings', 'Settings']];
+  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['settings', 'Settings']].filter(function (t) {
+    if (t[0] === 'log') { return canViewLog; }
+    if (t[0] === 'settings') { return canManageSettings; }
+    return true;
+  });
 
   return (
     <div className="p-4 text-slate-100">
@@ -456,8 +480,8 @@ export default function WaveSyncCenter(props) {
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
             <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments)</span></div>
             <div className="flex gap-2">
-              <button onClick={runDryRun} disabled={isProd || selectedRows.length === 0} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
-              <button onClick={pushSelected} disabled={isProd || busy || selectedRows.length === 0} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
+              <button onClick={runDryRun} disabled={isProd || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
+              <button onClick={pushSelected} disabled={isProd || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
             </div>
           </div>
           {queue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
@@ -517,7 +541,7 @@ export default function WaveSyncCenter(props) {
         </div>
       )}
 
-      {tab === 'log' && (
+      {tab === 'log' && canViewLog && (
         <div className="border border-slate-700 rounded overflow-hidden">
           {syncLog.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No sync log entries for this silo yet.</div> :
             syncLog.map(function (l, idx) {
@@ -554,7 +578,7 @@ export default function WaveSyncCenter(props) {
         </div>
       )}
 
-      {tab === 'settings' && (
+      {tab === 'settings' && canManageSettings && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
           <div className="mb-4 border border-slate-300 bg-slate-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Database setup check</div>
@@ -628,7 +652,7 @@ export default function WaveSyncCenter(props) {
             <div className="text-xs text-slate-700 mb-2">Pull your Wave categories into Hub so bank transactions can be categorized with the exact same names Wave uses. This only reads from Wave — it never changes anything in Wave.</div>
             <div className="text-xs bg-white border border-violet-200 text-slate-900 rounded px-2 py-1 mb-2 font-medium">{catCount > 0 ? (catCount + ' Wave categories loaded for this business.') : 'No Wave categories loaded yet for this business.'}</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={runCategoryPull} disabled={catBusy} className="text-xs bg-violet-600 hover:bg-violet-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{catBusy ? 'Pulling…' : 'Pull Wave categories'}</button>
+              <button onClick={runCategoryPull} disabled={catBusy || !canPullCats} title={!canPullCats ? 'Requires the Wave: Pull Categories permission' : ''} className="text-xs bg-violet-600 hover:bg-violet-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{catBusy ? 'Pulling…' : 'Pull Wave categories'}</button>
             </div>
             {catMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{catMsg}</div>}
           </div>
