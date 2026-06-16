@@ -223,16 +223,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
     setNotice('Matching has moved to Accounting → Bank Review & Matching, which posts the payment to the books correctly. The old quick-match here was disabled because it did not record the payment.');
   };
 
-  // Unmatch
-  const unmatch = async (txnId) => {
-    try {
-      await fetch('/api/plaid/match', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_id: txnId }),
-      });
-      await loadData();
-    } catch (e) { setError(e.message); }
+  // v55.83-GV — DISABLED. The old /api/plaid/match DELETE only cleared
+  // bank_transactions.matched_invoice_id; it never voided
+  // accounting_invoice_payments or payment_matches, never recomputed invoice
+  // balances, never wrote audit, never reversed a Wave payment. Unmatching a
+  // posted payment here would corrupt the books. Unmatch now lives only in
+  // Accounting → Bank Review & Matching (accounting-safe reversal).
+  const unmatch = async () => {
+    setError('');
+    setNotice('To unmatch a transaction, go to Accounting → Bank Review & Matching. Unmatching here was disabled because it did not reverse the posted payment, balances, or Wave sync.');
   };
 
   // Filter transactions: matched/unmatched view + selected account + display date range.
@@ -535,7 +534,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
                     {matchedInv && (
                       <div className="text-[10px] text-green-600 mt-0.5">
                         ✅ Matched → {matchedInv.customer || matchedInv.invoice_number || 'Invoice'}
-                        <button onClick={() => unmatch(t.id)} className="ml-1 text-red-400 underline">unmatch</button>
+                        <button onClick={() => unmatch(t.id)} className="ml-1 text-slate-400 underline" title="Unmatch moved to Accounting → Bank Review & Matching (accounting-safe)">unmatch in Bank Review →</button>
                       </div>
                     )}
                   </div>

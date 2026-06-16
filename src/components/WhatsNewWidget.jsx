@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GV',
+    date: '2026-06-16',
+    label: 'Bank tab can no longer corrupt the books + customer-statement Excel',
+    items: [
+      '**🛡️ The raw Bank tab can no longer match OR unmatch on its own.** Both the quick "Match" and "unmatch" links now send you to **Accounting → Bank Review & Matching**, which is the only place that records and reverses payments correctly (ledger + balances + Wave). The old shortcuts looked like they worked but never actually posted/reversed the payment — that loophole is closed.',
+      '**🚫 The old behind-the-scenes match route is fully shut off.** Even outside the buttons, the legacy `/api/plaid/match` endpoint is now blocked (returns "Gone") so nothing can quietly stamp a transaction as matched without going through the proper accounting flow.',
+      '**📊 Customer-statement Excel export added.** The Excel button on each Open Accounts card now offers both the *Internal view* and the *Customer statement* perspective (English or Bilingual) — so you can hand a customer an Excel that reads from their side ("You Owe Us"), matching the printed customer statement.',
+      { superAdminOnly: true, text: 'v55.83-GV. No SQL. /api/plaid/match/route.js fully rewritten: POST/DELETE/GET/PUT all return 410 Gone (disabled:true) — it can no longer mutate bank_transactions. BankTab.jsx: unmatch() neutered to a notice routing to Bank Review (was calling /api/plaid/match DELETE, which cleared matched_invoice_id without voiding accounting_invoice_payments/payment_matches/balances/audit/Wave); the unmatch button label now reads "unmatch in Bank Review". Combined with GU (match neutered), grep confirms zero live callers of plaid/match. OpenAccountsTab Excel dropdown: added Customer · English and Customer · Bilingual options calling handleExportExcel(a, bilingual, "customer"); exportAccountLedgerToExcel already honors perspective:"customer" (totals/labels switch to You Owe Us / Owed to You per open-account-i18n). Excel block still gated on canExport. STILL OPEN (not in GV): Inventory Report Center silent-empty bug, InventoryMixComposition perm key (edit_inventory vs Edit Inventory), inventory report perms not exposed in Settings, virtual-mix sale engine (Phase 2, parked), Wave generic-transaction push (no Wave mutation to build against).' },
+    ],
+  },
+  {
     version: 'v55.83-GU',
     date: '2026-06-16',
     label: 'Open Accounts printing for view-only staff + safer Bank tab matching',

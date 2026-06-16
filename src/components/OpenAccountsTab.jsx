@@ -1615,10 +1615,16 @@ export default function OpenAccountsTab(props) {
                         📊 Excel
                         <span className="ml-1 px-1 bg-amber-400 text-slate-900 rounded text-[9px] font-extrabold">EN/AR ▾</span>
                       </summary>
-                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[200px] p-1">
-                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Output language</div>
-                        <button onClick={function () { handleExportExcel(a, false, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 English Only<div className="text-[9px] text-slate-400 font-normal">.xlsx with EN headers</div></button>
-                        <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Bilingual (EN + AR)<div className="text-[9px] text-slate-400 font-normal">.xlsx with stacked EN/AR headers</div></button>
+                      <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded shadow-lg z-20 min-w-[240px] p-1">
+                        {/* v55.83-GV — added Customer-perspective Excel (their statement) to match the
+                            Print → Customer Statement options. exportAccountLedgerToExcel honors
+                            perspective:'customer' (labels: "You Owe Us"/"Owed to You"). */}
+                        <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-slate-700 mb-1">Internal view</div>
+                        <button onClick={function () { handleExportExcel(a, false, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 Internal · English<div className="text-[9px] text-slate-400 font-normal">.xlsx, our perspective, EN headers</div></button>
+                        <button onClick={function () { handleExportExcel(a, true, 'internal'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Internal · Bilingual<div className="text-[9px] text-slate-400 font-normal">.xlsx, our perspective, stacked EN/AR</div></button>
+                        <div className="px-2 py-1 mt-1 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold border-b border-t border-slate-700 mb-1">Customer statement</div>
+                        <button onClick={function () { handleExportExcel(a, false, 'customer'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇺🇸 Customer · English<div className="text-[9px] text-slate-400 font-normal">.xlsx, their perspective ("You Owe Us")</div></button>
+                        <button onClick={function () { handleExportExcel(a, true, 'customer'); }} className="block w-full text-left px-3 py-2 text-[11px] text-white hover:bg-slate-700 rounded font-bold">🇪🇬 Customer · Bilingual<div className="text-[9px] text-slate-400 font-normal">.xlsx, their perspective, stacked EN/AR</div></button>
                       </div>
                     </details>
                     )}
