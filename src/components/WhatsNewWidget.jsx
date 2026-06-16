@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GG',
+    date: '2026-06-16',
+    label: 'Dashboard & Bank tab now respect each silo’s default bank account',
+    items: [
+      '**🏦 The default bank account now applies beyond Bank Review.** When a Wave business has a default bank account set, the Accounting Dashboard’s "Unmatched bank txns" count is scoped to that account, and the Bank tab auto-focuses it (you can still switch accounts manually). If no default is set, both stay silo-wide. Set the default in Wave Sync Center → Settings.',
+      { superAdminOnly: true, text: 'v55.83-GG. No SQL (uses GD’s wave_business_settings.default_plaid_account_id). AccountingDashboard: load now also selects bank_transactions.account_id + wave_business_settings; after silo scoping, if a default account is set for the active silo and present in the txns, txns are further filtered to that account before computing unmatchedCount. BankTab.loadData: fetches the silo default and setAcctFilter(cur => cur===\"all\" ? default : cur) — only auto-selects while the filter is untouched, never overrides a manual pick; falls back to all-accounts if the default has no loaded txns. Bank Review already auto-loaded the default (GD).' },
+    ],
+  },
+  {
     version: 'v55.83-GF',
     date: '2026-06-16',
     label: 'Accounting Dashboard permissions split out (AR ≠ bank); per-card Restricted',

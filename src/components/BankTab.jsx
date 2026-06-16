@@ -67,6 +67,19 @@ export default function BankTab({ user, supabase }) {
 
       const { data: txns } = await supabase.from('bank_transactions').select('*').order('date', { ascending: false }).limit(500);
       setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));
+      // v55.83-GG — auto-select this silo's default bank account (only while the filter is still
+      // "all", so it never overrides a manual choice). Mirrors Bank Review's auto-load.
+      try {
+        const activeBizB = getActiveWaveBusiness();
+        if (activeBizB) {
+          const { data: bsRows } = await supabase.from('wave_business_settings').select('default_plaid_account_id').eq('wave_business_id', activeBizB);
+          const defAcctB = (bsRows && bsRows[0] && bsRows[0].default_plaid_account_id) || null;
+          const scopedB = scopeIfRegistered(txns || [], activeBizB, bizRegistry, true);
+          if (defAcctB && scopedB.some(t => t.account_id === defAcctB)) {
+            setAcctFilter(function (cur) { return cur === 'all' ? defAcctB : cur; });
+          }
+        }
+      } catch (eDefB) {}
 
       const { data: invs } = await supabase.from('invoices').select('*').order('date', { ascending: false }).limit(200);
       setInvoices(invs || []);

@@ -60,10 +60,11 @@ export default function AccountingDashboard(props) {
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status').catch(function () { return { data: [] }; }),
-      supabase.from('bank_transactions').select('id,review_status,wave_business_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
       supabase.from('daily_log').select('entry_text,log_date,log_category').in('log_category', ['accounting_invoices', 'accounting_proformas', 'accounting_customers', 'bank_review']).order('log_date', { ascending: false }).limit(12).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
       var reg = (r[5] && r[5].data) || []; var activeBiz = getActiveWaveBusiness(); var inv = scopeIfRegistered((r[0] && r[0].data) || [], activeBiz, reg, true);
       var custs = (r[1] && r[1].data) || [];
@@ -73,6 +74,11 @@ export default function AccountingDashboard(props) {
       // invoices. accounting_invoice_payments has NO wave_business_id column, so a payment is
       // scoped by whether its parent invoice belongs to this silo (invoices are already scoped).
       var txns = scopeIfRegistered((r[3] && r[3].data) || [], activeBiz, reg, true);
+      // v55.83-GG — also scope the bank widget to this silo's DEFAULT bank account when one is set,
+      // so the dashboard matches Bank Review instead of mixing accounts. Falls back to silo-wide.
+      var defAcctD = null;
+      ((r[7] && r[7].data) || []).forEach(function (s) { if (s && s.wave_business_id === activeBiz && s.default_plaid_account_id) { defAcctD = s.default_plaid_account_id; } });
+      if (defAcctD && txns.some(function (t) { return t.account_id === defAcctD; })) { txns = txns.filter(function (t) { return t.account_id === defAcctD; }); }
       var invIdSet = {}; inv.forEach(function (i) { invIdSet[i.id] = true; });
       var pays = ((r[2] && r[2].data) || []).filter(function (p) { return invIdSet[p.accounting_invoice_id]; });
       var lastLog = (r[4] && r[4].data && r[4].data[0]) || null;
