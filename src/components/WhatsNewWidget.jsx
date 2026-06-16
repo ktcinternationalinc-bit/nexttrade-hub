@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GR',
+    date: '2026-06-16',
+    label: 'Bank Review: clean Wave category dropdown + separate Wave-sync badge',
+    items: [
+      '**🧹 The Wave category dropdown in Bank Review is cleaned up.** No more repeated "Accounts Receivable / System Receivable / Invoice" entries — it now de-duplicates by account and hides receivable accounts (those aren\'t manual categories; a customer payment links to an invoice, not to A/R).',
+      '**🏷️ New Wave-sync badge per transaction.** Each row now shows its Wave status (Wave: not synced / pending / synced / failed / Hub only) **separately** from the Hub review status — so "Approved" no longer makes you think it\'s been synced to Wave when it hasn\'t.',
+      { superAdminOnly: true, text: 'v55.83-GR. No SQL (uses existing category_status). BankReviewTab: the waveCategories load now dedupes by wave_account_id and excludes accounts whose subtype/name contains RECEIVABLE. Added a second badge in the status cell driven by category_status (pending_wave_sync → "Wave: pending"; synced; sync_failed/failed → "Wave: failed"; local_only → "Hub only"; has wave_account_id but no status → pending; else "Wave: not synced"). Review status badge unchanged. NEXT (GS): make the Wave Sync Center actually QUEUE these pending bank transactions (truthful pending/unsupported) instead of them silently not appearing, and mark classification changes as pending.' },
+    ],
+  },
+  {
     version: 'v55.83-GQ',
     date: '2026-06-16',
     label: 'Inventory Report Center: new Movement report (EN/AR)',

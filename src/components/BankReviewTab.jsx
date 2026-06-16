@@ -113,8 +113,21 @@ export default function BankReviewTab(props) {
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
       setPlaidAccts(pa);
       // Wave categories scoped to the active silo, for the categorization dropdown.
+      // v55.83-GR — dedupe by wave_account_id and drop receivable / system-receivable accounts.
+      // Those aren't valid manual categories (a customer payment links to an invoice + the Wave
+      // payment account, not to A/R), and Wave returns several near-identical receivable rows,
+      // which made the dropdown unusable ("Accounts Receivable / System Receivable / Invoice" spam).
       var activeBiz = getActiveWaveBusiness();
-      var cats = ((res[6] && res[6].data) || []).filter(function (c) { return !activeBiz || c.wave_business_id === activeBiz; });
+      var seenAcct = {};
+      var cats = ((res[6] && res[6].data) || []).filter(function (c) {
+        if (activeBiz && c.wave_business_id !== activeBiz) { return false; }
+        if (!c.wave_account_id || seenAcct[c.wave_account_id]) { return false; }
+        seenAcct[c.wave_account_id] = true;
+        var sub = String(c.subtype || '').toUpperCase();
+        var nm = String(c.wave_account_name || '').toUpperCase();
+        if (sub.indexOf('RECEIVABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0) { return false; }
+        return true;
+      });
       setWaveCategories(cats);
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn);
@@ -559,7 +572,17 @@ export default function BankReviewTab(props) {
                     <div className="px-2 py-1.5 text-xs text-slate-100 truncate">{t.name}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}</div>
                     <div className="px-2 py-1.5 text-right text-xs font-mono font-bold text-slate-100">{seeAmounts ? fmt(t.amount_abs || Math.abs(Number(t.amount))) : maskAmount(null, false)}</div>
                     <div className="px-2 py-1.5 text-[11px] text-slate-300">{t.classification ? labelize(t.classification) : <span className="text-slate-500 italic">—</span>}</div>
-                    <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + (t.review_status === 'approved' ? 'bg-blue-700 text-white' : t.review_status === 'reviewed' ? 'bg-emerald-700 text-white' : t.review_status === 'ignored' || t.review_status === 'duplicate' ? 'bg-slate-600 text-white' : t.review_status === 'needs_clarification' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-200')}>{labelize(t.review_status || 'unreviewed')}</span></div>
+                    <div className="px-2 py-1.5">
+                      <span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + (t.review_status === 'approved' ? 'bg-blue-700 text-white' : t.review_status === 'reviewed' ? 'bg-emerald-700 text-white' : t.review_status === 'ignored' || t.review_status === 'duplicate' ? 'bg-slate-600 text-white' : t.review_status === 'needs_clarification' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-200')}>{labelize(t.review_status || 'unreviewed')}</span>
+                      {/* v55.83-GR — Wave sync status is SEPARATE from Hub review. "Approved" never
+                          means "synced to Wave"; this badge tells the truth about the Wave side. */}
+                      {(function () {
+                        var cs = t.category_status;
+                        var wlabel = cs === 'pending_wave_sync' ? '⧖ Wave: pending' : cs === 'synced' ? '✓ Wave: synced' : (cs === 'sync_failed' || cs === 'failed') ? '✕ Wave: failed' : cs === 'local_only' ? 'Hub only' : (t.wave_account_id ? '⧖ Wave: pending' : 'Wave: not synced');
+                        var wcls = cs === 'synced' ? 'bg-emerald-800 text-emerald-100' : (cs === 'sync_failed' || cs === 'failed') ? 'bg-rose-800 text-rose-100' : cs === 'pending_wave_sync' ? 'bg-violet-700 text-white' : 'bg-slate-700 text-slate-400';
+                        return <span className={'block mt-1 text-[9px] px-1.5 py-0.5 rounded font-bold w-fit ' + wcls}>{wlabel}</span>;
+                      })()}
+                    </div>
                   </div>
                 );
               })}
