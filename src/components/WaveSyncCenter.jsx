@@ -125,6 +125,10 @@ export default function WaveSyncCenter(props) {
   var ca2 = useState(0); var catCount = ca2[0]; var setCatCount = ca2[1];
   var sp0 = useState(false); var schemaBusy = sp0[0]; var setSchemaBusy = sp0[1];
   var sp1 = useState(null); var schemaResult = sp1[0]; var setSchemaResult = sp1[1];
+  var bk0 = useState([]); var bankAccts = bk0[0]; var setBankAccts = bk0[1];
+  var bk1 = useState(''); var bankSel = bk1[0]; var setBankSel = bk1[1];
+  var bk2 = useState(false); var bankBusy = bk2[0]; var setBankBusy = bk2[1];
+  var bk3 = useState(''); var bankMsg = bk3[0]; var setBankMsg = bk3[1];
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
@@ -170,6 +174,43 @@ export default function WaveSyncCenter(props) {
     }).catch(function () { setProdSetup(null); });
   }
   useEffect(function () { loadProdSetup(); }, [active]);
+
+  // v55.83-GD — per-silo default bank account. The account list is sourced from THIS silo's bank
+  // transactions (the same account_id Bank Review filters on), labelled via plaid_accounts.
+  function loadBankAccts() {
+    if (!active) { setBankAccts([]); return; }
+    Promise.all([
+      supabase.from('bank_transactions').select('account_id, name').eq('wave_business_id', active).limit(3000),
+      supabase.from('plaid_accounts').select('plaid_account_id, name, mask')
+    ]).then(function (res) {
+      var pa = {}; ((res[1] && res[1].data) || []).forEach(function (a) { if (a && a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
+      var seen = {}; var list = [];
+      ((res[0] && res[0].data) || []).forEach(function (t) {
+        if (!t.account_id || seen[t.account_id]) { return; }
+        seen[t.account_id] = true;
+        var a = pa[t.account_id];
+        var label = a ? ((a.name || 'Account') + (a.mask ? (' ··' + a.mask) : '')) : (t.name || ('Account ··' + String(t.account_id).slice(-4)));
+        list.push({ account_id: t.account_id, label: label });
+      });
+      setBankAccts(list);
+    }).catch(function () { setBankAccts([]); });
+  }
+  useEffect(function () { loadBankAccts(); setBankSel(''); setBankMsg(''); }, [active]);
+
+  function saveDefaultBank(accId) {
+    var chosen = null; bankAccts.forEach(function (a) { if (a.account_id === accId) { chosen = a; } });
+    setBankBusy(true); setBankMsg('');
+    fetch('/api/wave/default-bank-account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: (userProfile && userProfile.id) || null, default_plaid_account_id: accId || null, default_plaid_account_name: chosen ? chosen.label : null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.saved) { setBankMsg(accId ? ('Default bank account set: ' + (d.default_plaid_account_name || d.default_plaid_account_id)) : 'Default bank account cleared.'); loadProdSetup(); toast.success('Default bank account saved'); }
+        else if (d && d.db_error) { setBankMsg('Database save FAILED: ' + d.db_error + '\n\nIf this mentions a missing column, run the silo migration (adds default_plaid_account_id / default_plaid_account_name / default_bank_connection_id to wave_business_settings).'); toast.error('Save failed — see message'); }
+        else if (d && d.error) { setBankMsg('Error: ' + d.error); toast.error('Save failed'); }
+        else { setBankMsg(JSON.stringify(d, null, 2)); }
+      })
+      .catch(function (e) { setBankMsg('Request failed: ' + ((e && e.message) || String(e))); })
+      .finally(function () { setBankBusy(false); });
+  }
 
   function runProductSetup(mode, productId, productName) {
     setProdBusy(true); setProdMsg(''); if (mode !== 'select') { setProdList(null); }
@@ -646,6 +687,22 @@ export default function WaveSyncCenter(props) {
                 })}
               </div>
             )}
+          </div>
+          <div className="mb-4 border border-sky-200 bg-sky-50 rounded-lg p-3">
+            <div className="font-bold text-slate-900 mb-1">Default Bank Account for This Silo</div>
+            <div className="text-xs text-slate-700 mb-2">Bank Review auto-loads this account when this Wave business is selected (you can still switch accounts manually). This is the local Plaid/bank account whose transactions you review — separate from the Wave payment deposit account above.</div>
+            {prodSetup && prodSetup.default_plaid_account_id
+              ? <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Default bank account: {prodSetup.default_plaid_account_name || prodSetup.default_plaid_account_id}</div>
+              : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default bank account set for this silo — Bank Review shows all of this silo&#39;s accounts.</div>}
+            <div className="flex gap-2 flex-wrap items-center">
+              <select value={bankSel} onChange={function (e) { setBankSel(e.target.value); }} className="text-xs bg-white border border-slate-300 text-slate-900 rounded px-2 py-1 min-w-[220px]">
+                <option value="">{bankAccts.length ? '— choose an account —' : 'No bank accounts found for this silo'}</option>
+                {bankAccts.map(function (a) { return <option key={a.account_id} value={a.account_id}>{a.label}</option>; })}
+              </select>
+              <button onClick={function () { saveDefaultBank(bankSel); }} disabled={bankBusy || !bankSel} className="text-xs bg-sky-600 hover:bg-sky-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{bankBusy ? 'Saving…' : 'Set default'}</button>
+              {prodSetup && prodSetup.default_plaid_account_id && <button onClick={function () { saveDefaultBank(''); }} disabled={bankBusy} className="text-xs bg-slate-500 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold disabled:opacity-50">Clear</button>}
+            </div>
+            {bankMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{bankMsg}</div>}
           </div>
           <div className="mb-4 border border-violet-200 bg-violet-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Wave Categories (Chart of Accounts)</div>

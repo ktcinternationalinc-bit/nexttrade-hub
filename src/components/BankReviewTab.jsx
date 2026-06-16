@@ -79,6 +79,7 @@ export default function BankReviewTab(props) {
   var [fStatus, setFStatus] = useState('unreviewed');
   var [fDirection, setFDirection] = useState('all');
   var [fAccount, setFAccount] = useState('all');
+  var [autoAcctDone, setAutoAcctDone] = useState(false);
   var [fUnsupported, setFUnsupported] = useState(false);
   var [search, setSearch] = useState('');
   var [fFrom, setFFrom] = useState('');
@@ -103,6 +104,7 @@ export default function BankReviewTab(props) {
       fetchAllRows('wave_business_registry', '*'),
       supabase.from('plaid_accounts').select('*'),
       supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
+      supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       var m = (res[1] && res[1].data) || [];
@@ -116,6 +118,17 @@ export default function BankReviewTab(props) {
       setWaveCategories(cats);
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn);
+      // v55.83-GD — auto-load this silo's default bank account into the account filter, once per
+      // mount (the component remounts on silo switch via its key). User can still switch manually.
+      try {
+        var activeBizA = getActiveWaveBusiness();
+        if (!autoAcctDone && activeBizA) {
+          var defAcct = null;
+          ((res[7] && res[7].data) || []).forEach(function (s) { if (s && s.wave_business_id === activeBizA && s.default_plaid_account_id) { defAcct = s.default_plaid_account_id; } });
+          if (defAcct && t.some(function (x) { return x.account_id === defAcct; })) { setFAccount(defAcct); }
+          setAutoAcctDone(true);
+        }
+      } catch (eAuto) {}
       setAcctCustomers(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), reg, true));
       setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
       setSel(function (cur) { if (!cur) { return cur; } var fr = null; t.forEach(function (x) { if (x.id === cur.id) { fr = x; } }); return fr || cur; });

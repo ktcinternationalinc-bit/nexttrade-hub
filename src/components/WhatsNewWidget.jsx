@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GD',
+    date: '2026-06-16',
+    label: 'Per-silo default bank account (Bank Review auto-loads it)',
+    items: [
+      '**🏦 Each Wave business can now have a default bank account.** Set it in Wave Sync Center → Settings → "Default Bank Account for This Silo". When you select that business, Bank Review automatically loads that account instead of all accounts (you can still switch manually). This keeps you from accidentally reviewing/matching another account’s transactions.',
+      { superAdminOnly: true, text: 'v55.83-GD. REQUIRES the silo migration (wave_business_settings.default_plaid_account_id / default_plaid_account_name / default_bank_connection_id). New route /api/wave/default-bank-account (POST, wave.settings.manage) upserts the choice and verifies the account has transactions in this silo (never points a silo at another silo account). WaveSyncCenter Settings: new picker sourced from THIS silo bank_transactions.account_id (same id Bank Review filters on), labelled via plaid_accounts; gated by the settings tab permission. BankReviewTab: loads wave_business_settings.default_plaid_account_id and auto-applies it to the fAccount filter once per mount (the component remounts on silo switch via its key), only if that account exists in the loaded txns; manual switching still works. Dashboard bank/payment widgets are already silo-scoped (FV). Until the migration runs, the save returns a clear db_error and the auto-load simply no-ops.' },
+    ],
+  },
+  {
     version: 'v55.83-GC',
     date: '2026-06-16',
     label: 'Wave Sync Center: per-action permissions (buttons hide/disable)',
