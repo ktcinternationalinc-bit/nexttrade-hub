@@ -169,6 +169,23 @@ export async function POST(req) {
     // refuses payments on drafts, so record it: pushed_draft when DRAFT (surfaced for repair in the
     // Sync Center + blocks payment push), else synced. wave_invoice_id is always linked once created.
     var waveStatus = (ic.invoice && ic.invoice.status) ? ic.invoice.status : null;
+    // v55.83-IN — AUTO-APPROVE: Wave creates invoices as DRAFT and refuses payments on drafts, which
+    // left every pushed invoice stuck on "needs Wave status repair". Immediately approve it in Wave
+    // (status-only mutation, surfaces Wave's exact error) so it lands as SAVED and is payment-ready.
+    if (waveStatus === 'DRAFT') {
+      try {
+        var apprMut = 'mutation($input: InvoiceApproveInput!){ invoiceApprove(input:$input){ didSucceed inputErrors{ message path code } invoice{ id status } } }';
+        var apprResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: apprMut, variables: { input: { invoiceId: ic.invoice.id } } }) });
+        var apprData = await apprResp.json();
+        var ia = apprData && apprData.data && apprData.data.invoiceApprove;
+        if (ia && ia.didSucceed && ia.invoice && ia.invoice.id) {
+          waveStatus = (ia.invoice.status) ? ia.invoice.status : 'SAVED';
+        }
+        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, response_payload: apprData, success: !!(ia && ia.didSucceed), error_message: (ia && ia.didSucceed) ? null : 'Auto-approve after create did not succeed — invoice may need manual approval in Wave', attempted_by: by });
+      } catch (eAppr) {
+        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, success: false, error_message: 'Auto-approve threw: ' + ((eAppr && eAppr.message) || String(eAppr)), attempted_by: by });
+      }
+    }
     var newSyncStatus = (waveStatus === 'DRAFT') ? 'pushed_draft' : (verified ? 'synced' : 'pushed_unverified');
     await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: waveStatus, wave_sync_status: newSyncStatus }).eq('id', hubId);
     await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'read_back', dry_run: false, response_payload: data, success: !!verified, error_message: verified ? null : 'Read-back number mismatch (invoice still linked)', attempted_by: by });

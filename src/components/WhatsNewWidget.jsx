@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IN',
+    date: '2026-06-17',
+    label: 'Wave invoices: no more "DRAFT / needs status repair" dead-end — one-click + auto approve',
+    items: [
+      '**✅ Invoices pushed to Wave are now auto-approved.** Wave creates invoices as DRAFT and refuses payments on drafts — that\'s why an approved Hub invoice got stuck on "needs Wave status repair." The Hub now approves it in Wave automatically right after pushing, so it lands ready to accept payments.',
+      '**🔧 For invoices already stuck as DRAFT:** the blocked "needs Wave status repair" row in Wave Sync Center now has an **"✅ Approve in Wave"** button — one click approves it in Wave (no more opening Wave, approving by hand, and re-importing). Note: editing the invoice number never unblocked it because the block is purely the Wave DRAFT status.',
+      '**🛒 "Create it in Wave" (Default Invoice Product) is fixed** — it now tells Wave the product is sold (isSold), so Wave stops rejecting it with "indicate whether you will be buying or selling."',
+      { superAdminOnly: true, text: 'v55.83-IN. Root cause: push-invoice-v2 called invoiceCreate (Wave returns DRAFT) and never approved it; nothing in the codebase ever called invoiceApprove, so invoices sat as pushed_draft and both the Sync Center repair row AND push-payment blocked on wave_status DRAFT. Fixes: (1) NEW /api/wave/approve-invoice route — invoiceApprove(input:{invoiceId}) mutation (same didSucceed/inputErrors envelope as invoiceCreate; status-only, surfaces Wave\'s exact error; mirrors push-invoice-v2 silo/production gating but requires an existing wave_invoice_id), updates wave_status=SAVED + wave_sync_status=synced. (2) push-invoice-v2 now auto-calls invoiceApprove inline when the created invoice is DRAFT. (3) WaveSyncCenter: "✅ Approve in Wave" button on the invrepair row → approveInWave() → /api/wave/approve-invoice → reload. (4) product-setup productCreate now sends isSold:true,isBought:false. (5) CustomerLedger permission gate fixed: was calling canViewCustomerAr/canViewInvoices with the wrong arg order (userProfile as isSuperAdmin, no role) so admin/owner fallback was dead — now (isSuperAdmin, modulePerms, role) + a precise restricted message. Wave invoiceApprove mutation shape confirmed via Wave dev portal/search before coding (not guessed); it is status-only so a wrong field fails loud with Wave\'s accepted-fields error, never corrupts money. STILL TODO this session (next build): Bank-tab "Match in Bank Review" deep-link navigation; widen product-setup/payment-account-setup beyond KANDIL for unlocked production KTC; AT/AV stale test refresh; remaining amber contrast panels.' },
+    ],
+  },
+  {
     version: 'v55.83-IM',
     date: '2026-06-17',
     label: 'Accounting/Wave: final QA pass — fixed real money-integrity gaps',

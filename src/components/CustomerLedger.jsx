@@ -34,7 +34,11 @@ export default function CustomerLedger(props) {
   var userProfile = props.userProfile;
   var modulePerms = props.modulePerms || {};
   var isSuperAdmin = props.isSuperAdmin === true;
-  var allowed = isSuperAdmin || canViewCustomerAr(userProfile, modulePerms) || canViewInvoices(userProfile, modulePerms);
+  // v55.83-IN (Codex FAIL) — these helpers are (isSuperAdmin, mp[, role]); the old call passed
+  // userProfile as isSuperAdmin and NOTHING as role, so the admin/owner role fallback never fired
+  // and a legit admin/owner without explicit invoice/AR grants was wrongly blocked from this tab.
+  var role = userProfile && userProfile.role;
+  var allowed = isSuperAdmin || canViewCustomerAr(isSuperAdmin, modulePerms) || canViewInvoices(isSuperAdmin, modulePerms, role);
 
   var [loading, setLoading] = useState(true);
   var [customers, setCustomers] = useState([]);
@@ -221,7 +225,7 @@ export default function CustomerLedger(props) {
   }
 
   if (!allowed) {
-    return <div className="p-6"><RestrictedNotice title="Restricted" message={'You don\'t have permission to view customer AR. Ask an admin for the "View Customer AR" permission.'} /></div>;
+    return <div className="p-6"><RestrictedNotice title="Restricted" message={'You don\'t have permission to view the Customer Ledger / AR. Ask a super admin to grant "Customer: View AR" (customer.view_ar) or "Invoice: View" (ACCT-004 / invoice.view) — admin/owner roles also have access.'} /></div>;
   }
   if (loading) return <div className="p-6 text-slate-400 text-sm">Loading customer accounting data…</div>;
 

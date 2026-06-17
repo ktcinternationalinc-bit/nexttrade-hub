@@ -94,7 +94,10 @@ export async function POST(req) {
       var incomeAccountId = body.income_account_id || ((acEdges && acEdges.length && acEdges[0].node) ? acEdges[0].node.id : null);
       if (!incomeAccountId) { return NextResponse.json({ error: 'No Wave income account available. Pick or create an income account in Wave first.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, accounts: acData }, { status: 502 }); }
       var pcMut = 'mutation($input: ProductCreateInput!){ productCreate(input:$input){ didSucceed inputErrors{ message path code } product{ id name } } }';
-      var pcVars = { input: { businessId: bid, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId } };
+      // v55.83-IN — Wave's ProductCreateInput REQUIRES the sold/bought indicator ("indicate whether
+      // you will be buying or selling this product"). Omitting it caused the productCreate rejection
+      // you saw. This is a sellable invoice line item → isSold:true, isBought:false.
+      var pcVars = { input: { businessId: bid, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId, isSold: true, isBought: false } };
       var pcResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: pcMut, variables: pcVars }) });
       var pcData = await pcResp.json();
       var pc = pcData && pcData.data && pcData.data.productCreate;

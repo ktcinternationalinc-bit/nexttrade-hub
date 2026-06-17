@@ -484,6 +484,23 @@ export default function WaveSyncCenter(props) {
       })
       .catch(function (e) { toast.error('Could not update: ' + ((e && e.message) || 'error')); });
   }
+
+  // v55.83-IN — one-click approve a DRAFT invoice in Wave (DRAFT -> SAVED) so it accepts payments,
+  // instead of telling the user to open Wave and approve by hand + re-import.
+  function approveInWave(invoiceId) {
+    if (!invoiceId) { return; }
+    if (!canPushInvoice) { toast.error('You do not have the Wave: Invoice push permission.'); return; }
+    setBusy(true);
+    fetch('/api/wave/approve-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.success) { toast.success('Invoice approved in Wave (' + (j.wave_status || 'SAVED') + ') — it can now accept payments.'); load(); }
+        else if (j && j.approved_in_wave) { toast.success('Approved in Wave — run Wave Import to refresh the status.'); load(); }
+        else { toast.error('Approve failed: ' + ((j && j.error) || 'see Sync Log for the exact Wave reason')); }
+      })
+      .catch(function (e) { toast.error('Approve failed: ' + ((e && e.message) || 'network error')); })
+      .finally(function () { setBusy(false); });
+  }
   var selectedRows = queue.filter(function (q) { return sel[q.key] && !q.blocked; });
 
   function runDryRun() {
@@ -603,6 +620,7 @@ export default function WaveSyncCenter(props) {
                     <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
+                    {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
                     <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500'))}>{q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced')}</span>
                   </div>
                 );
