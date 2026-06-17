@@ -27,6 +27,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase, dbUpdate } from '../lib/supabase';
+import { loadPrimaryPhotoUrls } from '../lib/inventory-photos';
 
 var LEVEL_COLS = {
   1: { col: 'family_list_id',       label: 'Family',       parent: null },
@@ -50,6 +51,7 @@ export default function ProductPicker(props) {
   var canEdit = isSuperAdmin || (props.modulePerms && props.modulePerms['Edit Inventory'] === true);
 
   var [products, setProducts] = useState([]);
+  var [photoUrls, setPhotoUrls] = useState({}); // v55.83-IJ — productId -> signed primary-photo thumb URL
   var [lists, setLists] = useState([]);          // inventory_lists rows for cascade dropdowns
   var [rules, setRules] = useState([]);          // inventory_list_rules rows
   var [layers, setLayers] = useState([]);        // open inventory_layers (for filterByStock)
@@ -115,6 +117,17 @@ export default function ProductPicker(props) {
     });
     return parts.join(' · ');
   }
+
+  // v55.83-IJ — mint signed thumbnail URLs for products that have a primary
+  // photo. Graceful: no photos / no migration / no bucket → empty map → no thumbs.
+  useEffect(function () {
+    if (!products || !products.length) { setPhotoUrls({}); return; }
+    var cancelled = false;
+    loadPrimaryPhotoUrls(products.map(function (p) { return p.id; })).then(function (map) {
+      if (!cancelled) setPhotoUrls(map || {});
+    });
+    return function () { cancelled = true; };
+  }, [products]);
 
   // ── Filtering / sorting ──────────────────────────────────────────
   var filtered = useMemo(function () {
@@ -338,9 +351,18 @@ export default function ProductPicker(props) {
                       {p.featured ? '⭐' : '☆'}
                     </button>
                     <div className="font-mono font-extrabold text-slate-900 text-sm">{p.quick_code || '—'}</div>
-                    <div className="text-sm">
-                      <div className="font-semibold text-slate-900 truncate">{describe(p)}</div>
-                      <div className="text-[10px] text-slate-500 font-mono truncate">{p.classification_slug}</div>
+                    <div className="text-sm flex items-center gap-2 min-w-0">
+                      {photoUrls[p.id] && (
+                        <img
+                          src={photoUrls[p.id]}
+                          alt=""
+                          className="w-9 h-9 rounded object-cover border border-slate-200 flex-shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900 truncate">{describe(p)}</div>
+                        <div className="text-[10px] text-slate-500 font-mono truncate">{p.classification_slug}</div>
+                      </div>
                     </div>
                     <div className="text-[11px] text-right text-slate-600">
                       {filterByStock ? <><span className="font-extrabold text-emerald-700">{stock.toFixed(2)}</span> on hand</> : ''}

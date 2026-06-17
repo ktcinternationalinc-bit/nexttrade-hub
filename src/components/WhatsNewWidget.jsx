@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IJ',
+    date: '2026-06-17',
+    label: 'Inventory: product photo thumbnails in the product list & picker',
+    items: [
+      '**🖼️ Product photos now show as thumbnails** wherever you browse or pick products — the Product List and the Product Picker show each product\'s primary/cover photo next to its name, so you can recognize a SKU at a glance.',
+      { superAdminOnly: true, text: 'v55.83-IJ (phase 2 of product photos, builds on II). New lib src/lib/inventory-photos.js loadPrimaryPhotoUrls(productIds): one batched query of attachments (parent_type=inventory_product, is_primary=true) + one createSignedUrls call on the private product-photos bucket → {productId: signedUrl}. Fully graceful — if the II migration/bucket isn\'t set up, every call errors, is swallowed, returns {} → rows just show no thumb, never crash. Wired into InventoryProductMaster (list rows, name cell) and ProductPicker (results, name cell) via a useEffect on the products array; thumbnails render only when a primary photo exists. No grid-template changes (thumbs sit in a flex inside the existing name cell). Receiving uses ProductPicker for SKU selection so it\'s covered; the receipt-group list itself was left unchanged (different surface). Test test-v55-83-ij-photo-thumbnails.js. Needs the II setup (private product-photos bucket + sql/v55-83-II-product-photos.sql) to actually display.' },
+    ],
+  },
+  {
     version: 'v55.83-II',
     date: '2026-06-17',
     label: 'Inventory: add internal product photos (with a primary/cover image)',

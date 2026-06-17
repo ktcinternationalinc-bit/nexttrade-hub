@@ -22,6 +22,7 @@ import { createPortal } from 'react-dom';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import InventoryVariantHistory from './InventoryVariantHistory';
 import AttachmentManager from './AttachmentManager';
+import { loadPrimaryPhotoUrls } from '../lib/inventory-photos';
 
 var UOM_OPTIONS = [
   { v: 'kg',     en: 'Kilograms',     ar: 'كيلوغرام' },
@@ -185,6 +186,7 @@ export default function InventoryProductMaster(props) {
   var [lists, setLists] = useState([]);          // all inventory_lists rows
   var [rules, setRules] = useState([]);          // all inventory_list_rules rows
   var [products, setProducts] = useState([]);    // all inventory_products rows
+  var [photoUrls, setPhotoUrls] = useState({});  // v55.83-IJ — productId -> signed primary-photo thumb URL
   var [loading, setLoading] = useState(true);
 
   // Filters / search
@@ -429,6 +431,17 @@ export default function InventoryProductMaster(props) {
     }
     return out;
   }
+
+  // v55.83-IJ — mint signed thumbnail URLs for products with a primary photo.
+  // Graceful: no photos / no migration / no bucket → empty map → no thumbs.
+  useEffect(function () {
+    if (!products || !products.length) { setPhotoUrls({}); return; }
+    var cancelled = false;
+    loadPrimaryPhotoUrls(products.map(function (p) { return p.id; })).then(function (map) {
+      if (!cancelled) setPhotoUrls(map || {});
+    });
+    return function () { cancelled = true; };
+  }, [products]);
 
   // Filtered product list for the table
   var filteredProducts = useMemo(function () {
@@ -1209,8 +1222,19 @@ export default function InventoryProductMaster(props) {
                       to text-sm font-extrabold. Also bumped English name from
                       text-sm font-bold to text-base font-extrabold for parity
                       and widened the Classification column. */}
-                  <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
-                  <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                  <div className="flex items-start gap-2 min-w-0">
+                    {photoUrls[p.id] && (
+                      <img
+                        src={photoUrls[p.id]}
+                        alt=""
+                        className="w-11 h-11 rounded object-cover border border-slate-200 flex-shrink-0 mt-0.5"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
+                      <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                    </div>
+                  </div>
                 </div>
                 {/* v55.83-A.6.27.43 — Classification breakdown as bullets per level.
                     Order: Family → Grade → Category → Construction → Backing → Color → Pattern → Spec → Country.
