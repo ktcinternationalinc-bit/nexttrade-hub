@@ -2024,3 +2024,110 @@ Scope read before this pass:
 
 #### Launch reminder unchanged
 - Accounting/banking launch still depends on live items outside local code review: run/confirm launch SQL + /api/wave/preflight-schema, live non-super Settings permission retest on v55.83-IG or later, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores real wave_payment_id.
+
+### 2026-06-17 INVENTORY PRODUCT PHOTOS QA - GAP / FEATURE NOT BUILT
+
+Scope read before this pass:
+- User asked whether inventory can add/show product photos.
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Inspected Inventory Product Master, inventory product schema, generic AttachmentManager, and attachment SQL.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL / GAP - Inventory products do not have a first-class photo/gallery workflow
+- InventoryProductMaster loads and saves inventory_products rows, but there is no photo upload field, gallery section, or AttachmentManager mounted for each product.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:19
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:244
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:518
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:871
+- The inventory_products base schema has identity/classification/spec/default fields, but no image_url/photo_url/primary_photo_id/gallery metadata.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-23-inventory-product-master.sql:11
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-23-inventory-product-master.sql:14
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-23-inventory-product-master.sql:35
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-23-inventory-product-master.sql:50
+- There is a reusable AttachmentManager that can upload/list files and render image thumbnails, but its documented current parent types are open-account invoices, system tickets, and open-account entries. Product Master does not use it.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:12
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:13
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:67
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:389
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:412
+- The generic attachments table is extensible by parent_type, so product photos can likely be built without adding columns to inventory_products, but the current SQL comments do not list inventory_product as an intended parent type.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-61-attachments.sql:31
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-61-attachments.sql:34
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-61-attachments.sql:38
+
+#### Business impact
+- Staff cannot visually verify colors, patterns, material texture, or variants from the Hub. For textiles/leather/PVC inventory this is a real usability gap: names and classification codes are not enough.
+- This also hurts ProductPicker, Receiving, Stock Mix composition, and customer-facing sales workflows because staff cannot inspect the actual product image before choosing a SKU/component.
+
+#### Instruction for Claude
+- Build product photos as an inventory enhancement after current accounting launch blockers are green.
+- Recommended approach: reuse AttachmentManager with parentType="inventory_product" and parentId={product.id} inside the Product Master edit/detail experience, plus show image thumbnails in Product Master rows and ProductPicker results.
+- Add a concept of a primary photo, either by a small product_photos table or by extending attachments metadata with is_primary/sort_order/caption for parent_type='inventory_product'. Do not just allow a pile of files with no primary thumbnail.
+- Restrict uploads to image MIME types for the product-photo UI, even if generic attachments accepts any file. Product docs/spec sheets can stay as generic attachments later.
+- Security note: the current generic attachments bucket is public-by-URL. Product photos may be acceptable public if they are catalog images, but internal stock/warehouse photos may not be. Claude should ask Max whether product photos are public catalog assets or internal-only. If internal-only, use private bucket + signed URLs instead of public_url.
+- Expected UX: + Photo button on product detail/edit, drag/drop multiple photos, visible gallery, set primary, remove photo, captions/notes, thumbnail in Inventory Overview/Product Master/ProductPicker/Receiving/Stock Mix where space allows.
+
+### 2026-06-17 GMAIL IDENTITY MODEL QA - CAUTION / DO NOT BLIND-FIX
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Claude's latest commit 99d30bc is handoff-only and asks Codex to confirm the Gmail identity model before enforcing auth.
+- Inspected Gmail connect/callback/inbox/send, CommunicationsTab, app user-profile loading, and AI Gmail usage.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### CAUTION - The table is email_accounts, and current Gmail linkage is auth-user-id based unless auth uid equals users.id
+- Gmail connect reads userId from the query string and passes it through Google OAuth state.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\connect\route.js:14
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\connect\route.js:29
+- Gmail callback stores that state into email_accounts.user_id.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\callback\route.js:14
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\callback\route.js:66
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\callback\route.js:70
+- CommunicationsTab passes user.id, not userProfile.id, to Gmail connect/inbox/send.
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:57
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:92
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:113
+- app/page.jsx sets user from Supabase auth session, then separately resolves userProfile by email first and auth-id fallback second.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:1288
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:1589
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:1593
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:1595
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:1598
+
+#### Business / security impact
+- Claude is right not to blindly change Gmail routes to session-derived userProfile semantics. The existing connected accounts may be keyed by Supabase auth uid, while much of the Hub uses users.id after profile resolution. If those differ for any staff member, a naive requireUser + users.id filter can make their connected Gmail disappear.
+- The original security FAIL still stands: inbox/send trust caller-supplied userId and service-role lookup. A caller can target another connected account if they know or guess that ID.
+
+#### Additional caller check
+- The only UI caller of /api/gmail/inbox and /api/gmail/send found in source is CommunicationsTab.
+- AI uses email_accounts directly and currently selects the first active account, not the current user's account, for Gmail read/send actions.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:86
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:153
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:172
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:1383
+
+#### Instruction for Claude
+- Do not rename this mentally to gmail_accounts; code uses email_accounts.
+- Safe fix plan: first confirm in live Supabase whether users.id equals auth.users.id for all active users and whether email_accounts.user_id values match auth uid or users.id. If they are identical, enforce requireUser and filter email_accounts.user_id = auth.user.id. If they differ, add an explicit mapping step: resolve auth.email to users.email, then use the same canonical ID consistently for email_accounts, messages.handled_by, and comms_audit.user_id.
+- Update CommunicationsTab to send Authorization Bearer token on Gmail inbox/send, but keep the current userId behavior until the mapping is confirmed. Then remove trust in request userId server-side.
+- Also fix /api/ask Gmail paths in the same security pass, otherwise AI can still read/send through the first active Gmail account even after /api/gmail/inbox and /api/gmail/send are hardened.
+- Do this as a dedicated communications-security build after the accounting launch path is stable, with one live Gmail read and one live Gmail send test before calling it done.
+
+### 2026-06-17 HEARTBEAT PROCESS CORRECTION - GMAIL QA ANSWER IS NOW IN THIS FILE
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD remains 99d30bc handoff-only; no new app source changes to QA.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### CAUTION - Claude handoff is stale on Gmail mapping answer
+- CLAUDE_HANDOFF.md currently says Codex did not yet answer the Gmail id-mapping question.
+- file: D:\GITHUB\nexttrade-hub\CLAUDE_HANDOFF.md:149
+- That is now stale. Codex answered it in the immediately previous QA section: code uses email_accounts, current UI links Gmail through user.id from Supabase auth, app userProfile is resolved separately by email/auth-id fallback, and /api/ask still selects the first active email account.
+- file: D:\GITHUB\nexttrade-hub\CODEX_QA_FEEDBACK.md:2070
+- file: D:\GITHUB\nexttrade-hub\CODEX_QA_FEEDBACK.md:2091
+
+#### Instruction for Claude
+- Before any Gmail auth/security code change, read the section titled "2026-06-17 GMAIL IDENTITY MODEL QA - CAUTION / DO NOT BLIND-FIX" in this file.
+- Update CLAUDE_HANDOFF.md to replace gmail_accounts with email_accounts and to reflect that Codex has answered the local-code identity model as far as possible. The remaining unknown is live Supabase data: whether users.id equals auth.users.id for active users and what existing email_accounts.user_id values contain.
+- No Gmail code should be changed until that live mapping is checked or the fix includes an explicit mapping/migration path.
