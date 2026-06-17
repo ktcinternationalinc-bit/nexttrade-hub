@@ -1,14 +1,12 @@
 // ============================================================
-// v55.83-IE — Settings permission toggle must use the SAME default as the display.
+// v55.83-IE/IF/IG — Settings permission toggle must flip the state the user SEES.
 //
-// P0 BUG (Max): clicking an OFF permission to turn it ON did nothing, so no
-// permission could be granted. Cause: the grid displays TAB_PERMS default ON
-// (?? true) and ACTION_PERMS default OFF (?? false), but togglePermission always
-// used `?? true`. For an action permission with no saved row: display = OFF, but
-// toggle computed current = true → newVal = false → re-saved OFF → no change.
-//
-// Fix: togglePermission derives the default from the key's list (TAB vs ACTION),
-// so the first click flips it the way the user sees it.
+// P0 BUG (Max): clicking an OFF permission to turn it ON did nothing → no permission
+// could be granted. Causes fixed across builds:
+//   IE — togglePermission default didn't match the display default.
+//   IF — write was not optimistic and errors were swallowed (silent fail looked like nothing).
+//   IG — toggle now takes the DISPLAYED hasAccess and saves !displayedHasAccess, so it always
+//        inverts the visible ON/OFF even for legacy-fallback keys (Open Accounts / Edit Open Accounts).
 //
 // Part 1 = the toggle logic; Part 2 = source wiring.
 // ============================================================
@@ -23,33 +21,32 @@ function ok(label, cond, hint) {
   else { failures.push(label + (hint ? ' — ' + hint : '')); console.log('✗ ' + label + (hint ? ' — ' + hint : '')); }
 }
 
-// Model of the corrected toggle: default depends on whether the key is a tab perm.
-function nextVal(stored, isTabPerm) {
-  var def = isTabPerm ? true : false;
-  var current = (stored === undefined || stored === null) ? def : stored;
-  return !current;
-}
+// Corrected toggle: it flips the displayed state directly.
+function nextVal(displayedHasAccess) { return !displayedHasAccess; }
 
-// ---- 1. toggle logic ----
-ok('1a: OFF action perm (no row) → first click turns it ON', nextVal(undefined, false) === true);
-ok('1b: ON tab perm (no row) → first click turns it OFF', nextVal(undefined, true) === false);
-ok('1c: explicitly-false action perm → click turns ON', nextVal(false, false) === true);
-ok('1d: explicitly-true action perm → click turns OFF', nextVal(true, false) === false);
-ok('1e (regression): the OLD always-?? true logic would have FAILED to turn on an OFF action perm',
-  (function () { var oldCurrent = (undefined === undefined ? true : undefined); return (!oldCurrent) === false; })()); // old code → stays false
+// ---- 1. toggle logic: always inverts what the user sees ----
+ok('1a: displayed OFF → click turns ON', nextVal(false) === true);
+ok('1b: displayed ON → click turns OFF', nextVal(true) === false);
+ok('1c: legacy-fallback shown ON (e.g. Edit Open Accounts) → first click turns OFF', nextVal(true) === false);
+ok('1d: action perm shown OFF → first click turns ON', nextVal(false) === true);
 
 // ---- 2. source wiring ----
 var src = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'SettingsTab.jsx'), 'utf8');
-ok('2a: togglePermission derives default from TAB_PERMS membership',
-  /const isTabPerm = TAB_PERMS\.some\(p => p\.key === module\)/.test(src) && /const current = permissions\[userId\]\?\.\[module\] \?\? def/.test(src));
-ok('2b: old unconditional "?? true" in togglePermission is gone',
+ok('2a: togglePermission accepts displayedHasAccess and uses it',
+  /const togglePermission = async \(userId, module, displayedHasAccess\)/.test(src) &&
+  /typeof displayedHasAccess === 'boolean'[\s\S]{0,20}displayedHasAccess/.test(src));
+ok('2b: BOTH grid buttons pass the displayed hasAccess into togglePermission',
+  (src.match(/togglePermission\(u\.id, p\.key, hasAccess\)/g) || []).length >= 2);
+ok('2c: old unconditional "?? true" toggle default is gone',
   src.indexOf('const current = permissions[userId]?.[module] ?? true;') === -1);
-ok('2c: display still uses per-section defaults (tab ?? true, action ?? false)',
+ok('2d: display still uses per-section defaults (tab ?? true, action ?? false)',
   /permissions\[u\.id\]\?\.\[p\.key\] \?\? true/.test(src) && /permissions\[u\.id\]\?\.\[p\.key\] \?\? false/.test(src));
+ok('2e: write is optimistic + surfaces failures (revert + error toast)',
+  /\/\/ optimistic/.test(src) && /\/\/ revert/.test(src) && /toast\.error\('Could not save permission/.test(src));
 
 console.log('');
 if (failures.length === 0) {
-  console.log('✅ All v55.83-IE permission-toggle-default tests passed');
+  console.log('✅ All v55.83-IG permission-toggle tests passed');
   process.exit(0);
 } else {
   console.log('❌ ' + failures.length + ' tests FAILED:');

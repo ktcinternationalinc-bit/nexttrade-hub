@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IG',
+    date: '2026-06-17',
+    label: 'Permission toggle now flips exactly what you see (incl. Open Accounts)',
+    items: [
+      '**🛠️ Permission toggle fully fixed.** The ON/OFF button now flips precisely the state shown — including the special "Open Accounts" / "Edit Open Accounts" rows that use legacy fallbacks. One click always inverts what you see, and a blocked save still shows a clear error.',
+      { superAdminOnly: true, text: 'v55.83-IG (closes Codex IF caution). togglePermission(userId, module, displayedHasAccess) now flips the DISPLAYED hasAccess (= !displayedHasAccess) instead of recomputing from row+default — both grid buttons (TAB + ACTION) pass their computed hasAccess (which includes the readPerm legacy fallback for Open Accounts / Edit Open Accounts). Removes the last default-vs-display mismatch edge. Keeps IF optimistic-update + revert-on-error + toast. Updated test test-v55-83-ie-permission-toggle-default.js (9 assertions, passing). No SQL. If a grant still fails on the deployed build, the red error toast will name the DB reason (likely an RLS policy on module_permissions).' },
+    ],
+  },
+  {
     version: 'v55.83-IF',
     date: '2026-06-17',
     label: 'Permission toggle: instant response + clear error if a save is blocked',

@@ -1784,3 +1784,58 @@ Scope note:
 
 #### Launch call after this working-tree check
 - Still NOT staff-launch-ready. Permission assignment must be fully reliable because the Kandil launch depends on granting exact Bank/AR/Wave/ACCT permissions to non-super users.
+
+### 2026-06-17 v55.83-IF COMMITTED QA - SETTINGS PERMISSION TOGGLE PASS WITH CAUTION
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 5452969 v55.83-IF.
+- Inspected committed SettingsTab permission toggle path, BankReviewTab Wave-synced reverse guard, tests, badge/What's New/handoff.
+- Ran focused tests: node __tests__\test-v55-83-ie-permission-toggle-default.js - PASS; node __tests__\test-v55-83-ie-no-local-reverse-of-synced.js - PASS; node __tests__\test-v55-83-ic-active-matches.js - PASS; node __tests__\test-v55-83-fl-real-payment-push.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - The reported OFF action-permission grant bug is fixed enough to retest live
+- togglePermission now derives missing-row default from TAB_PERMS membership: tab permissions default ON, action permissions default OFF.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1076
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1077
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1078
+- Result: a missing-row ACTION permission that displays OFF now computes newVal=true on first click instead of re-saving false. This directly addresses Max's report that clicking OFF would not turn permissions ON.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ie-permission-toggle-default.js
+- IF also updates the UI optimistically before the DB await, so the button should visibly flip immediately.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1080
+- IF checks maybeSingle/update/insert error objects, reverts on failure, and shows a loud toast with the DB error instead of silently doing nothing.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1082
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1090
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1094
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1095
+- Business verdict: PASS for the launch-critical ability to grant normal Bank/AR/Wave/ACCT action permissions, pending live browser retest on the deployed IF build.
+
+#### PASS - Wave-synced local payment reverse guard remains fixed
+- BankReviewTab loads wave_payment_id into paysByTxn and blocks local reverse when a payment row has wave_payment_id or sync_status synced/manual_done.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:110
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:366
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:367
+- Regression test passes.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ie-no-local-reverse-of-synced.js
+
+#### CAUTION - One display-state edge remains in Settings
+- The click handlers still call togglePermission(u.id, p.key) without passing the rendered hasAccess value.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1627
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1662
+- For ordinary Bank/AR/Wave/ACCT action grants this is now OK because the display default and toggle default match. However, Edit Open Accounts has special legacy display fallback: it can display ON because legacy Open Accounts is true while no explicit Edit Open Accounts row exists.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1657
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1658
+- In that legacy case, first click may still insert has_access=true instead of flipping the displayed ON to OFF. This is not the specific launch blocker Max reported, but it is the same design weakness and should be cleaned up.
+- Instruction for Claude: post-launch or next permissions hardening, pass displayed hasAccess into togglePermission for both table sections and save !displayedHasAccess. Add a regression for the Edit Open Accounts legacy fallback toggling OFF on first click.
+
+#### Live retest instruction for Max / Claude
+- Hard-refresh and confirm the visible badge is v55.83-IF.
+- In Settings > Module Access, for a non-super user turn ON: bank.view, bank.see_amounts, payments.match, payments.unmatch, wave.sync.view, wave.sync.dry_run, wave.payments.push, ar.view_invoice_balances, invoice.view, invoice.create, accounting.customers.view, accounting.customers.edit, purchase_orders.view, purchase_orders.edit.
+- If the button flips ON and stays after reload: permission assignment gate is cleared.
+- If the button flips back with a red error toast: capture the exact error text; likely Supabase policy/RLS on module_permissions needs a targeted SQL/policy fix.
+- If the badge is not IF or there is no error toast/no visible flip: stale deployed app/browser cache, hard refresh or redeploy IF before judging.
+
+#### Remaining launch gates after IF
+- Run/confirm launch SQL + /api/wave/preflight-schema.
+- Dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.

@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IF** (committing). History: … IC `61c4844` → ID `c5c14b6` → IE `784c580` → IF (this).
+**v55.83-IG** (committing). History: … ID `c5c14b6` → IE `784c580` → IF `5452969` → IG (this).
+
+## IG — closed Codex's IF caution (permission toggle complete)
+togglePermission now takes displayedHasAccess and saves !displayedHasAccess; both TAB+ACTION buttons pass their computed hasAccess (incl. readPerm legacy fallback for Open Accounts/Edit Open Accounts). Removes the last default-vs-display edge. Keeps IF optimistic+revert+toast. Test updated (9 assertions). Build exit 0.
+⮕ For Codex: verify the displayed-state toggle + legacy fallback. ⮕ For Max: hard-refresh to IG; if a grant still won't save, the red toast names the DB reason (probably RLS on module_permissions → I'd add a policy). Permission-toggle saga: IE (default) → IF (optimistic/loud) → IG (flip displayed state) = done.
 
 ## IF — permission toggle robustness (Max says IE didn't resolve it)
 togglePermission now: optimistic setPermissions BEFORE await (instant flip) + checks sel/update/insert .error + reverts & toast.error on failure (was: state only after await + silent console.error → "nothing happens" if the DB write was blocked). Two scenarios now distinguishable for Max: (a) NO change + NO error toast → stale build, hard-refresh (badge should read IF); (b) error toast → RLS/policy on module_permissions blocks writes → NEXT FIX likely a Supabase policy letting super_admin/admin write module_permissions (await Max's error text before writing SQL). No SQL this build.

@@ -1067,15 +1067,16 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     setLoaded(true);
   };
 
-  const togglePermission = async (userId, module) => {
-    // v55.83-IE/IF (P0 BUG, Max) — default MUST match the display default (TAB_PERMS ?? true,
-    // ACTION_PERMS ?? false) or the first click does nothing. v55.83-IF — also flip the UI
-    // OPTIMISTICALLY (before the await) so the button responds instantly, and if the DB write fails
-    // (e.g. RLS/policy/constraint) REVERT + show a loud error instead of silently doing nothing
-    // (the old code updated state only AFTER the await and swallowed errors → "can't turn anything on").
+  const togglePermission = async (userId, module, displayedHasAccess) => {
+    // v55.83-IG (Codex) — flip EXACTLY the state the user sees. The caller passes the displayed
+    // hasAccess (which already accounts for legacy fallbacks like Open Accounts via readPerm), so a
+    // first click always inverts the visible ON/OFF — no default-vs-display mismatch. Falls back to
+    // the per-list default only if not provided.
+    // (IE/IF history: default had to match display, and the write is optimistic + loud — see below.)
     const isTabPerm = TAB_PERMS.some(p => p.key === module);
-    const def = isTabPerm ? true : false;
-    const current = permissions[userId]?.[module] ?? def;
+    const current = (typeof displayedHasAccess === 'boolean')
+      ? displayedHasAccess
+      : (permissions[userId]?.[module] ?? (isTabPerm ? true : false));
     const newVal = !current;
     setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } })); // optimistic
     try {
@@ -1624,7 +1625,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                             : (permissions[u.id]?.[p.key] ?? true);
                           return (
                             <td key={u.id} className="px-2 py-1.5 text-center align-top">
-                              <button onClick={() => togglePermission(u.id, p.key)}
+                              <button onClick={() => togglePermission(u.id, p.key, hasAccess)}
                                 className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
                                 {hasAccess ? 'ON' : 'OFF'}
                               </button>
@@ -1659,7 +1660,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                             : (permissions[u.id]?.[p.key] ?? false);
                           return (
                             <td key={u.id} className="px-2 py-1.5 text-center align-top">
-                              <button onClick={() => togglePermission(u.id, p.key)}
+                              <button onClick={() => togglePermission(u.id, p.key, hasAccess)}
                                 className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
                                 {hasAccess ? 'ON' : 'OFF'}
                               </button>
