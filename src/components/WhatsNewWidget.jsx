@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IK',
+    date: '2026-06-17',
+    label: 'Inventory reports: cost/value data fully withheld (not just hidden) without permission',
+    items: [
+      '**🔒 Inventory report valuation is now fully withheld** for staff without valuation permission. Cost and Total Value already showed as "Restricted" on screen and in exports — now the actual numbers are also stripped from the underlying data, so they can\'t be recovered from the page or a downloaded file. No change for users who do have permission.',
+      { superAdminOnly: true, text: 'v55.83-IK (defense-in-depth; closes the gap-list "valuation double-gate" P3 item + aligns with Codex\'s product-photo privacy caution theme). New stripValuation(rows, cols) in InventoryReportCenter nulls every column flagged valuation:true (avg_cost, total_value in inventory-report-defs SNAPSHOT_COLUMNS) on a COPY of each row when !showValuation, applied at the single flatRows() chokepoint that feeds the table, print, and CSV export. Display is byte-identical: masking still keys off the column.valuation flag (returns "Restricted"), and footer totals still skip gated columns — so the only change is that the real numbers no longer ride in React props / serialized payloads / memory. Test test-v55-83-ik-valuation-doublegate.js (9 assertions). No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-IJ',
     date: '2026-06-17',
     label: 'Inventory: product photo thumbnails in the product list & picker',

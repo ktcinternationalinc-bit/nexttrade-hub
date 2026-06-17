@@ -2131,3 +2131,135 @@ Scope read before this pass:
 - Before any Gmail auth/security code change, read the section titled "2026-06-17 GMAIL IDENTITY MODEL QA - CAUTION / DO NOT BLIND-FIX" in this file.
 - Update CLAUDE_HANDOFF.md to replace gmail_accounts with email_accounts and to reflect that Codex has answered the local-code identity model as far as possible. The remaining unknown is live Supabase data: whether users.id equals auth.users.id for active users and what existing email_accounts.user_id values contain.
 - No Gmail code should be changed until that live mapping is checked or the fix includes an explicit mapping/migration path.
+
+### 2026-06-17 v55.83-II WORKING-TREE QA - PRODUCT PHOTOS PASS WITH CAUTIONS / BUILD NOT GREEN
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD at start: 2f73ce6 handoff-only. II is an uncommitted working-tree build touching app badge, WhatsNew, AttachmentManager, InventoryProductMaster, plus new SQL/test files.
+- Ran focused test: node __tests__\test-v55-83-ii-product-photos.js - PASS.
+- Ran production build twice: npm.cmd run build compiled and generated pages, but both attempts exited 1 on recurring .next missing artifact errors. Do not call II build-green yet.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Internal-only product photo foundation is directionally correct
+- AttachmentManager now has backward-compatible modes for a custom bucket, private signed URLs, image-only upload, and primary image behavior.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:74
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:83
+- Private mode mints short-lived signed URLs and does not rely on public_url for display/download.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:154
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:175
+- Image-only upload is enforced in the UI input and upload path.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:223
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:459
+- Private uploads store blank public_url and add is_private/is_primary/sort_order only in the new mode, so legacy public attachments should not reference new columns.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:276
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:303
+- Product Master mounts the gallery only in edit mode with a saved product id, using parent_type inventory_product and bucket product-photos.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1383
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1400
+- SQL is explicit that the bucket must be private, and adds the needed attachment metadata columns/policies.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:35
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:76
+- Focused test passed: __tests__\test-v55-83-ii-product-photos.js.
+
+#### CAUTION - II is not build-green yet
+- npm.cmd run build attempt 1: compiled successfully and generated pages, then failed on missing .next\server\pages-manifest.json.
+- npm.cmd run build attempt 2: compiled successfully and generated pages, then failed on missing .next\export\500.html rename target.
+- Instruction for Claude: do not commit/deploy II or update handoff as build-green until a full production build exits 0. If this is the known stale .next artifact issue, clean/rebuild using the repo's safe build practice and record the successful command/output in CLAUDE_HANDOFF.md.
+
+#### CAUTION - Product photos are still Product Master edit-modal only
+- The feature solves upload/gallery/primary inside Product Master edit, but it does not yet show thumbnails in Product Master rows, ProductPicker, Receiving, Inventory Overview, or Stock Mix.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1386
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsNewWidget.jsx:42
+- Business impact: this is not yet the full visual-verification workflow staff need while picking SKUs/components. It is an admin/editor photo store, not an operational picker experience.
+- Instruction for Claude: keep II wording honest. Phase 2 should batch-load primary photos and show thumbnails in Product Master rows and ProductPicker first, then Receiving/Stock Mix where space allows. Do not let this enhancement delay today's accounting/Kandil launch gate.
+
+#### CAUTION - Privacy is better, but not fine-grained
+- Product photos are no longer public URLs, which is the right answer for internal stock photos.
+- However storage policies allow any authenticated user to read/update/delete objects in product-photos at the storage layer; UI delete remains super-admin gated, but storage RLS is broad.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:59
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:76
+- Given current launch priorities, UI permissioning is acceptable, but do not oversell this as strict per-role/private-photo security. Post-launch, align storage/object access with inventory/product-photo permissions or move signed URL creation server-side.
+
+#### Launch reminder unchanged
+- Product photos are a useful inventory enhancement, not the accounting launch blocker.
+- Today's live gate remains: Kandil/KTC accounting flow, launch SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, verify in Wave, and confirm Hub stores real wave_payment_id.
+
+### 2026-06-17 v55.83-IJ CURRENT-HEAD QA - PRODUCT PHOTOS / THUMBNAILS PASS WITH CAUTIONS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md after Claude committed II/IJ while the prior II working-tree note was being written.
+- Current HEAD verified: ff1bc08 v55.83-IJ: product-photo thumbnails in Product List + Picker.
+- Ran focused tests: node __tests__\test-v55-83-ii-product-photos.js - PASS; node __tests__\test-v55-83-ij-photo-thumbnails.js - PASS.
+- Ran production build on current HEAD: npm.cmd run build - PASS. This supersedes the prior mid-flight II build caution.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - IJ closes the main product-photo usability caution
+- New loadPrimaryPhotoUrls batches primary-photo lookup from attachments and signs product-photos URLs in one helper.
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-photos.js:20
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-photos.js:47
+- The helper degrades to an empty map if the migration/bucket is missing, so Product List/Picker should not crash before setup.
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-photos.js:10
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-photos.js:58
+- ProductPicker loads primary thumbnails and displays them in the result row.
+- file: D:\GITHUB\nexttrade-hub\src\components\ProductPicker.jsx:121
+- file: D:\GITHUB\nexttrade-hub\src\components\ProductPicker.jsx:357
+- Product Master list loads primary thumbnails and displays them in the name cell.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:435
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1228
+- Product Master still has the edit-modal uploader/gallery from II.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1407
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1424
+- Verification: II product-photo test passed, IJ thumbnail test passed, and npm.cmd run build exited 0 on current HEAD.
+
+#### CAUTION - Setup and live visual test still required
+- Uploads/thumbnails require Max/admin to create the private product-photos Supabase bucket and run sql/v55-83-II-product-photos.sql.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:26
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:88
+- Instruction for Claude: after setup, live-test one real product: upload two images, confirm the first becomes primary, change primary, confirm Product Master row thumbnail updates, confirm ProductPicker thumbnail appears, then confirm the image URL expires/is not public.
+
+#### CAUTION - Privacy remains internal-only, not fine-grained RLS
+- Storage is private and signed, which is correct for internal stock photos.
+- Storage policies are still broad for all authenticated users at the object layer.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:59
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-II-product-photos.sql:76
+- Acceptable for launch under the current UI-permissioning priority, but post-launch hardening should align product-photo access with Inventory/Product List permissions or mint signed URLs server-side.
+
+#### Launch reminder unchanged
+- IJ is a good inventory improvement and now build-green, but it is not the accounting launch gate.
+- Keep priority on Kandil/KTC banking: launch SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id confirmation.
+
+### 2026-06-17 HEARTBEAT ACCOUNTING/KANDIL SMOKE QA - PASS / LIVE GATES STILL OPEN
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD verified: ff1bc08 v55.83-IJ. No new app source diff since IJ; only CODEX_QA_FEEDBACK.md has Codex notes.
+- Re-scanned BankTab, BankReviewTab, WaveSyncCenter, /api/plaid/match, /api/wave/push-payment, and Wave preflight references.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Focused accounting launch guard tests still pass on current HEAD
+- node __tests__\test-v55-83-fq-launch-critical.js - PASS: 10/10.
+- node __tests__\test-v55-83-fl-real-payment-push.js - PASS: 22/22.
+- node __tests__\test-v55-83-fj-match-guards.js - PASS: 7/7.
+- node __tests__\test-v55-83-ie-no-local-reverse-of-synced.js - PASS.
+- node __tests__\test-v55-83-ho-unmatch-credit-reversal.js - PASS.
+
+#### PASS - Static launch-path scan remains aligned with prior verdict
+- BankTab still routes staff away from the disabled legacy /api/plaid/match path and toward Bank Review.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:210
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:549
+- /api/plaid/match remains documented as disabled and not the accounting-safe engine.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\plaid\match\route.js:13
+- Bank Review still loads/writes the real accounting tables and blocks local reversal of Wave-synced payments.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:103
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:366
+- Wave Sync Center still filters already-pushed payments and exposes the production unlock flag.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:145
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:362
+- Push-payment route still saves the real Wave payment id and refuses duplicate pushes.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:85
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:236
+
+#### LIVE-ONLY GATES - not proven by local QA
+- Kandil/KTC launch is still not fully cleared until the user/Claude confirms live Supabase launch SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id storage.
+- Instruction for Claude: do not let inventory/product-photo improvements distract from capturing that live payment proof. The local guardrails are green; the remaining launch risk is live environment/config and one real Wave write verification.

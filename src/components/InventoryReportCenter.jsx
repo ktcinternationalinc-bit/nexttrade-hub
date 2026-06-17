@@ -254,10 +254,28 @@ export default function InventoryReportCenter(props) {
     return rows;
   }
 
+  // v55.83-IK — valuation double-gate (defense-in-depth). The display/export
+  // paths already MASK valuation columns as "Restricted" when !showValuation,
+  // but the real cost/value numbers (avg_cost, total_value) still rode along in
+  // the row objects — visible via React props, serialized payloads, or memory.
+  // Strip those keys at the single row chokepoint so the actual numbers never
+  // leave this function when the viewer lacks inventory.valuation.view. Display
+  // is unchanged: the masking checks the column's `valuation` flag, not the value.
+  function stripValuation(rows, cols) {
+    if (showValuation) { return rows; }
+    var valKeys = (cols || []).filter(function (c) { return c.valuation; }).map(function (c) { return c.key; });
+    if (!valKeys.length) { return rows; }
+    return (rows || []).map(function (r) {
+      var copy = Object.assign({}, r);
+      valKeys.forEach(function (k) { copy[k] = null; });
+      return copy;
+    });
+  }
+
   // Flat (non-grouped) reports share one row dispatcher.
   function flatRows() {
-    if (reportId === 'movement') { return movementRows(); }
-    return snapshotRows();
+    var rows = (reportId === 'movement') ? movementRows() : snapshotRows();
+    return stripValuation(rows, report && report.columns);
   }
 
   // ---- Export (CSV, Excel-readable, UTF-8 BOM so Arabic renders) ----
