@@ -11,10 +11,15 @@ import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
 import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, canWriteToWaveBusiness } from '../lib/wave-business';
+import { isPaymentVoid as isPaymentVoidCanonical } from '../lib/payment-matching';
 
 function num(v) { var n = Number(String(v == null ? 0 : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function money(v, cur) { return (cur || 'USD') + ' ' + num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function isPaymentVoid(p) { return p.is_void === true || p.void === true || p.voided === true || p.status === 'void'; }
+// v55.83-IM (QA fix) — the local check ignored sync_status, so a payment reversed only via
+// sync_status (void/voided/cancelled/reversed/deleted — what import/push treat as void) was counted
+// as LIVE here while the dashboard/BankReview excluded it. Delegate to the canonical helper (adds
+// sync_status) and keep the legacy field checks so nothing that was excluded before regresses.
+function isPaymentVoid(p) { return isPaymentVoidCanonical(p) || (p && (p.is_void === true || p.void === true || p.status === 'void')); }
 function isDraftInv(inv) { return inv && inv.wave_status === 'DRAFT'; }
 function isDeadInv(inv) { var rs = inv && inv.record_status; return rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted'; }
 function statusLabel(inv) {

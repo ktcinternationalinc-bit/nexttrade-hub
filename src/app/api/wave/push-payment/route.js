@@ -113,7 +113,15 @@ export async function POST(req) {
     if (!paymentDate) { return NextResponse.json({ ok: false, error: 'Payment date is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
     var paymentMethod = body.payment_method || 'OTHER';
-    var exchangeRate = body.exchange_rate != null ? body.exchange_rate : 1;
+    // v55.83-IM (QA fix) — exchange_rate was passed to Wave verbatim if the caller supplied it, with
+    // no validation. A bad/negative/non-numeric rate would post a WRONG amount to real books. Default
+    // to 1 and reject anything that isn't a positive finite number.
+    var exchangeRate = 1;
+    if (body.exchange_rate != null) {
+      var erNum = Number(body.exchange_rate);
+      if (!isFinite(erNum) || erNum <= 0) { return NextResponse.json({ ok: false, error: 'Invalid exchange_rate: must be a positive number.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      exchangeRate = erNum;
+    }
 
     // Accounting-grade context for the sync log: resolve invoice number + customer identity.
     var invoiceNumber = null;
@@ -232,9 +240,21 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, error: 'Wave reported success but returned no payment id.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
-    try {
-      await db.from('accounting_invoice_payments').update({ wave_payment_id: wavePaymentId, sync_status: 'synced', last_synced_at: new Date().toISOString(), sync_error: null }).eq('id', hubId);
-    } catch (e6) {}
+    // v55.83-IM (QA fix) — Wave has now recorded a REAL payment. The write-back below is the ONLY
+    // place wave_payment_id gets stored on the Hub row. Supabase resolves with {error} (no throw),
+    // so the old try/catch was a no-op and a failed write-back returned ok:true with the row left in
+    // 'syncing' and NO wave_payment_id — an orphaned Wave payment that a later retry could DUPLICATE.
+    // Check the error; retry once storing at least the id (so the dup-guard at the top blocks
+    // re-push); if it still fails, surface a manual-reconcile state instead of false success.
+    var wb = await db.from('accounting_invoice_payments').update({ wave_payment_id: wavePaymentId, sync_status: 'synced', last_synced_at: new Date().toISOString(), sync_error: null }).eq('id', hubId);
+    if (wb && wb.error) {
+      var wb2 = await db.from('accounting_invoice_payments').update({ wave_payment_id: wavePaymentId, sync_status: 'synced' }).eq('id', hubId);
+      if (wb2 && wb2.error) {
+        var reconMsg = 'PAYMENT POSTED TO WAVE (id=' + wavePaymentId + ') BUT THE HUB WRITE-BACK FAILED: ' + ((wb2.error && wb2.error.message) || 'unknown') + '. Do NOT re-push this payment — reconcile manually (set wave_payment_id=' + wavePaymentId + ' on Hub payment ' + hubId + ').';
+        try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, wave_record_id: wavePaymentId, action: 'push', dry_run: false, success: false, error_message: reconMsg, request_payload: logCtx, response_payload: buildLogPayload(logCtx, { wave_payment_id: wavePaymentId, writeback_error: wb2.error, sync_status_after: 'syncing' }), attempted_by: by }); } catch (e6b) {}
+        return NextResponse.json({ ok: false, manual_reconcile: true, wave_payment_id: wavePaymentId, error: reconMsg, api_build_marker: API_BUILD_MARKER }, { status: 200 });
+      }
+    }
 
     // Recompute the Hub invoice so amount_paid/balance/status reflect the now-synced payment.
     if (pay.accounting_invoice_id) {

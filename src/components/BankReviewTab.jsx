@@ -334,6 +334,10 @@ export default function BankReviewTab(props) {
     function compute(inv) {
       if (!inv) { return Promise.resolve(); } // safety: never write balances for an unknown invoice
       return supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', invId).then(function (r) {
+        // v55.83-IM (QA fix) — Supabase resolves with {error} (no throw). If we don't check it,
+        // a failed read yields hubPaid=0 and we'd WRITE a wrong amount_paid/balance_due, corrupting
+        // a correct invoice. Throw so the caller's .catch surfaces it and we never persist bad math.
+        if (r && r.error) { throw r.error; }
         var total = invoiceTotal(inv);
         var waveImported = (inv && Number(inv.wave_imported_paid)) || 0;
         var hubPaid = 0;
@@ -347,6 +351,7 @@ export default function BankReviewTab(props) {
     }
     if (inMem) { return compute(inMem); }
     return supabase.from('accounting_invoices').select('*').eq('id', invId).then(function (r) {
+      if (r && r.error) { throw r.error; } // v55.83-IM — don't silently skip recompute on a failed fetch
       var inv = (r && r.data && r.data.length) ? r.data[0] : null;
       return compute(inv);
     });
@@ -487,12 +492,26 @@ export default function BankReviewTab(props) {
     if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('That invoice belongs to another business.'); return; }
     var apply = roundMoney(Number(mAmount));
     if (!(apply > 0)) { toast.error('Enter an amount greater than zero.'); return; }
+    // v55.83-IM (QA fix) — a single deposit may legitimately pay MULTIPLE invoices (split), but the
+    // cumulative amount posted from it must never exceed the deposit, or we over-post cash. Guard
+    // against over-application using the already-posted (non-void) payment rows for this txn.
+    var depositAmt = roundMoney(Number(t.amount_abs != null ? t.amount_abs : (t.amount || 0)));
+    var alreadyApplied = 0;
+    (paysByTxn[t.id] || []).forEach(function (p) { if (!isPaymentVoid(p)) { alreadyApplied += Number(p.amount) || 0; } });
+    if (depositAmt > 0 && roundMoney(alreadyApplied + apply) > depositAmt + 0.01) {
+      toast.error('Cannot apply ' + fmt(apply) + ' — this transaction is ' + fmt(depositAmt) + ' and ' + fmt(alreadyApplied) + ' is already applied. Remaining to apply: ' + fmt(roundMoney(depositAmt - alreadyApplied)) + '.');
+      return;
+    }
     setBusy(true);
     var biz = t.business_id || (inv ? inv.business_id : null);
     var siloId = activeBiz || (inv && inv.wave_business_id) || t.wave_business_id || null; // v55.83-DZ
     // Compute CURRENT paid from live payment rows (not stale inv.amount_paid) so a second
     // deposit against the same invoice classifies partial/full/overpayment correctly.
     supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv.id).then(function (pr) {
+      // v55.83-IM (QA fix) — check pr.error: a failed read would set existingHub=0, understate
+      // paidNow, and misclassify a real overpayment as partial/full — so the excess would NOT be
+      // routed to customer_credits and the money would vanish from the books. Surface instead.
+      if (pr && pr.error) { throw pr.error; }
       var waveImp = Number(inv.wave_imported_paid) || 0;
       var existingHub = 0;
       ((pr && pr.data) || []).forEach(function (p) { if (!isPaymentVoid(p)) { existingHub += Number(p.amount) || 0; } });

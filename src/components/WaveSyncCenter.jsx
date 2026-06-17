@@ -173,7 +173,11 @@ export default function WaveSyncCenter(props) {
       setBankTxns(scopeIfRegistered((res[5] && res[5].data) || [], getActiveWaveBusiness(), rg, true));
       setSplitTxns(scopeIfRegistered((res[6] && res[6].data) || [], getActiveWaveBusiness(), rg, true));
       setInvoices(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), rg, true));
-      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active; }));
+      // v55.83-IM (QA fix) — wave_business_id didn't exist on wave_sync_log until this build, so the
+      // old `=== active` filter matched undefined and HID every audit row (push rows AND import rows,
+      // which scope via wave_record_id/business_id). Show rows for the active silo PLUS any row not
+      // tagged with a wave_business_id, so the audit trail is visible instead of silently blank.
+      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active || l.wave_record_id === active || l.wave_business_id == null; }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
       .finally(function () { setLoading(false); });
   }

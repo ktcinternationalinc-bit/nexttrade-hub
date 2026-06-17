@@ -98,6 +98,16 @@ export async function POST(request) {
       var ppRes = await admin.from('accounting_invoice_payments')
         .select('accounting_invoice_id, amount, voided, sync_status, wave_payment_id')
         .not('wave_payment_id', 'is', null);
+      // v55.83-IM (QA fix) — Supabase returns {data:null, error} WITHOUT throwing, so this
+      // try/catch never fires on a query failure. If we don't check ppRes.error explicitly, a
+      // transient failure yields ppRows=[] → hubPushedByInv stays empty → wave_imported_paid is
+      // written as the FULL Wave paid (no Hub-pushed subtraction) → every consumer's
+      // paid = wave_imported_paid + SUM(hub rows) DOUBLE-COUNTS the pushed payments. Fail loud
+      // instead of silently corrupting the central anti-double-count invariant.
+      if (ppRes && ppRes.error) {
+        report.errors.push('ABORT: could not load Hub-pushed payments for the double-count guard: ' + (ppRes.error.message || String(ppRes.error)) + '. Import aborted to avoid double-counting paid amounts.');
+        return Response.json({ ok: false, error: 'Aborted to avoid double-counting paid amounts (Hub-pushed payment load failed).', report: report });
+      }
       var ppRows = (ppRes && ppRes.data) || [];
       var ppi;
       for (ppi = 0; ppi < ppRows.length; ppi++) {
@@ -107,7 +117,10 @@ export async function POST(request) {
         if (!pr.accounting_invoice_id) { continue; }
         hubPushedByInv[pr.accounting_invoice_id] = (hubPushedByInv[pr.accounting_invoice_id] || 0) + (Number(pr.amount) || 0);
       }
-    } catch (ePP) { /* if this fails, fall back to non-subtracted (logged below) */ }
+    } catch (ePP) {
+      report.errors.push('ABORT: exception loading Hub-pushed payments: ' + ((ePP && ePP.message) || String(ePP)));
+      return Response.json({ ok: false, error: 'Aborted to avoid double-counting paid amounts (exception loading Hub-pushed payments).', report: report });
+    }
 
     var page = 1;
     var totalPages = 1;

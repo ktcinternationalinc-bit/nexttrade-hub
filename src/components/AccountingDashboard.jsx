@@ -68,7 +68,7 @@ export default function AccountingDashboard(props) {
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
-      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,bank_transaction_id').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,bank_transaction_id,voided').catch(function () { return { data: [] }; }),
       supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('wave_business_registry', '*').catch(function () { return { data: [] }; }),
