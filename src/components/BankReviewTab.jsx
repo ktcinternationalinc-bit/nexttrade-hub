@@ -351,6 +351,11 @@ export default function BankReviewTab(props) {
     setBusy(true);
     supabase.from('accounting_invoice_payments').update(payStamp).eq('bank_transaction_id', t.id)
       .then(function () { return supabase.from('payment_matches').update(matchStamp).eq('bank_transaction_id', t.id).then(function (r) { return r; }, function (e) { console.warn('[unmatch] payment_matches void non-fatal:', (e && e.message) || e); return null; }); })
+      // v55.83-HO (bug fix) — also reverse any OVERPAYMENT credit this transaction created. Without
+      // this, unmatching a deposit restored the invoice balance but left the customer's overpayment
+      // credit "open" → a phantom credit the customer never actually had. Scoped by
+      // source_transaction_id (only the overpayment path sets it). Non-fatal so unmatch never breaks.
+      .then(function () { return supabase.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', t.id).eq('status', 'open').then(function (r) { return r; }, function (e) { console.warn('[unmatch] customer_credits reverse non-fatal:', (e && e.message) || e); return null; }); })
       .then(function () { return patchTxn(t, { linked_type: null, linked_id: null, matched_invoice_id: null, review_status: t.review_status === 'approved' ? t.review_status : 'reviewed' }, 'Unmatched bank txn ' + (t.name || t.id) + ' (' + ms.length + ' match(es) reversed)'); })
       .then(function () { var chain = Promise.resolve(); Object.keys(invIds).forEach(function (id) { chain = chain.then(function () { return recomputeInvoice(id); }); }); return chain; })
       .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })

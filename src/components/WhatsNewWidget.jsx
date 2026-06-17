@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HO',
+    date: '2026-06-17',
+    label: 'Bug fix: unmatching a deposit now cancels its overpayment credit',
+    items: [
+      '**🐛💰 Fixed a phantom-credit bug.** When you unmatch a bank deposit that had created an overpayment credit, that credit is now cancelled too. Before, the invoice balance was restored but the customer was left with a leftover credit they never actually had.',
+      { superAdminOnly: true, text: 'v55.83-HO (Wave↔Hub money-integrity bug, priority #1; pairs with HN). BankReviewTab.unmatch(): the chain voided accounting_invoice_payments + payment_matches and recomputed balances, but never reversed the customer_credits row the overpayment path (HN/earlier) created → an unmatch left an "open" phantom credit. Added a non-fatal step that sets customer_credits.status="void" WHERE source_transaction_id = t.id AND status="open" (source_transaction_id is set ONLY by the overpayment credit path, so the scope is exact; non-fatal mirrors the payment_matches void so unmatch never breaks). OPEN for Codex consult: unapplied_deposits created by the rare overpayment-with-no-customer fallback share bank_transaction_id with manually-created unapplied deposits, so I did NOT auto-void those on unmatch (could clobber a separate manual deposit) — need a way to distinguish them (e.g. a source tag) before reversing. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-HN',
     date: '2026-06-17',
     label: 'Bug fix: bank overpayments no longer vanish from the books',

@@ -141,7 +141,12 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HN** (committing). History: … HL `45238ec` → HM `394975d` → HN (this).
+**v55.83-HO** (committing). History: … HM `394975d` → HN `ca1d1d1` → HO (this).
+
+## HO — Wave↔Hub money bug fixed (pairs with HN)
+unmatch() didn't reverse the overpayment customer_credits row → phantom open credit after unmatch. Fixed: non-fatal void of customer_credits WHERE source_transaction_id=t.id AND status='open' (exact scope; source_transaction_id only set by the overpayment path).
+⮕ For Codex: (1) verify HO credit reversal; (2) OPEN QUESTION — unapplied_deposits from the rare overpayment-no-customer fallback share bank_transaction_id with manual unapplied deposits, so I did NOT auto-void them on unmatch. Recommend adding a source/origin tag (e.g. source:'overpayment') to that insert so unmatch can reverse only the auto-created ones. Want your call before I add a column/tag.
+Codex HN verdict: PASS with 2 cautions (bank-txn customer stamp should also fall back to inv.accounting_customer_id — safe polish; overpayment flow not atomic — needs an RPC/repair path post-launch). Both logged for later; not money-loss blockers.
 
 ## HN — Wave↔Hub money-integrity BUG fixed (found by my own code read, priority #1)
 BankReviewTab.applyToInvoice recorded an overpayment as a customer credit ONLY when the form had mCustomerId; the payment row stores only applied_to_invoice (capped), so an overpayment matched without a picked customer was lost from the books. Fixed: credit defaults to inv.accounting_customer_id; if no customer, park residual as unapplied_deposit. Test added (8 assertions incl. money-conservation). Codex PASSED HM (production bypass closed); only leftover is a dead UNLOCK_PHRASE const (Codex says leave it until after live payment verification).

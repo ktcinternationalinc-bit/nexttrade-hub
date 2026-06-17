@@ -764,3 +764,42 @@ Scope read before this pass:
 - file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:11
 - file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:167
 - Instruction for Claude: optional post-launch cleanup only. Do not touch it ahead of the live payment verification unless there is a real warning/failure.
+### 2026-06-17 v55.83-HN Heartbeat QA - PASS WITH CAUTIONS
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: ca1d1d1 v55.83-HN.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: npm.cmd run build PASS; HN overpayment-credit test PASS; real payment-push static test PASS; Open Accounts Excel note-strip test PASS.
+
+#### PASS - HN closes the Bank Review overpayment residual-loss bug
+- applyToInvoice() no longer gates overpayment recording on mCustomerId alone. It now defaults the residual credit customer to inv.accounting_customer_id, which is the correct accounting source if the matcher did not manually pick a customer.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:481
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:482
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:485
+- If an invoice truly has no accounting customer, the residual is parked as an unapplied deposit instead of being silently dropped.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:487
+- Test coverage: __tests__/test-v55-83-hn-overpayment-credit.js passed. It covers partial/full/overpayment math, money-conservation math, removal of the old mCustomerId-only gate, invoice-customer fallback, and unapplied-deposit fallback.
+- Business impact: this is a real launch-quality accounting fix. Overpaid bank deposits matched to invoices should no longer lose the residual just because the user did not select a customer in the match form.
+
+#### CAUTION - Bank transaction customer stamp still does not use the invoice customer fallback
+- HN records the overpayment credit against creditCustId = mCustomerId || inv.accounting_customer_id, but the final bank transaction patch still writes accounting_customer_id: mCustomerId || t.accounting_customer_id.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:482
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:493
+- Business impact: when staff match an invoice without manually picking a customer, the payment row and credit can point to the invoice customer, but the bank transaction can remain customer-blank. That is not a money-loss blocker, but it can make customer filtering/review less clear.
+- Instruction for Claude: in the next safe banking polish pass, consider stamping the bank transaction with mCustomerId || inv.accounting_customer_id || t.accounting_customer_id so the bank row, payment row, and credit/deposit agree on customer identity. Verify this does not override an intentionally different existing transaction customer.
+
+#### CAUTION - Overpayment flow is still multi-write, not atomic
+- The flow inserts payment_matches, then accounting_invoice_payments, then recomputes the invoice, then inserts customer_credits/unapplied_deposits, then patches the bank transaction.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:466
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:472
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:475
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:485
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:493
+- Business impact: if the credit/deposit insert fails after the payment row is inserted, the UI shows an error but the invoice payment may already exist. This is an existing architecture limitation, now more visible because HN added a residual write. Not a reason to reject HN, but do not overstate "money is never dropped" until this is either RPC-atomic or has a repair/retry path.
+- Instruction for Claude: launch can proceed with HN plus operator caution, but the professional fix is an atomic server-side RPC for Bank Review match/apply/overpayment, or at minimum a detectable retry/repair path for matches where applied_to_invoice + residual does not equal the bank amount.
+
+#### Current launch verdict after HN
+- GO: Hub-safe Bank Review/manual Wave workflow, with HN improving overpayment correctness.
+- CODE-READY: production Dry Run/Push guards after HM/HN remain ready for controlled testing.
+- NOT STAFF-READY for production Wave push until live launch SQL/config is verified and one real Kandil/KTC payment push is confirmed in Wave with Hub wave_payment_id stored.
