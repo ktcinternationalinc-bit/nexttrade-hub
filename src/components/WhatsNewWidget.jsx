@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HN',
+    date: '2026-06-17',
+    label: 'Bug fix: bank overpayments no longer vanish from the books',
+    items: [
+      '**🐛💰 Fixed a real money bug in Bank Review matching.** When a deposit was larger than the invoice it was matched to, the extra amount was only recorded as a customer credit if you had picked a customer in the form — otherwise the overpayment silently disappeared. Now the overpayment always goes to the invoice\'s own customer as a credit; if the invoice somehow has no customer, it\'s parked as an unapplied deposit. Money is never dropped.',
+      { superAdminOnly: true, text: 'v55.83-HN (Wave↔Hub money-integrity bug, priority #1). BankReviewTab.applyToInvoice: the overpayment→customer_credits insert was gated on `c.overpayment > 0 && mCustomerId`. The payment row only stores applied_to_invoice (capped at the balance), so when an overpayment was matched without a form customer, the residual (c.overpayment) was recorded nowhere → lost from the books. Fixed: creditCustId = mCustomerId || inv.accounting_customer_id; insert customer_credits to that customer; if no customer at all, insert an unapplied_deposits row for the residual instead of dropping it. Added __tests__/test-v55-83-hn-overpayment-credit.js (8 assertions: classifyApplication math incl. money-conservation + source wiring). No SQL. Continuing Wave↔Hub bug hunt next.' },
+    ],
+  },
+  {
     version: 'v55.83-HM',
     date: '2026-06-17',
     label: 'Harden: production unlock is the single authorization path (remove dead phrase bypass)',

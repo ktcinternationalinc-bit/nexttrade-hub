@@ -473,9 +473,18 @@ export default function BankReviewTab(props) {
       })
       .then(function () {
         var chain = recomputeInvoice(inv.id);
-        if (c.overpayment > 0 && mCustomerId) {
+        // v55.83-HN (bug fix) — an overpayment is real money beyond the invoice balance and is NOT
+        // captured by the payment row (which records only applied_to_invoice). Previously the credit
+        // was created ONLY when the form had mCustomerId, so an overpayment matched without picking a
+        // customer silently vanished from the books. Default to the INVOICE's customer; if there is
+        // truly none, park it as an unapplied_deposit so the money is always tracked.
+        if (c.overpayment > 0) {
+          var creditCustId = mCustomerId || inv.accounting_customer_id || null;
           chain = chain.then(function () {
-            return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: mCustomerId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+            if (creditCustId) {
+              return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: creditCustId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (inv.invoice_number || inv.id), created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+            }
+            return dbInsert('unapplied_deposits', { business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, accounting_customer_id: null, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (inv.invoice_number || inv.id) + ' (invoice had no customer)', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
           });
         }
         return chain;

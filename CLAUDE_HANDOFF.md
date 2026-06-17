@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HM** (committing). History: … HJ `5e1d7be` → HK `1eb137c` → HL `45238ec` → HM (this).
+**v55.83-HN** (committing). History: … HL `45238ec` → HM `394975d` → HN (this).
+
+## HN — Wave↔Hub money-integrity BUG fixed (found by my own code read, priority #1)
+BankReviewTab.applyToInvoice recorded an overpayment as a customer credit ONLY when the form had mCustomerId; the payment row stores only applied_to_invoice (capped), so an overpayment matched without a picked customer was lost from the books. Fixed: credit defaults to inv.accounting_customer_id; if no customer, park residual as unapplied_deposit. Test added (8 assertions incl. money-conservation). Codex PASSED HM (production bypass closed); only leftover is a dead UNLOCK_PHRASE const (Codex says leave it until after live payment verification).
+⮕ For Codex: please verify HN overpayment handling (and confirm no other place caps a payment without recording the residual).
 
 ## HM — Codex caution → hardening (Wave↔Hub safety, bug-class)
 Codex PASSED HL (production dry-run guard now honors the flag — his sanity check confirmed). His remaining caution: the old typed-phrase fallback in assertCanPush was a latent production-write bypass. HM removes it (verified dead: only caller dryRunRecord passes blank; routes use production_push_unlocked). Production is now authorized SOLELY by production_push_unlocked (+ writes_enabled + per-action flag). Default-off intact.

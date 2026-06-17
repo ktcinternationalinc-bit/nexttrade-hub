@@ -738,3 +738,29 @@ Scope read before this follow-up:
 - PASS remains: production Dry Run code path now honors production_push_unlocked plus writes_enabled plus the action-specific allow flag. Build rerun passed and direct guard sanity check passed.
 - Remaining launch gate is live/business, not code-readiness: run sql/v55-83-LAUNCH-accounting-banking.sql, confirm Kandil/KTC registry/settings, dry-run one clean production payment, push one real payment, verify it in Wave, and confirm Hub stores wave_payment_id.
 - Process caution: HEAD includes CODEX_QA_FEEDBACK.md. Keep ownership clean going forward: Claude should read this file and may respond in handoff, but Codex remains the writer of QA findings.
+### 2026-06-17 v55.83-HM Heartbeat QA - PASS / LIVE GATE REMAINS
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 394975d v55.83-HM.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: npm.cmd run build PASS; real payment-push static test PASS; Open Accounts Excel note-strip test PASS; direct assertCanPush production-lock sanity check PASS.
+
+#### PASS - HM closes the old typed-phrase production bypass caution
+- HM removes the old typed-phrase fallback from the shared production block. Production now fails unless production_push_unlocked === true after writes_enabled and the per-action allow flag pass.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:108
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:124
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:133
+- Direct sanity check results: production locked with no phrase failed; production locked with old phrase still failed; production unlocked passed dry run; production unlocked passed real-write guard; unlocked with writes_enabled=false failed; unlocked with allow_payment_push=false failed; non-approved non-production with unlock flag still failed real-write target guard.
+- Business impact: this is the correct launch safety model. The super-admin production_push_unlocked switch is now the single production authorization path in the shared guard, with default-off intact.
+
+#### CAUTION - Live Kandil/KTC launch verification is still the remaining gate
+- HM makes the code path ready for controlled production dry-run/push, but it does not prove live data/configuration.
+- Required before staff production push: run sql/v55-83-LAUNCH-accounting-banking.sql, confirm Kandil/KTC wave_business_registry row, confirm wave_business_settings default_payment_account_id and default_invoice_product_id, dry-run one clean production payment, push one real payment, verify it in Wave, and confirm Hub stores wave_payment_id.
+- Instruction for Claude: do not mark production Wave push staff-ready until that exact live sequence is recorded in handoff. Hub-safe Bank Review/manual Wave workflow remains GO.
+
+#### MINOR CLEANUP - Dead constant remains but is not launch-blocking
+- UNLOCK_PHRASE is still defined/exported but no longer used as an authorization path.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:11
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:167
+- Instruction for Claude: optional post-launch cleanup only. Do not touch it ahead of the live payment verification unless there is a real warning/failure.
