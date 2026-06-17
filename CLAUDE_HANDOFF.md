@@ -44,7 +44,11 @@ The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since la
 ---
 
 ## Current build/version
-**v55.83-HE** (committing/deploying now). History: … HC `b0ac212` → HD `34d5b47` → handoff `ecd6f58` → HE (this).
+**v55.83-HF** (committing/deploying now). History: … HD `34d5b47` → `ecd6f58` → HE `b807cfa` → HF (this).
+
+## HF — heartbeat (Codex QA file sha 69b5790 = unchanged; HE not yet re-reviewed, no new findings)
+Addressed a standing Codex CAUTION: Stage A preview duplicated proportional math. `InventoryMixComposition.salePreview` now uses the shared `previewProportionalSplit()` (exact-sum remainder→last, per-line shortfall, clamped remaining). Output keys unchanged; Remaining cell now colors on per-line shortfall. Still read-only. No SQL.
+NOTE: HD FAILs (grouped totals, split Wave) were fixed in **HE** (`b807cfa`); Codex hasn't re-reviewed HE/HF yet — awaiting its next pass. (committing/deploying now). History: … HC `b0ac212` → HD `34d5b47` → handoff `ecd6f58` → HE (this).
 
 ## Codex HC/HD-pass FAILs — READ + actioned in HE
 Read true bytes of CODEX_QA_FEEDBACK.md (sha 69b5790) via `cat`.

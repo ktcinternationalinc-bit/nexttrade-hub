@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbDelete } from '../lib/supabase';
-import { buildComposition } from '../lib/mix-composition';
+import { buildComposition, previewProportionalSplit } from '../lib/mix-composition';
 import { canEditInventory } from '../lib/inventory-permissions';
 
 // PHASE 1 (READ-ONLY): Stock Mix Lot composition.
@@ -73,38 +73,41 @@ export default function InventoryMixComposition(props) {
     return buildComposition(myComponents, availByProduct);
   }, [myComponents, availByProduct]);
 
-  // v55.83-HA — Stage A: READ-ONLY sale preview. Given a sale quantity, show how the
-  // mix WOULD draw down each color, the remaining-after, a COGS estimate, and any
-  // shortfall. This consumes NOTHING and writes NOTHING — it is a feasibility view.
+  // v55.83-HA/HE — Stage A: READ-ONLY sale preview. Given a sale quantity, show how the
+  // mix WOULD draw down each color, the remaining-after, a COGS estimate, and any shortfall.
+  // Consumes NOTHING, writes NOTHING — pure feasibility view.
   //
-  // DRAFT ALLOCATION RULE (must be confirmed against the El Sayad records before the
-  // real consuming engine is built): each color is drawn proportionally to its CURRENT
-  // availability — planned_i = qty * available_i / total_available. With this rule a
-  // per-color shortfall is impossible while qty <= total; the only shortfall is when
-  // the requested qty exceeds the whole mix's available stock.
+  // v55.83-HE (Codex QA caution): allocation now reuses the shared previewProportionalSplit()
+  // from lib/mix-composition.js instead of duplicating the math here. That helper splits by
+  // current availability and gives the rounding remainder to the last line (so the parts sum
+  // to exactly the sale qty) and reports per-line shortfall + clamped remaining. DRAFT rule —
+  // must still be confirmed against the El Sayad records before the real consuming engine.
   var salePreview = useMemo(function () {
     var qty = Number(saleQty) || 0;
-    var total = composition.total || 0;
-    var rows = composition.rows.map(function (r) {
-      var share = total > 0 ? (r.available / total) : 0;
-      var planned = qty * share;
-      var cost = Number(avgCostByProduct[r.component_product_id]) || 0;
+    var split = previewProportionalSplit(composition.rows, qty);  // {lines, total_available, sale_qty, feasible}
+    var srcByPid = {};
+    composition.rows.forEach(function (r) { srcByPid[r.component_product_id] = r; });
+    var rows = split.lines.map(function (ln) {
+      var src = srcByPid[ln.component_product_id] || {};
+      var cost = Number(avgCostByProduct[ln.component_product_id]) || 0;
+      var share = split.total_available > 0 ? (ln.available / split.total_available * 100) : 0;
       return {
-        component_product_id: r.component_product_id,
-        name: r.name_en || r.component_color,
-        quick_code: r.quick_code,
-        available: r.available,
-        share_pct: share * 100,
-        planned: planned,
-        remaining_after: r.available - planned,
+        component_product_id: ln.component_product_id,
+        name: src.name_en || ln.component_color,
+        quick_code: src.quick_code,
+        available: ln.available,
+        share_pct: share,
+        planned: ln.planned,
+        remaining_after: ln.remaining_if_filled,
+        shortfall: ln.shortfall,
         avg_cost: cost,
-        cogs: planned * cost,
+        cogs: ln.planned * cost,
         has_cost: cost > 0
       };
     });
     var cogsTotal = rows.reduce(function (s, x) { return s + x.cogs; }, 0);
     var anyMissingCost = rows.some(function (x) { return !x.has_cost; });
-    return { qty: qty, total: total, rows: rows, cogsTotal: cogsTotal, shortfall: qty > total, anyMissingCost: anyMissingCost };
+    return { qty: qty, total: split.total_available, rows: rows, cogsTotal: cogsTotal, shortfall: !split.feasible, anyMissingCost: anyMissingCost };
   }, [saleQty, composition, avgCostByProduct]);
 
   function addComponent() {
@@ -222,7 +225,7 @@ export default function InventoryMixComposition(props) {
                                   <td className="text-right font-mono">{r.available.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                                   <td className="text-right text-indigo-700 font-semibold">{r.share_pct.toLocaleString(undefined, { maximumFractionDigits: 1 })}%</td>
                                   <td className="text-right font-mono font-bold text-slate-900">{r.planned.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                  <td className={'text-right font-mono ' + (r.remaining_after < 0 ? 'text-rose-700 font-bold' : 'text-slate-700')}>{r.remaining_after.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                  <td className={'text-right font-mono ' + (r.shortfall > 0 ? 'text-rose-700 font-bold' : 'text-slate-700')} title={r.shortfall > 0 ? ('Short by ' + r.shortfall.toLocaleString(undefined, { maximumFractionDigits: 2 })) : ''}>{r.remaining_after.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                                   <td className="text-right font-mono text-slate-600">{r.has_cost ? r.avg_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '—'}</td>
                                   <td className="text-right font-mono text-slate-900">{r.has_cost ? r.cogs.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '—'}</td>
                                 </tr>

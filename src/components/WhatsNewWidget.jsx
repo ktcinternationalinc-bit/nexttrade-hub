@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HF',
+    date: '2026-06-17',
+    label: 'Stock Mix preview: shared, more-accurate split math',
+    items: [
+      '**🔬 Stock Mix Sale Preview now uses the shared allocation calculator** — the per-color split adds up to exactly the sale quantity (rounding handled on the last line) and shows a clearer per-color shortfall. No behavior you rely on changes; it just makes the preview math exact and consistent. Still read-only — it does not sell or deduct anything.',
+      { superAdminOnly: true, text: 'v55.83-HF (Codex caution cleanup). InventoryMixComposition.salePreview now calls previewProportionalSplit() from lib/mix-composition.js instead of duplicating the proportional math — exact-sum (remainder→last line), per-line shortfall + clamped remaining_if_filled, feasible flag. Output keys unchanged so JSX is untouched except the Remaining cell now colors rose on r.shortfall>0 (was remaining_after<0, which can no longer happen with clamping) + a "Short by N" title. No SQL, no writes, still non-destructive. Remaining open: Stage B gated (allocation rule + live-mirrored SQL + Codex review); user to run sql/v55-83-HE split-Wave migration; direct Bank-tab matching (business decision); live Wave payment + Snapshot visual checks (user-side).' },
+    ],
+  },
+  {
     version: 'v55.83-HE',
     date: '2026-06-17',
     label: 'QA fixes: Stock Mix report totals on print/export + safer Bank split Wave categories',
