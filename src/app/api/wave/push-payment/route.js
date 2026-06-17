@@ -146,10 +146,26 @@ export async function POST(req) {
     if (pay.wave_business_id && pay.wave_business_id !== waveBusinessId) {
       return NextResponse.json({ ok: false, error: 'This payment belongs to a different Wave business than the selected one — cannot push across silos.', api_build_marker: API_BUILD_MARKER }, { status: 400 });
     }
-    // v55.83-FY — Wave refuses payments on DRAFT invoices. Block with a clear message (before
-    // claiming/mutating) instead of letting Wave reject it cryptically. Row stays pending for retry.
+    // v55.83-IN — Wave refuses payments on DRAFT invoices. Instead of blocking and making the user
+    // go approve the invoice by hand, AUTO-APPROVE it in Wave first (status-only invoiceApprove),
+    // then continue with the payment. Only fall back to a block if approval itself fails.
     if (invDraftBlocked) {
-      return NextResponse.json({ ok: false, error: 'Payment cannot be pushed because the Wave invoice is still DRAFT. Save/approve the invoice in Wave, or run invoice status repair first, then retry.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
+      var apprOk = false;
+      var apprResp = null;
+      try {
+        var apprMut = 'mutation($input: InvoiceApproveInput!){ invoiceApprove(input:$input){ didSucceed inputErrors{ message path code } invoice{ id status } } }';
+        apprResp = await gql(token, apprMut, { input: { invoiceId: invWaveId } });
+        var ia = apprResp && apprResp.data && apprResp.data.invoiceApprove;
+        if (ia && ia.didSucceed) {
+          apprOk = true;
+          var apprStatus = (ia.invoice && ia.invoice.status) ? ia.invoice.status : 'SAVED';
+          try { await db.from('accounting_invoices').update({ wave_status: apprStatus, wave_sync_status: 'synced' }).eq('id', pay.accounting_invoice_id); } catch (eUpd) {}
+        }
+      } catch (eAppr) { apprResp = { error: (eAppr && eAppr.message) || String(eAppr) }; }
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: pay.accounting_invoice_id, wave_record_id: invWaveId, action: 'approve', dry_run: false, success: apprOk, error_message: apprOk ? null : 'Auto-approve before payment push did not succeed', response_payload: apprResp, attempted_by: by }); } catch (eLog) {}
+      if (!apprOk) {
+        return NextResponse.json({ ok: false, error: 'Payment cannot be pushed: the Wave invoice is DRAFT and auto-approve did not succeed. Use "Approve in Wave" on the invoice row (or approve it in Wave), then retry.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
+      }
     }
     var customerName = null;
     if (pay.accounting_customer_id) {

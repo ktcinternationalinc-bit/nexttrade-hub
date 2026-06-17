@@ -435,13 +435,14 @@ export default function WaveSyncCenter(props) {
       if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
       if (bt.classification) { bb.push('class: ' + bt.classification); }
       if (bt.wave_account_name) { bb.push('→ ' + bt.wave_account_name); }
-      bb.push('⛔ Hub-only — Wave transaction/category sync is not implemented yet');
+      bb.push('ℹ Stays in the Hub — Wave\'s API can\'t accept raw transaction/category pushes. Customer payments reach Wave by matching them to an invoice in Bank Review.');
       rows.push({
         key: 'banktxn:' + bt.id, action: 'bank_transaction', id: bt.id,
         label: 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
         amount: Number(bt.amount_abs) || 0,
         sub: bb.join(' · '),
-        blocked: 'Wave transaction/category sync is not implemented yet — this is categorized in the Hub only.',
+        blocked: 'Hub-only — Wave\'s API does not accept transaction pushes.',
+        hubOnly: true,
         record: bt
       });
     });
@@ -453,13 +454,14 @@ export default function WaveSyncCenter(props) {
       if (sp.category_status !== 'pending_wave_sync') { return; }
       var sb = [];
       if (sp.wave_account_name) { sb.push('→ ' + sp.wave_account_name); }
-      sb.push('⛔ Hub-only — Wave transaction/category sync is not implemented yet');
+      sb.push('ℹ Stays in the Hub — Wave\'s API can\'t accept category pushes for split lines.');
       rows.push({
         key: 'split:' + sp.id, action: 'bank_transaction_split', id: sp.id,
         label: 'Split line · ' + (sp.wave_account_name || 'Wave category'),
         amount: Number(sp.split_amount) || 0,
         sub: sb.join(' · '),
-        blocked: 'Wave transaction/category sync is not implemented yet — this split line is categorized in the Hub only.',
+        blocked: 'Hub-only — Wave\'s API does not accept category pushes.',
+        hubOnly: true,
         record: sp
       });
     });
@@ -603,6 +605,11 @@ export default function WaveSyncCenter(props) {
 
       {tab === 'pending' && (
         <div className="border border-slate-700 rounded overflow-hidden">
+          {queue.some(function (q) { return q.hubOnly; }) && (
+            <div className="bg-slate-800/40 border-b border-slate-700 px-3 py-2 text-[11px] text-slate-300">
+              ℹ <span className="font-bold">About "Hub-only" bank transactions:</span> Wave's API does not accept raw bank-transaction or category pushes, so categorized bank transactions stay in the Hub — this is a Wave platform limit, not an error. <span className="font-semibold">Customer payments still reach Wave</span> the right way: match the deposit to its invoice in Bank Review &amp; Matching, which posts a real payment to Wave.
+            </div>
+          )}
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
             <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments · {queue.filter(function (q) { return q.action === 'bank_transaction'; }).length} bank txns)</span></div>
             <div className="flex gap-2">
@@ -621,7 +628,7 @@ export default function WaveSyncCenter(props) {
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
-                    <span className={'text-[10px] ' + (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500'))}>{q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced')}</span>
+                    <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Wave\'s API does not accept raw bank-transaction/category pushes — this stays in the Hub' : ''}>{q.hubOnly ? 'ℹ Hub-only' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
                   </div>
                 );
               })}
