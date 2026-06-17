@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HY',
+    date: '2026-06-17',
+    label: 'Tickets: prominent "Attach Document" button at the top of every ticket',
+    items: [
+      '**📎 Attaching a document is now obvious.** Open any ticket and there\'s a blue "📎 Attach Document" button right at the top (next to Back/Delete) — no more hunting for a tiny paperclip in the comment box. Pick any file up to 10MB; it attaches and shows under Comments & Attachments. (The comment-box attach still works too — both use the same upload.)',
+      { superAdminOnly: true, text: 'v55.83-HY (Max: attach not findable in tickets — answers 1+2+4). Extracted attachFileToTicket(file) reusable helper in TicketsTab (supabase.storage ticket-attachments → ticket_comments attachment row). Added a prominent always-visible "📎 Attach Document" <label>+hidden file input in the ticket DETAIL header row (next to Back/Delete) so it is unmissable; RichCommentComposer paperclip now also calls the same helper (DRY). Still queued: file upload on the NEW-ticket create form (#2 — needs upload-after-create since storage path uses the ticket id). NOTE: if uploads error, verify the ticket-attachments Supabase storage bucket exists + RLS allows authenticated upload.' },
+    ],
+  },
+  {
     version: 'v55.83-HX',
     date: '2026-06-17',
     label: 'Tickets: the "Attach file" button is now clearly labeled',

@@ -1404,3 +1404,68 @@ Scope read before this pass:
 #### Remaining launch checks after HW
 - Accounting/banking still depends on live environment confirmation: assign ACCT/Open Accounts permissions, visual-check Accounting/Open Accounts RestrictedNotice, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores wave_payment_id.
 - Inventory still needs the requested real-product visual comparison between Overview and Inventory Snapshot.
+
+### 2026-06-17 v55.83-HX TICKETS ATTACHMENTS QUICK QA - PASS / CAUTION
+
+Scope read before this pass:
+- User explicitly asked where the ticket document attachment functionality went.
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 95d482f v55.83-HX.
+- Inspected only ticket attachment flow: TicketsTab, RichCommentComposer, DashboardTicketModalOverlay, AttachmentManager, and attachment SQL references.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - The ticket attachment control still exists and HX makes it discoverable
+- HX relabels the ticket comment composer file control from icon-only to `Attach`, with a tooltip and visible blue styling.
+- file: D:\GITHUB\nexttrade-hub\src\components\RichCommentComposer.jsx:167
+- file: D:\GITHUB\nexttrade-hub\src\components\RichCommentComposer.jsx:168
+- TicketsTab still passes an onAttach handler into RichCommentComposer in ticket detail view.
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1255
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1261
+- Existing attachments still render as clickable links inside ticket comments.
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1236
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1240
+- Business verdict: the feature was not fully removed; it was effectively hidden behind a tiny icon in the ticket detail comment box. HX improves that discoverability.
+
+#### CAUTION - Users still cannot attach a document while creating a new ticket
+- The New Ticket form has title/description/priority/due date/assignee/order/client/privacy fields, but no document/file picker.
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1415
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1523
+- Business impact: a staff member who expects to add the supporting document at ticket creation will still think the ticket document feature disappeared. Current workflow is create ticket first, open ticket detail, then attach inside Comments & Attachments.
+- Instruction for Claude: decide and document the intended workflow. Best product fix: support attachments during ticket creation by staging the selected file until the ticket row exists, then upload/insert the attachment comment after create succeeds. If not building now, make the post-create attachment path obvious in the UI.
+
+#### CAUTION - Ticket attachment storage bucket/schema needs live verification
+- Ticket uploads go to Supabase Storage bucket `ticket-attachments`.
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1268
+- file: D:\GITHUB\nexttrade-hub\src\components\TicketsTab.jsx:1270
+- The reusable AttachmentManager and repo SQL document a different shared bucket/table named `attachments`.
+- file: D:\GITHUB\nexttrade-hub\src\components\AttachmentManager.jsx:28
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-61-attachments.sql:23
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-61-attachments.sql:31
+- I did not find repo SQL that creates/verifies the `ticket-attachments` bucket or its storage policies.
+- Business impact: HX can make the button visible, but upload can still fail in production if `ticket-attachments` is missing or lacks policies.
+- Instruction for Claude: before calling ticket attachments launch-ready, verify the live Supabase bucket/policies for `ticket-attachments`, or migrate Tickets to the shared `AttachmentManager` / `attachments` table path. If keeping `ticket-attachments`, add a documented migration/preflight so this does not depend on tribal memory.
+
+### 2026-06-17 v55.83-HX HEARTBEAT ADDENDUM - OPEN ACCOUNTS FAIL STILL OPEN
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 95d482f v55.83-HX.
+- Inspected launch-relevant Open Accounts restricted gate plus Wave push/split-preflight references.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL REMAINS - HX did not close the Open Accounts restricted-panel launch bug
+- OpenAccountsTab still uses the old bg-amber-50 / text-amber-900 permission panel for users without Open Accounts permission.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1328
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1330
+- Business impact: Open Accounts is in launch scope and Max's live complaint was exactly unreadable permission/error text on the dark Accounting surface. This remains a user-facing contrast risk for staff who lack the Open Accounts permission.
+- Instruction for Claude: fix this before more polish/features. Convert only this no-permission return to RestrictedNotice; do not touch ledger, statement, print, or Excel logic.
+
+#### PASS WITH USER-GATED CAUTION - Wave push and split metadata wiring remain code-ready but not live-proven
+- Production Wave push remains guarded by production_push_unlocked plus writes_enabled plus per-action flags in the shared guard/routes.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:109
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:119
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:133
+- Split Wave-category columns are represented in the launch SQL and preflight expectations.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-LAUNCH-accounting-banking.sql:16
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:19
+- Caution: this is still not launch-complete until the target Supabase has the launch SQL/preflight green and one real Kandil/KTC payment is dry-run, pushed, verified in Wave, and verified in Hub with a real wave_payment_id.

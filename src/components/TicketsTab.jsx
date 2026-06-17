@@ -549,6 +549,29 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     })();
   };
 
+  // v55.83-HY — reusable file attach. Used by BOTH the dedicated "Attach Document" button in the
+  // ticket detail header AND the comment composer's paperclip, so there is always an obvious way
+  // to add a document to a ticket. Uploads to the ticket-attachments storage bucket and records it
+  // as an attachment comment.
+  const attachFileToTicket = async (file) => {
+    if (!file || !sel) return;
+    if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); return; }
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
+      const { error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
+      const url = (urlData && urlData.publicUrl) || '';
+      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
+      await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
+      loadComments(sel.id);
+      if (toast) toast.success('File attached ✓');
+    } catch (err) { toast ? toast.error('Upload failed: ' + ((err && err.message) || err)) : alert('Upload failed'); }
+    setUploading(false);
+  };
+
   const addComment = async () => {
     if (!f.comment || !sel) return;
     // v55.44 — hard guard against rapid re-taps. If a save is already in
@@ -817,12 +840,25 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold hover:bg-slate-50">
           ← Back
         </button>
-        {canDeleteTicket(sel) && (
+        <div className="flex items-center gap-2">
+          {/* v55.83-HY — dedicated, always-visible Attach Document control in the detail header
+              (Max couldn't find the paperclip buried in the comment box). Same upload as comments. */}
+          <label title="Attach a document, image, or file to this ticket (max 10MB)"
+            className={'px-3 py-1 rounded border text-xs font-bold cursor-pointer transition ' + (uploading ? 'bg-slate-200 text-slate-400 border-slate-200' : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700')}>
+            {uploading ? '⏳ Uploading…' : '📎 Attach Document'}
+            <input type="file" className="hidden" disabled={uploading} onChange={async (e) => {
+              const file = e.target.files && e.target.files[0];
+              if (file) await attachFileToTicket(file);
+              e.target.value = '';
+            }} />
+          </label>
+          {canDeleteTicket(sel) && (
           <button onClick={() => deleteTicket(sel)}
             className="px-3 py-1 rounded border border-red-300 text-red-600 text-xs font-semibold hover:bg-red-50 transition">
             🗑 Delete Ticket
           </button>
-        )}
+          )}
+        </div>
       </div>
 
       {/* TICKET HEADER */}
@@ -1258,24 +1294,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           onSubmit={addComment}
           uploading={uploading}
           submitting={submittingComment}
-          onAttach={async (file) => {
-            if (!file || !sel) return;
-            if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); return; }
-            setUploading(true);
-            try {
-              const ext = file.name.split('.').pop();
-              const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
-              const { data: upData, error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
-              if (upErr) throw upErr;
-              const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
-              const url = urlData?.publicUrl || '';
-              await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
-              await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
-              loadComments(sel.id);
-              if (toast) toast.success('File attached ✓');
-            } catch (err) { toast ? toast.error('Upload failed: ' + err.message) : alert('Upload failed: ' + err.message); }
-            setUploading(false);
-          }}
+          onAttach={attachFileToTicket}
         />
       </div>
 
