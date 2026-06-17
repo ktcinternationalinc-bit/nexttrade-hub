@@ -38,6 +38,9 @@ export default function InventoryReportCenter(props) {
   // v55.83-GW — surface load failures instead of silently showing an empty report.
   var [loadErrors, setLoadErrors] = useState([]);   // [{source, message}]
   var [diag, setDiag] = useState(null);             // counts for super-admin diagnostic
+  // v55.83-GY — match Inventory Overview's default view: hide zero-stock rows
+  // (current 0 AND received 0). Toggle to show them. Overview hides them by default too.
+  var [showZero, setShowZero] = useState(false);
   var isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
 
   var isRtl = lang === 'ar';
@@ -58,7 +61,7 @@ export default function InventoryReportCenter(props) {
     setLoading(true);
     setLoadErrors([]);
     Promise.all([
-      q('inventory_products', supabase.from('inventory_products').select('id,name_en,name_ar,quick_code,design_sku,default_uom,family_list_id,category_list_id,grade_list_id,color_list_id,origin_list_id,is_virtual_mix,active').eq('active', true)),
+      q('inventory_products', supabase.from('inventory_products').select('id,name_en,name_ar,quick_code,design_sku,default_uom,family_list_id,category_list_id,grade_list_id,color_list_id,origin_list_id,is_virtual_mix,is_family_template,active').eq('active', true)),
       q('inventory_layers', supabase.from('inventory_layers').select('product_id,qty_remaining,cost_per_uom,warehouse_id,receipt_date').gt('qty_remaining', 0)),
       q('inventory_lists', supabase.from('inventory_lists').select('id,label_en,label_ar')),
       q('inv_warehouses', supabase.from('inv_warehouses').select('id,name,code')),
@@ -145,7 +148,9 @@ export default function InventoryReportCenter(props) {
       comps.forEach(function (c) { if (!compsByMix[c.mix_product_id]) { compsByMix[c.mix_product_id] = []; } compsByMix[c.mix_product_id].push(c); });
 
       setRaw({
-        nonVirtual: products.filter(function (p) { return p.is_virtual_mix !== true; }),
+        // Snapshot excludes virtual mixes AND family templates (no physical stock) —
+        // same exclusions Inventory Overview applies.
+        nonVirtual: products.filter(function (p) { return p.is_virtual_mix !== true && p.is_family_template !== true; }),
         mixes: products.filter(function (p) { return p.is_virtual_mix === true; }),
         listMap: listMap, whMap: whMap, nameMap: nameMap,
         layerAgg: layerAgg, availByProduct: availByProduct, currentByProduct: currentByProduct,
@@ -186,6 +191,8 @@ export default function InventoryReportCenter(props) {
       };
     });
     if (q) { rows = rows.filter(function (r) { return (String(r.code).toLowerCase().indexOf(q) >= 0) || (String(r.name_en).toLowerCase().indexOf(q) >= 0) || (String(r.name_ar).toLowerCase().indexOf(q) >= 0); }); }
+    // v55.83-GY — hide zero-stock rows by default (current 0 AND received 0), matching Overview.
+    if (!showZero) { rows = rows.filter(function (r) { return (Number(r.qty_remaining) || 0) !== 0 || (Number(r.original_qty) || 0) !== 0; }); }
     rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
     return rows;
   }
@@ -338,9 +345,10 @@ export default function InventoryReportCenter(props) {
         </div>
       )}
 
-      {/* v55.83-GX — non-blocking warning: products (and maybe receipts) exist, but there
-          are NO positive cost layers. The snapshot will show rows with Current Qty 0, so the
-          all-empty message above won't fire — surface the reason inline instead. */}
+      {/* v55.83-GX/GY — non-blocking warning: products exist but there are NO finalized cost
+          layers. Current Qty is NOT necessarily 0 here — received-but-not-finalized (pending)
+          stock is included in Current Qty but has no cost/valuation yet. The two messages below
+          distinguish "pending stock, no cost" from "nothing received". */}
       {!loading && loadErrors.length === 0 && reportId === 'snapshot' && diag && diag.products > 0 && diag.layers === 0 && (
         <div className="p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-xs">
           {diag.receiptsValid > 0
@@ -361,7 +369,15 @@ export default function InventoryReportCenter(props) {
       )}
 
       {!report.grouped && (
-        <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={reportId === 'movement' ? (isRtl ? 'بحث بالمنتج أو المرجع' : 'Search product or reference') : (isRtl ? 'بحث بالكود أو الاسم' : 'Search code or name')} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-full max-w-xs" />
+        <div className="flex flex-wrap items-center gap-3">
+          <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={reportId === 'movement' ? (isRtl ? 'بحث بالمنتج أو المرجع' : 'Search product or reference') : (isRtl ? 'بحث بالكود أو الاسم' : 'Search code or name')} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-full max-w-xs" />
+          {reportId === 'snapshot' && (
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold cursor-pointer">
+              <input type="checkbox" checked={showZero} onChange={function (e) { setShowZero(e.target.checked); }} />
+              {isRtl ? 'إظهار العناصر صفرية المخزون' : 'Show zero-stock items'}
+            </label>
+          )}
+        </div>
       )}
 
       {loading ? (

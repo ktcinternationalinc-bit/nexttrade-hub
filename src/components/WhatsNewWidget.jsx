@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GY',
+    date: '2026-06-17',
+    label: 'Inventory Snapshot default view now matches the Overview (hide zero-stock + templates)',
+    items: [
+      '**📦 Inventory Snapshot now opens the same way as the Inventory Overview.** By default it hides zero-stock items and family-template products (which hold no physical stock), so the report you see matches the Overview at a glance. A new "Show zero-stock items" checkbox brings the empty ones back when you need a full list.',
+      { superAdminOnly: true, text: 'v55.83-GY. No SQL. InventoryReportCenter: products query now also selects is_family_template; snapshot nonVirtual list excludes is_family_template (Overview hides templates); added showZero state + "Show zero-stock items" checkbox (snapshot only); snapshotRows hides rows where current_qty===0 && original_qty===0 unless showZero (mirrors Overview line ~341). Cleanup of GX cautions from Codex QA: corrected the amber no-cost-layer warning comment (Current Qty is NOT always 0 now — pending received stock is included), and removed stale "finalized receipts = Overview Original Stock" wording from CLAUDE_HANDOFF.md. Build verified exit 0. STILL OPEN: virtual-mix sale engine (parked), Wave generic-transaction push (no mutation).' },
+    ],
+  },
+  {
     version: 'v55.83-GX',
     date: '2026-06-16',
     label: 'Inventory Snapshot matches Overview (EN+AR names, Received qty) + Bank cleanup',
