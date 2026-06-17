@@ -8,6 +8,23 @@ QA loop:
 
 ---
 
+## 🎯 STANDING TO-DO / PRIORITIES (heartbeat never idles — always advance the top UNBLOCKED item)
+Main goal: KTC Hub Accounting/Banking launch-ready and progressively more professional, without ever breaking employee-facing flows or touching real-money writes unsafely.
+
+- **P0 — Launch safety (always first):** fix ANY Codex FAIL immediately; keep `npm run build` green; never weaken the production default-off invariant; no employee-facing crash/lockout.
+- **P0 — Migrations/config (USER):** run `sql/v55-83-LAUNCH-accounting-banking.sql`; assign employee permissions. (Claude: keep verifying + reminding.)
+- **P1 — Production Wave push toggle:** code-ready (HJ). Gated on USER: test silo → one real payment → verify `wave_payment_id` → flip real KTC. Claude must NOT flip it.
+- **P2 — Post-launch cleanups (safe, do these while waiting):**
+  - Narrow the HH split-save fallback to missing-column/schema errors only (Codex caution).
+  - Clean the stale static tests Codex listed (fi-payment-queue-safety, fs-permission-model, fr-route-lockdown, a-6-27-52-open-accounts, aa-phase2-polish) so the suite reflects current routes/wording.
+  - Keep Wave Sync Center split categories truthfully Hub-only (no generic push exists).
+- **P2 — Stage B virtual-mix SELLING:** gated on allocation rule (user) + live-mirrored SQL + Codex review. Stage A preview stays read-only.
+- **P3 — Ongoing professional polish** of Accounting + Inventory tabs (loading/empty/error states, consistency, performance) — safe, concrete, one per fire.
+
+Heartbeat rule: each fire — (1) read Codex file via `cat`; (2) fix FAILs; (3) else pick the highest-priority UNBLOCKED item above and ship it (build→commit→deploy→bump badge+What's New+handoff); (4) only report a bare "hold" if EVERY item is genuinely blocked/gated, and even then re-verify + re-prioritize next fire. Never stop the loop.
+
+---
+
 ## 📒 Progress & thinking (running log — newest context at top)
 
 ### Where we are (one line)
