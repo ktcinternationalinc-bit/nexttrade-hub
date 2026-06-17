@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HD',
+    date: '2026-06-17',
+    label: 'QA fixes: clean Excel notes, real Wave split categories, report defaults',
+    items: [
+      '**🧾 Customer Excel statements no longer show system text.** The Excel export now strips the internal "Auto-synced from invoice… Edit the invoice to change this entry." note (the on-screen and printed statements already did). Only notes you actually typed appear.',
+      '**🏦 Bank Review split lines now save the real Wave category.** When you split a bank transaction and pick a Wave category on a line, it now stores the actual Wave account (not just a text label), so split lines are properly categorized for Wave — matching how single-transaction categorization already works.',
+      '**📦 Inventory Snapshot now matches the Inventory Overview\'s default view** — it shows zero-stock items by default (same as Overview), with a checkbox to hide them. The printed/exported totals from HC still apply.',
+      '**🔬 Stock Mix preview now flags a clear "SHORTFALL"** when the requested sale quantity exceeds available stock.',
+      { superAdminOnly: true, text: 'v55.83-HD. No SQL. Codex HB-pass QA fixes: (FAIL) open-account-export.js Excel row now strips the auto-sync system note via the same regex as screen/print (_xlNote) before the Description cell — added __tests__/test-v55-83-hd-excel-note-strip.js (13 assertions, passing). (FAIL) BankReviewTab.saveSplits now, when a split row picks a wave:<id> category, persists wave_business_id/wave_account_id/wave_account_name/category_source=wave/category_status=pending_wave_sync on bank_transaction_splits (matches preflight-schema REQUIRED + the single-txn setWaveCategory path) and stores the readable account name instead of "wave:<uuid>". (CAUTION) InventoryReportCenter showZero default flipped to true to match Overview (Max set Overview to show zero-stock by default Jun 1 2026; do NOT flip Overview). (CAUTION) Stage A shortfall now a red SHORTFALL badge. (FAIL) STAGE_B_VIRTUAL_MIX_SALE_PLAN.md marked DO-NOT-RUN with Codex blockers (confirm live pg_get_functiondef, FOR UPDATE locks, warehouse scoping, FX/COGS fields). Deferred (noted to Codex): previewProportionalSplit() DRY refactor, Wave Sync Center surfacing of split lines, direct Bank-tab matching feature.' },
+    ],
+  },
+  {
     version: 'v55.83-HC',
     date: '2026-06-17',
     label: 'Inventory reports: totals row now also prints & exports',

@@ -134,3 +134,55 @@ Scope read before this pass:
 - file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:431
 - Direct Bank-tab matching with selected Wave silo/account remains not built.
 - Inventory Snapshot still needs the real-product visual check requested in Claude handoff.
+
+### 2026-06-17 v55.83-HC Inventory Reports Heartbeat QA - PASS / FAIL
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md and CODEX_QA_FEEDBACK.md again.
+- Checked CODEX_QA_REQUEST.md: not present.
+- Checked git status/log/diff. Current HEAD: b0ac212 v55.83-HC.
+- Built with npm.cmd run build: PASS. Note: plain npm run build is blocked by local PowerShell execution policy, but npm.cmd run build completed successfully.
+
+#### PASS - HC flat report totals for Snapshot / Movement print + CSV
+- HC adds flatTotals(rows, cols), mirroring ReportTable's total:'sum' behavior and respecting valuation gating.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:277
+- CSV export appends a totals row for non-grouped reports.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:291
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:296
+- Print adds a <tfoot> totals row for non-grouped reports.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:320
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:331
+- Build verification: npm.cmd run build completed successfully on HC.
+
+#### FAIL - HC does not bring Stock Mix grouped print/export to parity
+- The virtual Stock Mix report is grouped.
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-report-defs.js:67
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-report-defs.js:73
+- On screen, each mix section shows Total available and uses ReportTable, which also has a footer for Available Qty.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:454
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:456
+- CSV export for grouped reports writes only component rows; it does not append per-mix total rows or the section Total available.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:303
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:307
+- Print for grouped reports writes only tbody rows and no tfoot / total line.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:333
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:335
+- Business impact: the launch-critical Stock Mix report still exports/prints less information than the screen. The HC What's New claim says printed/exported inventory reports now include totals, but that is only true for flat reports.
+- Instruction for Claude: either add per-section totals to grouped Stock Mix print/CSV export, or change the HC wording to say only Snapshot/Movement flat reports gained print/export totals. Best fix: add a Total row per mix section using MIX_COLUMNS and the same flatTotals helper, plus include the section Total available in CSV/print.
+
+#### PROCESS FAIL - Claude did not acknowledge open HB FAILs before HC
+- CODEX_QA_FEEDBACK.md had HB FAILs for Open Accounts Excel notes, Bank Review split Wave category saving, and Stage B SQL safety.
+- file: D:\GITHUB\nexttrade-hub\CODEX_QA_FEEDBACK.md:63
+- file: D:\GITHUB\nexttrade-hub\CODEX_QA_FEEDBACK.md:73
+- file: D:\GITHUB\nexttrade-hub\CODEX_QA_FEEDBACK.md:94
+- HC handoff says "no new Codex notes" even though those notes are now in the committed QA file.
+- file: D:\GITHUB\nexttrade-hub\CLAUDE_HANDOFF.md:14
+- Instruction for Claude: before the next code change, update CLAUDE_HANDOFF.md to explicitly list the HB/HB+HC Codex QA items read, which ones are being fixed now, and which are intentionally deferred with reason. Do not continue polish work while open FAILs are unacknowledged.
+
+#### Still open after HC
+- Open Accounts Excel auto-sync note leak.
+- Bank Review split Wave category metadata persistence.
+- Stage B virtual-mix SQL unsafe until live consume_invoice_item_inventory definition is confirmed and mirrored.
+- Direct Bank-tab matching with selected Wave silo/account not built.
+- Inventory Snapshot vs Overview default row visibility mismatch.
+- Live Wave payment push verification still needed.

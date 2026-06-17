@@ -38,9 +38,10 @@ export default function InventoryReportCenter(props) {
   // v55.83-GW — surface load failures instead of silently showing an empty report.
   var [loadErrors, setLoadErrors] = useState([]);   // [{source, message}]
   var [diag, setDiag] = useState(null);             // counts for super-admin diagnostic
-  // v55.83-GY — match Inventory Overview's default view: hide zero-stock rows
-  // (current 0 AND received 0). Toggle to show them. Overview hides them by default too.
-  var [showZero, setShowZero] = useState(false);
+  // v55.83-GY/HD — match Inventory Overview's default view. Overview DELIBERATELY shows
+  // zero-stock rows by default (Max, Jun 1 2026), so the Snapshot defaults to showing them
+  // too (Codex QA: the earlier hide-by-default did NOT match Overview). Toggle hides them.
+  var [showZero, setShowZero] = useState(true);
   var isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
 
   var isRtl = lang === 'ar';

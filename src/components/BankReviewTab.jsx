@@ -378,7 +378,25 @@ export default function BankReviewTab(props) {
       var amt = roundMoney(Number(r.amount));
       if (!(amt > 0)) return;
       chain = chain.then(function () {
-        return dbInsert('bank_transaction_splits', { business_id: t.business_id, bank_transaction_id: t.id, split_amount: amt, category: r.category || null, linked_type: r.invoice_id ? 'invoice' : (r.customer_id ? 'customer' : null), linked_id: r.invoice_id || r.customer_id || null, notes: r.notes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+        var splitRow = { business_id: t.business_id, bank_transaction_id: t.id, split_amount: amt, category: r.category || null, linked_type: r.invoice_id ? 'invoice' : (r.customer_id ? 'customer' : null), linked_id: r.invoice_id || r.customer_id || null, notes: r.notes || null, created_by: userProfile && userProfile.id };
+        // v55.83-HD (Codex QA FAIL fix) — if the split row picked a Wave category (value "wave:<id>"),
+        // persist the real Wave fields (matching the single-txn path + preflight schema for
+        // bank_transaction_splits) instead of saving the raw "wave:<uuid>" string. Without this the
+        // split looked categorized in the UI but saved as a plain string, making Wave sync ambiguous.
+        if (r.category && r.category.indexOf('wave:') === 0) {
+          var _wid = r.category.slice(5);
+          var _cat = null; var _ci;
+          for (_ci = 0; _ci < waveCategories.length; _ci++) { if (waveCategories[_ci].wave_account_id === _wid) { _cat = waveCategories[_ci]; break; } }
+          if (_cat) {
+            splitRow.category = _cat.wave_account_name;
+            splitRow.wave_business_id = t.wave_business_id || getActiveWaveBusiness() || _cat.wave_business_id || null;
+            splitRow.wave_account_id = _cat.wave_account_id;
+            splitRow.wave_account_name = _cat.wave_account_name;
+            splitRow.category_source = 'wave';
+            splitRow.category_status = 'pending_wave_sync';
+          }
+        }
+        return dbInsert('bank_transaction_splits', splitRow, userProfile && userProfile.id);
       });
       if (r.invoice_id) {
         chain = chain.then(function () {

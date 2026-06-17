@@ -886,10 +886,15 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
       case 'offset':           arSide = credit; apSide = debit; break;
       default: arSide = credit; apSide = debit;
     }
+    // v55.83-HD (Codex QA FAIL fix) — strip the system "Auto-synced from invoice … Edit the
+    // invoice to change this entry." note from Excel notes too. Screen (OpenAccountsTab:1934)
+    // and print (this file:308) already strip it; the Excel description cell did not, leaking
+    // implementation noise onto customer/internal statements. If nothing real remains, append nothing.
+    var _xlNote = e.notes ? String(e.notes).replace(/Auto-synced from invoice[\s\S]*?Edit the invoice to change this entry\.?/gi, '').trim() : '';
     var row = [
       fmtDate(e.entry_date),
       xlType(e.transaction_type) || '',
-      (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
+      (e.description || '') + (_xlNote ? ' — ' + _xlNote : ''),
       e.reference_number || '',
       entryCur,
       arSide > 0.005 ? arSide : '',         // AR Side

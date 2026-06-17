@@ -204,7 +204,10 @@ export default function InventoryMixComposition(props) {
                   {salePreview.qty > 0 && (
                     <div>
                       {salePreview.shortfall && (
-                        <div className="bg-amber-100 text-amber-900 text-xs font-bold rounded px-2 py-1.5 mb-2">⚠ Requested {salePreview.qty.toLocaleString()} exceeds total available {salePreview.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Not enough mix stock — this sale could not be fully fulfilled.</div>
+                        <div className="bg-rose-200 text-rose-900 text-xs font-bold rounded px-2 py-1.5 mb-2 border border-rose-400">
+                          <span className="inline-block bg-rose-700 text-white rounded px-1.5 py-0.5 mr-1 text-[10px] font-extrabold">SHORTFALL</span>
+                          Requested {salePreview.qty.toLocaleString()} exceeds total available {salePreview.total.toLocaleString(undefined, { maximumFractionDigits: 2 })} — not enough mix stock to fully fulfil this sale.
+                        </div>
                       )}
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">

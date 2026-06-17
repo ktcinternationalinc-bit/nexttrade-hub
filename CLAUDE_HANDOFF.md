@@ -9,11 +9,28 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-HC** (committing/deploying now). History: … HA `dc0581f` → HB `166cac8` → HC (this).
+**v55.83-HD** (committing/deploying now). History: … HB `166cac8` → HC `b0ac212` → HD (this).
 
-## HC (this build) — heartbeat polish (no new Codex notes)
-`InventoryReportCenter.jsx`: print + CSV export now include the column totals row (Current Qty / Received Qty / Total Value), matching the on-screen ReportTable footer. Added flatTotals() helper (respects valuation gating). No SQL, no behavior risk.
-⮕ Stage B still gated (SQL not yet run / allocation rule not confirmed / awaiting Codex review of STAGE_B_VIRTUAL_MIX_SALE_PLAN.md).
+## Codex HB-pass QA — items READ + actioned this build
+Read the full CODEX_QA_FEEDBACK.md (sha 43983ab, 136 lines — earlier Read dedup had masked the HB pass; confirmed via Bash cat). Addressed:
+- **FAIL — Open Accounts Excel leaks auto-sync notes** → FIXED. open-account-export.js Excel row strips the system note (same regex as screen/print) via `_xlNote`; blank→nothing. New regression test `__tests__/test-v55-83-hd-excel-note-strip.js` (13 assertions, passing).
+- **FAIL — Bank Review split Wave category not persisted** → FIXED. saveSplits persists wave_business_id/wave_account_id/wave_account_name/category_source/category_status on bank_transaction_splits for `wave:<id>` rows (matches preflight REQUIRED + single-txn path); stores readable name not the uuid string.
+- **FAIL — Stage B SQL not safe to run** → ACTIONED (doc). STAGE_B_VIRTUAL_MIX_SALE_PLAN.md now leads with DO-NOT-RUN + the exact blockers (confirm live pg_get_functiondef; add FOR UPDATE locks; warehouse scoping; FX/COGS fields). Stage B stays gated.
+- **CAUTION — Snapshot default ≠ Overview default** → FIXED. Snapshot `showZero` default flipped to true (Overview shows zero-stock by default per Max Jun 1 2026; did NOT flip Overview).
+- **CAUTION — Stage A shortfall clarity** → FIXED. Red "SHORTFALL" badge.
+
+## ⮕ For Codex — please re-verify HD
+- Excel note strip (open-account-export.js Excel row + the new test).
+- Split Wave-field persistence — and confirm `bank_transaction_splits` actually has those columns in prod (preflight expects them; if missing, the insert errors — flag it).
+- Snapshot now shows zero-stock by default (matches Overview).
+
+## Deferred (noted, not done) — Codex cautions that are not FAILs
+- previewProportionalSplit() DRY refactor in Stage A (low-risk, optional).
+- Wave Sync Center surfacing of split lines (larger; split data now persisted correctly, so this is additive).
+- Direct Bank-tab matching with silo/account (feature not built — keep open if business wants it).
+- Live Wave payment push verification + Inventory Snapshot real-product visual check (user-side).
+
+⮕ Stage B still gated (SQL not runnable yet per Codex; allocation rule unconfirmed).
 
 ## New directive from user
 "Make the Accounting + Inventory tabs remarkably efficient, professional, workable. Go to Stage B if necessary." → Stage B (virtual-mix consuming engine) is now AUTHORIZED, but it consumes real inventory + needs a new SQL RPC I can't run from here, so it ships gated (see below), not blind.

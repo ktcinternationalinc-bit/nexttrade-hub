@@ -1,9 +1,23 @@
 # Stage B — Virtual Stock Mix sale engine (implementation plan + SQL)
 
-Status: **DRAFT for review.** Stage A (read-only preview, v55.83-HA) is live. Stage B actually
-consumes real component stock, so it ships in this order: (1) you confirm the allocation rule,
-(2) you run the SQL below in Supabase (I can't run migrations from here), (3) I wire the UI behind
-a confirm dialog, (4) Codex QA verifies, (5) we enable it.
+Status: **DRAFT — DO NOT RUN YET.** Stage A (read-only preview, v55.83-HA) is live.
+
+## ⛔ Codex QA (HB pass) — the SQL below is NOT safe to run as-is. Fix first:
+1. **Confirm the LIVE function first.** Run in Supabase:
+   `select pg_get_functiondef('consume_invoice_item_inventory(uuid)'::regprocedure);`
+   The repo has divergent versions — the older line-level fn orders FIFO by `received_at`
+   (`sql/v55-83-a-6-27-44c-line-level-consumption.sql:68,73`) while the newer FX-snapshot fn
+   orders by `receipt_date` and stamps FX sale fields (`sql/v55-83-a-6-27-64-auto-fx-snapshots.sql:219,224,292`).
+   The new RPC must mirror **whatever is live**, not a guess.
+2. **Add `FOR UPDATE` row locks** when selecting layers, or concurrent sales can double-spend a layer.
+3. **Scope by warehouse** (the live fn does; the draft below doesn't).
+4. **Mirror the newer FX/COGS fields** (`cost_egp_at_sale`, `fx_rate_at_sale`, cogs_usd/egp, cogs_movement_id)
+   and the backorder convention, or the mix sale bypasses the latest landed-cost/P&L conventions.
+5. Keep gated until the **allocation rule** is confirmed from the El Sayad records.
+
+Order of operations once corrected: (1) confirm allocation rule, (2) I rewrite the RPC to match the
+live definition + locking/warehouse/FX, (3) Codex re-reviews, (4) you run it in Supabase, (5) I wire
+the UI behind a confirm dialog, (6) enable. The draft below is a STARTING POINT, not runnable SQL.
 
 ## The one decision only you can make: the allocation rule
 When N units of a virtual mix are sold, how is N split across its component colors?
