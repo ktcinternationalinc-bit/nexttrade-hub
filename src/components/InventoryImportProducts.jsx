@@ -16,6 +16,7 @@
 //     lists them with confirmation option ("Did you mean X?")
 
 import { useState, useEffect, useRef } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import * as XLSX from 'xlsx';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 
@@ -760,12 +761,7 @@ export default function InventoryImportProducts(props) {
   if (!canImport) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Importing products requires the "Edit Product List" permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message={'Importing products requires the "Edit Product List" permission. Ask Max to grant it from Settings - Roles & Permissions.'} />
       </div>
     );
   }

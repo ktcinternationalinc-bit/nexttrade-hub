@@ -17,6 +17,7 @@
 // upstream. If no rules exist, the child is universal.
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { createPortal } from 'react-dom';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import InventoryVariantHistory from './InventoryVariantHistory';
@@ -1027,12 +1028,7 @@ export default function InventoryProductMaster(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Viewing the Product List requires the Inventory permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message="Viewing the Product List requires the Inventory permission. Ask Max to grant it from Settings - Roles & Permissions." />
       </div>
     );
   }

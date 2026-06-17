@@ -17,6 +17,7 @@
 //   - Each row becomes ONE receipt (sequential numbers RCV-YYYY-MM-DD-NNN)
 
 import { useState, useEffect, useRef } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import * as XLSX from 'xlsx';
 import { supabase, dbInsert } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
@@ -552,12 +553,7 @@ export default function InventoryStockImport(props) {
   if (!canImport) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Importing stock requires the "Edit Inventory" permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message={'Importing stock requires the "Edit Inventory" permission. Ask Max to grant it from Settings - Roles & Permissions.'} />
       </div>
     );
   }

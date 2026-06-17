@@ -17,6 +17,7 @@
 //      child or parent option records.
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 
 // v55.83-A.6.27.26 (Max May 18 2026) — Max wants EVERY level (2-8) to
@@ -303,12 +304,7 @@ export default function InventoryMasterAdmin(props) {
   if (!canManage) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            The Inventory Master admin screen requires the "Manage Inventory Master" permission. Ask Max to grant it from Settings → Roles & Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message={'The Inventory Master admin screen requires the "Manage Inventory Master" permission. Ask Max to grant it from Settings - Roles & Permissions.'} />
       </div>
     );
   }

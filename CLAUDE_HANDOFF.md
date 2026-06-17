@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HT** (committing). History: … HR `642bb7c` → HS `81ae9eb` → HT (this).
+**v55.83-HU** (committing). History: … HS `81ae9eb` → HT `6a5b2b1` → HU (this).
+
+## HU — contrast sweep COMPLETE (Inventory cluster)
+Converted all 8 Inventory "Access restricted" early-return panels to RestrictedNotice (InventoryReceiving was genuinely dark-on-dark: text-amber-900 on bg-amber-500/15; rest were purge-prone bg-amber-50). Contrast sweep now covers Accounting+Wave (HQ) + Inventory (HU). No gate logic changed, no SQL.
+⮕ For Codex: verify the inventory restricted panels + flag any remaining dark-on-dark anywhere. Remaining work: resume Wave↔Hub bug hunt (Sync Center dedup/orphan, push-payment edge cases, multi-currency recompute); legacy WhatsApp send (out-of-focus). USER: assign ACCT perms, live visual check, production-Wave live test.
 
 ## HT — Codex cross-area FAIL fixed: Inventory Overview error-surfacing
 load() now checks res.error on products/lists/layers/receipts and setError()+toast (was silent empty stock on a failed query — Supabase doesn't throw). Sales optional → warn. Mirrors HK/ReportCenter. No SQL. Codex PASSED HS (P0 fully closed).

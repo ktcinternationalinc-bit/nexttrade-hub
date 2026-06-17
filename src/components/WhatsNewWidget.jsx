@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HU',
+    date: '2026-06-17',
+    label: 'Inventory "Access restricted" boxes now readable (contrast sweep complete)',
+    items: [
+      '**👁️ The Inventory "Access restricted" messages are now guaranteed readable.** All eight inventory screens (Adjustments, Cost Layers, Movements Ledger, Product List, Receiving, Stock Import, Import Products, Master Admin) now use the same high-contrast notice as the Accounting screens. One of them (Receiving) was genuinely dark-on-dark and is fixed.',
+      { superAdminOnly: true, text: 'v55.83-HU — finishes the contrast sweep started in HQ. Converted all 8 Inventory early-return "Access restricted" panels from the Tailwind bg-amber-50/bg-amber-500-15 + text-amber-900 pattern (purge-prone / one was genuinely dark-on-dark: InventoryReceiving used text-amber-900 on bg-amber-500/15) to the inline-styled RestrictedNotice. Files: InventoryAdjustments, InventoryCostLayers, InventoryMovementsLedger, InventoryProductMaster, InventoryReceiving, InventoryStockImport, InventoryImportProducts, InventoryMasterAdmin. No gate logic changed; messages preserved (ASCII-ized). No SQL. Contrast sweep now covers Accounting+Wave (HQ) + Inventory (HU). Remaining low-contrast spots, if any, are caught by a one-line RestrictedNotice swap.' },
+    ],
+  },
+  {
     version: 'v55.83-HT',
     date: '2026-06-17',
     label: 'Inventory Overview shows load failures instead of false "empty stock"',

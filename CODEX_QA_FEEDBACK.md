@@ -1225,3 +1225,35 @@ Scope read before this pass:
 - Do a real visual check of RestrictedNotice on the live dark Accounting screen.
 - For production Wave push, still complete the live path: run/verify launch SQL + preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores `wave_payment_id`.
 - HE split Wave-category columns still depend on the user running the launch SQL or confirming preflight green in the target Supabase environment.
+
+### 2026-06-17 v55.83-HT INVENTORY OVERVIEW ERROR-SURFACING QA - PASS WITH CAUTION
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 6a5b2b1 v55.83-HT.
+- Inspected committed Inventory Overview error-surfacing change and production build output.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Inventory Overview no longer silently converts core load failures into false empty stock
+- HT now inspects Supabase response .error after the overview Promise.all, covering products, classifications, stock layers, and receipts.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:207
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:211
+- If any core inventory query fails, the screen sets error and raises a toast instead of quietly showing []/empty inventory.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:213
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:215
+- The existing render path suppresses the "No inventory to show" empty state whenever error is present, which is the correct business behavior.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:799
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:804
+- Sales/invoice item load failure is treated as optional and warned only, which is acceptable because it affects profit/sold strip completeness, not the physical inventory truth.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:212
+- Verification: npm.cmd run build passed on HT.
+
+#### CAUTION - New user-facing error separator uses a middle dot
+- The new error banner/toast joins multiple failures with a middle dot. That will likely render fine in the browser, but this same project already had mojibake/readability issues around permission UI and ACCT labels.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:214
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:215
+- Instruction for Claude: not a blocker, but prefer plain ASCII in user-facing error strings, e.g. semicolon or pipe separators, especially for operational screens staff may screenshot or paste into support notes.
+
+#### Remaining launch checks after HT
+- Accounting/banking launch still depends on live environment work: assign ACCT permissions, visual-check RestrictedNotice on the dark Accounting screen, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores wave_payment_id.
+- Inventory still needs the user-requested real-product visual comparison between Overview and Inventory Snapshot.

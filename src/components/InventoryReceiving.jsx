@@ -16,6 +16,7 @@
 //     supplier/cost/rack with confirm; tech specs just save no popup
 
 import { useState, useEffect, useMemo, useRef } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 import InventoryFinalizeCostDialog from './InventoryFinalizeCostDialog';
@@ -1776,12 +1777,7 @@ export default function InventoryReceiving(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-500/15 border-2 border-amber-600/50 rounded-lg p-4 text-amber-100">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Viewing stock receipts requires the Inventory permission.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message="Viewing stock receipts requires the Inventory permission." />
       </div>
     );
   }
