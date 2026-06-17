@@ -1,7 +1,7 @@
 // v55.83-Z — Phase 2: Bank transaction review + classification + matching UI.
 // Money math comes from src/lib/payment-matching.js (validated). Permissions from
 // src/lib/bank-permissions.js. No Wave sync here. No deletes. Approved = locked.
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import SiloBanner from './SiloBanner';
 import { assertMatchSameSilo } from '../lib/wave-silo-guard';
@@ -75,6 +75,7 @@ export default function BankReviewTab(props) {
   function bizLabel(id) { if (!id) { return 'All businesses'; } var e = registry.find(function (r) { return r.wave_business_id === id; }); return e ? (e.label || id) : id; }
   var [loading, setLoading] = useState(true);
   var [sel, setSel] = useState(null);            // selected transaction
+  var deepLinkRef = useRef(false);               // v55.83-IN — one-shot guard for the Bank-tab deep-link
   var [busy, setBusy] = useState(false);
 
   // filters
@@ -158,6 +159,22 @@ export default function BankReviewTab(props) {
       setAcctCustomers(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), reg, true));
       setAcctInvoices(scopeIfRegistered((res[3] && res[3].data) || [], getActiveWaveBusiness(), reg, true));
       setSel(function (cur) { if (!cur) { return cur; } var fr = null; t.forEach(function (x) { if (x.id === cur.id) { fr = x; } }); return fr || cur; });
+      // v55.83-IN — deep-link from the Bank tab "Match in Bank Review" button: auto-open the txn.
+      var deepId = props.deepLink && props.deepLink.txnId;
+      if (deepId && !deepLinkRef.current) {
+        deepLinkRef.current = true;
+        var deepHit = null;
+        t.forEach(function (x) { if (x.id === deepId) { deepHit = x; } });
+        if (deepHit) {
+          // Clear filters that could hide the row, then select it (the matching panel opens from sel
+          // regardless of the list filter, so the user can match immediately).
+          setFStatus('all'); setFAccount('all'); setSearch('');
+          openTxn(deepHit);
+          if (toast && toast.success) { toast.success('Opened the transaction for matching.'); }
+        } else if (toast && toast.error) {
+          toast.error('That bank transaction is not loaded in Bank Review here — set the account to the right one and widen the date range, then click it.');
+        }
+      }
     }).catch(function (e) { console.error('[bankreview] load', e); toast.error('Failed to load bank transactions'); })
       .finally(function () { setLoading(false); });
   }

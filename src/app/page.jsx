@@ -406,6 +406,10 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
+  // v55.83-IN — deep-link from the raw Bank tab "Match in Bank Review" button into
+  // Accounting → Bank Review & Matching, carrying the bank transaction id so it auto-selects.
+  const [acctDeepLink, setAcctDeepLink] = useState(null); // { sub, txnId } | null
+  const goToBankReview = (txnId) => { setAcctDeepLink({ sub: 'review', txnId: txnId || null }); setTab('accounting'); };
   // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
   // dashboard (or any non-tickets tab), we switch to tickets, open the
   // ticket modal, and remember which tab to return to when modal closes.
@@ -2724,6 +2728,7 @@ export default function App() {
   // the Sales tab showing only that month's invoices.
   const navigate = (t, opts) => {
     setTabLoading(true);
+    if (t !== 'accounting') { setAcctDeepLink(null); } // v55.83-IN — clear stale Bank Review deep-link on manual nav elsewhere
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
     if (opts && opts.from && opts.to) {
@@ -14154,12 +14159,12 @@ export default function App() {
 
         {tab === 'bank' && (
           <SafeSection label="Bank">
-            <BankTab user={user} supabase={supabase} modulePerms={modulePerms} userProfile={userProfile} />
+            <BankTab user={user} supabase={supabase} modulePerms={modulePerms} userProfile={userProfile} onGoToBankReview={goToBankReview} />
           </SafeSection>
         )}
         {tab === 'accounting' && (
           <SafeSection label="Accounting">
-            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} />
+            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} />
           </SafeSection>
         )}
 

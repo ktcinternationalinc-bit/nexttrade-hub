@@ -5,7 +5,7 @@ import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 
-export default function BankTab({ user, supabase, modulePerms, userProfile }) {
+export default function BankTab({ user, supabase, modulePerms, userProfile, onGoToBankReview }) {
   const [connections, setConnections] = useState([]);
   const [plaidAccts, setPlaidAccts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -527,9 +527,14 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
                     </div>
                     {!t.matched_invoice_id && (
                       <button
-                        onClick={() => setNotice('To match this transaction to an invoice, go to Accounting → Bank Review & Matching. That screen posts the payment to the books (ledger + Wave); the old quick-match here did not and was disabled.')}
-                        className="text-[10px] text-slate-400 font-semibold mt-1"
-                        title="Matching moved to Accounting → Bank Review & Matching (accounting-safe)">
+                        onClick={() => {
+                          // v55.83-IN — actually NAVIGATE to Accounting → Bank Review & Matching and
+                          // deep-link this transaction, instead of just showing a notice that felt dead.
+                          if (onGoToBankReview) { onGoToBankReview(t.id); }
+                          else { setNotice('To match this transaction to an invoice, go to Accounting → Bank Review & Matching.'); }
+                        }}
+                        className="text-[10px] text-blue-400 hover:text-blue-300 font-bold mt-1 underline"
+                        title="Open this transaction in Accounting → Bank Review & Matching">
                         🔗 Match in Bank Review →
                       </button>
                     )}

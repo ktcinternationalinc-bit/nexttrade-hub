@@ -41,7 +41,18 @@ export async function POST(req) {
     var mode = body.mode || 'find';
     if (!bid) { return NextResponse.json({ error: 'wave_business_id is required.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
     if (bid === 'REAL_KTC_WAVE_BUSINESS_ID' || bid === 'TEST_WAVE_BUSINESS_ID') { return NextResponse.json({ error: 'Placeholder business id is not a real Wave business. Connect a real Wave business first.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
-    if (bid !== APPROVED_PUSH_BUSINESS_ID) { return NextResponse.json({ error: 'Product setup is allowed only for the approved KANDIL EGYPT test business.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 403 }); }
+    // v55.83-IN — allow the approved test business OR a PRODUCTION business that a super admin has
+    // unlocked (production_push_unlocked=true). This is CONFIG ONLY (sets the default invoice product);
+    // real invoice/customer/payment pushes stay gated by writes_enabled + allow_*_push. Without this,
+    // real KTC could never configure its default product from the Hub. assertPermission above already
+    // required wave.settings.manage.
+    if (bid !== APPROVED_PUSH_BUSINESS_ID) {
+      var _regRes = await db.from('wave_business_registry').select('production_push_unlocked, label').eq('wave_business_id', bid).single();
+      var _reg = _regRes && _regRes.data;
+      if (!(_reg && _reg.production_push_unlocked === true)) {
+        return NextResponse.json({ error: 'Product setup is allowed for the approved test business, or a production business a super admin has unlocked. Open Wave Sync Center → Settings, enable "REAL production Wave push" for this business, then retry.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 403 });
+      }
+    }
     var token = process.env.WAVE_ACCESS_TOKEN;
     if (!token) { return NextResponse.json({ error: 'No Wave token configured (WAVE_ACCESS_TOKEN).', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
 

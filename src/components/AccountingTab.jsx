@@ -15,7 +15,9 @@ import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
 
 export default function AccountingTab(props) {
-  var [sub, setSub] = useState('dashboard');
+  // v55.83-IN — open directly on a deep-linked sub-tab (e.g. Bank Review from the Bank tab's
+  // "Match in Bank Review" button). props.deepLink = { sub, txnId }; txnId flows to children via {...props}.
+  var [sub, setSub] = useState((props.deepLink && props.deepLink.sub) || 'dashboard');
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
