@@ -1068,7 +1068,14 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   };
 
   const togglePermission = async (userId, module) => {
-    const current = permissions[userId]?.[module] ?? true;
+    // v55.83-IE (P0 BUG, Max) — the default here MUST match the display default, or toggling does
+    // nothing. The grid shows TAB_PERMS default ON (?? true) and ACTION_PERMS default OFF (?? false).
+    // This used to always use `?? true`, so clicking an OFF action permission computed current=true
+    // → set it to false again → no visible change ("can't turn anything on"). Derive the default
+    // from which list the key belongs to so the first click flips it the way the user sees it.
+    const isTabPerm = TAB_PERMS.some(p => p.key === module);
+    const def = isTabPerm ? true : false;
+    const current = permissions[userId]?.[module] ?? def;
     const newVal = !current;
     try {
       const { data: existing } = await supabase.from('module_permissions')

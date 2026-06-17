@@ -1651,3 +1651,96 @@ Scope read before this pass:
 #### Remaining launch gates after IC
 - Accounting/banking still requires live environment proof: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
 - Split Wave-category production safety still depends on the target Supabase launch SQL/preflight being green.
+
+### 2026-06-17 v55.83-ID COMMITTED QA - ORPHAN PAYMENT REVERSE PASS / WAVE-SYNCED REVERSAL FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: c5c14b6 v55.83-ID.
+- Inspected only launch-critical BankReviewTab payment match/unmatch/orphan path plus Wave payment push status handling.
+- Ran focused tests: node __tests__\test-v55-83-ic-active-matches.js - PASS; node __tests__\test-v55-83-ho-unmatch-credit-reversal.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- Note: node __tests__\test-v55-83-fi-payment-queue-safety.js still fails 1 stale static assertion; this matches the known stale-test cleanup bucket and did not block build.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - ID closes the zero-payment_match orphan visibility/reverse path
+- BankReviewTab now loads accounting_invoice_payments into paysByTxn and filters out void/reversed rows with the shared isPaymentVoid helper.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:110
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:122
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:123
+- The orphan panel only renders when there are payment rows but no active matchesByTxn rows, so normally matched transactions should not get the orphan warning.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:721
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:737
+- unmatch() now permits the orphan case where ms.length === 0 but paysByTxn[t.id] has rows, then uses the existing void-by-bank_transaction_id and invoice recompute path.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:358
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:362
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:375
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:385
+- Business verdict: PASS for Hub-only orphan repair. This is a useful safety valve for half-created/backfilled payment rows that have not been pushed to Wave.
+
+#### FAIL - Bank Review can locally reverse a payment that has already been pushed to Wave
+- Wave payment push marks a successful Hub payment row with wave_payment_id and sync_status = synced.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:235
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:236
+- Wave Sync Center correctly excludes already-pushed payments from the push queue.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:361
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:362
+- BankReviewTab's new paysByTxn select does not load wave_payment_id/source, and the orphan panel/unmatch button does not distinguish pending Hub-only payments from Wave-synced payments.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:110
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:737
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:741
+- unmatch() updates every accounting_invoice_payments row for the bank_transaction_id to void/sync_status void, with no guard for wave_payment_id or sync_status synced/manual_done.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:377
+- Business impact: after the live Kandil/KTC payment push is enabled, staff could unmatch/reverse a payment in Hub while the real Wave payment remains applied in Wave. Hub invoice balance would be restored, but Wave would still show the payment unless there is a separate Wave reversal/manual process. That breaks the launch promise that Hub and Wave remain accounting-correct.
+- Instruction for Claude: before production Wave payment push is unlocked for staff, add a hard guard in BankReviewTab unmatch/reverse. If any payment row for the bank_transaction_id has wave_payment_id or sync_status in synced/manual_done, do not auto-void it locally. Show a clear message such as: "Payment already pushed to Wave. Reverse/remove it in Wave first, then run Wave import/reconcile or use a supervised repair." If a real Wave payment reversal API exists, build that as a separate explicit flow with confirmation and audit. Also include wave_payment_id and source/sync_status in the paysByTxn/payment-row fetch and add a focused regression/static test.
+
+#### Remaining launch gates after ID
+- Do not treat production Wave payment push as fully staff-ready until the already-synced unmatch/reverse guard above is fixed or the business explicitly restricts unmatch/reopen permissions to a supervised admin process.
+- Still requires live environment proof: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+
+### 2026-06-17 SETTINGS PERMISSION TOGGLE QA - LAUNCH-BLOCKING FAIL + IE WORKING-TREE PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- User reported live Settings > Module Access OFF buttons cannot be clicked on to turn permissions ON.
+- This is technically outside the narrow Accounting tab code, but it directly blocks launch because staff cannot be granted Bank/AR/Wave/Open Accounts permissions.
+- Inspected SettingsTab permission render/save logic and Claude's current BankReviewTab IE working-tree fix.
+- Ran focused tests: node __tests__\test-v55-83-ie-no-local-reverse-of-synced.js - PASS; node __tests__\test-v55-83-ic-active-matches.js - PASS; node __tests__\test-v55-83-ho-unmatch-credit-reversal.js - PASS; node __tests__\test-v55-83-fl-real-payment-push.js - PASS.
+- Ran production build after the BankReviewTab change: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - IE working-tree fix blocks local reversal of Wave-synced payments
+- BankReviewTab now loads wave_payment_id with payment rows used for paysByTxn.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:110
+- unmatch() now blocks local reverse if any non-voided payment row for that bank transaction has wave_payment_id, sync_status synced, or sync_status manual_done.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:363
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:366
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:367
+- Focused regression test exists and passes.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ie-no-local-reverse-of-synced.js
+- Verdict: this closes the v55.83-ID Wave-synced local reversal FAIL once Claude commits it. Remaining live gate is still the actual one-payment Wave verification.
+
+#### FAIL - Settings Module Access OFF buttons cannot reliably turn action permissions ON
+- The permission table correctly renders TAB permissions with default ON and ACTION permissions with default OFF.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:373
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:375
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1608
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1643
+- The toggle save function ignores which section the permission came from and always treats a missing row as current=true.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1070
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1071
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1072
+- Result: for any ACTION permission with no existing module_permissions row, the UI shows OFF because default is false, but togglePermission computes current=true and writes has_access=false again. The button appears not to work. This matches Max's live report.
+- Affected launch permissions include payments.match, payments.unmatch, bank.see_amounts, wave.payments.push, wave.sync.view, ar.view_* and the ACCT-00x invoice/customer permissions.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:455
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:471
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:474
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:491
+- Business impact: launch permission assignment is blocked. Staff can be locked out of invoices/customers/proformas/purchase orders/Bank Review/Wave Sync even though the code underneath is ready.
+- Instruction for Claude: fix immediately before more accounting/inventory work. The safest UI fix is to pass the displayed hasAccess into togglePermission, e.g. togglePermission(userId, key, hasAccess), and save !hasAccess. Do not recompute missing rows with a hard-coded default true. Keep the Open Accounts legacy fallback behavior for display, but ensure clicking the displayed state flips the displayed state. Also check Supabase update/insert error objects and toast failures; current code awaits update/insert without checking .error, so RLS/schema failures can silently fail.
+- Add a focused regression/static test: ACTION permission missing row displays OFF and first click inserts has_access=true; TAB permission missing row displays ON and first click inserts has_access=false; Edit Open Accounts legacy fallback flips from the displayed state; Supabase insert/update errors surface to the user.
+
+#### Launch call after this pass
+- Accounting/banking is NOT staff-launch-ready until the Settings permission toggle bug is fixed, because Max cannot assign the exact Bank/AR/Wave/ACCT permissions needed for Kandil users.
+- After this fix commits, re-test by turning ON at least: bank.view, bank.see_amounts, payments.match, payments.unmatch, wave.sync.view, wave.sync.dry_run, wave.payments.push, ar.view_invoice_balances, invoice.view, invoice.create, accounting.customers.view, accounting.customers.edit, purchase_orders.view, purchase_orders.edit for a non-super user, then reload and confirm the states persist.

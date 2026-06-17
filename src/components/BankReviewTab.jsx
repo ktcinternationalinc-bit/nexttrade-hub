@@ -107,7 +107,7 @@ export default function BankReviewTab(props) {
       supabase.from('plaid_accounts').select('*'),
       supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
-      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, voided, sync_status'),
+      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, voided, sync_status, wave_payment_id'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
@@ -360,6 +360,11 @@ export default function BankReviewTab(props) {
     // v55.83-ID — also allow reversing a recorded payment that has NO active match (orphan), so
     // such a payment isn't stuck. The void+recompute below keys on bank_transaction_id either way.
     if (ms.length === 0 && orphanPays.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
+    // v55.83-IE (Codex FAIL) — do NOT locally void a payment that has already been pushed to Wave
+    // (has a wave_payment_id, or sync_status synced/manual_done). Local-only reversal would leave
+    // the Hub and Wave out of sync. Reverse it in Wave first, then re-import/reconcile.
+    var syncedPay = (paysByTxn[t.id] || []).some(function (p) { return p && (p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'); });
+    if (syncedPay) { toast.error('This payment was already pushed to Wave. Reverse/remove it in Wave first, then run Wave import/reconcile. Local reverse is blocked to keep the Hub and Wave in sync.'); return; }
     var _confirmMsg = ms.length === 0
       ? 'Reverse the recorded payment on this transaction?\n\nThis voids the payment row(s) and restores the invoice balance(s). It is logged, not hard-deleted.'
       : 'Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.';

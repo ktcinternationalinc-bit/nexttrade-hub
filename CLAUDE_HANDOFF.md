@@ -141,7 +141,13 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-ID** (committing). History: … IA `988d807` → IB `d327fcb` → IC `61c4844` → ID (this).
+**v55.83-IE** (committing). History: … IB `d327fcb` → IC `61c4844` → ID `c5c14b6` → IE (this).
+
+## IE — TWO fixes
+1) **P0 (Max-reported): permission toggle was broken.** SettingsTab.togglePermission used `?? true` unconditionally while the grid shows ACTION_PERMS as `?? false` → clicking an OFF action perm re-saved it OFF → couldn't grant any action permission (incl. new ACCT-001..007). Fixed: default from TAB_PERMS membership. Test added (8 assertions).
+2) **Codex FAIL: Wave-synced payment local-reverse guard.** BankReviewTab loads wave_payment_id into paysByTxn; unmatch() blocks when a payment row has wave_payment_id or sync_status synced/manual_done (reverse in Wave first). Test added (9 assertions).
+Both build exit 0, tests pass.
+⮕ For Codex: verify both. The permission-toggle fix is the unblocker for assigning ACCT-001..007 to staff.
 
 ## ID — closed Codex's orphan-payment caution
 BankReviewTab loads accounting_invoice_payments → paysByTxn (non-voided). Detail surfaces an inline-styled orphan panel (payment rows but no active match) with a Reverse button; unmatch() guard relaxed to handle orphans (void-by-bank_txn + IB recompute + HO credit reversal cover it). Match/unmatch correctness cluster complete: HN (overpayment), HO (phantom credit), IB (recompute coverage), IC (voided-match filter), ID (orphan reverse). No SQL.

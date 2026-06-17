@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IE',
+    date: '2026-06-17',
+    label: 'CRITICAL FIX: permission toggles now actually turn ON (+ Wave-synced reverse guard)',
+    items: [
+      '**🛠️ Fixed: you can now grant permissions again.** In Settings → permissions, clicking an OFF action permission (like the new Invoices/Customers/Purchase-Order permissions) did nothing — it stayed off, so nothing could be granted. The toggle now flips correctly on the first click.',
+      '**🛟 Safety: a payment already pushed to Wave can no longer be reversed locally.** Bank Review now blocks a local reverse/unmatch of a payment that already has a Wave id (or is synced) — it tells you to reverse it in Wave first — so the Hub and Wave can\'t drift out of sync.',
+      { superAdminOnly: true, text: 'v55.83-IE — TWO fixes. (1) P0 (Max): SettingsTab.togglePermission used `permissions[userId]?.[module] ?? true` unconditionally, but the grid displays ACTION_PERMS with `?? false`. So toggling an OFF action perm with no row computed current=true → saved false → no change → couldn\'t grant ANY action permission (incl. the new ACCT-001..007). Fix: derive default from TAB_PERMS membership (isTabPerm ? true : false) so toggle matches display. Test test-v55-83-ie-permission-toggle-default.js. (2) Codex FAIL: BankReviewTab unmatch/reverse could locally void a Wave-pushed payment → Hub/Wave divergence. Fix: load wave_payment_id into paysByTxn; unmatch() blocks when any non-voided payment row has wave_payment_id or sync_status synced/manual_done, with a message to reverse in Wave first. Test test-v55-83-ie-no-local-reverse-of-synced.js. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-ID',
     date: '2026-06-17',
     label: 'Bank Review: recover a recorded payment that has no match',
