@@ -1620,3 +1620,34 @@ Scope note:
 - file: D:\GITHUB\nexttrade-hub\src\components\AssistantsBar.jsx:149
 - Business impact: the Hub can become much more valuable if AI summarizes the day by customer/account: overdue invoice + recent WhatsApp + missed call + open ticket + promised follow-up. Right now those signals are scattered.
 - R&D instruction for Claude later: after banking launch, define an AI context contract: customer timeline summaries, invoice/payment status, open tickets, recent communications, and suggested next action. Start read-only, then add draft actions requiring human approval.
+
+### 2026-06-17 v55.83-IC COMMITTED QA - BANK REVIEW ACTIVE MATCH FILTER PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 61c4844 v55.83-IC.
+- Inspected only launch-critical BankReviewTab active-match display/unmatch path plus the new focused regression test.
+- Ran focused test: node __tests__\test-v55-83-ic-active-matches.js - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - IC closes the Bank Review voided payment_matches display/counting FAIL
+- BankReviewTab still reads payment_matches for the audit-backed match map, but now filters rows to active matches only before grouping into matchesByTxn.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:102
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:114
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:116
+- The existing transaction-list matched badge and detail Matched panel continue to key off matchesByTxn, so voided payment_matches no longer make an unmatched transaction look matched.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:627
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:706
+- Regression test covers active kept, voided excluded, txn with only voided matches not shown as matched, legacy rows with undefined voided treated as active, and unmatch still soft-voids payment_matches for audit.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ic-active-matches.js
+- Verification: node __tests__\test-v55-83-ic-active-matches.js passed.
+
+#### CAUTION STILL OPEN - orphan payment rows with zero payment_match rows need a repair path
+- IC closes the active-match UI bug. It does not add a path for a bank transaction that has accounting_invoice_payments rows but no payment_matches row at all.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:346
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:347
+- Business instruction for Claude: keep this as a next Wave?Hub hardening item or Sync Center repair tool. It is separate from the IC FAIL fix and should not block the active-match PASS, but do not claim zero-match orphan payment repair is done.
+
+#### Remaining launch gates after IC
+- Accounting/banking still requires live environment proof: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+- Split Wave-category production safety still depends on the target Supabase launch SQL/preflight being green.

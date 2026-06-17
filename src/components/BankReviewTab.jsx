@@ -67,6 +67,7 @@ export default function BankReviewTab(props) {
 
   var [txns, setTxns] = useState([]);
   var [matchesByTxn, setMatchesByTxn] = useState({});
+  var [paysByTxn, setPaysByTxn] = useState({});   // v55.83-ID — non-voided payment rows per bank txn (orphan detection)
   var [acctCustomers, setAcctCustomers] = useState([]);
   var [acctInvoices, setAcctInvoices] = useState([]);
   var [registry, setRegistry] = useState([]);
@@ -106,6 +107,7 @@ export default function BankReviewTab(props) {
       supabase.from('plaid_accounts').select('*'),
       supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
+      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, voided, sync_status'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
@@ -114,6 +116,13 @@ export default function BankReviewTab(props) {
       var m = ((res[1] && res[1].data) || []).filter(function (x) { return x && x.voided !== true; });
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
+      // v55.83-ID — non-voided payment rows grouped by bank txn. Used to detect ORPHAN payments
+      // (a recorded payment with no active match) so they can be reversed instead of being stuck.
+      var paysBy = {};
+      ((res[8] && res[8].data) || []).forEach(function (p) {
+        if (!p || !p.bank_transaction_id || isPaymentVoid(p)) { return; }
+        (paysBy[p.bank_transaction_id] = paysBy[p.bank_transaction_id] || []).push(p);
+      });
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
       setPlaidAccts(pa);
       // Wave categories scoped to the active silo, for the categorization dropdown.
@@ -134,7 +143,7 @@ export default function BankReviewTab(props) {
       });
       setWaveCategories(cats);
       setRegistry(reg);
-      setTxns(t); setMatchesByTxn(byTxn);
+      setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy);
       // v55.83-GD — auto-load this silo's default bank account into the account filter, once per
       // mount (the component remounts on silo switch via its key). User can still switch manually.
       try {
@@ -347,8 +356,14 @@ export default function BankReviewTab(props) {
     if (!t || !mayMatch) { toast.error('You do not have Payments: Match permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
     var ms = matchesByTxn[t.id] || [];
-    if (ms.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
-    if (!window.confirm('Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.')) { return; }
+    var orphanPays = paysByTxn[t.id] || [];
+    // v55.83-ID — also allow reversing a recorded payment that has NO active match (orphan), so
+    // such a payment isn't stuck. The void+recompute below keys on bank_transaction_id either way.
+    if (ms.length === 0 && orphanPays.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
+    var _confirmMsg = ms.length === 0
+      ? 'Reverse the recorded payment on this transaction?\n\nThis voids the payment row(s) and restores the invoice balance(s). It is logged, not hard-deleted.'
+      : 'Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.';
+    if (!window.confirm(_confirmMsg)) { return; }
     var invIds = {}; ms.forEach(function (m) { if (m.invoice_id) { invIds[m.invoice_id] = true; } });
     var payStamp = { voided: true, sync_status: 'void', voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
     var matchStamp = { voided: true, voided_at: payStamp.voided_at, voided_by: payStamp.voided_by }; // payment_matches has no sync_status column
@@ -714,6 +729,17 @@ export default function BankReviewTab(props) {
                 <div className="text-[10px] mt-0.5">Wave sync: Pending Wave sync (push is a later build).</div>
                 {mayMatch && !isLocked(sel) && <button onClick={function () { unmatch(sel); }} disabled={busy} className="mt-1.5 px-2 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px] font-bold disabled:opacity-50">Unmatch (reverse)</button>}
                 {isLocked(sel) && <div className="text-[10px] mt-1">Reopen the transaction to unmatch.</div>}
+              </div>
+            )}
+
+            {/* v55.83-ID — ORPHAN recorded payment: a payment row with no active match. Surfaced so
+                it can be reversed instead of being stuck (inline-styled for guaranteed contrast). */}
+            {(!matchesByTxn[sel.id] || matchesByTxn[sel.id].length === 0) && paysByTxn[sel.id] && paysByTxn[sel.id].length > 0 && (
+              <div style={{ background: '#7f1d1d', color: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+                <div style={{ fontWeight: 800, marginBottom: 2 }}>⚠ Recorded payment with no match</div>
+                <div style={{ fontSize: 11 }}>This deposit has {paysByTxn[sel.id].length} recorded payment(s) but no active match — likely an import or a match that didn&apos;t complete. Reverse it to restore the invoice balance.</div>
+                {mayMatch && !isLocked(sel) && <button onClick={function () { unmatch(sel); }} disabled={busy} className="mt-1.5 px-2 py-1 bg-white text-rose-800 rounded text-[11px] font-bold disabled:opacity-50">Reverse recorded payment</button>}
+                {isLocked(sel) && <div style={{ fontSize: 10, marginTop: 4 }}>Reopen the transaction to reverse.</div>}
               </div>
             )}
 

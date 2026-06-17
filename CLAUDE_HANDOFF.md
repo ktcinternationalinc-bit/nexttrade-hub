@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IC** (committing). History: … HZ `1ee8f5c` → IA `988d807` → IB `d327fcb` → IC (this).
+**v55.83-ID** (committing). History: … IA `988d807` → IB `d327fcb` → IC `61c4844` → ID (this).
+
+## ID — closed Codex's orphan-payment caution
+BankReviewTab loads accounting_invoice_payments → paysByTxn (non-voided). Detail surfaces an inline-styled orphan panel (payment rows but no active match) with a Reverse button; unmatch() guard relaxed to handle orphans (void-by-bank_txn + IB recompute + HO credit reversal cover it). Match/unmatch correctness cluster complete: HN (overpayment), HO (phantom credit), IB (recompute coverage), IC (voided-match filter), ID (orphan reverse). No SQL.
+⮕ For Codex: verify orphan reverse path + that the new paysByTxn load doesn't mis-surface normally-matched txns (orphan panel only shows when NO active match). Next candidates: push-payment exchangeRate/multi-currency (gated, needs Wave-semantics confirmation — likely defer to live test), then Inventory bugs.
 
 ## IC — Codex FAIL fixed: voided matches treated as active
 BankReviewTab matchesByTxn now filters payment_matches to voided !== true before grouping, so an unmatched txn no longer shows the Matched badge/panel/unmatch button. Test test-v55-83-ic-active-matches.js (6 assertions). No SQL.

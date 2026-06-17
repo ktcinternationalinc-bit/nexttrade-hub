@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ID',
+    date: '2026-06-17',
+    label: 'Bank Review: recover a recorded payment that has no match',
+    items: [
+      '**🛟 You can now reverse a "stuck" recorded payment.** If a bank deposit somehow recorded a payment without a proper match (e.g. an import, or a match that didn\'t finish), the transaction now shows a clear "⚠ Recorded payment with no match" notice with a "Reverse recorded payment" button — so the invoice balance can be restored instead of being stuck.',
+      { superAdminOnly: true, text: 'v55.83-ID (Codex caution → hardening; Wave↔Hub). BankReviewTab.load() now also loads accounting_invoice_payments and builds paysByTxn (non-voided, grouped by bank_transaction_id). Detail shows an inline-styled (guaranteed-contrast) orphan panel when a txn has non-voided payment rows but no active match; its Reverse button calls unmatch(sel). unmatch() guard relaxed: proceeds when ms.length===0 but paysByTxn[t.id] has rows (the void-by-bank_transaction_id + IB invoice-id recompute + HO credit reversal already handle it); confirm message adapts. No SQL. Completes the match/unmatch correctness cluster (HN/HO/IB/IC/ID).' },
+    ],
+  },
+  {
     version: 'v55.83-IC',
     date: '2026-06-17',
     label: 'Bug fix: an unmatched deposit no longer still shows as "Matched"',
