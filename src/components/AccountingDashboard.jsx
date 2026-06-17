@@ -46,6 +46,8 @@ export default function AccountingDashboard(props) {
 
   var [d, setD] = useState(null);
   var [loading, setLoading] = useState(true);
+  var [refreshing, setRefreshing] = useState(false);   // v55.83-HB — non-blocking refresh (keeps data on screen)
+  var [lastLoaded, setLastLoaded] = useState(null);     // v55.83-HB — "updated at" indicator
   var [showSmall, setShowSmall] = useState(false);     // show small (<$200) + ignored overdue
   var [busy, setBusy] = useState(false);
   var [viewing, setViewing] = useState(null);
@@ -56,8 +58,11 @@ export default function AccountingDashboard(props) {
     return Math.round((new Date(due + 'T00:00:00').getTime() - new Date(today + 'T00:00:00').getTime()) / 86400000);
   }
 
-  function load() {
-    setLoading(true);
+  // v55.83-HB — load(silent): silent refresh keeps the current dashboard on screen
+  // (sets `refreshing` instead of the full-screen `loading`), so a manual Refresh or a
+  // silo switch doesn't blank the view.
+  function load(silent) {
+    if (silent) { setRefreshing(true); } else { setLoading(true); }
     var today = new Date().toISOString().substring(0, 10);
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
@@ -169,7 +174,7 @@ export default function AccountingDashboard(props) {
         nonUsd: nonUsdList,
         ws: ws, lastLog: lastLog, activity: activity, diag: diag
       });
-    }).catch(function (e) { console.error('[acctdash]', e); }).finally(function () { setLoading(false); });
+    }).catch(function (e) { console.error('[acctdash]', e); }).finally(function () { setLoading(false); setRefreshing(false); setLastLoaded(new Date()); });
   }
   useEffect(function () { if (anyAccess) load(); else setLoading(false); }, []);
 
@@ -218,7 +223,14 @@ export default function AccountingDashboard(props) {
 
   return (
     <div className="p-4">
-      <div className="text-lg font-extrabold text-slate-100 mb-1">📊 Accounting Dashboard</div>
+      {/* v55.83-HB — header with non-blocking Refresh + last-updated. */}
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <div className="text-lg font-extrabold text-slate-100">📊 Accounting Dashboard</div>
+        <div className="flex items-center gap-2">
+          {lastLoaded && <span className="text-[10px] text-slate-400">Updated {lastLoaded.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>}
+          <button onClick={function () { if (!loading && !refreshing) { load(true); } }} disabled={loading || refreshing} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded text-xs font-bold">{refreshing ? '↻ Refreshing…' : '↻ Refresh'}</button>
+        </div>
+      </div>
 
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">

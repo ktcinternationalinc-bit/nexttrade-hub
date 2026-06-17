@@ -9,7 +9,19 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-HA** (committing/deploying now). Deployed history: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ `80ff065` → handoff `45915c2` → HA (this).
+**v55.83-HB** (committing/deploying now). History: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ `80ff065` → `45915c2` → HA `dc0581f` → HB (this).
+
+## New directive from user
+"Make the Accounting + Inventory tabs remarkably efficient, professional, workable. Go to Stage B if necessary." → Stage B (virtual-mix consuming engine) is now AUTHORIZED, but it consumes real inventory + needs a new SQL RPC I can't run from here, so it ships gated (see below), not blind.
+
+## HB (this build)
+1. `AccountingDashboard.jsx` — non-blocking **Refresh** + "Updated HH:MM" (load(silent) keeps data on screen; useful after a payment or silo switch). No SQL.
+2. `STAGE_B_VIRTUAL_MIX_SALE_PLAN.md` (repo root) — full Stage B plan + **DRAFT SQL** for `consume_virtual_mix_inventory` / `reverse_virtual_mix_inventory`.
+
+## ⮕ For Codex — please review STAGE_B_VIRTUAL_MIX_SALE_PLAN.md
+- Sanity-check the DRAFT SQL against the live `consume_invoice_item_inventory` definition in Supabase — especially the column assumptions (`inventory_layers.cost_per_uom`, FIFO order `received_at ASC, id ASC`). Flag any mismatch before the user runs it.
+- Opinion on the allocation rule (Option A proportional vs B fixed-recipe vs C manual) given what the El Sayad records imply.
+- Stage B will NOT be wired into the UI until: user confirms allocation rule + runs the SQL + Codex QA passes. Stage A preview (HA) stays the only live virtual-mix piece.
 
 ## HA (this build) — Stage A: READ-ONLY Virtual Mix Sale Preview
 `src/components/InventoryMixComposition.jsx`. Non-destructive feasibility view (no writes, no FIFO, no consumption). After picking a mix + entering a sale qty, shows per-color planned drawdown, remaining-after, avg cost, COGS estimate, shortfall warning. DRAFT allocation rule = proportional to each color's current availability (planned_i = qty * available_i / total). Loads inventory_layers.cost_per_uom for the COGS estimate. **Stage B (the actual consuming engine) remains PARKED** — needs user go-ahead + El Sayad records to confirm the real allocation rule. This was the "next step on auto" with no new Codex notes present.

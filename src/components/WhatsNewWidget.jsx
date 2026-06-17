@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HB',
+    date: '2026-06-17',
+    label: 'Accounting Dashboard: live Refresh + last-updated',
+    items: [
+      '**🔄 The Accounting Dashboard now has a Refresh button.** It updates the figures in place (without blanking the screen or reloading the whole page) and shows the time it was last updated. Handy after you record a payment or switch the active company — just hit Refresh instead of reloading.',
+      { superAdminOnly: true, text: 'v55.83-HB. No SQL. AccountingDashboard.jsx: added refreshing + lastLoaded state; load(silent) sets refreshing (not the full-screen loading) so a manual refresh / silo switch keeps the current data on screen; header now has a Refresh button (disabled while loading/refreshing) + "Updated HH:MM". Also added STAGE_B_VIRTUAL_MIX_SALE_PLAN.md (repo root): full implementation plan + DRAFT SQL RPCs (consume_virtual_mix_inventory / reverse_virtual_mix_inventory) for the virtual-mix sale engine — gated on (a) user confirming the allocation rule, (b) user running the SQL in Supabase, (c) Codex QA — NOT auto-shipped, because it consumes real inventory. Stage A preview (HA) remains the safe live piece.' },
+    ],
+  },
+  {
     version: 'v55.83-HA',
     date: '2026-06-17',
     label: 'Stock Mix: read-only Sale Preview (no stock is touched)',
