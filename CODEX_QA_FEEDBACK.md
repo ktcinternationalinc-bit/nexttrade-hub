@@ -1839,3 +1839,188 @@ Scope read before this pass:
 #### Remaining launch gates after IF
 - Run/confirm launch SQL + /api/wave/preflight-schema.
 - Dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+
+### 2026-06-17 v55.83-IG WORKING-TREE QA - SETTINGS TOGGLE PASS / LIVE RETEST REQUIRED
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD is still 5452969 v55.83-IF. IG is present as uncommitted working-tree changes in SettingsTab, the permission test, badge/What's New, and handoff.
+- Ran focused tests: node __tests__\test-v55-83-ie-permission-toggle-default.js - PASS; node __tests__\test-v55-83-ie-no-local-reverse-of-synced.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - IG closes the IF display-state edge in Settings Module Access
+- togglePermission now accepts displayedHasAccess and computes newVal from the exact ON/OFF state rendered to the user.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1070
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1077
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1080
+- The TAB permission grid now passes hasAccess into togglePermission.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1623
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1628
+- The ACTION permission grid now passes hasAccess into togglePermission, including the legacy Edit Open Accounts fallback case.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1658
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1663
+- Regression test now covers visible-state flipping, including legacy-fallback ON -> OFF.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ie-permission-toggle-default.js
+- Verdict: PASS in code/build. This is the permissioning fix Max asked for: clicking a visible OFF should turn it ON, clicking a visible ON should turn it OFF, and failed DB saves should revert with a clear red error.
+
+#### CAUTION - IG is not committed/deployed yet in this QA pass
+- git status shows IG source changes are still working-tree changes, not a committed build.
+- Instruction for Claude: commit/deploy IG only after keeping the build green. Then Max must hard-refresh and confirm the badge reads v55.83-IG or later before judging Settings again.
+- Live retest: for one non-super user, toggle ON bank.view, bank.see_amounts, payments.match, payments.unmatch, wave.sync.view, wave.sync.dry_run, wave.payments.push, ar.view_invoice_balances, invoice.view, invoice.create, accounting.customers.view, accounting.customers.edit, purchase_orders.view, purchase_orders.edit. Reload and confirm states persist.
+- If any toggle flips back with a red error, capture the exact toast. That becomes a targeted Supabase module_permissions policy/RLS fix, not a UI mystery.
+
+### 2026-06-17 BROADER HUB QA/RD IDLE-LANE - COMMS / CALENDAR / ADMIN / TICKETS / AI
+
+Scope note:
+- Max explicitly broadened the idle QA lane beyond accounting/inventory: Calendar, communications, WhatsApp, email, phone, admin, settings, system tickets, dashboard, and AI/persona.
+- These are not all launch blockers for today's Kandil accounting go-live, but they are real gaps for a professional operating hub. Bugs first, then polish.
+
+#### FAIL - Legacy Communications WhatsApp compose calls the wrong API contract
+- The legacy Communications compose sends WhatsApp with { to, body, userId, triggeredBy }.
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:98
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:101
+- The current /api/whatsapp/send route requires conversation_id and returns 400 when it is missing.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:49
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:52
+- Business impact: staff can try to send a WhatsApp from Communications and it will fail even though WhatsApp Inbox has a valid send path.
+- Instruction for Claude: either remove/disable legacy WhatsApp compose and route users to WhatsApp Inbox/Start Conversation, or update it to create/find a conversation then call /api/whatsapp/send with conversation_id. Do not leave a visible send button wired to a guaranteed 400.
+
+#### FAIL - Gmail inbox/send trusts userId without route authentication
+- Gmail inbox reads userId from the query string and uses a service-role Supabase client to pick the active email account.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\inbox\route.js:57
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\inbox\route.js:61
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\inbox\route.js:67
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\inbox\route.js:68
+- Gmail send also trusts body.userId and uses it to choose the sender account.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\send\route.js:31
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\send\route.js:39
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\send\route.js:47
+- file: D:\GITHUB\nexttrade-hub\src\app\api\gmail\send\route.js:48
+- Business/security impact: a caller who can hit these routes can request another user's mailbox or send using another active Gmail account by changing userId. This is too loose for professional email integration.
+- Instruction for Claude: add requireUser to Gmail inbox/send, derive userId from session for normal staff, and allow cross-user mailbox access only to an explicit admin/comms permission. Log all sends to comms_audit with the authenticated actor.
+
+#### CAUTION - WhatsApp routes are authenticated but not permission/ownership gated
+- WhatsApp conversation list returns all non-archived conversations to any authenticated user by default.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\route.js:37
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\route.js:39
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\route.js:51
+- Single-conversation route returns any conversation/messages by id to any authenticated user.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\[id]\route.js:27
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\[id]\route.js:44
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\conversations\[id]\route.js:70
+- Send route authenticates but does not enforce comms permission or assignment/claim ownership before sending.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:44
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:56
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:178
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:180
+- Business impact: okay for a tiny trusted team, not okay for staff-wide rollout. Customer conversations need a clear view all / assigned only / send permission model.
+- Instruction for Claude: after accounting launch, add comms.whatsapp.view_all, comms.whatsapp.view_assigned, comms.whatsapp.send, and optionally enforce assigned_to ownership unless user has view_all/send_all. The UI claim model should mean something operationally.
+
+#### CAUTION - WhatsApp unread count can lose increments under concurrent inbound messages
+- Webhook dedupes by wa_message_id, and SQL has wa_message_id UNIQUE, which is good.
+- file: D:\GITHUB\nexttrade-hub\sql\s35_whatsapp_tables.sql:72
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:147
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:150
+- However unread_count is updated from a stale conv.unread_count value in application code.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:244
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:250
+- Business impact: two messages arriving together can both write the same unread_count + 1, causing the inbox badge to undercount.
+- Instruction for Claude: replace with an atomic SQL RPC/increment or recompute unread count from unread inbound messages.
+
+#### CAUTION - Phone incoming webhook intentionally fails open in production paths
+- Missing TWILIO_AUTH_TOKEN makes verifyTwilioSignature return true.
+- file: D:\GITHUB\nexttrade-hub\src\lib\phone-auth.js:176
+- file: D:\GITHUB\nexttrade-hub\src\lib\phone-auth.js:179
+- Even when signature verification returns false, incoming route logs and proceeds.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:132
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:138
+- Business/security impact: this prevents callers hearing a Twilio app error, but it also allows spoofed inbound call logs/voicemail flow pollution if exposed. That is not acceptable as a permanent professional phone-system posture.
+- Instruction for Claude: keep launch continuity, but make fail-open explicit and environment-gated, e.g. PHONE_WEBHOOK_FAIL_OPEN=true. In production, missing token should raise a loud health alert, and signature failures should use a controlled fallback TwiML path plus admin alert.
+
+#### CAUTION - Calendar can silently show an empty schedule on load failure
+- loadEvents ignores Supabase error and sets data || [].
+- file: D:\GITHUB\nexttrade-hub\src\components\CalendarTab.jsx:110
+- file: D:\GITHUB\nexttrade-hub\src\components\CalendarTab.jsx:112
+- It also still uses browser alert/confirm for important flows.
+- file: D:\GITHUB\nexttrade-hub\src\components\CalendarTab.jsx:271
+- file: D:\GITHUB\nexttrade-hub\src\components\CalendarTab.jsx:277
+- file: D:\GITHUB\nexttrade-hub\src\components\CalendarTab.jsx:412
+- Business impact: staff may think the day is clear when the calendar failed to load. Browser dialogs also make the app feel unfinished.
+- Instruction for Claude: add a visible calendar load-error state and replace alert/confirm with app modal/toast patterns.
+
+#### CAUTION - Admin dashboard swallows core data errors and can show false zeroes
+- Admin loadData catches independent query failures but only logs console warnings, then marks loaded true.
+- file: D:\GITHUB\nexttrade-hub\src\components\AdminTab.jsx:165
+- file: D:\GITHUB\nexttrade-hub\src\components\AdminTab.jsx:168
+- file: D:\GITHUB\nexttrade-hub\src\components\AdminTab.jsx:170
+- file: D:\GITHUB\nexttrade-hub\src\components\AdminTab.jsx:214
+- Business impact: management scorecards can look empty/healthy because data failed, not because work is clean.
+- Instruction for Claude: add per-widget data health banners or a top "some admin data failed to load" banner listing the failed datasets. Admin should never make decisions from silent blanks.
+
+#### FAIL - System ticket attachments use public URLs; private toggle gate is ambiguous
+- System ticket file upload stores attachments in ticket-attachments and saves public URLs.
+- file: D:\GITHUB\nexttrade-hub\src\components\SystemTicketsPanel.jsx:118
+- file: D:\GITHUB\nexttrade-hub\src\components\SystemTicketsPanel.jsx:123
+- The private toggle comment says super-admin only, but the component gates with generic isAdmin.
+- file: D:\GITHUB\nexttrade-hub\src\components\SystemTicketsPanel.jsx:222
+- file: D:\GITHUB\nexttrade-hub\src\components\SystemTicketsPanel.jsx:227
+- page.jsx passes isAdmin, not an explicit isSuperAdmin flag.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:14248
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:14250
+- Business/security impact: system tickets often contain screenshots, internal bugs, customer data, or credentials. Public attachment URLs and ambiguous privacy controls are not good enough.
+- Instruction for Claude: move sensitive ticket attachments to a private bucket with signed URLs, or add a clear "public attachment" warning until fixed. Pass an explicit isSuperAdmin prop for private/public ticket toggles if the intended gate is truly super-admin only.
+
+#### CAUTION - AI quote request flows bypass Hub comms audit in some UI paths
+- AIAssistant opens mailto: and wa.me directly for quote requests in at least two flows.
+- file: D:\GITHUB\nexttrade-hub\src\components\AIAssistant.jsx:549
+- file: D:\GITHUB\nexttrade-hub\src\components\AIAssistant.jsx:554
+- file: D:\GITHUB\nexttrade-hub\src\components\AIAssistant.jsx:665
+- file: D:\GITHUB\nexttrade-hub\src\components\AIAssistant.jsx:672
+- /api/ask has audited send_email/send_whatsapp action paths, so the app already has a better pattern.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:1262
+- file: D:\GITHUB\nexttrade-hub\src\app\api\ask\route.js:1269
+- Business impact: AI should make the Hub smarter, not push staff out into unaudited browser actions. External customer/vendor communication needs approval, actor, channel, status, and audit trail.
+- Instruction for Claude: turn AI external actions into in-Hub approval cards. Draft first, user approves, route sends through the Hub email/WhatsApp endpoints, then write comms_audit. Keep mailto/wa.me only as a fallback clearly marked "not tracked."
+
+#### PRODUCT NORTH STAR - Backlog after today's accounting launch
+- Build an Operations Command Center, not another pile of tabs: unified inbox (WhatsApp/email/phone), customer timeline, pending staff actions, aging SLA, unassigned work, today's calendar, and AI-suggested next best actions.
+- Dashboard should answer: who is stuck, what customer is waiting, what money/inventory risk exists today, and what should Max inspect first.
+- AI should be an operator with guardrails: briefing, draft, approve, execute, audit. No silent external sends. No mystery permissions.
+
+### 2026-06-17 v55.83-IG COMMIT STATUS CORRECTION
+- Correction to the IG working-tree note immediately above: Claude committed IG after the QA verification was run.
+- Current HEAD verified after append: b95db84 v55.83-IG: permission toggle flips the DISPLAYED state.
+- PASS still stands: focused permission tests passed and npm.cmd run build passed before this note.
+- Updated instruction for Claude/Max: deploy/hard-refresh v55.83-IG, then live-test one non-super user permission set. If toggles fail with a red toast, capture the DB/RLS error text. If badge is not v55.83-IG or later, do not judge the fix yet.
+
+### 2026-06-17 v55.83-IH WORKING-TREE QA - INVENTORY RECEIPT STATUS FILTER PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD at start of pass: b95db84 v55.83-IG. IH is present as working-tree changes in inventory files, badge/What's New, and handoff.
+- Ran focused test: node __tests__\test-v55-83-ih-receipt-status.js - PASS.
+- Ran production build: first attempt hit the recurring .next missing trace artifact after successful compile/page generation; immediate retry npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Shared receipt-status helper prevents Overview vs Report Center drift
+- New shared helper defines the four excluded receipt statuses in one place: cancelled, pending_detail, merged, reversed.
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-receipts.js:12
+- file: D:\GITHUB\nexttrade-hub\src\lib\inventory-receipts.js:16
+- Inventory Overview now imports and uses isCountableReceipt in the stock/received aggregation path.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:19
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:295
+- Inventory Report Center now imports and uses the same helper in its receipt loop.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:12
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:114
+- Behavior is intentionally unchanged from the current good logic: finalized/active/received/missing legacy status count; cancelled/pending_detail/merged/reversed do not count.
+- Regression test covers predicate behavior and verifies both screens use the shared helper.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ih-receipt-status.js
+- Business verdict: PASS. This is a good low-risk inventory hardening item because it prevents another Overview-vs-Snapshot mismatch without changing launch math.
+
+#### CAUTION - IH is not committed at the time of this QA append
+- git status still shows IH source files modified/untracked while HEAD remains v55.83-IG.
+- Instruction for Claude: commit/deploy IH only after keeping the build green. If the first build repeats the .next trace artifact failure, rerun once or clean generated build output safely; do not claim build-green unless a full npm.cmd run build exits 0.
+
+#### Launch reminder unchanged
+- Accounting/banking launch still depends on live items outside local code review: run/confirm launch SQL + /api/wave/preflight-schema, live non-super Settings permission retest on v55.83-IG or later, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores real wave_payment_id.

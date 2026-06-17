@@ -141,7 +141,17 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IG** (committing). History: … ID `c5c14b6` → IE `784c580` → IF `5452969` → IG (this).
+**v55.83-IH** (committing). History: … IE `784c580` → IF `5452969` → IG `b95db84` → IH (this).
+
+## IH — Inventory receipt-status shared constant (drift prevention)
+Extracted isCountableReceipt() to lib/inventory-receipts.js; Overview + ReportCenter import it (were duplicate inline filters → the GX drift class). Test added (15 assertions). Audit's other inventory items verified FALSE POSITIVE (UOM_RANK already has sqm). No SQL.
+
+## ⮕ For Max — SECURITY items Codex found (OUT of Wave/Inventory scope — your call to prioritize)
+Codex's cross-area audit surfaced real FAILs I did NOT build (outside the stated Wave↔Hub/Inventory priority):
+- **Gmail inbox/send route trusts userId from the request without auth** → any caller could read/send as another user. Real security hole. Recommend: add requireUser/session-derived userId + admin gate. WANT ME TO FIX THIS NEXT? (security > scope, IMO.)
+- **Ticket attachments use PUBLIC storage URLs** (the ticket-attachments bucket). Sensitive docs would be world-readable by URL. Fix = private bucket + signed URLs (infra + code). Ties to the attach work HX/HY/IA.
+- Comms cautions: legacy WhatsApp compose → wrong API (400); WhatsApp routes lack permission/ownership gating; unread-count race; phone webhook fail-open; admin dashboard silent zeroes; AI quote bypasses comms audit. (Backlog.)
+⮕ Codex passed IG. Remaining Wave↔Hub (push-payment multi-currency) still awaits the live Wave test. Next in-scope: thin inventory backlog (mostly consistency/perf) — or pull a security FAIL forward if Max says so.
 
 ## IG — closed Codex's IF caution (permission toggle complete)
 togglePermission now takes displayedHasAccess and saves !displayedHasAccess; both TAB+ACTION buttons pass their computed hasAccess (incl. readPerm legacy fallback for Open Accounts/Edit Open Accounts). Removes the last default-vs-display edge. Keeps IF optimistic+revert+toast. Test updated (9 assertions). Build exit 0.

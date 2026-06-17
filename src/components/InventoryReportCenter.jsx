@@ -9,6 +9,7 @@ import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import ReportTable, { formatCell } from './ReportTable';
 import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS } from '../lib/inventory-report-defs';
+import { isCountableReceipt } from '../lib/inventory-receipts';
 
 // Bilingual labels for inventory_movements.movement_type (data-driven, not inferred from text).
 var MOVEMENT_TYPE_LABELS = {
@@ -110,7 +111,7 @@ export default function InventoryReportCenter(props) {
       var recvUomByProduct = {}; var validReceiptCount = 0;
       receipts.forEach(function (r) {
         var pid = r.product_id; if (!pid) { return; }
-        if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged' || r.status === 'reversed') { return; }
+        if (!isCountableReceipt(r)) { return; } // v55.83-IH — shared status filter (was inline; kept in sync with Overview)
         validReceiptCount += 1;
         var qv = Number(r.quantity) || 0;
         origByProduct[pid] = (origByProduct[pid] || 0) + qv;

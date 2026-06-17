@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IH',
+    date: '2026-06-17',
+    label: 'Inventory: one shared rule for which receipts count (prevents Overview/Report drift)',
+    items: [
+      '**📦 Inventory Overview and the Report Center now use the exact same rule for which receipts count** (excluding cancelled / pending / merged / reversed). They were duplicated copies that could drift apart — the kind of mismatch that caused an earlier report-vs-overview discrepancy. Now it\'s one shared definition.',
+      { superAdminOnly: true, text: 'v55.83-IH. Extracted INVALID_RECEIPT_STATUSES + isCountableReceipt() to src/lib/inventory-receipts.js; InventoryOverview (stock aggregation, line ~294) and InventoryReportCenter (receipt loop, line ~113) now import + use it instead of duplicate inline cancelled/pending_detail/merged/reversed checks. Behavior identical today; prevents future drift (the GX bug class). Test test-v55-83-ih-receipt-status.js (15 assertions). Verified the audit\'s other inventory items were FALSE POSITIVES (UOM_RANK already has sqm). No SQL. Note: Overview historyReceipts (line ~133) intentionally left as-is (different context). Codex passed IG (permission toggle done). Codex flagged OUT-OF-SCOPE security FAILs (Gmail route trusts userId w/o auth; ticket attachments use public URLs) + comms cautions — surfaced to Max for a decision, not built (outside Wave/Inventory priority).' },
+    ],
+  },
+  {
     version: 'v55.83-IG',
     date: '2026-06-17',
     label: 'Permission toggle now flips exactly what you see (incl. Open Accounts)',

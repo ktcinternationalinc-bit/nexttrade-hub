@@ -16,6 +16,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import RestrictedNotice from './RestrictedNotice';
+import { isCountableReceipt } from '../lib/inventory-receipts';
 import { supabase } from '../lib/supabase';
 
 function fmtNum(n, dp) {
@@ -291,7 +292,7 @@ export default function InventoryOverview(props) {
       // just to satisfy the >0 check. Counting it here showed expected/unverified
       // goods as real on-hand stock AND inflated Original. On-hand = only what has
       // actually arrived: 'active' / 'received' (pending cost) or 'finalized'.
-      if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged' || r.status === 'reversed') return;
+      if (!isCountableReceipt(r)) return; // v55.83-IH — shared status filter (kept in sync with Report Center)
       var q = Number(r.quantity || 0);
       s.original_qty += q;
       var uom = (r.uom || 'unit').toLowerCase();
