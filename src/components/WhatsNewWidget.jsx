@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IL',
+    date: '2026-06-17',
+    label: 'Inventory reports: "last updated" time next to Refresh',
+    items: [
+      '**🕒 Inventory reports now show when the data was last loaded** — an "Updated: HH:MM:SS" label sits next to the Refresh button, so you know how fresh the numbers are (parity with the Accounting dashboard).',
+      { superAdminOnly: true, text: 'v55.83-IL (closes the refresh/last-updated half of the gap-list P3 ReportCenter item; the Refresh button already existed). Added loadedAt state, stamped via setLoadedAt(new Date()) right after setRaw() on a successful load() (not set on error, so it reflects the last good load). Rendered next to Refresh, localized (ar-EG when RTL). RTL column-order reversal in AR is still open (deferred — needs careful per-report column ordering + live visual check). Test test-v55-83-il-report-last-updated.js. No SQL. Note: local accounting/Kandil guardrails remain green per Codex (fq 10/10, fl 22/22, fj 7/7); the only open launch risk is the live Wave write — not a code item.' },
+    ],
+  },
+  {
     version: 'v55.83-IK',
     date: '2026-06-17',
     label: 'Inventory reports: cost/value data fully withheld (not just hidden) without permission',

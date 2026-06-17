@@ -37,6 +37,7 @@ export default function InventoryReportCenter(props) {
   var [search, setSearch] = useState('');
   var [raw, setRaw] = useState(null);
   var [loading, setLoading] = useState(true);
+  var [loadedAt, setLoadedAt] = useState(null);     // v55.83-IL — timestamp of last successful data load
   // v55.83-GW — surface load failures instead of silently showing an empty report.
   var [loadErrors, setLoadErrors] = useState([]);   // [{source, message}]
   var [diag, setDiag] = useState(null);             // counts for super-admin diagnostic
@@ -160,6 +161,7 @@ export default function InventoryReportCenter(props) {
         lastRecv: lastRecv, origByProduct: origByProduct, recvUomPrimary: recvUomPrimary,
         compsByMix: compsByMix, movements: movements
       });
+      setLoadedAt(new Date()); // v55.83-IL — stamp last successful load for the "Updated …" label
     }).catch(function (e) { console.error('[inv-reports] load', e); toast.error('Failed to load inventory data'); })
       .finally(function () { setLoading(false); });
   }
@@ -391,6 +393,12 @@ export default function InventoryReportCenter(props) {
         {mayExport && <button onClick={doExport} className={btn + ' bg-emerald-600 text-white border-emerald-600'}>{isRtl ? 'تصدير Excel' : 'Export Excel'}</button>}
         <button onClick={printReport} className={btn + ' bg-slate-600 text-white border-slate-600'}>{isRtl ? 'طباعة' : 'Print'}</button>
         <button onClick={load} className={btn + ' bg-white text-slate-700 border-slate-300'}>{isRtl ? 'تحديث' : 'Refresh'}</button>
+        {/* v55.83-IL — last-updated stamp (parity with the Accounting dashboard) */}
+        {loadedAt && (
+          <span className="text-[11px] text-slate-500 font-semibold self-center ml-1">
+            {(isRtl ? 'آخر تحديث: ' : 'Updated: ') + loadedAt.toLocaleTimeString(isRtl ? 'ar-EG' : undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+        )}
       </div>
 
       {report && <div className="text-xs text-slate-500">{isRtl ? report.desc_ar : report.desc_en}</div>}

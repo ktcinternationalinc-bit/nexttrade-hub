@@ -2263,3 +2263,69 @@ Scope read before this pass:
 #### LIVE-ONLY GATES - not proven by local QA
 - Kandil/KTC launch is still not fully cleared until the user/Claude confirms live Supabase launch SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id storage.
 - Instruction for Claude: do not let inventory/product-photo improvements distract from capturing that live payment proof. The local guardrails are green; the remaining launch risk is live environment/config and one real Wave write verification.
+
+### 2026-06-17 v55.83-IK WORKING-TREE QA - INVENTORY VALUATION DOUBLE-GATE PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- New working-tree source change appeared in InventoryReportCenter.jsx while the heartbeat was running; Codex did not edit source.
+- Ran focused tests: node __tests__\test-v55-83-ik-valuation-doublegate.js - PASS; node __tests__\test-v55-83-ih-receipt-status.js - PASS.
+- Ran production build: first npm.cmd run build hit the recurring .next export artifact after successful compile/page generation; immediate retry npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Valuation numbers are stripped from report row objects when permission is missing
+- New stripValuation() derives valuation keys from report column definitions and nulls those keys on a copied row when showValuation is false.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:257
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:272
+- flatRows() now routes Snapshot and Movement rows through stripValuation before screen/export/print consumers use them.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:275
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:279
+- The visible table still shows Restricted because ReportTable.formatCell checks c.valuation && !showValuation before formatting the cell value.
+- file: D:\GITHUB\nexttrade-hub\src\components\ReportTable.jsx:12
+- file: D:\GITHUB\nexttrade-hub\src\components\ReportTable.jsx:13
+- Export and totals still avoid leaking valuation values when gated.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:285
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:301
+
+#### CAUTION - IK is still working-tree at time of QA append
+- git status showed InventoryReportCenter.jsx modified, not committed, during this pass.
+- Instruction for Claude: commit/deploy IK only after preserving the green build result. This is a good defense-in-depth improvement, but it is not a Kandil accounting launch blocker.
+
+#### Launch reminder unchanged
+- Local accounting smoke remains green from the prior heartbeat note. The remaining top launch risk is live environment/config: launch SQL/preflight, non-super permission test, one dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id confirmation.
+
+### 2026-06-17 v55.83-IK COMMIT STATUS CORRECTION
+- Correction to the IK working-tree caution immediately above: Claude committed IK after the QA verification was run.
+- Current HEAD verified after append: c98f8d5 v55.83-IK: inventory-report valuation double-gate.
+- PASS still stands: IK valuation test passed, IH receipt-status test passed, and npm.cmd run build passed on retry.
+- Remaining launch gate unchanged: Kandil/KTC live SQL/preflight + non-super permission test + one clean dry-run + one real Wave payment push + Wave verification + Hub wave_payment_id confirmation.
+
+### 2026-06-17 v55.83-IL WORKING-TREE QA - INVENTORY REPORT LAST UPDATED PASS / BUILD CAUTION
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- New working-tree IL source changes found in InventoryReportCenter.jsx, app badge, WhatsNewWidget, plus __tests__/test-v55-83-il-report-last-updated.js.
+- Ran focused tests: node __tests__\test-v55-83-il-report-last-updated.js - PASS; node __tests__\test-v55-83-ik-valuation-doublegate.js - PASS; node __tests__\test-v55-83-ih-receipt-status.js - PASS.
+- Ran production build twice: both npm.cmd run build attempts compiled successfully, but exited 1 on recurring .next artifact errors. Do not call IL build-green yet.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Inventory Report Center last-updated label is low-risk and useful
+- IL adds loadedAt state and stamps it only after a successful setRaw() path in load().
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:37
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:161
+- The label renders next to Refresh and uses localized time output.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:393
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:399
+- The existing Refresh button remains wired to load().
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:392
+- Focused test covers state, success-only stamp, label rendering, and Refresh wiring.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-il-report-last-updated.js
+
+#### CAUTION - IL is not build-green yet in this QA pass
+- Build attempt 1 failed on missing .next\export-detail.json after compile.
+- Build attempt 2 failed on missing .next\export\500.html rename after compile/page generation.
+- Instruction for Claude: before committing/deploying IL, run the repo's safe clean build path and record a full npm.cmd run build exit 0. The code change itself looks fine; the only blocker from this pass is build verification.
+
+#### Launch reminder unchanged
+- IL is an inventory-report polish item, not a Kandil accounting launch blocker.
+- The top launch gate remains live SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id confirmation.
