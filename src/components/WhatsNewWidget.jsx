@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HL',
+    date: '2026-06-17',
+    label: 'Fix: production Wave Dry Run now honors the unlock switch (Codex bug)',
+    items: [
+      '**🐛 Fixed: production "Dry Run" was still blocked even after enabling the production-push switch.** The Dry Run path used a separate guard that ignored the new switch, so the toggle looked enabled but Dry Run failed. Now Dry Run and the real push use the same unlock rule, so the production-push toggle works end to end (still default OFF, still super-admin only).',
+      { superAdminOnly: true, text: 'v55.83-HL (Codex-found FAIL fix; Wave↔Hub bug, priority area #1). wave-silo-guard.js assertCanPush() (used by dryRunRecord in wave-sync-eligibility.js) still required the old typed UNLOCK_PHRASE for production and ignored production_push_unlocked → dry-run blocked on unlocked production while the push routes already honored the flag (HI/HJ). Fixed: (1) APPROVED-target check now also allows a production business with production_push_unlocked===true; (2) production block now allowed when reg.production_push_unlocked===true (writes_enabled + per-action flag still enforced above), with the typed phrase retained only as a fallback. Default (flag false/absent) still locked. The production toggle is now consistent across dry-run + all three push routes. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-HK',
     date: '2026-06-17',
     label: 'Inventory: Adjustments / Movements / Cost Layers now report load failures',

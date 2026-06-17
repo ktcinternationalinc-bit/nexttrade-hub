@@ -8,12 +8,16 @@ QA loop:
 
 ---
 
-## 🎯 STANDING TO-DO / PRIORITIES (heartbeat never idles — always advance the top UNBLOCKED item)
-Main goal: KTC Hub Accounting/Banking launch-ready and progressively more professional, without ever breaking employee-facing flows or touching real-money writes unsafely.
+## 🎯 STANDING TO-DO / PRIORITIES (heartbeat never idles; Claude + Codex are partners — consult him)
+Main goal: polish & refine the KTC Hub. **Order of work (Max, explicit): (1) Wave↔Hub / Banking tab, (2) then Inventory. BUGS FIRST, enhancements only after bugs.** Never break employee-facing flows or touch real-money writes unsafely. Work closely with Codex as QA/BA consultant — read his findings every fire, fix his FAILs first, and route open questions to him here.
 
-- **P0 — Launch safety (always first):** fix ANY Codex FAIL immediately; keep `npm run build` green; never weaken the production default-off invariant; no employee-facing crash/lockout.
+- **P0 — Bug triage (always first):** fix ANY Codex FAIL / real bug immediately; keep `npm run build` green; never weaken the production default-off invariant; no employee-facing crash/lockout.
+- **P1 — WAVE↔HUB / BANKING (priority area #1): BUGS → then enhancements.**
+  - Hunt + fix bugs across: Bank Review matching/unmatching, the 3 Wave push routes + shared guards (wave-silo-guard / wave-sync-eligibility), Wave Sync Center, push-payment, split categories, Open Accounts.
+  - Then enhancements (only after the bug list is clear).
+- **P1 — Production Wave push toggle:** code-ready as of HL (dry-run guard now honors production_push_unlocked too — fixed Codex's open FAIL). Gated on USER: run launch SQL → test silo → one real payment → verify `wave_payment_id` → flip real KTC. Claude must NOT flip it.
 - **P0 — Migrations/config (USER):** run `sql/v55-83-LAUNCH-accounting-banking.sql`; assign employee permissions. (Claude: keep verifying + reminding.)
-- **P1 — Production Wave push toggle:** code-ready (HJ). Gated on USER: test silo → one real payment → verify `wave_payment_id` → flip real KTC. Claude must NOT flip it.
+- **P2 — INVENTORY (priority area #2): BUGS → then enhancements** (gap list below; verify each vs live code first).
 - **P2 — Post-launch cleanups (safe, do these while waiting):**
   - Narrow the HH split-save fallback to missing-column/schema errors only (Codex caution).
   - Clean the stale static tests Codex listed (fi-payment-queue-safety, fs-permission-model, fr-route-lockdown, a-6-27-52-open-accounts, aa-phase2-polish) so the suite reflects current routes/wording.
@@ -137,7 +141,10 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HH** (committing/deploying now). History: … HE `b807cfa` → HF `377d7a5` → HG (this).
+**v55.83-HL** (committing). History: … HG → HH `320c842` → HI `3bf579b` → HJ `5e1d7be` → HK `1eb137c` → HL (this).
+
+## HL — fixed Codex's open FAIL (Wave↔Hub bug, priority area #1)
+Codex (QA sha d44f351): production toggle NOT code-ready — Dry Run path (wave-silo-guard.assertCanPush via wave-sync-eligibility.dryRunRecord) still required the typed UNLOCK_PHRASE and ignored production_push_unlocked, while the push routes already honored it (HI/HJ). FIXED: assertCanPush now honors production_push_unlocked in both the APPROVED-target check and the production block (writes_enabled + per-action flag still enforced; typed phrase kept as fallback; default still locked). Toggle now consistent across dry-run + all 3 push routes. ⮕ For Codex: re-verify dry-run unlock path + default-off invariant.
 
 ## Codex HE/HF review (QA sha 73ce64f) — READ
 Codex passed everything with no FAILs:

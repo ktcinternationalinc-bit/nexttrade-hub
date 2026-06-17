@@ -656,3 +656,40 @@ Scope read before this pass:
 #### Current verdict
 - GO: Hub-safe Bank Review/manual Wave workflow; combined launch SQL as the migration script.
 - NOT GO: production Wave push unlock, until production Dry Run works through the same unlock model as Push and one real payment is verified in Wave.
+### 2026-06-17 v55.83-HK Heartbeat QA - PASS WITH CAUTION / FAIL STILL OPEN
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 1eb137c v55.83-HK.
+- Working tree has no source diff; only .claude/ is untracked.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: npm.cmd run build PASS; Open Accounts Excel note-strip test PASS; real payment-push static test PASS.
+
+#### PASS WITH CAUTION - HK inventory error surfacing is safe and useful
+- Inventory Adjustments now checks each Supabase response error after Promise.all instead of letting query failures look like an empty adjustment list.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryAdjustments.jsx:75
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryAdjustments.jsx:79
+- Inventory Cost Layers now surfaces layers/products/warehouses query errors instead of silently showing no stock layers.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryCostLayers.jsx:62
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryCostLayers.jsx:65
+- Inventory Movements Ledger now surfaces movements/products/warehouses query errors instead of silently showing no movements.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMovementsLedger.jsx:66
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMovementsLedger.jsx:69
+- Business impact: this is a good launch-quality fix for inventory/report trust. Staff should see a load failure when RLS/schema/query problems exist, not a false empty inventory story.
+- CAUTION: this was useful, but it was not the top P0 launch blocker. Do not continue inventory polish ahead of the production Dry Run guard if Max still wants live Wave push today.
+
+#### FAIL STILL OPEN - Production Wave push unlock is not ready because Dry Run still uses the old phrase guard
+- Wave Sync Center's runDryRun() calls dryRunRecord() without an unlockPhrase.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:489
+- dryRunRecord() forwards a blank unlockPhrase into assertCanPush().
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:75
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:80
+- assertCanPush() still requires the old typed phrase for any production business and does not honor production_push_unlocked.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:125
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:127
+- Business impact: the required sequence for launch is Dry Run one clean payment, then Push one real payment, then verify Wave and Hub wave_payment_id. Today the new production toggle can make the button available, but the shared dry-run guard can still fail production as locked.
+- Instruction for Claude: fix the shared dry-run guard path before any more lower-priority polish. Production dry-run should pass only when the active registry row has production_push_unlocked === true, writes_enabled === true, and the relevant allow_<action>_push === true. Keep absent/false production_push_unlocked locked by default. If the old typed phrase is intentionally still required, expose it in the UI and pass it intentionally; do not leave a hidden impossible guard.
+
+#### Current launch verdict after HK
+- GO: Hub-safe Bank Review/manual Wave workflow, Open Accounts statements/exports, combined launch SQL, and HK inventory error surfacing.
+- NOT GO: production Wave push unlock for Kandil/KTC until the Dry Run guard is fixed, the launch SQL is run live, Kandil registry/settings are confirmed, one dry run succeeds, one real payment push is verified in Wave, and Hub stores the real wave_payment_id.

@@ -84,8 +84,11 @@ function assertCanPush(opts) {
   // v55.83-EF — HARD GUARD: a REAL push may only target the approved KANDIL EGYPT test business.
   // Dry runs are allowed against any registered silo for inspection (opts.dryRun === true),
   // but an actual write is blocked unless the target id matches exactly.
-  if (opts.dryRun !== true && opts.waveBusinessId !== APPROVED_PUSH_BUSINESS_ID) {
-    return fail('not_approved_target', 'Push blocked: target Wave business is not the approved KANDIL EGYPT test business.');
+  // v55.83-HL — allow the approved test business, OR a production business a super admin has
+  // explicitly unlocked (production_push_unlocked). Dry runs are still allowed against any
+  // registered silo for inspection. Keeps parity with the push routes' guards.
+  if (opts.dryRun !== true && opts.waveBusinessId !== APPROVED_PUSH_BUSINESS_ID && !(reg.is_production !== false && reg.production_push_unlocked === true)) {
+    return fail('not_approved_target', 'Push blocked: target Wave business is not the approved test business and is not an unlocked production business.');
   }
 
   // record must belong to this silo
@@ -122,10 +125,12 @@ function assertCanPush(opts) {
     return fail('push_type_disabled', (action.charAt(0).toUpperCase() + action.slice(1)) + ' push is not enabled for ' + (reg.label || opts.waveBusinessId) + '. Enable it in Wave Sync > Settings.');
   }
 
-  // production requires the typed unlock phrase EVERY push (§7)
-  if (reg.is_production !== false) {
+  // v55.83-HL — production allowed when a super admin has flipped production_push_unlocked on the
+  // registry row (writes_enabled + the per-action flag are already enforced above). The old typed
+  // unlock phrase still authorizes as a fallback for any caller that passes one. Default = locked.
+  if (reg.is_production !== false && reg.production_push_unlocked !== true) {
     if ((opts.unlockPhrase || '').trim() !== UNLOCK_PHRASE) {
-      return fail('production_locked', 'This is a PRODUCTION Wave business. Type "' + UNLOCK_PHRASE + '" to authorize this push.');
+      return fail('production_locked', 'Production push is locked. A super admin must enable real production push for ' + (reg.label || opts.waveBusinessId) + '.');
     }
   }
 
