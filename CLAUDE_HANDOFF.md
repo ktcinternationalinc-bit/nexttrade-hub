@@ -9,7 +9,11 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-HB** (committing/deploying now). History: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ `80ff065` → `45915c2` → HA `dc0581f` → HB (this).
+**v55.83-HC** (committing/deploying now). History: … HA `dc0581f` → HB `166cac8` → HC (this).
+
+## HC (this build) — heartbeat polish (no new Codex notes)
+`InventoryReportCenter.jsx`: print + CSV export now include the column totals row (Current Qty / Received Qty / Total Value), matching the on-screen ReportTable footer. Added flatTotals() helper (respects valuation gating). No SQL, no behavior risk.
+⮕ Stage B still gated (SQL not yet run / allocation rule not confirmed / awaiting Codex review of STAGE_B_VIRTUAL_MIX_SALE_PLAN.md).
 
 ## New directive from user
 "Make the Accounting + Inventory tabs remarkably efficient, professional, workable. Go to Stage B if necessary." → Stage B (virtual-mix consuming engine) is now AUTHORIZED, but it consumes real inventory + needs a new SQL RPC I can't run from here, so it ships gated (see below), not blind.

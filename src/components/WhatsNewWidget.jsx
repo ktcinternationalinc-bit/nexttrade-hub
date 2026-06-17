@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HC',
+    date: '2026-06-17',
+    label: 'Inventory reports: totals row now also prints & exports',
+    items: [
+      '**➕ Printed and exported inventory reports now include the totals row.** The on-screen report already showed column totals (Current Qty, Received Qty, Total Value); now the Print view and the Excel/CSV export carry the exact same totals line, so a printed or downloaded report is complete on its own.',
+      { superAdminOnly: true, text: 'v55.83-HC. No SQL. InventoryReportCenter: added flatTotals(rows, cols) mirroring ReportTable\'s total:"sum" logic + valuation gating. doExport() appends a totals CSV line (first col labelled Total/الإجمالي, sum columns filled, others blank). printReport() adds a <tfoot> totals row to the flat-report table with the same values, formatted to 2 decimals. Grouped (virtual mix) report unchanged — it already shows per-section totals on screen. On-screen ReportTable tfoot was already correct; this just brings print/export to parity.' },
+    ],
+  },
+  {
     version: 'v55.83-HB',
     date: '2026-06-17',
     label: 'Accounting Dashboard: live Refresh + last-updated',

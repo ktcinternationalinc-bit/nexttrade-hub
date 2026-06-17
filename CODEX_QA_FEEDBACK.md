@@ -50,3 +50,87 @@ Cautions before commit/deploy:
 3. The amber no-layer warning is acceptable, but its comment still says rows show Current Qty 0. That is not always true now because pending received stock is included. Prefer updating the comment/text to avoid future confusion.
 
 QA verdict: GX is acceptable to build/deploy after the stale wording is cleaned up and the build passes.
+
+### 2026-06-17 v55.83-HB Accounting + Inventory QA - FAILS / CAUTIONS / PASSES
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, .claude check, git status/log/diff.
+- Read transferred QA list from D:\Downloads\Straight answers to all three. Let.txt.
+- Current HEAD inspected: 166cac8 v55.83-HB.
+- Source diff is clean; .claude/ is untracked. No source code edited.
+- Scope remains only Accounting/Wave/Plaid/Open Accounts and Inventory/Stock Mix/Reports. Do not touch EgyptBankTab or unrelated tabs.
+
+#### FAIL - Open Accounts Excel export still leaks system auto-sync notes
+- Screen ledger strips the system note before display.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1934
+- Print export strips the same system note.
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:308
+- Excel export still concatenates raw notes into the Description cell.
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:892
+- Business impact: customer/internal Excel statements can expose implementation noise like Auto-synced from invoice... Edit the invoice to change this entry.
+- Instruction for Claude: sanitize Excel notes with the same regex used by screen/print before building the description cell. If the stripped note is empty, do not append anything. Add a focused regression test for customer-perspective Excel export.
+
+#### FAIL - Bank Review split Wave category saving is incomplete
+- Split UI allows selecting Wave categories as wave:<wave_account_id>.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:695
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:698
+- Save path writes only raw category: r.category into bank_transaction_splits; it does not persist wave_business_id, wave_account_id, wave_account_name, wave_account_type, wave_account_subtype, category_source, or category_status on the split row.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:381
+- The schema preflight expects Wave category fields on bank_transaction_splits.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:19
+- Business impact: split lines can look categorized with a Wave account in the UI but save as a plain string, making Wave sync/reporting ambiguous or Hub-only.
+- Instruction for Claude: if a split row selects wave:<accountId>, persist real Wave fields on the split row: wave_business_id, wave_account_id, wave_account_name, wave_account_type, wave_account_subtype, category_source = 'wave', category_status = 'pending_wave_sync'. Also make parent transaction/split lines appear correctly in Wave Sync Center. If this is not being built now, remove Wave category choices from split mode until it is implemented.
+
+#### PASS WITH CAUTION - BankTab quick-match removal is safe, but direct Bank-tab matching is still not built
+- PASS: /api/plaid/match is hard-disabled for POST/DELETE/GET/PUT.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\plaid\match\route.js:24
+- file: D:\GITHUB\nexttrade-hub\src\app\api\plaid\match\route.js:37
+- PASS: BankTab no longer has live quick-match state/handlers; match/unmatch buttons route staff to Bank Review by notice only.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:210
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:224
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:528
+- CAUTION: this confirms the safe path, not the requested future path. Direct Bank-tab matching with selected Wave silo/account remains not built. Keep it open if the business expects staff to match directly from Bank tab.
+
+#### FAIL - Stage B virtual-mix SQL draft is not safe to run yet
+- The plan says to mirror consume_invoice_item_inventory, but local SQL history has multiple versions.
+- Older line-level function orders FIFO by received_at.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-44c-line-level-consumption.sql:68
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-44c-line-level-consumption.sql:73
+- Newer FX snapshot function orders FIFO by receipt_date and stamps FX sale fields.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-64-auto-fx-snapshots.sql:219
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-64-auto-fx-snapshots.sql:224
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-a-6-27-64-auto-fx-snapshots.sql:292
+- Draft Stage B SQL currently uses received_at, has no FOR UPDATE layer lock, no warehouse scoping, and does not mirror the newer FX/COGS fields.
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:80
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:82
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:97
+- Business impact: running this as-is risks inventory corruption under concurrent sales and can bypass the latest landed-cost/FX P&L conventions.
+- Instruction for Claude: do not ask the user to run the Stage B SQL yet. First confirm the live Supabase definition with pg_get_functiondef('consume_invoice_item_inventory(uuid)'::regprocedure), then rewrite the virtual-mix RPC to match live FIFO column, locking, warehouse behavior, backorder convention, and FX/COGS fields. Keep Stage B gated until the allocation rule is confirmed from El Sayad records.
+
+#### PASS WITH CAUTION - Stage A Stock Mix Sale Preview is non-destructive, but preview only
+- PASS: the Sale Preview logic in InventoryMixComposition.jsx is a calculation over loaded products/layers; it does not call an RPC or deduct inventory.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:76
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:85
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:192
+- CAUTION from transferred QA: the preview duplicates proportional allocation logic instead of using previewProportionalSplit() from src/lib/mix-composition.js.
+- file: D:\GITHUB\nexttrade-hub\src\lib\mix-composition.js:41
+- CAUTION from transferred QA: if sale quantity exceeds availability, make it visually clear as SHORTFALL, not just negative remaining stock.
+- Business instruction: keep labeling Stage A as read-only sale preview. Do not claim virtual mix selling works until Stage B drawdown/reversal is live and QA-passed.
+
+#### CAUTION - Inventory Snapshot default does not actually match Inventory Overview default
+- Inventory Snapshot hides zero-stock rows by default.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:43
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:195
+- Inventory Overview currently shows zero-stock rows by default.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:53
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:341
+- Business impact: Claude's handoff claim that Snapshot default matches Overview default is false in current code. The receipt/current math looks aligned, but row visibility is not aligned by default.
+- Instruction for Claude: pick the business default explicitly. If launch goal is show real inventory with less noise, flip Overview to hide zero-stock by default too. If launch goal is same rows as Overview right now, flip Snapshot to show zero-stock by default. Then visually compare one known real product across Overview and Snapshot.
+
+#### Still-open business blockers after this pass
+- One live Wave payment push still needs verification in Wave.
+- Generic Wave bank transaction/category push remains Hub-only and truthfully blocked in Wave Sync Center.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:414
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:431
+- Direct Bank-tab matching with selected Wave silo/account remains not built.
+- Inventory Snapshot still needs the real-product visual check requested in Claude handoff.

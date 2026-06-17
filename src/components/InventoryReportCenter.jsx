@@ -272,13 +272,34 @@ export default function InventoryReportCenter(props) {
     var a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
     document.body.removeChild(a); URL.revokeObjectURL(url);
   }
+  // v55.83-HC — column totals for total:'sum' columns, mirroring ReportTable (and respecting
+  // valuation gating) so PRINT and EXPORT carry the same totals row the screen shows.
+  function flatTotals(rows, cols) {
+    var totals = {};
+    cols.forEach(function (c) {
+      if (c.total === 'sum' && !(c.valuation && !showValuation)) {
+        var s = 0, any = false;
+        rows.forEach(function (r) { var n = Number(r[c.key]); if (isFinite(n)) { s += n; any = true; } });
+        if (any) { totals[c.key] = s; }
+      }
+    });
+    return totals;
+  }
   function doExport() {
     if (!mayExport) { toast.error(isRtl ? 'لا تملك صلاحية التصدير' : 'You do not have export permission'); return; }
     var lines = [];
     if (!report.grouped) {
       var cols = report.columns;
+      var rows = flatRows();
       lines.push(cols.map(colHeader).map(csvEscape).join(','));
-      flatRows().forEach(function (r) { lines.push(cols.map(function (c) { return csvEscape(cellExport(r, c)); }).join(',')); });
+      rows.forEach(function (r) { lines.push(cols.map(function (c) { return csvEscape(cellExport(r, c)); }).join(',')); });
+      var totals = flatTotals(rows, cols);
+      if (Object.keys(totals).length) {
+        lines.push(cols.map(function (c, ci) {
+          if (totals[c.key] !== undefined) { return csvEscape(totals[c.key]); }
+          return csvEscape(ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : '');
+        }).join(','));
+      }
     } else {
       var mixHead = isRtl ? 'المزيج' : 'Mix';
       lines.push([csvEscape(mixHead)].concat(MIX_COLUMNS.map(colHeader).map(csvEscape)).join(','));
@@ -295,9 +316,19 @@ export default function InventoryReportCenter(props) {
     var title = isRtl ? report.title_ar : report.title_en;
     function th(cols) { return cols.map(function (c) { return '<th style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-bottom:2px solid #333">' + colHeader(c) + '</th>'; }).join(''); }
     function tr(r, cols) { return '<tr>' + cols.map(function (c) { return '<td style="text-align:' + (c.align || 'left') + ';padding:3px 8px;border-bottom:1px solid #ccc">' + formatCell(r[c.key], c, lang, showValuation) + '</td>'; }).join('') + '</tr>'; }
+    // v55.83-HC — totals row for print, matching the on-screen and CSV totals.
+    function tfoot(rows, cols) {
+      var totals = flatTotals(rows, cols);
+      if (!Object.keys(totals).length) { return ''; }
+      return '<tfoot><tr style="font-weight:bold;background:#e2e8f0">' + cols.map(function (c, ci) {
+        var cell = totals[c.key] !== undefined ? (Number(totals[c.key]) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : '');
+        return '<td style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-top:2px solid #333">' + cell + '</td>';
+      }).join('') + '</tr></tfoot>';
+    }
     var body = '';
     if (!report.grouped) {
-      body = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(report.columns) + '</tr></thead><tbody>' + flatRows().map(function (r) { return tr(r, report.columns); }).join('') + '</tbody></table>';
+      var flatR = flatRows();
+      body = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(report.columns) + '</tr></thead><tbody>' + flatR.map(function (r) { return tr(r, report.columns); }).join('') + '</tbody>' + tfoot(flatR, report.columns) + '</table>';
     } else {
       mixSections().forEach(function (s) {
         body += '<h3 style="margin:16px 0 4px">' + s.title + '</h3>';
