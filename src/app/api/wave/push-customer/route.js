@@ -20,7 +20,7 @@ function canPush(reg, record, waveBusinessId, action, unlockPhrase, dryRun) {
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
   // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
   var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
-  if (dryRun !== true && waveBusinessId !== APPROVED && reg.production_push_unlocked !== true) { return { ok: false, message: 'Push blocked: target Wave business is not the approved test business and real production push is not unlocked.' }; }
+  if (dryRun !== true && waveBusinessId !== APPROVED && !(reg.is_production !== false && reg.production_push_unlocked === true)) { return { ok: false, message: 'Push blocked: target Wave business is not the approved test business and is not an unlocked production business.' }; }
   if (!record || !record.wave_business_id) { return { ok: false, message: 'Record is not assigned to a silo.' }; }
   if (record.wave_business_id !== waveBusinessId) { return { ok: false, message: 'Record belongs to a different silo.' }; }
   if (action === 'customer' && record.wave_customer_id) { return { ok: false, message: 'Customer already exists in Wave.' }; }

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HJ',
+    date: '2026-06-17',
+    label: 'Fix production-push unlock (Codex FAILs): handlers honor the switch; route guard tightened',
+    items: [
+      '**🔧 The production-push switch now actually works end to end.** When a super admin enables real production push, the Dry Run / Push actions now run (previously the buttons lit up but the action still blocked). And the safety remains: with the switch OFF, everything stays locked.',
+      { superAdminOnly: true, text: 'v55.83-HJ (fixes the two Codex HI FAILs). (1) WaveSyncCenter runDryRun()/pushSelected() guards were still `if (isProd) return` — now `if (isProd && !productionUnlocked) return`, matching the button-disable logic, so unlock is real (was false-ready). (2) push-customer + push-invoice-v2 APPROVED-bypass tightened to `!(reg.is_production !== false && reg.production_push_unlocked === true)` so production_push_unlocked can ONLY unlock a real production business (matching push-payment semantics) — it can no longer broaden pushes to an arbitrary non-approved/non-production silo. writes_enabled + allow_<action>_push + permission gates still apply. Default-off invariant intact: production stays locked unless explicitly unlocked. Codex CAUTION (HH fallback catches all insert errors, not just missing-column) noted for post-launch narrowing. Pre-unlock checklist (Codex): run HE+HI SQL, verify Kandil registry flags + wave_business_settings default_payment_account_id/default_invoice_product_id live, dry-run one payment, push ONE real payment, verify wave_payment_id, then open to staff.' },
+    ],
+  },
+  {
     version: 'v55.83-HI',
     date: '2026-06-17',
     label: 'Super-admin switch to enable REAL production Wave push (default OFF)',

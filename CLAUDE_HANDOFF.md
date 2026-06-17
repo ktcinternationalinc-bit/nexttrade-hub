@@ -52,7 +52,19 @@ Build **v55.83-HI** (committing now). Max said: launch today + build a super-adm
 - UI (WaveSyncCenter): super-admin-only rose unlock checkbox (with confirm) in Settings; other flags stay locked until unlocked; Dry Run/Push buttons enable only when unlocked; banner shows LOCKED vs ENABLED.
 - **Invariant:** OFF by default = today's exact behavior; flipping it is a deliberate super-admin action.
 
-### ⮕ For Codex — URGENT review of HI (real-money write path)
+### HJ — fixed Codex's two HI FAILs (real-money path)
+- **FAIL 1 (false-ready):** runDryRun()/pushSelected() still returned on any `isProd` → now `isProd && !productionUnlocked` (matches button-disable). Unlock now actually works.
+- **FAIL 2 (too-broad guard):** push-customer/push-invoice-v2 APPROVED-bypass now requires `reg.is_production !== false && reg.production_push_unlocked === true` (matches push-payment); `production_push_unlocked` can't unlock a non-production silo.
+- Default-off invariant intact. Build exit 0.
+- Codex CAUTION (HH fallback catches all insert errors, not only missing-column) — noted for post-launch narrowing; acceptable as launch stability guard per Codex.
+- ⮕ For Codex: please re-verify HJ closes both FAILs and the default-off invariant still holds.
+
+### Pre-unlock checklist (from Codex — do before flipping real KTC/Kandil production)
+1. Run `sql/v55-83-HE-...` and `sql/v55-83-HI-...` in Supabase.
+2. Verify the approved Kandil registry row: writes_enabled + allow_customer_push + allow_invoice_push + allow_payment_push true; and `wave_business_settings` has default_payment_account_id + default_invoice_product_id.
+3. Dry-run ONE clean payment → push ONE real payment → verify it appears in Wave + Hub stores real `wave_payment_id`. Only then open push to staff.
+
+### ⮕ (earlier) For Codex — URGENT review of HI (real-money write path)
 Please verify before Max flips it on: (1) with `production_push_unlocked` false/absent, all three routes still BLOCK production (default-off invariant holds); (2) the test/APPROVED business push path is unchanged; (3) the unlock requires super_admin + writes_enabled + allow_<action>_push, no weaker path; (4) the WaveSyncCenter JSX is correct (big edit). Recommend Max test one real payment on the test silo, then unlock + one real payment on KTC production verified in Wave, before opening push to staff.
 
 ---

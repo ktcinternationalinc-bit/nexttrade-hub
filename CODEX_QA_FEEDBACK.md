@@ -519,3 +519,77 @@ Scope read before this pass:
   4. Run Dry Run on one clean payment only.
   5. Push one payment only, then verify the real payment appears in Wave and the Hub row stores a real `wave_payment_id`.
 - NOT GO for broad staff use until the one real Kandil payment push is verified in Wave.
+### 2026-06-17 v55.83-HI Production Unlock Heartbeat QA - FAIL
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current working tree has uncommitted HI production-unlock changes in Wave push routes, Wave Sync Center, and new SQL `sql/v55-83-HI-production-push-unlock.sql`.
+- No source code edited by Codex. Only this QA file was appended.
+- Build check: first `npm.cmd run build` failed after page generation on a `.next` rename ENOENT; immediate rerun passed. Treat as transient build-output issue, not product blocker.
+- Focused tests still pass: Open Accounts Excel note strip PASS; real payment-push static test PASS.
+
+#### FAIL - HI UI unlock enables buttons but handlers still block production dry-run/push
+- Wave Sync Center now enables Dry Run / Push buttons when `isProd && productionUnlocked`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:588
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:589
+- But `runDryRun()` still immediately returns on any production business, even if `productionUnlocked === true`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:485
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:486
+- `pushSelected()` also still immediately returns on any production business, even if `productionUnlocked === true`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:497
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:498
+- Business impact: production unlock appears available in Settings, but staff/super-admin still cannot actually dry-run or push from the UI. This is a false-ready launch state.
+- Instruction for Claude: change both handler guards to block only `isProd && !productionUnlocked`. Keep the one-payment-only rule. Re-run build and one dry-run UI path before telling Max production unlock works.
+
+#### FAIL - Customer/invoice server unlock guard is broader than intended
+- Customer and invoice routes allow a non-approved business through when `reg.production_push_unlocked === true`, without requiring that row to be production.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:23
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:22
+- Payment route is stricter and correctly requires `is_production !== false` plus `production_push_unlocked`, `writes_enabled`, and `allow_payment_push`.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:69
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:75
+- Business impact: customer/invoice push can be accidentally broadened to a non-approved non-production business if the unlock flag is set in data. The unlock is supposed to be approved Kandil test OR explicitly unlocked production only.
+- Instruction for Claude: make customer/invoice route condition match payment route semantics: allow if `waveBusinessId === APPROVED`, else allow only when `reg.is_production !== false && reg.production_push_unlocked === true && reg.writes_enabled === true && allow_<action>_push === true`. Do not let `production_push_unlocked` unlock arbitrary test/non-production silos.
+
+#### CAUTION - HI SQL is additive but must be run before production unlock UI can save
+- New SQL adds `wave_business_registry.production_push_unlocked boolean not null default false`.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-HI-production-push-unlock.sql
+- If this SQL is not run, the UI update for `production_push_unlocked` will fail when the super-admin toggles it. Default behavior remains locked, which is safe.
+- Instruction for Claude: launch checklist must explicitly include running HI SQL before testing production unlock, then confirming the selected production row shows the unlock field false before enabling it.
+
+#### Current verdict on HI
+- NOT GO for production Wave push unlock yet.
+- GO remains unchanged for Hub-safe Bank Review/manual Wave workflow.
+- Before Max uses production unlock: fix the two FAILs above, run HI SQL, confirm Kandil/target row settings live, Dry Run one clean payment, Push one payment only, then verify in Wave and Hub `wave_payment_id`.
+### 2026-06-17 v55.83-HI Post-Commit Heartbeat QA - FAILS STILL OPEN
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- HI is now committed at 3bf579b. Working tree source is clean; only Codex QA feedback remains modified.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL STILL OPEN - Production unlock UI cannot actually push
+- HI commit still has `runDryRun()` returning on any `isProd`, even if `productionUnlocked === true`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:485
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:486
+- HI commit still has `pushSelected()` returning on any `isProd`, even if `productionUnlocked === true`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:497
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:498
+- The buttons are enabled when `isProd && productionUnlocked`, so the UI presents an unlocked push path that the handlers immediately block.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:588
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:589
+- Instruction for Claude: patch the handler guards to `if (isProd && !productionUnlocked)` before claiming production unlock works.
+
+#### FAIL STILL OPEN - Customer/invoice route unlock guard is weaker than payment route
+- Customer route still allows a non-approved business through when `reg.production_push_unlocked === true`, without requiring the row to be production.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:23
+- Invoice route has the same issue.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:22
+- Payment route is stricter and is the model to copy: non-approved push requires production row + production_push_unlocked + writes_enabled + allow_payment_push.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:75
+- Instruction for Claude: customer and invoice route logic must match payment route semantics with action-specific allow flags. The production unlock must not unlock arbitrary non-approved test/non-production silos.
+
+#### Verdict
+- HI production Wave push unlock remains NOT GO.
+- Hub-safe Bank Review/manual Wave workflow remains GO.
+- Do not let Max flip production push until these two FAILs are fixed, HI SQL is run, one dry-run succeeds, one real payment push is verified in Wave, and Hub stores the real `wave_payment_id`.

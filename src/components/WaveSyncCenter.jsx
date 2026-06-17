@@ -483,7 +483,7 @@ export default function WaveSyncCenter(props) {
   var selectedRows = queue.filter(function (q) { return sel[q.key] && !q.blocked; });
 
   function runDryRun() {
-    if (isProd) { toast.error('Production is read-only in this build. Dry run is available for the Test business only.'); return; }
+    if (isProd && !productionUnlocked) { toast.error('Production push is locked. A super admin must enable real production push in Settings first.'); return; }
     if (selectedRows.length === 0) { toast.error('Select at least one record.'); return; }
     var results = selectedRows.map(function (q) {
       var v = dryRunRecord({ action: q.action, record: q.record, waveBusinessId: active, registry: registry });
@@ -495,7 +495,7 @@ export default function WaveSyncCenter(props) {
   var [dryResults, setDryResults] = useState([]);
 
   function pushSelected() {
-    if (isProd) { toast.error('Production writes are disabled. Use read-only reconcile or unlock production in a future controlled build.'); return; }
+    if (isProd && !productionUnlocked) { toast.error('Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
     if (selectedRows.length === 0) { toast.error('Select records and Dry Run first.'); return; }
     // v55.83-GC — per-action permission gate (defense alongside the server route checks).
     var lacksPerm = selectedRows.some(function (q) {
