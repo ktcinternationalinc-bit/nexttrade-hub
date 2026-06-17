@@ -139,6 +139,10 @@ export default function WaveSyncCenter(props) {
   var active = getActiveWaveBusiness();
   var reg = registry.find(function (r) { return r.wave_business_id === active; });
   var isProd = !!(reg && reg.is_production !== false);
+  // v55.83-HI — super-admin master switch to allow REAL production Wave pushes for this business.
+  // Default OFF (column absent/false → locked, exactly as before). Flipped only by a super admin
+  // after testing on the test silo. Server routes enforce the same flag independently.
+  var productionUnlocked = !!(reg && reg.production_push_unlocked === true);
 
   function load() {
     setLoading(true);
@@ -530,7 +534,15 @@ export default function WaveSyncCenter(props) {
 
   function setFlag(field, val) {
     if (!reg) { return; }
-    if (isProd) { toast.error('Production flags are locked in this build.'); return; }
+    // v55.83-HI — production_push_unlocked is the super-admin master switch; only a super admin
+    // may set it, and it can be set even on a production business (that is the whole point). Every
+    // OTHER Wave flag stays locked on a production business until it has been unlocked. Test
+    // businesses (is_production === false) are unaffected.
+    if (field === 'production_push_unlocked') {
+      if (!isSuperAdmin) { toast.error('Only a super admin can enable real production push.'); return; }
+    } else if (isProd && !productionUnlocked) {
+      toast.error('Unlock real production push first (super-admin switch in Settings).'); return;
+    }
     setSavingFlags(true);
     var patch = {}; patch[field] = val;
     supabase.from('wave_business_registry').update(patch).eq('wave_business_id', active)
@@ -551,9 +563,14 @@ export default function WaveSyncCenter(props) {
       <div className="text-lg font-extrabold mb-3">🔄 Wave Sync Center</div>
       <SiloBanner registered={!!reg} isTest={!!(reg && reg.is_production === false)} canWrite={!!(reg && reg.writes_enabled === true)} label={reg ? (reg.label || active) : (active || 'No business selected')} />
 
-      {isProd && (
+      {isProd && !productionUnlocked && (
         <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#7f1d1d', color: '#fff' }}>
-          Production writes are disabled in this build. Use read-only reconcile, or unlock production in a future controlled build.
+          🔒 Production Wave pushes are LOCKED for this business. A super admin can enable them in Settings after testing on the test silo.
+        </div>
+      )}
+      {isProd && productionUnlocked && (
+        <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#b45309', color: '#fff' }}>
+          ⚠ REAL PRODUCTION Wave push is ENABLED for this business — pushes will write to your real Wave books. Disable in Settings when not actively syncing.
         </div>
       )}
 
@@ -568,8 +585,8 @@ export default function WaveSyncCenter(props) {
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
             <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments · {queue.filter(function (q) { return q.action === 'bank_transaction'; }).length} bank txns)</span></div>
             <div className="flex gap-2">
-              <button onClick={runDryRun} disabled={isProd || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
-              <button onClick={pushSelected} disabled={isProd || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
+              <button onClick={runDryRun} disabled={(isProd && !productionUnlocked) || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
+              <button onClick={pushSelected} disabled={(isProd && !productionUnlocked) || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
             </div>
           </div>
           {queue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
@@ -761,7 +778,7 @@ export default function WaveSyncCenter(props) {
             {catMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{catMsg}</div>}
           </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
-          {reg && !isProd && (function () {
+          {reg && (!isProd || productionUnlocked) && (function () {
             var checks = [
               ['Writes enabled', reg.writes_enabled === true],
               ['Payment push enabled', reg.allow_payment_push === true],
@@ -784,11 +801,20 @@ export default function WaveSyncCenter(props) {
                 : <div className="mt-2 text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 font-medium">Finish the red items above before pushing payments.</div>}
             </div>;
           })()}
-          {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : isProd ? (
-            <div className="text-sm text-red-700 font-semibold">This is a PRODUCTION business. All push flags are locked in this build.</div>
-          ) : (
+          {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : (
             <div className="space-y-2 text-sm">
-              {[['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (records payments in Wave)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
+              {/* v55.83-HI — super-admin master switch: enable REAL production Wave pushes for this
+                  business. Default OFF. Other push flags only become editable once this is ON. */}
+              {isProd && (
+                <div className="border border-rose-400 bg-rose-50 rounded p-2 mb-1">
+                  <label className="flex items-center gap-2 text-rose-900 font-bold">
+                    <input type="checkbox" checked={productionUnlocked} disabled={savingFlags || !isSuperAdmin} onChange={function (e) { if (e.target.checked && !window.confirm('Enable REAL production Wave pushes for ' + (reg.label || active) + '?\n\nThis lets the Hub WRITE to your real Wave books. Only do this after fully testing on the test silo. You can turn it off again here.')) { return; } setFlag('production_push_unlocked', e.target.checked); }} />
+                    ⚠ Enable REAL production Wave push (super-admin only)
+                  </label>
+                  <div className="text-[11px] text-rose-700 mt-1">Default OFF. When ON, this business can write to real Wave — test on the test silo first, and turn OFF when not actively syncing.{!isSuperAdmin ? ' (Super admin required.)' : ''}</div>
+                </div>
+              )}
+              {(!isProd || productionUnlocked) ? [['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (records payments in Wave)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {
                 var disabled = savingFlags || f[0] === 'allow_auto_push';
                 return (
                   <label key={f[0]} className="flex items-center gap-2">
@@ -796,7 +822,7 @@ export default function WaveSyncCenter(props) {
                     <span className={disabled && f[0] === 'allow_auto_push' ? 'text-slate-400' : ''}>{f[1]}</span>
                   </label>
                 );
-              })}
+              }) : <div className="text-xs text-rose-700 font-semibold">Other push flags unlock once you enable real production push above.</div>}
             </div>
           )}
         </div>

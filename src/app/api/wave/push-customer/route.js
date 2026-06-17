@@ -20,15 +20,16 @@ function canPush(reg, record, waveBusinessId, action, unlockPhrase, dryRun) {
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
   // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
   var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
-  if (dryRun !== true && waveBusinessId !== APPROVED) { return { ok: false, message: 'Push blocked: target Wave business is not the approved KANDIL EGYPT test business.' }; }
+  if (dryRun !== true && waveBusinessId !== APPROVED && reg.production_push_unlocked !== true) { return { ok: false, message: 'Push blocked: target Wave business is not the approved test business and real production push is not unlocked.' }; }
   if (!record || !record.wave_business_id) { return { ok: false, message: 'Record is not assigned to a silo.' }; }
   if (record.wave_business_id !== waveBusinessId) { return { ok: false, message: 'Record belongs to a different silo.' }; }
   if (action === 'customer' && record.wave_customer_id) { return { ok: false, message: 'Customer already exists in Wave.' }; }
   if (reg.writes_enabled !== true) { return { ok: false, message: 'Writes are disabled for ' + (reg.label || waveBusinessId) + '.' }; }
   if (reg.allow_customer_push !== true) { return { ok: false, message: 'Customer push is not enabled for ' + (reg.label || waveBusinessId) + '.' }; }
-  if (reg.is_production !== false) {
-    if ((unlockPhrase || '').trim() !== 'PUSH TO REAL KTC WAVE') { return { ok: false, message: 'Production is locked. Production push is not enabled in this build.' }; }
-    return { ok: false, message: 'Production writes are disabled in this build. Test business only.' };
+  // v55.83-HI — production push allowed ONLY when a super admin has flipped production_push_unlocked
+  // (on top of writes_enabled + allow_customer_push checked above). Absent/false → locked (default).
+  if (reg.is_production !== false && reg.production_push_unlocked !== true) {
+    return { ok: false, message: 'Production push is locked. A super admin must enable real production push for ' + (reg.label || waveBusinessId) + '.' };
   }
   return { ok: true };
 }

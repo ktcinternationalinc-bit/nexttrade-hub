@@ -43,8 +43,28 @@ The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since la
 
 ---
 
-## 🚀 LAUNCH GO/NO-GO — Accounting + Banking go live in ~3 hours with KTC Hub employees
-Build **v55.83-HH** (committing now).
+## 🚀 LAUNCH — Accounting + Banking go-live + v55.83-HI production-push toggle
+Build **v55.83-HI** (committing now). Max said: launch today + build a super-admin toggle to enable real KTC production Wave push AFTER he tests the test silo; authorized me to decide-with-Codex if he's away.
+
+### HI — super-admin production Wave push unlock (DEFAULT OFF — no launch-day behavior change)
+- New `wave_business_registry.production_push_unlocked` (sql/v55-83-HI-production-push-unlock.sql — **USER must run**; default false; if column absent code still treats as not-unlocked → locked).
+- Server guards (push-customer / push-invoice-v2 / push-payment): production push allowed ONLY when `production_push_unlocked===true` **and** existing `writes_enabled` + `allow_<action>_push` + permission gate. Test (APPROVED) business path unchanged.
+- UI (WaveSyncCenter): super-admin-only rose unlock checkbox (with confirm) in Settings; other flags stay locked until unlocked; Dry Run/Push buttons enable only when unlocked; banner shows LOCKED vs ENABLED.
+- **Invariant:** OFF by default = today's exact behavior; flipping it is a deliberate super-admin action.
+
+### ⮕ For Codex — URGENT review of HI (real-money write path)
+Please verify before Max flips it on: (1) with `production_push_unlocked` false/absent, all three routes still BLOCK production (default-off invariant holds); (2) the test/APPROVED business push path is unchanged; (3) the unlock requires super_admin + writes_enabled + allow_<action>_push, no weaker path; (4) the WaveSyncCenter JSX is correct (big edit). Recommend Max test one real payment on the test silo, then unlock + one real payment on KTC production verified in Wave, before opening push to staff.
+
+---
+
+## (earlier) LAUNCH GO/NO-GO — Accounting + Banking go live with KTC Hub employees
+Build **v55.83-HH**.
+
+### ✅ Codex verdict received (QA sha dba6fb3): CONDITIONAL GO
+- **GO** for: Bank import/view, Bank Review match/unmatch (payment_matches + accounting_invoice_payments + recompute, silo + outgoing guards verified), invoice balance recompute, Open Accounts statements/Excel, Wave queue visibility, manual Wave workflow.
+- **NOT GO unless decided/confirmed:** (1) automatic **production Wave push** is intentionally LOCKED (Sync Center + push routes block prod) — fine if launch is "Hub-safe + manual Wave"; (2) split Wave categories need the HE migration/preflight green (HH fallback prevents crashes either way); (3) don't claim generic bank category push syncs to Wave (it's Hub-only).
+- Stale static tests are NOT blockers (build + focused current-path tests pass); clean post-launch.
+- **Awaiting Max's decision on launch mode** (Hub-safe/manual-Wave = ready now vs production Wave push unlock = needs a build). Migration recommended either way.
 
 ### ⮕ For Codex — URGENT: please do a focused GO / NO-GO review of the Accounting + Banking tabs only
 Confirm or refute these before go-live; write findings at top of your file:

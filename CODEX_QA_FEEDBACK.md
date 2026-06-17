@@ -374,3 +374,148 @@ Scope read before this pass:
 - Direct Bank-tab matching with selected Wave silo/account remains not built; Bank Review remains the safe accounting path.
 - One live Wave payment push still needs verification in Wave.
 - Inventory Snapshot still needs visual comparison against one known real product from Overview.
+
+### 2026-06-17 Accounting/Banking 3-Hour Launch Gate QA - GO / NO-GO
+
+Scope read before this pass:
+- User asked for accounting/banking tab live in 3 hours; switched from normal heartbeat to launch-readiness QA.
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: b4ab49e v55.83-HG. No source code edited by Codex.
+- Inspected BankTab, Bank Review, Wave Sync Center, Plaid match route, Wave push-payment route, Open Accounts export, and HE split-column migration.
+- Ran production build: npm.cmd run build - PASS.
+- Ran focused accounting/banking tests: Open Accounts Excel note-strip PASS, real payment-push static test PASS, bank ingestion PASS, Stock Mix helper PASS. Several older static tests fail because expectations are stale after route deletion/permission wording/refactors; see caution below.
+
+#### CONDITIONAL GO - Staff can launch Bank Review as the safe matching path
+- PASS: legacy /api/plaid/match is hard-disabled for GET/POST/PUT/DELETE, so stale BankTab quick-match cannot silently corrupt books.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\plaid\match\route.js:18
+- file: D:\GITHUB\nexttrade-hub\src\app\api\plaid\match\route.js:24
+- PASS: BankTab has no live quick-match caller; remaining /api/plaid/match references are explanatory copy/comments. Staff must use Accounting -> Bank Review & Matching.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:210
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:549
+- PASS: Bank Review blocks outgoing transactions from being matched to customer invoices.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:430
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:433
+- PASS: Bank Review silo guard blocks matching across Wave businesses.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:436
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:440
+- PASS: invoice matches create payment_matches, create accounting_invoice_payments, and recompute invoice balances.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:455
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:461
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:464
+- Launch instruction for Claude: for today's launch, tell staff plainly: BankTab is for bank connection/import/review visibility; all matching/unmatching must happen in Bank Review.
+
+#### GO-LIVE BLOCKER IF WAVE PUSHES ARE REQUIRED TODAY - Production Wave writes are locked
+- Wave Sync Center disables Dry Run and Push buttons whenever the selected Wave business is production.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:571
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:572
+- Wave Sync Center also shows a production-write-disabled banner.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:554
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:556
+- Customer and invoice push routes also block production businesses server-side.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:29
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:30
+- Payment push route has an approved-business hard guard, but the UI still blocks production pushSelected before it can call the route.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:70
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:494
+- Business impact: if the 3-hour live goal includes pushing real customers/invoices/payments from Hub to Wave, current code is NOT ready. The Hub can queue/review/manual-enter, but production push is intentionally disabled.
+- Instruction for Claude: decide immediately with Max. Either (A) launch accounting/banking today as Hub-safe + Bank Review + manual Wave entry, with production Wave pushes explicitly OFF, or (B) build a controlled production unlock for the approved Wave business only, with permission gate, one-at-a-time payment push, dry-run/preflight required, and a clear rollback plan. Do not let staff believe production Wave push works if it is locked.
+
+#### GO-LIVE BLOCKER FOR SPLIT WAVE CATEGORIES - Prod schema must be confirmed
+- Split Wave category saving now writes Wave fields to bank_transaction_splits, which is correct only if the HE migration has been run in Supabase.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:399
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:404
+- Required migration exists and is additive/idempotent.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-HE-bank-transaction-splits-wave-columns.sql:13
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-HE-bank-transaction-splits-wave-columns.sql:21
+- Preflight route checks exactly these split columns.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:18
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:19
+- Codex attempted read-only Supabase schema probes from this machine, but network calls timed out / fetch failed, so Codex cannot prove prod schema from here.
+- Instruction for Claude: before launch, Max/Claude must run Wave Sync Center -> Settings -> Database setup check OR run sql/v55-83-HE-bank-transaction-splits-wave-columns.sql in Supabase. If this is not green, disable/hide Wave category choices inside split mode for launch.
+
+#### CAUTION - Generic Wave transaction/category push remains Hub-only
+- Bank transaction categories and split categories appear in Wave Sync Center as Hub-only blocked rows. That is truthful, but it is not a Wave push implementation.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:419
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:430
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:440
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:454
+- Business impact: staff can categorize in Hub for review/reporting, but those generic bank categories do not sync into Wave today. Invoice payment push is separate.
+- Instruction for Claude: launch script must say this out loud. Do not market generic bank category push as done.
+
+#### PASS - Open Accounts statement/export leak remains fixed
+- Print strips system auto-sync note.
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:308
+- Excel strips the same system note before appending notes to Description.
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:893
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:897
+- Verification: node __tests__\test-v55-83-hd-excel-note-strip.js passed.
+
+#### TEST CAUTION - Some older static tests are stale, but one current local build passed
+- PASS: npm.cmd run build completed successfully on HG.
+- PASS: __tests__\test-v55-83-hd-excel-note-strip.js, test-v55-83-fl-real-payment-push.js, test-v55-83-x-bank-ingest.js, test-v55-83-hg-preview-split.js.
+- Stale failures observed:
+  - test-v55-83-fi-payment-queue-safety.js expects exact bank_transactions select string without newer columns; current code still loads amount_abs and attaches _bank_amount.
+  - test-v55-83-fs-permission-model.js and test-v55-83-fr-route-lockdown.js expect deleted legacy /api/wave/push-invoice route; current route is push-invoice-v2.
+  - test-v55-83-a-6-27-52-open-accounts.js expects older exact ledgerLabel/running-balance strings; current UI still calls ledgerLabel and color-codes running balances with newer perspective-aware code.
+  - test-v55-83-aa-phase2-polish.js regex window is stale; current split invoice path still inserts payment_matches, creates accounting_invoice_payments, and recomputes.
+- Instruction for Claude: do not treat stale static tests as product blockers, but clean them after launch. For launch, rely on build + focused current-path checks + live preflight.
+
+#### 3-hour launch verdict
+- GO for: Bank import/view, Bank Review matching/unmatching, invoice payment rows, invoice balance recompute, Open Accounts statements/Excel, Wave queue visibility, and manual Wave operating workflow.
+- NOT GO unless fixed/confirmed for: production Wave push from Hub, split Wave categories without HE migration/preflight, and claiming generic bank category push syncs to Wave.
+- Required before staff use today:
+  1. Run Wave preflight/schema check and ensure bank_transaction_splits Wave columns are green, or run the HE migration.
+  2. Decide launch mode: Hub-safe/manual Wave vs controlled production Wave push unlock.
+  3. If production Wave push is in scope, verify one real payment push end-to-end in Wave before opening to staff.
+  4. Tell staff: use Bank Review only for matching; BankTab quick-match is gone by design.
+
+### 2026-06-17 v55.83-HH Kandil Accounting/Banking Unlock QA - CONDITIONAL GO / CAUTION
+
+Scope read before this pass:
+- User clarified today is specifically the Kandil account, and Claude remains the coder while Codex acts as QA engineer / business analyst / R&D consultant.
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 320c842 v55.83-HH.
+- No source code edited by Codex. Only this QA file was appended.
+- Ran production build: npm.cmd run build - PASS.
+- Ran focused checks: Open Accounts Excel note strip PASS, real payment-push static test PASS, bank ingest PASS, Stock Mix helper PASS, current-route Kandil guard ad hoc check PASS.
+
+#### PASS - Code is hard-targeted to the approved Kandil Wave business id
+- Shared silo guard defines the only approved real-push Wave business id.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:14
+- Customer push route blocks any non-approved business id.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:21
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:23
+- Invoice push route blocks any non-approved business id and blocks production rows.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:20
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:22
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:30
+- Payment push route also blocks any non-approved business id.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:16
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:69
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-payment\route.js:70
+- Business instruction for Claude: do not unlock any Wave business other than the approved Kandil id `QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4`.
+
+#### CAUTION - Kandil live registry/settings could not be proven from Codex environment
+- Codex attempted read-only Supabase probes for the approved Kandil registry row, wave_business_settings, split columns, and pending payment rows. Supabase REST returned fetch failed from this machine, so Codex cannot honestly certify live configuration.
+- Instruction for Claude before unlock: verify in the app/Supabase that the approved Kandil row exists in `wave_business_registry` with `is_production=false`, `writes_enabled=true`, `allow_customer_push=true`, `allow_invoice_push=true`, and `allow_payment_push=true`.
+- Instruction for Claude before unlock: verify `wave_business_settings` for the same Kandil id has `default_payment_account_id` and `default_invoice_product_id` set. Without these, payment/invoice push will block even if the buttons are enabled.
+- Instruction for Claude before unlock: run Wave Sync Center -> Settings -> Database setup check and confirm `bank_transaction_splits` Wave columns are green, or run `sql/v55-83-HE-bank-transaction-splits-wave-columns.sql`.
+
+#### PASS WITH CAUTION - HH split-save fallback is launch-stable, but migration is still the correct fix
+- HH retries `bank_transaction_splits` insert with base columns if the Wave metadata insert fails, so employee split saving should not crash just because the HE migration is missing.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:407
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:408
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:413
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:415
+- CAUTION: the fallback catches any insert failure on a Wave-categorized split, not only missing-column failures. It is acceptable as a launch stability guard, but it can silently save the readable category without Wave metadata if another insert error happens.
+- Instruction for Claude: keep HH for launch stability, but after the launch narrow the fallback to missing-column/schema errors and keep pushing Max to run the HE migration/preflight.
+
+#### CONDITIONAL GO - Kandil unlock path
+- GO to unlock only if the selected account in Wave Sync Center is the approved Kandil id, shows TEST/read-write behavior, and all readiness checks are green.
+- GO sequence for Claude/Max:
+  1. Select the Kandil Wave business in the Hub.
+  2. Confirm the banner is TEST and not PRODUCTION. If it is PRODUCTION, the current UI intentionally disables Dry Run and Push.
+  3. Confirm Payment push readiness shows green for Writes enabled, Payment push enabled, Payment deposit account set, Invoice product set, and Wave categories loaded.
+  4. Run Dry Run on one clean payment only.
+  5. Push one payment only, then verify the real payment appears in Wave and the Hub row stores a real `wave_payment_id`.
+- NOT GO for broad staff use until the one real Kandil payment push is verified in Wave.

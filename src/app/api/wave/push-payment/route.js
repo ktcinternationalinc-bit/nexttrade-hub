@@ -66,9 +66,15 @@ export async function POST(req) {
     if (!token) { return NextResponse.json({ ok: false, error: 'Wave token not configured.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (!hubId) { return NextResponse.json({ ok: false, error: 'No payment row id provided.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
-    // Hard guard: only the approved (KANDIL EGYPT) business may receive pushes.
-    if (waveBusinessId !== APPROVED_PUSH_BUSINESS_ID) {
-      return NextResponse.json({ ok: false, error: 'Payment push is only allowed to the approved Wave business.', api_build_marker: API_BUILD_MARKER }, { status: 403 });
+    // v55.83-HI — allow the approved test business OR a production business a super admin has
+    // explicitly unlocked (production_push_unlocked + writes_enabled + allow_payment_push on the
+    // registry row). Default (column absent/false) → only the approved test business, exactly as before.
+    var _regRes = await db.from('wave_business_registry').select('is_production, writes_enabled, allow_payment_push, production_push_unlocked, label').eq('wave_business_id', waveBusinessId);
+    var _preg = (_regRes && _regRes.data && _regRes.data.length) ? _regRes.data[0] : null;
+    var _isApprovedTest = (waveBusinessId === APPROVED_PUSH_BUSINESS_ID);
+    var _prodUnlocked = !!(_preg && _preg.is_production !== false && _preg.production_push_unlocked === true && _preg.writes_enabled === true && _preg.allow_payment_push === true);
+    if (!_isApprovedTest && !_prodUnlocked) {
+      return NextResponse.json({ ok: false, error: 'Production payment push is locked. A super admin must enable real production push (writes_enabled + allow_payment_push + production unlock) for this business.', api_build_marker: API_BUILD_MARKER }, { status: 403 });
     }
 
     // Load the payment row.

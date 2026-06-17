@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HI',
+    date: '2026-06-17',
+    label: 'Super-admin switch to enable REAL production Wave push (default OFF)',
+    items: [
+      '**🔐 Real Wave production push is now a switch you control.** In Wave Sync Center → Settings, a super admin can turn on "Enable REAL production Wave push" for a business once it has been tested on the test silo. It is OFF by default — nothing pushes to your real Wave books until you deliberately flip it (and you can turn it back off anytime).',
+      '**🛟 Safe by default.** With the switch OFF (the default), everything behaves exactly as before — production pushes stay locked. Turning it on also requires the existing Writes-enabled + per-action push flags, so it is a deliberate, multi-step action.',
+      { superAdminOnly: true, text: 'v55.83-HI. Adds wave_business_registry.production_push_unlocked (sql/v55-83-HI-production-push-unlock.sql — USER MUST RUN; default false, and if absent the code still reads it as not-true so production stays locked). WaveSyncCenter: productionUnlocked derived; setFlag lets ONLY a super admin set production_push_unlocked (and on a production business), and keeps every other flag locked on production until unlocked; Dry Run/Push buttons enable when (!isProd || productionUnlocked); banner shows locked vs ENABLED; Settings shows a rose super-admin unlock checkbox with a window.confirm, then reveals writes_enabled/allow_* flags + payment-push readiness. Server routes push-customer/push-invoice-v2/push-payment: production push allowed only when reg.production_push_unlocked===true (push-payment also requires writes_enabled + allow_payment_push), in addition to the existing per-action allow flags + permission gates; test (APPROVED) business path unchanged. DEFAULT OFF = no behavior change at launch. Must be tested on the test silo + Codex-reviewed before flipping real KTC.' },
+    ],
+  },
+  {
     version: 'v55.83-HH',
     date: '2026-06-17',
     label: 'Launch hardening: Bank split-save can never crash on a missing column',
