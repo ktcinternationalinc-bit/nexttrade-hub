@@ -2,6 +2,7 @@
 // Calls /api/wave/check (server-side token). Read-only — confirms the link works
 // and which businesses are API-invoice compatible (isClassicInvoicing === false).
 import { useState } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 
 export default function WaveConnectionTab(props) {
   var userProfile = props.userProfile || null;
@@ -31,10 +32,7 @@ export default function WaveConnectionTab(props) {
   if (!isSuperAdmin) {
     return (
       <div className="p-6">
-        <div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950">
-          <div className="font-extrabold">🔒 Owner only</div>
-          <div className="text-sm font-medium mt-1">Only the account owner can connect or check Wave.</div>
-        </div>
+        <RestrictedNotice title="Owner only" message="Only the account owner can connect or check Wave." />
       </div>
     );
   }

@@ -2,6 +2,7 @@
 // Money math comes from src/lib/payment-matching.js (validated). Permissions from
 // src/lib/bank-permissions.js. No Wave sync here. No deletes. Approved = locked.
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import SiloBanner from './SiloBanner';
 import { assertMatchSameSilo } from '../lib/wave-silo-guard';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
@@ -522,10 +523,7 @@ export default function BankReviewTab(props) {
   if (!canViewBank(isSuperAdmin, modulePerms)) {
     return (
       <div className="p-6">
-        <div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950">
-          <div className="font-extrabold">🔒 Bank review restricted</div>
-          <div className="text-sm font-medium mt-1">Viewing bank transactions requires the Bank: View permission.</div>
-        </div>
+        <RestrictedNotice title="Bank review restricted" message="Viewing bank transactions requires the Bank: View permission." />
       </div>
     );
   }

@@ -2,6 +2,7 @@
 // (by ID, so the two same-named KTC LLCs can't be confused), then preview the
 // real customer/invoice records. NOTHING is written to the Hub yet.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { supabase } from '../lib/supabase';
 import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
@@ -123,7 +124,7 @@ export default function WaveImportTab(props) {
   }
 
   if (!isSuperAdmin) {
-    return <div className="p-6"><div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950"><div className="font-extrabold">🔒 Owner only</div></div></div>;
+    return <div className="p-6"><RestrictedNotice title="Owner only" message="Only the account owner can use Wave Import." /></div>;
   }
 
   function runReconcile() {

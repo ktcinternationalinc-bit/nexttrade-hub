@@ -6,6 +6,7 @@
 // excluded). Currencies are kept strictly separate (no cross-currency sums).
 // Credits/deductions tables do not exist yet -> shown as 0 with an honest note.
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
@@ -215,7 +216,7 @@ export default function CustomerLedger(props) {
   }
 
   if (!allowed) {
-    return <div className="p-6"><div className="bg-amber-100 text-amber-950 rounded-lg p-4 text-sm font-bold">You don't have permission to view customer AR. Ask an admin for the "View Customer AR" permission.</div></div>;
+    return <div className="p-6"><RestrictedNotice title="Restricted" message={'You don\'t have permission to view customer AR. Ask an admin for the "View Customer AR" permission.'} /></div>;
   }
   if (loading) return <div className="p-6 text-slate-400 text-sm">Loading customer accounting data…</div>;
 

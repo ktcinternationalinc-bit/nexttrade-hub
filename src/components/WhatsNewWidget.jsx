@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HQ',
+    date: '2026-06-17',
+    label: 'Fix unreadable "Restricted" boxes (dark-on-dark) across Accounting & Wave',
+    items: [
+      '**👁️ Fixed the unreadable locked/restricted boxes.** The "🔒 Restricted / Owner only / Bank review restricted" messages were rendering as dark text on a dark background (invisible). They now use a guaranteed high-contrast style — bright text on a dark panel with a gold border — so the message is always readable. Applied across the Accounting dashboard, Invoices, Customer AR History, Customer Ledger, Company Profile, Purchase Orders, Bank Review, Wave Connection, and Wave Import.',
+      { superAdminOnly: true, text: 'v55.83-HQ (contrast bug, recurring). Root cause: the bg-amber-100/text-amber-950 restricted panels rely on Tailwind classes that get purged/overridden under the dark theme → rendered dark-on-dark (the exact problem SiloBanner already documented and solved with inline styles). Created src/components/RestrictedNotice.jsx (INLINE styles: bg #1e293b, gold #fbbf24 / red #f87171 border, bright #fde68a title + #e2e8f0 message — never purged). Replaced the early-return restricted/owner-only panels in: AccountingDashboard, AccountingInvoicesTab (the reported screenshot), AccountingCustomerHistory, CustomerLedger, CompanyProfileTab, PurchaseOrdersTab, BankReviewTab, WaveConnectionTab, WaveImportTab. STILL TO CONVERT (next fire, same component): Inventory cluster (bg-amber-50 "Access restricted" ×8), AccountingCustomersTab view-only banner, CRM/others. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-HP',
     date: '2026-06-17',
     label: 'Regression test locking the unmatch credit-reversal fix',

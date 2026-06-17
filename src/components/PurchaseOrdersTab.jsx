@@ -2,6 +2,7 @@
 // print/Save-PDF purchase orders. These never touch Wave, AR, or any financial
 // report — purely an internal document the team can hand to suppliers.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { canViewBank, canEditMappings, canCreateInvoice } from '../lib/bank-permissions';
 
@@ -121,7 +122,7 @@ export default function PurchaseOrdersTab(props) {
     if (w) { w.document.write(html); w.document.close(); }
   }
 
-  if (!mayView) return <div className="p-6"><div className="bg-amber-100 border border-amber-300 rounded-lg p-4 text-amber-950 font-bold">🔒 Restricted</div></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
   if (loading) return <div className="p-4 text-slate-400 text-sm">Loading purchase orders…</div>;
 
   var shown = rows.filter(function (r) {

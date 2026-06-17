@@ -5,6 +5,7 @@
 // Excludes void/cancelled/archived/deleted. Ignored overdue invoices are kept out
 // of overdue totals unless the toggle is on.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances, canManageOverdueDashboard } from '../lib/bank-permissions';
@@ -199,7 +200,7 @@ export default function AccountingDashboard(props) {
       .then(function (r) { setViewItems((r && r.data) || []); }).catch(function () { setViewItems([]); });
   }
 
-  if (!anyAccess) return <div className="p-4 text-sm bg-amber-50 border border-amber-200 rounded text-amber-900 m-3">You don&#39;t have permission to view the Accounting dashboard. Ask an admin for an AR or Bank viewing permission.</div>;
+  if (!anyAccess) return <div className="p-3"><RestrictedNotice title="Restricted" message="You don't have permission to view the Accounting dashboard. Ask an admin for an AR or Bank viewing permission." /></div>;
   if (loading || !d) return <div className="p-4 text-slate-400 text-sm">Loading dashboard…</div>;
 
   // overdue filter: default hide <$200 and ignored; toggle shows all

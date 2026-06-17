@@ -2,6 +2,7 @@
 // Approval: draft -> internal_review -> approved (Owner/Admin/Accounting Manager).
 // Proformas never touch balances until converted. Printable PDF via browser print.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
@@ -409,7 +410,7 @@ export default function AccountingInvoicesTab(props) {
     });
   }
 
-  if (!mayView) return <div className="p-6"><div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950"><div className="font-extrabold">🔒 Restricted</div><div className="text-sm font-medium mt-1">Requires the Bank: View permission.</div></div></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" message="Requires the Bank: View permission." /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading…</div>;
 
   var liveTotal = docTotal(items);

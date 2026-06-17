@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HP** (committing). History: … HN `ca1d1d1` → HO `43de37b` → HP (this).
+**v55.83-HQ** (committing). History: … HO `43de37b` → HP `d866b8f` → HQ (this).
+
+## HQ — CONTRAST BUG fix (Max reported: unreadable dark-on-dark "Restricted" box on Invoices)
+Root cause: bg-amber-100/text-amber-950 restricted panels get purged/overridden under the dark theme → dark-on-dark (the exact issue SiloBanner documents + solved with inline styles). Created src/components/RestrictedNotice.jsx (inline styles, guaranteed contrast: dark slate bg, gold/red bright border, bright text). Replaced the early-return restricted panels in AccountingDashboard, AccountingInvoicesTab (the screenshot), AccountingCustomerHistory, CustomerLedger, CompanyProfileTab, PurchaseOrdersTab, BankReviewTab, WaveConnectionTab, WaveImportTab.
+⮕ STILL TO CONVERT next fire (use RestrictedNotice): Inventory "Access restricted" cluster (bg-amber-50 ×8: InventoryAdjustments/CostLayers/MovementsLedger/ProductMaster/Receiving/StockImport/ImportProducts/MasterAdmin), AccountingCustomersTab view-only banner, CRM/others. ⮕ For Codex: verify the inline-style approach renders readable + flag any remaining dark-on-dark panel anywhere.
 
 ## HP — closed Codex's HO test caution
 Added __tests__/test-v55-83-ho-unmatch-credit-reversal.js (7 assertions; passing): locks unmatch→customer_credits void scoped by source_transaction_id+status=open (non-fatal), the source_transaction_id stamp on the credit insert, and documents the intentional non-reversal of unapplied_deposits. Per Codex's agreement, NOT adding an unapplied_deposits origin-tag schema change mid-launch — the rare overpayment-no-customer residual remains an unapplied_deposit (manual-review by nature).

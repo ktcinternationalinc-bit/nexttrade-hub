@@ -1,6 +1,7 @@
 // v55.83-AH — Company Profile (singleton). Drives invoice/proforma branding.
 // WAVE: maps to the Wave business; logo is Hub-only for our printed PDFs.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { canViewBank, canEditMappings } from '../lib/bank-permissions';
 
@@ -76,7 +77,7 @@ export default function CompanyProfileTab(props) {
       .finally(function () { setBusy(false); });
   }
 
-  if (!mayView) return <div className="p-6"><div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950"><div className="font-extrabold">🔒 Restricted</div></div></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading company profile…</div>;
 
   return (

@@ -3,6 +3,7 @@
 //   open = total_amount - wave_imported_paid - SUM(hub/plaid payment rows)
 // Wave imported paid is NEVER turned into payment rows -> no double-count.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
 import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
@@ -82,7 +83,7 @@ export default function AccountingCustomerHistory(props) {
     return s;
   }
 
-  if (!mayView) return <div className="p-6"><div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950"><div className="font-extrabold">🔒 Restricted</div></div></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading customer AR history…</div>;
 
   var listed = customers.filter(function (c) {
