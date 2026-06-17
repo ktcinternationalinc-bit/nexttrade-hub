@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { customerLifecycle, archivePatch, restorePatch } from '../lib/record-lifecycle';
-import { canViewBank, canEditMappings } from '../lib/bank-permissions';
+import { canViewAccountingCustomers, canEditAccountingCustomers } from '../lib/bank-permissions';
+import RestrictedNotice from './RestrictedNotice';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 
 var BLANK = {
@@ -19,8 +20,11 @@ export default function AccountingCustomersTab(props) {
   var modulePerms = props.modulePerms || {};
   var [businessId, setBusinessId] = useState(props.businessId || null);
 
-  var mayView = canViewBank(isSuperAdmin, modulePerms);
-  var mayEdit = canEditMappings(isSuperAdmin, modulePerms);
+  // v55.83-HR (Codex P0) — accounting customers are NOT bank data; gate on accounting.customers.*,
+  // not bank.view.
+  var _role = userProfile && userProfile.role;
+  var mayView = canViewAccountingCustomers(isSuperAdmin, modulePerms, _role);
+  var mayEdit = canEditAccountingCustomers(isSuperAdmin, modulePerms, _role);
 
   var [rows, setRows] = useState([]);
   var [loading, setLoading] = useState(true);
@@ -97,10 +101,7 @@ export default function AccountingCustomersTab(props) {
   if (!mayView) {
     return (
       <div className="p-6">
-        <div className="bg-amber-100 border-2 border-amber-300 rounded-lg p-4 text-amber-950">
-          <div className="font-extrabold">🔒 Restricted</div>
-          <div className="text-sm font-medium mt-1">Viewing accounting customers requires the Bank: View permission.</div>
-        </div>
+        <RestrictedNotice title="Customers restricted" message="Requires the Accounting Customers: View permission (code ACCT-002 / accounting.customers.view). Bank View is NOT required." />
       </div>
     );
   }

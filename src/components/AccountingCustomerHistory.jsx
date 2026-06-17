@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
-import { canViewBank, canSeeAmounts } from '../lib/bank-permissions';
+import { canViewAccountingCustomers, canViewCustomerAr, canSeeAmounts } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
@@ -20,7 +20,9 @@ export default function AccountingCustomerHistory(props) {
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var mayView = canViewBank(isSuperAdmin, modulePerms);
+  // v55.83-HR (Codex P0) — customer AR history is a customer/AR document view, not bank data.
+  var _role = userProfile && userProfile.role;
+  var mayView = canViewAccountingCustomers(isSuperAdmin, modulePerms, _role) || canViewCustomerAr(isSuperAdmin, modulePerms);
   var showAmt = canSeeAmounts(isSuperAdmin, modulePerms);
   var toast = props.toast || { error: function () {} };
 
@@ -83,7 +85,7 @@ export default function AccountingCustomerHistory(props) {
     return s;
   }
 
-  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Customer AR History restricted" message="Requires Accounting Customers: View (ACCT-002) or Customer: View AR. Bank View is NOT required." /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading customer AR history…</div>;
 
   var listed = customers.filter(function (c) {

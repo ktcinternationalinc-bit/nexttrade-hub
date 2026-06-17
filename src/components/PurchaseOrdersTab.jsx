@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
-import { canViewBank, canEditMappings, canCreateInvoice } from '../lib/bank-permissions';
+import { canViewPurchaseOrders, canEditPurchaseOrders } from '../lib/bank-permissions';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -16,8 +16,9 @@ export default function PurchaseOrdersTab(props) {
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
   var role = userProfile && userProfile.role;
-  var mayView = isSuperAdmin || canViewBank(isSuperAdmin, modulePerms) || canCreateInvoice(isSuperAdmin, modulePerms);
-  var mayEdit = isSuperAdmin || role === 'admin' || role === 'owner' || canEditMappings(isSuperAdmin, modulePerms) || canCreateInvoice(isSuperAdmin, modulePerms);
+  // v55.83-HR (Codex P0) — purchase orders are internal documents, not bank data.
+  var mayView = canViewPurchaseOrders(isSuperAdmin, modulePerms, role);
+  var mayEdit = canEditPurchaseOrders(isSuperAdmin, modulePerms, role);
 
   var [rows, setRows] = useState([]);
   var [itemsByPo, setItemsByPo] = useState({});
@@ -122,7 +123,7 @@ export default function PurchaseOrdersTab(props) {
     if (w) { w.document.write(html); w.document.close(); }
   }
 
-  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Purchase Orders restricted" message="Requires the Purchase Orders: View permission (code ACCT-006 / purchase_orders.view). Bank View is NOT required." /></div>;
   if (loading) return <div className="p-4 text-slate-400 text-sm">Loading purchase orders…</div>;
 
   var shown = rows.filter(function (r) {

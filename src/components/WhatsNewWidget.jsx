@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HR',
+    date: '2026-06-17',
+    label: 'P0: staff no longer need "Bank View" to use Invoices/Customers/POs',
+    items: [
+      '**🔑 Fixed a backwards permission setup.** Invoices, Proformas, Accounting Customers, Company Profile, Customer AR History, and Purchase Orders were locked behind the "Bank: View" permission — so staff had to be able to see raw bank transactions just to work on invoices. Now each has its own permission, and Bank: View only controls Bank Review & Matching.',
+      '**⚙️ New assignable permissions in Settings (with codes):** ACCT-001 Company Profile: View, ACCT-002/003 Accounting Customers View/Edit, ACCT-004 Invoices: View, ACCT-005 Invoices: Create/Edit, ACCT-006/007 Purchase Orders View/Edit. Grant these to staff instead of Bank: View. (Existing staff with "Edit Invoices" keep invoice access automatically.)',
+      '**👁️ Restricted messages now say exactly which permission is needed** (and that Bank View is not required), in the readable high-contrast style.',
+      { superAdminOnly: true, text: 'v55.83-HR (Codex P0). Re-gated the accounting document tabs off canViewBank/bank.view onto explicit document helpers in bank-permissions.js: AccountingInvoicesTab→canViewInvoices/canCreateInvoice; AccountingCustomersTab→canViewAccountingCustomers/canEditAccountingCustomers; AccountingCustomerHistory→canViewAccountingCustomers||canViewCustomerAr; CompanyProfileTab→canViewCompanyProfile/canEditCompanyProfile; PurchaseOrdersTab→canViewPurchaseOrders/canEditPurchaseOrders. BankReviewTab KEEPS canViewBank. New helpers are role-aware (super_admin/admin/owner) with legacy fallbacks (Edit Invoices/Invoices/Sales/Customers/etc.) so current staff are NOT locked out; bank.view is intentionally never a fallback. Added 7 assignable keys to Settings ACTION_PERMS with stable codes ACCT-001..007 + plain-English descriptions. Restricted notices name the exact code/key. Fixed RestrictedNotice mojibake icon (emoji default → "[LOCKED]"). Test: __tests__/test-v55-83-hr-accounting-doc-permissions.js (20 assertions; invoice.view-without-bank.view opens invoices, bank.view alone does not, Bank Review still needs bank.view, source-wiring). No SQL. Still queued: Inventory restricted-card contrast conversion; real visual check on the dark Accounting surface (user-side).' },
+    ],
+  },
+  {
     version: 'v55.83-HQ',
     date: '2026-06-17',
     label: 'Fix unreadable "Restricted" boxes (dark-on-dark) across Accounting & Wave',

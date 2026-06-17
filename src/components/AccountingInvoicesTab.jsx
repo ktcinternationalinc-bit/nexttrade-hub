@@ -6,7 +6,7 @@ import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
-import { canViewBank, canEditMappings, canReopen } from '../lib/bank-permissions';
+import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
@@ -52,8 +52,11 @@ export default function AccountingInvoicesTab(props) {
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
 
-  var mayView = canViewBank(isSuperAdmin, modulePerms);
-  var mayEdit = canEditMappings(isSuperAdmin, modulePerms);
+  // v55.83-HR (Codex P0) — Invoices/Proformas are DOCUMENT screens; gate on invoice.view /
+  // invoice.create, NOT bank.view. A user can work invoices without seeing bank transactions.
+  var _role = userProfile && userProfile.role;
+  var mayView = canViewInvoices(isSuperAdmin, modulePerms, _role);
+  var mayEdit = canCreateInvoice(isSuperAdmin, modulePerms, _role);
   var mayApprove = canReopen(isSuperAdmin, modulePerms, userProfile && userProfile.role); // Owner/Admin/Accounting Mgr
 
   var [mode, setMode] = useState(props.defaultMode || 'invoices');     // invoices | proformas
@@ -410,7 +413,7 @@ export default function AccountingInvoicesTab(props) {
     });
   }
 
-  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" message="Requires the Bank: View permission." /></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Invoices restricted" message="Requires the Invoices: View permission (code ACCT-004 / invoice.view). Ask an admin to grant it in Settings — Bank View is NOT required." /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading…</div>;
 
   var liveTotal = docTotal(items);

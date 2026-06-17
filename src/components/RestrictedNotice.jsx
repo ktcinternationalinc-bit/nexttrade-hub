@@ -8,7 +8,9 @@ import React from 'react';
 export default function RestrictedNotice(props) {
   var title = props.title || 'Restricted';
   var message = props.message || '';
-  var icon = props.icon || '🔒';
+  // v55.83-HR — no emoji default (it rendered as mojibake in some encodings per Codex). Callers
+  // may pass an icon explicitly; otherwise we show a clean ASCII lock cue in the title.
+  var icon = props.icon || '[LOCKED]';
   // tone: 'amber' (default, permission/lock) | 'red' (blocked/error)
   var red = props.tone === 'red';
   var border = red ? '#f87171' : '#fbbf24';     // bright red / bright gold

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
-import { canViewBank, canEditMappings } from '../lib/bank-permissions';
+import { canViewCompanyProfile, canEditCompanyProfile } from '../lib/bank-permissions';
 
 var BLANK = {
   company_name: '', address: '', phone: '', email: '', website: '', tax_id: '',
@@ -16,8 +16,10 @@ export default function CompanyProfileTab(props) {
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var mayView = canViewBank(isSuperAdmin, modulePerms);
-  var mayEdit = canEditMappings(isSuperAdmin, modulePerms);
+  // v55.83-HR (Codex P0) — company profile (printed-invoice branding) is not bank data.
+  var _role = userProfile && userProfile.role;
+  var mayView = canViewCompanyProfile(isSuperAdmin, modulePerms, _role);
+  var mayEdit = canEditCompanyProfile(isSuperAdmin, modulePerms, _role);
 
   var [form, setForm] = useState(BLANK);
   var [rowId, setRowId] = useState(null);
@@ -77,7 +79,7 @@ export default function CompanyProfileTab(props) {
       .finally(function () { setBusy(false); });
   }
 
-  if (!mayView) return <div className="p-6"><RestrictedNotice title="Restricted" /></div>;
+  if (!mayView) return <div className="p-6"><RestrictedNotice title="Company Profile restricted" message="Requires the Company Profile: View permission (code ACCT-001 / accounting.company_profile.view). Bank View is NOT required." /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading company profile…</div>;
 
   return (

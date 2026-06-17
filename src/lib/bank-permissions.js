@@ -12,8 +12,18 @@ export function canMatchPayments(isSuperAdmin, mp) { return isSuperAdmin === tru
 export function canEditMappings(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Accounting: Edit Mappings', 'accounting.edit_mappings']); }
 
 // ---- Invoice / payment OPERATIONAL flags (staff may hold these) ----
-export function canCreateInvoice(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Invoice: Create', 'invoice.create']); }
-export function canViewInvoices(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Invoice: View', 'invoice.view']); }
+// v55.83-HR (Codex P0) — these are DOCUMENT permissions and must NOT require bank.view. They are
+// role-aware + carry legacy fallbacks so current staff are not locked out, but bank.view is
+// intentionally never a fallback (viewing bank transactions must not imply document access).
+export function canCreateInvoice(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Invoice: Create', 'invoice.create', 'Edit Invoices']); }
+export function canViewInvoices(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Invoice: View', 'invoice.view', 'invoice.create', 'Edit Invoices', 'Invoices', 'Sales']); }
+// ---- Accounting DOCUMENT view/edit (Codex ACCT-001..007) — explicit, NOT gated by bank.view ----
+export function canViewAccountingCustomers(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.customers.view', 'accounting.customers.edit', 'Customers', 'customer.view_ar', 'Sales']); }
+export function canEditAccountingCustomers(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.customers.edit', 'Merge Customers']); }
+export function canViewCompanyProfile(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.company_profile.view', 'accounting.company_profile.edit']); }
+export function canEditCompanyProfile(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['accounting.company_profile.edit']); }
+export function canViewPurchaseOrders(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['purchase_orders.view', 'purchase_orders.edit', 'Invoice: View', 'invoice.view', 'Invoices']); }
+export function canEditPurchaseOrders(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['purchase_orders.edit', 'Invoice: Create', 'invoice.create']); }
 export function canViewInvoiceBalance(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Invoice: View Balance', 'invoice.view_balance']); }
 export function canViewPayments(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Payments: View', 'payments.view']); }
 export function canViewCustomerAr(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Customer: View AR', 'customer.view_ar']); }

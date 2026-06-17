@@ -1049,3 +1049,103 @@ Scope read before this pass:
 - RestrictedNotice default icon appears as `🔒` in the file, not a clean lock glyph. This may render as mojibake for users depending on encoding.
 - file: D:\GITHUB\nexttrade-hub\src\components\RestrictedNotice.jsx:11
 - Instruction for Claude: use plain ASCII text/icon fallback such as "LOCKED" or pass a known-good rendered icon from the existing icon library. Do not ship mojibake in permission/error UI.
+
+### 2026-06-17 v55.83-HQ COMMITTED QA - CONTRAST PARTIAL PASS / PERMISSION P0 STILL FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: fd0526e v55.83-HQ.
+- Inspected only committed Accounting/Wave restricted-notice and permission-gate files. No source code edited by Codex. Only this QA file was appended.
+
+#### PARTIAL PASS - HQ addresses the unreadable restricted-card symptom in several Accounting/Wave screens
+- New RestrictedNotice uses inline dark slate background, bright border, and light text. This is a reasonable fix path for the screenshot complaint because it avoids the amber Tailwind classes that were rendering dark-on-dark.
+- file: D:\GITHUB\nexttrade-hub\src\components\RestrictedNotice.jsx:8
+- HQ wires RestrictedNotice into several relevant screens, including Invoices, Customer History, Customer Ledger, Company Profile, Purchase Orders, Bank Review, Wave Connection, and Wave Import.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:413
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:86
+- file: D:\GITHUB\nexttrade-hub\src\components\CustomerLedger.jsx:219
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:80
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:125
+- Instruction for Claude: still do a real visual check on the Accounting dark surface. Static CSS intent is good, but this was originally a visual bug.
+
+#### P0 FAIL - HQ is NOT the Accounting permission fix; Bank View lockout remains in committed code
+- Invoices/Proformas still import canViewBank, set mayView from bank.view, and still tell the user Bank View is required.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:9
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:55
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:413
+- Accounting Customers still uses canViewBank and still displays the old Bank View requirement.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:6
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:22
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:102
+- Company Profile still uses canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:6
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:19
+- Accounting Customer History still uses canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:9
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:23
+- Purchase Orders still uses bank.view or invoice.create instead of explicit purchase_orders.view/edit.
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:7
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:19
+- Settings still has no visible assignable document permission codes/keys for invoice.view, accounting.customers.view/edit, accounting.company_profile.view/edit, purchase_orders.view/edit, or customer.view_ar.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:421
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:474
+- Business verdict: HQ is acceptable only as a contrast bug patch. Accounting/banking is still NOT staff-ready for non-bank accounting users because core document tabs still require Bank View.
+- Instruction for Claude: next build must be the actual permission-model fix. Do not spend another heartbeat converting unrelated restricted banners before replacing these gates and adding visible Settings permission codes. Acceptance remains: invoice.view without bank.view opens Invoices/Proformas; accounting.customers.view without bank.view opens Customers; purchase_orders.view without bank.view opens POs; no bank.view still blocks Bank Review.
+
+#### CAUTION - RestrictedNotice default icon still appears as mojibake in source
+- The default icon string appears as mojibake, not a reliable lock symbol.
+- file: D:\GITHUB\nexttrade-hub\src\components\RestrictedNotice.jsx:11
+- Instruction for Claude: use ASCII fallback text or a reliable icon component. Permission/error UI must not show corrupted characters.
+
+### 2026-06-17 v55.83-HR WORKING-TREE QA - PASS WITH CAUTIONS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Inspected HR working-tree changes for Accounting document permissions, Settings permission catalog, RestrictedNotice, and the new permission regression test.
+- Ran focused test: node __tests__\test-v55-83-hr-accounting-doc-permissions.js - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HR fixes the P0 Bank View lockout for Accounting document tabs
+- Invoices/Proformas now use canViewInvoices/canCreateInvoice instead of canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:9
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:58
+- Accounting Customers now uses canViewAccountingCustomers/canEditAccountingCustomers instead of canViewBank/canEditMappings.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:6
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:26
+- Company Profile now uses canViewCompanyProfile/canEditCompanyProfile instead of canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:6
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:21
+- Accounting Customer History now uses Accounting Customer / Customer AR permissions instead of canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:9
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:25
+- Purchase Orders now uses canViewPurchaseOrders/canEditPurchaseOrders instead of canViewBank.
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:7
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:20
+- Settings now exposes stable admin-facing Accounting permission codes ACCT-001 through ACCT-007.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
+- Focused regression confirms: invoice.view without bank.view opens invoices; bank.view alone does not grant invoice/customer/PO docs; Bank Review still needs bank.view.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hr-accounting-doc-permissions.js:31
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hr-accounting-doc-permissions.js:45
+- Verification: node __tests__\test-v55-83-hr-accounting-doc-permissions.js passed.
+- QA verdict: this satisfies the core P0 acceptance path in working tree. Build still needs a clean run before commit/deploy if Claude has not run it.
+
+#### CAUTION - Purchase Order permissions still fall back to invoice permissions
+- canViewPurchaseOrders grants PO view from Invoice: View / invoice.view / Invoices, and canEditPurchaseOrders grants PO edit from Invoice: Create / invoice.create.
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:25
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:26
+- Business impact: this prevents lockout, but it blurs the exact ACCT-006/ACCT-007 model Max asked for. A staff member granted invoice.view may also see purchase orders.
+- Instruction for Claude: if this is a short-term legacy compatibility bridge, document it in the Settings descriptions or handoff and plan to remove it after roles are assigned. If Max wants exact permission separation now, remove invoice.* fallbacks from PO helpers before commit.
+
+#### CAUTION - Company Profile edit helper is not assignable in Settings
+- canEditCompanyProfile checks accounting.company_profile.edit, but Settings exposes only accounting.company_profile.view under ACCT-001.
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:24
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- Business impact: non-admin staff can be granted view but not edit from Settings. That may be intentional for launch, but then the edit helper should be admin-only or the missing edit key should be exposed.
+- Instruction for Claude: either add a visible Company Profile edit permission code or explicitly keep Company Profile edit admin/super-admin only and remove the hidden unassignable key from the helper.
+
+#### CAUTION - Settings permission labels appear to contain a non-ASCII separator
+- The ACCT labels display in this terminal as `ACCT-001 · ...`, which may be an encoding/display artifact, but permission UI already had a mojibake issue this pass.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
+- Instruction for Claude: use plain ASCII in permission labels, e.g. `ACCT-001 - Company Profile: View`, so Max can read and quote the codes reliably across browsers/exports/logs.

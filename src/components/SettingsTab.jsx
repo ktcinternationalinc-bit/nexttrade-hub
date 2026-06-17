@@ -481,6 +481,16 @@ const ACTION_PERMS = [
   { key: 'inventory.reports.view',      label: 'Inventory: View Reports',        desc: 'Open the Inventory Report Center (Snapshot, Virtual Mix Composition, Movement). Falls back to general Inventory tab access if not set.' },
   { key: 'inventory.reports.export',    label: 'Inventory: Export Reports',      desc: 'Download Excel/CSV from the Inventory Report Center. Admins and super-admin always have this.' },
   { key: 'inventory.valuation.view',    label: 'Inventory: See Valuation in Reports', desc: 'Show cost/valuation columns (avg cost, total value) in inventory reports. Without this, quantities show but costs are Restricted. Falls back to "See Inventory Costs".' },
+  // v55.83-HR (Codex P0) — Accounting DOCUMENT permissions. These let staff work invoices,
+  // customers, company profile, and purchase orders WITHOUT needing Bank: View. Bank: View now
+  // only controls Bank Review & Matching. Stable codes (ACCT-001..007) are shown for admins.
+  { key: 'accounting.company_profile.view', label: 'ACCT-001 · Company Profile: View', desc: 'View the company profile used on printed invoices/proformas. Does NOT require Bank: View.' },
+  { key: 'accounting.customers.view',       label: 'ACCT-002 · Accounting Customers: View', desc: 'View Hub accounting customers (separate from CRM and from bank transactions). Does NOT require Bank: View.' },
+  { key: 'accounting.customers.edit',       label: 'ACCT-003 · Accounting Customers: Edit', desc: 'Create / edit / archive Hub accounting customers.' },
+  { key: 'invoice.view',                    label: 'ACCT-004 · Invoices: View',       desc: 'View Hub invoices and proformas (read-only). Does NOT require Bank: View.' },
+  { key: 'invoice.create',                  label: 'ACCT-005 · Invoices: Create/Edit', desc: 'Create and edit Hub invoices and proformas. (Legacy "Edit Invoices" also grants this.)' },
+  { key: 'purchase_orders.view',            label: 'ACCT-006 · Purchase Orders: View', desc: 'View internal purchase orders. Does NOT require Bank: View.' },
+  { key: 'purchase_orders.edit',            label: 'ACCT-007 · Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders.' },
 ];
 
 const NOTIF_TYPES = [

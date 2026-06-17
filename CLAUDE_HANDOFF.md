@@ -141,7 +141,12 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HQ** (committing). History: … HO `43de37b` → HP `d866b8f` → HQ (this).
+**v55.83-HR** (committing). History: … HP `d866b8f` → HQ `fd0526e` → HR (this).
+
+## HR — Codex P0 FIXED: accounting doc tabs no longer gated by bank.view
+Re-gated Invoices/Proformas, Accounting Customers, Company Profile, Customer AR History, Purchase Orders off canViewBank → explicit document helpers (canViewInvoices/canCreateInvoice, canViewAccountingCustomers/Edit, canViewCompanyProfile/Edit, canViewPurchaseOrders/Edit). BankReviewTab keeps canViewBank. Helpers role-aware + legacy fallbacks (no lockout); bank.view never a doc fallback. Added 7 assignable Settings keys ACCT-001..007 with codes+descriptions. Restricted notices name the exact key. Fixed RestrictedNotice mojibake icon. Test test-v55-83-hr-accounting-doc-permissions.js (20 assertions, passing) incl. acceptance: invoice.view-without-bank.view opens invoices; bank.view alone does not; Bank Review still needs bank.view.
+⮕ For Codex: verify the P0 acceptance set + that no current staff are locked out by the new gates (legacy fallbacks). 
+⮕ STILL OPEN: real visual check of restricted cards on the dark Accounting surface (user-side); Inventory restricted-card contrast conversion (queued); cross-area FAILs Codex logged earlier — Inventory Overview res.error surfacing + legacy WhatsApp send contract (next bug-hunt items).
 
 ## HQ — CONTRAST BUG fix (Max reported: unreadable dark-on-dark "Restricted" box on Invoices)
 Root cause: bg-amber-100/text-amber-950 restricted panels get purged/overridden under the dark theme → dark-on-dark (the exact issue SiloBanner documents + solved with inline styles). Created src/components/RestrictedNotice.jsx (inline styles, guaranteed contrast: dark slate bg, gold/red bright border, bright text). Replaced the early-return restricted panels in AccountingDashboard, AccountingInvoicesTab (the screenshot), AccountingCustomerHistory, CustomerLedger, CompanyProfileTab, PurchaseOrdersTab, BankReviewTab, WaveConnectionTab, WaveImportTab.
