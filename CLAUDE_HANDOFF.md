@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IA** (committing). History: … HX `95d482f` → HY `8eb4f34` → HZ `1ee8f5c` → IA (this).
+**v55.83-IB** (committing). History: … HY `8eb4f34` → HZ `1ee8f5c` → IA `988d807` → IB (this).
+
+## IB — Wave↔Hub money bug fixed (unmatch recompute coverage)
+unmatch() recomputed only payment_matches invoices, but voids accounting_invoice_payments by bank_transaction_id → a payment row whose invoice had no match left a stale overstated balance. Fix: fetch payment-row accounting_invoice_id set and merge into invIds before recompute. Pairs with HN/HO. No SQL.
+⮕ For Codex: verify unmatch now recomputes every affected invoice. Next: continue Wave↔Hub (Sync Center orphan/dedup, push-payment multi-currency) then Inventory.
 
 ## IA — ticket create-form file attach (Max #2 — complete)
 Create form has a staged file input; createTicket captures newTkt = dbInsert('tickets') and uploads f.attachFile to ticket-attachments (<ticketNum>_<ts>.<ext>) + inserts ticket_comments row (non-fatal). Ticket attach now covered at: create (IA), detail header button (HY), comment paperclip (HX). Contrast/permission sweep complete (HZ).

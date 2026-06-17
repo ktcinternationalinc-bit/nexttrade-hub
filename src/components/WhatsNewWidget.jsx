@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IB',
+    date: '2026-06-17',
+    label: 'Bug fix: unmatching a deposit recomputes every affected invoice',
+    items: [
+      '**🐛 Fixed a stale-balance edge case in Bank Review.** When you unmatch a bank deposit, every invoice it had paid is now recomputed — including invoices that didn\'t have a formal "match" record. Before, such an invoice could keep showing more paid than it actually was after the unmatch.',
+      { superAdminOnly: true, text: 'v55.83-IB (Wave↔Hub money-integrity bug). BankReviewTab.unmatch() built invIds only from matchesByTxn (payment_matches), but voids accounting_invoice_payments by bank_transaction_id — so a payment row whose invoice had no payment_match (imported payment, or a match insert that failed) was voided without its invoice being recomputed → overstated amount_paid/understated balance_due. Fix: before voiding, select accounting_invoice_id from the payment rows for this txn and merge into invIds (non-fatal fetch), so the existing recompute loop covers every affected invoice. No SQL. Pairs with HN/HO (overpayment + phantom-credit) to make the match/unmatch lifecycle balance-correct.' },
+    ],
+  },
+  {
     version: 'v55.83-IA',
     date: '2026-06-17',
     label: 'Tickets: attach a document while creating a new ticket',

@@ -350,7 +350,13 @@ export default function BankReviewTab(props) {
     var payStamp = { voided: true, sync_status: 'void', voided_at: new Date().toISOString(), voided_by: (userProfile && userProfile.id) || null };
     var matchStamp = { voided: true, voided_at: payStamp.voided_at, voided_by: payStamp.voided_by }; // payment_matches has no sync_status column
     setBusy(true);
-    supabase.from('accounting_invoice_payments').update(payStamp).eq('bank_transaction_id', t.id)
+    // v55.83-IB (bug fix) — recompute ALL invoices touched by the payment ROWS being voided, not
+    // only those that have a payment_matches entry. A payment row whose invoice lacks a match
+    // (imported payment, or a match insert that failed) would otherwise be voided WITHOUT its
+    // invoice balance being recomputed → a stale, overstated "paid" amount after unmatch.
+    supabase.from('accounting_invoice_payments').select('accounting_invoice_id').eq('bank_transaction_id', t.id)
+      .then(function (pr) { ((pr && pr.data) || []).forEach(function (p) { if (p && p.accounting_invoice_id) { invIds[p.accounting_invoice_id] = true; } }); return null; }, function (e) { console.warn('[unmatch] payment-row invoice fetch non-fatal:', (e && e.message) || e); return null; })
+      .then(function () { return supabase.from('accounting_invoice_payments').update(payStamp).eq('bank_transaction_id', t.id); })
       .then(function () { return supabase.from('payment_matches').update(matchStamp).eq('bank_transaction_id', t.id).then(function (r) { return r; }, function (e) { console.warn('[unmatch] payment_matches void non-fatal:', (e && e.message) || e); return null; }); })
       // v55.83-HO (bug fix) — also reverse any OVERPAYMENT credit this transaction created. Without
       // this, unmatching a deposit restored the invoice balance but left the customer's overpayment
