@@ -150,7 +150,7 @@ export async function POST(req) {
       return NextResponse.json({ error: preBlock.message, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: preBlock }, { status: 409 });
     }
 
-    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber status total{ value } } } }';
+    var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber status total{ value currency{ code } } } } }';
     var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, items: lineItems } };
     var reqPayload = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, query: mutation, variables: waveMutationVariables };
 
@@ -163,6 +163,19 @@ export async function POST(req) {
     await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ok ? ic.invoice.id : null, action: 'push', dry_run: false, request_payload: reqPayload, response_payload: data, success: !!ok, error_message: ok ? null : 'Wave invoiceCreate failed — see response_payload', attempted_by: by });
 
     if (!ok) { return NextResponse.json({ error: 'Wave did not accept the invoice. See sync log.', response: data }, { status: 502 }); }
+
+    // v55.83-IN — CURRENCY GUARANTEE. The Hub does not set the Wave invoice currency (Wave derives it
+    // from the customer/business), so verify the currency Wave actually assigned MATCHES the Hub
+    // invoice currency. A mismatch means the amounts are correct numbers in the WRONG currency — do
+    // NOT silently accept it: flag it, mark the row, and surface a clear error.
+    var hubCurrency = (inv.currency || 'USD').toUpperCase();
+    var waveCurrency = (ic.invoice && ic.invoice.total && ic.invoice.total.currency && ic.invoice.total.currency.code) ? String(ic.invoice.total.currency.code).toUpperCase() : null;
+    if (waveCurrency && waveCurrency !== hubCurrency) {
+      var curMsg = 'CURRENCY MISMATCH: Hub invoice ' + inv.invoice_number + ' is ' + hubCurrency + ' but Wave created it as ' + waveCurrency + '. Wave takes the currency from the customer — set customer "' + (cust.company_name || cust.contact_name || cust.id) + '" to ' + hubCurrency + ' in Wave, delete this Wave invoice, and re-push. The amounts are otherwise wrong-currency.';
+      await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: (ic.invoice.status || null), wave_sync_status: 'currency_mismatch' }).eq('id', hubId);
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'push', dry_run: false, response_payload: data, success: false, error_message: curMsg, attempted_by: by });
+      return NextResponse.json({ ok: false, success: false, currency_mismatch: true, hub_currency: hubCurrency, wave_currency: waveCurrency, wave_invoice_id: ic.invoice.id, error: curMsg, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 });
+    }
 
     var verified = String(ic.invoice.invoiceNumber) === String(inv.invoice_number);
     // v55.83-FY — capture Wave's own invoice status. Wave creates invoices as DRAFT by default and

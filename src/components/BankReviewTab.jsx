@@ -228,8 +228,10 @@ export default function BankReviewTab(props) {
 
   // ---- mutations ----
   function patchTxn(t, patch, activity) {
+    // v55.83-IN — return the updated row so callers can VERIFY the write actually persisted
+    // (a silent 0-row / RLS-filtered update would otherwise look like a successful save).
     return dbUpdate('bank_transactions', t.id, Object.assign({ updated_by: userProfile && userProfile.id }, patch), userProfile && userProfile.id)
-      .then(function () { if (activity) logActivity(userProfile && userProfile.id, activity, 'bank_review'); });
+      .then(function (row) { if (activity) logActivity(userProfile && userProfile.id, activity, 'bank_review'); return row; });
   }
 
   function setClassification(t, cls) {
@@ -294,8 +296,19 @@ export default function BankReviewTab(props) {
     if (status === 'reviewed') { patch.reviewed_by = userProfile && userProfile.id; patch.reviewed_at = new Date().toISOString(); }
     if (reason) patch.notes = ((t.notes || '') + (t.notes ? ' | ' : '') + labelize(status) + ': ' + reason.trim());
     patchTxn(t, patch, 'Marked bank txn ' + (t.name || t.id) + ' ' + status + (reason ? (' (' + reason.trim() + ')') : ''))
-      .then(function () { toast.success('Marked ' + labelize(status)); load(); setSel(null); })
-      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .then(function (row) {
+        // v55.83-IN — VERIFY the DB actually persisted the new status. If the returned row doesn't
+        // reflect it, the write was silently rejected (almost always a row-level-security policy on
+        // bank_transactions) — say so loudly instead of pretending it saved.
+        console.log('[setStatus] result for', t.id, '→', status, ':', row);
+        if (row && row.review_status === status) {
+          toast.success('Marked ' + labelize(status));
+        } else {
+          toast.error('Save did NOT persist — the database returned ' + (row ? ('status "' + (row.review_status || 'empty') + '"') : 'no row') + '. This is almost certainly a row-level-security policy on bank_transactions blocking the update. Screenshot this for Claude.');
+        }
+        load(); setSel(null);
+      })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error') + ' (screenshot this for Claude)'); })
       .finally(function () { setBusy(false); });
   }
 
@@ -304,8 +317,16 @@ export default function BankReviewTab(props) {
     setBusy(true);
     patchTxn(t, { review_status: 'approved', reviewed_by: userProfile && userProfile.id, reviewed_at: new Date().toISOString() },
       'Approved bank txn ' + (t.name || t.id))
-      .then(function () { toast.success('Approved & locked'); load(); setSel(null); })
-      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .then(function (row) {
+        console.log('[approve] result for', t.id, ':', row);
+        if (row && row.review_status === 'approved') {
+          toast.success('Approved & locked');
+        } else {
+          toast.error('Approve did NOT persist — the database returned ' + (row ? ('status "' + (row.review_status || 'empty') + '"') : 'no row') + '. Likely a row-level-security policy on bank_transactions. Screenshot this for Claude.');
+        }
+        load(); setSel(null);
+      })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Approve failed: ' + ((e && e.message) || 'unknown error') + ' (screenshot this for Claude)'); })
       .finally(function () { setBusy(false); });
   }
   function reopen(t) {
