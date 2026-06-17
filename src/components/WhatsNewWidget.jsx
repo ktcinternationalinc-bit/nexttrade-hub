@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IF',
+    date: '2026-06-17',
+    label: 'Permission toggle: instant response + clear error if a save is blocked',
+    items: [
+      '**🛠️ Permission buttons now respond instantly and tell you if a save fails.** The ON/OFF toggle flips the moment you click it; if the change can\'t be saved (e.g. you don\'t have rights to edit permissions, or a database policy blocks it), it now flips back and shows a clear error message instead of silently doing nothing. Combined with the IE default fix, granting permissions should now work — and if it still can\'t save, the error will say exactly why.',
+      { superAdminOnly: true, text: 'v55.83-IF (Max: toggle still not working). On top of IE\'s default-match fix, made togglePermission OPTIMISTIC + LOUD: it now setPermissions(newVal) BEFORE the await (instant UI), checks sel.error and the update/insert res.error, and on ANY failure reverts the optimistic state + toast.error with the DB message. Previously state updated only AFTER the await and the catch only console.error\'d, so a silent RLS/policy/constraint failure looked like "nothing happens". This surfaces the real cause. If Max still sees no change AND no error toast, the deployed build is stale (hard-refresh; badge should read v55.83-IF). If he sees an error toast, it is an RLS/permissions-on-module_permissions issue to address next (likely needs a policy allowing super_admin/admin to write module_permissions). No SQL yet — awaiting the error text.' },
+    ],
+  },
+  {
     version: 'v55.83-IE',
     date: '2026-06-17',
     label: 'CRITICAL FIX: permission toggles now actually turn ON (+ Wave-synced reverse guard)',

@@ -1068,25 +1068,32 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   };
 
   const togglePermission = async (userId, module) => {
-    // v55.83-IE (P0 BUG, Max) — the default here MUST match the display default, or toggling does
-    // nothing. The grid shows TAB_PERMS default ON (?? true) and ACTION_PERMS default OFF (?? false).
-    // This used to always use `?? true`, so clicking an OFF action permission computed current=true
-    // → set it to false again → no visible change ("can't turn anything on"). Derive the default
-    // from which list the key belongs to so the first click flips it the way the user sees it.
+    // v55.83-IE/IF (P0 BUG, Max) — default MUST match the display default (TAB_PERMS ?? true,
+    // ACTION_PERMS ?? false) or the first click does nothing. v55.83-IF — also flip the UI
+    // OPTIMISTICALLY (before the await) so the button responds instantly, and if the DB write fails
+    // (e.g. RLS/policy/constraint) REVERT + show a loud error instead of silently doing nothing
+    // (the old code updated state only AFTER the await and swallowed errors → "can't turn anything on").
     const isTabPerm = TAB_PERMS.some(p => p.key === module);
     const def = isTabPerm ? true : false;
     const current = permissions[userId]?.[module] ?? def;
     const newVal = !current;
+    setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } })); // optimistic
     try {
-      const { data: existing } = await supabase.from('module_permissions')
-        .select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
-      if (existing) {
-        await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', existing.id);
+      const sel = await supabase.from('module_permissions').select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
+      if (sel.error) throw sel.error;
+      let res;
+      if (sel.data) {
+        res = await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', sel.data.id);
       } else {
-        await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
+        res = await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
       }
-      setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } }));
-    } catch (err) { console.error(err); }
+      if (res && res.error) throw res.error;
+      if (toast) toast.success((newVal ? 'Granted' : 'Removed') + ': ' + module);
+    } catch (err) {
+      console.error('[togglePermission]', err);
+      setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: current } })); // revert
+      if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (You may lack rights to edit permissions, or a DB policy is blocking it.)');
+    }
   };
 
   const toggleNotif = async (userId, notifType) => {

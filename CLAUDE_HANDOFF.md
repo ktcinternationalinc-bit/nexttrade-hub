@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IE** (committing). History: … IB `d327fcb` → IC `61c4844` → ID `c5c14b6` → IE (this).
+**v55.83-IF** (committing). History: … IC `61c4844` → ID `c5c14b6` → IE `784c580` → IF (this).
+
+## IF — permission toggle robustness (Max says IE didn't resolve it)
+togglePermission now: optimistic setPermissions BEFORE await (instant flip) + checks sel/update/insert .error + reverts & toast.error on failure (was: state only after await + silent console.error → "nothing happens" if the DB write was blocked). Two scenarios now distinguishable for Max: (a) NO change + NO error toast → stale build, hard-refresh (badge should read IF); (b) error toast → RLS/policy on module_permissions blocks writes → NEXT FIX likely a Supabase policy letting super_admin/admin write module_permissions (await Max's error text before writing SQL). No SQL this build.
+⮕ For Codex: verify optimistic+revert toggle. ⮕ For Max: hard-refresh; if a red error appears when toggling, send me its text.
 
 ## IE — TWO fixes
 1) **P0 (Max-reported): permission toggle was broken.** SettingsTab.togglePermission used `?? true` unconditionally while the grid shows ACTION_PERMS as `?? false` → clicking an OFF action perm re-saved it OFF → couldn't grant any action permission (incl. new ACCT-001..007). Fixed: default from TAB_PERMS membership. Test added (8 assertions).

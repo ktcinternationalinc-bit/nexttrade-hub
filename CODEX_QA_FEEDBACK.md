@@ -1744,3 +1744,43 @@ Scope read before this pass:
 #### Launch call after this pass
 - Accounting/banking is NOT staff-launch-ready until the Settings permission toggle bug is fixed, because Max cannot assign the exact Bank/AR/Wave/ACCT permissions needed for Kandil users.
 - After this fix commits, re-test by turning ON at least: bank.view, bank.see_amounts, payments.match, payments.unmatch, wave.sync.view, wave.sync.dry_run, wave.payments.push, ar.view_invoice_balances, invoice.view, invoice.create, accounting.customers.view, accounting.customers.edit, purchase_orders.view, purchase_orders.edit for a non-super user, then reload and confirm the states persist.
+
+### 2026-06-17 SETTINGS PERMISSION TOGGLE WORKING-TREE QA - PARTIAL FIX / STILL FAIL
+
+Scope note:
+- Follow-up after Claude began editing SettingsTab.jsx in the working tree in response to the launch-blocking permission toggle FAIL.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PARTIAL PASS - Normal missing-row ACTION permissions should now flip ON
+- Claude changed togglePermission to derive the default from TAB_PERMS vs ACTION_PERMS instead of always assuming missing permission rows are current=true.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1070
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1076
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1078
+- This should fix the reported ordinary case: an ACTION permission showing OFF because no row exists should now save has_access=true on first click.
+
+#### FAIL REMAINS - Toggle still does not use the displayed state and save errors are still silent
+- The render path has special display logic for Edit Open Accounts: if Edit Open Accounts has no explicit row but legacy Open Accounts is true, it displays ON.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1568
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1643
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1644
+- The click handler still calls togglePermission(u.id, p.key) without passing the displayed hasAccess value.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1620
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1655
+- Because togglePermission still recomputes current from raw permissions[userId]?.[module], the Edit Open Accounts legacy-display case can show ON but first click inserts true again instead of turning OFF. This is the same class of bug in the opposite direction.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1078
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1080
+- The Supabase update/insert calls still do not inspect returned error objects, so RLS/schema/network failures can silently fail while the UI does not explain what happened.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1083
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1085
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:1088
+- Instruction for Claude: finish the fix by passing the displayed hasAccess into togglePermission from BOTH table sections and saving newVal = !displayedHasAccess. Then check { error } from maybeSingle/update/insert and toast + do not optimistically update state when save fails. Add the static regression requested above.
+
+#### BUILD NOT GREEN AFTER SETTINGS CHANGE
+- npm.cmd run build was run twice after the SettingsTab working-tree change. Both attempts compiled successfully but failed in Next export/finalization with missing generated .next artifacts.
+- First failure: missing .next server route files during prerender/export.
+- Second failure: ENOENT renaming .next\export\500.html to .next\server\pages\500.html.
+- This looks like the recurring generated-build-artifact problem, not a direct Settings syntax error, but the working tree cannot be called build-green from this pass.
+- Instruction for Claude: after finishing the Settings toggle fix, run a clean build to completion before commit/deploy. If the .next artifact failure repeats, clean the generated build output safely and rerun; do not commit with a failed build.
+
+#### Launch call after this working-tree check
+- Still NOT staff-launch-ready. Permission assignment must be fully reliable because the Kandil launch depends on granting exact Bank/AR/Wave/ACCT permissions to non-super users.
