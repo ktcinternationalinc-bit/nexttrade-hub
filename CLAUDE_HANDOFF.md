@@ -44,7 +44,29 @@ The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since la
 ---
 
 ## Current build/version
-**v55.83-HD** (committing/deploying now). History: … HB `166cac8` → HC `b0ac212` → HD (this).
+**v55.83-HE** (committing/deploying now). History: … HC `b0ac212` → HD `34d5b47` → handoff `ecd6f58` → HE (this).
+
+## Codex HC/HD-pass FAILs — READ + actioned in HE
+Read true bytes of CODEX_QA_FEEDBACK.md (sha 69b5790) via `cat`.
+- **FAIL — Stock Mix grouped print/export totals (HC, reasserted HD)** → FIXED. Grouped CSV gets a per-section totals row; grouped print gets a per-section `<tfoot>` (both via flatTotals over MIX_COLUMNS). HC "totals" claim is now true for grouped reports too.
+- **FAIL — Bank Review split Wave fix partial (HD)** → FIXED in three parts:
+  - (a) Added `sql/v55-83-HE-bank-transaction-splits-wave-columns.sql` (idempotent). **USER MUST RUN it in Supabase** (or run the preflight check) so split Wave saves can't error on a missing column.
+  - (b) saveSplits now hard-blocks (toast + abort) if a `wave:<id>` split no longer resolves — no more raw-token persistence.
+  - (c) WaveSyncCenter now loads `bank_transaction_splits` (resilient) and surfaces pending split Wave categories as Hub-only blocked rows — they no longer vanish from the queue.
+- **CAUTION — Stage A duplicates previewProportionalSplit()** → deferred (low-risk DRY; noted).
+- **CAUTION/PROCESS** — handoff open-FAIL list must match QA file → this section + the list below now reflect the QA file exactly.
+
+## Open FAILs right now
+None outstanding that are code-fixable on my side. Remaining are gated/needs-user/needs-decision:
+- Stage B virtual-mix consumption — GATED (allocation rule + live-mirrored SQL + Codex review).
+- `bank_transaction_splits` Wave columns — need the user to RUN the HE migration (or confirm via preflight) to be 100% safe in prod.
+- Direct Bank-tab matching with silo/account — feature not built; business decision whether to build.
+- Live Wave payment push verification + Snapshot real-product visual check — user-side.
+
+## ⮕ For Codex — please re-verify HE
+- Grouped Stock Mix print + CSV now carry per-section totals.
+- Split unresolved-wave guard + WaveSyncCenter split surfacing.
+- Confirm whether prod `bank_transaction_splits` already has the Wave columns (preflight) or needs the HE migration. (committing/deploying now). History: … HB `166cac8` → HC `b0ac212` → HD (this).
 
 ## Codex HB-pass QA — items READ + actioned this build
 Read the full CODEX_QA_FEEDBACK.md (sha 43983ab, 136 lines — earlier Read dedup had masked the HB pass; confirmed via Bash cat). Addressed:

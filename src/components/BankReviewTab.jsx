@@ -372,6 +372,14 @@ export default function BankReviewTab(props) {
     var txnAmt = Number(t.amount_abs || Math.abs(Number(t.amount)));
     var v = validateSplit(txnAmt, splitRows.map(function (r) { return { split_amount: r.amount }; }));
     if (!v.valid) { toast.error('Splits must be > 0 and not exceed ' + fmt(txnAmt) + ' (allocated ' + fmt(v.allocated) + ').'); return; }
+    // v55.83-HE (Codex QA) — block the save if a split line picked a Wave category that no longer
+    // resolves, so we never persist a raw "wave:<uuid>" token as the category.
+    var badWave = splitRows.some(function (r) {
+      if (!(r.category && r.category.indexOf('wave:') === 0)) { return false; }
+      var _id = r.category.slice(5);
+      return !waveCategories.some(function (c) { return c.wave_account_id === _id; });
+    });
+    if (badWave) { toast.error('A split line has an unrecognized Wave category — re-pick it and try again.'); return; }
     setBusy(true);
     var chain = Promise.resolve();
     splitRows.forEach(function (r) {

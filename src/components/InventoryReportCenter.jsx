@@ -306,6 +306,15 @@ export default function InventoryReportCenter(props) {
       lines.push([csvEscape(mixHead)].concat(MIX_COLUMNS.map(colHeader).map(csvEscape)).join(','));
       mixSections().forEach(function (s) {
         s.rows.forEach(function (r) { lines.push([csvEscape(s.title)].concat(MIX_COLUMNS.map(function (c) { return csvEscape(cellExport(r, c)); })).join(',')); });
+        // v55.83-HE (Codex QA FAIL fix) — per-section totals row, so grouped Stock Mix CSV
+        // matches the on-screen "Total available". Mirrors flat-report totals.
+        var st = flatTotals(s.rows, MIX_COLUMNS);
+        if (Object.keys(st).length) {
+          lines.push([csvEscape(s.title)].concat(MIX_COLUMNS.map(function (c, ci) {
+            if (st[c.key] !== undefined) { return csvEscape(st[c.key]); }
+            return csvEscape(ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : '');
+          })).join(','));
+        }
       });
     }
     download(reportId + '-' + lang + '.csv', lines.join('\n'));
@@ -333,7 +342,8 @@ export default function InventoryReportCenter(props) {
     } else {
       mixSections().forEach(function (s) {
         body += '<h3 style="margin:16px 0 4px">' + s.title + '</h3>';
-        body += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(MIX_COLUMNS) + '</tr></thead><tbody>' + s.rows.map(function (r) { return tr(r, MIX_COLUMNS); }).join('') + '</tbody></table>';
+        // v55.83-HE (Codex QA FAIL fix) — per-section totals row in grouped print too.
+        body += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' + th(MIX_COLUMNS) + '</tr></thead><tbody>' + s.rows.map(function (r) { return tr(r, MIX_COLUMNS); }).join('') + '</tbody>' + tfoot(s.rows, MIX_COLUMNS) + '</table>';
       });
     }
     var html = '<!doctype html><html dir="' + (isRtl ? 'rtl' : 'ltr') + '" lang="' + lang + '"><head><meta charset="utf-8"><title>' + title + '</title></head><body style="font-family:Arial,sans-serif;padding:16px"><h2>' + title + '</h2>' + body + '<script>window.onload=function(){window.print();}<\/script></body></html>';

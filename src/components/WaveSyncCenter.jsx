@@ -113,6 +113,7 @@ export default function WaveSyncCenter(props) {
   var [invoices, setInvoices] = useState([]);
   var [payments, setPayments] = useState([]);
   var [bankTxns, setBankTxns] = useState([]);
+  var [splitTxns, setSplitTxns] = useState([]);   // v55.83-HE — split lines with a pending Wave category
   var [syncLog, setSyncLog] = useState([]);
   var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
   var ps0 = useState(null); var prodSetup = ps0[0]; var setProdSetup = ps0[1];
@@ -147,7 +148,10 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
       fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
-      fetchAllRows('bank_transactions', 'id, amount_abs, name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status')
+      fetchAllRows('bank_transactions', 'id, amount_abs, name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status'),
+      // v55.83-HE — split lines categorized to a Wave account. Resilient: if the table is missing
+      // the Wave columns (migration not yet run), default to [] so the Sync Center still loads.
+      supabase.from('bank_transaction_splits').select('id, bank_transaction_id, split_amount, wave_business_id, wave_account_name, category_status').then(function (x) { return x; }).catch(function () { return { data: [] }; })
     ]).then(function (res) {
       var rg = (res[0] && res[0].data) || [];
       setRegistry(rg);
@@ -163,6 +167,7 @@ export default function WaveSyncCenter(props) {
       });
       setPayments(scopeIfRegistered(pays, getActiveWaveBusiness(), rg, true));
       setBankTxns(scopeIfRegistered((res[5] && res[5].data) || [], getActiveWaveBusiness(), rg, true));
+      setSplitTxns(scopeIfRegistered((res[6] && res[6].data) || [], getActiveWaveBusiness(), rg, true));
       setInvoices(scopeIfRegistered((res[2] && res[2].data) || [], getActiveWaveBusiness(), rg, true));
       setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active; }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
@@ -432,8 +437,26 @@ export default function WaveSyncCenter(props) {
         record: bt
       });
     });
+    // v55.83-HE (Codex QA FAIL fix) — split lines that picked a Wave category must ALSO appear
+    // here (truthful), not vanish because the parent txn was split. Same Hub-only blocked status
+    // as bank txns until a generic Wave category push exists.
+    splitTxns.forEach(function (sp) {
+      if (!sp || sp.wave_business_id !== active) { return; }
+      if (sp.category_status !== 'pending_wave_sync') { return; }
+      var sb = [];
+      if (sp.wave_account_name) { sb.push('→ ' + sp.wave_account_name); }
+      sb.push('⛔ Hub-only — Wave transaction/category sync is not implemented yet');
+      rows.push({
+        key: 'split:' + sp.id, action: 'bank_transaction_split', id: sp.id,
+        label: 'Split line · ' + (sp.wave_account_name || 'Wave category'),
+        amount: Number(sp.split_amount) || 0,
+        sub: sb.join(' · '),
+        blocked: 'Wave transaction/category sync is not implemented yet — this split line is categorized in the Hub only.',
+        record: sp
+      });
+    });
     return rows;
-  }, [customers, invoices, payments, bankTxns, active]);
+  }, [customers, invoices, payments, bankTxns, splitTxns, active]);
 
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
 

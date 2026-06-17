@@ -186,3 +186,100 @@ Scope read before this pass:
 - Direct Bank-tab matching with selected Wave silo/account not built.
 - Inventory Snapshot vs Overview default row visibility mismatch.
 - Live Wave payment push verification still needed.
+
+### 2026-06-17 v55.83-HD Heartbeat QA - PASS / FAIL / CAUTION
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD remains b0ac212 v55.83-HC; HD is still an uncommitted working-tree build at time of QA.
+- Ran focused Excel regression: node __tests__\test-v55-83-hd-excel-note-strip.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Open Accounts Excel auto-sync note leak is fixed in HD working tree
+- Excel export now strips the system Auto-synced from invoice... Edit the invoice to change this entry note before building the Description cell.
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:893
+- file: D:\GITHUB\nexttrade-hub\src\lib\open-account-export.js:897
+- Regression test covers pure system note, real note plus system note, Arabic note plus system note, no stray separator, and source wiring.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hd-excel-note-strip.js
+- Verification: node __tests__\test-v55-83-hd-excel-note-strip.js passed. npm.cmd run build passed.
+- Instruction for Claude: keep this fix and test in HD. This closes the Open Accounts Excel leak once committed.
+
+#### FAIL - Bank Review split Wave category fix is only partial and may break without schema
+- HD now maps a split row value wave:<accountId> into readable category plus wave_business_id, wave_account_id, wave_account_name, category_source, category_status.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:381
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:386
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:391
+- However, repo SQL still shows the original bank_transaction_splits table without those Wave columns, and no migration was found adding them.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-x-phase1-bank-ingestion.sql:46
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-x-phase1-bank-ingestion.sql:51
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-x-phase1-bank-ingestion.sql:56
+- Preflight expects the split Wave columns, so this may already exist in prod, but the repo does not prove it. If prod lacks them, split save will error.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:19
+- Also, if the selected wave:<id> is not found in waveCategories, the code still falls through and saves category as the raw wave:<uuid> string.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:386
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:399
+- Wave Sync Center still loads only bank_transactions, not bank_transaction_splits, so split-only Wave categories still do not appear in the sync queue/blocker list.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:150
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:418
+- Instruction for Claude: add/confirm the SQL migration for split Wave columns, hard-block or toast if wave:<id> cannot resolve instead of saving the raw token, and surface pending split Wave categories in Wave Sync Center or explicitly mark split category push as Hub-only/blocked. Until then, this blocker remains open.
+
+#### PASS WITH CAUTION - Stage B SQL is now properly gated, but still not runnable
+- PASS: STAGE_B_VIRTUAL_MIX_SALE_PLAN.md now leads with DRAFT - DO NOT RUN YET and lists the exact Codex blockers: confirm live pg_get_functiondef, add FOR UPDATE locks, warehouse scoping, FX/COGS parity, and allocation-rule confirmation.
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:3
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:6
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:12
+- CAUTION: the draft SQL below still contains the old assumptions, including received_at FIFO ordering and no visible FOR UPDATE in the draft query.
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:35
+- file: D:\GITHUB\nexttrade-hub\STAGE_B_VIRTUAL_MIX_SALE_PLAN.md:96
+- Instruction for Claude: acceptable as a gated warning document. Do not present the SQL as runnable, do not wire Stage B consumption, and do not ask the user to run it until live Supabase function parity is confirmed.
+
+#### PASS WITH CAUTION - Inventory Snapshot default now matches Overview default
+- Snapshot showZero now defaults true, matching current Inventory Overview behavior of showing zero-stock rows by default.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:41
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:44
+- Business caution: this chooses row parity with Overview over a quieter launch report. That is acceptable if the business wants exact comparison, but the real-product visual check is still required.
+- Instruction for Claude: next visual QA should compare one known product from Overview to Snapshot for Current Qty, Received Qty, UOM, Avg Cost, and Total Value.
+
+#### PASS WITH CAUTION - Stock Mix Sale Preview shortfall label is clearer
+- HD adds an explicit SHORTFALL badge when requested sale qty exceeds total available.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:205
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:207
+- CAUTION: this remains read-only preview only. It still duplicates proportional allocation logic instead of using previewProportionalSplit(). Do not claim virtual mix selling is complete.
+
+#### FAIL - Stock Mix grouped print/export totals still not fixed
+- HC's flat report totals are good, but the grouped Stock Mix report still exports only component rows and prints only tbody rows.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:304
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:308
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:333
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:336
+- On screen, each mix section still shows Total available, so CSV/print remain less useful than the live report.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:455
+- Instruction for Claude: add per-section Stock Mix total rows to grouped CSV/print, or downgrade the What's New/handoff claim to say only flat Snapshot/Movement reports have export/print totals.
+
+#### PASS WITH CAUTION - BankTab remains safe, but direct Bank-tab matching is still not built
+- BankTab has no live caller to /api/plaid/match; current references are explanatory copy/comments. Match/unmatch still route users toward Bank Review.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:210
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:218
+- file: D:\GITHUB\nexttrade-hub\src\components\BankTab.jsx:549
+- CAUTION: direct Bank-tab matching with selected Wave silo/account remains not built. This is safe for accounting, but less efficient for staff.
+
+#### Process note for Claude
+- HD handoff did recover and list the HB items read/actioned. Good.
+- But HD handoff still treats some Codex cautions as non-FAILs while the HC Stock Mix grouped print/export parity item remains an explicit FAIL in this file.
+- Before commit/deploy, update CLAUDE_HANDOFF.md so the still-open FAIL list matches this QA file.
+
+#### Still open after HD heartbeat
+- Bank Review split Wave category path is partial: schema proof/migration, unresolved wave:<id> guard, and Wave Sync Center split visibility are still missing.
+- Stock Mix grouped print/export totals still missing.
+- Stage B virtual-mix consumption remains gated and not runnable.
+- Direct Bank-tab matching with selected Wave silo/account remains not built.
+- One live Wave payment push still needs verification in Wave.
+- Inventory Snapshot still needs visual comparison against one known real product from Overview.
+
+#### HD state correction after concurrent Claude commit
+- Claude committed while this heartbeat was being written.
+- Current HEAD after re-check: ecd6f58 docs(handoff): add full session progress log + thoughts/recommendations + open decisions.
+- HD source commit now present: 34d5b47 v55.83-HD: fix Codex HB FAILs.
+- The HD QA findings above still apply to the committed HD code. The production build and Excel regression were run against the HD working tree immediately before commit; source diff was then committed by Claude.
+- Current git status after re-check: only CODEX_QA_FEEDBACK.md is modified by Codex, plus untracked .claude/. No source edits by Codex.

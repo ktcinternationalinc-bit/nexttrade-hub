@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HE',
+    date: '2026-06-17',
+    label: 'QA fixes: Stock Mix report totals on print/export + safer Bank split Wave categories',
+    items: [
+      '**📦 Stock Mix reports now print & export their per-mix totals too.** The grouped Stock Mix (virtual) report previously printed/exported only the component rows; now each mix section carries its "Total available" line in both Print and Excel/CSV — matching the on-screen report.',
+      '**🏦 Bank split Wave categories are safer and now visible in the Sync Center.** If a split line\'s Wave category can\'t be matched, the save is blocked with a clear message instead of saving a meaningless code. And split lines you categorize to a Wave account now show up in the Wave Sync Center (currently flagged Hub-only, like other categorized transactions) so nothing silently disappears.',
+      { superAdminOnly: true, text: 'v55.83-HE (Codex HC/HD FAIL fixes). InventoryReportCenter: grouped Stock Mix CSV now appends a per-section totals row (flatTotals over MIX_COLUMNS); grouped print adds a per-section <tfoot>. BankReviewTab.saveSplits: pre-save guard rejects any split line whose wave:<id> no longer resolves in waveCategories (no more raw "wave:<uuid>" persistence). WaveSyncCenter: loads bank_transaction_splits (resilient — defaults to [] if columns absent) and surfaces split lines with category_status="pending_wave_sync" as Hub-only blocked rows (key split:<id>), so split-only Wave categories no longer vanish from the queue. Added sql/v55-83-HE-bank-transaction-splits-wave-columns.sql (idempotent ALTER ADD COLUMN IF NOT EXISTS for the 5 Wave fields + a pending index) — USER MUST RUN in Supabase to guarantee split Wave saves work; /api/wave/preflight-schema already expects these columns. Still open/deferred: previewProportionalSplit DRY refactor; direct Bank-tab matching (business decision); Stage B gated; live Wave payment verification (user-side); Snapshot real-product visual check (user-side).' },
+    ],
+  },
+  {
     version: 'v55.83-HD',
     date: '2026-06-17',
     label: 'QA fixes: clean Excel notes, real Wave split categories, report defaults',
