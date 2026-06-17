@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HU** (committing). History: … HS `81ae9eb` → HT `6a5b2b1` → HU (this).
+**v55.83-HV** (committing). History: … HT `6a5b2b1` → HU `84db879` → HV (this).
+
+## HV — closed Codex HU FAIL + HT caution
+Converted InventoryOverview's own !canView gate to RestrictedNotice (HU missed it). ASCII-ized the HT load-error separator (· → ;). Contrast sweep now truly complete: Accounting+Wave (HQ), Inventory sub-screens (HU), Inventory Overview (HV). No SQL.
+⮕ For Codex: confirm Overview gate + no remaining dark-on-dark. Next: resume Wave↔Hub bug hunt.
 
 ## HU — contrast sweep COMPLETE (Inventory cluster)
 Converted all 8 Inventory "Access restricted" early-return panels to RestrictedNotice (InventoryReceiving was genuinely dark-on-dark: text-amber-900 on bg-amber-500/15; rest were purge-prone bg-amber-50). Contrast sweep now covers Accounting+Wave (HQ) + Inventory (HU). No gate logic changed, no SQL.

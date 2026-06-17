@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HV',
+    date: '2026-06-17',
+    label: 'Inventory Overview restricted box readable (sweep truly complete)',
+    items: [
+      '**👁️ The Inventory Overview "no permission" box is now readable too** — it was the one inventory restricted panel still using the old style. Now consistent with the rest.',
+      { superAdminOnly: true, text: 'v55.83-HV (Codex HU FAIL fix). Converted InventoryOverview\'s !canView early-return from bg-amber-50/text-amber-900 to the inline RestrictedNotice (HU had done the 8 sub-screens but missed Overview\'s own gate). Also ASCII-ized the HT Inventory Overview load-error separator (middle-dot → "; ") per Codex caution. Contrast sweep now genuinely complete: Accounting+Wave (HQ) + Inventory sub-screens (HU) + Inventory Overview (HV). No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-HU',
     date: '2026-06-17',
     label: 'Inventory "Access restricted" boxes now readable (contrast sweep complete)',

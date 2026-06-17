@@ -15,6 +15,7 @@
 // Read-only. Tolerates missing tables / migrations. Bilingual.
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 
 function fmtNum(n, dp) {
@@ -211,8 +212,8 @@ export default function InventoryOverview(props) {
         if (recRes && recRes.error) { _qErrs.push('receipts: ' + recRes.error.message); }
         if (soldRes && soldRes.error) { console.warn('[inventory-overview] sales data failed (profit strip partial):', soldRes.error.message); }
         if (_qErrs.length) {
-          setError(_qErrs.join(' · '));
-          toast.error('Failed to load inventory: ' + _qErrs.join(' · '));
+          setError(_qErrs.join('; '));
+          toast.error('Failed to load inventory: ' + _qErrs.join('; '));
         }
 
         setProducts(prodRes.data || []);
@@ -585,8 +586,8 @@ export default function InventoryOverview(props) {
 
   if (!canView) {
     return (
-      <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4 text-amber-900 font-semibold">
-        You don&apos;t have permission to view the Inventory Overview. Ask a super admin to grant you the &quot;Inventory&quot; permission.
+      <div style={{ padding: 24 }}>
+        <RestrictedNotice title="Access restricted" message={'You do not have permission to view the Inventory Overview. Ask a super admin to grant you the "Inventory" permission.'} />
       </div>
     );
   }

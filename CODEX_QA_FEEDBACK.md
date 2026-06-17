@@ -1257,3 +1257,61 @@ Scope read before this pass:
 #### Remaining launch checks after HT
 - Accounting/banking launch still depends on live environment work: assign ACCT permissions, visual-check RestrictedNotice on the dark Accounting screen, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores wave_payment_id.
 - Inventory still needs the user-requested real-product visual comparison between Overview and Inventory Snapshot.
+
+### 2026-06-17 v55.83-HU WORKING-TREE INVENTORY RESTRICTED-CONTRAST QA - PASS WITH ONE FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current committed HEAD remains 6a5b2b1 v55.83-HT; HU is working-tree only at time of QA.
+- Inspected only launch-relevant Inventory restricted/access panels and HU version/What's New edits.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HU converts the named Inventory restricted-card cluster to RestrictedNotice
+- Adjustments now uses RestrictedNotice for the no-Inventory access gate.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryAdjustments.jsx:240
+- Cost Layers now uses RestrictedNotice for the no-Inventory access gate.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryCostLayers.jsx:143
+- Movements Ledger now uses RestrictedNotice for the no-Inventory access gate.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMovementsLedger.jsx:112
+- Product List now uses RestrictedNotice and ASCII Settings wording.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryProductMaster.jsx:1031
+- Receiving now uses RestrictedNotice, replacing the genuinely dangerous dark-on-dark amber overlay path.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReceiving.jsx:1780
+- Stock Import now uses RestrictedNotice and ASCII Settings wording.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryStockImport.jsx:556
+- Import Products now uses RestrictedNotice and ASCII Settings wording.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryImportProducts.jsx:764
+- Inventory Master Admin now uses RestrictedNotice and ASCII Settings wording.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMasterAdmin.jsx:307
+- The badge is bumped to v55.83-HU and What's New documents the contrast sweep.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:5385
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsNewWidget.jsx:36
+- Verification: npm.cmd run build passed after the latest HU working-tree updates.
+
+#### FAIL - Inventory Overview access gate still uses the old amber restricted panel
+- The Inventory Overview no-permission return still uses bg-amber-50 / text-amber-900 instead of RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:586
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:588
+- Business impact: a user without the Inventory permission can still hit an old restricted/error visual pattern in Inventory. Given Max's repeated contrast complaint, the HU claim that the contrast sweep is complete is too broad unless this panel is converted too.
+- Instruction for Claude: convert the Inventory Overview no-permission return to RestrictedNotice, or narrow the HU What's New language to say the eight named sub-screens were converted but Overview's gate remains. Preferred fix: convert Overview as well so Inventory has one consistent readable restricted pattern.
+
+#### Remaining launch checks after HU working tree
+- Accounting/banking is still waiting on live environment confirmation: assign ACCT permissions, visual-check Accounting RestrictedNotice, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores wave_payment_id.
+- Inventory still needs the requested real-product visual comparison between Overview and Inventory Snapshot.
+
+### 2026-06-17 v55.83-HU COMMITTED ADDENDUM - INVENTORY OVERVIEW RESTRICTED GATE STILL OPEN
+
+Scope update:
+- HU is now committed at 84db879 after the working-tree QA above.
+- Re-checked HEAD and InventoryOverview after the commit.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL REMAINS - HU commit did not convert the Inventory Overview permission gate
+- The committed HU code still leaves the Inventory Overview no-permission return on the old amber panel instead of RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:586
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:588
+- HU's commit message / What's New says the contrast sweep is complete for the eight named Inventory access-restricted panels, but the Inventory module still has at least this one user-facing permission gate on the old pattern.
+- Instruction for Claude: next safe fix should convert InventoryOverview's no-permission return to RestrictedNotice too. This is a small UX consistency fix, not an accounting launch blocker, but it is exactly the class of readability bug Max is calling out.
+
+#### Verification note
+- npm.cmd run build passed after HU source changes. The first run failed at a transient Next export file rename, then a rerun completed successfully.
