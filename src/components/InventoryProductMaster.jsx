@@ -21,6 +21,7 @@ import RestrictedNotice from './RestrictedNotice';
 import { createPortal } from 'react-dom';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import InventoryVariantHistory from './InventoryVariantHistory';
+import AttachmentManager from './AttachmentManager';
 
 var UOM_OPTIONS = [
   { v: 'kg',     en: 'Kilograms',     ar: 'كيلوغرام' },
@@ -1376,6 +1377,26 @@ export default function InventoryProductMaster(props) {
                       ? 'This is a Template Product (blueprint). Editing or deleting does NOT affect any Products already created from it — they\'re independent snapshots.'
                       : 'This is a Product. Editing changes only this product. Existing inventory/sales attribution stays intact.'}
                   </div>
+                </div>
+              )}
+
+              {/* v55.83-II — Internal-only product photos. Edit mode only (a saved
+                  product.id is required as the attachment parent). Private bucket +
+                  signed URLs; one photo can be marked the primary/cover image. */}
+              {modalMode === 'edit' && modalProductId && (
+                <div className="mb-4">
+                  <AttachmentManager
+                    parentType="inventory_product"
+                    parentId={modalProductId}
+                    currentUserId={userProfile && userProfile.id}
+                    isSuperAdmin={isSuperAdmin}
+                    canEdit={canEdit}
+                    bucketName="product-photos"
+                    isPrivate={true}
+                    imageOnly={true}
+                    enablePrimary={true}
+                    title="🖼️ PRODUCT PHOTOS"
+                  />
                 </div>
               )}
 

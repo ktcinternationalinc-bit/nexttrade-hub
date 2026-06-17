@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-II',
+    date: '2026-06-17',
+    label: 'Inventory: add internal product photos (with a primary/cover image)',
+    items: [
+      '**📷 You can now attach photos to inventory products.** Open a product in the Product List → Edit and you\'ll see a "Product Photos" section: drag in or pick images, set one as the primary/cover photo, and remove them. This is for visually verifying colors, patterns, and texture before picking a SKU.',
+      '**🔒 Product photos are internal-only** — they are stored in a private space and shown through secure, expiring links, not public web URLs. (One-time setup by the admin is required before the first upload works.)',
+      { superAdminOnly: true, text: 'v55.83-II. Reuses AttachmentManager against a NEW PRIVATE bucket "product-photos" with parent_type="inventory_product", parentId=product.id. Added backward-compatible modes to AttachmentManager: bucketName, isPrivate (createSignedUrls on render — no public_url stored), imageOnly (accept=image/*, gallery thumbs), enablePrimary (is_primary clears siblings; first upload auto-primary; primary sorts first). Legacy public invoice/ticket attachments UNCHANGED (default bucket=attachments, getPublicUrl path intact, new columns only inserted in private/primary modes). Mounted in InventoryProductMaster edit modal (edit mode + saved id only). SQL sql/v55-83-II-product-photos.sql adds is_private/is_primary/sort_order/caption to attachments + storage.objects policies for bucket_id=product-photos. SETUP (Max): create PRIVATE bucket "product-photos" (image/*, 100MB) + run the SQL. Test test-v55-83-ii-product-photos.js (15 assertions). Built per Max\'s "internal" decision on the Codex product-photos gap. NOT yet done: thumbnails in Product Master rows / ProductPicker / Receiving (phase 2 — needs a batch primary-photo lookup).' },
+    ],
+  },
+  {
     version: 'v55.83-IH',
     date: '2026-06-17',
     label: 'Inventory: one shared rule for which receipts count (prevents Overview/Report drift)',
