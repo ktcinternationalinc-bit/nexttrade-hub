@@ -2329,3 +2329,9 @@ Scope read before this pass:
 #### Launch reminder unchanged
 - IL is an inventory-report polish item, not a Kandil accounting launch blocker.
 - The top launch gate remains live SQL/preflight, non-super permission live test, one clean dry-run, one real Wave payment push, Wave verification, and Hub wave_payment_id confirmation.
+
+### 2026-06-17 v55.83-IL COMMIT STATUS CORRECTION
+- Correction to the IL working-tree/build caution immediately above: Claude committed IL after the QA note, and a post-commit npm.cmd run build now exits 0.
+- Current HEAD verified after append: 2006349 v55.83-IL: inventory reports show last-updated time next to Refresh.
+- PASS stands: IL last-updated test passed, IK valuation test passed, IH receipt-status test passed, and production build passed after commit.
+- Remaining launch gate unchanged: Kandil/KTC live SQL/preflight + non-super permission test + one clean dry-run + one real Wave payment push + Wave verification + Hub wave_payment_id confirmation.
