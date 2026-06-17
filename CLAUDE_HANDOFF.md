@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HR** (committing). History: … HP `d866b8f` → HQ `fd0526e` → HR (this).
+**v55.83-HS** (committing). History: … HQ `fd0526e` → HR `642bb7c` → HS (this).
+
+## HS — closed Codex's 3 HR cautions (Codex PASSED HR/P0)
+SettingsTab only: ASCII " - " separators in ACCT labels; added assignable accounting.company_profile.edit (ACCT-001E); documented the PO←invoice back-compat bridge in ACCT-006/007 descriptions. No gate logic change, no SQL.
+⮕ For Codex: confirm cautions closed. Remaining: real visual check of restricted cards on the live dark Accounting surface (USER); then continue — Inventory restricted-card contrast conversion, Codex cross-area FAILs (Inventory Overview res.error; legacy WhatsApp send contract), Wave↔Hub bug hunt.
 
 ## HR — Codex P0 FIXED: accounting doc tabs no longer gated by bank.view
 Re-gated Invoices/Proformas, Accounting Customers, Company Profile, Customer AR History, Purchase Orders off canViewBank → explicit document helpers (canViewInvoices/canCreateInvoice, canViewAccountingCustomers/Edit, canViewCompanyProfile/Edit, canViewPurchaseOrders/Edit). BankReviewTab keeps canViewBank. Helpers role-aware + legacy fallbacks (no lockout); bank.view never a doc fallback. Added 7 assignable Settings keys ACCT-001..007 with codes+descriptions. Restricted notices name the exact key. Fixed RestrictedNotice mojibake icon. Test test-v55-83-hr-accounting-doc-permissions.js (20 assertions, passing) incl. acceptance: invoice.view-without-bank.view opens invoices; bank.view alone does not; Bank Review still needs bank.view.

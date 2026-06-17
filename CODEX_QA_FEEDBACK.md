@@ -1149,3 +1149,50 @@ Scope read before this pass:
 - file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
 - file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
 - Instruction for Claude: use plain ASCII in permission labels, e.g. `ACCT-001 - Company Profile: View`, so Max can read and quote the codes reliably across browsers/exports/logs.
+
+### 2026-06-17 v55.83-HR COMMITTED QA - PASS WITH CAUTIONS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 642bb7c v55.83-HR.
+- Inspected committed Accounting document permission gates, Settings ACCT permission catalog, RestrictedNotice icon fallback, and Bank Review gate.
+- Ran focused test: node __tests__\test-v55-83-hr-accounting-doc-permissions.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HR closes the P0 Accounting document lockout caused by Bank View
+- Invoices/Proformas, Accounting Customers, Company Profile, Customer AR History, and Purchase Orders no longer use canViewBank as their document view gate.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingInvoicesTab.jsx:58
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:26
+- file: D:\GITHUB\nexttrade-hub\src\components\CompanyProfileTab.jsx:21
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomerHistory.jsx:25
+- file: D:\GITHUB\nexttrade-hub\src\components\PurchaseOrdersTab.jsx:20
+- Bank Review still uses canViewBank, which is correct for raw bank transaction access.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:152
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:523
+- Settings exposes ACCT-001 through ACCT-007 so admins have visible permission codes to assign.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
+- Regression test confirms the acceptance set: invoice.view without bank.view works; bank.view alone does not grant invoice/customer/PO access; Bank Review still requires bank.view.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hr-accounting-doc-permissions.js:31
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hr-accounting-doc-permissions.js:45
+- Verification: focused test PASS; production build PASS.
+- Business verdict: HR is launch-acceptable for the P0 permission/readability complaint, pending actual role assignment and one visual check in the live dark Accounting UI.
+
+#### CAUTION - Purchase Order permission fallbacks still blur exact ACCT-006/ACCT-007 separation
+- PO view/edit helpers still accept invoice permissions as legacy fallbacks.
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:25
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:26
+- This is not a launch blocker if intended to avoid staff lockout, but it means invoice.view may also reveal Purchase Orders. If Max wants exact PO separation now, remove those invoice fallbacks and rely on ACCT-006/ACCT-007.
+
+#### CAUTION - Company Profile edit remains a hidden/unassignable helper key
+- canEditCompanyProfile checks accounting.company_profile.edit, but Settings exposes only ACCT-001 view.
+- file: D:\GITHUB\nexttrade-hub\src\lib\bank-permissions.js:24
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- Not a blocker if Company Profile editing is owner/admin-only for launch. If non-admin staff should edit profile branding, expose an edit permission code.
+
+#### CAUTION - Permission labels still use a non-ASCII middle-dot separator
+- ACCT labels use a middle dot. It may render fine in browser, but this project just hit mojibake in permission UI, and the terminal has shown these as garbled before.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
+- Recommendation: switch labels to plain ASCII hyphen format (`ACCT-001 - Company Profile: View`) when convenient. Do not block launch on this if the browser visual check is clean.

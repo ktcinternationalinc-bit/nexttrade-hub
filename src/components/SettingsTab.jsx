@@ -484,13 +484,14 @@ const ACTION_PERMS = [
   // v55.83-HR (Codex P0) — Accounting DOCUMENT permissions. These let staff work invoices,
   // customers, company profile, and purchase orders WITHOUT needing Bank: View. Bank: View now
   // only controls Bank Review & Matching. Stable codes (ACCT-001..007) are shown for admins.
-  { key: 'accounting.company_profile.view', label: 'ACCT-001 · Company Profile: View', desc: 'View the company profile used on printed invoices/proformas. Does NOT require Bank: View.' },
-  { key: 'accounting.customers.view',       label: 'ACCT-002 · Accounting Customers: View', desc: 'View Hub accounting customers (separate from CRM and from bank transactions). Does NOT require Bank: View.' },
-  { key: 'accounting.customers.edit',       label: 'ACCT-003 · Accounting Customers: Edit', desc: 'Create / edit / archive Hub accounting customers.' },
-  { key: 'invoice.view',                    label: 'ACCT-004 · Invoices: View',       desc: 'View Hub invoices and proformas (read-only). Does NOT require Bank: View.' },
-  { key: 'invoice.create',                  label: 'ACCT-005 · Invoices: Create/Edit', desc: 'Create and edit Hub invoices and proformas. (Legacy "Edit Invoices" also grants this.)' },
-  { key: 'purchase_orders.view',            label: 'ACCT-006 · Purchase Orders: View', desc: 'View internal purchase orders. Does NOT require Bank: View.' },
-  { key: 'purchase_orders.edit',            label: 'ACCT-007 · Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders.' },
+  { key: 'accounting.company_profile.view', label: 'ACCT-001 - Company Profile: View', desc: 'View the company profile used on printed invoices/proformas. Does NOT require Bank: View.' },
+  { key: 'accounting.company_profile.edit', label: 'ACCT-001E - Company Profile: Edit', desc: 'Edit the company profile (name, logo, branding on printed invoices/proformas). Admins/super-admin always have this.' },
+  { key: 'accounting.customers.view',       label: 'ACCT-002 - Accounting Customers: View', desc: 'View Hub accounting customers (separate from CRM and from bank transactions). Does NOT require Bank: View.' },
+  { key: 'accounting.customers.edit',       label: 'ACCT-003 - Accounting Customers: Edit', desc: 'Create / edit / archive Hub accounting customers.' },
+  { key: 'invoice.view',                    label: 'ACCT-004 - Invoices: View',       desc: 'View Hub invoices and proformas (read-only). Does NOT require Bank: View.' },
+  { key: 'invoice.create',                  label: 'ACCT-005 - Invoices: Create/Edit', desc: 'Create and edit Hub invoices and proformas. (Legacy "Edit Invoices" also grants this.)' },
+  { key: 'purchase_orders.view',            label: 'ACCT-006 - Purchase Orders: View', desc: 'View internal purchase orders. Does NOT require Bank: View. NOTE: for launch back-compat, "Invoices: View" also currently opens POs until roles are assigned.' },
+  { key: 'purchase_orders.edit',            label: 'ACCT-007 - Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders. NOTE: for launch back-compat, "Invoices: Create/Edit" also currently grants this until roles are assigned.' },
 ];
 
 const NOTIF_TYPES = [

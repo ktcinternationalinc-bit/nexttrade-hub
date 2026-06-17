@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HS',
+    date: '2026-06-17',
+    label: 'Polish the new accounting permissions (Codex cautions)',
+    items: [
+      '**⚙️ Company Profile editing is now its own assignable permission (ACCT-001E)** — you can let someone edit the printed-invoice branding without making them an admin. Permission codes now use plain dashes (e.g. "ACCT-004 - Invoices: View") so they\'re easy to read and quote.',
+      { superAdminOnly: true, text: 'v55.83-HS (closes the 3 Codex HR cautions; Codex PASSED HR). SettingsTab: (1) replaced the non-ASCII middle-dot in ACCT labels with " - "; (2) added assignable accounting.company_profile.edit (ACCT-001E) so the canEditCompanyProfile helper key is no longer hidden/unassignable; (3) documented in the ACCT-006/007 descriptions that invoice.view/invoice.create currently also open POs (launch back-compat bridge) — to be tightened after roles are assigned. No gate logic changed; no SQL. Still open (next): finish Inventory restricted-card contrast conversion; Codex cross-area FAILs (Inventory Overview res.error surfacing, legacy WhatsApp send contract); resume Wave↔Hub bug hunt.' },
+    ],
+  },
+  {
     version: 'v55.83-HR',
     date: '2026-06-17',
     label: 'P0: staff no longer need "Bank View" to use Invoices/Customers/POs',
