@@ -62,7 +62,7 @@ export default function InventoryReportCenter(props) {
       q('inventory_layers', supabase.from('inventory_layers').select('product_id,qty_remaining,cost_per_uom,warehouse_id,receipt_date').gt('qty_remaining', 0)),
       q('inventory_lists', supabase.from('inventory_lists').select('id,label_en,label_ar')),
       q('inv_warehouses', supabase.from('inv_warehouses').select('id,name,code')),
-      q('inventory_stock_receipts', supabase.from('inventory_stock_receipts').select('product_id,receipt_date').eq('status', 'finalized')),
+      q('inventory_stock_receipts', supabase.from('inventory_stock_receipts').select('product_id,receipt_date,quantity,quantity_kg,roll_count,uom,status')),
       q('inventory_mix_components', supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true)),
       q('inventory_movements', supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000))
     ]).then(function (res) {
@@ -78,17 +78,13 @@ export default function InventoryReportCenter(props) {
       var errs = [];
       res.forEach(function (r) { if (r.error) { errs.push({ source: r.source, message: r.error }); } });
       setLoadErrors(errs);
-      setDiag({
-        products: products.length, layers: layers.length, lists: lists.length,
-        warehouses: whs.length, receipts: receipts.length, mixComponents: comps.length,
-        movements: movements.length, errors: errs.length
-      });
 
       var listMap = {}; lists.forEach(function (l) { listMap[l.id] = { en: l.label_en || '', ar: l.label_ar || '' }; });
       var whMap = {}; whs.forEach(function (w) { whMap[w.id] = w.name || w.code || ''; });
       var nameMap = {}; products.forEach(function (p) { nameMap[p.id] = p; });
 
-      var layerAgg = {}; var availByProduct = {};
+      // Finalized cost layers — value/warehouse + finalized on-hand qty.
+      var layerAgg = {};
       layers.forEach(function (l) {
         var pid = l.product_id; if (!pid) { return; }
         if (!layerAgg[pid]) { layerAgg[pid] = { qty: 0, value: 0, whs: {} }; }
@@ -96,11 +92,54 @@ export default function InventoryReportCenter(props) {
         layerAgg[pid].qty += q;
         layerAgg[pid].value += q * (Number(l.cost_per_uom) || 0);
         if (l.warehouse_id && whMap[l.warehouse_id]) { layerAgg[pid].whs[whMap[l.warehouse_id]] = true; }
-        availByProduct[pid] = (availByProduct[pid] || 0) + q;
       });
 
-      var lastRecv = {};
-      receipts.forEach(function (r) { var pid = r.product_id; if (!pid || !r.receipt_date) { return; } if (!lastRecv[pid] || r.receipt_date > lastRecv[pid]) { lastRecv[pid] = r.receipt_date; } });
+      // v55.83-GX — receipts aggregated EXACTLY like InventoryOverview so the report
+      // reconciles with it:
+      //   - skip cancelled / pending_detail / merged / reversed (as good as deleted)
+      //   - original/received qty = sum of valid receipt.quantity (all valid statuses)
+      //   - non-finalized valid receipts ("active"/"received") count as PENDING on-hand
+      //     and are added into Current Qty (Overview shows them immediately, yellow)
+      //   - primary received UOM = the UOM with the largest received qty (source of truth)
+      var lastRecv = {}; var origByProduct = {}; var pendingByProduct = {};
+      var recvUomByProduct = {}; var validReceiptCount = 0;
+      receipts.forEach(function (r) {
+        var pid = r.product_id; if (!pid) { return; }
+        if (r.status === 'cancelled' || r.status === 'pending_detail' || r.status === 'merged' || r.status === 'reversed') { return; }
+        validReceiptCount += 1;
+        var qv = Number(r.quantity) || 0;
+        origByProduct[pid] = (origByProduct[pid] || 0) + qv;
+        var uom = (r.uom || 'unit').toLowerCase();
+        if (!recvUomByProduct[pid]) { recvUomByProduct[pid] = {}; }
+        recvUomByProduct[pid][uom] = (recvUomByProduct[pid][uom] || 0) + qv;
+        if (r.status !== 'finalized') { pendingByProduct[pid] = (pendingByProduct[pid] || 0) + qv; }
+        if (r.receipt_date && (!lastRecv[pid] || r.receipt_date > lastRecv[pid])) { lastRecv[pid] = r.receipt_date; }
+      });
+
+      // Current on-hand = finalized layer qty + pending (received-but-not-finalized) qty.
+      // This matches Overview's current_qty. availByProduct (used by mix composition) uses
+      // the same on-hand figure so component availability agrees with the rest of the app.
+      var currentByProduct = {};
+      products.forEach(function (p) {
+        var fin = (layerAgg[p.id] && layerAgg[p.id].qty) || 0;
+        var pend = pendingByProduct[p.id] || 0;
+        currentByProduct[p.id] = fin + pend;
+      });
+      var availByProduct = currentByProduct;
+
+      // Primary received UOM per product (largest received qty wins).
+      var recvUomPrimary = {};
+      Object.keys(recvUomByProduct).forEach(function (pid) {
+        var best = ''; var bestQ = -1; var m = recvUomByProduct[pid];
+        Object.keys(m).forEach(function (u) { if (m[u] > bestQ) { bestQ = m[u]; best = u; } });
+        recvUomPrimary[pid] = best;
+      });
+
+      setDiag({
+        products: products.length, layers: layers.length, lists: lists.length,
+        warehouses: whs.length, receiptsLoaded: receipts.length, receiptsValid: validReceiptCount,
+        mixComponents: comps.length, movements: movements.length, errors: errs.length
+      });
 
       var compsByMix = {};
       comps.forEach(function (c) { if (!compsByMix[c.mix_product_id]) { compsByMix[c.mix_product_id] = []; } compsByMix[c.mix_product_id].push(c); });
@@ -109,8 +148,9 @@ export default function InventoryReportCenter(props) {
         nonVirtual: products.filter(function (p) { return p.is_virtual_mix !== true; }),
         mixes: products.filter(function (p) { return p.is_virtual_mix === true; }),
         listMap: listMap, whMap: whMap, nameMap: nameMap,
-        layerAgg: layerAgg, availByProduct: availByProduct, lastRecv: lastRecv, compsByMix: compsByMix,
-        movements: movements
+        layerAgg: layerAgg, availByProduct: availByProduct, currentByProduct: currentByProduct,
+        lastRecv: lastRecv, origByProduct: origByProduct, recvUomPrimary: recvUomPrimary,
+        compsByMix: compsByMix, movements: movements
       });
     }).catch(function (e) { console.error('[inv-reports] load', e); toast.error('Failed to load inventory data'); })
       .finally(function () { setLoading(false); });
@@ -129,20 +169,23 @@ export default function InventoryReportCenter(props) {
       return {
         code: p.quick_code || p.design_sku || '',
         name: pname(p),
+        name_en: p.name_en || '',
+        name_ar: p.name_ar || '',
         family: listLabel(p.family_list_id),
         category: listLabel(p.category_list_id),
         grade: listLabel(p.grade_list_id),
         color: listLabel(p.color_list_id),
         origin: listLabel(p.origin_list_id),
-        uom: p.default_uom || '',
-        qty_remaining: agg.qty,
+        uom: (raw.recvUomPrimary && raw.recvUomPrimary[p.id]) || p.default_uom || 'unit',
+        qty_remaining: Number(raw.currentByProduct[p.id]) || 0,
+        original_qty: Number(raw.origByProduct[p.id]) || 0,
         warehouse: whNames.length > 1 ? (isRtl ? 'متعدد' : 'Multiple') : (whNames[0] || ''),
         avg_cost: agg.qty > 0 ? (agg.value / agg.qty) : 0,
         total_value: agg.value,
         last_received: raw.lastRecv[p.id] || ''
       };
     });
-    if (q) { rows = rows.filter(function (r) { return (String(r.code).toLowerCase().indexOf(q) >= 0) || (String(r.name).toLowerCase().indexOf(q) >= 0); }); }
+    if (q) { rows = rows.filter(function (r) { return (String(r.code).toLowerCase().indexOf(q) >= 0) || (String(r.name_en).toLowerCase().indexOf(q) >= 0) || (String(r.name_ar).toLowerCase().indexOf(q) >= 0); }); }
     rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
     return rows;
   }
@@ -295,13 +338,24 @@ export default function InventoryReportCenter(props) {
         </div>
       )}
 
+      {/* v55.83-GX — non-blocking warning: products (and maybe receipts) exist, but there
+          are NO positive cost layers. The snapshot will show rows with Current Qty 0, so the
+          all-empty message above won't fire — surface the reason inline instead. */}
+      {!loading && loadErrors.length === 0 && reportId === 'snapshot' && diag && diag.products > 0 && diag.layers === 0 && (
+        <div className="p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-xs">
+          {diag.receiptsValid > 0
+            ? (isRtl ? 'لا توجد طبقات تكلفة موجبة (مُرحَّلة) — الكمية الحالية تعكس مخزونًا مُستلَمًا لكنه لم يُرحَّل بعد، وبلا تكلفة/قيمة حتى الترحيل.' : 'No positive (finalized) cost layers — Current Qty reflects received-but-not-finalized stock, which has no cost/valuation until it is finalized into cost layers.')
+            : (isRtl ? 'توجد منتجات لكن لا يوجد مخزون مُستلَم بعد — الكمية الحالية ستظهر صفرًا.' : 'Products exist, but no stock has been received yet — Current Qty will show 0.')}
+        </div>
+      )}
+
       {/* Super-admin diagnostic — how many rows each source returned, so an empty report
           can be told apart from a broken query. */}
       {isSuperAdmin && diag && !loading && (
         <details className="text-[11px] text-slate-500">
           <summary className="cursor-pointer font-bold">{isRtl ? 'تشخيص (مسؤول)' : 'Diagnostics (super-admin)'}</summary>
           <div className="mt-1 font-mono">
-            products: {diag.products} · layers(qty&gt;0): {diag.layers} · receipts(finalized): {diag.receipts} · movements: {diag.movements} · mixComponents: {diag.mixComponents} · lists: {diag.lists} · warehouses: {diag.warehouses} · errors: {diag.errors}
+            products: {diag.products} · layers(qty&gt;0): {diag.layers} · receipts(loaded): {diag.receiptsLoaded} · receipts(valid): {diag.receiptsValid} · movements: {diag.movements} · mixComponents: {diag.mixComponents} · lists: {diag.lists} · warehouses: {diag.warehouses} · errors: {diag.errors}
           </div>
         </details>
       )}
@@ -321,7 +375,7 @@ export default function InventoryReportCenter(props) {
           // v55.83-GW — distinguish WHY a snapshot is empty instead of always "No data".
           var hasProducts = raw && raw.nonVirtual && raw.nonVirtual.length > 0;
           var hasLayers = diag && diag.layers > 0;
-          var hasReceipts = diag && diag.receipts > 0;
+          var hasReceipts = diag && diag.receiptsValid > 0;
           var msg;
           if (loadErrors.length > 0) {
             msg = isRtl ? 'تعذّر تحميل البيانات (انظر الخطأ أعلاه).' : 'Inventory data could not be loaded (see the error above).';

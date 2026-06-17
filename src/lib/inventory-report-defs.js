@@ -14,16 +14,20 @@
 //   valuation  — true if this column shows cost/value (hidden as "Restricted"
 //                unless the viewer has inventory.valuation.view)
 
+// v55.83-GX — explicit EN + AR name columns (per QA) and Original/Received Qty so the
+// snapshot reconciles with Inventory Overview (Current = layers, Original = receipts).
 var SNAPSHOT_COLUMNS = [
   { key: 'code', label_en: 'Code', label_ar: 'الكود', align: 'left', format: 'text' },
-  { key: 'name', label_en: 'Product Name', label_ar: 'اسم المنتج', align: 'left', format: 'text' },
+  { key: 'name_en', label_en: 'Name (EN)', label_ar: 'الاسم (إنجليزي)', align: 'left', format: 'text' },
+  { key: 'name_ar', label_en: 'Name (AR)', label_ar: 'الاسم (عربي)', align: 'left', format: 'text' },
   { key: 'family', label_en: 'Family', label_ar: 'العائلة', align: 'left', format: 'text' },
   { key: 'category', label_en: 'Category', label_ar: 'الفئة', align: 'left', format: 'text' },
   { key: 'grade', label_en: 'Grade', label_ar: 'الدرجة', align: 'left', format: 'text' },
   { key: 'color', label_en: 'Color', label_ar: 'اللون', align: 'left', format: 'text' },
   { key: 'origin', label_en: 'Origin', label_ar: 'المنشأ', align: 'left', format: 'text' },
   { key: 'uom', label_en: 'UOM', label_ar: 'الوحدة', align: 'center', format: 'text' },
-  { key: 'qty_remaining', label_en: 'Qty Remaining', label_ar: 'الكمية المتبقية', align: 'right', format: 'number', total: 'sum' },
+  { key: 'qty_remaining', label_en: 'Current Qty', label_ar: 'الكمية الحالية', align: 'right', format: 'number', total: 'sum' },
+  { key: 'original_qty', label_en: 'Received Qty', label_ar: 'الكمية المستلمة', align: 'right', format: 'number', total: 'sum' },
   { key: 'warehouse', label_en: 'Warehouse', label_ar: 'المخزن', align: 'left', format: 'text' },
   { key: 'avg_cost', label_en: 'Avg Cost', label_ar: 'متوسط التكلفة', align: 'right', format: 'money', valuation: true },
   { key: 'total_value', label_en: 'Total Value', label_ar: 'القيمة الإجمالية', align: 'right', format: 'money', total: 'sum', valuation: true },

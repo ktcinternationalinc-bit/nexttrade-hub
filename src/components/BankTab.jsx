@@ -562,54 +562,10 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
         </div>
       ) : null}
 
-      {/* Match Modal */}
-      {matchingTxn && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={() => setMatchingTxn(null)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[80vh] overflow-hidden"
-            onClick={e => e.stopPropagation()}>
-            <div className="p-4 border-b">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="font-bold text-sm">Match Transaction / مطابقة</h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    {matchingTxn.name} — {fmtMoney(matchingTxn.amount)} on {matchingTxn.date}
-                  </p>
-                </div>
-                <button onClick={() => setMatchingTxn(null)} className="text-slate-400 text-lg">✕</button>
-              </div>
-              <input
-                type="text"
-                value={searchInv}
-                onChange={e => setSearchInv(e.target.value)}
-                placeholder="Search invoices by customer, number, amount..."
-                className="w-full border rounded-lg px-3 py-2 text-xs mt-2"
-              />
-            </div>
-            <div className="overflow-y-auto max-h-[50vh] p-2">
-              {matchableInvoices.length === 0 ? (
-                <p className="text-center text-slate-400 text-xs py-4">No invoices found</p>
-              ) : matchableInvoices.map(inv => (
-                <button key={inv.id}
-                  onClick={() => matchToInvoice(matchingTxn.id, inv.id)}
-                  className="w-full text-left p-3 rounded-lg hover:bg-blue-50 border-b last:border-0">
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <div className="font-semibold text-xs">{inv.customer || 'N/A'}</div>
-                      <div className="text-[10px] text-slate-500">
-                        #{inv.invoice_number || '—'} • {inv.date}
-                      </div>
-                    </div>
-                    <div className="font-bold text-sm text-blue-600">
-                      {fmtMoney(inv.amount || inv.total)}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* v55.83-GX — The legacy in-tab Match Modal was REMOVED. It posted to the
+          accounting-bypassing /api/plaid/match route (now 410 Gone). Matching and
+          unmatching live only in Accounting → Bank Review & Matching. The Match /
+          unmatch buttons here now route the user there via a notice. */}
     </div>
   );
 }

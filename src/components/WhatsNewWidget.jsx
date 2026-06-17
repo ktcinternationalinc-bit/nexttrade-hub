@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GX',
+    date: '2026-06-16',
+    label: 'Inventory Snapshot matches Overview (EN+AR names, Received qty) + Bank cleanup',
+    items: [
+      '**📦 Inventory Snapshot now reconciles with the Inventory Overview.** It shows both Current Qty (stock on hand, including received-but-not-yet-finalized stock) and Received Qty (everything received), using the exact same receipt rules the Overview uses — so the two screens agree. Plus separate English-name and Arabic-name columns, the correct unit of measure from the received lines, and an upfront warning when stock was received but not yet finalized into cost layers.',
+      '**🧹 Removed the old hidden Bank "match" popup.** The legacy in-tab matching window (which used to bypass the books) is fully gone — matching/unmatching is only in Accounting → Bank Review & Matching.',
+      { superAdminOnly: true, text: 'v55.83-GX. No SQL. inventory-report-defs SNAPSHOT_COLUMNS: split name into name_en + name_ar, added original_qty ("Received Qty"), relabeled qty_remaining "Current Qty". InventoryReportCenter now mirrors InventoryOverview receipt logic EXACTLY (QA fix): receipts query selects product_id,receipt_date,quantity,quantity_kg,roll_count,uom,status with NO status=finalized filter; aggregation skips cancelled/pending_detail/merged/reversed; Received Qty = sum of all valid receipt.quantity; Current Qty = finalized layer qty + pending (valid non-finalized) qty (== Overview current_qty, which adds non-finalized received stock); UOM = primary received-line UOM (max qty) with product default_uom only as fallback (mirrors Overview effUom); avg_cost/total_value from finalized layers only (pending stock has no cost). Diagnostics relabeled receipts(loaded)+receipts(valid). snapshotRows emit name_en/name_ar/original_qty; search matches EN+AR. Print/export already use the same flatRows()/mixSections(). BankTab: deleted the dead Match Modal JSX (matchingTxn never set after GU; posted to the now-410 /api/plaid/match). Added CLAUDE_HANDOFF.md + CODEX_QA_FEEDBACK.md for the Codex 5-min QA loop. STILL OPEN: virtual-mix sale engine (parked), Wave generic-transaction push (no mutation).' },
+    ],
+  },
+  {
     version: 'v55.83-GW',
     date: '2026-06-16',
     label: 'Inventory reports tell you WHY they are empty + fix mix-edit permission',
