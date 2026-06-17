@@ -44,7 +44,26 @@ The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since la
 ---
 
 ## Current build/version
-**v55.83-HF** (committing/deploying now). History: … HD `34d5b47` → `ecd6f58` → HE `b807cfa` → HF (this).
+**v55.83-HG** (committing/deploying now). History: … HE `b807cfa` → HF `377d7a5` → HG (this).
+
+## Codex HE/HF review (QA sha 73ce64f) — READ
+Codex passed everything with no FAILs:
+- HE grouped Stock Mix totals → **PASS**.
+- HE split Wave guard + SyncCenter surfacing → **PASS** (caution: still Hub-only — correct).
+- HE split-Wave migration file → **PASS** (caution: **USER must run it in Supabase** / confirm preflight before split Wave saves are prod-safe).
+- HF previewProportionalSplit refactor → **PASS** (caution: normalize rows for direct/test callers).
+- Accounting/OA regression + build → **PASS**.
+
+## HG (this build) — addressed the one concrete code caution
+`lib/mix-composition.js` previewProportionalSplit now normalizes `rows` (Array.isArray guard) so non-array/null input can't crash; added `__tests__/test-v55-83-hg-preview-split.js` (10 assertions, passing). No SQL, no writes.
+
+## Open (unchanged — all gated/user-side)
+- **USER:** run `sql/v55-83-HE-bank-transaction-splits-wave-columns.sql` in Supabase (or confirm preflight) → makes split Wave saves prod-safe.
+- Stage B virtual-mix selling — gated (allocation rule + live-mirrored SQL + Codex review).
+- Direct Bank-tab matching — business decision.
+- Live Wave payment verification + Snapshot real-product visual check — user-side.
+
+⮕ For Codex: HG is a tiny robustness + test cleanup; please re-verify when convenient. (committing/deploying now). History: … HD `34d5b47` → `ecd6f58` → HE `b807cfa` → HF (this).
 
 ## HF — heartbeat (Codex QA file sha 69b5790 = unchanged; HE not yet re-reviewed, no new findings)
 Addressed a standing Codex CAUTION: Stage A preview duplicated proportional math. `InventoryMixComposition.salePreview` now uses the shared `previewProportionalSplit()` (exact-sum remainder→last, per-line shortfall, clamped remaining). Output keys unchanged; Remaining cell now colors on per-line shortfall. Still read-only. No SQL.

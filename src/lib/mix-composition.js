@@ -40,9 +40,12 @@ function buildComposition(components, availByProduct) {
 // redistribute here (redistribution is a Phase 2 decision wired with a warning + confirm).
 function previewProportionalSplit(rows, saleQty, decimals) {
   decimals = decimals == null ? 2 : decimals;
+  // v55.83-HG (Codex caution) — normalize rows up front so direct/test callers that pass
+  // null/undefined/non-array can't crash the loop below. App caller already passes an array.
+  rows = Array.isArray(rows) ? rows : [];
   var sale = Number(saleQty) || 0;
   var total = 0; var i;
-  for (i = 0; i < (rows || []).length; i++) { total = total + (Number(rows[i].available) || 0); }
+  for (i = 0; i < rows.length; i++) { total = total + (Number(rows[i].available) || 0); }
   var out = [];
   var running = 0;
   var f = Math.pow(10, decimals);

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HG',
+    date: '2026-06-17',
+    label: 'Hardened the shared Stock Mix split calculator (+ tests)',
+    items: [
+      '**🧮 Internal hardening (no visible change).** The shared calculator behind the Stock Mix Sale Preview now safely handles empty/invalid input, and is covered by automated tests confirming the split adds up exactly and flags shortfalls. Still read-only — nothing is sold or deducted.',
+      { superAdminOnly: true, text: 'v55.83-HG (Codex HE/HF caution cleanup). Codex passed HE (grouped totals, split Wave guard+SyncCenter+migration) and HF (previewProportionalSplit) with no FAILs. HG: previewProportionalSplit() in lib/mix-composition.js now normalizes rows via Array.isArray guard so direct/test callers passing null/non-array cannot crash (app caller already passed an array; this future-proofs Stage B reuse). Added __tests__/test-v55-83-hg-preview-split.js (10 assertions: null/undefined/non-array safety, exact-sum remainder-to-last, feasibility, per-line shortfall, clamped remaining, source-wiring) — passing. No SQL, no writes. OPEN: user must run sql/v55-83-HE split-Wave migration (or confirm preflight) before split Wave saves are prod-safe; Stage B gated (allocation rule + live-mirrored SQL + Codex review); direct Bank-tab matching (business decision); live Wave payment + Snapshot visual checks (user-side).' },
+    ],
+  },
+  {
     version: 'v55.83-HF',
     date: '2026-06-17',
     label: 'Stock Mix preview: shared, more-accurate split math',

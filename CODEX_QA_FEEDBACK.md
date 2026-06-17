@@ -283,3 +283,68 @@ Scope read before this pass:
 - HD source commit now present: 34d5b47 v55.83-HD: fix Codex HB FAILs.
 - The HD QA findings above still apply to the committed HD code. The production build and Excel regression were run against the HD working tree immediately before commit; source diff was then committed by Claude.
 - Current git status after re-check: only CODEX_QA_FEEDBACK.md is modified by Codex, plus untracked .claude/. No source edits by Codex.
+
+### 2026-06-17 v55.83-HE/HF Heartbeat QA - PASS / CAUTION
+
+Scope read before this pass:
+- Restarted the 5-minute heartbeat automation.
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 377d7a5 v55.83-HF. HE commit inspected: b807cfa.
+- Ran focused Excel regression: node __tests__\test-v55-83-hd-excel-note-strip.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HE fixes Stock Mix grouped CSV/print totals
+- Grouped Stock Mix CSV now appends a per-section totals row using flatTotals over MIX_COLUMNS.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:307
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:311
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:313
+- Grouped Stock Mix print now adds a per-section tfoot using the same totals helper.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:343
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:346
+- Business impact: exported/printed Stock Mix now carries the same total-available information staff see on screen. This closes the HC/HD grouped totals FAIL at code level.
+
+#### PASS WITH CAUTION - HE fixes split Wave raw-token guard and Sync Center visibility
+- Bank Review now blocks split save if a wave:<id> selection no longer resolves, preventing raw wave:<uuid> category persistence.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:375
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:382
+- Split rows still persist readable Wave category fields when resolved.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:399
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:404
+- Wave Sync Center now loads pending bank_transaction_splits and surfaces them as Hub-only blocked rows, so split-only Wave categories no longer disappear from the queue.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:151
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:170
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:443
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:450
+- CAUTION: this does not implement generic Wave transaction/category push. It correctly shows these as Hub-only blocked until a real Wave mutation exists.
+
+#### PASS WITH CAUTION - HE adds the missing split Wave column migration
+- New SQL migration adds wave_business_id, wave_account_id, wave_account_name, category_source, and category_status to bank_transaction_splits, plus an index for pending Wave sync rows.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-HE-bank-transaction-splits-wave-columns.sql:13
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-HE-bank-transaction-splits-wave-columns.sql:21
+- CAUTION: this is a repo migration only. Production is not fully safe until the user runs this in Supabase or confirms /api/wave/preflight-schema passes for bank_transaction_splits.
+- Instruction for Claude: keep the UI honest: if preflight reports those split columns missing, tell staff/admins the HE migration must be run before split Wave category saving is launch-safe.
+
+#### PASS WITH CAUTION - HF cleans up Stage A preview math
+- Stock Mix Sale Preview now uses shared previewProportionalSplit() instead of duplicating proportional allocation in the component.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:3
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryMixComposition.jsx:87
+- file: D:\GITHUB\nexttrade-hub\src\lib\mix-composition.js:41
+- PASS: grep shows InventoryMixComposition Sale Preview still has no insert/update/delete/rpc calls in the preview path; it remains read-only.
+- CAUTION: previewProportionalSplit assumes rows is an array in the loop at line 49. Current caller passes composition.rows, so this is safe in the app, but a future test/direct import should pass [] or the helper should normalize rows first.
+- CAUTION: Stage A remains preview-only. Do not claim virtual mix selling is complete until Stage B drawdown/COGS/reversal is built, SQL-reviewed, run, and QA-passed.
+
+#### PASS - Accounting/Open Accounts regression still holds on HF
+- Excel auto-sync note-strip regression still passes.
+- Production build still passes with npm.cmd run build.
+- Existing Next metadata/dynamic-route warnings are unchanged and outside this scoped Accounting/Inventory QA pass.
+
+#### Process note
+- HE committed the previously appended Codex QA notes into git. That appears to be committing Codex's existing file changes, not rewriting their content. Going forward, Claude should still avoid editing CODEX_QA_FEEDBACK.md directly and use CLAUDE_HANDOFF.md for responses/status.
+
+#### Still open after HE/HF heartbeat
+- User must run or confirm the HE bank_transaction_splits Wave-column migration before split Wave categories are production-safe.
+- Stage B virtual-mix selling remains gated: allocation rule decision, live consume_invoice_item_inventory parity, locking/warehouse/FX/COGS SQL, Codex review, then user-run migration.
+- Direct Bank-tab matching with selected Wave silo/account remains not built; Bank Review remains the safe accounting path.
+- One live Wave payment push still needs verification in Wave.
+- Inventory Snapshot still needs visual comparison against one known real product from Overview.
