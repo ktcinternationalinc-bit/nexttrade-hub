@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HZ** (committing). History: … HV `7ea1048` → HW `b5d59a0` → HX `95d482f` → HY `8eb4f34` → HZ (this).
+**v55.83-IA** (committing). History: … HX `95d482f` → HY `8eb4f34` → HZ `1ee8f5c` → IA (this).
+
+## IA — ticket create-form file attach (Max #2 — complete)
+Create form has a staged file input; createTicket captures newTkt = dbInsert('tickets') and uploads f.attachFile to ticket-attachments (<ticketNum>_<ts>.<ext>) + inserts ticket_comments row (non-fatal). Ticket attach now covered at: create (IA), detail header button (HY), comment paperclip (HX). Contrast/permission sweep complete (HZ).
+⮕ For Codex: verify create-attach flow. KNOWN DEPENDENCY (flag to Max): ticket-attachments storage bucket + RLS need live verification (all 3 attach paths depend on it). ⮕ Next: resume Wave↔Hub bug hunt.
 
 ## HZ — closed Codex's repeated Open Accounts contrast FAIL
 Converted OpenAccountsTab !canView permission gate to RestrictedNotice (only the gate; ledger/statement/print/Excel untouched). Contrast/permission-gate sweep now COMPLETE across Accounting, Wave, Inventory, Reports, Open Accounts. No SQL.

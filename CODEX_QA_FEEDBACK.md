@@ -1511,3 +1511,24 @@ Scope read before this pass:
 #### CAUTION - Not committed yet and launch still requires live Wave verification
 - This PASS is for the working tree only until Claude commits it.
 - After commit, remaining accounting/banking launch gates are still user/live-environment gates: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+
+### 2026-06-17 v55.83-HZ COMMITTED QA - OPEN ACCOUNTS CONTRAST PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 1ee8f5c v55.83-HZ.
+- Inspected committed OpenAccountsTab no-permission gate and HZ touched files.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HZ closes the repeated Open Accounts restricted-panel FAIL
+- OpenAccountsTab now imports RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:20
+- The no Open Accounts permission return now uses RestrictedNotice instead of the old bg-amber-50 / text-amber-900 panel.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1329
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1332
+- The committed diff is scoped to the permission gate plus badge/What's New/handoff. Open Accounts ledger, statement, print, and Excel logic remain untouched.
+- Verification carried forward from the HZ working-tree QA: npm.cmd run build passed on rerun after one transient .next export/cache failure.
+
+#### Remaining launch gates
+- No code-fixable contrast/permission-gate FAIL remains in the scoped Accounting/Wave/Open Accounts/Inventory reports path from this pass.
+- Accounting/banking still requires live environment proof before staff launch: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.

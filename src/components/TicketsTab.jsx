@@ -263,9 +263,27 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (makeConfidential) {
         ticketRow.is_confidential = true;
       }
-      await dbInsert('tickets', ticketRow, myId || null);
+      var newTkt = await dbInsert('tickets', ticketRow, myId || null);
       var logTag = makePrivate ? ' [PRIVATE]' : (makeConfidential ? ' [CONFIDENTIAL]' : (assignedName ? ' → ' + assignedName : ''));
       await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + logTag, 'ticket');
+      // v55.83-IA — if a document was staged on the create form, upload it now that the ticket
+      // row exists (storage path uses the new ticket number; comment links to the new ticket id).
+      // Non-fatal: a failed attachment must not undo the created ticket.
+      if (f.attachFile && newTkt && newTkt.id) {
+        try {
+          var _file = f.attachFile;
+          if (_file.size > 10 * 1024 * 1024) { if (toast) toast.warning('Attachment skipped — file over 10MB.'); }
+          else {
+            var _ext = _file.name.split('.').pop();
+            var _fn = ticketNum + '_' + Date.now() + '.' + _ext;
+            var _up = await supabase.storage.from('ticket-attachments').upload(_fn, _file);
+            if (_up && _up.error) throw _up.error;
+            var _urlData = supabase.storage.from('ticket-attachments').getPublicUrl(_fn);
+            await dbInsert('ticket_comments', { ticket_id: newTkt.id, comment_text: '📎 Attached: ' + _file.name, attachment_url: (_urlData && _urlData.data && _urlData.data.publicUrl) || '', attachment_name: _file.name, is_system: false, created_by: myId }, myId);
+            if (toast) toast.success('Ticket created with attachment ✓');
+          }
+        } catch (_e) { if (toast) toast.error('Ticket created, but attachment upload failed: ' + ((_e && _e.message) || _e)); }
+      }
       // Don't notify anyone on private tickets — the assignee IS the creator.
       // Confidential tickets DO notify the assignees (they need to know).
       if (!makePrivate) {
@@ -1466,6 +1484,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         <div className="col-span-2"><label className="text-[10px] font-semibold">Client</label>
           <input list="tkt-cl" value={f.clientName||''} onChange={e=>{ const m=customers.find(c=>c.name===e.target.value); setF({...f,clientName:e.target.value,customerId:m?m.id:''}); }} className="w-full px-3 py-2 rounded border text-sm" />
           <datalist id="tkt-cl">{customers.map(c=><option key={c.id} value={c.name}/>)}</datalist></div>
+        {/* v55.83-IA — attach a document while creating the ticket. The file is staged here and
+            uploaded after the ticket row exists (storage path uses the new ticket number). */}
+        <div className="col-span-2"><label className="text-[10px] font-semibold">📎 Attach a document (optional)</label>
+          <input type="file" onChange={e=>setF({...f, attachFile: (e.target.files && e.target.files[0]) || null})} className="w-full px-3 py-2 rounded border text-sm bg-white" />
+          {f.attachFile && <p className="text-[10px] text-blue-600 mt-1 font-semibold">Will attach: {f.attachFile.name}</p>}
+          <p className="text-[10px] text-slate-500 mt-0.5">Max 10MB. Uploaded right after the ticket is created.</p></div>
         {/* v55.82-V — PRIVATE TICKETS for super_admin (Max May 12 2026).
             Only super_admin sees this toggle. When checked: the ticket is
             visible only to the creator + the creator's AI session. Other

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IA',
+    date: '2026-06-17',
+    label: 'Tickets: attach a document while creating a new ticket',
+    items: [
+      '**📎 You can now attach a document right when creating a ticket.** The "+ Ticket" form has an "Attach a document (optional)" field — pick a file (≤10MB) and it uploads automatically once the ticket is created, showing under Comments & Attachments. Completes the ticket-attachment fixes (top-of-ticket button + comment-box paperclip + now create-time).',
+      { superAdminOnly: true, text: 'v55.83-IA (Max #2 — attach on create). Create form: added a staged file input (f.attachFile) near the Client field. createTicket now captures the inserted row (var newTkt = await dbInsert(\'tickets\',...) — dbInsert returns .select().single()) and, if a file was staged, uploads to the ticket-attachments bucket (path <ticketNum>_<ts>.<ext>) then inserts the ticket_comments attachment row (ticket_id: newTkt.id). Non-fatal try/catch so a failed upload never undoes ticket creation; 10MB guard. setF({}) clears the staged file. No SQL. NOTE: depends on the ticket-attachments storage bucket + RLS (same as detail attach) — needs live verification before calling launch-ready.' },
+    ],
+  },
+  {
     version: 'v55.83-HZ',
     date: '2026-06-17',
     label: 'Open Accounts restricted box now readable (last contrast gate)',
