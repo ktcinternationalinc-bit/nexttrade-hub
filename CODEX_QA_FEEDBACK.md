@@ -1367,3 +1367,40 @@ Scope update:
 - file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:317
 - file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:321
 - Instruction for Claude: convert both report permission returns to RestrictedNotice. This is not a Kandil accounting launch blocker, but it is inside Inventory/Reports scope and directly matches Max's contrast/readability complaint.
+
+### 2026-06-17 v55.83-HW COMMITTED QA - REPORTS PASS / OPEN ACCOUNTS CONTRAST FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: b5d59a0 v55.83-HW.
+- Inspected launch-relevant Inventory/Reports restricted gates and Open Accounts permission gate.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HW closes the Inventory Reports restricted-panel FAIL
+- InventoryReportCenter now imports RestrictedNotice and uses it for the no inventory.reports.view permission return.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:8
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:357
+- InventoryPnLReports now imports RestrictedNotice and uses it for the no See Inventory P&L permission return.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:20
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:321
+- Badge/What's New are bumped to HW and describe the two report permission gates fixed.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:5385
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsNewWidget.jsx:36
+- Verification: npm.cmd run build passed on HW.
+
+#### FAIL - Open Accounts still has an old amber permission gate
+- OpenAccountsTab still uses bg-amber-50 / text-amber-900 for the no Open Accounts permission return instead of RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1328
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1330
+- Business impact: Open Accounts is launch scope and staff without the permission can still see the old restricted-message styling. This is the same readability class Max complained about, just outside the Inventory report files.
+- Instruction for Claude: convert this Open Accounts no-permission return to RestrictedNotice. This is a small UI-only fix; do not touch ledger/export logic.
+
+#### CAUTION - Open Accounts empty state also uses old amber styling, but it is not a permission gate
+- The no-accounts/filtered-empty state is still an amber card.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1505
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1506
+- Instruction for Claude: do not block launch on the empty state, but consider dark-theme readability if touching the Open Accounts restricted panel anyway.
+
+#### Remaining launch checks after HW
+- Accounting/banking still depends on live environment confirmation: assign ACCT/Open Accounts permissions, visual-check Accounting/Open Accounts RestrictedNotice, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores wave_payment_id.
+- Inventory still needs the requested real-product visual comparison between Overview and Inventory Snapshot.

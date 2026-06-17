@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HX',
+    date: '2026-06-17',
+    label: 'Tickets: the "Attach file" button is now clearly labeled',
+    items: [
+      '**📎 Attaching a document to a ticket is easier to find.** Open a ticket → the comment box now has a clearly labeled "📎 Attach" button (it was just a small paperclip icon before, easy to miss). Pick any file up to 10MB; it shows as a clickable attachment under Comments & Attachments. The feature was always there — just hard to spot.',
+      { superAdminOnly: true, text: 'v55.83-HX. RichCommentComposer.jsx: the attach control (always rendered, wired to TicketsTab onAttach → supabase.storage ticket-attachments bucket → ticket_comments row) was an icon-only 📎 label; relabeled to "📎 Attach" / "⏳ Uploading…" with a blue pill style + title tooltip so it is discoverable. No behavior/logic change — pure findability fix prompted by Max not finding it. No SQL. NOTE: if uploads error in prod, check the ticket-attachments storage bucket exists + RLS allows authenticated upload.' },
+    ],
+  },
+  {
     version: 'v55.83-HW',
     date: '2026-06-17',
     label: 'Inventory Report Center & P&L restricted boxes readable too',

@@ -164,8 +164,8 @@ export default function RichCommentComposer({ value, onChange, onSubmit, uploadi
           className="flex-1 px-3 py-2 border rounded-lg text-sm bg-white min-h-[60px] max-h-[200px] overflow-auto outline-none focus:border-blue-400"
           style={{ whiteSpace: 'pre-wrap' }}
         />
-        <label className={'px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition self-start ' + (uploading ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}>
-          {uploading ? '⏳' : '📎'}
+        <label title="Attach a document, image, or file (max 10MB)" className={'px-3 py-2 rounded-lg text-xs font-bold cursor-pointer transition self-start whitespace-nowrap border ' + (uploading ? 'bg-slate-200 text-slate-400 border-slate-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100')}>
+          {uploading ? '⏳ Uploading…' : '📎 Attach'}
           <input ref={fileRef} type="file" className="hidden" disabled={uploading} onChange={async (e) => {
             const file = e.target.files?.[0];
             if (onAttach) await onAttach(file);
