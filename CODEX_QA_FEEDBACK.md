@@ -803,3 +803,113 @@ Scope read before this pass:
 - GO: Hub-safe Bank Review/manual Wave workflow, with HN improving overpayment correctness.
 - CODE-READY: production Dry Run/Push guards after HM/HN remain ready for controlled testing.
 - NOT STAFF-READY for production Wave push until live launch SQL/config is verified and one real Kandil/KTC payment push is confirmed in Wave with Hub wave_payment_id stored.
+### 2026-06-17 v55.83-HO Heartbeat QA - PASS WITH CAUTIONS
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 43de37b v55.83-HO.
+- Working tree has no source diff; only .claude/ is untracked.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: npm.cmd run build PASS; HN overpayment-credit test PASS; real payment-push static test PASS; Open Accounts Excel note-strip test PASS.
+
+#### PASS - HO reverses the phantom overpayment customer credit on unmatch
+- unmatch() now voids open customer_credits rows tied to the bank transaction by source_transaction_id after voiding accounting_invoice_payments and payment_matches.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:352
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:353
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:358
+- The overpayment credit path stamps source_transaction_id: t.id, so the reversal scope matches the rows created by the overpayment flow.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:490
+- Business impact: this closes the bad accounting state where unmatching restored the invoice balance but left a customer's overpayment credit open.
+
+#### CAUTION - No-customer overpayment fallback deposits still cannot be safely auto-reversed
+- HN's fallback creates unapplied_deposits with bank_transaction_id: t.id when an overpaid invoice has no accounting customer, but there is no origin/source tag proving that row was auto-created by the overpayment branch.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:492
+- Manual Create Unapplied uses the same bank_transaction_id pattern, so auto-voiding all unapplied_deposits for the bank transaction would risk reversing a real manual deposit.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:515
+- Instruction for Claude: I agree with not auto-voiding unapplied_deposits by bank_transaction_id alone. Add a durable source/origin discriminator for auto-created overpayment fallback deposits before trying to reverse them on unmatch. If that cannot land before launch, surface this rare fallback as an operator/manual-review item rather than claiming unmatch fully reverses every residual case.
+
+#### CAUTION - Add a targeted HO regression test
+- I found HN overpayment coverage, but no HO-specific test locking the customer_credits void-on-unmatch behavior.
+- Instruction for Claude: add a small static or unit-style regression test proving unmatch voids customer_credits by source_transaction_id/status=open, and separately documenting that unapplied_deposits are intentionally not auto-voided until a safe source/origin tag exists.
+
+#### Current launch verdict after HO
+- GO: Hub-safe Bank Review/manual Wave workflow, with HO improving unmatch correctness.
+- CODE-READY: production Dry Run/Push guard path remains green under focused tests and build.
+- NOT STAFF-READY for production Wave push until live Kandil/KTC launch SQL/config is verified, one production dry run succeeds, one real payment is pushed and verified in Wave, and Hub stores the real wave_payment_id.
+### 2026-06-17 Cross-Area Gap Hunt - Inventory / WhatsApp / Open Accounts - FAILS / R&D CAUTION
+
+Scope read before this gap pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Inspected Inventory Overview, Inventory Report Center, ReportTable, Open Accounts, Communications/WhatsApp routes, and WhatsApp Inbox only. No source files edited by Codex.
+- Context: user asked Codex to keep wearing QA engineer + business analyst + R&D consultant hats while Claude executes.
+
+#### FAIL - Inventory Overview can still show false partial/empty inventory when Supabase returns res.error
+- InventoryOverview load defines safe(q), but safe only catches thrown promise failures. Supabase query failures usually resolve as { data, error }, so layRes/recRes/soldRes errors are kept but then ignored.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:186
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:196
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:197
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:198
+- The loader then sets layers/receipts/salesItems from .data without checking .error, so a missing column/RLS/query failure can become [] and the user may see no stock or understated stock instead of a load failure.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:202
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:204
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:205
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:206
+- Business impact: Inventory Overview is the screen staff will trust most. If it silently drops layers/receipts, Inventory Snapshot may be more truthful than Overview, which breaks launch priority #2: reports must show real inventory.
+- Instruction for Claude: mirror InventoryReportCenter's q(source, builder) pattern here, or explicitly throw/surface each res.error. Core inventory_products and inventory_lists errors should also be checked. If invoice_items sold data is optional, mark only the sales/profit strip partial; do not let stock quantities render as complete when layers/receipts failed.
+
+#### FAIL - Legacy WhatsApp send paths call the new /api/whatsapp/send contract with the old payload
+- /api/whatsapp/send now requires conversation_id and returns { ok: true, ... } on success.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:50
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:52
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:183
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\send\route.js:187
+- The legacy Communications composer still sends { to, body, userId, triggeredBy } and checks data2.success, so it will fail even before Meta send, and success would not be recognized under the new response shape.
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:98
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:101
+- file: D:\GITHUB\nexttrade-hub\src\components\CommunicationsTab.jsx:104
+- The team reminder WhatsApp path also sends { to, body } to /api/whatsapp/send and swallows errors, so staff may believe urgent reminders went out when the route rejected them.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:10696
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:10698
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:10699
+- Business impact: this is exactly the kind of integration gap that makes the hub feel unprofessional: one WhatsApp inbox works, but older send buttons/reminders hit the wrong API contract.
+- Instruction for Claude: either remove/disable the legacy one-shot WhatsApp compose/reminder paths, or adapt them to the current model: find/create a conversation by phone, respect the 24-hour window, use /api/whatsapp/start for template/outbound-first sends, and check ok instead of success. Do not silently swallow reminder send failures; surface a count of sent/failed recipients.
+
+#### R&D CAUTION - Open Accounts has phone data but no WhatsApp statement/invoice workflow yet
+- Open Account invoices store counterparty_phone.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1035
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1155
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:2456
+- WhatsApp Inbox can start a template by raw phone and optionally link to a CRM customer, but it is not linked to open_accounts/open_account_invoices/accounting_customers or to statement/invoice sharing.
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:513
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:519
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:553
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsAppInbox.jsx:560
+- Business/R&D recommendation: after the accounting launch path is stable, design a first-class "Send statement/invoice via WhatsApp" flow from Open Accounts. It should generate the same clean customer-perspective statement/invoice already used for print/export, send via approved Meta template outside the 24-hour window, and log the conversation/message back to the Open Account. This is not a 3-hour launch blocker; it is the right professional integration direction.
+### 2026-06-17 v55.83-HP Working-Tree QA - PASS WITH BUILD CAUTION
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md after Claude's HP working-tree update.
+- Inspected working-tree diff for CLAUDE_HANDOFF.md, src/app/page.jsx, src/components/WhatsNewWidget.jsx, and __tests__/test-v55-83-ho-unmatch-credit-reversal.js.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: HO unmatch credit-reversal test PASS; HN overpayment-credit test PASS; real payment-push static test PASS; npm.cmd run build FAILED twice in local generated .next/export/prerender artifact stage after compilation succeeded.
+
+#### PASS - HP satisfies the requested HO regression-test caution
+- New test locks the customer_credits void-on-unmatch behavior by checking the unmatch source for customer_credits update, status:void, source_transaction_id=t.id, status=open, and non-fatal handling.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:31
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:39
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:41
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:43
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:45
+- Test also documents the intentional decision not to blanket-void unapplied_deposits by bank_transaction_id until an origin/source tag exists.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-ho-unmatch-credit-reversal.js:51
+- Verification: node __tests__\test-v55-83-ho-unmatch-credit-reversal.js passed.
+
+#### CAUTION - HP build was not green in my local pass; run a clean build before commit/deploy
+- First npm.cmd run build compiled successfully but then failed during prerender/export with many Cannot find module errors under .next/server/app.
+- Second npm.cmd run build compiled successfully but failed with ENOENT opening D:\GITHUB\nexttrade-hub\.next\export-detail.json.
+- This looks like a local generated .next artifact/race failure rather than an obvious HP source failure, because HP only adds a static test plus badge/What's New text and focused tests passed. Still, do not mark HP deploy-ready until Claude gets a clean build in his run.
+- Instruction for Claude: run a clean build before commit/deploy. If the same .next artifact failure repeats, clean the generated build output and rebuild; do not change app source to chase a generated-output problem unless a real source stack appears.
+
+#### PROCESS / PRIORITY NOTE - new cross-area FAILs were appended after HP started
+- The Inventory Overview false-empty/error-surfacing FAIL and legacy WhatsApp send contract FAIL are now in this QA file immediately above this HP note. They were appended while Claude was already working on HP, so HP's handoff may not mention them yet.
+- Instruction for Claude: before the next source change, re-read CODEX_QA_FEEDBACK.md and treat those new FAILs as the next queue items after the accounting launch gate. Accounting/Kandil live payment verification still stays the top launch gate.

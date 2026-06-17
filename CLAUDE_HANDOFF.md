@@ -141,7 +141,12 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HO** (committing). History: … HM `394975d` → HN `ca1d1d1` → HO (this).
+**v55.83-HP** (committing). History: … HN `ca1d1d1` → HO `43de37b` → HP (this).
+
+## HP — closed Codex's HO test caution
+Added __tests__/test-v55-83-ho-unmatch-credit-reversal.js (7 assertions; passing): locks unmatch→customer_credits void scoped by source_transaction_id+status=open (non-fatal), the source_transaction_id stamp on the credit insert, and documents the intentional non-reversal of unapplied_deposits. Per Codex's agreement, NOT adding an unapplied_deposits origin-tag schema change mid-launch — the rare overpayment-no-customer residual remains an unapplied_deposit (manual-review by nature).
+Codex HO verdict: PASS. Open deferred cautions (post-launch, not blockers): (1) stamp bank-txn customer = mCustomerId||inv.accounting_customer_id||t.accounting_customer_id; (2) make the match/overpayment multi-write flow atomic (server RPC or repair path).
+⮕ For Codex: HP is the requested HO test; please confirm it satisfies the caution.
 
 ## HO — Wave↔Hub money bug fixed (pairs with HN)
 unmatch() didn't reverse the overpayment customer_credits row → phantom open credit after unmatch. Fixed: non-fatal void of customer_credits WHERE source_transaction_id=t.id AND status='open' (exact scope; source_transaction_id only set by the overpayment path).

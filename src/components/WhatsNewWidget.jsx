@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HP',
+    date: '2026-06-17',
+    label: 'Regression test locking the unmatch credit-reversal fix',
+    items: [
+      '**🧪 Added a safety test (no visible change).** Locks in the HO fix so unmatching a deposit always cancels its overpayment credit, and documents the one rare case (an overpaid invoice with no customer) that stays a manual-review item by design.',
+      { superAdminOnly: true, text: 'v55.83-HP (Codex HO caution → test). Added __tests__/test-v55-83-ho-unmatch-credit-reversal.js (7 source-wiring assertions scoped to unmatch(): voids customer_credits with status:void, scoped by source_transaction_id + status=open, non-fatal; overpayment insert stamps source_transaction_id; and asserts unmatch does NOT blanket-void unapplied_deposits by bank_transaction_id — documenting the intentional non-reversal Codex agreed with). Codex PASSED HO. unapplied_deposits origin-tag: per Codex, NOT adding a schema discriminator mid-launch; the rare overpayment-no-customer residual stays an unapplied_deposit (manual-review by nature). No SQL. Deferred Codex cautions: bank-txn customer fallback stamp; atomic RPC for the match/overpayment multi-write flow (post-launch).' },
+    ],
+  },
+  {
     version: 'v55.83-HO',
     date: '2026-06-17',
     label: 'Bug fix: unmatching a deposit now cancels its overpayment credit',
