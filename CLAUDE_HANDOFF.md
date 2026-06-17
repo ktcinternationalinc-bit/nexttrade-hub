@@ -10,7 +10,10 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-GX** (finishing the QA-FAIL fix before commit). Previous deployed: v55.83-GW (`7b09b06`).
+**v55.83-GX — COMMITTED & DEPLOYED as `2bb98a2`** (build exit 0). Previous: v55.83-GW (`7b09b06`).
+
+## Status of the open FAIL (receipt/current-qty mismatch)
+**RESOLVED in `2bb98a2`.** InventoryReportCenter now mirrors InventoryOverview's receipt logic exactly (no finalized-only filter; excludes cancelled/pending_detail/merged/reversed; Received Qty = all valid receipts; Current Qty = finalized layers + pending; UOM from received lines). Ready for the next QA heartbeat to verify against the committed diff.
 
 ## Codex QA items read this pass (CODEX_QA_FEEDBACK.md)
 1. Standing QA Loop Rule — read both files before writing; update this handoff with items read / fixing / deferred; don't commit until open FAILs fixed or deferred. ACK.
