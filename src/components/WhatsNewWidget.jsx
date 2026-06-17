@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HK',
+    date: '2026-06-17',
+    label: 'Inventory: Adjustments / Movements / Cost Layers now report load failures',
+    items: [
+      '**📦 Inventory screens no longer look "empty" when they actually failed to load.** Stock Adjustments, the Movements Ledger, and Cost Layers now show the real reason (e.g. a permission or database issue) instead of a blank list — same fix already applied to the Inventory Report Center. Start of a focused inventory gap-hunt.',
+      { superAdminOnly: true, text: 'v55.83-HK (inventory gap-hunt #1). InventoryAdjustments/InventoryMovementsLedger/InventoryCostLayers load() now inspect each Promise.all response\'s .error and toast a per-table reason. Root cause: Supabase returns {data:null,error} on query failure WITHOUT throwing, so the existing try/catch never fired and setX(res.data||[]) showed an empty screen on RLS/missing-column. (The inventory audit had FALSE POSITIVES claiming these had empty catches — they did not; the real gap was the unchecked res.error.) No SQL. Remaining inventory gap list tracked in CLAUDE_HANDOFF.md (Overview safe() error surfacing, shared receipt-status constants, ReportTable empty-state, UOM sqm rank, select(*) perf, ReportCenter refresh/RTL, valuation data-strip).' },
+    ],
+  },
+  {
     version: 'v55.83-HJ',
     date: '2026-06-17',
     label: 'Fix production-push unlock (Codex FAILs): handlers honor the switch; route guard tightened',

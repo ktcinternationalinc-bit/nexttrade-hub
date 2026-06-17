@@ -63,6 +63,13 @@ export default function InventoryMovementsLedger(props) {
           supabase.from('inv_warehouses').select('id,name,code').order('name'),
         ]);
         if (cancelled) return;
+        // v55.83-HK — surface Supabase query errors (they don't throw → catch won't fire →
+        // empty ledger would look like "no movements" instead of a load failure).
+        var _errs = [];
+        if (mvRes && mvRes.error) { _errs.push('movements: ' + mvRes.error.message); }
+        if (prodRes && prodRes.error) { _errs.push('products: ' + prodRes.error.message); }
+        if (whRes && whRes.error) { _errs.push('warehouses: ' + whRes.error.message); }
+        if (_errs.length) { console.error('[movements] query errors', _errs); toast.error('Failed to load: ' + _errs.join(' · ')); }
         setMovements(mvRes.data || []);
         setProducts(prodRes.data || []);
         setWarehouses(whRes.data || []);

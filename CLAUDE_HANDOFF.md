@@ -19,7 +19,20 @@ Main goal: KTC Hub Accounting/Banking launch-ready and progressively more profes
   - Clean the stale static tests Codex listed (fi-payment-queue-safety, fs-permission-model, fr-route-lockdown, a-6-27-52-open-accounts, aa-phase2-polish) so the suite reflects current routes/wording.
   - Keep Wave Sync Center split categories truthfully Hub-only (no generic push exists).
 - **P2 — Stage B virtual-mix SELLING:** gated on allocation rule (user) + live-mirrored SQL + Codex review. Stage A preview stays read-only.
+- **P2 — NEXT MAJOR FOCUS (after banking/accounting is stable): INVENTORY SYSTEM + REPORTS gap-hunt.** Systematically find and fix gaps across the inventory module (Overview, Report Center, Receiving, Stock Import, Adjustments, Cost Layers, Movements Ledger, Mix Composition, Master SKU, permissions, report defs). Categories to hunt: silent error-swallowing, missing empty/error states, permission key inconsistencies, data-source mismatches vs Overview, missing report columns/exports/totals, bilingual (EN/AR) gaps, valuation-permission leaks, N+1 / select(*) perf, UX. Maintain a prioritized GAP LIST (below) and fix the top safe item each heartbeat. Each fix: build→commit→deploy→badge+What's New+handoff; add a regression test where it makes sense.
 - **P3 — Ongoing professional polish** of Accounting + Inventory tabs (loading/empty/error states, consistency, performance) — safe, concrete, one per fire.
+
+### INVENTORY GAP LIST (living — from a code audit; fix top-safe each heartbeat)
+NOTE: the audit had false positives — verify each before fixing (e.g. it claimed Adjustments/Movements/CostLayers swallow errors with empty catches; in fact they HAVE try/catch+toast — the real gap was unchecked `res.error` since Supabase doesn't throw on query errors).
+- ✅ **HK (DONE, 5e?/this build):** InventoryAdjustments / InventoryMovementsLedger / InventoryCostLayers now check each `res.error` after Promise.all and toast the real per-table reason (was silent empty on RLS/missing-column). Matches the ReportCenter q() fix.
+- [ ] P1: InventoryOverview.jsx layers/receipts load uses `safe()` — confirm it distinguishes load-failure from no-stock; surface error if `res.error`.
+- [ ] P2: Extract shared VALID/INVALID receipt-status constants (Overview + ReportCenter both hardcode cancelled/pending_detail/merged/reversed) to prevent drift.
+- [ ] P2: ReportTable empty state — distinguish error / filtered-out / truly-empty (partly done in ReportCenter; ReportTable itself still bare "No data").
+- [ ] P2: UOM_RANK missing 'sqm' (sorts last) in InventoryOverview — add sqm rank.
+- [ ] P3: select('*') → explicit columns on inventory_movements / inventory_layers / skus list (perf); add limit caps on layers/movements in ReportCenter.
+- [ ] P3: InventoryReportCenter refresh button + last-updated (parity with Accounting dashboard); RTL column order in AR.
+- [ ] P3: valuation double-gate — strip cost fields from rows when !showValuation (defense-in-depth; currently shown as "Restricted" text only).
+- (Verify each against live code before fixing — audit line numbers are approximate.)
 
 Heartbeat rule: each fire — (1) read Codex file via `cat`; (2) fix FAILs; (3) else pick the highest-priority UNBLOCKED item above and ship it (build→commit→deploy→bump badge+What's New+handoff); (4) only report a bare "hold" if EVERY item is genuinely blocked/gated, and even then re-verify + re-prioritize next fire. Never stop the loop.
 

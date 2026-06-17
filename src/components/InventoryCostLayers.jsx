@@ -59,6 +59,13 @@ export default function InventoryCostLayers(props) {
           supabase.from('inv_warehouses').select('id,name,code').order('name'),
         ]);
         if (cancelled) return;
+        // v55.83-HK — surface Supabase query errors (they don't throw → catch won't fire →
+        // empty view would look like "no stock" instead of a load failure).
+        var _errs = [];
+        if (lyRes && lyRes.error) { _errs.push('layers: ' + lyRes.error.message); }
+        if (prodRes && prodRes.error) { _errs.push('products: ' + prodRes.error.message); }
+        if (whRes && whRes.error) { _errs.push('warehouses: ' + whRes.error.message); }
+        if (_errs.length) { console.error('[layers] query errors', _errs); toast.error('Failed to load: ' + _errs.join(' · ')); }
         setLayers(lyRes.data || []);
         setProducts(prodRes.data || []);
         setWarehouses(whRes.data || []);

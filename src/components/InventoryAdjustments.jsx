@@ -72,6 +72,15 @@ export default function InventoryAdjustments(props) {
         supabase.from('inv_warehouses').select('id,name,code').order('name'),
         supabase.from('inventory_layers').select('*').eq('status', 'open').gt('qty_remaining', 0).order('receipt_date'),
       ]);
+      // v55.83-HK — Supabase returns {data:null,error} on a query failure (RLS / missing
+      // column) WITHOUT throwing, so the catch below never fires and the screen would show an
+      // empty list instead of the real reason. Surface per-table query errors explicitly.
+      var _errs = [];
+      if (adjRes && adjRes.error) { _errs.push('adjustments: ' + adjRes.error.message); }
+      if (prodRes && prodRes.error) { _errs.push('products: ' + prodRes.error.message); }
+      if (whRes && whRes.error) { _errs.push('warehouses: ' + whRes.error.message); }
+      if (lyRes && lyRes.error) { _errs.push('layers: ' + lyRes.error.message); }
+      if (_errs.length) { console.error('[adjustments] query errors', _errs); toast.error('Failed to load: ' + _errs.join(' · ')); }
       setAdjustments(adjRes.data || []);
       setProducts(prodRes.data || []);
       setWarehouses(whRes.data || []);

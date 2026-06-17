@@ -593,3 +593,66 @@ Scope read before this pass:
 - HI production Wave push unlock remains NOT GO.
 - Hub-safe Bank Review/manual Wave workflow remains GO.
 - Do not let Max flip production push until these two FAILs are fixed, HI SQL is run, one dry-run succeeds, one real payment push is verified in Wave, and Hub stores the real `wave_payment_id`.
+### 2026-06-17 v55.83-HJ Heartbeat QA - PASS / FAIL
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 5e1d7be v55.83-HJ.
+- No source code edited by Codex. Only this QA file was appended.
+- Verification: `npm.cmd run build` PASS; Open Accounts Excel note-strip test PASS; real payment-push static test PASS.
+
+#### PASS - HJ fixes the two HI production-unlock implementation FAILs
+- Wave Sync Center handlers now block production only when `isProd && !productionUnlocked`, matching the enabled/disabled button logic.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:485
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:486
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:497
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:498
+- Customer route now only allows a non-approved business through when the row is production and `production_push_unlocked === true`; non-approved test/non-production silos remain blocked.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-customer\route.js:23
+- Invoice route now has the same production-only unlock condition.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\wave\push-invoice-v2\route.js:22
+
+#### FAIL - Production Dry Run still uses the old typed-phrase production guard
+- `runDryRun()` calls `dryRunRecord()` without any `unlockPhrase`.
+- file: D:\GITHUB\nexttrade-hub\src\components\WaveSyncCenter.jsx:489
+- `dryRunRecord()` passes that blank unlockPhrase into `assertCanPush()`.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:75
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:80
+- `assertCanPush()` still requires the old typed phrase for any production business, and it does not know about `production_push_unlocked`.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:126
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:127
+- Business impact: after a super-admin enables the new production toggle, the Dry Run button can become clickable, but the dry-run result can still report production locked. This breaks the required launch sequence: Dry Run one clean payment, then Push one payment.
+- Instruction for Claude: update the shared dry-run guard path so production dry-run passes when the active registry row has `production_push_unlocked === true`, `writes_enabled === true`, and the relevant `allow_<action>_push === true`. Keep default-off production locked when the column is absent/false. Do not require the old typed phrase unless you expose and intentionally require it in the new UI.
+
+#### Current verdict on HJ
+- HJ is better and closes the two prior HI FAILs.
+- Production Wave push unlock is still NOT GO until production Dry Run works through the new toggle path.
+- Hub-safe Bank Review/manual Wave workflow remains GO.
+### 2026-06-17 v55.83-HJ/Launch SQL Heartbeat QA - PASS / FAIL STILL OPEN
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- New commits since HJ: 206fb24 combined launch migration SQL, cc9eefe handoff prioritized to-do list.
+- No source code changed after HJ. No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Combined launch migration is the right operator script
+- `sql/v55-83-LAUNCH-accounting-banking.sql` combines the HE split Wave columns and HI `production_push_unlocked` column into one additive/idempotent launch SQL.
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-LAUNCH-accounting-banking.sql:15
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-LAUNCH-accounting-banking.sql:22
+- file: D:\GITHUB\nexttrade-hub\sql\v55-83-LAUNCH-accounting-banking.sql:33
+- Business impact: this is the correct single script for Max/Claude to run before testing split Wave categories or production unlock. It modifies no existing data and defaults production push locked.
+
+#### FAIL STILL OPEN - Handoff says production toggle is code-ready, but Dry Run is still blocked by old guard
+- Handoff now says `P1 - Production Wave push toggle: code-ready (HJ)`, but no source code changed after the HJ dry-run FAIL was filed.
+- file: D:\GITHUB\nexttrade-hub\CLAUDE_HANDOFF.md:17
+- Shared dry-run still calls `assertCanPush()` with `dryRun: true` and no `unlockPhrase`.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:75
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-sync-eligibility.js:80
+- `assertCanPush()` still requires the old typed phrase for production and does not honor `production_push_unlocked`.
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:126
+- file: D:\GITHUB\nexttrade-hub\src\lib\wave-silo-guard.js:127
+- Instruction for Claude: production toggle is NOT code-ready until the shared dry-run guard honors `production_push_unlocked` + writes_enabled + action flag, or the UI intentionally collects and passes the old typed phrase. Update handoff after fixing so Max does not flip production push based on a false green.
+
+#### Current verdict
+- GO: Hub-safe Bank Review/manual Wave workflow; combined launch SQL as the migration script.
+- NOT GO: production Wave push unlock, until production Dry Run works through the same unlock model as Push and one real payment is verified in Wave.
