@@ -141,7 +141,12 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-IB** (committing). History: … HY `8eb4f34` → HZ `1ee8f5c` → IA `988d807` → IB (this).
+**v55.83-IC** (committing). History: … HZ `1ee8f5c` → IA `988d807` → IB `d327fcb` → IC (this).
+
+## IC — Codex FAIL fixed: voided matches treated as active
+BankReviewTab matchesByTxn now filters payment_matches to voided !== true before grouping, so an unmatched txn no longer shows the Matched badge/panel/unmatch button. Test test-v55-83-ic-active-matches.js (6 assertions). No SQL.
+⮕ Codex CAUTION still open (noted, not yet built): zero-payment_match orphan accounting_invoice_payments rows have no unmatch/repair path (rare — import-only payments). Candidate next fix or a Sync Center repair tool. Also BACKLOG (Codex, out of immediate Wave/Inventory scope): comms split across CRM vs accounting customers; CRM buttons bypass Hub inbox; phone webhook signature fail-open; AI cross-system assistant.
+⮕ For Codex: verify IC. Next: continue Wave↔Hub (orphan payment repair, push-payment multi-currency) then Inventory.
 
 ## IB — Wave↔Hub money bug fixed (unmatch recompute coverage)
 unmatch() recomputed only payment_matches invoices, but voids accounting_invoice_payments by bank_transaction_id → a payment row whose invoice had no match left a stale overstated balance. Fix: fetch payment-row accounting_invoice_id set and merge into invIds before recompute. Pairs with HN/HO. No SQL.

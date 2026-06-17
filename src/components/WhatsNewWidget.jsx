@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IC',
+    date: '2026-06-17',
+    label: 'Bug fix: an unmatched deposit no longer still shows as "Matched"',
+    items: [
+      '**🐛 Fixed Bank Review showing stale matches.** A bank transaction that had been unmatched could still display the green "Matched" badge and the match panel, because the reversed (voided) match record was still being counted. Now only active matches show — reversed ones stay in the audit trail but no longer make a transaction look matched.',
+      { superAdminOnly: true, text: 'v55.83-IC (Codex FAIL fix; Wave↔Hub). BankReviewTab.load() built matchesByTxn from ALL payment_matches incl. voided ones, so the Matched badge (line ~624), detail panel (~703), and unmatch guard (~346) treated a voided match as active. Fix: filter res[1] payment_matches to voided !== true before grouping into byTxn (undefined voided = active, legacy-safe). Voided rows remain in DB for audit; unmatch still sets voided=true. Test __tests__/test-v55-83-ic-active-matches.js (6 assertions, passing). Pairs with IB/HO/HN. No SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-IB',
     date: '2026-06-17',
     label: 'Bug fix: unmatching a deposit recomputes every affected invoice',

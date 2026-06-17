@@ -1532,3 +1532,91 @@ Scope read before this pass:
 #### Remaining launch gates
 - No code-fixable contrast/permission-gate FAIL remains in the scoped Accounting/Wave/Open Accounts/Inventory reports path from this pass.
 - Accounting/banking still requires live environment proof before staff launch: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+
+### 2026-06-17 v55.83-IB WORKING-TREE QA - BANK REVIEW UNMATCH RECOMPUTE PASS / ACTIVE-MATCH FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 988d807 v55.83-IA; IB is working-tree only at time of QA.
+- Inspected only launch-critical BankReviewTab unmatch/match display path plus IB badge/What's New/handoff diff.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - IB improves unmatch invoice recompute coverage for mixed match/payment-row cases
+- IB fetches accounting_invoice_payments.accounting_invoice_id for the bank transaction before voiding rows, then merges those invoice ids into the existing recompute set.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:357
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:358
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:367
+- Business impact: if a bank transaction has at least one payment_match plus additional accounting_invoice_payments rows, unmatch is less likely to leave a paid/balance_due stale after voiding the payment rows.
+
+#### FAIL - Bank Review still treats voided payment_matches as active matches
+- Bank Review loads all payment_matches without filtering voided rows.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:102
+- It groups every returned row into matchesByTxn with no voided check.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:111
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:113
+- The transaction list and detail panel treat matchesByTxn[t.id].length > 0 as currently matched, again with no voided check.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:624
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:703
+- Business impact: after unmatch soft-voids payment_matches, the reload can still show the transaction as Matched using the historical void row. Staff may think the payment is still matched, may see another Unmatch button against already-voided history, and the launch accounting state becomes visually untrustworthy.
+- Instruction for Claude: build matchesByTxn from ACTIVE matches only, e.g. filter payment_matches where voided !== true before grouping and before rendering. Keep the voided rows in the database for audit, but never let them drive the active Matched badge/panel/button. Add a focused regression/static test that BankReviewTab skips voided payment_matches in matchesByTxn/render logic.
+
+#### CAUTION - IB does not fully cover payment rows with zero payment_match rows
+- unmatch() still exits immediately when matchesByTxn[t.id] is empty.
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:346
+- file: D:\GITHUB\nexttrade-hub\src\components\BankReviewTab.jsx:347
+- Business impact: IB's handoff says it fixes a payment row whose invoice lacks a match, but a transaction with accounting_invoice_payments rows and no payment_matches row at all still has no visible Matched panel and unmatch refuses to run. If those orphan payment rows can exist from import/backfill/partial failure, staff still need a repair/unmatch path or an explicit Sync Center orphan queue.
+- Instruction for Claude: either add a safe Bank Review/Sync Center repair path for orphan accounting_invoice_payments rows, or narrow the IB claim to the mixed case where at least one active payment_match exists. Do not call orphan payment-row unmatch solved until a zero-payment_match case is handled.
+
+#### Remaining launch gates after IB working tree
+- Fix the active-match filtering FAIL before calling Bank Review launch-ready.
+- Accounting/banking still requires live environment proof: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.
+
+### 2026-06-17 STRATEGIC BACKLOG - COMMUNICATIONS / AI / CUSTOMER TIMELINE (NOT A BANKING LAUNCH BLOCKER)
+
+Scope note:
+- User asked Codex to keep scanning the broader Hub while the heartbeat continues: WhatsApp, phone, AI, workflow gaps, and future professional-hub improvements.
+- This section is intentionally NOT a request to pause current launch fixes. Claude must still fix the open Bank Review active-match FAIL first.
+- No source code edited by Codex. Only this QA/backlog note was appended.
+
+#### BACKLOG P1 - Communications are split between CRM customers and accounting customers
+- WhatsApp inbound conversation matching only looks in the legacy CRM customers table by phone/whatsapp.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:281
+- file: D:\GITHUB\nexttrade-hub\src\app\api\whatsapp\webhook\route.js:284
+- Phone inbound/outbound customer matching also only looks in customers, not accounting_customers.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:179
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:182
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\outbound\route.js:187
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\outbound\route.js:190
+- Accounting customer master has phone/email, but no communications timeline linkage.
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:10
+- file: D:\GITHUB\nexttrade-hub\src\components\AccountingCustomersTab.jsx:78
+- Business impact: the accounting side can create KTC/Wave customers and invoices, but calls/WhatsApp may attach only to the old CRM customer record or remain unlinked. Staff will not get one professional customer timeline across invoice, payment, call, voicemail, WhatsApp, ticket, and follow-up.
+- R&D instruction for Claude later: design a unified contact identity layer or dual-link fields so WhatsApp/phone rows can resolve to accounting_customers as well as CRM customers. Then surface the timeline in Accounting Customer History / Customer Ledger, not only CRM.
+
+#### BACKLOG P1 - CRM contact buttons bypass the Hub communication inbox
+- CRM WhatsApp button opens wa.me in a new tab and logs only a generic contact note.
+- file: D:\GITHUB\nexttrade-hub\src\components\CRMTab.jsx:144
+- file: D:\GITHUB\nexttrade-hub\src\components\CRMTab.jsx:150
+- file: D:\GITHUB\nexttrade-hub\src\components\CRMTab.jsx:151
+- CRM Call button uses tel: instead of the Hub PhoneWidget/Twilio flow.
+- file: D:\GITHUB\nexttrade-hub\src\components\CRMTab.jsx:673
+- file: D:\GITHUB\nexttrade-hub\src\components\CRMTab.jsx:674
+- Business impact: staff can leave the Hub for communication, which weakens the operating-layer vision. Conversations may not be captured in the WhatsApp inbox/phone logs/transcripts, so AI and managers lose context.
+- R&D instruction for Claude later: replace external-only actions with Hub-native actions where configured: open/start WhatsAppInbox conversation, place call via PhoneWidget/Twilio, then log/link the result to the customer timeline. Keep external fallback only when Hub comms are not configured.
+
+#### BACKLOG P2 - Phone webhooks intentionally fail open on bad Twilio signatures
+- Inbound call, call-status, recording-callback, and voicemail-record routes log signature failure but continue processing.
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:132
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\incoming\route.js:138
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\call-status\route.js:35
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\recording-callback\route.js:44
+- file: D:\GITHUB\nexttrade-hub\src\app\api\phone\voicemail-record\route.js:65
+- Business impact: this was likely done to prevent Twilio caller-facing failures, and security is not today's accounting launch priority. But for a professional communications hub, public webhook spoofing can pollute call logs, voicemail rows, recording rows, and transcripts.
+- R&D instruction for Claude later: move to fail-closed in production after fixing URL/env mismatch, with an explicit dev/test bypass only. If fail-open must remain temporarily, add rate limiting and a visible diagnostics panel so operators know signatures are failing.
+
+#### BACKLOG P1 - AI should become the cross-system work assistant, not just a chat surface
+- AI assistant/memory exists, and phone/WhatsApp/tickets/invoices all produce useful signals, but there is no obvious shared action queue tying them together.
+- file: D:\GITHUB\nexttrade-hub\src\components\AIAssistant.jsx:30
+- file: D:\GITHUB\nexttrade-hub\src\components\AssistantsBar.jsx:149
+- Business impact: the Hub can become much more valuable if AI summarizes the day by customer/account: overdue invoice + recent WhatsApp + missed call + open ticket + promised follow-up. Right now those signals are scattered.
+- R&D instruction for Claude later: after banking launch, define an AI context contract: customer timeline summaries, invoice/payment status, open tickets, recent communications, and suggested next action. Start read-only, then add draft actions requiring human approval.

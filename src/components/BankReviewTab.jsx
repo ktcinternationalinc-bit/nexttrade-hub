@@ -108,7 +108,10 @@ export default function BankReviewTab(props) {
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
-      var m = (res[1] && res[1].data) || [];
+      // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
+      // unmatch button. Voided payment_matches stay in the DB for audit but must NOT make a
+      // transaction look matched (otherwise an unmatched txn still shows as matched).
+      var m = ((res[1] && res[1].data) || []).filter(function (x) { return x && x.voided !== true; });
       var byTxn = {};
       m.forEach(function (x) { (byTxn[x.bank_transaction_id] = byTxn[x.bank_transaction_id] || []).push(x); });
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
