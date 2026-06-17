@@ -141,7 +141,12 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HW** (committing). History: … HU `84db879` → HV `7ea1048` → HW (this).
+**v55.83-HZ** (committing). History: … HV `7ea1048` → HW `b5d59a0` → HX `95d482f` → HY `8eb4f34` → HZ (this).
+
+## HZ — closed Codex's repeated Open Accounts contrast FAIL
+Converted OpenAccountsTab !canView permission gate to RestrictedNotice (only the gate; ledger/statement/print/Excel untouched). Contrast/permission-gate sweep now COMPLETE across Accounting, Wave, Inventory, Reports, Open Accounts. No SQL.
+## Tickets attach (Max): HX labeled the composer paperclip; HY added a prominent '📎 Attach Document' button in the ticket detail header (shared attachFileToTicket helper). REMAINING: #2 file upload on the NEW-ticket create form (next fire) — stage file, upload-after-create. NOTE for Codex/Max: ticket-attachments storage bucket + RLS need live verification (or migrate to shared attachments table) before calling ticket attach launch-ready.
+⮕ Open launch gates (USER/live): assign ACCT perms; run launch SQL + preflight; one real Kandil/KTC Wave payment verification; live visual check of restricted cards.
 
 ## HW — closed Codex HV FAIL (last 2 restricted gates)
 Converted InventoryReportCenter !mayView + InventoryPnLReports !canSeePnL permission returns to RestrictedNotice. CONTRAST SWEEP FULLY COMPLETE across Accounting/Wave/Inventory/Reports — every permission/lock gate uses the inline readable component. No SQL.

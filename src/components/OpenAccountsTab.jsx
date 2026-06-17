@@ -17,6 +17,7 @@
 // Permission: super_admin OR users with the "Open Accounts" module permission.
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { printAccountLedger, exportAccountLedgerToExcel } from '../lib/open-account-export';
 import { printOpenAccountInvoice } from '../lib/open-account-invoice-print';
@@ -1327,8 +1328,8 @@ export default function OpenAccountsTab(props) {
 
   if (!canView) {
     return (
-      <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4 text-amber-900 font-semibold">
-        You don&apos;t have permission to view Open Accounts. Ask a super admin to grant you the &quot;Open Accounts&quot; permission.
+      <div className="p-4">
+        <RestrictedNotice title="Access restricted" message={'You do not have permission to view Open Accounts. Ask a super admin to grant you the "Open Accounts" permission.'} />
       </div>
     );
   }

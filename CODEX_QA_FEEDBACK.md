@@ -1469,3 +1469,45 @@ Scope read before this pass:
 - file: D:\GITHUB\nexttrade-hub\sql\v55-83-LAUNCH-accounting-banking.sql:16
 - file: D:\GITHUB\nexttrade-hub\src\app\api\wave\preflight-schema\route.js:19
 - Caution: this is still not launch-complete until the target Supabase has the launch SQL/preflight green and one real Kandil/KTC payment is dry-run, pushed, verified in Wave, and verified in Hub with a real wave_payment_id.
+
+### 2026-06-17 v55.83-HY HEARTBEAT ADDENDUM - LAUNCH FAIL STILL OPEN
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 8eb4f34 v55.83-HY.
+- HY touched Tickets/WhatsNew/badge and committed the prior Codex QA notes; it did not touch Open Accounts or Wave launch code.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL REMAINS - Latest HEAD still has the Open Accounts old restricted panel
+- The Open Accounts no-permission return is still bg-amber-50 / text-amber-900 instead of RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1328
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1330
+- Business impact: this is the active launch-scope UI/readability defect. It is small, but it is exactly the class of issue Max reported on the dark Accounting surface.
+- Instruction for Claude: before any more ticket/UI polish, convert only this Open Accounts permission gate to RestrictedNotice. Do not touch Open Accounts ledger, statement, print, or Excel behavior.
+
+#### CAUTION - Handoff is stale versus HEAD
+- CLAUDE_HANDOFF.md still says Current build/version v55.83-HW while git HEAD is v55.83-HY.
+- Business impact: not a code blocker, but it can mislead the QA/coding loop about what has actually shipped.
+- Instruction for Claude: update CLAUDE_HANDOFF.md after closing the Open Accounts FAIL so it reflects the current build and open launch gates: launch SQL/preflight plus one real Kandil/KTC Wave payment verification.
+
+### 2026-06-17 v55.83-HY WORKING-TREE QA - OPEN ACCOUNTS RESTRICTED PANEL PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current committed HEAD inspected: 8eb4f34 v55.83-HY.
+- Working tree has an uncommitted OpenAccountsTab.jsx change from Claude; Codex did not edit source code.
+- Inspected only the Open Accounts no-permission gate and build result.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - Open Accounts no-permission gate is converted to RestrictedNotice in the working tree
+- OpenAccountsTab now imports RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:20
+- The no Open Accounts permission return now uses RestrictedNotice instead of the old bg-amber-50 / text-amber-900 panel.
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1329
+- file: D:\GITHUB\nexttrade-hub\src\components\OpenAccountsTab.jsx:1332
+- The diff is correctly scoped to the permission gate only; ledger, statement, print, and Excel logic were not touched.
+- Verification: npm.cmd run build passed on rerun. First build attempt hit the recurring transient .next missing route/font-manifest export failure after compile/static generation; the immediate rerun completed successfully.
+
+#### CAUTION - Not committed yet and launch still requires live Wave verification
+- This PASS is for the working tree only until Claude commits it.
+- After commit, remaining accounting/banking launch gates are still user/live-environment gates: run/confirm launch SQL + /api/wave/preflight-schema, dry-run one clean Kandil/KTC payment, push one real payment, verify it in Wave, and confirm Hub stores the real wave_payment_id.

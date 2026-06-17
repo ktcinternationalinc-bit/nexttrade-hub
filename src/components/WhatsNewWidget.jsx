@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HZ',
+    date: '2026-06-17',
+    label: 'Open Accounts restricted box now readable (last contrast gate)',
+    items: [
+      '**👁️ The Open Accounts "no permission" box is now readable** — it was the last screen still using the old dark-on-dark style. Now consistent with everywhere else.',
+      { superAdminOnly: true, text: 'v55.83-HZ (Codex FAIL fix, repeated HW/HX/HY). Converted OpenAccountsTab !canView permission gate (was bg-amber-50/text-amber-900) to RestrictedNotice. Only the no-permission return was touched — ledger/statement/print/Excel logic untouched per Codex. The contrast/permission-gate sweep is now complete across Accounting, Wave, Inventory, Reports, AND Open Accounts. No SQL. (Open Accounts empty-state amber styling left as-is — Codex flagged it as non-blocking, not a permission gate.)' },
+    ],
+  },
+  {
     version: 'v55.83-HY',
     date: '2026-06-17',
     label: 'Tickets: prominent "Attach Document" button at the top of every ticket',
