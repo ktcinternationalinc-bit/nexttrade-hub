@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HM',
+    date: '2026-06-17',
+    label: 'Harden: production unlock is the single authorization path (remove dead phrase bypass)',
+    items: [
+      '**🔒 Tightened the production Wave-push authorization.** Removed an old, unused "type this phrase" backdoor from the shared guard so the super-admin production switch is the one and only way to authorize real production pushes. No change to normal use — production stays locked by default.',
+      { superAdminOnly: true, text: 'v55.83-HM (Codex caution → hardening; Wave↔Hub safety). wave-silo-guard.assertCanPush(): removed the UNLOCK_PHRASE fallback in the production block — verified it was dead (only caller is dryRunRecord, which always passes a blank phrase; the 3 push-route guards already require production_push_unlocked, not the phrase). Production now authorized ONLY by production_push_unlocked===true (after writes_enabled + per-action allow flag). Eliminates a latent production-write bypass. Default-off invariant unchanged. UNLOCK_PHRASE const left defined but unused. No SQL. Next: continue Wave↔Hub bug hunt, then inventory bugs.' },
+    ],
+  },
+  {
     version: 'v55.83-HL',
     date: '2026-06-17',
     label: 'Fix: production Wave Dry Run now honors the unlock switch (Codex bug)',

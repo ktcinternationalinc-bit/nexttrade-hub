@@ -125,13 +125,13 @@ function assertCanPush(opts) {
     return fail('push_type_disabled', (action.charAt(0).toUpperCase() + action.slice(1)) + ' push is not enabled for ' + (reg.label || opts.waveBusinessId) + '. Enable it in Wave Sync > Settings.');
   }
 
-  // v55.83-HL — production allowed when a super admin has flipped production_push_unlocked on the
-  // registry row (writes_enabled + the per-action flag are already enforced above). The old typed
-  // unlock phrase still authorizes as a fallback for any caller that passes one. Default = locked.
+  // v55.83-HM — production_push_unlocked is the SINGLE production authorization path (Codex
+  // hardening): writes_enabled + the per-action flag are enforced above, then a production
+  // business must be explicitly unlocked by a super admin. The old typed-phrase fallback was
+  // removed — it was dead (no caller passes a phrase here) and was a latent production-write
+  // bypass. Default (flag false/absent) = locked.
   if (reg.is_production !== false && reg.production_push_unlocked !== true) {
-    if ((opts.unlockPhrase || '').trim() !== UNLOCK_PHRASE) {
-      return fail('production_locked', 'Production push is locked. A super admin must enable real production push for ' + (reg.label || opts.waveBusinessId) + '.');
-    }
+    return fail('production_locked', 'Production push is locked. A super admin must enable real production push for ' + (reg.label || opts.waveBusinessId) + '.');
   }
 
   return pass({ registry: reg, production: reg.is_production !== false });

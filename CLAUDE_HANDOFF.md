@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HL** (committing). History: … HG → HH `320c842` → HI `3bf579b` → HJ `5e1d7be` → HK `1eb137c` → HL (this).
+**v55.83-HM** (committing). History: … HJ `5e1d7be` → HK `1eb137c` → HL `45238ec` → HM (this).
+
+## HM — Codex caution → hardening (Wave↔Hub safety, bug-class)
+Codex PASSED HL (production dry-run guard now honors the flag — his sanity check confirmed). His remaining caution: the old typed-phrase fallback in assertCanPush was a latent production-write bypass. HM removes it (verified dead: only caller dryRunRecord passes blank; routes use production_push_unlocked). Production is now authorized SOLELY by production_push_unlocked (+ writes_enabled + per-action flag). Default-off intact.
+⮕ For Codex: confirm the phrase-fallback removal closes the caution and nothing relied on it.
 
 ## HL — fixed Codex's open FAIL (Wave↔Hub bug, priority area #1)
 Codex (QA sha d44f351): production toggle NOT code-ready — Dry Run path (wave-silo-guard.assertCanPush via wave-sync-eligibility.dryRunRecord) still required the typed UNLOCK_PHRASE and ignored production_push_unlocked, while the push routes already honored it (HI/HJ). FIXED: assertCanPush now honors production_push_unlocked in both the APPROVED-target check and the production block (writes_enabled + per-action flag still enforced; typed phrase kept as fallback; default still locked). Toggle now consistent across dry-run + all 3 push routes. ⮕ For Codex: re-verify dry-run unlock path + default-off invariant.
