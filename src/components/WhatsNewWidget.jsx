@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HH',
+    date: '2026-06-17',
+    label: 'Launch hardening: Bank split-save can never crash on a missing column',
+    items: [
+      '**🛡️ Bank Review split categorization is now crash-proof.** If a split line uses a Wave category but the database hasn\'t been updated with the Wave columns yet, the split still saves (with the readable category) instead of erroring — so nothing breaks for staff during launch.',
+      { superAdminOnly: true, text: 'v55.83-HH (launch hardening for the Accounting/Banking go-live). BankReviewTab.saveSplits: the bank_transaction_splits insert now has a .catch fallback — if the insert fails (e.g. the sql/v55-83-HE Wave columns are not yet in prod), it retries with the base columns only (business_id, bank_transaction_id, split_amount, category[readable name], linked_type/id, notes, created_by). Guarantees split save never throws for employees even if the HE migration has not run. Verified pre-launch: zero live callers of /api/plaid/match (route is 410); Bank Review real accounting flow intact (payment_matches + accounting_invoice_payments + recomputeInvoice + void/unmatch). Recommended pre-launch: run sql/v55-83-HE so split Wave metadata persists fully (not required for stability now that the fallback exists).' },
+    ],
+  },
+  {
     version: 'v55.83-HG',
     date: '2026-06-17',
     label: 'Hardened the shared Stock Mix split calculator (+ tests)',

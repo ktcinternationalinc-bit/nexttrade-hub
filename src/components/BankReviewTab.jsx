@@ -404,7 +404,18 @@ export default function BankReviewTab(props) {
             splitRow.category_status = 'pending_wave_sync';
           }
         }
-        return dbInsert('bank_transaction_splits', splitRow, userProfile && userProfile.id);
+        return dbInsert('bank_transaction_splits', splitRow, userProfile && userProfile.id)
+          .catch(function (err) {
+            // v55.83-HH (LAUNCH SAFETY) — if the DB doesn't yet have the split Wave columns
+            // (sql/v55-83-HE migration not run), don't fail the whole split save: retry with the
+            // base columns only. The split still saves with the readable category name; the Wave
+            // metadata is simply omitted until the migration is applied.
+            if (splitRow.wave_account_id) {
+              var base = { business_id: splitRow.business_id, bank_transaction_id: splitRow.bank_transaction_id, split_amount: splitRow.split_amount, category: splitRow.category, linked_type: splitRow.linked_type, linked_id: splitRow.linked_id, notes: splitRow.notes, created_by: splitRow.created_by };
+              return dbInsert('bank_transaction_splits', base, userProfile && userProfile.id);
+            }
+            throw err;
+          });
       });
       if (r.invoice_id) {
         chain = chain.then(function () {

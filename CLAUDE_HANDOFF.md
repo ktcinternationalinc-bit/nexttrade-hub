@@ -43,8 +43,39 @@ The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since la
 
 ---
 
+## 🚀 LAUNCH GO/NO-GO — Accounting + Banking go live in ~3 hours with KTC Hub employees
+Build **v55.83-HH** (committing now).
+
+### ⮕ For Codex — URGENT: please do a focused GO / NO-GO review of the Accounting + Banking tabs only
+Confirm or refute these before go-live; write findings at top of your file:
+1. Bank Review match/unmatch posts correctly (payment_matches + accounting_invoice_payments + recomputeInvoice) and nothing bypasses the ledger. (Legacy /api/plaid/match is 410; verified no live callers.)
+2. The HH fallback makes split-save crash-proof if `bank_transaction_splits` lacks the Wave columns. Confirm the .catch retry is correct.
+3. Run `/api/wave/preflight-schema` (or check) — does prod `bank_transaction_splits` already have the Wave columns? If yes, HH fallback never triggers and the migration is optional. If no, the user should run sql/v55-83-HE for full Wave metadata (but HH keeps it stable either way).
+4. Any employee-facing crash/permission lockout risk on Accounting Dashboard / Bank Review / BankTab / Open Accounts.
+
+### Claude's launch assessment (Accounting + Banking)
+**READY for launch** with these facts:
+- ✅ Dangerous accounting-bypass paths CLOSED: /api/plaid/match → 410, no live callers; BankTab match/unmatch route to Bank Review only.
+- ✅ Bank Review = the real accounting flow (verified: payment_matches, accounting_invoice_payments, recomputeInvoice, void/unmatch).
+- ✅ Open Accounts statements clean (no system notes; customer/internal print + Excel); print/export gated by view/export perms.
+- ✅ Accounting Dashboard: permission-split AR/bank cards, live Refresh, silo-scoped.
+- ✅ HH: split-save can't crash even if the HE migration isn't run.
+- ✅ Build exit 0; OA-Excel + mix-split regression tests pass.
+
+### USER pre-launch checklist (do these before employees log in)
+1. **Assign permissions** to each employee in Settings → Roles & Permissions: Bank (`bank.view`, `bank.see_amounts`, `payments.match`/`payments.unmatch` as needed, `bank.classify`), AR (`ar.view_*`), `Open Accounts`/`Edit Open Accounts`, `Export Data`. Without these they'll see "Restricted"/no access.
+2. **(Recommended, ~1 min) Run** `sql/v55-83-HE-bank-transaction-splits-wave-columns.sql` in Supabase so split Wave categories persist full metadata. NOT required for stability (HH fallback covers it).
+3. Confirm the active Wave business/silo is selected so the dashboard scopes correctly.
+
+### NOT part of this launch (future; their absence does NOT block go-live)
+- Stage B virtual-mix SELLING (gated; Stage A preview is read-only and harmless).
+- Generic Wave transaction/category PUSH (Wave platform limit; shown truthfully as Hub-only).
+- Direct Bank-tab matching (Bank Review is the matching home).
+
+---
+
 ## Current build/version
-**v55.83-HG** (committing/deploying now). History: … HE `b807cfa` → HF `377d7a5` → HG (this).
+**v55.83-HH** (committing/deploying now). History: … HE `b807cfa` → HF `377d7a5` → HG (this).
 
 ## Codex HE/HF review (QA sha 73ce64f) — READ
 Codex passed everything with no FAILs:

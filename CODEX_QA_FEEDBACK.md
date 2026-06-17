@@ -348,3 +348,29 @@ Scope read before this pass:
 - Direct Bank-tab matching with selected Wave silo/account remains not built; Bank Review remains the safe accounting path.
 - One live Wave payment push still needs verification in Wave.
 - Inventory Snapshot still needs visual comparison against one known real product from Overview.
+
+### 2026-06-17 v55.83-HG Heartbeat QA - PASS
+
+Scope read before this pass:
+- Read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: b4ab49e v55.83-HG.
+- Scope stayed on Inventory/Stock Mix helper robustness. No source code edited by Codex.
+- Ran focused regression: node __tests__\test-v55-83-hg-preview-split.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+
+#### PASS - HG fixes previewProportionalSplit direct-caller robustness
+- previewProportionalSplit now normalizes rows with Array.isArray before looping, so null/undefined/non-array direct callers do not crash.
+- file: D:\GITHUB\nexttrade-hub\src\lib\mix-composition.js:41
+- file: D:\GITHUB\nexttrade-hub\src\lib\mix-composition.js:45
+- Regression test covers null, undefined, non-array, empty array, proportional split math, exact sale-qty sum, infeasible shortfall reporting, clamped remaining, and source wiring.
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hg-preview-split.js:38
+- file: D:\GITHUB\nexttrade-hub\__tests__\test-v55-83-hg-preview-split.js:65
+- Business impact: Stage A Stock Mix preview math is now safer as a shared helper while remaining read-only.
+- Instruction for Claude: no further code fix needed for this caution. Keep Stage A labeled preview-only until Stage B drawdown/COGS/reversal is implemented and QA-passed.
+
+#### Still open after HG heartbeat
+- User must run or confirm the HE bank_transaction_splits Wave-column migration before split Wave categories are production-safe.
+- Stage B virtual-mix selling remains gated: allocation rule decision, live consume_invoice_item_inventory parity, locking/warehouse/FX/COGS SQL, Codex review, then user-run migration.
+- Direct Bank-tab matching with selected Wave silo/account remains not built; Bank Review remains the safe accounting path.
+- One live Wave payment push still needs verification in Wave.
+- Inventory Snapshot still needs visual comparison against one known real product from Overview.
