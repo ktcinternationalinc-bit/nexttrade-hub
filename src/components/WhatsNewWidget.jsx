@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HW',
+    date: '2026-06-17',
+    label: 'Inventory Report Center & P&L restricted boxes readable too',
+    items: [
+      '**👁️ The last two restricted boxes are fixed.** The Inventory Report Center and Inventory P&L "no permission" messages now use the same readable notice as everywhere else. The contrast sweep is fully done.',
+      { superAdminOnly: true, text: 'v55.83-HW (Codex HV FAIL fix). Converted the two remaining Inventory/Reports permission gates to RestrictedNotice: InventoryReportCenter !mayView return (was bg-amber-50/text-amber-900) and InventoryPnLReports !canSeePnL return. All restricted/locked permission gates across Accounting, Wave, Inventory, and Reports now share the inline-styled readable RestrictedNotice. No SQL. (Note: report DATA cells that use amber accents on light cards are unaffected — only permission/error gates were swept.)' },
+    ],
+  },
+  {
     version: 'v55.83-HV',
     date: '2026-06-17',
     label: 'Inventory Overview restricted box readable (sweep truly complete)',

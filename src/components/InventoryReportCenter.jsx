@@ -5,6 +5,7 @@
 //   2. Stock Mix (Virtual) — composition of each virtual mix from REAL product stock only
 // Virtual mixes are reported as composition ONLY and never counted as physical stock.
 import { useState, useEffect } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import ReportTable, { formatCell } from './ReportTable';
 import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS } from '../lib/inventory-report-defs';
@@ -353,7 +354,7 @@ export default function InventoryReportCenter(props) {
   }
 
   if (!mayView) {
-    return <div className="p-4 text-sm bg-amber-50 border border-amber-200 rounded text-amber-900">You do not have permission to view inventory reports (inventory.reports.view).</div>;
+    return <div className="p-4"><RestrictedNotice title="Access restricted" message="You do not have permission to view inventory reports (inventory.reports.view)." /></div>;
   }
 
   var btn = 'px-3 py-1.5 rounded text-xs font-bold border';

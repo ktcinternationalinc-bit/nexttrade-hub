@@ -1315,3 +1315,55 @@ Scope update:
 
 #### Verification note
 - npm.cmd run build passed after HU source changes. The first run failed at a transient Next export file rename, then a rerun completed successfully.
+
+### 2026-06-17 v55.83-HV WORKING-TREE QA - OVERVIEW PASS / REPORTS CONTRAST FAIL
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current committed HEAD at start: 84db879 v55.83-HU; HV is working-tree only at time of QA.
+- Inspected launch-relevant Inventory Overview and Inventory report permission panels only.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HV closes the HU Inventory Overview restricted-gate FAIL
+- InventoryOverview now imports RestrictedNotice.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:18
+- The no-Inventory permission return now uses RestrictedNotice instead of the old bg-amber-50/text-amber-900 panel.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:587
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:590
+- HT's user-facing load-error separator is now ASCII semicolon-space instead of a middle dot.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:215
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryOverview.jsx:216
+- Badge/What's New are bumped to HV and correctly describe the Overview fix.
+- file: D:\GITHUB\nexttrade-hub\src\app\page.jsx:5385
+- file: D:\GITHUB\nexttrade-hub\src\components\WhatsNewWidget.jsx:36
+- Verification: npm.cmd run build passed on the HV working tree.
+
+#### FAIL - Inventory Reports still have old restricted/error permission panels
+- InventoryReportCenter still returns an old amber permission panel for users without inventory.reports.view.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:355
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:356
+- InventoryPnLReports still returns an old amber permission panel for users without See Inventory P&L.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:317
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:320
+- Business impact: Reports are in this QA scope, and staff without report/P&L permission can still hit the old restricted-message style. That means the HV claim that the contrast sweep is truly complete is still too broad.
+- Instruction for Claude: convert these two report permission returns to RestrictedNotice as the next tiny safe fix, or narrow the HV release text to Inventory Overview only. Preferred fix: import/use RestrictedNotice in both report files so all Inventory/Reports permission gates share the same readable pattern.
+
+#### Remaining launch checks after HV working tree
+- Accounting/banking still depends on live environment confirmation: assign ACCT permissions, visual-check Accounting RestrictedNotice, run/verify launch SQL + Wave preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores wave_payment_id.
+- Inventory still needs the requested real-product visual comparison between Overview and Inventory Snapshot.
+
+### 2026-06-17 v55.83-HV COMMITTED ADDENDUM - REPORT RESTRICTED PANELS STILL OPEN
+
+Scope update:
+- HV is now committed at 7ea1048 after the working-tree QA above.
+- Re-checked committed InventoryReportCenter and InventoryPnLReports.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### FAIL REMAINS - HV commit did not convert Inventory report permission gates
+- InventoryReportCenter still uses the old amber permission panel for users without inventory.reports.view.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:355
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryReportCenter.jsx:356
+- InventoryPnLReports still uses the old amber permission panel for users without See Inventory P&L, and the lock glyph appears mojibake in this terminal.
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:317
+- file: D:\GITHUB\nexttrade-hub\src\components\InventoryPnLReports.jsx:321
+- Instruction for Claude: convert both report permission returns to RestrictedNotice. This is not a Kandil accounting launch blocker, but it is inside Inventory/Reports scope and directly matches Max's contrast/readability complaint.

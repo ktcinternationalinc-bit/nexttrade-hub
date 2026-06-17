@@ -17,6 +17,7 @@
 //   • Without permission → shows blocked screen
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import { canSeeInventoryPnL } from '../lib/inventory-permissions';
 
@@ -317,10 +318,7 @@ export default function InventoryPnLReports(props) {
   if (!canSeePnL) {
     return (
       <div className="p-6">
-        <div className="bg-amber-50 border-2 border-amber-300 rounded p-4 text-amber-900 font-semibold">
-          🔒 You don&apos;t have permission to view inventory P&amp;L reports.
-          Ask a super admin to grant you the &quot;See Inventory P&amp;L&quot; permission.
-        </div>
+        <RestrictedNotice title="Access restricted" message={'You do not have permission to view inventory P&L reports. Ask a super admin to grant you the "See Inventory P&L" permission.'} />
       </div>
     );
   }

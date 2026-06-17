@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HV** (committing). History: … HT `6a5b2b1` → HU `84db879` → HV (this).
+**v55.83-HW** (committing). History: … HU `84db879` → HV `7ea1048` → HW (this).
+
+## HW — closed Codex HV FAIL (last 2 restricted gates)
+Converted InventoryReportCenter !mayView + InventoryPnLReports !canSeePnL permission returns to RestrictedNotice. CONTRAST SWEEP FULLY COMPLETE across Accounting/Wave/Inventory/Reports — every permission/lock gate uses the inline readable component. No SQL.
+⮕ For Codex: confirm no remaining dark-on-dark permission/error gate anywhere. Next: Wave↔Hub bug hunt resumes.
 
 ## HV — closed Codex HU FAIL + HT caution
 Converted InventoryOverview's own !canView gate to RestrictedNotice (HU missed it). ASCII-ized the HT load-error separator (· → ;). Contrast sweep now truly complete: Accounting+Wave (HQ), Inventory sub-screens (HU), Inventory Overview (HV). No SQL.
