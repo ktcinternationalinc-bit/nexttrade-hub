@@ -468,6 +468,12 @@ export default function WaveSyncCenter(props) {
     return rows;
   }, [customers, invoices, payments, bankTxns, splitTxns, active]);
 
+  // v55.83-IN (Codex) — separate actionable Wave pushes (customers/invoices/payments) from
+  // Hub-only bank categorizations that Wave's API cannot accept. They must NOT inflate the main
+  // pending count or sit in the push list as if they were pushable.
+  var actionableQueue = queue.filter(function (q) { return !q.hubOnly; });
+  var hubOnlyQueue = queue.filter(function (q) { return q.hubOnly; });
+
   function toggle(key) { setSel(function (p) { var n = Object.assign({}, p); if (n[key]) { delete n[key]; } else { n[key] = true; } return n; }); }
 
   // Mark a queued payment as entered-in-Wave-manually (clears it from the pending queue
@@ -611,15 +617,15 @@ export default function WaveSyncCenter(props) {
             </div>
           )}
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
-            <div className="text-xs font-bold">Pending in this silo: {queue.length}<span className="ml-2 font-normal text-slate-400">({queue.filter(function (q) { return q.action === 'customer'; }).length} customers · {queue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {queue.filter(function (q) { return q.action === 'payment'; }).length} payments · {queue.filter(function (q) { return q.action === 'bank_transaction'; }).length} bank txns)</span></div>
+            <div className="text-xs font-bold">Pending in this silo: {actionableQueue.length}<span className="ml-2 font-normal text-slate-400">({actionableQueue.filter(function (q) { return q.action === 'customer'; }).length} customers · {actionableQueue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {actionableQueue.filter(function (q) { return q.action === 'payment'; }).length} payments)</span></div>
             <div className="flex gap-2">
               <button onClick={runDryRun} disabled={(isProd && !productionUnlocked) || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
               <button onClick={pushSelected} disabled={(isProd && !productionUnlocked) || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
             </div>
           </div>
-          {queue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
+          {actionableQueue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
             <div>
-              {queue.map(function (q) {
+              {actionableQueue.map(function (q) {
                 return (
                   <div key={q.key} className="flex items-center gap-2 px-3 py-2 border-t border-slate-800 text-sm">
                     <input type="checkbox" checked={!!sel[q.key]} disabled={!!q.blocked} onChange={function () { toggle(q.key); }} className="w-4 h-4" />
@@ -629,6 +635,23 @@ export default function WaveSyncCenter(props) {
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
                     <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Wave\'s API does not accept raw bank-transaction/category pushes — this stays in the Hub' : ''}>{q.hubOnly ? 'ℹ Hub-only' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {hubOnlyQueue.length > 0 && (
+            <div className="border-t border-slate-700">
+              <div className="bg-slate-900/60 px-3 py-2 text-[11px] font-bold text-slate-300">
+                Hub-only — not pushed to Wave ({hubOnlyQueue.length}) <span className="font-normal text-slate-500">· Wave's API can't accept these; customer payments reach Wave via invoice matching in Bank Review.</span>
+              </div>
+              {hubOnlyQueue.map(function (q) {
+                return (
+                  <div key={q.key} className="flex items-center gap-2 px-3 py-2 border-t border-slate-800/60 text-sm opacity-80">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-700 text-slate-200">{q.action === 'bank_transaction_split' ? 'split' : 'bank txn'}</span>
+                    <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
+                    {q.amount != null && <span className="font-mono text-slate-400">{Number(q.amount).toLocaleString()}</span>}
+                    <span className="text-[10px] text-slate-400 font-semibold" title="Wave's API does not accept raw bank-transaction/category pushes — this stays in the Hub">ℹ Hub-only</span>
                   </div>
                 );
               })}

@@ -190,7 +190,13 @@ export async function POST(req) {
     await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: waveStatus, wave_sync_status: newSyncStatus }).eq('id', hubId);
     await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'read_back', dry_run: false, response_payload: data, success: !!verified, error_message: verified ? null : 'Read-back number mismatch (invoice still linked)', attempted_by: by });
 
-    return NextResponse.json({ success: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, wave_invoice_id: ic.invoice.id, verified: !!verified });
+    // v55.83-IN (Codex) — do NOT report a clean success when the invoice is still DRAFT (auto-approve
+    // failed). The invoice exists in Wave but can't take payments yet, so surface needs_approval so
+    // the UI/caller knows to use "Approve in Wave" rather than treating it as fully synced.
+    if (waveStatus === 'DRAFT') {
+      return NextResponse.json({ success: true, needs_approval: true, wave_status: 'DRAFT', warning: 'Invoice created in Wave but is still DRAFT (auto-approve did not succeed). Use "Approve in Wave" before pushing a payment.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, wave_invoice_id: ic.invoice.id, verified: !!verified });
+    }
+    return NextResponse.json({ success: true, wave_status: waveStatus, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, wave_invoice_id: ic.invoice.id, verified: !!verified });
   } catch (e) {
     return NextResponse.json({ error: (e && e.message) || String(e) }, { status: 500 });
   }

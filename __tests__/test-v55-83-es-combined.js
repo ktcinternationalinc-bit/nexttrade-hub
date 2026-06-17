@@ -8,7 +8,9 @@ ok(/idx === 0 && <span[^>]*>NEWEST/.test(wsc),'NEWEST badge on sorted row 0 (tru
 // Fix 2: productCreate isSold
 var ps = fs.readFileSync(path.join(__dirname,'..','src/app/api/wave/product-setup/route.js'),'utf8');
 var pcv = (ps.match(/var pcVars = .*/)||[''])[0];
-ok(!/isSold|isBought/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv),'productCreate (now in product-setup) uses incomeAccountId, no invalid flags');
+// v55.83-IN: Wave's ProductCreateInput REQUIRES the sold/bought indicator — the earlier assertion
+// that isSold/isBought were "invalid flags" was wrong and caused the live "buying or selling" reject.
+ok(/isSold: true/.test(pcv) && /isBought: false/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv),'productCreate sends isSold/isBought + incomeAccountId (Wave-required)');
 // safety/diagnostics retained
 ok(/var API_BUILD_MARKER = 'v55\.83-EP-push-invoice-v2-productid';/.test(v2),'v2 marker retained');
 ok(/var API_ROUTE = '\/api\/wave\/push-invoice-v2';/.test(v2),'v2 route retained');

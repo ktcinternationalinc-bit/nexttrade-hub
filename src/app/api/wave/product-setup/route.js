@@ -47,9 +47,10 @@ export async function POST(req) {
     // real KTC could never configure its default product from the Hub. assertPermission above already
     // required wave.settings.manage.
     if (bid !== APPROVED_PUSH_BUSINESS_ID) {
-      var _regRes = await db.from('wave_business_registry').select('production_push_unlocked, label').eq('wave_business_id', bid).single();
+      var _regRes = await db.from('wave_business_registry').select('production_push_unlocked, is_production, label').eq('wave_business_id', bid).single();
       var _reg = _regRes && _regRes.data;
-      if (!(_reg && _reg.production_push_unlocked === true)) {
+      // v55.83-IN (Codex) — require a real PRODUCTION registry row that is unlocked, not just the flag.
+      if (!(_reg && _reg.is_production !== false && _reg.production_push_unlocked === true)) {
         return NextResponse.json({ error: 'Product setup is allowed for the approved test business, or a production business a super admin has unlocked. Open Wave Sync Center → Settings, enable "REAL production Wave push" for this business, then retry.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 403 });
       }
     }
