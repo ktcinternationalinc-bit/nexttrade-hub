@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-GZ',
+    date: '2026-06-17',
+    label: 'Code cleanup: removed dead Bank quick-match scaffolding',
+    items: [
+      '**🧹 Housekeeping (no visible change).** Removed leftover code behind the old Bank "quick match" popup that was already disabled. Matching/unmatching continues to work only through Accounting → Bank Review & Matching.',
+      { superAdminOnly: true, text: 'v55.83-GZ. No SQL, no behavior change. BankTab.jsx: deleted now-unreachable scaffolding left after the GX modal removal — matchToInvoice(), matchableInvoices, and the matchingTxn/searchInv useState pairs (all write-only/uncalled once the modal and the /api/plaid/match calls were removed). The Match and unmatch buttons still route to Bank Review via setNotice; fmtMoney and the invoices state are retained (invoices still loaded by loadData). Pre-empts a likely dead-code QA finding. STILL OPEN: virtual-mix sale engine (parked), Wave generic-transaction push (no mutation).' },
+    ],
+  },
+  {
     version: 'v55.83-GY',
     date: '2026-06-17',
     label: 'Inventory Snapshot default view now matches the Overview (hide zero-stock + templates)',

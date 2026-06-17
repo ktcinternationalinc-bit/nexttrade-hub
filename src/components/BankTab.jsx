@@ -13,8 +13,6 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [view, setView] = useState('all'); // all | unmatched | matched
-  const [matchingTxn, setMatchingTxn] = useState(null);
-  const [searchInv, setSearchInv] = useState('');
   const [dateRange, setDateRange] = useState('30');
   const [acctFilter, setAcctFilter] = useState('all');
   const [viewRange, setViewRange] = useState('all');
@@ -209,19 +207,13 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
     setSyncing(false);
   };
 
-  // v55.83-GU — DISABLED. The old /api/plaid/match route only stamped
-  // bank_transactions.matched_invoice_id; it never created payment_matches or
-  // accounting_invoice_payments, never recomputed balances, and never queued a
-  // Wave payment. That silently corrupted the books (a "matched" txn that
-  // posted nothing). Matching now lives in Accounting → Bank Review & Matching,
-  // which runs the accounting-safe flow (payment_matches +
-  // accounting_invoice_payments + balance recompute + Wave sync queue + silo).
-  // This quick-match is neutered so it can no longer bypass the ledger.
-  const matchToInvoice = async () => {
-    setMatchingTxn(null);
-    setError('');
-    setNotice('Matching has moved to Accounting → Bank Review & Matching, which posts the payment to the books correctly. The old quick-match here was disabled because it did not record the payment.');
-  };
+  // v55.83-GU/GX — in-tab quick-match REMOVED. The old /api/plaid/match route only
+  // stamped bank_transactions.matched_invoice_id; it never created payment_matches /
+  // accounting_invoice_payments, never recomputed balances, never queued Wave — it
+  // silently corrupted the books. The Match button now just routes the user (via a
+  // notice) to Accounting → Bank Review & Matching, the accounting-safe flow. The old
+  // match modal + matchToInvoice/matchableInvoices/searchInv/matchingTxn scaffolding
+  // were deleted in GZ so nobody can wire them back to the dead route.
 
   // v55.83-GV — DISABLED. The old /api/plaid/match DELETE only cleared
   // bank_transactions.matched_invoice_id; it never voided
@@ -261,15 +253,6 @@ export default function BankTab({ user, supabase, modulePerms, userProfile }) {
   const unmatchedCount = scopedTxns.filter(t => !t.matched_invoice_id).length;
   const totalIn = scopedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
   const totalOut = scopedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-
-  // Invoice search for matching modal
-  const matchableInvoices = invoices.filter(inv => {
-    if (!searchInv) return true;
-    const q = searchInv.toLowerCase();
-    return (inv.customer || '').toLowerCase().includes(q) ||
-           (inv.invoice_number || '').toLowerCase().includes(q) ||
-           String(inv.amount || inv.total || '').includes(q);
-  }).slice(0, 20);
 
   const fmtMoney = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Math.abs(n || 0));
 

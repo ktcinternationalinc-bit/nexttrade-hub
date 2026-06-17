@@ -9,7 +9,10 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-GY** (committing/deploying now). Deployed history: GW `7b09b06` → GX `2bb98a2` → handoff doc `4ff8445` → GY (this).
+**v55.83-GZ** (committing/deploying now). Deployed history: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ (this).
+
+## GZ (this build) — proactive dead-code cleanup
+`src/components/BankTab.jsx`: removed scaffolding left over after the GX modal removal — `matchToInvoice()`, `matchableInvoices`, and the `matchingTxn`/`searchInv` useState pairs (all uncalled/write-only once the modal and `/api/plaid/match` calls were gone). No behavior change; Match/unmatch still route to Bank Review. Pre-empts a likely dead-code QA finding. Build exit 0.
 
 ## Codex QA items read this pass
 From CODEX_QA_FEEDBACK.md:
