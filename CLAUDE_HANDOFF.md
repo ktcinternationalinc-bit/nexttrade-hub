@@ -8,6 +8,41 @@ QA loop:
 
 ---
 
+## 📒 Progress & thinking (running log — newest context at top)
+
+### Where we are (one line)
+The whole **safe** Accounting/Bank/Open-Accounts/Inventory-report backlog is shipped and Codex-reviewed. The only big thing left is the **virtual-mix consuming engine (Stage B)**, which is deliberately gated on a business decision + a SQL migration the user must run.
+
+### Build-by-build progress (this session)
+| Build | Commit | What landed | QA |
+|---|---|---|---|
+| GU | f39eea1 | OA print/statement for view-only; Excel for export; neutered Bank quick-match | superseded |
+| GV | f39eea1 | `/api/plaid/match` → 410; Bank unmatch disabled; customer-statement Excel | PASS |
+| GW | 7b09b06 | Inventory report error surfacing + diagnostics + empty-state reasons; mix-edit perm key; report perms in Settings | PASS |
+| GX | 2bb98a2 | Inventory Snapshot reconciles w/ Overview (valid-receipt logic); removed dead Bank modal; QA-loop files | PASS w/ cautions |
+| GY | 432ae7d | Snapshot hide zero-stock+templates (later corrected in HD) | caution |
+| GZ | 80ff065 | Removed dead Bank quick-match scaffolding | — |
+| HA | dc0581f | **Stage A** read-only Stock-Mix Sale Preview (non-destructive) | PASS (preview only) |
+| HB | 166cac8 | Accounting Dashboard live Refresh + last-updated; Stage B plan + draft SQL | FAILs found ↓ |
+| HC | b0ac212 | Inventory report print/CSV totals row | — |
+| HD | 34d5b47 | **Fixed all 3 Codex HB FAILs** (Excel note strip +test, split Wave fields, Stage B SQL gated) + 2 cautions | awaiting re-verify |
+
+### Process note (important)
+The `Read` tool de-dupes and once masked a whole Codex pass ("unchanged since last Read"). Heartbeat now reads the TRUE bytes via `cat CODEX_QA_FEEDBACK.md`. Do not trust the dedup.
+
+### My honest thoughts / recommendations
+1. **Launch-readiness:** Accounting + Bank + Open Accounts are in good shape — the dangerous accounting-bypass paths are closed (410 route, no quick match/unmatch), statements are clean, permissions are split sensibly. I'd call these launch-ready pending the user's own live spot-check.
+2. **Inventory reports** now reconcile with Overview (numbers + default row visibility) and print/export are complete with totals. Good to launch.
+3. **Stage B is the real frontier.** Two genuine blockers, neither of which I should guess: (a) the **allocation rule** (proportional vs fixed recipe vs manual — needs the El Sayad records), and (b) the **SQL RPC** must mirror the LIVE `consume_invoice_item_inventory` (locking, warehouse, FX/COGS) — I can't introspect Supabase from here. Until both are settled, the read-only Stage A preview is the safe stand-in. Recommend the user pick the allocation rule next; I'll then write the corrected RPC for Codex to review before anyone runs it.
+4. **Wave generic transaction push** remains a true platform limitation (no money-transaction mutation). Truthfully labeled Hub-only. Don't reopen without a confirmed Wave mutation.
+5. **Open small items** (not blocking): previewProportionalSplit DRY refactor, Wave Sync Center surfacing split lines, direct Bank-tab matching (only if the business actually wants staff matching from the raw Bank tab — Bank Review is the safe home).
+
+### Open decisions I need from the user
+- **Allocation rule for virtual-mix sales** (A proportional / B fixed recipe / C manual at sale time).
+- Whether to build **direct Bank-tab matching** or keep matching solely in Bank Review (recommended).
+
+---
+
 ## Current build/version
 **v55.83-HD** (committing/deploying now). History: … HB `166cac8` → HC `b0ac212` → HD (this).
 
