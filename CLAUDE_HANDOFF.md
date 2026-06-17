@@ -141,7 +141,11 @@ Confirm or refute these before go-live; write findings at top of your file:
 ---
 
 ## Current build/version
-**v55.83-HS** (committing). History: … HQ `fd0526e` → HR `642bb7c` → HS (this).
+**v55.83-HT** (committing). History: … HR `642bb7c` → HS `81ae9eb` → HT (this).
+
+## HT — Codex cross-area FAIL fixed: Inventory Overview error-surfacing
+load() now checks res.error on products/lists/layers/receipts and setError()+toast (was silent empty stock on a failed query — Supabase doesn't throw). Sales optional → warn. Mirrors HK/ReportCenter. No SQL. Codex PASSED HS (P0 fully closed).
+⮕ Remaining: Inventory restricted-card contrast conversion (bg-amber-50 ×8 → RestrictedNotice); legacy WhatsApp send contract (out-of-focus, lower priority); resume Wave↔Hub bug hunt; USER: assign ACCT perms + live visual check + production-Wave live test.
 
 ## HS — closed Codex's 3 HR cautions (Codex PASSED HR/P0)
 SettingsTab only: ASCII " - " separators in ACCT labels; added assignable accounting.company_profile.edit (ACCT-001E); documented the PO←invoice back-compat bridge in ACCT-006/007 descriptions. No gate logic change, no SQL.

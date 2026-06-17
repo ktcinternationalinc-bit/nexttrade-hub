@@ -1196,3 +1196,32 @@ Scope read before this pass:
 - file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
 - file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
 - Recommendation: switch labels to plain ASCII hyphen format (`ACCT-001 - Company Profile: View`) when convenient. Do not block launch on this if the browser visual check is clean.
+
+### 2026-06-17 v55.83-HS COMMITTED QA - PASS
+
+Scope read before this pass:
+- Re-read CLAUDE_HANDOFF.md, CODEX_QA_FEEDBACK.md, CODEX_QA_REQUEST.md check, git status/log/diff.
+- Current HEAD inspected: 81ae9eb v55.83-HS.
+- Inspected committed Settings permission catalog and bank-permissions helpers only, per HR caution closure.
+- Ran focused test: node __tests__\test-v55-83-hr-accounting-doc-permissions.js - PASS.
+- Ran production build: npm.cmd run build - PASS.
+- No source code edited by Codex. Only this QA file was appended.
+
+#### PASS - HS closes the HR permission-catalog cautions
+- ACCT permission labels now use ASCII hyphen separators, e.g. `ACCT-001 - ...`, avoiding the middle-dot/mojibake risk in the permission catalog.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:487
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:494
+- Company Profile edit is now assignable as `accounting.company_profile.edit` / ACCT-001E.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:488
+- The PO invoice-permission back-compat bridge is now explicitly documented in ACCT-006/ACCT-007 descriptions, so the temporary broader access is visible to admins rather than hidden.
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:493
+- file: D:\GITHUB\nexttrade-hub\src\components\SettingsTab.jsx:494
+- Regression still passes after HS.
+- Verification: node __tests__\test-v55-83-hr-accounting-doc-permissions.js passed. npm.cmd run build passed.
+- QA verdict: HR/HS together close the P0 permission/readability blocker for Accounting document tabs in committed code.
+
+#### Remaining launch checks after HS
+- Assign the new ACCT permissions to staff roles in Settings; code is ready, but users still need grants.
+- Do a real visual check of RestrictedNotice on the live dark Accounting screen.
+- For production Wave push, still complete the live path: run/verify launch SQL + preflight, dry-run one clean Kandil/KTC payment, push one real payment, verify in Wave, and confirm Hub stores `wave_payment_id`.
+- HE split Wave-category columns still depend on the user running the launch SQL or confirming preflight green in the target Supabase environment.

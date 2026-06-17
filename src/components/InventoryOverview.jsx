@@ -199,6 +199,22 @@ export default function InventoryOverview(props) {
         ]);
         if (cancelled) return;
 
+        // v55.83-HT (Codex FAIL fix) — Supabase returns {data:null,error} on a failed query
+        // WITHOUT throwing, so the try/catch never fires and a real failure (RLS / missing column /
+        // missing table on the CORE products/lists or the stock layers/receipts) would render as
+        // EMPTY stock — a false "no inventory" story. Surface those errors explicitly so the screen
+        // shows the load failure instead. Sold/sales data is optional (profit strip only) → warn only.
+        var _qErrs = [];
+        if (prodRes && prodRes.error) { _qErrs.push('products: ' + prodRes.error.message); }
+        if (lstRes && lstRes.error) { _qErrs.push('classifications: ' + lstRes.error.message); }
+        if (layRes && layRes.error) { _qErrs.push('stock layers: ' + layRes.error.message); }
+        if (recRes && recRes.error) { _qErrs.push('receipts: ' + recRes.error.message); }
+        if (soldRes && soldRes.error) { console.warn('[inventory-overview] sales data failed (profit strip partial):', soldRes.error.message); }
+        if (_qErrs.length) {
+          setError(_qErrs.join(' · '));
+          toast.error('Failed to load inventory: ' + _qErrs.join(' · '));
+        }
+
         setProducts(prodRes.data || []);
         setLists(lstRes.data || []);
         setLayers((layRes && layRes.data) || []);

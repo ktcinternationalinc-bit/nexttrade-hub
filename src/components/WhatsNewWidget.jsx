@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HT',
+    date: '2026-06-17',
+    label: 'Inventory Overview shows load failures instead of false "empty stock"',
+    items: [
+      '**📦 Inventory Overview no longer hides a load failure as "no inventory."** If the products, classifications, stock layers, or receipts fail to load (e.g. a database/permission issue), the screen now shows the real error instead of pretending the warehouse is empty. Same trustworthiness fix already applied to the inventory reports and sub-tabs.',
+      { superAdminOnly: true, text: 'v55.83-HT (Codex cross-area FAIL fix; Inventory). InventoryOverview.load(): after Promise.all it now inspects each response .error and setError()+toast for the CORE products/lists and the stock layers/receipts queries (Supabase returns {data:null,error} without throwing, so the try/catch never fired → empty stock shown on a real failure). Existing error banner (line ~783) renders it and suppresses the "no inventory" empty state. Sales/invoice_items error is optional (profit strip) → console.warn only. No SQL. Next: finish Inventory restricted-card contrast conversion; resume Wave↔Hub bug hunt.' },
+    ],
+  },
+  {
     version: 'v55.83-HS',
     date: '2026-06-17',
     label: 'Polish the new accounting permissions (Codex cautions)',
