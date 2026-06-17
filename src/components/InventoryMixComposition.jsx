@@ -23,26 +23,36 @@ export default function InventoryMixComposition(props) {
   var [allProducts, setAllProducts] = useState([]);     // real products (candidates)
   var [components, setComponents] = useState([]);        // inventory_mix_components rows
   var [availByProduct, setAvailByProduct] = useState({});
+  var [avgCostByProduct, setAvgCostByProduct] = useState({});   // v55.83-HA — weighted avg cost per component, for the read-only COGS estimate
   var [selMix, setSelMix] = useState('');
   var [addProductId, setAddProductId] = useState('');
   var [busy, setBusy] = useState(false);
+  var [saleQty, setSaleQty] = useState('');                     // v55.83-HA — Stage A sale preview qty (read-only)
 
   function load() {
     setLoading(true);
     Promise.all([
       supabase.from('inventory_products').select('id, name_en, quick_code, color_list_id, is_virtual_mix').order('name_en'),
       supabase.from('inventory_mix_components').select('*'),
-      supabase.from('inventory_layers').select('product_id, qty_remaining').gt('qty_remaining', 0)
+      supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)
     ]).then(function (res) {
       var prods = (res[0] && res[0].data) || [];
       setMixProducts(prods.filter(function (p) { return p.is_virtual_mix === true; }));
       setAllProducts(prods.filter(function (p) { return p.is_virtual_mix !== true; }));
       setComponents((res[1] && res[1].data) || []);
-      var avail = {};
+      var avail = {}; var costAgg = {};
       ((res[2] && res[2].data) || []).forEach(function (l) {
-        avail[l.product_id] = (avail[l.product_id] || 0) + (Number(l.qty_remaining) || 0);
+        var pid = l.product_id; if (!pid) { return; }
+        var qq = Number(l.qty_remaining) || 0;
+        avail[pid] = (avail[pid] || 0) + qq;
+        if (!costAgg[pid]) { costAgg[pid] = { q: 0, v: 0 }; }
+        costAgg[pid].q += qq;
+        costAgg[pid].v += qq * (Number(l.cost_per_uom) || 0);
       });
       setAvailByProduct(avail);
+      var avgCost = {};
+      Object.keys(costAgg).forEach(function (pid) { avgCost[pid] = costAgg[pid].q > 0 ? (costAgg[pid].v / costAgg[pid].q) : 0; });
+      setAvgCostByProduct(avgCost);
     }).catch(function (e) { console.error('[mix] load', e); toast.error('Failed to load mix data'); })
       .finally(function () { setLoading(false); });
   }
@@ -62,6 +72,40 @@ export default function InventoryMixComposition(props) {
   var composition = useMemo(function () {
     return buildComposition(myComponents, availByProduct);
   }, [myComponents, availByProduct]);
+
+  // v55.83-HA — Stage A: READ-ONLY sale preview. Given a sale quantity, show how the
+  // mix WOULD draw down each color, the remaining-after, a COGS estimate, and any
+  // shortfall. This consumes NOTHING and writes NOTHING — it is a feasibility view.
+  //
+  // DRAFT ALLOCATION RULE (must be confirmed against the El Sayad records before the
+  // real consuming engine is built): each color is drawn proportionally to its CURRENT
+  // availability — planned_i = qty * available_i / total_available. With this rule a
+  // per-color shortfall is impossible while qty <= total; the only shortfall is when
+  // the requested qty exceeds the whole mix's available stock.
+  var salePreview = useMemo(function () {
+    var qty = Number(saleQty) || 0;
+    var total = composition.total || 0;
+    var rows = composition.rows.map(function (r) {
+      var share = total > 0 ? (r.available / total) : 0;
+      var planned = qty * share;
+      var cost = Number(avgCostByProduct[r.component_product_id]) || 0;
+      return {
+        component_product_id: r.component_product_id,
+        name: r.name_en || r.component_color,
+        quick_code: r.quick_code,
+        available: r.available,
+        share_pct: share * 100,
+        planned: planned,
+        remaining_after: r.available - planned,
+        avg_cost: cost,
+        cogs: planned * cost,
+        has_cost: cost > 0
+      };
+    });
+    var cogsTotal = rows.reduce(function (s, x) { return s + x.cogs; }, 0);
+    var anyMissingCost = rows.some(function (x) { return !x.has_cost; });
+    return { qty: qty, total: total, rows: rows, cogsTotal: cogsTotal, shortfall: qty > total, anyMissingCost: anyMissingCost };
+  }, [saleQty, composition, avgCostByProduct]);
 
   function addComponent() {
     if (!canEdit) { toast.error('Edit Inventory permission required.'); return; }
@@ -99,7 +143,7 @@ export default function InventoryMixComposition(props) {
       <div className="text-xs text-slate-400 mb-4">Read-only. Shows what a Stock Mix Lot is currently made of, by real color stock. No inventory is changed here.</div>
 
       <div className="bg-amber-100 text-amber-950 text-xs font-semibold rounded-lg px-3 py-2 mb-4">
-        Phase 1 — view only. Defining a mix here does not deduct stock, change costs, or affect invoices. Selling the mix (proportional drawdown) is a later, separate step.
+        View only. Defining a mix here does not deduct stock, change costs, or affect invoices. A read-only <b>Sale Preview</b> below shows how a sale <i>would</i> draw down colors (DRAFT allocation) — it still does not sell or consume anything. The actual sale engine is a later, separate step.
       </div>
 
       {mixProducts.length === 0 ? (
@@ -144,6 +188,54 @@ export default function InventoryMixComposition(props) {
                   </div>
                 )}
               </div>
+
+              {/* v55.83-HA — Stage A: READ-ONLY sale preview. No writes, no consumption. */}
+              {composition.rows.length > 0 && (
+                <div className="bg-white text-slate-900 rounded-lg p-4 mb-4">
+                  <div className="font-bold mb-1">🔬 Sale Preview <span className="ml-1 text-[11px] font-extrabold text-rose-700 align-middle">READ-ONLY</span></div>
+                  <div className="bg-rose-100 text-rose-900 text-[11px] font-semibold rounded px-2 py-1.5 mb-3">
+                    This does NOT sell the mix or deduct any stock. The allocation below is a DRAFT rule — each color is drawn proportionally to its current availability — pending confirmation against the El Sayad records. The real sale engine (atomic drawdown + COGS posting + reversal) is not built yet.
+                  </div>
+                  <div className="flex items-center gap-2 mb-3 flex-wrap">
+                    <label className="text-xs font-bold text-slate-600">Sale quantity</label>
+                    <input type="number" min="0" value={saleQty} onChange={function (e) { setSaleQty(e.target.value); }} className="px-3 py-1.5 rounded border border-slate-300 text-sm w-40" placeholder="e.g. 100" />
+                    <span className="text-xs text-slate-500">of {composition.total.toLocaleString(undefined, { maximumFractionDigits: 2 })} available</span>
+                  </div>
+                  {salePreview.qty > 0 && (
+                    <div>
+                      {salePreview.shortfall && (
+                        <div className="bg-amber-100 text-amber-900 text-xs font-bold rounded px-2 py-1.5 mb-2">⚠ Requested {salePreview.qty.toLocaleString()} exceeds total available {salePreview.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Not enough mix stock — this sale could not be fully fulfilled.</div>
+                      )}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead><tr className="text-left text-slate-500 border-b border-slate-200">
+                            <th className="py-1">Color</th><th className="text-right">Available</th><th className="text-right">Share</th><th className="text-right">Planned draw</th><th className="text-right">Remaining</th><th className="text-right">Avg cost</th><th className="text-right">Est. COGS</th>
+                          </tr></thead>
+                          <tbody>
+                            {salePreview.rows.map(function (r) {
+                              return (
+                                <tr key={r.component_product_id} className="border-b border-slate-100">
+                                  <td className="py-1 font-semibold text-slate-900">{r.name} <span className="text-slate-500 font-mono text-xs">{r.quick_code || ''}</span></td>
+                                  <td className="text-right font-mono">{r.available.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                  <td className="text-right text-indigo-700 font-semibold">{r.share_pct.toLocaleString(undefined, { maximumFractionDigits: 1 })}%</td>
+                                  <td className="text-right font-mono font-bold text-slate-900">{r.planned.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                  <td className={'text-right font-mono ' + (r.remaining_after < 0 ? 'text-rose-700 font-bold' : 'text-slate-700')}>{r.remaining_after.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                  <td className="text-right font-mono text-slate-600">{r.has_cost ? r.avg_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '—'}</td>
+                                  <td className="text-right font-mono text-slate-900">{r.has_cost ? r.cogs.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '—'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot><tr className="font-extrabold text-slate-900"><td className="py-2" colSpan={6}>Estimated total COGS</td><td className="text-right font-mono">{salePreview.cogsTotal.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}</td></tr></tfoot>
+                        </table>
+                      </div>
+                      {salePreview.anyMissingCost && (
+                        <div className="text-[11px] text-slate-500 mt-1 italic">Some colors have no cost layer yet, so the COGS estimate excludes them (shown as —).</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {canEdit && (
                 <div className="bg-slate-800/60 rounded-lg p-3 mb-3">

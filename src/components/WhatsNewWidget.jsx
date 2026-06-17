@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-HA',
+    date: '2026-06-17',
+    label: 'Stock Mix: read-only Sale Preview (no stock is touched)',
+    items: [
+      '**🔬 New read-only Sale Preview for Stock Mixes.** In Inventory → Core Inventory → Stock Mix, after you pick a mix you can now type a sale quantity and instantly see how that sale *would* draw down each color: planned quantity per color, remaining after, an estimated cost (COGS), and a warning if you ask for more than is available. It is clearly marked READ-ONLY — it does NOT sell anything or change any stock. It is a planning/feasibility view only.',
+      '**⚠️ The split rule is a DRAFT.** The preview splits a sale across colors in proportion to each color’s current availability. This is a draft assumption shown for review — the real selling engine (which would actually deduct stock and post cost) is still not built and still needs the El Sayad records to confirm the correct split.',
+      { superAdminOnly: true, text: 'v55.83-HA. No SQL, NO writes, NO consumption — pure read-only feasibility view (Stage A of the parked virtual-mix work). InventoryMixComposition.jsx: load() now also selects inventory_layers.cost_per_uom and builds avgCostByProduct (qty-weighted). Added saleQty state + salePreview useMemo: DRAFT allocation = planned_i = qty * available_i / total_available (proportional to current availability); per-row planned/remaining_after/avg_cost/cogs, total COGS, shortfall flag when qty>total, anyMissingCost note. New Sale Preview card (rose READ-ONLY banner) renders when composition.rows>0. Does NOT call FIFO, does NOT write inventory_layers/movements/invoices. Stage B (atomic consuming engine + invoice-line stamping + void/edit reversal + regression tests) remains PARKED pending (a) user go-ahead and (b) El Sayad records confirming the real allocation rule. Routed to Codex via CLAUDE_HANDOFF.md for QA opinion on whether Stage A is safe (it is non-destructive).' },
+    ],
+  },
+  {
     version: 'v55.83-GZ',
     date: '2026-06-17',
     label: 'Code cleanup: removed dead Bank quick-match scaffolding',

@@ -9,7 +9,11 @@ QA loop:
 ---
 
 ## Current build/version
-**v55.83-GZ** (committing/deploying now). Deployed history: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ (this).
+**v55.83-HA** (committing/deploying now). Deployed history: GW `7b09b06` → GX `2bb98a2` → GY `432ae7d` → GZ `80ff065` → handoff `45915c2` → HA (this).
+
+## HA (this build) — Stage A: READ-ONLY Virtual Mix Sale Preview
+`src/components/InventoryMixComposition.jsx`. Non-destructive feasibility view (no writes, no FIFO, no consumption). After picking a mix + entering a sale qty, shows per-color planned drawdown, remaining-after, avg cost, COGS estimate, shortfall warning. DRAFT allocation rule = proportional to each color's current availability (planned_i = qty * available_i / total). Loads inventory_layers.cost_per_uom for the COGS estimate. **Stage B (the actual consuming engine) remains PARKED** — needs user go-ahead + El Sayad records to confirm the real allocation rule. This was the "next step on auto" with no new Codex notes present.
+⮕ For Codex: please confirm Stage A is genuinely non-destructive (grep should show no insert/update/delete from the preview path) and sanity-check the DRAFT proportional allocation as a reasonable placeholder.
 
 ## GZ (this build) — proactive dead-code cleanup
 `src/components/BankTab.jsx`: removed scaffolding left over after the GX modal removal — `matchToInvoice()`, `matchableInvoices`, and the `matchingTxn`/`searchInv` useState pairs (all uncalled/write-only once the modal and `/api/plaid/match` calls were gone). No behavior change; Match/unmatch still route to Bank Review. Pre-empts a likely dead-code QA finding. Build exit 0.
