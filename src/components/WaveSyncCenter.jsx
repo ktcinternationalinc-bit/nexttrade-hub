@@ -358,6 +358,13 @@ export default function WaveSyncCenter(props) {
       byBankTxn[p.bank_transaction_id].total = Math.round((byBankTxn[p.bank_transaction_id].total + (Number(p.amount) || 0)) * 100) / 100;
       if (p._bank_amount != null) { byBankTxn[p.bank_transaction_id].bankAmount = Number(p._bank_amount); }
     });
+    // v55.83-IN — every bank txn that has ANY non-void payment (pending OR already synced) is
+    // "matched" and must not also appear in the Hub-only categorize list.
+    var matchedTxnIds = {};
+    payments.forEach(function (p) {
+      if (!p || isPaymentVoid(p) || !p.bank_transaction_id) { return; }
+      matchedTxnIds[p.bank_transaction_id] = true;
+    });
     payments.forEach(function (p) {
       if (!p) { return; }
       if (p.wave_business_id !== active) { return; }
@@ -431,6 +438,11 @@ export default function WaveSyncCenter(props) {
     bankTxns.forEach(function (bt) {
       if (!bt || bt.wave_business_id !== active) { return; }
       if (bt.category_status !== 'pending_wave_sync') { return; }
+      // v55.83-IN (core fix) — if this transaction has been MATCHED to an invoice, it already
+      // produced a payment row (the actual Wave-bound item, shown in the payments section above).
+      // Do NOT also list it here as a "Hub-only" categorization — that made a matched deposit look
+      // blocked/stuck when its payment is really what pushes to Wave.
+      if (matchedTxnIds[bt.id] || bt.matched_invoice_id || bt.linked_id) { return; }
       var bb = [];
       if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
       if (bt.classification) { bb.push('class: ' + bt.classification); }
