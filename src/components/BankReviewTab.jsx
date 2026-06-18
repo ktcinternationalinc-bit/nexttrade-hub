@@ -543,6 +543,7 @@ export default function BankReviewTab(props) {
     setBusy(true);
     var biz = t.business_id || (inv ? inv.business_id : null);
     var siloId = activeBiz || (inv && inv.wave_business_id) || t.wave_business_id || null; // v55.83-DZ
+    var createdMatchId = null; // v55.83-IN — track the match row so we can void it if the payment insert fails (atomicity)
     // Compute CURRENT paid from live payment rows (not stale inv.amount_paid) so a second
     // deposit against the same invoice classifies partial/full/overpayment correctly.
     supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv.id).then(function (pr) {
@@ -561,7 +562,8 @@ export default function BankReviewTab(props) {
         notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
       }, userProfile && userProfile.id)
       .then(function (matchRow) {
-        return createInvPaymentRow(inv, t, c.applied_to_invoice, matchRow && matchRow.id, mNotes);
+        createdMatchId = matchRow && matchRow.id; // v55.83-IN — remember for rollback if the payment insert fails
+        return createInvPaymentRow(inv, t, c.applied_to_invoice, createdMatchId, mNotes);
       })
       .then(function () {
         var chain = recomputeInvoice(inv.id);
@@ -590,7 +592,16 @@ export default function BankReviewTab(props) {
         onReload(); load();
       });
     })
-    .catch(function (e) { console.error('[save] Match failed: ', e); toast.error('Match failed: ' + ((e && e.message) || 'unknown error — check console')); })
+    .catch(function (e) {
+      console.error('[save] Match failed: ', e);
+      // v55.83-IN — ATOMICITY: if the payment row (or recompute) failed AFTER the match row was
+      // created, void the orphan match so it can't show a phantom "Matched" badge with no payment.
+      if (createdMatchId) {
+        dbUpdate('payment_matches', createdMatchId, { voided: true }, userProfile && userProfile.id)
+          .then(function () { load(); }).catch(function (e2) { console.error('[save] orphan match void failed', e2); });
+      }
+      toast.error('Match failed: ' + ((e && e.message) || 'unknown error') + (createdMatchId ? ' (rolled back the partial match)' : '') + ' — screenshot this for Claude.');
+    })
     .finally(function () { setBusy(false); });
   }
   function createUnapplied() {

@@ -378,8 +378,11 @@ export default function AccountingInvoicesTab(props) {
       var docTot = row.total_amount != null ? roundMoney(Number(row.total_amount)) : lineSum;
       var adjustment = roundMoney(docTot - lineSum);
       var c = company || {};
-      var paid = Number(row.amount_paid) || 0;
-      var bal = row.balance_due != null ? Number(row.balance_due) : roundMoney(docTot - paid);
+      // v55.83-IN — use the SAME canonical figure as the on-screen blotter/ledger
+      // (wave_imported_paid + non-void Hub payment rows), not the stale stored amount_paid/balance_due,
+      // so the printed/PDF invoice never disagrees with what staff see on screen.
+      var paid = roundMoney((Number(row.wave_imported_paid) || 0) + (Number(hubPaidMap[row.id]) || 0));
+      var bal = roundMoney(Math.max(0, docTot - paid));
       var notes = row.notes || (isInvoice() ? (c.default_invoice_notes || '') : (c.default_proforma_notes || ''));
       var terms = row.terms || (c.default_payment_terms || '');
       var logoHtml = c.logo_data_url ? '<img src="' + c.logo_data_url + '" style="max-height:70px;max-width:200px;margin-bottom:6px"/>' : '';
