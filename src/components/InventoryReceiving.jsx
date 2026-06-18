@@ -1054,9 +1054,36 @@ export default function InventoryReceiving(props) {
     });
   }
 
-  function removeLine(lineIdx) {
+  // v55.83-IN (core inventory fix) — deleting a product line must PERSIST immediately, not just drop
+  // from local state. Previously removeLine only spliced the array and Save never cancelled the
+  // removed line's DB row, so the deleted item stayed status='received' and kept inflating the
+  // blotter (even after refresh). Now: an already-saved line (existing_id) is soft-cancelled in the
+  // DB right away and the blotter is reloaded; an unsaved blank line is just removed from the form.
+  async function removeLine(lineIdx) {
+    var L = lines[lineIdx];
+    if (L && L.existing_id) {
+      if (lines.filter(function (x) { return x.existing_id; }).length <= 1) {
+        toast.error('This is the only saved product on the shipment — use "Delete Shipment" to remove the whole inbound shipment.');
+        return;
+      }
+      if (!window.confirm('Delete this product line from the shipment now? It is removed from inventory and the blotter immediately (soft-cancelled, restorable by an admin).')) { return; }
+      try {
+        setBusy(true);
+        var res = await dbUpdate('inventory_stock_receipts', L.existing_id, { status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: userProfile && userProfile.id, updated_by: userProfile && userProfile.id }, userProfile && userProfile.id);
+        if (res && res.error) { throw res.error; }
+        try { await supabase.from('inventory_receipt_rolls').delete().eq('receipt_id', L.existing_id); } catch (eRolls) { /* rolls best-effort */ }
+        if (toast && toast.success) { toast.success('Product line deleted and removed from the blotter.'); }
+        await reload(); // refresh the grouped blotter immediately (no manual refresh needed)
+      } catch (e) {
+        console.error('[receiving] removeLine cancel failed', e);
+        toast.error('Could not delete the line: ' + ((e && e.message) || 'unknown error') + ' — screenshot for Claude.');
+        setBusy(false);
+        return;
+      }
+      setBusy(false);
+    }
     setLines(function (prev) {
-      if (prev.length === 1) return prev; // always keep at least one line
+      if (prev.length === 1) return [emptyLine()]; // never leave zero rows in the form
       var next = prev.slice();
       next.splice(lineIdx, 1);
       return next;
@@ -1795,7 +1822,13 @@ export default function InventoryReceiving(props) {
     groupedReceipts[r.receipt_number].push(r);
   });
   var grouped = Object.keys(groupedReceipts).map(function (rn) {
-    var rows = groupedReceipts[rn];
+    var allRows = groupedReceipts[rn];
+    // v55.83-IN (core inventory fix) — EXCLUDE soft-deleted lines (cancelled/reversed) from the
+    // blotter detail AND totals so a deleted product never inflates qty / cost / line count. This is
+    // the other half of the "deleted items keep showing on the blotter" bug. (Merged source lines are
+    // intentionally left here — they are filtered at the group level by the showMerged toggle.)
+    var rows = allRows.filter(function (r) { return r.status !== 'cancelled' && r.status !== 'reversed'; });
+    var headRow = rows[0] || allRows[0];
     // v55.83-A.6.27.33 — when finalized, prefer landed_total (purchase + freight/duty/etc).
     // Otherwise show provisional total_cost (just purchase cost × qty).
     var totalCost = rows.reduce(function (a, b) {
@@ -1804,18 +1837,19 @@ export default function InventoryReceiving(props) {
     }, 0);
     return {
       receipt_number: rn,
-      receipt_date: rows[0].receipt_date,
-      status: rows[0].status,
-      receipt_type: rows[0].receipt_type,
-      warehouse_id: rows[0].warehouse_id,
-      supplier: rows[0].supplier,
-      shipment_reference: rows[0].shipment_reference,
+      receipt_date: headRow.receipt_date,
+      status: headRow.status,
+      receipt_type: headRow.receipt_type,
+      warehouse_id: headRow.warehouse_id,
+      supplier: headRow.supplier,
+      shipment_reference: headRow.shipment_reference,
       lines: rows,
       lineCount: rows.length,
       totalQty: rows.reduce(function (a, b) { return a + Number(b.quantity || 0); }, 0),
       totalCost: totalCost,
       isHeaderOnly: false,
       header: headerByNumber[rn] || null,
+      _allCancelled: rows.length === 0 && allRows.length > 0, // whole shipment soft-deleted
     };
   });
 

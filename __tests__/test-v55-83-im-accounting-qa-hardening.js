@@ -35,7 +35,10 @@ ok('2b: recomputeInvoice throws on invoice-fetch error (no silent skip)',
   /if \(r && r\.error\) \{ throw r\.error; \} \/\/ v55\.83-IM/.test(br));
 
 // 3 — applyToInvoice surfaces read error (overpayment classified correctly)
-ok('3: applyToInvoice throws on paid-now read error', /if \(pr && pr\.error\) \{ throw pr\.error; \}/.test(br));
+// v55.83-IP: the match paid-now/overpayment logic moved server-side (RLS bypass). Assert the server
+// endpoint surfaces the invoice-payment read error instead of proceeding on assumed-empty data.
+ok('3: match endpoint surfaces the invoice-payment read error (server-side)',
+  /if \(invPayR && invPayR\.error\) \{ return NextResponse\.json\(\{ ok: false/.test(rd('src/app/api/accounting/bank-write/route.js')));
 
 // 4 — over-apply cap: cumulative posted from a deposit can't exceed it
 ok('4: applyToInvoice caps cumulative application at the deposit amount',

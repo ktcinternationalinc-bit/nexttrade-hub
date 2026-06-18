@@ -46,9 +46,10 @@ ok('1c: only reverses still-open credits',
 ok('1d: the credit reversal is non-fatal (cannot break unmatch)',
   /customer_credits[\s\S]{0,400}non-fatal/.test(unmatchSrc) || /customer_credits[\s\S]{0,400}function \(e\)/.test(unmatchSrc));
 
-// 2. the overpayment credit insert stamps source_transaction_id so the scope above is valid
-ok('2a: overpayment credit insert stamps source_transaction_id: t.id',
-  /customer_credits[\s\S]{0,300}source_transaction_id:\s*t\.id/.test(bank));
+// 2. the overpayment credit insert stamps source_transaction_id so the scope above is valid.
+// v55.83-IP: the match/credit write moved server-side (RLS bypass) — assert it there.
+ok('2a: overpayment credit insert stamps source_transaction_id: t.id (server-side)',
+  /customer_credits[\s\S]{0,400}source_transaction_id:\s*t\.id/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8')));
 
 // 3. document the intentional non-reversal of unapplied_deposits on unmatch
 ok('3a: unmatch does NOT blanket-void unapplied_deposits by bank_transaction_id',

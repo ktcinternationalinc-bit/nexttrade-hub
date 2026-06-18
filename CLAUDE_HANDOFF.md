@@ -147,6 +147,23 @@ Confirm or refute these before go-live; write findings at top of your file:
 ## IH — Inventory receipt-status shared constant (drift prevention)
 Extracted isCountableReceipt() to lib/inventory-receipts.js; Overview + ReportCenter import it (were duplicate inline filters → the GX drift class). Test added (15 assertions). Audit's other inventory items verified FALSE POSITIVE (UOM_RANK already has sqm). No SQL.
 
+## 🎯 CORE WORKFLOW DIRECTIVE (Max, non-negotiable) — for Codex + Claude
+The central, must-work accounting workflow of the entire system:
+1. Bank transactions appear in the Hub.
+2. Transactions are categorized inside the Hub.
+3. Transactions are linked to the correct invoices where applicable.
+4. The Hub clearly shows the transaction↔invoice relationship.
+5. Categorized/linked data transfers correctly to Wave.
+6. Wave reflects the correct invoice/payment/accounting status after transfer.
+7. Deleting / editing / re-categorizing updates the Hub AND Wave with no stale or incorrect data.
+Test end-to-end from the Accounting tab, the Banking tab, AND the Wave Sync side until the full loop works. This is the project's most important function — partial patches are not acceptable.
+
+### STATUS (v55.83-IP) — root cause found + addressed in code
+- **ROOT CAUSE of "categorize/link doesn't save / can't reach Wave":** Bank Review wrote directly from the browser (Supabase client = `authenticated` role, subject to RLS). The app authenticates by EMAIL so `users.id != auth.uid()`; any auth.uid()-keyed RLS policy on the LIVE DB filtered those UPDATE/INSERTs to **0 rows with no error** → saves silently did nothing → nothing could transfer to Wave.
+- **FIX (IP):** new `/api/accounting/bank-write` route does the core writes with the **service-role key (bypasses RLS)** + `assertPermission`. BankReviewTab now routes set_status / classify / set_wave_category / **match_invoice** / unmatch through it. match_invoice is atomic server-side (match + payment + overpayment credit + bank-txn relationship stamp + canonical recompute, rollback on payment failure). This makes steps 1-4 + 7 work **regardless of live RLS state**.
+- **Steps 5-6 (transfer to Wave):** once linked, the payment is a pushable row in Wave Sync; it pushes after its invoice+customer are in Wave (invoice push auto-approves drafts — IN). Currency verified on push (IN).
+- **Still recommended:** run `sql/v55-83-IN-rls-open-all-accounting.sql` so direct reads/other tables are open too. **Codex: please QA the IP server-write path end-to-end and the live push (steps 5-6) on KANDIL.**
+
 ## 🧭 DECISION LOG (Claude, per Max: "decide best move when away; consult Codex/GPT; note it")
 - **(Max request) FINAL MAJOR QA REVIEW of Wave↔Hub + banking matching + accounting → shipped v55.83-IM.** Ran 4 parallel deep-review agents (Hub→Wave push, Wave→Hub sync, banking match/unmatch, accounting correctness), then VERIFIED every finding against the code myself (caught that the "statement double-credit" finding was a symptom of the import double-count root cause, not separate). FIXED (verified, low-risk, clearly correct):
   1. `import-invoices` ignored `ppRes.error` on the Hub-pushed-payment subtraction → on a transient query failure it zeroed the guard and **double-counted** paid amounts across the whole app. Now checks error + ABORTS the import.

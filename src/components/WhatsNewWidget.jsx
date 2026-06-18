@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IP',
+    date: '2026-06-18',
+    label: 'Accounting/Banking CORE: categorize + link-to-invoice now persist reliably (server-side, RLS-proof)',
+    items: [
+      '**🏦 The core banking workflow is now reliable.** Categorizing a bank transaction, linking it to an invoice, and saving review status all now persist for sure — they no longer depend on a database security setting that was silently dropping the writes. Once linked, the payment shows in Wave Sync ready to push to Wave.',
+      { superAdminOnly: true, text: 'v55.83-IP — ROOT CAUSE of "categorize/link doesn\'t save / can\'t reach Wave": Bank Review wrote directly from the browser via the Supabase client (authenticated role), which is subject to RLS. The app authenticates by EMAIL so users.id != auth.uid(); any auth.uid()-keyed RLS policy on the live DB filtered those UPDATE/INSERTs to 0 rows (no error) → saves silently did nothing → nothing could transfer to Wave. FIX: new server route /api/accounting/bank-write performs the core writes with the SERVICE-ROLE key (bypasses RLS) + assertPermission per action. BankReviewTab now routes through it: set_status (Save reviewed/Approve), classify + set_wave_category (categorize), and match_invoice (link deposit→invoice) — the match is fully atomic server-side (payment_matches + accounting_invoice_payments + overpayment credit + bank-txn relationship stamp + canonical recompute, with rollback of the match row if the payment insert fails). unmatch also handled (blocks reversing a Wave-synced payment). This makes the core workflow work REGARDLESS of the live RLS state, so it no longer depends on running sql/v55-83-IN-rls-open-all-accounting.sql (still recommended to run so direct reads/other tables are open). Test test-v55-83-ip-bank-write-serverside.js (16 assertions). After this: bank txn → categorize/link in Hub (persists) → appears as a pushable payment in Wave Sync → push to Wave (once its invoice+customer are in Wave, which auto-approve handles). Split-mode writes still client-side (next pass).' },
+    ],
+  },
+  {
+    version: 'v55.83-IO',
+    date: '2026-06-18',
+    label: 'Inventory: deleting an inbound-shipment product now updates the blotter (real fix)',
+    items: [
+      '**🗑️ Deleting a product from an inbound shipment now actually removes it** — immediately, and it stays removed after refresh. Before, deleting a line only dropped it from the screen; the database row was never cancelled, so the blotter kept counting the deleted product (skewing qty, rolls, weight, value, and SKU totals).',
+      '**📊 The receiving blotter no longer counts deleted lines** — cancelled/reversed lines are excluded from each shipment\'s quantity, cost, and line-count totals (and from the expanded detail), so totals are correct.',
+      { superAdminOnly: true, text: 'v55.83-IO — TWO compounding bugs found + fixed in InventoryReceiving.jsx. (1) removeLine() only spliced local state and the saveReceipt() line loop only updated/inserted lines present in state — it NEVER cancelled the removed line\'s inventory_stock_receipts row, so the deleted line stayed status=received and kept counting (persisted, survived refresh). Now removeLine() is async: for a saved line (existing_id) it confirms, soft-cancels the DB row (status=cancelled + cancelled_at/by), deletes its rolls, and calls reload() so the blotter updates instantly without a manual refresh; blank/unsaved lines just splice. (2) the grouped blotter built totals (totalQty/totalCost/lineCount) and detail over ALL grouped rows including cancelled/reversed — now it filters allRows → rows excluding cancelled/reversed and derives header/status from the first live row, so deleted lines never inflate totals and a partially-cancelled shipment shows the correct live status. Overview + ReportCenter already exclude deleted receipts via isCountableReceipt (v55.83-IH). Whole-shipment delete already soft-cancels all lines + reverses cost layers. Test test-v55-83-io-receiving-delete-blotter.js (9 assertions). No SQL. NOTE: soft-delete (status=cancelled), restorable by admin; movements ledger is a separate audit surface and is unaffected.' },
+    ],
+  },
+  {
     version: 'v55.83-IN',
     date: '2026-06-17',
     label: 'Wave invoices: no more "DRAFT / needs status repair" dead-end — one-click + auto approve',

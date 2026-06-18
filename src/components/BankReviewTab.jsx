@@ -227,6 +227,16 @@ export default function BankReviewTab(props) {
   function isLocked(t) { return t && t.review_status === 'approved'; }
 
   // ---- mutations ----
+  // v55.83-IP — route core Bank Review writes through the SERVICE-ROLE server endpoint so they
+  // bypass row-level-security (the app authenticates by email, so client writes were being silently
+  // filtered to 0 rows by auth.uid()-based RLS). Returns the parsed JSON or throws with the reason.
+  function bankWrite(action, payload) {
+    var bodyObj = Object.assign({ action: action, user_id: userProfile && userProfile.id }, payload || {});
+    return fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'Server rejected the write.'); } return j; });
+  }
+
   function patchTxn(t, patch, activity) {
     // v55.83-IN — return the updated row so callers can VERIFY the write actually persisted
     // (a silent 0-row / RLS-filtered update would otherwise look like a successful save).
@@ -242,10 +252,10 @@ export default function BankReviewTab(props) {
     // (category_status doubles as the bank-txn Wave-sync flag). This is what makes it appear in
     // the Wave Sync Center (as Hub-only/unsupported for now) instead of silently staying hidden.
     var clsPatch = { classification: cls, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status, category_status: 'pending_wave_sync', category_source: t.category_source || 'classification' };
-    patchTxn(t, clsPatch,
-      'Classified bank txn ' + (t.name || t.id) + ' as ' + cls + ' (queued for Wave sync)')
+    // v55.83-IP — service-role endpoint (bypasses RLS) so the categorization persists.
+    bankWrite('classify', { bank_transaction_id: t.id, patch: clsPatch })
       .then(function () { toast.success('Classified as ' + labelize(cls)); setSel(Object.assign({}, t, clsPatch)); load(); })
-      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Could not classify: ' + ((e && e.message) || 'unknown error') + ' (screenshot for Claude)'); })
       .finally(function () { setBusy(false); });
   }
 
@@ -264,9 +274,10 @@ export default function BankReviewTab(props) {
       patch = { wave_account_id: cat.wave_account_id, wave_account_name: cat.wave_account_name, wave_account_type: cat.type || null, wave_account_subtype: cat.subtype || null, category_source: 'wave', category_status: 'pending_wave_sync', review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status };
     }
     setBusy(true);
-    patchTxn(t, patch, 'Set Wave category on bank txn ' + (t.name || t.id) + (accountId ? (' = ' + patch.wave_account_name) : ' (cleared)'))
+    // v55.83-IP — service-role endpoint (bypasses RLS) so the Wave category persists.
+    bankWrite('set_wave_category', { bank_transaction_id: t.id, patch: patch })
       .then(function () { setSel(Object.assign({}, t, patch)); toast.success(accountId ? ('Wave category: ' + patch.wave_account_name) : 'Category cleared'); load(); })
-      .catch(function (e) { console.error('[wave-cat] save', e); toast.error('Could not save category — has the bank_transactions category SQL been run? ' + ((e && e.message) || '')); })
+      .catch(function (e) { console.error('[wave-cat] save', e); toast.error('Could not save category: ' + ((e && e.message) || 'unknown error') + ' (screenshot for Claude)'); })
       .finally(function () { setBusy(false); });
   }
 
@@ -292,20 +303,13 @@ export default function BankReviewTab(props) {
     var reason = '';
     if (reasonRequired) { reason = window.prompt('Reason for marking ' + labelize(status) + ':') || ''; if (!reason.trim()) { toast.error('Reason required.'); return; } }
     setBusy(true);
-    var patch = { review_status: status };
-    if (status === 'reviewed') { patch.reviewed_by = userProfile && userProfile.id; patch.reviewed_at = new Date().toISOString(); }
-    if (reason) patch.notes = ((t.notes || '') + (t.notes ? ' | ' : '') + labelize(status) + ': ' + reason.trim());
-    patchTxn(t, patch, 'Marked bank txn ' + (t.name || t.id) + ' ' + status + (reason ? (' (' + reason.trim() + ')') : ''))
-      .then(function (row) {
-        // v55.83-IN — VERIFY the DB actually persisted the new status. If the returned row doesn't
-        // reflect it, the write was silently rejected (almost always a row-level-security policy on
-        // bank_transactions) — say so loudly instead of pretending it saved.
-        console.log('[setStatus] result for', t.id, '→', status, ':', row);
-        if (row && row.review_status === status) {
-          toast.success('Marked ' + labelize(status));
-        } else {
-          toast.error('Save did NOT persist — the database returned ' + (row ? ('status "' + (row.review_status || 'empty') + '"') : 'no row') + '. This is almost certainly a row-level-security policy on bank_transactions blocking the update. Screenshot this for Claude.');
-        }
+    var noteVal = reason ? ((t.notes || '') + (t.notes ? ' | ' : '') + labelize(status) + ': ' + reason.trim()) : null;
+    // v55.83-IP — go through the service-role endpoint (bypasses RLS) so the status actually persists.
+    bankWrite('set_status', { bank_transaction_id: t.id, status: status, notes: noteVal })
+      .then(function (j) {
+        var row = j && j.row;
+        if (row && row.review_status === status) { toast.success('Marked ' + labelize(status)); }
+        else { toast.error('Saved, but the status did not read back as expected. Refresh and verify.'); }
         load(); setSel(null);
       })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error') + ' (screenshot this for Claude)'); })
@@ -315,15 +319,12 @@ export default function BankReviewTab(props) {
   function approve(t) {
     if (!mayMatch && !isSuperAdmin) { toast.error('Approval requires Payments: Match (or admin).'); return; }
     setBusy(true);
-    patchTxn(t, { review_status: 'approved', reviewed_by: userProfile && userProfile.id, reviewed_at: new Date().toISOString() },
-      'Approved bank txn ' + (t.name || t.id))
-      .then(function (row) {
-        console.log('[approve] result for', t.id, ':', row);
-        if (row && row.review_status === 'approved') {
-          toast.success('Approved & locked');
-        } else {
-          toast.error('Approve did NOT persist — the database returned ' + (row ? ('status "' + (row.review_status || 'empty') + '"') : 'no row') + '. Likely a row-level-security policy on bank_transactions. Screenshot this for Claude.');
-        }
+    // v55.83-IP — service-role endpoint (bypasses RLS).
+    bankWrite('set_status', { bank_transaction_id: t.id, status: 'approved' })
+      .then(function (j) {
+        var row = j && j.row;
+        if (row && row.review_status === 'approved') { toast.success('Approved & locked'); }
+        else { toast.error('Saved, but did not read back as approved. Refresh and verify.'); }
         load(); setSel(null);
       })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Approve failed: ' + ((e && e.message) || 'unknown error') + ' (screenshot this for Claude)'); })
@@ -541,68 +542,27 @@ export default function BankReviewTab(props) {
       return;
     }
     setBusy(true);
-    var biz = t.business_id || (inv ? inv.business_id : null);
     var siloId = activeBiz || (inv && inv.wave_business_id) || t.wave_business_id || null; // v55.83-DZ
-    var createdMatchId = null; // v55.83-IN — track the match row so we can void it if the payment insert fails (atomicity)
-    // Compute CURRENT paid from live payment rows (not stale inv.amount_paid) so a second
-    // deposit against the same invoice classifies partial/full/overpayment correctly.
-    supabase.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv.id).then(function (pr) {
-      // v55.83-IM (QA fix) — check pr.error: a failed read would set existingHub=0, understate
-      // paidNow, and misclassify a real overpayment as partial/full — so the excess would NOT be
-      // routed to customer_credits and the money would vanish from the books. Surface instead.
-      if (pr && pr.error) { throw pr.error; }
-      var waveImp = Number(inv.wave_imported_paid) || 0;
-      var existingHub = 0;
-      ((pr && pr.data) || []).forEach(function (p) { if (!isPaymentVoid(p)) { existingHub += Number(p.amount) || 0; } });
-      var paidNow = roundMoney(waveImp + existingHub);
-      var c = classifyApplication(invoiceTotal(inv), paidNow, apply);
-      return dbInsert('payment_matches', {
-        business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, invoice_id: inv.id,
-        matched_amount: c.applied_to_invoice, match_type: c.type, is_manual_override: false,
-        notes: mNotes || null, matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id,
-      }, userProfile && userProfile.id)
-      .then(function (matchRow) {
-        createdMatchId = matchRow && matchRow.id; // v55.83-IN — remember for rollback if the payment insert fails
-        return createInvPaymentRow(inv, t, c.applied_to_invoice, createdMatchId, mNotes);
-      })
-      .then(function () {
-        var chain = recomputeInvoice(inv.id);
-        // v55.83-HN (bug fix) — an overpayment is real money beyond the invoice balance and is NOT
-        // captured by the payment row (which records only applied_to_invoice). Previously the credit
-        // was created ONLY when the form had mCustomerId, so an overpayment matched without picking a
-        // customer silently vanished from the books. Default to the INVOICE's customer; if there is
-        // truly none, park it as an unapplied_deposit so the money is always tracked.
-        if (c.overpayment > 0) {
-          var creditCustId = mCustomerId || inv.accounting_customer_id || null;
-          chain = chain.then(function () {
-            if (creditCustId) {
-              return dbInsert('customer_credits', { business_id: biz, wave_business_id: siloId, accounting_customer_id: creditCustId, source_transaction_id: t.id, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (inv.invoice_number || inv.id), created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
-            }
-            return dbInsert('unapplied_deposits', { business_id: biz, wave_business_id: siloId, bank_transaction_id: t.id, accounting_customer_id: null, amount: c.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (inv.invoice_number || inv.id) + ' (invoice had no customer)', created_by: userProfile && userProfile.id }, userProfile && userProfile.id);
-          });
-        }
-        return chain;
-      })
-      .then(function () {
-        return patchTxn(t, { classification: t.classification || 'customer_payment', accounting_customer_id: mCustomerId || t.accounting_customer_id, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status },
-          'Matched ' + fmt(c.applied_to_invoice) + ' from bank txn to invoice ' + (inv.invoice_number || inv.id) + (c.overpayment > 0 ? (' (+' + fmt(c.overpayment) + ' credit)') : ''));
-      })
-      .then(function () {
-        toast.success('Matched ' + fmt(c.applied_to_invoice) + (c.type === 'partial' ? ' (partial)' : '') + (c.overpayment > 0 ? ' · ' + fmt(c.overpayment) + ' to customer credit' : ''));
+    var custForWave = acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; });
+    // v55.83-IP — the ENTIRE match (match row + payment row + recompute + overpayment credit +
+    // bank-txn stamp) is now done atomically server-side with the service-role key (bypasses RLS,
+    // which was silently dropping these writes). One call, all-or-nothing, anti-double-count enforced.
+    bankWrite('match_invoice', {
+      txn: { id: t.id, business_id: t.business_id, wave_business_id: t.wave_business_id, amount_abs: t.amount_abs, amount: t.amount, posted_date: t.posted_date, date: t.date, classification: t.classification, accounting_customer_id: t.accounting_customer_id, review_status: t.review_status },
+      invoice: { id: inv.id, business_id: inv.business_id, wave_business_id: inv.wave_business_id, total_amount: invoiceTotal(inv), wave_imported_paid: inv.wave_imported_paid, accounting_customer_id: inv.accounting_customer_id, invoice_number: inv.invoice_number, wave_invoice_id: inv.wave_invoice_id },
+      amount: apply,
+      wave_business_id: siloId,
+      wave_customer_id: custForWave && custForWave.wave_customer_id ? custForWave.wave_customer_id : null,
+      match_customer_id: mCustomerId || null,
+      credit_customer_id: mCustomerId || inv.accounting_customer_id || null,
+      notes: mNotes || null
+    })
+      .then(function (j) {
+        toast.success('Matched ' + fmt(j.applied) + (j.type === 'partial' ? ' (partial)' : '') + (j.overpayment > 0 ? ' · ' + fmt(j.overpayment) + ' to customer credit' : ''));
         onReload(); load();
-      });
-    })
-    .catch(function (e) {
-      console.error('[save] Match failed: ', e);
-      // v55.83-IN — ATOMICITY: if the payment row (or recompute) failed AFTER the match row was
-      // created, void the orphan match so it can't show a phantom "Matched" badge with no payment.
-      if (createdMatchId) {
-        dbUpdate('payment_matches', createdMatchId, { voided: true }, userProfile && userProfile.id)
-          .then(function () { load(); }).catch(function (e2) { console.error('[save] orphan match void failed', e2); });
-      }
-      toast.error('Match failed: ' + ((e && e.message) || 'unknown error') + (createdMatchId ? ' (rolled back the partial match)' : '') + ' — screenshot this for Claude.');
-    })
-    .finally(function () { setBusy(false); });
+      })
+      .catch(function (e) { console.error('[save] Match failed: ', e); toast.error('Match failed: ' + ((e && e.message) || 'unknown error') + ' — screenshot this for Claude.'); })
+      .finally(function () { setBusy(false); });
   }
   function createUnapplied() {
     var t = sel; if (!t || !mayMatch) return;
