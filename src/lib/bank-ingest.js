@@ -40,13 +40,18 @@ export function deriveAccountInfo(t, accountsById) {
   return { account_type: type, account_subtype: subtype, unsupported_account: unsupported };
 }
 
-export function mapPlaidTransaction(t, conn, accountsById) {
+// v55.83-IV — acctSiloMap (optional 4th arg): { [plaid_account_id]: wave_business_id }. When the
+// transaction's own account has an explicit silo assignment, that WINS over the connection default,
+// so a connection holding accounts in different silos (6338 vs 6353) stamps each row correctly.
+export function mapPlaidTransaction(t, conn, accountsById, acctSiloMap) {
   var amount = Number(t.amount);
   var acct = deriveAccountInfo(t, accountsById);
+  var connBiz = conn ? (conn.wave_business_id || null) : null;
+  var acctBiz = (acctSiloMap && t && t.account_id && acctSiloMap[t.account_id]) ? acctSiloMap[t.account_id] : null;
   return {
     connection_id: conn ? conn.id : null,
     business_id: conn ? (conn.business_id || null) : null,
-    wave_business_id: conn ? (conn.wave_business_id || null) : null,
+    wave_business_id: acctBiz || connBiz,
     bank_source: conn ? (conn.institution_name || conn.bank_name || null) : null,
     plaid_transaction_id: t.transaction_id,
     account_id: t.account_id,

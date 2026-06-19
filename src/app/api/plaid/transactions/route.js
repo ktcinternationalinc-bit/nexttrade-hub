@@ -63,7 +63,25 @@ export async function POST(req) {
     // (depository vs credit). Credit/loan accounts get flagged unsupported.
     var accountsById = {};
     (data.accounts || []).forEach(function (a) { if (a && a.account_id) accountsById[a.account_id] = a; });
-    var rows = rawTxns.map(function (t) { return mapPlaidTransaction(t, conn, accountsById); });
+
+    // v55.83-IV — ACCOUNT-LEVEL silo: build a map of plaid_account_id -> wave_business_id from the
+    // per-account assignment, so each transaction is stamped by its OWN account (6338 vs 6353), not
+    // the whole connection. Also UPSERT plaid_accounts (names/masks) WITHOUT clobbering the assignment.
+    var acctSiloMap = {};
+    try {
+      var paRes = await supabase.from('plaid_accounts').select('plaid_account_id, wave_business_id').eq('connection_id', conn.id);
+      ((paRes && paRes.data) || []).forEach(function (a) { if (a && a.plaid_account_id && a.wave_business_id) { acctSiloMap[a.plaid_account_id] = a.wave_business_id; } });
+    } catch (eMap) {}
+    if (data.accounts && data.accounts.length) {
+      var paRows = data.accounts.map(function (a) {
+        return { connection_id: conn.id, plaid_account_id: a.account_id, name: a.name || null, official_name: a.official_name || null, mask: a.mask || null, type: a.type || null, subtype: a.subtype || null };
+      });
+      // upsert names/masks; assignment columns are intentionally NOT in the payload so existing
+      // wave_business_id assignments are preserved across syncs.
+      try { await supabase.from('plaid_accounts').upsert(paRows, { onConflict: 'plaid_account_id' }); } catch (ePA) { console.warn('[plaid] plaid_accounts upsert failed:', (ePA && ePA.message) || ePA); }
+    }
+
+    var rows = rawTxns.map(function (t) { return mapPlaidTransaction(t, conn, accountsById, acctSiloMap); });
 
     var synced = 0;
     if (rows.length > 0) {

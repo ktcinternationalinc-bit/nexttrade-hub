@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IV',
+    date: '2026-06-19',
+    label: 'Banking: assign each bank ACCOUNT to its own silo (6338 → KTC, 6353 → Kandil)',
+    items: [
+      '**🏦 Each bank account can now be assigned to its own silo** — not just the whole connection. In the Bank tab, every account shows a silo selector and a "Set & repair" button: it assigns that account and instantly re-files its existing transactions to the correct silo. So a single bank login holding both a KTC account (··6338) and a Kandil account (··6353) puts each under the right business.',
+      { superAdminOnly: true, text: 'v55.83-IV (Codex launch-blocker: connection-level mapping bled accounts across silos). (1) sql/v55-83-IV-account-level-silo.sql adds plaid_accounts.wave_business_id + assigned_by/at + assignment_source. (2) bank-ingest.mapPlaidTransaction takes acctSiloMap (plaid_account_id→wave_business_id); the account assignment WINS over the connection default, falls back to connection when unassigned. (3) /api/plaid/transactions builds acctSiloMap from plaid_accounts, UPSERTS plaid_accounts names/masks (preserving assignment), passes the map to the mapper. (4) NEW /api/accounting/bank-write action assign_account_silo: sets the per-account silo + RESTAMPS existing bank_transactions by account_id (the repair) + audit. (5) BankTab per-account silo selector + "Set & repair". Behavioral test proves 6338→KTC, 6353→Kandil, unmapped→connection default; runner now includes db-bank-assign (account-level). SETUP: run sql/v55-83-IV. STILL OPEN (Codex): data-freshness strip (silo/account/newest date/count/last sync/filters) on both screens; super-admin diagnostic view for misassigned rows; proforma partial-import atomicity; live KTC/Kandil verification.' },
+    ],
+  },
+  {
     version: 'v55.83-IU',
     date: '2026-06-19',
     label: 'Wave estimate → Proforma import hardened (no silent partial imports)',

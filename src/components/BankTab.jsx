@@ -20,6 +20,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const [notice, setNotice] = useState('');
   const [bizRegistry, setBizRegistry] = useState([]);
   const [assignSel, setAssignSel] = useState({}); // { connId: wave_business_id }
+  const [acctAssignSel, setAcctAssignSel] = useState({}); // v55.83-IV — { plaid_account_id: wave_business_id }
   const [assigning, setAssigning] = useState(false);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [connectBizSel, setConnectBizSel] = useState('');
@@ -40,6 +41,20 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       try { await supabase.from('bank_data_assignment_audit').insert({ record_type: 'bank_connection', bank_connection_id: conn.id, transaction_count: cnt, old_wave_business_id: conn.wave_business_id || null, new_wave_business_id: bizId, assigned_by: (user && user.id) || null }); } catch (eA) { console.error('[bank-assign] audit', eA); }
       await loadData();
     } catch (e) { console.error('[bank-assign]', e); setError('Assign failed: ' + ((e && e.message) || e)); }
+    setAssigning(false);
+  };
+  // v55.83-IV — ACCOUNT-LEVEL assignment + repair via the service-role route (RLS-proof). Sets the
+  // per-account silo AND restamps existing transactions for that account so 6338/6353 land correctly.
+  const assignAccount = async (a) => {
+    const bizId = acctAssignSel[a.plaid_account_id] || a.wave_business_id;
+    if (!bizId) { setError('Choose a silo for this account.'); return; }
+    setAssigning(true); setError('');
+    try {
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'assign_account_silo', plaid_account_id: a.plaid_account_id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
+      const j = await res.json();
+      if (!j || !j.ok) { setError('Account assign failed: ' + ((j && j.error) || 'unknown')); }
+      else { setNotice('Account ··' + (a.mask || a.plaid_account_id) + ' assigned to ' + bizLabel(bizId) + ' — ' + (j.restamped || 0) + ' transaction(s) restamped.'); await loadData(); }
+    } catch (e) { setError('Account assign failed: ' + ((e && e.message) || e)); }
     setAssigning(false);
   };
   useEffect(() => { fetchAllRows('wave_business_registry', '*').then((r) => setBizRegistry((r && r.data) || [])).catch(() => {}); }, []);
@@ -391,12 +406,21 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                         var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
                         var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
                         return (
-                          <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100">
+                          <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100 gap-2 flex-wrap">
                             <div className="text-xs text-slate-900">
                               <span className="font-semibold">{nm}</span>{a.mask ? <span className="font-mono text-slate-600"> ··{a.mask}</span> : null}
                               {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
+                              <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
                             </div>
-                            <div className="text-[10px] text-slate-500">{cnt} transaction{cnt === 1 ? '' : 's'}</div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}</span>
+                              {/* v55.83-IV — account-level silo assignment + repair (super-admin / bank.classify) */}
+                              <select value={acctAssignSel[a.plaid_account_id] || a.wave_business_id || ''} onChange={function (e) { var v = e.target.value; setAcctAssignSel(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = v; return n; }); }} className="px-1 py-0.5 border border-slate-300 rounded text-[10px] text-slate-900 bg-white" title="Assign THIS account to a silo (6338 → Real KTC, 6353 → Kandil)">
+                                <option value="">— silo —</option>
+                                {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Prod)')}</option>; })}
+                              </select>
+                              <button onClick={function () { assignAccount(a); }} disabled={assigning} className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-[10px] font-bold rounded" title="Assign this account + restamp its existing transactions to the chosen silo">{assigning ? '…' : 'Set & repair'}</button>
+                            </div>
                           </div>
                         );
                       })}

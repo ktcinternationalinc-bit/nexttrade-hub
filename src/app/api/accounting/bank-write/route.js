@@ -159,6 +159,24 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, unmatched_invoices: ik.length, api_build_marker: API_BUILD_MARKER });
     }
 
+    // ── assign_account_silo: account-level bank→silo mapping + repair existing rows (v55.83-IV) ──
+    if (action === 'assign_account_silo') {
+      var pacct = body.plaid_account_id;
+      var newBiz = body.wave_business_id || null;
+      if (!pacct) { return NextResponse.json({ ok: false, error: 'plaid_account_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var nowIso = new Date().toISOString();
+      // 1) set the per-account assignment
+      var aRes = await db.from('plaid_accounts').update({ wave_business_id: newBiz, assigned_by: by, assigned_at: nowIso, assignment_source: 'manual' }).eq('plaid_account_id', pacct).select('id');
+      if (aRes && aRes.error) { return NextResponse.json({ ok: false, error: 'Could not set account assignment: ' + aRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // 2) REPAIR: restamp existing bank_transactions for this account to the new silo
+      var rRes = await db.from('bank_transactions').update({ wave_business_id: newBiz, updated_by: by }).eq('account_id', pacct).select('id');
+      if (rRes && rRes.error) { return NextResponse.json({ ok: false, error: 'Assignment saved but restamping existing transactions failed: ' + rRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var restamped = (rRes && rRes.data) ? rRes.data.length : 0;
+      // 3) audit
+      try { await db.from('bank_data_assignment_audit').insert({ record_type: 'plaid_account', transaction_count: restamped, new_wave_business_id: newBiz, assigned_by: by, notes: 'account-level assignment for plaid_account ' + pacct }); } catch (eAud) {}
+      return NextResponse.json({ ok: true, restamped: restamped, plaid_account_id: pacct, wave_business_id: newBiz, api_build_marker: API_BUILD_MARKER });
+    }
+
     return NextResponse.json({ ok: false, error: 'Unknown action: ' + action, api_build_marker: API_BUILD_MARKER }, { status: 400 });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
