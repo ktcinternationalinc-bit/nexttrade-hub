@@ -10,13 +10,40 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
-import { classifyApplication, roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
+import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus } from '../../../../lib/payment-matching';
 
 var API_BUILD_MARKER = 'v55.83-IP-bank-write';
 var API_ROUTE = '/api/accounting/bank-write';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+}
+
+// v55.83-JF — server-side money-conservation check for a bank transaction. This is the AUTHORITATIVE
+// gate: the route uses the service-role key (bypasses RLS), so the client-side allocation gating in
+// JC is not enough — a direct POST could otherwise approve a partially-allocated deposit. Sums every
+// piecewise disposition (non-void invoice payments + saved split lines + OPEN unapplied deposits) and
+// compares to the transaction amount. Returns the bankAllocationStatus verdict.
+async function allocationForTxn(db, txnId) {
+  var tR = await db.from('bank_transactions').select('amount, amount_abs').eq('id', txnId).limit(1);
+  if (tR && tR.error) { throw tR.error; }
+  var t = (tR && tR.data && tR.data.length) ? tR.data[0] : null;
+  if (!t) { return { missing: true }; }
+  var total = Number(t.amount_abs != null ? t.amount_abs : Math.abs(Number(t.amount) || 0));
+  var paid = 0; var split = 0; var unapplied = 0;
+  var pR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('bank_transaction_id', txnId);
+  if (pR && pR.error) { throw pR.error; }
+  var pr = (pR && pR.data) || []; var i;
+  for (i = 0; i < pr.length; i++) { if (!isPaymentVoid(pr[i])) { paid += Number(pr[i].amount) || 0; } }
+  var sR = await db.from('bank_transaction_splits').select('split_amount').eq('bank_transaction_id', txnId);
+  if (sR && sR.error) { throw sR.error; }
+  var sr = (sR && sR.data) || [];
+  for (i = 0; i < sr.length; i++) { split += Number(sr[i].split_amount) || 0; }
+  var uR = await db.from('unapplied_deposits').select('amount, status').eq('bank_transaction_id', txnId);
+  if (uR && uR.error) { throw uR.error; }
+  var ur = (uR && uR.data) || [];
+  for (i = 0; i < ur.length; i++) { if (!ur[i].status || ur[i].status === 'open') { unapplied += Number(ur[i].amount) || 0; } }
+  return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: unapplied });
 }
 
 // Server-side invoice recompute — mirrors BankReviewTab.recomputeInvoice + push-payment.
@@ -57,6 +84,15 @@ export async function POST(req) {
 
     // ── set_status: review status on a bank transaction ──
     if (action === 'set_status') {
+      // v55.83-JF — AUTHORITATIVE money-conservation gate. Block reviewed/approved server-side when
+      // the transaction is partially (or over-) allocated. This closes the direct-route bypass Codex
+      // flagged: the client gate alone could be skipped by POSTing straight to this service-role route.
+      if (body.status === 'reviewed' || body.status === 'approved') {
+        var alloc = await allocationForTxn(db, body.bank_transaction_id);
+        if (alloc && alloc.missing) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+        if (alloc && alloc.overAllocated) { return NextResponse.json({ ok: false, error: 'Over-allocated by ' + Math.abs(alloc.remaining) + ' — fix the lines before marking ' + body.status + '.', allocation: alloc, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+        if (alloc && !alloc.complete) { return NextResponse.json({ ok: false, error: alloc.remaining + ' of this ' + alloc.total + ' transaction is unallocated. Every dollar must be allocated (invoice payment / split / unapplied / explicit Uncategorized) before it can be ' + body.status + '.', allocation: alloc, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      }
       var sPatch = { review_status: body.status, updated_by: by };
       if (body.status === 'reviewed' || body.status === 'approved') { sPatch.reviewed_by = by; sPatch.reviewed_at = new Date().toISOString(); }
       if (body.notes != null) { sPatch.notes = body.notes; }

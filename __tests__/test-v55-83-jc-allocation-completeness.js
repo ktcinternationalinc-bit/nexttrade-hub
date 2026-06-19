@@ -61,6 +61,17 @@ ok('F1: match_invoice only auto-marks reviewed when the deposit is fully allocat
 ok('F2: match_invoice returns deposit_remaining + fully_allocated to the client',
   /deposit_remaining: depositRemaining, fully_allocated: fullyAllocated/.test(route));
 
+// --- G. Server set_status is the AUTHORITATIVE gate (closes the service-role bypass Codex flagged) ---
+ok('G1: bank-write computes server-side allocation (payments + splits + open unapplied)',
+  /async function allocationForTxn\(db, txnId\)/.test(route) &&
+  /from\('accounting_invoice_payments'\)\.select\('amount, voided, sync_status'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
+  /from\('bank_transaction_splits'\)\.select\('split_amount'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
+  /from\('unapplied_deposits'\)\.select\('amount, status'\)\.eq\('bank_transaction_id', txnId\)/.test(route));
+ok('G2: set_status blocks reviewed/approved server-side when not fully allocated (direct-route bypass closed)',
+  /if \(body\.status === 'reviewed' \|\| body\.status === 'approved'\) \{[\s\S]{0,600}allocationForTxn\(db, body\.bank_transaction_id\)/.test(route) &&
+  /if \(alloc && !alloc\.complete\)[\s\S]{0,160}is unallocated\./.test(route) &&
+  /if \(alloc && alloc\.overAllocated\)/.test(route));
+
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JC allocation-completeness tests passed'); process.exit(0); }
 else { console.log('❌ ' + failures.length + ' FAILED:'); failures.forEach(function (f) { console.log('   - ' + f); }); process.exit(1); }

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JF',
+    date: '2026-06-19',
+    label: 'Closed a back-door that could still approve a half-allocated bank transaction',
+    items: [
+      '**🔒 The "every dollar must be allocated" rule is now enforced on the server too.** The earlier money-conservation fix guarded the screen, but the underlying save route could still be reached directly. Now the server itself refuses to mark a transaction reviewed or approved unless invoice payments + splits + unapplied deposits add up to the full amount.',
+      { superAdminOnly: true, text: 'v55.83-JF (Codex P0 — JC service-role bypass). bank-write set_status was the authoritative write (service-role, bypasses RLS) but only the client gated allocation. Added allocationForTxn(db,txnId) (non-void payments + bank_transaction_splits + OPEN unapplied_deposits vs amount_abs) -> bankAllocationStatus; set_status now returns 409 + allocation detail when reviewed/approved on an incomplete or over-allocated txn. JC regression extended (G1/G2) so the suite fails if the bypass returns. Also hardened sql/v55-83-JE-visibility-window.sql for Codex schema-compat: ALTER ADD COLUMN IF NOT EXISTS + unique index on key so a pre-existing app_settings table still works with upsert(onConflict:key). NEXT: wire floorDateFor into Invoices/AR/Customer Ledger/Open Accounts (JE follow-through) + a cross-tab visibility regression.' },
+    ],
+  },
+  {
     version: 'v55.83-JE',
     date: '2026-06-19',
     label: 'NEW: admins can now set how far back staff see history (Settings → Accounting Visibility)',
