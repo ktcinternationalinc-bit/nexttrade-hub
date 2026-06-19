@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IR',
+    date: '2026-06-18',
+    label: 'Bank sync now tells you what happened (no more silent "nothing")',
+    items: [
+      '**🔄 Bank "Sync" now reports the result.** After syncing from the Bank tab you get a clear message — how many transactions Plaid returned, and a hint if none came in (widen the date range) or if they\'re scoped to a different silo than the one selected. No more clicking Sync and seeing nothing.',
+      { superAdminOnly: true, text: 'v55.83-IR. BankTab.syncTransactions now always sets a result notice (synced count + Plaid total-in-range + scope/date hint) instead of clearing the notice on success — the "sync does nothing" report was almost always (a) 0 new in the date window, or (b) synced rows scoped to a different silo than the one selected at top (loadData scopes bank_transactions by active wave_business_id via scopeIfRegistered). The /api/plaid/transactions route is sound: service-role upsert on plaid_transaction_id, surfaces upsert errors (500), requires the connection assigned to a silo. NEXT (backlog, see CLAUDE_HANDOFF STANDING DIRECTIVES): [A] admin history-visibility window (1mo/3mo/6mo/1yr/current-yr/custom; super-admin sees all) on Banking+Accounting; [B] Plaid link start-date + gap-free incremental sync from last received date.' },
+    ],
+  },
+  {
     version: 'v55.83-IQ',
     date: '2026-06-18',
     label: 'Wave estimates → Hub Proformas (per silo) + Wave categories in the categorize dropdown',

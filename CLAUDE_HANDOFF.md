@@ -147,6 +147,18 @@ Confirm or refute these before go-live; write findings at top of your file:
 ## IH — Inventory receipt-status shared constant (drift prevention)
 Extracted isCountableReceipt() to lib/inventory-receipts.js; Overview + ReportCenter import it (were duplicate inline filters → the GX drift class). Test added (15 assertions). Audit's other inventory items verified FALSE POSITIVE (UOM_RANK already has sqm). No SQL.
 
+## 🔒 STANDING DIRECTIVES (Max, locked in 2026-06-18)
+- **Team + roles:** GPT/Codex = top QA analyst + main business analyst (be adamant if Claude is wrong). Claude = developer (writes code) + may discuss/overwrite with reasoning. Max makes the final call. You're a team — and compared on who does the best job.
+- **Heartbeat (every 5 min, keep alive):** read Codex/GPT input from CODEX_QA_FEEDBACK.md (`cat`+sha, not Read tool), fix FAILs, then review Accounting + Banking end-to-end as a fresh BA + QA team looking for gaps/issues, follow up with Codex, suggest fixes. Then post Claude's report. Reschedule every fire.
+- **Priority order, always:** (1) core requirements to go LIVE today, (2) accuracy, (3) ease-of-use, (4) professionalism.
+- **Process:** never stage/commit CODEX_QA_FEEDBACK.md; SWC-safe API routes; bump badge+What's New each build; service-role server routes for accounting/bank writes (RLS trap).
+
+### 📋 FEATURE BACKLOG (Max, locked in — build via heartbeat by priority)
+- **[A] Admin history-visibility window.** Admin sets how far NON-super users can see back in Invoices, AR, and Bank transactions: 1mo / 3mo / 6mo / 1yr / current-year / custom. Applies to Banking tab + Accounting tabs. SUPER ADMIN sees ALL. Plaid still stores full history server-side. (Needs: a setting (per-business?) + client filters on invoice/AR/bank queries gated by role.)
+- **[B] Plaid linking start-date + gap-free incremental sync.** On (re)link, let the user pick the from-date to backfill. On normal sync, pull from the last received date forward AND verify completeness of history before the previous sync (no gaps). (Plaid transactionsSync cursor or date-window reconciliation.)
+- **[C] DONE/IR — bank sync feedback** (manual sync now reports synced count + scope/date hint instead of silent no-update). Verify the underlying sync persists for KTC live.
+- **[DONE IQ] estimates→proformas per silo; Wave categories in categorize dropdown (silo-scoped).**
+
 ## 🎯 CORE WORKFLOW DIRECTIVE (Max, non-negotiable) — for Codex + Claude
 The central, must-work accounting workflow of the entire system:
 1. Bank transactions appear in the Hub.

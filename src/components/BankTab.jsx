@@ -202,7 +202,14 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       }
       if (data.error) { setError(data.error); setSyncing(false); return; }
       await loadData();
-      setNotice('');
+      // v55.83-IR — never leave sync silent. Report exactly what Plaid returned so "nothing happened"
+      // becomes actionable (0 new, scoped to another silo, or widen the date range).
+      var syncedN = Number(data.synced) || 0;
+      var totalN = (data.total != null) ? Number(data.total) : null;
+      var msg = '✅ Synced ' + syncedN + ' transaction(s) from Plaid' + (totalN != null ? (' (Plaid reports ' + totalN + ' in the last ' + (parseInt(dateRange) || 30) + ' days)') : '') + '.';
+      if (syncedN === 0) { msg += ' No transactions in that window — widen the date range above, or this account may have no recent activity.'; }
+      else { msg += ' If you don\'t see them below, make sure the account\'s silo matches the one selected at the top (transactions are shown per silo).'; }
+      setNotice(msg);
     } catch (e) { setError(e.message); }
     setSyncing(false);
   };
