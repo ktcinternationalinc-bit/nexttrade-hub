@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IU',
+    date: '2026-06-19',
+    label: 'Wave estimate → Proforma import hardened (no silent partial imports)',
+    items: [
+      '**📄 Estimate imports no longer silently drop line items.** A proforma is only reported as a clean import if all its line items saved; any line failure is flagged and the run reports it (a proforma without its items is now caught, not trusted).',
+      { superAdminOnly: true, text: 'v55.83-IU (Codex FAILs on IQ). Root cause of silent partial: the line-item insert wrote created_by, which accounting_proforma_items does NOT have → every line failed and the old code swallowed it. Fixes: (1) line-item row writes only real columns (business_id/proforma_id/description/quantity/unit_price/line_total/sort_order) — no created_by; (2) capture EVERY line-item error in report.errors + flag the proforma PARTIAL + report.partial count, so a partial import is never reported clean (ok:false via errors); (3) line_total falls back to quantity×price and the header total falls back to the line sum when Wave returns 0/null (mirrors the hardened invoice importer); (4) sql/v55-83-IU-proforma-estimate-fixes.sql makes the dedup key PER-SILO (wave_business_id, wave_estimate_id) instead of global. IQ test strengthened (A9–A12); runner 20/20. SETUP: run the IU SQL. STILL OPEN (Codex, next): account-level Plaid→silo mapping + repair view + freshness strip; live per-silo estimate verification; rewrite stale dl-wave-sync test.' },
+    ],
+  },
+  {
     version: 'v55.83-IT',
     date: '2026-06-19',
     label: 'Banking: same account now shows the same newest transactions on every screen',

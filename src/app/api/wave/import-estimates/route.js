@@ -105,7 +105,23 @@ export async function POST(request) {
             }
           }
 
-          var total = r2(num(n.total));
+          // v55.83-IU (Codex FAIL) — prepare line items WITH a total fallback (quantity*price) like the
+          // hardened invoice importer, and derive the header total from the lines if Wave's total is 0/null.
+          var rawItems = n.items || [];
+          var preparedItems = []; var lineSum = 0; var pli;
+          for (pli = 0; pli < rawItems.length; pli++) {
+            var pit = rawItems[pli];
+            var lt = num(pit.total);
+            if (!lt) { lt = (Number(pit.quantity) || 1) * (Number(pit.price) || 0); }
+            lt = r2(lt); lineSum += lt;
+            preparedItems.push({
+              business_id: internalBusinessId, // accounting_proforma_items has no creator/audit column to set
+              description: (pit.product && pit.product.name ? (pit.product.name + (pit.description ? (' — ' + pit.description) : '')) : (pit.description || 'Item')),
+              quantity: Number(pit.quantity) || 1, unit_price: Number(pit.price) || 0, line_total: lt, sort_order: pli
+            });
+          }
+          lineSum = r2(lineSum);
+          var total = r2(num(n.total)) || lineSum;
           var fields = {
             business_id: internalBusinessId,
             wave_business_id: businessId,
@@ -140,19 +156,21 @@ export async function POST(request) {
             report.created++;
           }
 
-          // Line items: delete-then-insert (dedupe-safe), keyed on proforma_id.
+          // Line items: delete-then-insert (dedupe-safe), keyed on proforma_id. v55.83-IU — capture
+          // EVERY line-item error (no silent partial); if any line fails the proforma is flagged PARTIAL
+          // and the run is not reported clean.
           if (proformaId) {
             try { await admin.from('accounting_proforma_items').delete().eq('proforma_id', proformaId); } catch (eDel) {}
-            var items = n.items || []; var z;
-            for (z = 0; z < items.length; z++) {
-              var it = items[z];
-              var liRes = await admin.from('accounting_proforma_items').insert({
-                proforma_id: proformaId, business_id: internalBusinessId,
-                description: (it.product && it.product.name ? (it.product.name + (it.description ? (' — ' + it.description) : '')) : (it.description || 'Item')),
-                quantity: Number(it.quantity) || 1, unit_price: Number(it.price) || 0,
-                line_total: r2(num(it.total)), created_by: userId
-              });
-              if (liRes && !liRes.error) { report.lineItems++; }
+            var z; var lineFail = 0;
+            for (z = 0; z < preparedItems.length; z++) {
+              var row = Object.assign({ proforma_id: proformaId }, preparedItems[z]);
+              var liRes = await admin.from('accounting_proforma_items').insert(row);
+              if (liRes && liRes.error) { lineFail++; report.errors.push('Line item on estimate ' + (n.estimateNumber || n.id) + ' ("' + row.description + '"): ' + liRes.error.message); }
+              else { report.lineItems++; }
+            }
+            if (lineFail > 0) {
+              report.partial = (report.partial || 0) + 1;
+              report.errors.push('Estimate ' + (n.estimateNumber || n.id) + ': ' + lineFail + ' of ' + preparedItems.length + ' line item(s) FAILED — proforma imported PARTIAL (header only).');
             }
           }
 

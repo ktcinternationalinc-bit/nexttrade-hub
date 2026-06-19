@@ -31,6 +31,15 @@ ok('A6: SQL adds wave_business_id + currency + provenance to accounting_proforma
 ok('A7: Wave Import UI has an Import-estimates button + handler',
   /function runImportEstimates\(\)/.test(ui) && /\/api\/wave\/import-estimates/.test(ui) && /Import estimates into Hub/.test(ui));
 ok('A8: Proformas tab scopes rows by the active silo', /scopeIfRegistered\(\(isInvoice\(\) \? invoices : proformas\), waveBiz/.test(inv));
+// v55.83-IU hardening (Codex FAILs): no silent partial, total fallback, per-silo dedup, no bad column
+ok('A9: line-item insert captures EVERY error + flags PARTIAL (no silent partial import)',
+  /if \(liRes && liRes\.error\) \{ lineFail\+\+/.test(route) && /imported PARTIAL/.test(route));
+ok('A10: line + header totals fall back to quantity×price / line sum (mirror invoice importer)',
+  /lt = \(Number\(pit\.quantity\) \|\| 1\) \* \(Number\(pit\.price\) \|\| 0\)/.test(route) && /var total = r2\(num\(n\.total\)\) \|\| lineSum/.test(route));
+ok('A11: the line-item row (preparedItems) does NOT include the non-existent created_by column',
+  (function () { var m = route.match(/preparedItems\.push\(\{[\s\S]*?\}\);/); return m && m[0].indexOf('created_by') === -1; })());
+ok('A12: dedup index is per-silo (wave_business_id, wave_estimate_id)',
+  /uq_acct_proformas_wave_estimate_silo[\s\S]{0,120}\(wave_business_id, wave_estimate_id\)/.test(fs.readFileSync(path.join(__dirname, '..', 'sql', 'v55-83-IU-proforma-estimate-fixes.sql'), 'utf8')));
 
 // ---- B. Wave categories feed the categorize dropdown, scoped per silo ----
 ok('B1: Bank Review loads wave_categories and filters to the active silo',
