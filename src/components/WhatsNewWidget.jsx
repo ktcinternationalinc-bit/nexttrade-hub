@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JG',
+    date: '2026-06-19',
+    label: 'Sealed two more ways a half-allocated transaction could slip through',
+    items: [
+      '**🔒 Categorizing a transaction no longer auto-marks it reviewed if money is still unallocated.** Picking a classification or Wave category still saves, but it will not quietly flip a partly-matched deposit to "reviewed" — that now requires every dollar to be accounted for, same as the Approve button.',
+      '**🧮 Overpayments parked as customer credit now count as allocated.** Previously a deposit whose extra amount went to a customer credit could look short and get wrongly blocked; the money math now includes customer credits.',
+      { superAdminOnly: true, text: 'v55.83-JG (Codex JF review — 2 more P0s). (1) classify/set_wave_category patches carry review_status:reviewed to auto-advance; now if that promotion would fire, the route checks allocationForTxn and STRIPS review_status/reviewed_by/at when incomplete or over-allocated (categorization persists; auto-review gated) + returns auto_review_stripped. (2) allocationForTxn now also sums customer_credits by source_transaction_id (open) into the parked bucket, so overpayment-to-credit is not under-counted. JC regression extended G3/G4/G5. CAUTION carried from Codex: route tests are still static + runtime-math; a true HTTP direct-POST test needs a seeded DB (his live pass). REMAINING: move BankReview split/park writes off browser dbInsert to the service route (P1); wire visibility floor into Invoices/AR/Ledger/Open Accounts (P1); Plaid backfill/incremental (P1).' },
+    ],
+  },
+  {
     version: 'v55.83-JF',
     date: '2026-06-19',
     label: 'Closed a back-door that could still approve a half-allocated bank transaction',

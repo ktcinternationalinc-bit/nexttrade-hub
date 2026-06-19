@@ -43,6 +43,12 @@ async function allocationForTxn(db, txnId) {
   if (uR && uR.error) { throw uR.error; }
   var ur = (uR && uR.data) || [];
   for (i = 0; i < ur.length; i++) { if (!ur[i].status || ur[i].status === 'open') { unapplied += Number(ur[i].amount) || 0; } }
+  // v55.83-JG (Codex) — overpayment can land in customer_credits (keyed by source_transaction_id),
+  // not unapplied_deposits. Count it too, or an over-paid deposit looks under-allocated and is blocked.
+  var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
+  if (cR && cR.error) { throw cR.error; }
+  var cr = (cR && cR.data) || [];
+  for (i = 0; i < cr.length; i++) { if (!cr[i].status || cr[i].status === 'open') { unapplied += Number(cr[i].amount) || 0; } }
   return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: unapplied });
 }
 
@@ -106,10 +112,22 @@ export async function POST(req) {
     if (action === 'classify' || action === 'set_wave_category') {
       var cPatch = body.patch || {};
       cPatch.updated_by = by;
+      // v55.83-JG (Codex P0) — classify/set_wave_category patches carry review_status:'reviewed' to
+      // auto-advance an unreviewed txn. That bypassed the set_status money-conservation gate: a partly
+      // matched deposit could become reviewed just by picking a category. So if this patch would
+      // promote to reviewed/approved, verify full allocation first; if not fully allocated, STRIP the
+      // promotion (the categorization still saves, but the txn stays unreviewed until every dollar is
+      // allocated). Categorizing itself is always allowed — only the silent auto-review is gated.
+      var autoReviewStripped = false;
+      if (cPatch.review_status === 'reviewed' || cPatch.review_status === 'approved') {
+        var cAlloc = await allocationForTxn(db, body.bank_transaction_id);
+        if (cAlloc && cAlloc.missing) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+        if (cAlloc && (!cAlloc.complete || cAlloc.overAllocated)) { delete cPatch.review_status; delete cPatch.reviewed_by; delete cPatch.reviewed_at; autoReviewStripped = true; }
+      }
       var cRes = await db.from('bank_transactions').update(cPatch).eq('id', body.bank_transaction_id).select();
       if (cRes && cRes.error) { return NextResponse.json({ ok: false, error: cRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!(cRes && cRes.data && cRes.data.length)) { return NextResponse.json({ ok: false, error: 'No row updated (transaction not found).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
-      return NextResponse.json({ ok: true, row: cRes.data[0], api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── match_invoice: link a deposit to an invoice (the core workflow) ──

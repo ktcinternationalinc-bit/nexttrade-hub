@@ -71,6 +71,14 @@ ok('G2: set_status blocks reviewed/approved server-side when not fully allocated
   /if \(body\.status === 'reviewed' \|\| body\.status === 'approved'\) \{[\s\S]{0,600}allocationForTxn\(db, body\.bank_transaction_id\)/.test(route) &&
   /if \(alloc && !alloc\.complete\)[\s\S]{0,160}is unallocated\./.test(route) &&
   /if \(alloc && alloc\.overAllocated\)/.test(route));
+ok('G3: allocation math includes customer_credits (overpayment routed to a credit is not under-counted)',
+  /from\('customer_credits'\)\.select\('amount, status'\)\.eq\('source_transaction_id', txnId\)/.test(route));
+ok('G4: classify/set_wave_category strip the auto-review when the txn is not fully allocated (no category-side bypass)',
+  /cPatch\.review_status === 'reviewed' \|\| cPatch\.review_status === 'approved'/.test(route) &&
+  /delete cPatch\.review_status; delete cPatch\.reviewed_by; delete cPatch\.reviewed_at; autoReviewStripped = true/.test(route));
+// runtime: an overpayment parked as a customer credit completes the deposit (folds into the parked bucket)
+var withCredit = pm.bankAllocationStatus({ txnAmount: 1000, paid: 800, unapplied: 200 });
+ok('G5: 800 invoice payment + 200 parked (credit/unapplied) fully allocates a 1000 deposit', withCredit.complete === true && Math.abs(withCredit.remaining) < 0.001);
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JC allocation-completeness tests passed'); process.exit(0); }
