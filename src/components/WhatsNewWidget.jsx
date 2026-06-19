@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JE',
+    date: '2026-06-19',
+    label: 'NEW: admins can now set how far back staff see history (Settings → Accounting Visibility)',
+    items: [
+      '**📅 You can finally set the history window.** Go to **Settings → 📅 Accounting Visibility** (super admin). Choose how far back normal users can see: last 1 / 3 / 6 months, 1 year, current year, all history, or a custom number of days / start date. You (super admin) always see all stored history regardless of the setting.',
+      '**🔎 Every bank screen now shows a "Visibility" chip** with the active window and the cutoff date, plus the newest transaction date loaded — so it is obvious what is and isn\'t being shown (no more wondering if the screen is just stale). This is live on Bank Review and the Bank tab now; Invoices, AR, Customer Ledger and Open Accounts come next.',
+      { superAdminOnly: true, text: 'v55.83-JE (user P0 — "where do I set how far users can see"). NEW src/lib/visibility-window.js (pure: WINDOW_OPTIONS, floorDateFor({window,customDays,customFrom,isSuperAdmin}), isWithinWindow, labelForWindow). NEW /api/admin/visibility (service-role): GET reads app_settings[accounting_visibility_window]; POST is super-admin-gated, validates the window, degrades gracefully if the table is missing (points to SQL). NEW Settings panel AccountingVisibilityPanel (section accountingvis, super-admin). BankReviewTab.load + BankTab.loadData fetch the policy and .gte(posted_date, floor) for non-super-admins; both render a Visibility chip + newest-loaded date. SQL sql/v55-83-JE-visibility-window.sql (app_settings k/v) — MAX MUST RUN. Test test-v55-83-je (18 incl. runtime math). REMAINING: wire the same floor into Invoices / AR / Customer Ledger / Open Accounts queries (helper is ready — mechanical). Plaid backfill date + gap-free incremental sync still separate.' },
+    ],
+  },
+  {
     version: 'v55.83-JD',
     date: '2026-06-19',
     label: 'Approving an invoice now actually saves (it was silently doing nothing)',

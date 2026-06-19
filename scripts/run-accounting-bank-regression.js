@@ -35,6 +35,7 @@ var MANIFEST = [
   { f: 'test-v55-83-jb-draft-invoice-payment-block.js', label: 'new', why: 'matched payment to a DRAFT Wave invoice is blocked (not retryable) + Approve-invoice-in-Wave on the payment row; eligibility/dry-run reports DRAFT as blocked' },
   { f: 'test-v55-83-iz-registry-flags.js', label: 'new', why: 'production unlock + push flags save via service-role route (super-admin gated)' },
   { f: 'test-v55-83-jd-invoice-approval-serverside.js', label: 'new', why: 'invoice approve/submit/reopen persist via service-role route (was RLS-trapped browser dbUpdate)' },
+  { f: 'test-v55-83-je-visibility-window.js', label: 'new', why: 'admin history-visibility window: pure floor math + super-admin route + Bank Review/BankTab query clamp + settings UI' },
   { f: 'test-v55-83-fj-match-guards.js', label: 'must-pass', why: 'match guards' },
   { f: 'test-v55-83-fm-wave-categories.js', label: 'updated', why: 'Wave categories in categorize dropdown, silo-scoped' },
   { f: 'test-v55-83-ja-category-dropdown.js', label: 'new', why: 'categories load via service-role route (RLS-proof) + reason-specific empty state' },

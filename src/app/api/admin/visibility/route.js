@@ -1,0 +1,75 @@
+// /api/admin/visibility — v55.83-JE. ADMIN HISTORY-VISIBILITY WINDOW.
+// GET  -> returns the current org-wide visibility window (any authenticated caller may read it).
+// POST -> sets it (SUPER-ADMIN only). Stored in app_settings under 'accounting_visibility_window'.
+// Service-role (bypasses RLS); degrades gracefully to {window:'all'} if the app_settings table has
+// not been created yet (tells the admin to run sql/v55-83-JE-visibility-window.sql).
+// SWC-safe: var + string concat, no template literals/arrows/optional-chaining.
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { isValidWindowKey } from '../../../../lib/visibility-window';
+
+var API_BUILD_MARKER = 'v55.83-JE-visibility';
+var SETTING_KEY = 'accounting_visibility_window';
+var DEFAULT_VALUE = { window: 'all', customDays: null, customFrom: null };
+
+function admin() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+}
+
+async function readSetting(db) {
+  var res = await db.from('app_settings').select('value, updated_at, updated_by').eq('key', SETTING_KEY).limit(1);
+  if (res && res.error) { return { ok: false, error: res.error.message, value: DEFAULT_VALUE, table_missing: true }; }
+  var row = (res && res.data && res.data.length) ? res.data[0] : null;
+  return { ok: true, value: (row && row.value) || DEFAULT_VALUE, updated_at: row ? row.updated_at : null };
+}
+
+export async function GET() {
+  var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) { return NextResponse.json({ ok: true, value: DEFAULT_VALUE, note: 'server key missing — defaulting to all history', api_build_marker: API_BUILD_MARKER }); }
+  var db = admin();
+  var r = await readSetting(db);
+  // A missing table is not an error to the caller — it just means "no restriction set yet".
+  return NextResponse.json({ ok: true, value: r.value, updated_at: r.updated_at || null, table_missing: r.table_missing === true, api_build_marker: API_BUILD_MARKER });
+}
+
+export async function POST(req) {
+  var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) { return NextResponse.json({ ok: false, error: 'Server key missing (SUPABASE_SERVICE_ROLE_KEY).', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+  var db = admin();
+  try {
+    var body = await req.json();
+    var by = body.user_id || null;
+
+    // Super-admin only (real role check, not a client flag).
+    var isSuper = false;
+    if (by) {
+      var uRes = await db.from('users').select('role').eq('id', by);
+      var urow = (uRes && uRes.data && uRes.data.length) ? uRes.data[0] : null;
+      if (urow && urow.role === 'super_admin') { isSuper = true; }
+    }
+    if (!isSuper) { return NextResponse.json({ ok: false, error: 'Only a super admin can change the history-visibility window.', api_build_marker: API_BUILD_MARKER }, { status: 403 }); }
+
+    var win = String(body.window || '').trim();
+    if (!isValidWindowKey(win)) { return NextResponse.json({ ok: false, error: 'Invalid window "' + win + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    var customDays = null;
+    var customFrom = null;
+    if (win === 'custom') {
+      if (body.customFrom) { customFrom = String(body.customFrom).substring(0, 10); }
+      else { var cd = parseInt(body.customDays, 10); if (!(cd > 0)) { return NextResponse.json({ ok: false, error: 'Custom window needs a positive number of days or a from-date.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); } customDays = cd; }
+    }
+    var value = { window: win, customDays: customDays, customFrom: customFrom };
+
+    var up = await db.from('app_settings').upsert({ key: SETTING_KEY, value: value, updated_by: by, updated_at: new Date().toISOString() }, { onConflict: 'key' }).select();
+    if (up && up.error) {
+      var msg = up.error.message || '';
+      if (msg.indexOf('app_settings') >= 0 || msg.indexOf('does not exist') >= 0 || msg.indexOf('relation') >= 0) {
+        return NextResponse.json({ ok: false, error: 'The settings table is not set up yet. Run sql/v55-83-JE-visibility-window.sql, then try again. (' + msg + ')', api_build_marker: API_BUILD_MARKER }, { status: 400 });
+      }
+      return NextResponse.json({ ok: false, error: 'Could not save the window: ' + msg, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+    }
+    if (!(up && up.data && up.data.length)) { return NextResponse.json({ ok: false, error: 'Saved nothing (0 rows). Refresh and retry.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+    return NextResponse.json({ ok: true, value: value, api_build_marker: API_BUILD_MARKER });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
+  }
+}

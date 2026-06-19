@@ -4,6 +4,7 @@ import { fmtET } from '../lib/et-time';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 
 export default function BankTab({ user, supabase, modulePerms, userProfile, onGoToBankReview }) {
   const [connections, setConnections] = useState([]);
@@ -16,6 +17,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const [dateRange, setDateRange] = useState('30');
   const [acctFilter, setAcctFilter] = useState('all');
   const [viewRange, setViewRange] = useState('all');
+  const [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE admin visibility window
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [bizRegistry, setBizRegistry] = useState([]);
@@ -87,8 +89,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       const _activeBizScope = getActiveWaveBusiness();
       // v55.83-IT (Codex FAIL) — order by posted_date (canonical date) to match Bank Review, so the
       // same silo/account shows the same newest transaction on both screens.
+      // v55.83-JE — admin history-visibility window: clamp non-super-admins to the org policy.
+      let _visFloor = null;
+      try {
+        const _vr = await fetch('/api/admin/visibility').then(r => r.json()).catch(() => null);
+        if (_vr && _vr.value) { setVisCfg(_vr.value); _visFloor = floorDateFor({ window: _vr.value.window, customDays: _vr.value.customDays, customFrom: _vr.value.customFrom, isSuperAdmin }, new Date()); }
+      } catch (eVis) {}
       let _txq = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false });
       if (_activeBizScope) { _txq = _txq.eq('wave_business_id', _activeBizScope); }
+      if (_visFloor) { _txq = _txq.gte('posted_date', _visFloor); }
       const { data: txns } = await _txq.limit(500);
       setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));
       // v55.83-GG — auto-select this silo's default bank account (only while the filter is still
@@ -524,6 +533,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
               <option value="60">Last 60 days</option>
               <option value="90">Last 90 days</option>
             </select>
+            {(() => {
+              const f = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin }, new Date());
+              const lbl = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
+              return <span className="text-[11px] text-slate-500 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility).">· Visibility: <b className={f ? 'text-sky-600' : 'text-slate-700'}>{lbl}</b>{f ? ` (from ${f})` : ''}</span>;
+            })()}
           </div>
           {['all', 'unmatched', 'matched'].map(v => (
             <button key={v} onClick={() => setView(v)}

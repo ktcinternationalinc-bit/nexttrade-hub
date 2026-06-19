@@ -13,6 +13,7 @@ import {
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
 } from '../lib/bank-permissions';
 import { classifyApplication, computeInvoiceBalance, validateSplit, bankAllocationStatus, roundMoney, isPaymentVoid } from '../lib/payment-matching';
+import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -69,6 +70,9 @@ export default function BankReviewTab(props) {
   var [matchesByTxn, setMatchesByTxn] = useState({});
   var [paysByTxn, setPaysByTxn] = useState({});   // v55.83-ID — non-voided payment rows per bank txn (orphan detection)
   var [allocByTxn, setAllocByTxn] = useState({}); // v55.83-JC — {paid,split,unapplied} per bank txn (money-conservation gate)
+  var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE — admin history-visibility window
+  // The active date floor: null for super-admin or "all history". Normal users are clamped to it.
+  var visFloor = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date());
   var [acctCustomers, setAcctCustomers] = useState([]);
   var [acctInvoices, setAcctInvoices] = useState([]);
   var [registry, setRegistry] = useState([]);
@@ -99,14 +103,22 @@ export default function BankReviewTab(props) {
   var [waveCategories, setWaveCategories] = useState([]);
   var [catDiag, setCatDiag] = useState(null); // v55.83-JA — {total, usable, hidden_receivable, error} for the dropdown empty-state
 
-  function load() {
+  async function load() {
     setLoading(true);
     // v55.83-IT (Codex FAIL — data consistency) — scope by the active silo at the QUERY before the
     // 1000 limit, exactly like BankTab. Previously a global limit(1000) could fill up with other
     // silos' newer rows and leave the active silo a stale subset (KTC 6338 "stopping at June 11").
     var _activeBizRev = getActiveWaveBusiness();
+    // v55.83-JE — admin history-visibility window. Fetch the org policy, then clamp the query by
+    // posted_date for NON-super-admins. Super-admins (visFloor null) always see all stored history.
+    var _floor = visFloor;
+    try {
+      var _vr = await fetch('/api/admin/visibility').then(function (r) { return r.json(); }).catch(function () { return null; });
+      if (_vr && _vr.value) { setVisCfg(_vr.value); _floor = floorDateFor({ window: _vr.value.window, customDays: _vr.value.customDays, customFrom: _vr.value.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
+    } catch (eVis) {}
     var _txQRev = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false });
     if (_activeBizRev) { _txQRev = _txQRev.eq('wave_business_id', _activeBizRev); }
+    if (_floor) { _txQRev = _txQRev.gte('posted_date', _floor); }
     _txQRev = _txQRev.limit(1000);
     Promise.all([
       _txQRev,
@@ -716,12 +728,18 @@ export default function BankReviewTab(props) {
         var hidden = inSilo - showing;
         var acctName = fAccount === 'all' ? 'All accounts' : (function () { var a = accounts.find(function (x) { return x.id === fAccount; }); return a ? a.label : fAccount; })();
         var unassignedNote = txns.some(function (t) { return !t.wave_business_id; });
+        // v55.83-JE — data-freshness: newest loaded posted date + the active visibility window.
+        var newestLoaded = null;
+        txns.forEach(function (t) { var d = (t.posted_date || t.date || '').substring(0, 10); if (d && (!newestLoaded || d > newestLoaded)) { newestLoaded = d; } });
+        var winLabel = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
         return (
           <div className="mb-3 rounded-lg bg-slate-800 border border-slate-600 px-3 py-2 text-xs text-slate-100 flex flex-wrap gap-x-4 gap-y-1">
             <span>Silo transactions: <b className="text-white">{inSilo}</b></span>
             <span>Account: <b className="text-white">{acctName}</b></span>
             <span>Status filter: <b className="text-white">{fStatus === 'all' ? 'All' : fStatus}</b></span>
             <span>Showing: <b className="text-white">{showing}</b></span>
+            <span>Newest loaded: <b className="text-white">{newestLoaded || '—'}</b></span>
+            <span title="How far back history is shown. A super admin can change this in Settings → Accounting visibility.">Visibility: <b className={visFloor ? 'text-sky-300' : 'text-white'}>{winLabel}</b>{visFloor ? <span className="text-slate-400"> (from {visFloor})</span> : null}</span>
             {hidden > 0 && <span className="text-amber-300">Hidden by filters: <b>{hidden}</b>{fAccount !== 'all' ? ' (mostly other accounts — pick All accounts to see them)' : ''}</span>}
             {accounts.length > 1 && fAccount === 'all' && <span className="text-slate-400">{accounts.length} accounts in this silo</span>}
             {unassignedNote && <span className="text-amber-300 font-bold">⚠ Some bank transactions are unassigned — assign them on the Bank tab before matching.</span>}

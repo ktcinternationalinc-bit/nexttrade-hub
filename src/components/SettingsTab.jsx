@@ -6,6 +6,7 @@ import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
 import BusinessEntitiesPanel from './BusinessEntitiesPanel';
+import AccountingVisibilityPanel from './AccountingVisibilityPanel';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
 // Existing helper rejects both active===false AND active===null (legacy bug).
@@ -1219,7 +1220,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities'], ['accountingvis', '📅 Accounting Visibility']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -1235,6 +1236,11 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* ===== BUSINESS ENTITIES (SUPER ADMIN ONLY) v55.83-A.6.27.53 ===== */}
       {section === 'entities' && isSuperAdmin && (
         <BusinessEntitiesPanel userProfile={userProfile} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+
+      {/* ===== ACCOUNTING HISTORY VISIBILITY (SUPER ADMIN ONLY) v55.83-JE ===== */}
+      {section === 'accountingvis' && isSuperAdmin && (
+        <AccountingVisibilityPanel userProfile={userProfile} toast={toast} />
       )}
 
       {/* ===== CUSTOMS RATES (v55.51) ===== */}
