@@ -128,15 +128,23 @@ export async function POST(req) {
         }
       }
 
-      // 4) stamp the bank transaction so the Hub shows the relationship
-      var txnPatch = { classification: t.classification || 'customer_payment', accounting_customer_id: body.match_customer_id || t.accounting_customer_id || inv.accounting_customer_id || null, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status, updated_by: by };
+      // 4) stamp the bank transaction so the Hub shows the relationship.
+      // v55.83-JC — ACCOUNTING INTEGRITY (money conservation): only auto-flip an unreviewed deposit
+      // to 'reviewed' when this match (plus prior payments + the overpayment routed to credit/
+      // unapplied) FULLY allocates the deposit. A partial match must leave it unreviewed so the
+      // remaining amount is still surfaced for allocation — never silently "done".
+      var allocatedAfter = roundMoney(already + c.applied_to_invoice + (c.overpayment || 0));
+      var depositRemaining = depositAmt > 0 ? roundMoney(depositAmt - allocatedAfter) : 0;
+      var fullyAllocated = !(depositAmt > 0) || depositRemaining <= 0.01;
+      var nextStatus = (t.review_status === 'unreviewed' && fullyAllocated) ? 'reviewed' : t.review_status;
+      var txnPatch = { classification: t.classification || 'customer_payment', accounting_customer_id: body.match_customer_id || t.accounting_customer_id || inv.accounting_customer_id || null, linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, review_status: nextStatus, updated_by: by };
       var txnRes = await db.from('bank_transactions').update(txnPatch).eq('id', t.id);
       if (txnRes && txnRes.error) { /* non-fatal: the money rows are the source of truth */ }
 
       // 5) recompute the invoice balance
       var recomputed = await recompute(db, inv.id);
 
-      return NextResponse.json({ ok: true, match_id: matchId, applied: c.applied_to_invoice, overpayment: c.overpayment, type: c.type, invoice: recomputed, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, match_id: matchId, applied: c.applied_to_invoice, overpayment: c.overpayment, type: c.type, invoice: recomputed, deposit_remaining: depositRemaining, fully_allocated: fullyAllocated, review_status: nextStatus, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── unmatch: reverse a match (re-categorize / delete) ──

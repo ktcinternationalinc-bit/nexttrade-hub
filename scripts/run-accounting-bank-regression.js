@@ -21,6 +21,7 @@ var MANIFEST = [
   // Bank Review core writes (service-role, RLS-proof)
   { f: 'test-v55-83-ip-bank-write-serverside.js', label: 'new', why: 'categorize/status/match/unmatch via /api/accounting/bank-write' },
   { f: 'test-v55-83-im-accounting-qa-hardening.js', label: 'updated', why: 'res.error guards, over-apply cap, void handling, currency guard' },
+  { f: 'test-v55-83-jc-allocation-completeness.js', label: 'new', why: 'money conservation — partial bank allocation cannot be reviewed/approved; split must fully allocate; server flips reviewed only when deposit fully allocated' },
   { f: 'test-v55-83-cj-unmatch.js', label: 'updated', why: 'unmatch now server-route contract' },
   { f: 'test-v55-83-ho-unmatch-credit-reversal.js', label: 'updated', why: 'overpayment credit reversal now server-side' },
   { f: 'test-v55-83-ic-active-matches.js', label: 'updated', why: 'only active matches; server-side void' },

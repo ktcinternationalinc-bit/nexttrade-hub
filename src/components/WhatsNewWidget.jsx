@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JC',
+    date: '2026-06-19',
+    label: 'Every dollar of a bank deposit must now be accounted for before it can be reviewed or approved',
+    items: [
+      '**🧮 No more "disappearing" money on a bank transaction.** If a 250.00 deposit only has 100.00 applied to an invoice, the Hub now keeps the transaction open and tells you 150.00 is still unallocated — you can apply it to another invoice, split it, park it as an unapplied deposit/credit, or mark the remainder "Uncategorized / Needs review". It will not let you mark the transaction reviewed or approved until every dollar is handled, and it never silently guesses the leftover.',
+      '**➗ Splitting a transaction now has to cover the whole amount,** with a one-click "+ remainder as Needs review" button for whatever is left over (that remainder stays in the Hub — it is not sent to Wave as a category). The allocated/left counter turns green only when it balances exactly.',
+      '**💬 Honest messages on partial matches.** Applying part of a deposit to an invoice now says exactly how much is still unallocated instead of looking finished.',
+      { superAdminOnly: true, text: 'v55.83-JC (Codex P0 accounting integrity — partial bank allocation could leave money unaccounted + auto-mark reviewed). NEW payment-matching.bankAllocationStatus({txnAmount,paid,split,unapplied}) → {allocated, remaining, hasPiecewise, overAllocated, complete}; validateSplit now also returns fullyAllocated. BankReviewTab: load() builds allocByTxn (non-void invoice payments + bank_transaction_splits + OPEN unapplied_deposits) per txn; txnAllocation(t) wraps the helper; setStatus(reviewed/approved) and approve() hard-block unless complete (or over-allocated). saveSplits requires v.fullyAllocated. createUnapplied only flips unreviewed→reviewed when the park completes the deposit. Split UI: explicit "+ remainder (X) as Needs review" line (category needs_clarification, Hub-only label) + balance counter. SERVER /api/accounting/bank-write match_invoice: review_status flips unreviewed→reviewed ONLY when already+applied+overpayment fully allocates the deposit; returns deposit_remaining/fully_allocated; applyToInvoice toast reflects the residual. Test test-v55-83-jc (16, incl. runtime math). NEXT remaining Codex items: admin history-visibility window; data-freshness strip; Plaid backfill date + gap-free incremental sync; live KTC/Kandil end-to-end verify.' },
+    ],
+  },
+  {
     version: 'v55.83-JB',
     date: '2026-06-19',
     label: 'A payment to a not-yet-approved (draft) Wave invoice no longer looks like a failed payment to retry',

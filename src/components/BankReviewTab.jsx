@@ -12,7 +12,7 @@ import {
   canViewBank, canSeeAmounts, canClassify, canMatchPayments, canReopen,
   maskAmount, CLASSIFICATIONS, REVIEW_STATUSES,
 } from '../lib/bank-permissions';
-import { classifyApplication, computeInvoiceBalance, validateSplit, roundMoney, isPaymentVoid } from '../lib/payment-matching';
+import { classifyApplication, computeInvoiceBalance, validateSplit, bankAllocationStatus, roundMoney, isPaymentVoid } from '../lib/payment-matching';
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -68,6 +68,7 @@ export default function BankReviewTab(props) {
   var [txns, setTxns] = useState([]);
   var [matchesByTxn, setMatchesByTxn] = useState({});
   var [paysByTxn, setPaysByTxn] = useState({});   // v55.83-ID — non-voided payment rows per bank txn (orphan detection)
+  var [allocByTxn, setAllocByTxn] = useState({}); // v55.83-JC — {paid,split,unapplied} per bank txn (money-conservation gate)
   var [acctCustomers, setAcctCustomers] = useState([]);
   var [acctInvoices, setAcctInvoices] = useState([]);
   var [registry, setRegistry] = useState([]);
@@ -116,7 +117,9 @@ export default function BankReviewTab(props) {
       supabase.from('plaid_accounts').select('*'),
       supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
-      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, voided, sync_status, wave_payment_id'),
+      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
+      supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount'),
+      supabase.from('unapplied_deposits').select('bank_transaction_id, amount, status'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
@@ -128,9 +131,23 @@ export default function BankReviewTab(props) {
       // v55.83-ID — non-voided payment rows grouped by bank txn. Used to detect ORPHAN payments
       // (a recorded payment with no active match) so they can be reversed instead of being stuck.
       var paysBy = {};
+      // v55.83-JC — accumulate every piecewise disposition per bank txn for the money-conservation
+      // gate: invoice payments + saved split lines + open unapplied deposits.
+      var allocBy = {};
+      function bucket(id) { if (!allocBy[id]) { allocBy[id] = { paid: 0, split: 0, unapplied: 0 }; } return allocBy[id]; }
       ((res[8] && res[8].data) || []).forEach(function (p) {
         if (!p || !p.bank_transaction_id || isPaymentVoid(p)) { return; }
         (paysBy[p.bank_transaction_id] = paysBy[p.bank_transaction_id] || []).push(p);
+        bucket(p.bank_transaction_id).paid += Number(p.amount) || 0;
+      });
+      ((res[9] && res[9].data) || []).forEach(function (s) {
+        if (!s || !s.bank_transaction_id) { return; }
+        bucket(s.bank_transaction_id).split += Number(s.split_amount) || 0;
+      });
+      ((res[10] && res[10].data) || []).forEach(function (u) {
+        if (!u || !u.bank_transaction_id) { return; }
+        if (u.status && u.status !== 'open') { return; } // only open (still-unallocated) deposits count as allocation of the deposit
+        bucket(u.bank_transaction_id).unapplied += Number(u.amount) || 0;
       });
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });
       setPlaidAccts(pa);
@@ -152,7 +169,7 @@ export default function BankReviewTab(props) {
       });
       setWaveCategories(cats); // fallback (client query); the service-role route below is authoritative
       setRegistry(reg);
-      setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy);
+      setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy); setAllocByTxn(allocBy);
       // v55.83-JA — load categories via the SERVICE-ROLE route too (bypasses RLS). The client query
       // above can come back empty under RLS even when Sync Center shows "89 loaded". The route returns
       // the usable list + diagnostic counts so the dropdown is authoritative and the empty-state honest.
@@ -320,8 +337,26 @@ export default function BankReviewTab(props) {
     return keys.map(function (k) { return { type: k, items: groups[k].slice().sort(function (x, y) { return String(x.wave_account_name).localeCompare(String(y.wave_account_name)); }) }; });
   }
 
+  // v55.83-JC — money-conservation status for a transaction (see bankAllocationStatus). Uses the
+  // allocation map built in load(). A transaction allocated piecewise (invoice payments / splits /
+  // unapplied deposits) is only "complete" when those sum to the full transaction amount.
+  function txnAllocation(t) {
+    if (!t) { return bankAllocationStatus({ txnAmount: 0 }); }
+    var a = allocByTxn[t.id] || { paid: 0, split: 0, unapplied: 0 };
+    var total = Number(t.amount_abs != null ? t.amount_abs : Math.abs(Number(t.amount) || 0));
+    return bankAllocationStatus({ txnAmount: total, paid: a.paid, split: a.split, unapplied: a.unapplied });
+  }
+
   function setStatus(t, status, reasonRequired) {
     if (isLocked(t) && status !== 'approved') { toast.error('Approved — reopen first.'); return; }
+    // v55.83-JC — ACCOUNTING INTEGRITY: never let a partially-allocated transaction become reviewed/
+    // approved. Money must be fully accounted for first (invoice payment + splits + unapplied =
+    // transaction total), or explicitly carried as needs_clarification.
+    if (status === 'reviewed' || status === 'approved') {
+      var allocS = txnAllocation(t);
+      if (allocS.overAllocated) { toast.error('Over-allocated by ' + fmt(Math.abs(allocS.remaining)) + ' — remove or reduce a line before marking ' + labelize(status) + '.'); return; }
+      if (!allocS.complete) { toast.error(fmt(allocS.remaining) + ' of this ' + fmt(allocS.total) + ' transaction is unallocated. Apply it to an invoice, split it, park it as unapplied, or mark the remainder Uncategorized / Needs review before marking ' + labelize(status) + '.'); return; }
+    }
     var reason = '';
     if (reasonRequired) { reason = window.prompt('Reason for marking ' + labelize(status) + ':') || ''; if (!reason.trim()) { toast.error('Reason required.'); return; } }
     setBusy(true);
@@ -340,6 +375,11 @@ export default function BankReviewTab(props) {
 
   function approve(t) {
     if (!mayMatch && !isSuperAdmin) { toast.error('Approval requires Payments: Match (or admin).'); return; }
+    // v55.83-JC — same money-conservation gate as setStatus: a partially-allocated transaction can
+    // never be approved/locked. Approve is the point of no return for Wave, so this is the hard stop.
+    var allocA = txnAllocation(t);
+    if (allocA.overAllocated) { toast.error('Over-allocated by ' + fmt(Math.abs(allocA.remaining)) + ' — fix the lines before approving.'); return; }
+    if (!allocA.complete) { toast.error(fmt(allocA.remaining) + ' of this ' + fmt(allocA.total) + ' transaction is unallocated. Every dollar must be accounted for before approving — apply it to an invoice, split it, park it as unapplied, or mark the remainder Uncategorized / Needs review.'); return; }
     setBusy(true);
     // v55.83-IP — service-role endpoint (bypasses RLS).
     bankWrite('set_status', { bank_transaction_id: t.id, status: 'approved' })
@@ -460,6 +500,10 @@ export default function BankReviewTab(props) {
     var txnAmt = Number(t.amount_abs || Math.abs(Number(t.amount)));
     var v = validateSplit(txnAmt, splitRows.map(function (r) { return { split_amount: r.amount }; }));
     if (!v.valid) { toast.error('Splits must be > 0 and not exceed ' + fmt(txnAmt) + ' (allocated ' + fmt(v.allocated) + ').'); return; }
+    // v55.83-JC — ACCOUNTING INTEGRITY: a split must consume the WHOLE transaction. Marking a txn
+    // reviewed with money left over is the hole Codex flagged. The remainder must be an explicit line
+    // (another invoice/category, an unapplied/credit line, or an explicit Uncategorized / Needs review).
+    if (!v.fullyAllocated) { toast.error(fmt(v.remaining) + ' remains unallocated. Add another line, park it as unapplied, or mark the remainder Uncategorized / Needs review — a split must cover the full ' + fmt(txnAmt) + '.'); return; }
     // v55.83-HE (Codex QA) — block the save if a split line picked a Wave category that no longer
     // resolves, so we never persist a raw "wave:<uuid>" token as the category.
     var badWave = splitRows.some(function (r) {
@@ -567,7 +611,14 @@ export default function BankReviewTab(props) {
       notes: mNotes || null
     })
       .then(function (j) {
-        toast.success('Matched ' + fmt(j.applied) + (j.type === 'partial' ? ' (partial)' : '') + (j.overpayment > 0 ? ' · ' + fmt(j.overpayment) + ' to customer credit' : ''));
+        // v55.83-JC — be truthful about the bank transaction, not just the invoice. If the deposit
+        // is not fully allocated, say what's left and that it must be handled before the txn is done.
+        var rem = Number(j.deposit_remaining || 0);
+        if (j.fully_allocated === false && rem > 0.01) {
+          toast.success('Applied ' + fmt(j.applied) + ' to the invoice. ' + fmt(rem) + ' of this deposit is still unallocated — apply it to another invoice, split it, park it as unapplied, or mark it Uncategorized / Needs review. The transaction stays open until then.');
+        } else {
+          toast.success('Matched ' + fmt(j.applied) + (j.type === 'partial' ? ' (partial)' : '') + (j.overpayment > 0 ? ' · ' + fmt(j.overpayment) + ' to customer credit' : ''));
+        }
         onReload(); load();
       })
       .catch(function (e) { console.error('[save] Match failed: ', e); toast.error('Match failed: ' + ((e && e.message) || 'unknown error') + ' — screenshot this for Claude.'); })
@@ -578,10 +629,17 @@ export default function BankReviewTab(props) {
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
     var amt = roundMoney(Number(mAmount));
     if (!(amt > 0)) { toast.error('Enter an amount.'); return; }
+    // v55.83-JC — money conservation: parking part of a deposit only finishes the transaction if the
+    // park (plus anything already allocated) covers the whole deposit. Otherwise leave it unreviewed
+    // so the remainder is still surfaced — don't silently mark a partially-parked deposit reviewed.
+    var allocU = txnAllocation(t);
+    var afterPark = roundMoney(allocU.allocated + amt);
+    var parkRemaining = roundMoney(allocU.total - afterPark);
+    var parkComplete = !(allocU.total > 0) || parkRemaining <= 0.01;
     setBusy(true);
     dbInsert('unapplied_deposits', { business_id: t.business_id, wave_business_id: (t.wave_business_id || getActiveWaveBusiness() || null), bank_transaction_id: t.id, accounting_customer_id: mCustomerId || null, amount: amt, status: 'open', notes: mNotes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
-      .then(function () { return patchTxn(t, { accounting_customer_id: mCustomerId || t.accounting_customer_id, classification: t.classification || 'customer_payment', review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status }, 'Created unapplied deposit ' + fmt(amt) + ' from bank txn ' + (t.name || t.id)); })
-      .then(function () { toast.success('Unapplied deposit created — awaiting allocation'); load(); })
+      .then(function () { return patchTxn(t, { accounting_customer_id: mCustomerId || t.accounting_customer_id, classification: t.classification || 'customer_payment', review_status: (t.review_status === 'unreviewed' && parkComplete) ? 'reviewed' : t.review_status }, 'Created unapplied deposit ' + fmt(amt) + ' from bank txn ' + (t.name || t.id)); })
+      .then(function () { toast.success(parkComplete ? 'Unapplied deposit created — awaiting allocation' : ('Unapplied deposit of ' + fmt(amt) + ' created. ' + fmt(parkRemaining) + ' of this deposit is still unallocated — the transaction stays open until every dollar is handled.')); load(); })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
@@ -845,12 +903,23 @@ export default function BankReviewTab(props) {
                         </div>
                       );
                     })}
-                    <div className="flex items-center justify-between text-[11px] mb-1">
-                      <button onClick={addSplitRow} className="text-indigo-300 font-bold">+ add line</button>
-                      <span className="text-slate-300">Allocated {fmt(splitRows.reduce(function (a, r) { return a + (Number(r.amount) || 0); }, 0))} / {seeAmounts ? fmt(sel.amount_abs || Math.abs(Number(sel.amount))) : '•••••'}</span>
-                    </div>
+                    {(function () {
+                      var txnTot = Number(sel.amount_abs || Math.abs(Number(sel.amount)));
+                      var allocd = splitRows.reduce(function (a, r) { return a + (Number(r.amount) || 0); }, 0);
+                      var rem = roundMoney(txnTot - allocd);
+                      return (
+                        <div className="flex items-center justify-between text-[11px] mb-1">
+                          <div className="flex gap-2">
+                            <button onClick={addSplitRow} className="text-indigo-300 font-bold">+ add line</button>
+                            {/* v55.83-JC — explicit residual action (Codex): never auto-guess Uncategorized; the user adds it on purpose. Hub-only — no Wave category push. */}
+                            {rem > 0.01 && <button onClick={function () { setSplitRows(splitRows.concat([{ amount: String(rem), category: 'needs_clarification', customer_id: '', invoice_id: '', notes: 'Uncategorized / Needs review (Hub-only — not pushed to Wave)' }])); }} className="text-amber-300 font-bold" title="Add the unallocated remainder as an explicit Uncategorized / Needs review line. Hub-only — it will not create a Wave category transaction.">+ remainder ({fmt(rem)}) as Needs review</button>}
+                          </div>
+                          <span className={rem > 0.01 ? 'text-amber-300 font-bold' : (rem < -0.01 ? 'text-rose-400 font-bold' : 'text-emerald-300')}>Allocated {fmt(allocd)} / {seeAmounts ? fmt(txnTot) : '•••••'}{rem > 0.01 ? ' · ' + fmt(rem) + ' left' : (rem < -0.01 ? ' · over by ' + fmt(-rem) : ' ✓')}</span>
+                        </div>
+                      );
+                    })()}
                     <button onClick={saveSplits} disabled={busy} className="w-full px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-bold disabled:opacity-50">Save split</button>
-                    <div className="text-[10px] text-slate-500 mt-1">Lines tied to an invoice also record a payment and update that invoice's balance. Total can't exceed the transaction.</div>
+                    <div className="text-[10px] text-slate-500 mt-1">Every dollar must be allocated: lines tied to an invoice record a payment and update its balance; the remainder can be another category, an unapplied/credit line, or an explicit Uncategorized / Needs review line. A split must cover the full transaction.</div>
                   </div>
                 )}
               </div>

@@ -53,15 +53,51 @@ export function computeInvoiceBalance(invoiceTotal, matches) {
 }
 
 // Validate splitting a bank transaction across targets (must not exceed the txn).
+// v55.83-JC — also expose fullyAllocated: a split that does not consume the WHOLE transaction
+// leaves money unaccounted, so reviewed/approved flows must require exact allocation (see
+// bankAllocationStatus below). `valid` stays the lenient "not over-allocated" check used while the
+// user is still building lines; `fullyAllocated` is the strict gate for finalizing.
 export function validateSplit(txnAmount, splits) {
   var total = roundMoney(txnAmount);
   var sum = 0;
   (splits || []).forEach(function (s) { sum = sum + (Number(s.split_amount) || 0); });
   sum = roundMoney(sum);
+  var remaining = roundMoney(total - sum);
   return {
     valid: sum > 0 && sum <= roundMoney(total + 0.001),
+    fullyAllocated: sum > 0 && Math.abs(remaining) <= 0.01,
     allocated: sum,
-    remaining: roundMoney(total - sum),
+    remaining: remaining,
+  };
+}
+
+// v55.83-JC — ACCOUNTING INTEGRITY (money conservation). A bank transaction must be FULLY
+// accounted for before it can be marked reviewed/approved. Allocation is the sum of every piecewise
+// disposition tied to the transaction: invoice payments + saved split lines + open unapplied
+// deposits/customer credits. (A transaction categorized as a single whole — one classification/Wave
+// category with no piecewise rows — is complete by definition; that case has hasPiecewise=false.)
+// Returns the math + a `complete` verdict; the UI blocks reviewed/approved unless complete.
+export function bankAllocationStatus(parts) {
+  parts = parts || {};
+  var total = roundMoney(Number(parts.txnAmount) || 0);
+  var paid = roundMoney(Number(parts.paid) || 0);
+  var split = roundMoney(Number(parts.split) || 0);
+  var unapplied = roundMoney(Number(parts.unapplied) || 0);
+  var allocated = roundMoney(paid + split + unapplied);
+  var remaining = roundMoney(total - allocated);
+  var hasPiecewise = (paid > 0) || (split > 0) || (unapplied > 0);
+  return {
+    total: total,
+    paid: paid,
+    split: split,
+    unapplied: unapplied,
+    allocated: allocated,
+    remaining: remaining,
+    hasPiecewise: hasPiecewise,
+    overAllocated: remaining < -0.01,
+    // Complete when there is nothing allocated piecewise (whole-category path) OR the piecewise
+    // allocation lands on the transaction total within one cent.
+    complete: !hasPiecewise || Math.abs(remaining) <= 0.01,
   };
 }
 
