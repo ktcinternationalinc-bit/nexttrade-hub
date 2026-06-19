@@ -33,12 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IS',
+    date: '2026-06-19',
+    label: 'Bank Review reverse/unmatch is now reliable; bank-sync shows the right silo',
+    items: [
+      '**↩️ Unmatch / reverse now persists reliably.** Reversing a matched payment in Bank Review now goes through the same secure server path as matching — so it can\'t silently half-apply. The payment is voided, the invoice balance restored, and the bank transaction unlinked, all at once.',
+      '**🏦 Bank tab now shows the synced silo\'s rows.** Transactions are now fetched scoped to the selected silo before the row limit, so a freshly-synced account can\'t be hidden behind other silos\' transactions.',
+      { superAdminOnly: true, text: 'v55.83-IS (closes Codex CORE FAIL on reverse path). (1) BankReviewTab.unmatch now calls bankWrite("unmatch") (service-role /api/accounting/bank-write) instead of client-side supabase update chains — same RLS-proof path as match; keeps the fast client pre-check that blocks reversing Wave-synced/manual_done payments. (2) BankTab.loadData scopes bank_transactions by active wave_business_id at the QUERY before .limit(500) (was global-500-then-scope → could truncate the active silo\'s rows). (3) /api/plaid/transactions now REQUIRES SUPABASE_SERVICE_ROLE_KEY (no anon fallback → no RLS 0-row trap); returns 500 with a clear message if missing. (4) Sync notice reworded honestly ("processed", not "synced"; dropped the user-error/date/silo speculation). STILL OPEN per Codex (next heartbeats): plaid_accounts upsert during manual sync; true inserted/updated counts; cursor/incremental sync ([B]); split-save + park-unapplied still client-side → move to service route; IQ estimate route created_by on proforma_items + total fallback + per-silo dedup.' },
+    ],
+  },
+  {
     version: 'v55.83-IR',
     date: '2026-06-18',
-    label: 'Bank sync now tells you what happened (no more silent "nothing")',
+    label: 'Bank sync shows a result message after a sync attempt (partial UX fix)',
     items: [
-      '**🔄 Bank "Sync" now reports the result.** After syncing from the Bank tab you get a clear message — how many transactions Plaid returned, and a hint if none came in (widen the date range) or if they\'re scoped to a different silo than the one selected. No more clicking Sync and seeing nothing.',
-      { superAdminOnly: true, text: 'v55.83-IR. BankTab.syncTransactions now always sets a result notice (synced count + Plaid total-in-range + scope/date hint) instead of clearing the notice on success — the "sync does nothing" report was almost always (a) 0 new in the date window, or (b) synced rows scoped to a different silo than the one selected at top (loadData scopes bank_transactions by active wave_business_id via scopeIfRegistered). The /api/plaid/transactions route is sound: service-role upsert on plaid_transaction_id, surfaces upsert errors (500), requires the connection assigned to a silo. NEXT (backlog, see CLAUDE_HANDOFF STANDING DIRECTIVES): [A] admin history-visibility window (1mo/3mo/6mo/1yr/current-yr/custom; super-admin sees all) on Banking+Accounting; [B] Plaid link start-date + gap-free incremental sync from last received date.' },
+      '**🔄 Bank "Sync" now shows a result message** after a sync attempt, instead of appearing to do nothing.',
+      { superAdminOnly: true, text: 'v55.83-IR — PARTIAL UX fix only (per Codex). BankTab.syncTransactions shows a result notice after /api/plaid/transactions returns. Underlying Plaid reliability was still open at IR (scoped query-before-limit, true insert/update counts, plaid_accounts upsert, service-role requirement, cursor/incremental sync) — several addressed in IS; cursor/incremental + account upsert still pending. Do NOT treat Plaid sync as launch-ready until the KTC/Kandil acceptance flow passes.' },
     ],
   },
   {

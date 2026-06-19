@@ -9,17 +9,20 @@ var PLAID_BASE = {
   production: 'https://production.plaid.com',
 };
 
+// v55.83-IS (Codex FAIL) — bank ingestion MUST use the service-role key. Falling back to the anon
+// key re-introduces the RLS trap (email-auth: users.id != auth.uid()) and would silently filter the
+// upsert to 0 rows. Return null if it's missing so callers fail loud instead of writing nothing.
 function sb() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
+  var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) { return null; }
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, key, { auth: { persistSession: false } });
 }
 
 // POST — pull from Plaid (read-only) and upsert into bank_transactions.
 export async function POST(req) {
   try {
     var supabase = sb();
+    if (!supabase) { return NextResponse.json({ error: 'Server bank-ingestion key missing (SUPABASE_SERVICE_ROLE_KEY). Bank sync is disabled until it is configured — set it in the server environment.' }, { status: 500 }); }
     var body = await req.json();
     var connection_id = body.connection_id;
     var start_date = body.start_date;
@@ -94,6 +97,7 @@ export async function POST(req) {
 export async function GET(req) {
   try {
     var supabase = sb();
+    if (!supabase) { return NextResponse.json({ error: 'Server bank-ingestion key missing (SUPABASE_SERVICE_ROLE_KEY).' }, { status: 500 }); }
     var url = new URL(req.url);
     var connectionId = url.searchParams.get('connection_id');
     var reviewStatus = url.searchParams.get('review_status');

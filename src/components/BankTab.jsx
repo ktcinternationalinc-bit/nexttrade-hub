@@ -67,7 +67,12 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       setConnections(conns || []);
       try { const pa = await supabase.from('plaid_accounts').select('*'); setPlaidAccts((pa && pa.data) || []); } catch (ePA) { setPlaidAccts([]); }
 
-      const { data: txns } = await supabase.from('bank_transactions').select('*').order('date', { ascending: false }).limit(500);
+      // v55.83-IS (Codex FAIL) — scope by the active silo at the QUERY before the 500 limit, so a
+      // silo's freshly-synced rows can't be truncated out by other silos' transactions.
+      const _activeBizScope = getActiveWaveBusiness();
+      let _txq = supabase.from('bank_transactions').select('*').order('date', { ascending: false });
+      if (_activeBizScope) { _txq = _txq.eq('wave_business_id', _activeBizScope); }
+      const { data: txns } = await _txq.limit(500);
       setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));
       // v55.83-GG — auto-select this silo's default bank account (only while the filter is still
       // "all", so it never overrides a manual choice). Mirrors Bank Review's auto-load.
@@ -204,11 +209,10 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       await loadData();
       // v55.83-IR — never leave sync silent. Report exactly what Plaid returned so "nothing happened"
       // becomes actionable (0 new, scoped to another silo, or widen the date range).
-      var syncedN = Number(data.synced) || 0;
+      var procN = Number(data.synced) || 0;
       var totalN = (data.total != null) ? Number(data.total) : null;
-      var msg = '✅ Synced ' + syncedN + ' transaction(s) from Plaid' + (totalN != null ? (' (Plaid reports ' + totalN + ' in the last ' + (parseInt(dateRange) || 30) + ' days)') : '') + '.';
-      if (syncedN === 0) { msg += ' No transactions in that window — widen the date range above, or this account may have no recent activity.'; }
-      else { msg += ' If you don\'t see them below, make sure the account\'s silo matches the one selected at the top (transactions are shown per silo).'; }
+      var msg = '✅ Plaid sync done — ' + procN + ' transaction(s) processed' + (totalN != null ? (' (Plaid reported ' + totalN + ' in the last ' + (parseInt(dateRange) || 30) + ' days)') : '') + '.';
+      if (procN === 0) { msg += ' No transactions returned for that window — widen the date range above, or this account may have no recent activity.'; }
       setNotice(msg);
     } catch (e) { setError(e.message); }
     setSyncing(false);

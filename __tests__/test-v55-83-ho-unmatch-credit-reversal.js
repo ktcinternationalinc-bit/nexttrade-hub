@@ -29,22 +29,23 @@ function ok(label, cond, hint) {
 }
 
 var bank = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankReviewTab.jsx'), 'utf8');
+// v55.83-IS: unmatch moved to the service-role route (RLS-proof) — assert the credit reversal there.
+var route = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8');
+var umStart = route.indexOf("if (action === 'unmatch')");
+ok('0: server unmatch handler exists', umStart > -1);
+var unmatchSrc = route.substring(umStart, umStart + 1600);
 
-// isolate the unmatch() function body so assertions are scoped to it
-var umStart = bank.indexOf('function unmatch(');
-ok('0: unmatch() exists', umStart > -1);
-var umEnd = bank.indexOf('\n  function ', umStart + 1);
-var unmatchSrc = umEnd > umStart ? bank.substring(umStart, umEnd) : bank.substring(umStart);
-
-// 1. unmatch reverses the overpayment credit, scoped correctly
+// 1. server unmatch reverses the overpayment credit, scoped correctly
 ok('1a: unmatch voids customer_credits',
-  unmatchSrc.indexOf("from('customer_credits')") > -1 && /status:\s*'void'/.test(unmatchSrc));
+  unmatchSrc.indexOf("from('customer_credits')") > -1 && /status: 'void'/.test(unmatchSrc));
 ok('1b: scoped by source_transaction_id (the overpayment-only tag)',
-  /eq\('source_transaction_id',\s*t\.id\)/.test(unmatchSrc));
+  /eq\('source_transaction_id', bid\)/.test(unmatchSrc));
 ok('1c: only reverses still-open credits',
-  /eq\('status',\s*'open'\)/.test(unmatchSrc));
+  /eq\('status', 'open'\)/.test(unmatchSrc));
 ok('1d: the credit reversal is non-fatal (cannot break unmatch)',
-  /customer_credits[\s\S]{0,400}non-fatal/.test(unmatchSrc) || /customer_credits[\s\S]{0,400}function \(e\)/.test(unmatchSrc));
+  /try \{ await db\.from\('customer_credits'\)[\s\S]{0,160}catch \(eC\)/.test(unmatchSrc));
+// 1e: the client UI delegates unmatch to the service route (no direct client credit writes)
+ok('1e: BankReviewTab.unmatch delegates to bankWrite("unmatch")', /bankWrite\('unmatch'/.test(bank));
 
 // 2. the overpayment credit insert stamps source_transaction_id so the scope above is valid.
 // v55.83-IP: the match/credit write moved server-side (RLS bypass) — assert it there.

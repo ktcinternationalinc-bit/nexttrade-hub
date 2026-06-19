@@ -156,8 +156,8 @@ Extracted isCountableReceipt() to lib/inventory-receipts.js; Overview + ReportCe
 ### 📋 FEATURE BACKLOG (Max, locked in — build via heartbeat by priority)
 - **[A] Admin history-visibility window.** Admin sets how far NON-super users can see back in Invoices, AR, and Bank transactions: 1mo / 3mo / 6mo / 1yr / current-year / custom. Applies to Banking tab + Accounting tabs. SUPER ADMIN sees ALL. Plaid still stores full history server-side. (Needs: a setting (per-business?) + client filters on invoice/AR/bank queries gated by role.)
 - **[B] Plaid linking start-date + gap-free incremental sync.** On (re)link, let the user pick the from-date to backfill. On normal sync, pull from the last received date forward AND verify completeness of history before the previous sync (no gaps). (Plaid transactionsSync cursor or date-window reconciliation.)
-- **[C] DONE/IR — bank sync feedback** (manual sync now reports synced count + scope/date hint instead of silent no-update). Verify the underlying sync persists for KTC live.
-- **[DONE IQ] estimates→proformas per silo; Wave categories in categorize dropdown (silo-scoped).**
+- **[C] PARTIAL (IR+IS) — bank sync.** IS: unmatch→service route; BankTab scopes query-before-limit; /api/plaid/transactions requires service-role; honest "processed" notice. STILL OPEN (Codex): plaid_accounts upsert on manual sync, true inserted/updated counts, cursor/incremental sync ([B]), split-save + park-unapplied still client-side. NOT launch-closed until KTC/Kandil acceptance passes.
+- **[IQ PARTIAL] estimates→proformas: UI/route wired, but Codex blockers remain** — proforma_items `created_by` may be unsupported (preflight/schema), estimate total needs quantity*price fallback, per-silo dedup key, stronger test + a live per-silo estimate verification. Wave categories dropdown IS silo-scoped (works once categories pulled).
 
 ## 🎯 CORE WORKFLOW DIRECTIVE (Max, non-negotiable) — for Codex + Claude
 The central, must-work accounting workflow of the entire system:

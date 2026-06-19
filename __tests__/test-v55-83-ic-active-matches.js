@@ -43,8 +43,10 @@ ok('1d: undefined voided treated as active (legacy rows)', buildByTxn([{ id: 'x'
 var src = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankReviewTab.jsx'), 'utf8');
 ok('2a: matchesByTxn source filters payment_matches on voided !== true',
   /res\[1\][\s\S]{0,40}\.filter\(function \(x\) \{ return x && x\.voided !== true; \}\)/.test(src));
-ok('2b: unmatch still voids payment_matches (audit-preserving)',
-  /from\('payment_matches'\)\.update\(matchStamp\)/.test(src));
+// v55.83-IS: unmatch moved to the service-role route — it still voids payment_matches there (audit-preserving).
+ok('2b: unmatch voids payment_matches (audit-preserving), now server-side',
+  /from\('payment_matches'\)\.update\(\{ voided: true \}\)\.eq\('bank_transaction_id', bid\)/.test(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8')));
 
 console.log('');
 if (failures.length === 0) {
