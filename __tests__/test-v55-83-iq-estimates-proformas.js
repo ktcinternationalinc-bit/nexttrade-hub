@@ -47,7 +47,7 @@ ok('B1: Bank Review loads wave_categories and filters to the active silo',
 ok('B2: categorize dropdown renders the Wave chart-of-accounts grouped by type',
   /orderedCatGroups\(sel\.direction\)/.test(br));
 ok('B3: clear empty-state tells the user to pull Wave categories for the silo',
-  /Pull them in Wave Sync Center/.test(br));
+  /Pull Wave categories/.test(br));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-IQ estimate/proforma + category tests passed'); process.exit(0); }

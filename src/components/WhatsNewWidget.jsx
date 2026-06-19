@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JA',
+    date: '2026-06-19',
+    label: 'Wave categories pulled in Sync Center now actually appear when categorizing',
+    items: [
+      '**🏷️ The categorize dropdown now reliably shows your pulled Wave categories.** Sync Center could say "89 categories loaded" while Bank Review showed none — a database-permission quirk on the browser read. Categories now load through a secure server route, so what you pulled is what you see. If the dropdown is ever empty, it now tells you exactly why (load error / all hidden as receivable-system / wrong silo / not pulled yet).',
+      { superAdminOnly: true, text: 'v55.83-JA (Codex P0 — categories loaded but not in dropdown = RLS-trap on the client wave_categories read). NEW /api/wave/categories (service-role, assertPermission bank.classify): scopes by wave_business_id, applies the SAME usability filters as Bank Review (is_active, dedupe by wave_account_id, hide receivable/system), returns {total, active_count, usable_count, hidden_receivable_count, categories}. BankReviewTab.load now fetches categories from this route (authoritative; client query kept only as fallback) and stores catDiag for a reason-specific empty state instead of the old misleading "none loaded". Test test-v55-83-ja (6); runner 25/25 required green. NEXT: align Sync Center count to show usable vs total; live KTC/Kandil verify the dropdown shows real accounts (e.g. Vehicle Repair).' },
+    ],
+  },
+  {
     version: 'v55.83-IZ',
     date: '2026-06-19',
     label: 'Real KTC production Wave push unlock now actually saves',

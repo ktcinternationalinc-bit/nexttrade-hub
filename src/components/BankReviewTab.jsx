@@ -96,6 +96,7 @@ export default function BankReviewTab(props) {
   var [splitMode, setSplitMode] = useState(false);
   var [splitRows, setSplitRows] = useState([]);
   var [waveCategories, setWaveCategories] = useState([]);
+  var [catDiag, setCatDiag] = useState(null); // v55.83-JA — {total, usable, hidden_receivable, error} for the dropdown empty-state
 
   function load() {
     setLoading(true);
@@ -149,9 +150,23 @@ export default function BankReviewTab(props) {
         if (sub.indexOf('RECEIVABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0) { return false; }
         return true;
       });
-      setWaveCategories(cats);
+      setWaveCategories(cats); // fallback (client query); the service-role route below is authoritative
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy);
+      // v55.83-JA — load categories via the SERVICE-ROLE route too (bypasses RLS). The client query
+      // above can come back empty under RLS even when Sync Center shows "89 loaded". The route returns
+      // the usable list + diagnostic counts so the dropdown is authoritative and the empty-state honest.
+      (function () {
+        var abiz = getActiveWaveBusiness();
+        if (!abiz || abiz === 'all') { setCatDiag(null); return; }
+        fetch('/api/wave/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: abiz, user_id: userProfile && userProfile.id }) })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok) { setWaveCategories(j.categories || []); setCatDiag({ total: j.total, usable: j.usable_count, hidden_receivable: j.hidden_receivable_count, error: null }); }
+            else { setCatDiag({ error: (j && j.error) || 'category load failed' }); }
+          })
+          .catch(function (e) { setCatDiag({ error: (e && e.message) || 'network error' }); });
+      })();
       // v55.83-GD — auto-load this silo's default bank account into the account filter, once per
       // mount (the component remounts on silo switch via its key). User can still switch manually.
       try {
@@ -741,7 +756,13 @@ export default function BankReviewTab(props) {
                   {sel.direction === 'in' && <div className="text-[10px] text-slate-500 mt-0.5">Money-in: if this is a customer invoice payment, match it to the invoice below instead of categorizing.</div>}
                 </div>
               ) : (
-                <div className="text-[10px] text-amber-300">No Wave categories loaded for this business. Pull them in Wave Sync Center → Settings → Pull Wave categories.</div>
+                <div className="text-[10px] text-amber-300">{
+                  catDiag && catDiag.error
+                    ? ('Could not load Wave categories: ' + catDiag.error)
+                    : (catDiag && catDiag.total > 0 && catDiag.usable === 0
+                        ? (catDiag.total + ' Wave accounts loaded, but 0 are usable as bank categories after hiding ' + (catDiag.hidden_receivable || 0) + ' receivable/system account(s).')
+                        : 'No Wave categories loaded for this silo. Go to Wave Sync Center → select this business → Pull Wave categories.')
+                }</div>
               )}
             </div>
 

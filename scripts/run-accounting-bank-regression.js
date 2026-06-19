@@ -34,6 +34,7 @@ var MANIFEST = [
   { f: 'test-v55-83-iz-registry-flags.js', label: 'new', why: 'production unlock + push flags save via service-role route (super-admin gated)' },
   { f: 'test-v55-83-fj-match-guards.js', label: 'must-pass', why: 'match guards' },
   { f: 'test-v55-83-fm-wave-categories.js', label: 'updated', why: 'Wave categories in categorize dropdown, silo-scoped' },
+  { f: 'test-v55-83-ja-category-dropdown.js', label: 'new', why: 'categories load via service-role route (RLS-proof) + reason-specific empty state' },
   { f: 'test-v55-83-iq-estimates-proformas.js', label: 'new', why: 'Wave estimates → Hub proformas per silo' },
   { f: 'test-v55-83-iy-perline-wave-product.js', label: 'new', why: 'per-line Wave product selection on invoices + read-only product catalog pull' },
   { f: 'test-v55-83-at-invoice-import.js', label: 'updated', why: 'invoice import anti-double-count invariant' },
