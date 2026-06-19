@@ -6,6 +6,9 @@ var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+
 ok(/bodyJson\.user_id/.test(rt) && /assertPermission\(db, \(bodyJson && bodyJson\.user_id\) \|\| null, 'wave\.categories\.pull'/.test(rt),'route gates on wave.categories.pull (super_admin via assertPermission)');
 ok(/assertPermission/.test(rt) && /'wave\.categories\.pull', request\)/.test(rt),'route auth (incl. CRON bearer) handled by assertPermission(request)');
 ok(/onlyBiz/.test(rt) && /wave_business_id === onlyBiz/.test(rt),'route scopes to active business');
+// v55.83-IX (Codex P0): an explicit single-business pull (onlyBiz) must include PRODUCTION too,
+// else Real KTC can never pull its Wave Chart of Accounts and the categorize dropdown stays empty.
+ok(/if \(onlyBiz\) \{\s*businesses = allBiz\.filter\(function \(x\) \{ return x\.wave_business_id === onlyBiz; \}\);/.test(rt),'explicit single-business category pull includes production (read-only)');
 ok(!/\bconst \b/.test(rt) && !/=>/.test(rt),'route SWC-safe');
 // UI pull
 ok(/runCategoryPull/.test(wsc) && /sync-categories/.test(wsc),'pull handler present');

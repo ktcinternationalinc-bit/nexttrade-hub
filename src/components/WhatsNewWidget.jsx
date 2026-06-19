@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IX',
+    date: '2026-06-19',
+    label: 'Real KTC can now pull its Wave categories (categorize dropdown no longer empty)',
+    items: [
+      '**🏷️ "Pull Wave categories" now works for Real KTC (production).** It was skipping production businesses by default, so the categorize dropdown stayed empty for KTC. Now picking a business and pulling its categories works regardless — so your real Wave Chart of Accounts (e.g. Vehicle Repair) shows up when categorizing.',
+      { superAdminOnly: true, text: 'v55.83-IX (Codex P0 — category pull excluded production). sync-categories filtered to test-only unless includeProduction=true, then scoped to onlyBiz — so an explicit production single-business pull returned 0. Fix: when onlyBiz is set (explicit single-business request), pull it regardless of is_production (category pull is READ-ONLY, no Wave writes); the test-only default now only applies to the bulk all-business pull. fm-wave-categories test strengthened; runner stays green. After deploy: Wave Sync Center → select Real KTC → Pull Wave categories → the silo-scoped categorize dropdown in Bank Review populates.' },
+    ],
+  },
+  {
     version: 'v55.83-IW',
     date: '2026-06-19',
     label: 'Customer Ledger: picker now shows only the selected silo’s customers (and all of them)',

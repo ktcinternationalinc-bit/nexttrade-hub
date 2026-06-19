@@ -74,8 +74,16 @@ async function runSync(request) {
 
   var regRes = await db.from('wave_business_registry').select('wave_business_id, label, is_production');
   var allBiz = (regRes && regRes.data) || [];
-  var businesses = includeProduction ? allBiz : allBiz.filter(function (x) { return x.is_production === false; });
-  if (onlyBiz) { businesses = businesses.filter(function (x) { return x.wave_business_id === onlyBiz; }); }
+  // v55.83-IX (Codex P0) — category pull is READ-ONLY (never writes to Wave). When the user EXPLICITLY
+  // requests one business (onlyBiz), pull it even if it's production — otherwise Real KTC could never
+  // get its Wave Chart of Accounts and the categorize dropdown stays empty. The test-only default
+  // only applies to the bulk (all-business) pull.
+  var businesses;
+  if (onlyBiz) {
+    businesses = allBiz.filter(function (x) { return x.wave_business_id === onlyBiz; });
+  } else {
+    businesses = includeProduction ? allBiz : allBiz.filter(function (x) { return x.is_production === false; });
+  }
   if (businesses.length === 0) {
     return Response.json({ ok: true, scope: includeProduction ? 'all_businesses' : 'test_only', message: 'No matching Wave businesses to sync categories for.', results: [] });
   }
