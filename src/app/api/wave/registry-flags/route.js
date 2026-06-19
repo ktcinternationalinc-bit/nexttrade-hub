@@ -53,7 +53,13 @@ export async function POST(req) {
     if (up && up.error) { return NextResponse.json({ ok: false, error: up.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (!(up && up.data && up.data.length)) { return NextResponse.json({ ok: false, error: 'Update affected 0 rows — flag not saved.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
     var row = up.data[0];
-    return NextResponse.json({ ok: true, field: field, value: row[field], row: row, api_build_marker: API_BUILD_MARKER });
+    // v55.83-JN (Codex P0 — "unlock snaps back OFF") — VERIFY the readback actually equals what we
+    // asked for. If a DB trigger/RLS/coercion/stale-row left it different, the route must FAIL LOUD
+    // with full diagnostics instead of reporting a false success that makes the UI snap the toggle off.
+    if (row[field] !== value) {
+      return NextResponse.json({ ok: false, error: 'Registry flag readback mismatch: requested ' + JSON.stringify(value) + ', saved ' + JSON.stringify(row[field]) + '. The database did not persist the change (check triggers/RLS on wave_business_registry).', requested: value, saved: row[field], wave_business_id: waveBusinessId, field: field, registry_row_id: row.id, registry_label: row.label || null, api_build_marker: API_BUILD_MARKER }, { status: 409 });
+    }
+    return NextResponse.json({ ok: true, field: field, value: row[field], row: row, requested: value, saved: row[field], registry_row_id: row.id, registry_label: row.label || null, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }

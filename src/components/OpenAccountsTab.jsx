@@ -196,6 +196,21 @@ export default function OpenAccountsTab(props) {
   // v55.83-JL — admin history-visibility floor for open-account invoices (super-admin bypass).
   var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null });
   function oaiFloorValue() { return floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
+  // v55.83-JN — load invoice line items scoped to the visible invoices when a floor is active (so
+  // out-of-window line items never enter non-super-admin state); super-admin / no-floor loads all.
+  async function loadInvoiceItems(invRows, floor) {
+    if (!floor) { return await supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }); }
+    var ids = (invRows || []).map(function (i) { return i.id; }).filter(Boolean);
+    if (!ids.length) { return { data: [] }; }
+    var out = []; var CH = 200; var ci;
+    for (ci = 0; ci < ids.length; ci += CH) {
+      var chunk = ids.slice(ci, ci + CH);
+      var res = await supabase.from('open_account_invoice_items').select('*').in('invoice_id', chunk).order('sort_order', { ascending: true });
+      if (res && res.error) { return res; }
+      if (res && res.data) { out = out.concat(res.data); }
+    }
+    return { data: out };
+  }
 
   // v55.83-A.6.27.NEXT (Issue 4) — Permission split.
   //
@@ -373,12 +388,13 @@ export default function OpenAccountsTab(props) {
         var _oaInvQ = supabase.from('open_account_invoices').select('*');
         if (_oaFloor) { _oaInvQ = _oaInvQ.gte('invoice_date', _oaFloor); }
         _oaInvQ = _oaInvQ.order('invoice_date', { ascending: false });
-        var [accRes, entRes, bizRes, invRes, itmRes, fxRes] = await Promise.all([
+        // v55.83-JN — line items are a child of invoices; when a floor is active, don't load items for
+        // out-of-window invoices into state. Items are fetched AFTER invoices, scoped to visible ids.
+        var [accRes, entRes, bizRes, invRes, fxRes] = await Promise.all([
           supabase.from('open_accounts').select('*').order('account_name'),
           supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
           supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
           _oaInvQ,
-          supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
           // v55.83-A.6.27.72 HOTFIX 11 — FX rates for the Global Net Position card.
           // Errors gracefully if fx_rates table isn't populated yet.
           supabase.from('fx_rates').select('*').order('rate_date', { ascending: false }).limit(500),
@@ -388,8 +404,10 @@ export default function OpenAccountsTab(props) {
         if (entRes.error) throw entRes.error;
         if (bizRes && !bizRes.error) setEntities(bizRes.data || []);
         else if (bizRes && bizRes.error) console.warn('[open-accounts] business_entities not loaded:', bizRes.error.message);
-        if (invRes && !invRes.error) setInvoices(invRes.data || []);
+        var _oaInvRows = (invRes && !invRes.error) ? (invRes.data || []) : [];
+        if (invRes && !invRes.error) setInvoices(_oaInvRows);
         else if (invRes && invRes.error) console.warn('[open-accounts] open_account_invoices not loaded — run sql/v55-83-a-6-27-59 in Supabase:', invRes.error.message);
+        var itmRes = await loadInvoiceItems(_oaInvRows, _oaFloor);
         if (itmRes && !itmRes.error) setInvoiceItems(itmRes.data || []);
         else if (itmRes && itmRes.error) console.warn('[open-accounts] open_account_invoice_items not loaded:', itmRes.error.message);
         // FX rates load is best-effort — card falls back to "rate not available" if missing.
@@ -1330,17 +1348,18 @@ export default function OpenAccountsTab(props) {
       var _oaInvQR = supabase.from('open_account_invoices').select('*');
       if (_oaFloorR) { _oaInvQR = _oaInvQR.gte('invoice_date', _oaFloorR); }
       _oaInvQR = _oaInvQR.order('invoice_date', { ascending: false });
-      var [accRes, entRes, bizRes, invRes, itmRes] = await Promise.all([
+      var [accRes, entRes, bizRes, invRes] = await Promise.all([
         supabase.from('open_accounts').select('*').order('account_name'),
         supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
         supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
         _oaInvQR,
-        supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
       ]);
+      var _oaInvRowsR = (invRes && !invRes.error) ? (invRes.data || []) : [];
+      var itmRes = await loadInvoiceItems(_oaInvRowsR, _oaFloorR); // v55.83-JN scoped child items
       setAccounts(accRes.data || []);
       setEntries(entRes.data || []);
       if (bizRes && !bizRes.error) setEntities(bizRes.data || []);
-      if (invRes && !invRes.error) setInvoices(invRes.data || []);
+      if (invRes && !invRes.error) setInvoices(_oaInvRowsR);
       if (itmRes && !itmRes.error) setInvoiceItems(itmRes.data || []);
     } catch (e) { console.error('[open-accounts] reload failed:', e); }
   }

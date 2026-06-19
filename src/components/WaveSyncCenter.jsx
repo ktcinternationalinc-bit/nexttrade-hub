@@ -135,6 +135,7 @@ export default function WaveSyncCenter(props) {
   var [sel, setSel] = useState({});
   var [busy, setBusy] = useState(false);
   var [savingFlags, setSavingFlags] = useState(false);
+  var [flagStatus, setFlagStatus] = useState(null); // v55.83-JN — persistent inline save status for the production unlock
 
   var active = getActiveWaveBusiness();
   var reg = registry.find(function (r) { return r.wave_business_id === active; });
@@ -587,16 +588,32 @@ export default function WaveSyncCenter(props) {
       toast.error('Unlock real production push first (super-admin switch in Settings).'); return;
     }
     setSavingFlags(true);
-    // v55.83-IZ — save through the SERVICE-ROLE route. The old direct client update was silently
+    setFlagStatus({ field: field, pending: true, msg: 'Saving ' + field + '…' });
+    // v55.83-IZ/JN — save through the SERVICE-ROLE route. The old direct client update was silently
     // filtered by RLS (email-auth) and ignored the error/0-row result, so the unlock never persisted.
+    // JN: treat success ONLY when the route confirms the readback equals what we asked for, merge the
+    // returned row into registry immediately (so the checkbox reflects the server truth before load()),
+    // and keep a persistent inline status so a failure no longer just silently snaps the toggle off.
     fetch('/api/wave/registry-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ waveBusinessId: active, field: field, value: val, user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        if (!j || !j.ok) { toast.error('Could not save "' + field + '": ' + ((j && j.error) || 'unknown error')); }
-        else { toast.success((val ? 'Enabled' : 'Disabled') + ': ' + field); }
+        var readback = j && (typeof j.value !== 'undefined' ? j.value : (j.row ? j.row[field] : undefined));
+        var saved = j && j.ok === true && readback === val;
+        if (!saved) {
+          var emsg = (j && j.error) || ('Save did not confirm (requested ' + JSON.stringify(val) + ', got ' + JSON.stringify(readback) + ')');
+          toast.error('Could not save "' + field + '": ' + emsg);
+          setFlagStatus({ field: field, ok: false, msg: emsg, requested: val, saved: readback, rowId: (j && j.registry_row_id) || null, label: (j && j.registry_label) || null });
+        } else {
+          // Merge the verified server row into the local registry so the toggle reflects truth now.
+          if (j.row) {
+            setRegistry(function (prev) { return (prev || []).map(function (rr) { return (rr && rr.wave_business_id === active) ? Object.assign({}, rr, j.row) : rr; }); });
+          }
+          toast.success((val ? 'Enabled' : 'Disabled') + ': ' + field + (j.registry_label ? ' on ' + j.registry_label : ''));
+          setFlagStatus({ field: field, ok: true, msg: (val ? 'Enabled' : 'Disabled') + ' ' + field + ' (confirmed saved' + (j.registry_label ? ' on ' + j.registry_label : '') + ')', rowId: j.registry_row_id || null, label: j.registry_label || null });
+        }
         load();
       })
-      .catch(function (e) { toast.error('Could not save: ' + ((e && e.message) || e)); })
+      .catch(function (e) { var em = (e && e.message) || String(e); toast.error('Could not save: ' + em); setFlagStatus({ field: field, ok: false, msg: em }); })
       .finally(function () { setSavingFlags(false); });
   }
 
@@ -886,6 +903,14 @@ export default function WaveSyncCenter(props) {
                     ⚠ Enable REAL production Wave push (super-admin only)
                   </label>
                   <div className="text-[11px] text-rose-700 mt-1">Default OFF. When ON, this business can write to real Wave — test on the test silo first, and turn OFF when not actively syncing.{!isSuperAdmin ? ' (Super admin required.)' : ''}</div>
+                  {/* v55.83-JN — persistent inline save status so a failed unlock no longer silently snaps back OFF. */}
+                  {flagStatus && flagStatus.field === 'production_push_unlocked' && (
+                    <div className={'text-[11px] mt-1 rounded px-2 py-1 font-semibold ' + (flagStatus.pending ? 'bg-slate-100 text-slate-700' : (flagStatus.ok ? 'bg-emerald-100 text-emerald-900' : 'bg-rose-200 text-rose-900'))}>
+                      {flagStatus.pending ? '⏳ ' : (flagStatus.ok ? '✅ ' : '⛔ ')}{flagStatus.msg}
+                      {!flagStatus.ok && !flagStatus.pending && flagStatus.rowId ? <span className="block text-[10px] font-normal">row {String(flagStatus.rowId).substring(0, 8)}{flagStatus.label ? ' · ' + flagStatus.label : ''}</span> : null}
+                      {!flagStatus.ok && !flagStatus.pending ? <span className="block text-[10px] font-normal">If this keeps failing: the DB likely has a trigger/RLS on wave_business_registry blocking the write — screenshot this for Claude.</span> : null}
+                    </div>
+                  )}
                 </div>
               )}
               {(!isProd || productionUnlocked) ? [['writes_enabled', 'Writes enabled (master switch)'], ['allow_customer_push', 'Allow customer push'], ['allow_invoice_push', 'Allow invoice push'], ['allow_payment_push', 'Allow payment push (records payments in Wave)'], ['allow_auto_push', 'Allow auto-push (keep OFF)']].map(function (f) {

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JN',
+    date: '2026-06-19',
+    label: 'Production Wave unlock now stays ON and tells you if a save fails (launch-critical fix)',
+    items: [
+      '**🔓 Enabling real production Wave push for Real KTC now actually sticks.** Before, clicking OK on the confirm could leave the switch snapping back OFF with no explanation. Now the save is confirmed end-to-end: the server checks the value really persisted, the switch reflects the saved state immediately, and a clear status message appears right under the toggle — green if it saved, red with the exact reason if it didn\'t (e.g. a database rule blocking the write).',
+      '**🔎 Open Accounts now fully respects the history window** — line items behind older invoices no longer load for normal users either.',
+      { superAdminOnly: true, text: 'v55.83-JN (Codex P0 — "production unlock snaps back OFF after confirm"; user-reported live). Route /api/wave/registry-flags now VERIFIES row[field]===value after update+select and returns 409 + {requested,saved,registry_row_id,registry_label} on mismatch (no false success). WaveSyncCenter.setFlag treats success ONLY when readback===requested, MERGES the returned row into local registry immediately (toggle reflects server truth pre-load), and renders a PERSISTENT inline status under the unlock box (not just a toast). IZ regression +JN1-JN5. Also closed Codex JM gap: OpenAccountsTab open_account_invoice_items now scoped to visible invoice ids via loadInvoiceItems (chunked .in) on load+reload when floored; JL test +6b. Clean build green; runner 31/31. REMAINING: Customer Ledger + AR History windowing (events floored, all-time balances) = JO; Plaid backfill/incremental; live seeded direct-POST proof. NOTE: if unlock still fails live, the inline status will now show the exact DB error — likely a trigger/RLS on wave_business_registry.' },
+    ],
+  },
+  {
     version: 'v55.83-JM',
     date: '2026-06-19',
     label: 'History window now fully enforced on Invoices (payments included) + newest-date shown',

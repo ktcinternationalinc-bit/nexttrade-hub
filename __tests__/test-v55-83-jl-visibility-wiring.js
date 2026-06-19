@@ -45,6 +45,15 @@ ok('5: OpenAccountsTab floors the reload path too',
   /_oaInvQR = _oaInvQR\.gte\('invoice_date', _oaFloorR\)/.test(oa) && /function oaiFloorValue\(\)/.test(oa));
 ok('6: OpenAccountsTab shows an invoice-visibility chip',
   /Invoice visibility:/.test(oa));
+// JN — Open Accounts LINE ITEMS must also be scoped to visible invoices when a floor is active (no
+// child-row leak), on BOTH the load and reload paths. Fails on the old blanket items fetch.
+ok('6b: OpenAccountsTab scopes line items to visible invoices (chunked .in by invoice_id) when floored, on both load + reload',
+  /async function loadInvoiceItems\(invRows, floor\)/.test(oa) &&
+  /\.in\('invoice_id', chunk\)/.test(oa) &&
+  /loadInvoiceItems\(_oaInvRows, _oaFloor\)/.test(oa) &&
+  /loadInvoiceItems\(_oaInvRowsR, _oaFloorR\)/.test(oa) &&
+  // no blanket items select left embedded directly in a load/reload Promise.all
+  !/_oaInvQR?,\s*\n\s*supabase\.from\('open_account_invoice_items'\)\.select\('\*'\)\.order/.test(oa));
 
 // --- Codex GUARD: every screen the panel CLAIMS as enforced must actually wire the policy ---
 // Parse the "Enforced now:" line and verify each named screen's source uses the visibility policy.
