@@ -31,6 +31,12 @@ ok('2: AccountingInvoicesTab fetches the policy and floors at the query (invoice
   /fetchAllRows\('accounting_proformas', '\*', 'created_at', false, _proFloor\)/.test(inv));
 ok('3: invoice floor respects super-admin (floorDateFor with isSuperAdmin) + shows a Visibility chip',
   /floorDateFor\(\{ window: _vr\.value\.window[\s\S]{0,80}isSuperAdmin: isSuperAdmin \}/.test(inv) && /Visibility:/.test(inv));
+// JM — child payment rows must NOT load all history when a floor is active (Codex)
+ok('3b: invoice payments are SCOPED to in-window invoice ids when a floor applies (no all-history fetch)',
+  /if \(_floor\) \{[\s\S]{0,400}\.in\('accounting_invoice_id', chunk\)/.test(inv) &&
+  /invRows\.map\(function \(i\) \{ return i\.id; \}\)/.test(inv));
+ok('3c: invoice + OA visibility chips show the newest-loaded date',
+  /· Newest: /.test(inv) && /· Newest: /.test(oa));
 
 // --- Open Accounts: query-level floor on both load + reload paths ---
 ok('4: OpenAccountsTab floors open_account_invoices at the query on the main load',
@@ -61,7 +67,7 @@ if (enforcedMatch) {
     allWired, 'claimed: ' + named.join(' | '));
 }
 // And the panel must NOT claim Ledger / AR History as enforced yet (they are deferred to JM).
-ok('9: panel does NOT overclaim Customer Ledger / AR History as enforced (honest until JM)',
+ok('9: panel does NOT overclaim Customer Ledger / AR History as enforced (still show full history — deferred)',
   /Coming next:[\s\S]{0,160}Customer Ledger/.test(panel) && /AR History/.test(panel));
 
 console.log('');

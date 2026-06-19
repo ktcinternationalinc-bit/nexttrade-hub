@@ -1370,7 +1370,9 @@ export default function OpenAccountsTab(props) {
             {(function () {
               var f = oaiFloorValue();
               var lbl = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
-              return <div className="text-[11px] font-semibold text-emerald-100 mt-1" title="Org history-visibility window — invoices older than the cutoff are not shown (super admin sets it in Settings → Accounting Visibility).">Invoice visibility: <b className="bg-white/20 rounded px-1.5 py-0.5">{lbl}</b>{f ? <span> (from {f})</span> : null}</div>;
+              var newest = null;
+              (invoices || []).forEach(function (row) { var d = (row.invoice_date || '').substring(0, 10); if (d && (!newest || d > newest)) { newest = d; } });
+              return <div className="text-[11px] font-semibold text-emerald-100 mt-1" title="Org history-visibility window — invoices older than the cutoff are not shown (super admin sets it in Settings → Accounting Visibility).">Invoice visibility: <b className="bg-white/20 rounded px-1.5 py-0.5">{lbl}</b>{f ? <span> (from {f})</span> : null} · Newest: <b className="bg-white/20 rounded px-1.5 py-0.5">{newest || '—'}</b></div>;
             })()}
           </div>
           <div className="flex gap-2 items-center flex-wrap">

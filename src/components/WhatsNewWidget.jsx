@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JM',
+    date: '2026-06-19',
+    label: 'History window now fully enforced on Invoices (payments included) + newest-date shown',
+    items: [
+      '**📅 The Invoices and Open Accounts visibility window is now fully enforced** — not just the invoice rows, but the payment rows behind them no longer load older history for normal users either. Each visibility chip now also shows the newest transaction date loaded, so it\'s obvious how current the screen is.',
+      { superAdminOnly: true, text: 'v55.83-JM (Codex JL follow-up — 2 gaps). (1) AccountingInvoicesTab fetched accounting_invoice_payments for ALL history into state; now when a floor is active (non-super-admin) it scopes payments to the in-window invoice ids via chunked .in() (200/chunk); super-admin (no floor) keeps the full fetchAllRows. (2) Visibility chips on Invoices + Open Accounts now show "· Newest: <date>" (newest loaded row). JL test extended 3b/3c. Clean build green; runner 31/31. STILL DEFERRED: Customer Ledger + AR History (window the displayed events, keep all-time balance/aging — Codex exemption). Open: Plaid backfill/incremental; live seeded direct-POST proof.' },
+    ],
+  },
+  {
     version: 'v55.83-JL',
     date: '2026-06-19',
     label: 'History-visibility window now also applies to Invoices and Open Accounts',

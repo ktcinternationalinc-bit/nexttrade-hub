@@ -105,20 +105,34 @@ export default function AccountingInvoicesTab(props) {
       fetchAllRows('accounting_proformas', '*', 'created_at', false, _proFloor),
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('invoice_id, voided').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_products').select('wave_business_id, wave_product_id, name, is_archived').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-    ]).then(function (r) {
-      setWaveProducts((r[7] && r[7].data) || []);
+    ]).then(async function (r) {
+      setWaveProducts((r[6] && r[6].data) || []);
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
       if (b) { setBusinessId(b.id); if (b.name) setBusinessName(b.name); }
       setCustomers((r[1] && r[1].data) || []);
-      setInvoices((r[2] && r[2].data) || []);
+      var invRows = (r[2] && r[2].data) || [];
+      setInvoices(invRows);
       setProformas((r[3] && r[3].data) || []); setCompany((r[4] && r[4].data && r[4].data[0]) || null);
       var pm = {}; ((r[5] && r[5].data) || []).forEach(function (row) { if (row && row.invoice_id && row.voided !== true) pm[row.invoice_id] = true; }); setPmCount(pm);
-      // Per-invoice hub-paid map (non-void) so the LIST shows real Paid/Balance even when the
-      // stored amount_paid is stale. Keyed by accounting_invoice_id.
+      // v55.83-JL/JM — payment rows: when a visibility floor is active (non-super-admin), DON'T load
+      // all-history payments into state. Scope them to the in-window invoice ids (chunked .in). A
+      // super-admin (no floor) keeps the full fetch since they see everything anyway.
+      var payRows = [];
+      if (_floor) {
+        var invIds = invRows.map(function (i) { return i.id; }).filter(Boolean);
+        var CH = 200; var ci;
+        for (ci = 0; ci < invIds.length; ci += CH) {
+          var chunk = invIds.slice(ci, ci + CH);
+          var prc = await supabase.from('accounting_invoice_payments').select('accounting_invoice_id, amount, voided, sync_status').in('accounting_invoice_id', chunk).then(function (x) { return x; }).catch(function () { return { data: [] }; });
+          if (prc && prc.data) { payRows = payRows.concat(prc.data); }
+        }
+      } else {
+        var allPr = await fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; });
+        payRows = (allPr && allPr.data) || [];
+      }
       var paidMap = {};
-      ((r[6] && r[6].data) || []).forEach(function (p) {
+      payRows.forEach(function (p) {
         if (!p || !p.accounting_invoice_id) { return; }
         if (isPaymentVoid(p)) { return; }
         paidMap[p.accounting_invoice_id] = (paidMap[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0);
@@ -467,7 +481,10 @@ export default function AccountingInvoicesTab(props) {
         {(function () {
           var f = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date());
           var lbl = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
-          return <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility).">Visibility: <b className={f ? 'text-sky-300' : 'text-slate-200'}>{lbl}</b>{f ? <span> (from {f})</span> : null}</span>;
+          // newest loaded date among the rows currently shown (invoice_date / proforma_date)
+          var newest = null;
+          (isInvoice() ? invoices : proformas).forEach(function (row) { var d = ((isInvoice() ? row.invoice_date : row.proforma_date) || '').substring(0, 10); if (d && (!newest || d > newest)) { newest = d; } });
+          return <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility).">Visibility: <b className={f ? 'text-sky-300' : 'text-slate-200'}>{lbl}</b>{f ? <span> (from {f})</span> : null} · Newest: <b className="text-slate-200">{newest || '—'}</b></span>;
         })()}
         <span className="text-[11px] text-slate-400">{displayRows.length} shown · newest first</span>
       </div>
