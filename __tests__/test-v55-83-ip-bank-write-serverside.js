@@ -42,6 +42,15 @@ ok('3b: applyToInvoice uses bankWrite match_invoice (not a direct client insert 
   /bankWrite\('match_invoice'/.test(rc));
 ok('3c: setStatus + approve use bankWrite set_status', (rc.match(/bankWrite\('set_status'/g) || []).length >= 2);
 ok('3d: classify + wave-category use bankWrite', /bankWrite\('classify'/.test(rc) && /bankWrite\('set_wave_category'/.test(rc));
+ok('3e: unmatch uses bankWrite AND the unmatch() body does NOT write payment tables from the client', (function () {
+  if (!/bankWrite\('unmatch'/.test(rc)) { return false; }
+  var s = rc.indexOf('function unmatch(t)');
+  if (s < 0) { return false; }
+  var body = rc.substring(s, s + 1400);
+  return body.indexOf("from('accounting_invoice_payments').update") === -1
+    && body.indexOf("from('payment_matches').update") === -1
+    && body.indexOf("from('customer_credits').update") === -1;
+})());
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-IP server-write tests passed'); process.exit(0); }

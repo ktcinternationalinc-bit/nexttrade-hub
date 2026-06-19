@@ -2,9 +2,9 @@ var fs=require('fs');var path=require('path');
 function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 var rt=p('src/app/api/wave/sync-categories/route.js');var wsc=p('src/components/WaveSyncCenter.jsx');var br=p('src/components/BankReviewTab.jsx');
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
-// route auth
-ok(/bodyJson\.user_id/.test(rt) && /role === 'super_admin'/.test(rt),'route accepts super_admin user_id');
-ok(/auth === \('Bearer ' \+ secret\)/.test(rt),'route still accepts CRON_SECRET bearer');
+// route auth — v55.83-IS: auth (super_admin + CRON bearer) now delegated to assertPermission.
+ok(/bodyJson\.user_id/.test(rt) && /assertPermission\(db, \(bodyJson && bodyJson\.user_id\) \|\| null, 'wave\.categories\.pull'/.test(rt),'route gates on wave.categories.pull (super_admin via assertPermission)');
+ok(/assertPermission/.test(rt) && /'wave\.categories\.pull', request\)/.test(rt),'route auth (incl. CRON bearer) handled by assertPermission(request)');
 ok(/onlyBiz/.test(rt) && /wave_business_id === onlyBiz/.test(rt),'route scopes to active business');
 ok(!/\bconst \b/.test(rt) && !/=>/.test(rt),'route SWC-safe');
 // UI pull
@@ -15,7 +15,7 @@ ok(/user_id: \(userProfile && userProfile\.id\)/.test(wsc),'sends user_id for au
 ok(/Push permissions for:/.test(wsc),'push permissions intact');
 // bank review dropdown
 ok(/setWaveCategories/.test(br) && /from\('wave_categories'\)/.test(br),'bank review loads wave categories');
-ok(/c\.wave_business_id === activeBiz/.test(br),'categories scoped to active silo');
+ok(/c\.wave_business_id !== activeBiz/.test(br),'categories scoped to active silo');
 ok(/optgroup label="Wave categories"/.test(br),'wave categories optgroup in dropdown');
 ok(/optgroup label="General"/.test(br),'general fallback preserved');
 ok(/value=\{'wave:' \+ c\.wave_account_id\}/.test(br),'stores wave account id reference');

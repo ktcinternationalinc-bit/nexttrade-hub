@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "test:accounting-bank": "node scripts/run-accounting-bank-regression.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.3",

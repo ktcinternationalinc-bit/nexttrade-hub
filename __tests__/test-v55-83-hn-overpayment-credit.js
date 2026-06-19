@@ -45,14 +45,18 @@ ok('1e: applied + overpayment always equals the deposit (money conserved)', (fun
   return Math.abs((c.applied_to_invoice + c.overpayment) - apply) < 1e-9;
 })());
 
-// ---- 2. source wiring (the fix) ----
-var bank = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankReviewTab.jsx'), 'utf8');
-ok('2a: overpayment branch no longer gated on mCustomerId alone',
-  bank.indexOf('if (c.overpayment > 0 && mCustomerId)') === -1);
+// ---- 2. source wiring (the fix) ---- v55.83-IP/IS: the match + overpayment-credit write moved
+// to the service-role route /api/accounting/bank-write (RLS-proof). Assert the contract there.
+var route = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8');
+ok('2a: overpayment handled in the match route (c.overpayment > 0)',
+  /if \(c\.overpayment > 0\)/.test(route));
 ok('2b: credit customer defaults to the invoice customer',
-  /creditCustId\s*=\s*mCustomerId\s*\|\|\s*inv\.accounting_customer_id/.test(bank));
+  /creditCustId = body\.credit_customer_id \|\| inv\.accounting_customer_id/.test(route));
 ok('2c: residual with no customer falls back to an unapplied_deposit (never dropped)',
-  bank.indexOf("dbInsert('unapplied_deposits'") > -1 && /creditCustId/.test(bank));
+  route.indexOf("from('unapplied_deposits').insert") > -1 && /if \(creditCustId\) \{/.test(route));
+// 2d: the UI delegates the match (incl. overpayment) to the service route
+ok('2d: BankReviewTab match delegates to the service route',
+  /bankWrite\('match_invoice'/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankReviewTab.jsx'), 'utf8')));
 
 console.log('');
 if (failures.length === 0) {

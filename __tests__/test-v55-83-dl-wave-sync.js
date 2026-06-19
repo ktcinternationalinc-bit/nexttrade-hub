@@ -3,7 +3,7 @@ function p(f){return fs.readFileSync(path.join(__dirname,'..',f),'utf8');}
 function load(f){return p(f).replace(/export \{[\s\S]*?\};\s*$/,'').replace(/^import[^\n]*\n/gm,'');}
 var m={exports:{}};(new Function('module','exports', load('src/lib/wave-silo-guard.js')+load('src/lib/wave-sync-eligibility.js')+'\nmodule.exports={dryRunRecord,paymentEligible,invoiceEligible,customerEligible};'))(m,m.exports);
 var E=m.exports;
-var cust=p('src/app/api/wave/push-customer/route.js');var invr=p('src/app/api/wave/push-invoice/route.js');var payr=p('src/app/api/wave/push-payment/route.js');
+var cust=p('src/app/api/wave/push-customer/route.js');var invr=p('src/app/api/wave/push-invoice-v2/route.js');var payr=p('src/app/api/wave/push-payment/route.js');
 var ui=p('src/components/WaveSyncCenter.jsx');var at=p('src/components/AccountingTab.jsx');
 var pass=0,fail=0;function ok(c,m){if(c)pass++;else{fail++;console.log('  ✗ '+m);}}
 var reg=[{wave_business_id:'A',label:'Test',is_production:false,writes_enabled:true,allow_customer_push:true,allow_invoice_push:true},
