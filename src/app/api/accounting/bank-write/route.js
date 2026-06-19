@@ -45,10 +45,10 @@ async function allocationForTxn(db, txnId) {
   for (i = 0; i < ur.length; i++) { if (!ur[i].status || ur[i].status === 'open') { unapplied += Number(ur[i].amount) || 0; } }
   // v55.83-JG (Codex) — overpayment can land in customer_credits (keyed by source_transaction_id),
   // not unapplied_deposits. Count it too, or an over-paid deposit looks under-allocated and is blocked.
-  var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
+  var cR = await db.from('customer_credits').select('amount, status, voided').eq('source_transaction_id', txnId);
   if (cR && cR.error) { throw cR.error; }
   var cr = (cR && cR.data) || [];
-  for (i = 0; i < cr.length; i++) { if (!cr[i].status || cr[i].status === 'open') { unapplied += Number(cr[i].amount) || 0; } }
+  for (i = 0; i < cr.length; i++) { if (cr[i].voided !== true && (!cr[i].status || cr[i].status === 'open')) { unapplied += Number(cr[i].amount) || 0; } }
   return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: unapplied });
 }
 
@@ -110,7 +110,16 @@ export async function POST(req) {
 
     // ── classify / set_wave_category: categorization on a bank transaction ──
     if (action === 'classify' || action === 'set_wave_category') {
-      var cPatch = body.patch || {};
+      // v55.83-JH (Codex P0) — NEVER trust the raw client patch. Whitelist only categorization fields,
+      // so a direct POST can't set arbitrary columns (e.g. approved_by) on bank_transactions. And the
+      // categorize actions (bank.classify permission) may ONLY ever auto-advance to 'reviewed', never
+      // 'approved' — approval is a separate, higher-permission action via set_status.
+      var CLASSIFY_FIELDS = { classification: 1, category_status: 1, category_source: 1, wave_account_id: 1, wave_account_name: 1, wave_account_type: 1, wave_account_subtype: 1, review_status: 1, accounting_customer_id: 1 };
+      var rawPatch = body.patch || {};
+      var cPatch = {};
+      var fk;
+      for (fk in rawPatch) { if (Object.prototype.hasOwnProperty.call(rawPatch, fk) && CLASSIFY_FIELDS[fk]) { cPatch[fk] = rawPatch[fk]; } }
+      if (cPatch.review_status === 'approved') { delete cPatch.review_status; } // approval never comes through categorize
       cPatch.updated_by = by;
       // v55.83-JG (Codex P0) — classify/set_wave_category patches carry review_status:'reviewed' to
       // auto-advance an unreviewed txn. That bypassed the set_status money-conservation gate: a partly

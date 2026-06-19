@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JH',
+    date: '2026-06-19',
+    label: 'Money-conservation: customer credits now count on screen too, and categorizing can never approve',
+    items: [
+      '**🧮 The Bank Review screen now counts customer credits when checking a deposit is fully allocated** (the server already did). So a $250 deposit split as $100 to an invoice + $150 to a customer credit correctly shows as complete and can be approved — instead of looking short.',
+      '**🔒 Categorizing a transaction can never approve it.** Picking a classification or Wave category can, at most, mark a fully-allocated transaction "reviewed"; it can never set it to "approved" (that stays a separate, higher-permission action). The categorize save also now only accepts known category fields, not arbitrary data.',
+      { superAdminOnly: true, text: 'v55.83-JH (Codex JG review — 2 P0s). (1) BankReviewTab.load now loads customer_credits and folds OPEN, non-void credits (by source_transaction_id) into allocByTxn so the UI allocation matches the server; voided/closed credits excluded. (2) bank-write classify/set_wave_category: whitelist patch fields (classification, category_status/source, wave_account_*, review_status, accounting_customer_id) — arbitrary client keys dropped — and force-strip review_status==="approved" (approval only via set_status w/ payments.match). Server credit query now excludes voided. JC regression extended H1-H5 (incl. runtime 250=100+150-credit complete; 100 alone not). Clean build green; 29/29 required. STILL OPEN (P1): move split-save/park-unapplied off browser dbInsert to a service route (same RLS class); wire visibility floor into Invoices/AR/Ledger/Open Accounts; Plaid backfill/incremental. CAUTION (Codex): route tests remain static+pure-math; full HTTP direct-POST test needs a seeded DB (his live pass).' },
+    ],
+  },
+  {
     version: 'v55.83-JG',
     date: '2026-06-19',
     label: 'Sealed two more ways a half-allocated transaction could slip through',
