@@ -402,6 +402,7 @@ export default function WaveSyncCenter(props) {
       else if (contaminatedCust[p.accounting_customer_id]) { blocked = 'Invoice/customer belongs to a wrong or unregistered Wave silo — do not push'; }
       else if (!invWaveId) { blocked = 'Invoice not yet in Wave'; }
       else if (!custWaveId) { blocked = 'Customer not yet in Wave'; }
+      else if (inv && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) { blocked = 'Wave invoice is DRAFT — approve/repair it (use "Approve in Wave") before pushing this payment. Retrying the payment will hit the same Wave error.'; }
       else if (dupBlock) { blocked = dupBlock; }
       else if (p.sync_status === 'syncing') { blocked = 'Currently syncing to Wave…'; }
       // A push that FAILED is retryable — it is NOT a hard data block. Only the real guards above
@@ -428,6 +429,7 @@ export default function WaveSyncCenter(props) {
         sub: subBits.join(' · '),
         blocked: blocked,
         retryable: !!retryFail,
+        draftBlockedInvoiceId: (inv && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) ? inv.id : null,
         record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
       });
     });
@@ -653,6 +655,7 @@ export default function WaveSyncCenter(props) {
                     {q.amount != null && <span className="font-mono text-slate-300">{Number(q.amount).toLocaleString()}</span>}
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
+                    {q.action === 'payment' && q.draftBlockedInvoiceId && canPushInvoice && <button onClick={function () { approveInWave(q.draftBlockedInvoiceId); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment's invoice is DRAFT in Wave. Approve it (DRAFT → SAVED) so the payment can post — then push the payment.">{busy ? '…' : '✅ Approve invoice in Wave'}</button>}
                     <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Wave\'s API does not accept raw bank-transaction/category pushes — this stays in the Hub' : ''}>{q.hubOnly ? 'ℹ Hub-only' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
                   </div>
                 );

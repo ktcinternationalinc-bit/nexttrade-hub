@@ -47,6 +47,13 @@ function paymentEligible(pay, invoice, customer) {
   var invWaveId = (invoice && invoice.wave_invoice_id) || pay.wave_invoice_id || null;
   var custWaveId = (customer && customer.wave_customer_id) || pay.wave_customer_id || null;
   if (!invWaveId) { return { eligible: false, reason: 'invoice is not in Wave yet (no wave_invoice_id)' }; }
+  // v55.83-JB — Wave refuses payments on DRAFT invoices ("A payment cannot be added to a draft
+  // invoice"). Dry Run must report this as blocked, not ready: the invoice has to be approved
+  // (DRAFT -> SAVED) in Wave/Hub first. The payment push route auto-approves, but eligibility/dry-run
+  // must still tell the truth so a DRAFT payment is never presented as a normal retryable push.
+  if (invoice && (invoice.wave_status === 'DRAFT' || invoice.wave_sync_status === 'pushed_draft')) {
+    return { eligible: false, reason: 'Wave invoice is DRAFT; approve it in Wave/Hub before recording payment.' };
+  }
   if (!custWaveId) { return { eligible: false, reason: 'customer is not in Wave yet (no wave_customer_id)' }; }
   if (!(Number(pay.amount) > 0)) { return { eligible: false, reason: 'amount must be positive' }; }
   if (!pay.payment_date) { return { eligible: false, reason: 'payment date required' }; }

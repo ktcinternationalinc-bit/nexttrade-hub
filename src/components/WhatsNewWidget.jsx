@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JB',
+    date: '2026-06-19',
+    label: 'A payment to a not-yet-approved (draft) Wave invoice no longer looks like a failed payment to retry',
+    items: [
+      '**💳 Matched payments now point you to the real fix when the invoice is still a draft in Wave.** Before, a matched customer payment could sit in the Sync Center as "failed · retry" with the Wave error "a payment cannot be added to a draft invoice" — so staff kept retrying the payment and it kept failing. Now that payment is clearly marked blocked (not retryable), with a one-click **"Approve invoice in Wave"** button right on the payment row. Approve the invoice once, then the payment goes through. Dry Run also reports this as blocked instead of "ready", so nothing falsely looks good to push.',
+      { superAdminOnly: true, text: 'v55.83-JB (Codex P0 core workflow — matched payment to DRAFT invoice surfaced as retryable). wave-sync-eligibility.paymentEligible now rejects invoice.wave_status===DRAFT || wave_sync_status===pushed_draft (dry-run = blocked, not ready). WaveSyncCenter payment row: sets a hard block when the invoice is DRAFT (so retryFail never sets → checkbox disabled via disabled={!!q.blocked} + selectedRows filter on !q.blocked), carries draftBlockedInvoiceId, and renders an "Approve invoice in Wave" button (approveInWave → /api/wave/approve-invoice) on the payment row itself, not only the invrepair row. push-payment route already auto-approves DRAFT then blocks with a repair message on failure (IN). Test test-v55-83-jb (7 assertions); runner green. NEXT: P0 partial bank allocation can leave money unaccounted — require explicit allocation of every dollar, no silent auto-uncategorize, no approve/sync of a partially allocated txn.' },
+    ],
+  },
+  {
     version: 'v55.83-JA',
     date: '2026-06-19',
     label: 'Wave categories pulled in Sync Center now actually appear when categorizing',
