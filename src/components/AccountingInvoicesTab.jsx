@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
@@ -84,14 +85,24 @@ export default function AccountingInvoicesTab(props) {
   var [viewItems, setViewItems] = useState([]);
   var [viewPayments, setViewPayments] = useState([]);
   var [viewLoading, setViewLoading] = useState(false);
+  var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JL admin visibility window
 
-  function load() {
+  async function load() {
     setLoading(true);
+    // v55.83-JL — admin history-visibility floor. Apply at the QUERY (not fetch-then-hide) so older
+    // rows never enter non-super-admin state. invoices floor on invoice_date, proformas on proforma_date.
+    var _floor = null;
+    try {
+      var _vr = await fetch('/api/admin/visibility').then(function (x) { return x.json(); }).catch(function () { return null; });
+      if (_vr && _vr.value) { setVisCfg(_vr.value); _floor = floorDateFor({ window: _vr.value.window, customDays: _vr.value.customDays, customFrom: _vr.value.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
+    } catch (eVis) {}
+    var _invFloor = _floor ? { col: 'invoice_date', value: _floor } : null;
+    var _proFloor = _floor ? { col: 'proforma_date', value: _floor } : null;
     Promise.all([
       supabase.from('businesses').select('id,name').limit(1),
       supabase.from('accounting_customers').select('*').order('company_name', { ascending: true }),
-      fetchAllRows('accounting_invoices', '*', 'created_at', false),
-      fetchAllRows('accounting_proformas', '*', 'created_at', false),
+      fetchAllRows('accounting_invoices', '*', 'created_at', false, _invFloor),
+      fetchAllRows('accounting_proformas', '*', 'created_at', false, _proFloor),
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('invoice_id, voided').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
@@ -453,6 +464,11 @@ export default function AccountingInvoicesTab(props) {
       <div className="flex items-center gap-2 mb-2">
         <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={'Search ' + (isInvoice() ? 'invoices' : 'proformas') + ' — number, customer, status, Wave/Hub…'} className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-slate-100 text-xs" style={{ width: '380px' }} />
         {search.trim() && <button onClick={function () { setSearch(''); }} className="text-[11px] text-slate-300 hover:text-white">clear</button>}
+        {(function () {
+          var f = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date());
+          var lbl = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
+          return <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility).">Visibility: <b className={f ? 'text-sky-300' : 'text-slate-200'}>{lbl}</b>{f ? <span> (from {f})</span> : null}</span>;
+        })()}
         <span className="text-[11px] text-slate-400">{displayRows.length} shown · newest first</span>
       </div>
 

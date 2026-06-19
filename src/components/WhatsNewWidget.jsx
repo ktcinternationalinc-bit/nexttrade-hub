@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JL',
+    date: '2026-06-19',
+    label: 'History-visibility window now also applies to Invoices and Open Accounts',
+    items: [
+      '**📅 The visibility window you set in Settings now also limits Invoices and Open Accounts** (it already covered Bank Review and the Bank tab). Older invoices are filtered out at load for normal users — a super admin still sees everything. Each screen shows a "Visibility" chip with the active window and cutoff date.',
+      '**🔎 Customer Ledger and AR History intentionally still show full history for now** — their balances and aging need the older rows to stay correct, so windowing just their visible event list is a careful follow-up. The Settings panel now says exactly which screens enforce the window so it never overstates coverage.',
+      { superAdminOnly: true, text: 'v55.83-JL (Codex P1, pre-build-reviewed). Per Codex: floor at the QUERY, not fetch-then-hide. fetchAllRows gained an optional gteFilter {col,value}. AccountingInvoicesTab floors accounting_invoices on invoice_date + accounting_proformas on proforma_date via gteFilter (super-admin bypass) + Visibility chip. OpenAccountsTab floors open_account_invoices with .gte(invoice_date, floor) on BOTH load + reload paths + chip. AccountingVisibilityPanel copy now lists "Enforced now: BankReview/BankTab/Invoices/Open Accounts" and "Coming next: Customer Ledger & AR History" (honest — no overclaim). NEW test jl(9) incl. a GUARD that parses the panel\'s Enforced-now list and fails if any named screen does not import/use the visibility policy. Runner 31/31 required. DEFERRED to JM: Customer Ledger + AR History — floor the displayed events but keep all-time balance/aging math (Codex AR-aging exemption). Still open: Plaid backfill/incremental; live seeded direct-POST proof.' },
+    ],
+  },
+  {
     version: 'v55.83-JK',
     date: '2026-06-19',
     label: 'Fixed split math so an invoice line + a category line add up correctly',

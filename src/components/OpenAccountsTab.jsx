@@ -26,6 +26,7 @@ import { TRANSACTION_TYPES, simulate, computePaidRemaining, findOffsetCandidate,
 import { T as t18n, P as i18nP } from '../lib/open-account-i18n';
 // v55.83-A.6.27.61 — Attachments wire-up
 import AttachmentManager from './AttachmentManager';
+import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 
 function fmtNum(n) {
   if (n == null || isNaN(Number(n))) return '—';
@@ -192,6 +193,9 @@ export default function OpenAccountsTab(props) {
   var userProfile = props.userProfile;
   var modulePerms = props.modulePerms || {};
   var isSuperAdmin = props.isSuperAdmin === true;
+  // v55.83-JL — admin history-visibility floor for open-account invoices (super-admin bypass).
+  var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null });
+  function oaiFloorValue() { return floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
 
   // v55.83-A.6.27.NEXT (Issue 4) — Permission split.
   //
@@ -359,11 +363,21 @@ export default function OpenAccountsTab(props) {
       setLoading(true);
       setError(null);
       try {
+        // v55.83-JL — fetch the admin visibility policy first, then floor open-account invoices AT THE
+        // QUERY (super-admin bypass). Older invoices never enter non-super-admin state.
+        var _oaFloor = null;
+        try {
+          var _vr = await fetch('/api/admin/visibility').then(function (x) { return x.json(); }).catch(function () { return null; });
+          if (_vr && _vr.value) { setVisCfg(_vr.value); _oaFloor = floorDateFor({ window: _vr.value.window, customDays: _vr.value.customDays, customFrom: _vr.value.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
+        } catch (eVis) {}
+        var _oaInvQ = supabase.from('open_account_invoices').select('*');
+        if (_oaFloor) { _oaInvQ = _oaInvQ.gte('invoice_date', _oaFloor); }
+        _oaInvQ = _oaInvQ.order('invoice_date', { ascending: false });
         var [accRes, entRes, bizRes, invRes, itmRes, fxRes] = await Promise.all([
           supabase.from('open_accounts').select('*').order('account_name'),
           supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
           supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
-          supabase.from('open_account_invoices').select('*').order('invoice_date', { ascending: false }),
+          _oaInvQ,
           supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
           // v55.83-A.6.27.72 HOTFIX 11 — FX rates for the Global Net Position card.
           // Errors gracefully if fx_rates table isn't populated yet.
@@ -1311,11 +1325,16 @@ export default function OpenAccountsTab(props) {
 
   async function reload() {
     try {
+      // v55.83-JL — same visibility floor on the reload path.
+      var _oaFloorR = oaiFloorValue();
+      var _oaInvQR = supabase.from('open_account_invoices').select('*');
+      if (_oaFloorR) { _oaInvQR = _oaInvQR.gte('invoice_date', _oaFloorR); }
+      _oaInvQR = _oaInvQR.order('invoice_date', { ascending: false });
       var [accRes, entRes, bizRes, invRes, itmRes] = await Promise.all([
         supabase.from('open_accounts').select('*').order('account_name'),
         supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
         supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
-        supabase.from('open_account_invoices').select('*').order('invoice_date', { ascending: false }),
+        _oaInvQR,
         supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
       ]);
       setAccounts(accRes.data || []);
@@ -1348,6 +1367,11 @@ export default function OpenAccountsTab(props) {
               <span className="mx-2">·</span>
               <span className="bg-white text-red-800 rounded px-1.5 py-0.5 mr-1">DEBIT</span> = money out from us
             </div>
+            {(function () {
+              var f = oaiFloorValue();
+              var lbl = isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays);
+              return <div className="text-[11px] font-semibold text-emerald-100 mt-1" title="Org history-visibility window — invoices older than the cutoff are not shown (super admin sets it in Settings → Accounting Visibility).">Invoice visibility: <b className="bg-white/20 rounded px-1.5 py-0.5">{lbl}</b>{f ? <span> (from {f})</span> : null}</div>;
+            })()}
           </div>
           <div className="flex gap-2 items-center flex-wrap">
             {canEdit && (

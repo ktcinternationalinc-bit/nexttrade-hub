@@ -52,7 +52,11 @@ export default function AccountingVisibilityPanel({ userProfile, toast }) {
   return (
     <div className="bg-white rounded-xl p-5 max-w-2xl">
       <h3 className="text-lg font-bold mb-1">📅 Accounting History Visibility</h3>
-      <p className="text-[13px] text-slate-600 mb-4">Controls how far back <b>normal users</b> can see bank transactions, invoices, AR, customer ledgers and Open Accounts. You (super admin) always see <b>all</b> stored history regardless of this setting.</p>
+      <p className="text-[13px] text-slate-600 mb-4">Controls how far back <b>normal users</b> can see history. You (super admin) always see <b>all</b> stored history regardless of this setting.</p>
+      <div className="text-[12px] text-slate-600 mb-4 bg-slate-50 border border-slate-200 rounded p-2">
+        <b>Enforced now:</b> Bank Review, Bank tab, Invoices, Open Accounts.<br/>
+        <b>Coming next:</b> Customer Ledger &amp; Customer AR History still show full history (their balances/aging need older rows; the visible event list will be windowed in a follow-up).
+      </div>
 
       {tableMissing && (
         <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-300 text-[12px] text-amber-900">
