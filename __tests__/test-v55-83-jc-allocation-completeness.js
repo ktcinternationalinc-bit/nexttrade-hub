@@ -35,7 +35,7 @@ ok('B2: approve has the same money-conservation gate', /!allocA\.complete/.test(
 ok('B3: txnAllocation uses the loaded allocation map + bankAllocationStatus',
   /function txnAllocation\(t\)/.test(br) && /bankAllocationStatus\(\{ txnAmount: total, paid: a\.paid, split: a\.split, unapplied: a\.unapplied \}\)/.test(br));
 ok('B4: allocation map is built from payments + splits + open unapplied deposits in load()',
-  /from\('bank_transaction_splits'\)\.select\('bank_transaction_id, split_amount'\)/.test(br) &&
+  /from\('bank_transaction_splits'\)\.select\('bank_transaction_id, split_amount, linked_type'\)/.test(br) &&
   /from\('unapplied_deposits'\)\.select\('bank_transaction_id, amount, status'\)/.test(br) &&
   /bucket\(p\.bank_transaction_id\)\.paid/.test(br) && /setAllocByTxn\(allocBy\)/.test(br));
 
@@ -63,11 +63,12 @@ ok('F2: match_invoice returns deposit_remaining + fully_allocated to the client'
   /deposit_remaining: depositRemaining, fully_allocated: fullyAllocated/.test(route));
 
 // --- G. Server set_status is the AUTHORITATIVE gate (closes the service-role bypass Codex flagged) ---
-ok('G1: bank-write computes server-side allocation (payments + splits + open unapplied)',
+ok('G1: bank-write computes server-side allocation (payments + splits[+linked_type] + unapplied + credits → summarizeBankAllocation)',
   /async function allocationForTxn\(db, txnId\)/.test(route) &&
   /from\('accounting_invoice_payments'\)\.select\('amount, voided, sync_status'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
-  /from\('bank_transaction_splits'\)\.select\('split_amount'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
-  /from\('unapplied_deposits'\)\.select\('amount, status'\)\.eq\('bank_transaction_id', txnId\)/.test(route));
+  /from\('bank_transaction_splits'\)\.select\('split_amount, linked_type'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
+  /from\('unapplied_deposits'\)\.select\('amount, status'\)\.eq\('bank_transaction_id', txnId\)/.test(route) &&
+  /return summarizeBankAllocation\(\{/.test(route));
 ok('G2: set_status blocks reviewed/approved server-side when not fully allocated (direct-route bypass closed)',
   /if \(body\.status === 'reviewed' \|\| body\.status === 'approved'\) \{[\s\S]{0,600}allocationForTxn\(db, body\.bank_transaction_id\)/.test(route) &&
   /if \(alloc && !alloc\.complete\)[\s\S]{0,160}is unallocated\./.test(route) &&
@@ -83,7 +84,9 @@ ok('G5: 800 invoice payment + 200 parked (credit/unapplied) fully allocates a 10
 
 // --- H. JH: client UI counts credits too + categorize actions are whitelisted (no approve via patch) ---
 ok('H1: server counts only OPEN customer credits (schema-safe; no voided-column dependency, reversed=void excluded by status)',
-  /for \(i = 0; i < cr\.length; i\+\+\) \{ if \(!cr\[i\]\.status \|\| cr\[i\]\.status === 'open'\)/.test(route) && !/customer_credits'\)\.select\('amount, status, voided'/.test(route));
+  /from\('customer_credits'\)\.select\('amount, status'\)\.eq\('source_transaction_id', txnId\)/.test(route) &&
+  !/customer_credits'\)\.select\('amount, status, voided'/.test(route) &&
+  /\(parts\.credits \|\| \[\]\)\.forEach\(function \(c\) \{ if \(!c\.status \|\| c\.status === 'open'\)/.test(rd('src/lib/payment-matching.js')));
 ok('H2: classify/set_wave_category whitelist patch fields (no arbitrary columns)',
   /var CLASSIFY_FIELDS = \{[\s\S]{0,200}\}/.test(route) && /if \(Object\.prototype\.hasOwnProperty\.call\(rawPatch, fk\) && CLASSIFY_FIELDS\[fk\]\)/.test(route));
 ok('H3: categorize actions can never write approved (approval is a separate higher-permission action)',

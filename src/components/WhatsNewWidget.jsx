@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JK',
+    date: '2026-06-19',
+    label: 'Fixed split math so an invoice line + a category line add up correctly',
+    items: [
+      '**🧮 Splitting a $250 deposit into, say, $100 to an invoice and $150 to a category now adds up to exactly $250** — a rounding/double-count bug briefly made the invoice portion count twice (so it looked like $350 and got blocked). Splitting, parking, and approving now agree on the totals.',
+      '**🛡️ Parking an unapplied amount is now checked before it saves** (it won\'t let you over-allocate a deposit), and a split that hits an unexpected error rolls back cleanly instead of leaving half-saved lines.',
+      { superAdminOnly: true, text: 'v55.83-JK (Codex JJ review — 3 real route bugs). (1) DOUBLE-COUNT: save_splits writes both a split row and a payment row for invoice-linked lines; allocationForTxn counted both → 250=100inv+150cat computed as 350/over. Fix: NEW pure summarizeBankAllocation(parts) excludes linked_type===invoice splits (their dollars are the payment); server allocationForTxn now selects split_amount,linked_type and delegates to it. (2) create_unapplied now rejects over-park BEFORE insert (was insert-then-check). (3) save_splits pre-fetches/validates ALL invoice refs before any write + tracks created split/match/payment ids and rolls them back on a mid-loop failure. Behavioral test JK1 proves 250=100inv(+payment)+150cat is complete & not over; JK2 control proves the exclusion matters. Tests jj(19)+jc updated; clean build green; runner 30/30. Client allocByTxn still excludes invoice splits? (next: confirm BankReviewTab allocByTxn mirrors the exclusion). REMAINING P1: visibility wiring into Invoices/AR/Ledger/Open Accounts; Plaid backfill/incremental; live direct-POST proof.' },
+    ],
+  },
+  {
     version: 'v55.83-JJ',
     date: '2026-06-19',
     label: 'Splitting a deposit and parking an unapplied amount now save reliably (server-side)',

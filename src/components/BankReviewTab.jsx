@@ -130,7 +130,7 @@ export default function BankReviewTab(props) {
       supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
       supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
-      supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount'),
+      supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount, linked_type'),
       supabase.from('unapplied_deposits').select('bank_transaction_id, amount, status'),
       supabase.from('customer_credits').select('source_transaction_id, amount, status'),
     ]).then(function (res) {
@@ -155,6 +155,9 @@ export default function BankReviewTab(props) {
       });
       ((res[9] && res[9].data) || []).forEach(function (s) {
         if (!s || !s.bank_transaction_id) { return; }
+        // v55.83-JK — an invoice-linked split also has a payment row for the same dollars; counting
+        // both double-counts. Exclude linked_type==='invoice' here, exactly like the server.
+        if (String(s.linked_type || '') === 'invoice') { return; }
         bucket(s.bank_transaction_id).split += Number(s.split_amount) || 0;
       });
       ((res[10] && res[10].data) || []).forEach(function (u) {

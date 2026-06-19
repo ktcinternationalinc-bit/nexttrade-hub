@@ -71,6 +71,23 @@ export function validateSplit(txnAmount, splits) {
   };
 }
 
+// v55.83-JK — pure allocation summarizer over the raw rows for a bank transaction. Both the server
+// route and the Bank Review UI use this so they agree exactly. CRITICAL: an invoice-linked split line
+// also has a payment row for the same dollars, so counting BOTH double-counts — invoice-linked splits
+// (linked_type === 'invoice') are therefore EXCLUDED from the split sum (their money is the payment).
+// parts: { total, payments:[{amount,voided,sync_status}], splits:[{split_amount,linked_type}],
+//          unapplied:[{amount,status}], credits:[{amount,status}] }
+export function summarizeBankAllocation(parts) {
+  parts = parts || {};
+  var total = roundMoney(Number(parts.total) || 0);
+  var paid = 0, split = 0, parked = 0;
+  (parts.payments || []).forEach(function (p) { if (!isPaymentVoid(p)) { paid += Number(p.amount) || 0; } });
+  (parts.splits || []).forEach(function (s) { if (String(s.linked_type || '') !== 'invoice') { split += Number(s.split_amount) || 0; } });
+  (parts.unapplied || []).forEach(function (u) { if (!u.status || u.status === 'open') { parked += Number(u.amount) || 0; } });
+  (parts.credits || []).forEach(function (c) { if (!c.status || c.status === 'open') { parked += Number(c.amount) || 0; } });
+  return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: parked });
+}
+
 // v55.83-JC — ACCOUNTING INTEGRITY (money conservation). A bank transaction must be FULLY
 // accounted for before it can be marked reviewed/approved. Allocation is the sum of every piecewise
 // disposition tied to the transaction: invoice payments + saved split lines + open unapplied

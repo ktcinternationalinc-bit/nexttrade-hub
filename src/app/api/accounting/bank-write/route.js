@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
-import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus } from '../../../../lib/payment-matching';
+import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
 
 var API_BUILD_MARKER = 'v55.83-IP-bank-write';
 var API_ROUTE = '/api/accounting/bank-write';
@@ -30,30 +30,19 @@ async function allocationForTxn(db, txnId) {
   var t = (tR && tR.data && tR.data.length) ? tR.data[0] : null;
   if (!t) { return { missing: true }; }
   var total = Number(t.amount_abs != null ? t.amount_abs : Math.abs(Number(t.amount) || 0));
-  var paid = 0; var split = 0; var unapplied = 0;
   var pR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('bank_transaction_id', txnId);
   if (pR && pR.error) { throw pR.error; }
-  var pr = (pR && pR.data) || []; var i;
-  for (i = 0; i < pr.length; i++) { if (!isPaymentVoid(pr[i])) { paid += Number(pr[i].amount) || 0; } }
-  var sR = await db.from('bank_transaction_splits').select('split_amount').eq('bank_transaction_id', txnId);
+  // v55.83-JK — select linked_type so summarizeBankAllocation can EXCLUDE invoice-linked splits (their
+  // dollars are already counted as the payment row — counting both double-counts, the bug Codex caught).
+  var sR = await db.from('bank_transaction_splits').select('split_amount, linked_type').eq('bank_transaction_id', txnId);
   if (sR && sR.error) { throw sR.error; }
-  var sr = (sR && sR.data) || [];
-  for (i = 0; i < sr.length; i++) { split += Number(sr[i].split_amount) || 0; }
   var uR = await db.from('unapplied_deposits').select('amount, status').eq('bank_transaction_id', txnId);
   if (uR && uR.error) { throw uR.error; }
-  var ur = (uR && uR.data) || [];
-  for (i = 0; i < ur.length; i++) { if (!ur[i].status || ur[i].status === 'open') { unapplied += Number(ur[i].amount) || 0; } }
-  // v55.83-JG (Codex) — overpayment can land in customer_credits (keyed by source_transaction_id),
-  // not unapplied_deposits. Count it too, or an over-paid deposit looks under-allocated and is blocked.
-  // v55.83-JI (Codex P0 schema-safe) — rely on status only; customer_credits has no guaranteed
-  // `voided` column on live/prod, and selecting it would throw column-not-found and break the whole
-  // approval path. unmatch already sets reversed credits to status='void', so the open-status check
-  // excludes them without a migration.
+  // v55.83-JI schema-safe — status only (customer_credits has no guaranteed `voided` column; unmatch
+  // sets reversed credits to status='void', excluded by the open-status check in summarizeBankAllocation).
   var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
   if (cR && cR.error) { throw cR.error; }
-  var cr = (cR && cR.data) || [];
-  for (i = 0; i < cr.length; i++) { if (!cr[i].status || cr[i].status === 'open') { unapplied += Number(cr[i].amount) || 0; } }
-  return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: unapplied });
+  return summarizeBankAllocation({ total: total, payments: (pR && pR.data) || [], splits: (sR && sR.data) || [], unapplied: (uR && uR.data) || [], credits: (cR && cR.data) || [] });
 }
 
 // Server-side invoice recompute — mirrors BankReviewTab.recomputeInvoice + push-payment.
@@ -126,6 +115,11 @@ export async function POST(req) {
       var uRow0 = (uCur && uCur.data && uCur.data.length) ? uCur.data[0] : null;
       if (!uRow0) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       if (uRow0.review_status === 'approved') { return NextResponse.json({ ok: false, error: 'Transaction is approved — reopen it first.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      // v55.83-JK (Codex) — reject OVER-PARK before writing anything: the new park plus what's already
+      // allocated must not exceed the deposit. Previously we inserted first, then checked.
+      var uPre = await allocationForTxn(db, ut.id);
+      if (uPre && !uPre.missing && uPre.total > 0 && roundMoney(uPre.allocated + uAmt) > uPre.total + 0.01) {
+        return NextResponse.json({ ok: false, error: 'Parking ' + uAmt + ' would over-allocate this ' + uPre.total + ' deposit (' + uPre.allocated + ' already allocated; ' + roundMoney(uPre.total - uPre.allocated) + ' remaining).', allocation: uPre, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       var uSilo = body.wave_business_id || uRow0.wave_business_id || ut.wave_business_id || null;
       var uIns = await db.from('unapplied_deposits').insert({ business_id: uRow0.business_id || ut.business_id || null, wave_business_id: uSilo, bank_transaction_id: ut.id, accounting_customer_id: body.customer_id || null, amount: uAmt, status: 'open', notes: body.notes || null, created_by: by }).select();
       if (uIns && uIns.error) { return NextResponse.json({ ok: false, error: 'Could not save the unapplied deposit: ' + uIns.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -157,16 +151,38 @@ export async function POST(req) {
       var biz = tRow.business_id || t.business_id || null;
       var silo = body.wave_business_id || tRow.wave_business_id || t.wave_business_id || null;
       var isOut = tRow.direction === 'out';
-      // Validate every line + the exact-allocation contract before writing anything.
-      var sum = 0; var ri2;
+      // v55.83-JK (Codex) — VALIDATE EVERYTHING BEFORE ANY WRITE. Per-line amounts/money-out, the
+      // exact-allocation contract, AND every invoice reference (exists + same business) are checked up
+      // front, so a bad invoice ref can't leave half-written split rows behind.
+      var sum = 0; var ri2; var invIds = [];
       for (ri2 = 0; ri2 < rows.length; ri2++) {
         var amt2 = roundMoney(Number(rows[ri2].amount));
         if (!(amt2 > 0)) { return NextResponse.json({ ok: false, error: 'Every split line must be greater than zero.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
         if (isOut && rows[ri2].invoice_id) { return NextResponse.json({ ok: false, error: 'This is an OUTGOING transaction — split lines cannot link to a customer invoice.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        if (rows[ri2].invoice_id) { invIds.push(rows[ri2].invoice_id); }
         sum = roundMoney(sum + amt2);
       }
       if (Math.abs(sum - depAmt) > 0.01) { return NextResponse.json({ ok: false, error: 'Split lines total ' + sum + ' but the transaction is ' + depAmt + '. A split must allocate the full amount.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
-      // Insert each split line; invoice-linked lines also produce match + payment + recompute.
+      // Pre-fetch + validate ALL referenced invoices before writing.
+      var invMap = {};
+      if (invIds.length) {
+        var preInv = await db.from('accounting_invoices').select('id, business_id, wave_business_id, total_amount, wave_imported_paid, accounting_customer_id, invoice_number, wave_invoice_id').in('id', invIds);
+        if (preInv && preInv.error) { return NextResponse.json({ ok: false, error: preInv.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        var pinv = (preInv && preInv.data) || []; var pq;
+        for (pq = 0; pq < pinv.length; pq++) { invMap[pinv[pq].id] = pinv[pq]; }
+        for (ri2 = 0; ri2 < invIds.length; ri2++) {
+          var ivchk = invMap[invIds[ri2]];
+          if (!ivchk) { return NextResponse.json({ ok: false, error: 'Split references an invoice that was not found (' + invIds[ri2] + ').', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+          if (biz && ivchk.business_id && biz !== ivchk.business_id) { return NextResponse.json({ ok: false, error: 'A split line links an invoice from another business.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        }
+      }
+      // Write phase. Track everything created so a mid-way DB failure can be rolled back.
+      var createdSplitIds = []; var createdMatchIds = []; var createdPaymentIds = [];
+      async function rollbackSplits() {
+        try { if (createdPaymentIds.length) { await db.from('accounting_invoice_payments').delete().in('id', createdPaymentIds); } } catch (e1) {}
+        try { if (createdMatchIds.length) { await db.from('payment_matches').delete().in('id', createdMatchIds); } } catch (e2) {}
+        try { if (createdSplitIds.length) { await db.from('bank_transaction_splits').delete().in('id', createdSplitIds); } } catch (e3) {}
+      }
       var results = []; var k2;
       for (k2 = 0; k2 < rows.length; k2++) {
         var r = rows[k2];
@@ -179,24 +195,24 @@ export async function POST(req) {
           if (splitRow.wave_account_id) {
             var baseRow = { business_id: biz, bank_transaction_id: t.id, split_amount: amt3, category: splitRow.category, linked_type: splitRow.linked_type, linked_id: splitRow.linked_id, notes: splitRow.notes, created_by: by };
             var sIns2 = await db.from('bank_transaction_splits').insert(baseRow).select();
-            if (sIns2 && sIns2.error) { return NextResponse.json({ ok: false, error: 'Split line save failed: ' + sIns2.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-          } else { return NextResponse.json({ ok: false, error: 'Split line save failed: ' + sIns.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-        }
+            if (sIns2 && sIns2.error) { await rollbackSplits(); return NextResponse.json({ ok: false, error: 'Split line save failed (rolled back): ' + sIns2.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+            if (sIns2 && sIns2.data && sIns2.data.length) { createdSplitIds.push(sIns2.data[0].id); }
+          } else { await rollbackSplits(); return NextResponse.json({ ok: false, error: 'Split line save failed (rolled back): ' + sIns.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        } else if (sIns && sIns.data && sIns.data.length) { createdSplitIds.push(sIns.data[0].id); }
         if (r.invoice_id) {
-          var invR = await db.from('accounting_invoices').select('id, business_id, wave_business_id, total_amount, wave_imported_paid, accounting_customer_id, invoice_number, wave_invoice_id').eq('id', r.invoice_id).limit(1);
-          var inv2 = (invR && invR.data && invR.data.length) ? invR.data[0] : null;
-          if (!inv2) { return NextResponse.json({ ok: false, error: 'Split references an invoice that was not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
-          if (biz && inv2.business_id && biz !== inv2.business_id) { return NextResponse.json({ ok: false, error: 'A split line links an invoice from another business.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+          var inv2 = invMap[r.invoice_id];
           // anti-double-count: paid so far on the invoice
           var ipR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', inv2.id);
           var paidNow2 = Number(inv2.wave_imported_paid) || 0; var ipr2 = (ipR && ipR.data) || []; var yy;
           for (yy = 0; yy < ipr2.length; yy++) { if (!isPaymentVoid(ipr2[yy])) { paidNow2 += Number(ipr2[yy].amount) || 0; } }
           var cc = classifyApplication(Number(inv2.total_amount) || 0, roundMoney(paidNow2), amt3);
           var mI = await db.from('payment_matches').insert({ business_id: biz, wave_business_id: silo, bank_transaction_id: t.id, invoice_id: inv2.id, matched_amount: cc.applied_to_invoice, match_type: cc.type, is_manual_override: true, notes: r.notes || 'split', matched_by: by, created_by: by }).select();
-          if (mI && mI.error) { return NextResponse.json({ ok: false, error: 'Split match save failed: ' + mI.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+          if (mI && mI.error) { await rollbackSplits(); return NextResponse.json({ ok: false, error: 'Split match save failed (rolled back): ' + mI.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
           var mId = (mI && mI.data && mI.data.length) ? mI.data[0].id : null;
-          var pI = await db.from('accounting_invoice_payments').insert({ business_id: biz, wave_business_id: silo, accounting_invoice_id: inv2.id, accounting_customer_id: inv2.accounting_customer_id || null, amount: cc.applied_to_invoice, payment_date: t.posted_date || t.date || null, source: 'plaid_match', bank_transaction_id: t.id, payment_match_id: mId, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: inv2.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: r.notes || 'split', created_by: by });
-          if (pI && pI.error) { try { await db.from('payment_matches').update({ voided: true }).eq('id', mId); } catch (eRb) {} return NextResponse.json({ ok: false, error: 'Split payment save failed (match rolled back): ' + pI.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+          if (mId) { createdMatchIds.push(mId); }
+          var pI = await db.from('accounting_invoice_payments').insert({ business_id: biz, wave_business_id: silo, accounting_invoice_id: inv2.id, accounting_customer_id: inv2.accounting_customer_id || null, amount: cc.applied_to_invoice, payment_date: t.posted_date || t.date || null, source: 'plaid_match', bank_transaction_id: t.id, payment_match_id: mId, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: inv2.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: r.notes || 'split', created_by: by }).select();
+          if (pI && pI.error) { await rollbackSplits(); return NextResponse.json({ ok: false, error: 'Split payment save failed (rolled back): ' + pI.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+          if (pI && pI.data && pI.data.length) { createdPaymentIds.push(pI.data[0].id); }
           if (cc.overpayment > 0) {
             var credCust = inv2.accounting_customer_id || null;
             if (credCust) { await db.from('customer_credits').insert({ business_id: biz, wave_business_id: silo, accounting_customer_id: credCust, source_transaction_id: t.id, amount: cc.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (inv2.invoice_number || inv2.id) + ' (split)', created_by: by }); }
