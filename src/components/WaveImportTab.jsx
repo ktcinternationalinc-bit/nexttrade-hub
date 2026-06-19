@@ -26,6 +26,8 @@ export default function WaveImportTab(props) {
   var [conn, setConn] = useState(null);
   var [importingInv, setImportingInv] = useState(false);
   var [invReport, setInvReport] = useState(null);
+  var [importingEst, setImportingEst] = useState(false); // v55.83-IQ — estimates → proformas
+  var [estReport, setEstReport] = useState(null);
   var [diag, setDiag] = useState(null);
   var [diagBusy, setDiagBusy] = useState(false);
   var [recon, setRecon] = useState(null);
@@ -110,6 +112,18 @@ export default function WaveImportTab(props) {
       .then(function (d) { setInvReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
       .catch(function (e) { setInvReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
       .finally(function () { setImportingInv(false); });
+  }
+
+  // v55.83-IQ — pull Wave ESTIMATES into the Hub as PROFORMAS (per silo).
+  function runImportEstimates() {
+    var blkE = importBlockReason(); if (blkE) { window.alert(blkE); return; }
+    if (!window.confirm('Import ALL estimates from the selected Wave business into the Hub as Proformas? Safe and re-runnable — matches on Wave estimate ID. Import customers first.')) return;
+    setImportingEst(true); setEstReport(null);
+    fetch('/api/wave/import-estimates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: bizId, userId: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setEstReport(d && d.report ? d.report : { errors: [d && d.error ? d.error : 'Unknown error'] }); })
+      .catch(function (e) { setEstReport({ errors: ['Request failed: ' + ((e && e.message) || 'unknown')] }); })
+      .finally(function () { setImportingEst(false); });
   }
 
   function runImportCustomers() {
@@ -308,6 +322,34 @@ export default function WaveImportTab(props) {
                   <div className="mt-2"><div className="font-bold text-rose-700">Errors ({invReport.errors.length}):</div>
                     <ul className="list-disc ml-4 text-rose-700">{invReport.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
                     {invReport.errors.length > 20 && <div className="text-rose-700">…and {invReport.errors.length - 20} more</div>}
+                  </div>
+                ) : <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 border-t border-slate-700 pt-3">
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 3b — Import estimates → Proformas (per silo)</div>
+            <div className="text-[11px] text-slate-400 mb-2">Pulls Wave estimates for this business into the Hub as Proformas (with line items). Safe and re-runnable: matches on Wave estimate ID. They appear under Accounting → Proformas for this silo.</div>
+            <button onClick={runImportEstimates} disabled={importingEst} className="px-4 py-2 bg-fuchsia-700 hover:bg-fuchsia-600 text-white rounded text-sm font-bold disabled:opacity-50">
+              {importingEst ? 'Importing estimates…' : 'Import estimates into Hub'}
+            </button>
+            {estReport && (
+              <div className="bg-white text-slate-900 rounded-lg p-3 mt-3 border border-slate-200 text-xs">
+                <div className="font-extrabold mb-1">📋 Estimate → Proforma import report</div>
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  <div className="bg-emerald-100 text-emerald-950 rounded p-2"><div className="text-lg font-extrabold">{estReport.created || 0}</div>created</div>
+                  <div className="bg-sky-100 text-sky-950 rounded p-2"><div className="text-lg font-extrabold">{estReport.updated || 0}</div>updated</div>
+                  <div className="bg-amber-100 text-amber-950 rounded p-2"><div className="text-lg font-extrabold">{estReport.skipped || 0}</div>skipped</div>
+                  <div className="bg-violet-100 text-violet-950 rounded p-2"><div className="text-lg font-extrabold">{estReport.lineItems || 0}</div>line items</div>
+                </div>
+                <div className="text-slate-600">Total read: {estReport.total == null ? '—' : estReport.total} · {estReport.timestamp || ''}</div>
+                {(estReport.placeholders && estReport.placeholders.length > 0) && (
+                  <div className="mt-2 bg-amber-50 text-amber-950 rounded p-2"><b>{estReport.placeholders.length} placeholder customer(s) created</b> — flagged for review: {estReport.placeholders.slice(0, 10).join(', ')}{estReport.placeholders.length > 10 ? '…' : ''}</div>
+                )}
+                {(estReport.errors && estReport.errors.length > 0) ? (
+                  <div className="mt-2"><div className="font-bold text-rose-700">Errors ({estReport.errors.length}):</div>
+                    <ul className="list-disc ml-4 text-rose-700">{estReport.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
                   </div>
                 ) : <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
               </div>

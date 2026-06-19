@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IQ',
+    date: '2026-06-18',
+    label: 'Wave estimates → Hub Proformas (per silo) + Wave categories in the categorize dropdown',
+    items: [
+      '**📄 Pull Wave estimates into the Hub as Proformas, per silo.** Wave Import → "Import estimates into Hub" pulls each Wave business\'s estimates (with line items) into Accounting → Proformas, scoped to that silo. Re-runnable (matches on the Wave estimate ID).',
+      '**🏷️ Wave categories (Chart of Accounts) appear in the categorize dropdown.** When you categorize a transaction in Bank Review, the silo\'s real Wave accounts (e.g. "Vehicle Repair", grouped by Expense/Income/etc.) are the dropdown options. If the list is empty for a silo, pull them once via Wave Sync Center → Pull Wave categories.',
+      { superAdminOnly: true, text: 'v55.83-IQ. (A) NEW /api/wave/import-estimates (service-role, read-only Wave query) pulls business.estimates → accounting_proformas dedup by wave_estimate_id, links customers via wave_customer_id (flagged placeholder if missing), imports line items into accounting_proforma_items (delete-then-insert), stamps wave_business_id + currency + wave_status + source=wave_import. SQL sql/v55-83-IQ-proforma-wave-estimates.sql adds wave_business_id/currency/wave_status/source/is_historical + unique index on wave_estimate_id (RUN IT). Button in WaveImportTab (Step 3b). Proformas tab already scopes by silo via scopeIfRegistered. (B) Wave categorize dropdown already existed in BankReviewTab and is silo-scoped (loads wave_categories filtered to active wave_business_id, grouped by account type via orderedCatGroups); populated by the existing sync-categories pull. Confirmed working — if empty, the silo\'s chart of accounts hasn\'t been pulled (Wave Sync Center → Pull Wave categories). Test test-v55-83-iq-estimates-proformas.js (11). NOTE: estimate GraphQL fields (estimates/estimateNumber/estimateDate/expiryDate) mirror the invoice query; read-only so a wrong field surfaces a GraphQL error, never a mutation. SETUP: run the IQ SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-IP',
     date: '2026-06-18',
     label: 'Accounting/Banking CORE: categorize + link-to-invoice now persist reliably (server-side, RLS-proof)',
