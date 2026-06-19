@@ -61,7 +61,8 @@ var SCREEN_SOURCES = {
   'Bank Review': 'src/components/BankReviewTab.jsx',
   'Bank tab': 'src/components/BankTab.jsx',
   'Invoices': 'src/components/AccountingInvoicesTab.jsx',
-  'Open Accounts': 'src/components/OpenAccountsTab.jsx'
+  'Open Accounts': 'src/components/OpenAccountsTab.jsx',
+  'Customer Ledger': 'src/components/CustomerLedger.jsx'
 };
 function usesPolicy(src) {
   var s = rd(src);
@@ -76,8 +77,12 @@ if (enforcedMatch) {
     allWired, 'claimed: ' + named.join(' | '));
 }
 // And the panel must NOT claim Ledger / AR History as enforced yet (they are deferred to JM).
-ok('9: panel does NOT overclaim Customer Ledger / AR History as enforced (still show full history — deferred)',
-  /Coming next:[\s\S]{0,160}Customer Ledger/.test(panel) && /AR History/.test(panel));
+ok('9: panel honestly defers AR History (open-balance needs full history) in Coming next',
+  /Coming next:[\s\S]{0,160}Customer AR History/.test(panel));
+ok('10: CustomerLedger windows DISPLAYED events but keeps all-time running balance (Codex AR-aging exemption)',
+  /var displayStatement = useMemo/.test(rd('src/components/CustomerLedger.jsx')) &&
+  /statement\.filter\(function \(e\) \{ return \(e\.date \|\| ''\) >= ledgerFloor/.test(rd('src/components/CustomerLedger.jsx')) &&
+  /run \+= e\.debit - e\.credit; e\.running = run/.test(rd('src/components/CustomerLedger.jsx')));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JL visibility-wiring tests passed'); process.exit(0); }

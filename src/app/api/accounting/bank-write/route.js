@@ -255,6 +255,7 @@ export async function POST(req) {
         var cAlloc = await allocationForTxn(db, body.bank_transaction_id);
         if (cAlloc && cAlloc.missing) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
         if (cAlloc && (!cAlloc.complete || cAlloc.overAllocated)) { delete cPatch.review_status; delete cPatch.reviewed_by; delete cPatch.reviewed_at; autoReviewStripped = true; }
+        else { cPatch.reviewed_by = by; cPatch.reviewed_at = new Date().toISOString(); } // v55.83-JP (audit) — a reviewed txn must record who/when, like set_status
       }
       var cRes = await db.from('bank_transactions').update(cPatch).eq('id', body.bank_transaction_id).select();
       if (cRes && cRes.error) { return NextResponse.json({ ok: false, error: cRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -270,6 +271,17 @@ export async function POST(req) {
       if (!(apply > 0)) { return NextResponse.json({ ok: false, error: 'Amount must be greater than zero.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var biz = t.business_id || inv.business_id || null;
       var siloId = body.wave_business_id || inv.wave_business_id || t.wave_business_id || null;
+      // v55.83-JP (audit) — SERVER-SIDE silo guard. The client checks same-silo, but this service-role
+      // route bypasses RLS, so a direct call could cross-match a 6338 deposit to a 6353 invoice. Refuse
+      // when the deposit and the invoice declare different Wave businesses. Re-read both from the DB so
+      // we don't trust client-supplied silo tags.
+      var tSiloRes = await db.from('bank_transactions').select('wave_business_id').eq('id', t.id);
+      var iSiloRes = await db.from('accounting_invoices').select('wave_business_id').eq('id', inv.id);
+      var tSilo = (tSiloRes && tSiloRes.data && tSiloRes.data.length) ? tSiloRes.data[0].wave_business_id : null;
+      var iSilo = (iSiloRes && iSiloRes.data && iSiloRes.data.length) ? iSiloRes.data[0].wave_business_id : null;
+      if (tSilo && iSilo && tSilo !== iSilo) {
+        return NextResponse.json({ ok: false, error: 'Cross-silo match blocked: this deposit belongs to a different Wave business than the invoice. Match within the same silo.', txn_silo: tSilo, invoice_silo: iSilo, api_build_marker: API_BUILD_MARKER }, { status: 409 });
+      }
 
       // Over-apply guard across this deposit (server-authoritative).
       var depositAmt = roundMoney(Number(t.amount_abs != null ? t.amount_abs : (t.amount || 0)));
@@ -328,15 +340,28 @@ export async function POST(req) {
       if (txnRes && txnRes.error) { /* non-fatal: the money rows are the source of truth */ }
 
       // 5) recompute the invoice balance
-      var recomputed = await recompute(db, inv.id);
+      // v55.83-JP (audit) — recompute is best-effort: the match + payment rows are the source of truth.
+      // If recompute throws (a transient read error), do NOT 500 after the money rows are already
+      // written — return ok with a flag so the client refreshes balances instead of showing a stale one.
+      var recomputed = null; var recomputeFailed = false;
+      try { recomputed = await recompute(db, inv.id); } catch (eRc) { recomputeFailed = true; }
 
-      return NextResponse.json({ ok: true, match_id: matchId, applied: c.applied_to_invoice, overpayment: c.overpayment, type: c.type, invoice: recomputed, deposit_remaining: depositRemaining, fully_allocated: fullyAllocated, review_status: nextStatus, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, match_id: matchId, applied: c.applied_to_invoice, overpayment: c.overpayment, type: c.type, invoice: recomputed, recompute_failed: recomputeFailed, deposit_remaining: depositRemaining, fully_allocated: fullyAllocated, review_status: nextStatus, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── unmatch: reverse a match (re-categorize / delete) ──
     if (action === 'unmatch') {
       var bid = body.bank_transaction_id;
       if (!bid) { return NextResponse.json({ ok: false, error: 'bank_transaction_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // v55.83-JP (audit) — silo guard: when the caller declares which silo it's acting in, refuse to
+      // void another silo's payments by a guessed txn id. The txn is re-read from the DB.
+      if (body.wave_business_id) {
+        var umSiloRes = await db.from('bank_transactions').select('wave_business_id').eq('id', bid);
+        var umSilo = (umSiloRes && umSiloRes.data && umSiloRes.data.length) ? umSiloRes.data[0].wave_business_id : null;
+        if (umSilo && umSilo !== body.wave_business_id) {
+          return NextResponse.json({ ok: false, error: 'Cross-silo unmatch blocked: this transaction belongs to a different Wave business.', txn_silo: umSilo, api_build_marker: API_BUILD_MARKER }, { status: 409 });
+        }
+      }
       // Block reversing a Wave-synced payment (would desync Hub from Wave).
       var payRows = await db.from('accounting_invoice_payments').select('id, accounting_invoice_id, wave_payment_id, sync_status, voided').eq('bank_transaction_id', bid);
       if (payRows && payRows.error) { return NextResponse.json({ ok: false, error: payRows.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

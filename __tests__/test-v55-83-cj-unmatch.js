@@ -5,10 +5,10 @@ var b=p('src/components/BankReviewTab.jsx');
 // v55.83-IS: unmatch/reverse moved to the service-role route (RLS-proof). The UI delegates; the
 // route does the soft-void + recompute + unlink. Tests assert the new contract, not old client code.
 var route=p('src/app/api/accounting/bank-write/route.js');
-var um=route.substring(route.indexOf("if (action === 'unmatch')"), route.indexOf("if (action === 'unmatch')")+2400);
+var um=route.substring(route.indexOf("if (action === 'unmatch')"), route.indexOf("if (action === 'unmatch')")+3200);
 
 ok(/function unmatch\(t\)/.test(b),'unmatch() exists in BankReviewTab');
-ok(/bankWrite\('unmatch', \{ bank_transaction_id: t\.id \}\)/.test(b),'UI delegates unmatch to the service route');
+ok(/bankWrite\('unmatch', \{ bank_transaction_id: t\.id/.test(b),'UI delegates unmatch to the service route');
 ok(um.indexOf("from('accounting_invoice_payments').update({ voided: true")>-1 && /eq\('bank_transaction_id', bid\)/.test(um),'server voids accounting_invoice_payments by txn');
 ok(/from\('payment_matches'\)\.update\(\{ voided: true \}\)\.eq\('bank_transaction_id', bid\)/.test(um),'server voids payment_matches by txn');
 ok(/linked_type: null, linked_id: null, matched_invoice_id: null/.test(um),'server clears the bank-txn link on unmatch');

@@ -298,6 +298,14 @@ export default function AccountingInvoicesTab(props) {
     // Recompute paid from ACTUAL non-void payments (not the stale header amount_paid), so
     // editing line items on an invoice that already has payments can't drift the balance.
     var realPaid = (editing && editing !== 'new') ? (Number(hubPaidMap[editing]) || 0) : 0;
+    // v55.83-JP (audit) — do NOT silently floor the balance to 0 when the new total is BELOW what's
+    // already been paid: that hides an overpayment and falsely shows the invoice "paid". Block the edit
+    // and tell the user to handle the existing payment first (unmatch / issue a credit).
+    if (isInvoice() && total < roundMoney(realPaid) - 0.01) {
+      setBusy(false);
+      toast.error('This invoice already has ' + fmt(realPaid) + ' applied, but the new total is ' + fmt(total) + '. Reducing it below the paid amount would hide an overpayment. Unmatch/reverse the excess payment first, or raise the total.');
+      return;
+    }
     var newBalance = roundMoney(Math.max(0, total - realPaid));
     var newStatus = realPaid <= 0.0001 ? 'unpaid' : (newBalance <= 0.0001 ? 'paid' : 'partial');
     var hpayload = isInvoice()
@@ -350,7 +358,14 @@ export default function AccountingInvoicesTab(props) {
         if (!j || !j.ok) { throw new Error((j && j.error) || 'approval did not save'); }
         return logActivity(userProfile && userProfile.id, 'Invoice ' + (row.invoice_number || row.id) + ' -> ' + status, 'accounting_invoices').then(function () { return j; });
       })
-      .then(function () { toast.success('Invoice ' + status.replace('_', ' ')); load(); })
+      .then(function () {
+        toast.success('Invoice ' + status.replace('_', ' '));
+        // v55.83-JP (audit) — close whichever modal was showing this row so its buttons/lock reflect
+        // the new status instead of staying stale (the old modal kept showing "Approve" after approval).
+        setEditing(function (ed) { return (ed && ed !== 'new' && ed.id === row.id) ? null : ed; });
+        setViewing(function (v) { return (v && v.id === row.id) ? null : v; });
+        load();
+      })
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Could not ' + (status === 'approved' ? 'approve' : 'update') + ' invoice: ' + ((e && e.message) || 'unknown error') + ' (screenshot for Claude)'); })
       .finally(function () { setBusy(false); });
   }
@@ -390,7 +405,9 @@ export default function AccountingInvoicesTab(props) {
           var invId = res && res[0] ? res[0].id : (res && res.id);
           var chain = Promise.resolve();
           its.forEach(function (it, idx) {
-            chain = chain.then(function () { return dbInsert('accounting_invoice_items', { business_id: row.business_id || businessId, invoice_id: invId, description: it.description, quantity: it.quantity, unit_price: it.unit_price, line_total: it.line_total, sku: it.sku, product_ref: it.product_ref, sort_order: idx }, userProfile && userProfile.id); });
+            // v55.83-JP (audit) — carry the per-line Wave product across the conversion, or the
+            // invoice loses the silo's chosen Wave product and falls back to the default on push.
+            chain = chain.then(function () { return dbInsert('accounting_invoice_items', { business_id: row.business_id || businessId, invoice_id: invId, description: it.description, quantity: it.quantity, unit_price: it.unit_price, line_total: it.line_total, sku: it.sku, product_ref: it.product_ref, wave_product_id: it.wave_product_id || null, wave_product_name: it.wave_product_name || null, wave_product_source: it.wave_product_id ? (it.wave_product_source || 'selected') : null, sort_order: idx }, userProfile && userProfile.id); });
           });
           return chain.then(function () {
             return dbUpdate('accounting_proformas', row.id, { status: 'converted', converted_invoice_id: invId, updated_by: userProfile && userProfile.id }, userProfile && userProfile.id);

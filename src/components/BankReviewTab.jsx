@@ -504,7 +504,7 @@ export default function BankReviewTab(props) {
     // RLS trap as match: they can silently 0-row under live RLS). Route the whole reversal through the
     // service-role endpoint, which voids the payment rows + matches + overpayment credits, recomputes
     // every affected invoice, and unlinks the bank txn — atomically, RLS-proof.
-    bankWrite('unmatch', { bank_transaction_id: t.id })
+    bankWrite('unmatch', { bank_transaction_id: t.id, wave_business_id: t.wave_business_id || getActiveWaveBusiness() || null })
       .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })
       .catch(function (e) { console.error('[unmatch]', e); toast.error('Unmatch failed: ' + ((e && e.message) || 'unknown error') + ' — screenshot for Claude.'); })
       .finally(function () { setBusy(false); });

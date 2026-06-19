@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JP',
+    date: '2026-06-19',
+    label: 'Fine-tooth-comb sweep: silo guards, balance-corruption fixes, A/R + Ledger visibility, unlock diagnosis',
+    items: [
+      '**🔒 Stronger protection against silos crossing.** Matching or unmatching a bank deposit now refuses to touch an invoice or payment in a different business (Real KTC vs Kandil), checked on the server, not just the screen.',
+      '**🧮 A few quiet money bugs fixed.** After a real Wave payment push, the invoice balance can no longer be written from a half-failed read; reducing an invoice below what was already paid is now blocked (it used to silently hide the overpayment); and converting a proforma to an invoice now keeps the per-line Wave product you picked.',
+      '**📅 Where to set how far back staff see history:** **Settings → 📅 Accounting Visibility** (super admin). It now also applies to the **Customer Ledger** — older statement rows are hidden for normal users while the balances stay all-time correct. (Customer AR History detail is the last screen still pending.)',
+      '**🔓 If the production unlock still won\'t turn on, it now tells you why** — if the flag column is missing on the database it names the exact SQL file to run.',
+      '**✅ Approving an invoice now closes its window** so you never see stale "Approve" buttons after it\'s already approved.',
+      { superAdminOnly: true, text: 'v55.83-JP (Max 2-hour fine-tooth-comb; 3 parallel audit agents, findings verified before fixing — e.g. the "import customer silo bleed" P0 was a FALSE POSITIVE: fetchAllMap already scopes by wave_business_id). FIXES: bank-write match_invoice + unmatch now re-read silos from DB and 409 on cross-silo; match_invoice recompute is non-fatal (recompute_failed flag, no 500 after money rows); categorize auto-review sets reviewed_by/at; push-payment recompute checks both reads .error (skips wrong-balance write, logs recompute_skipped) + silo-scopes the invoice update. AccountingInvoicesTab: block reducing total below paid (hidden-overpayment), proforma→invoice carries wave_product_id/name/source, setApproval closes the showing modal. CustomerLedger: visibility floor windows displayed statement events, all-time running balance preserved (displayStatement memo) + chip; panel promotes Customer Ledger to Enforced-now, AR History deferred. NEW sql/v55-83-JP-registry-flags-ensure.sql ensures all 6 registry flag columns exist; registry-flags route names it on a missing-column error. Tests jp(10)+jl extended; runner 33/33. STILL: AR History detail windowing; sync-categories require-wave_business_id gate; Plaid transactions/sync (cursor) for true gap-free incremental.' },
+    ],
+  },
+  {
     version: 'v55.83-JO',
     date: '2026-06-19',
     label: 'Now tells you the real reason Wave categories are empty, and why a bank stopped syncing',

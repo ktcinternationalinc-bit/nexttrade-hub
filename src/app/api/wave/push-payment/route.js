@@ -277,21 +277,31 @@ export async function POST(req) {
       try {
         var allPays = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', pay.accounting_invoice_id);
         var invR = await db.from('accounting_invoices').select('total_amount, wave_imported_paid').eq('id', pay.accounting_invoice_id);
-        var invD = (invR && invR.data && invR.data.length) ? invR.data[0] : null;
-        if (invD) {
-          var total = Number(invD.total_amount) || 0;
-          var paid = Number(invD.wave_imported_paid) || 0;
-          var rows = (allPays && allPays.data) || [];
-          var ri;
-          for (ri = 0; ri < rows.length; ri++) {
-            var rr = rows[ri];
-            var isVoid = (rr.voided === true) || (rr.sync_status === 'void' || rr.sync_status === 'voided' || rr.sync_status === 'cancelled' || rr.sync_status === 'reversed' || rr.sync_status === 'deleted');
-            if (!isVoid) { paid = paid + (Number(rr.amount) || 0); }
+        // v55.83-JP (audit) — if EITHER read failed, do NOT write a recomputed balance from a partial
+        // result (that would undercount paid and corrupt the canonical balance). The payment is already
+        // in Wave; skip the recompute and flag it so the row is reconciled rather than written wrong.
+        if ((allPays && allPays.error) || (invR && invR.error)) {
+          try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'payment', hub_record_id: hubId, action: 'recompute_skipped', dry_run: false, success: false, error_message: 'Balance recompute skipped after push — read failed: ' + (((allPays && allPays.error) || {}).message || ((invR && invR.error) || {}).message || 'unknown'), attempted_by: by }); } catch (eLg) {}
+        } else {
+          var invD = (invR && invR.data && invR.data.length) ? invR.data[0] : null;
+          if (invD) {
+            var total = Number(invD.total_amount) || 0;
+            var paid = Number(invD.wave_imported_paid) || 0;
+            var rows = (allPays && allPays.data) || [];
+            var ri;
+            for (ri = 0; ri < rows.length; ri++) {
+              var rr = rows[ri];
+              var isVoid = (rr.voided === true) || (rr.sync_status === 'void' || rr.sync_status === 'voided' || rr.sync_status === 'cancelled' || rr.sync_status === 'reversed' || rr.sync_status === 'deleted');
+              if (!isVoid) { paid = paid + (Number(rr.amount) || 0); }
+            }
+            paid = Math.round(paid * 100) / 100;
+            var bal = Math.round(Math.max(0, total - paid) * 100) / 100;
+            var st = paid <= 0.0001 ? 'unpaid' : (bal <= 0.0001 ? 'paid' : 'partial');
+            // v55.83-JP (audit) — scope the update by silo too, so a malformed id can't touch another silo's invoice.
+            var invUpdQ = db.from('accounting_invoices').update({ amount_paid: paid, balance_due: bal, payment_status: st }).eq('id', pay.accounting_invoice_id);
+            if (waveBusinessId) { invUpdQ = invUpdQ.eq('wave_business_id', waveBusinessId); }
+            await invUpdQ;
           }
-          paid = Math.round(paid * 100) / 100;
-          var bal = Math.round(Math.max(0, total - paid) * 100) / 100;
-          var st = paid <= 0.0001 ? 'unpaid' : (bal <= 0.0001 ? 'paid' : 'partial');
-          await db.from('accounting_invoices').update({ amount_paid: paid, balance_due: bal, payment_status: st }).eq('id', pay.accounting_invoice_id);
         }
       } catch (eRecomp) {}
     }

@@ -12,6 +12,7 @@ import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
 import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, canWriteToWaveBusiness } from '../lib/wave-business';
 import { isPaymentVoid as isPaymentVoidCanonical } from '../lib/payment-matching';
+import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 
 function num(v) { var n = Number(String(v == null ? 0 : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function money(v, cur) { return (cur || 'USD') + ' ' + num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -56,9 +57,14 @@ export default function CustomerLedger(props) {
   var [toDate, setToDate] = useState('');
   var [expanded, setExpanded] = useState({});
   var [err, setErr] = useState('');
+  // v55.83-JP — admin history-visibility window. AR/ledger keep ALL-TIME balances (loaded in full);
+  // the floor only limits which EVENTS are DISPLAYED (so aging/running balance stays correct).
+  var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null });
+  var ledgerFloor = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date());
 
   var load = useCallback(function () {
     setLoading(true); setErr('');
+    fetch('/api/admin/visibility').then(function (x) { return x.json(); }).then(function (j) { if (j && j.value) { setVisCfg(j.value); } }).catch(function () {});
     function safe(p) { return p.then(function (r) { return r && r.data ? r.data : []; }).catch(function (e) { return []; }); }
     Promise.all([
       safe(fetchAllRows('accounting_customers', '*', 'company_name', true)),
@@ -214,12 +220,19 @@ export default function CustomerLedger(props) {
     return ev;
   }, [curInvoices, paymentHistory]);
 
+  // v55.83-JP — DISPLAY window: the running balance above is accumulated over ALL events (so each
+  // shown row's balance is still correct), but non-super-admins only SEE events on/after the floor.
+  var displayStatement = useMemo(function () {
+    if (!ledgerFloor) { return statement; }
+    return statement.filter(function (e) { return (e.date || '') >= ledgerFloor; });
+  }, [statement, ledgerFloor]);
+
   function toggle(id) { setExpanded(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
 
   function exportCsv() {
     var lines = [];
     lines.push(['Date', 'Type', 'Reference', 'Description', 'Debit', 'Credit', 'Running Balance'].join(','));
-    statement.forEach(function (e) {
+    displayStatement.forEach(function (e) {
       function q(x) { return '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"'; }
       lines.push([q(e.date), q(e.type), q(e.ref), q(e.desc), e.debit ? e.debit.toFixed(2) : '', e.credit ? e.credit.toFixed(2) : '', e.running.toFixed(2)].join(','));
     });
@@ -232,7 +245,7 @@ export default function CustomerLedger(props) {
 
   function printStatement() {
     var c = selectedCustomer || {};
-    var rows = statement.map(function (e) {
+    var rows = displayStatement.map(function (e) {
       return '<tr><td>' + (e.date || '') + '</td><td>' + e.type + '</td><td>' + (e.ref || '') + '</td><td>' + (e.desc || '') + '</td><td style="text-align:right">' + (e.debit ? e.debit.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + '</td><td style="text-align:right">' + (e.credit ? e.credit.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + '</td><td style="text-align:right">' + e.running.toLocaleString('en-US', { minimumFractionDigits: 2 }) + '</td></tr>';
     }).join('');
     var html = '<html><head><title>Customer Statement</title><style>body{font-family:Arial,sans-serif;color:#0f172a;padding:24px}h1{margin:0}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}th,td{border:1px solid #cbd5e1;padding:4px 8px}th{background:#f1f5f9;text-align:left}.sum{margin-top:8px;font-size:13px}.r{text-align:right}</style></head><body>'
@@ -344,6 +357,7 @@ export default function CustomerLedger(props) {
             <input type="date" value={fromDate} onChange={function (e) { setFromDate(e.target.value); }} className="px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-200" />
             <span className="text-slate-500">to</span>
             <input type="date" value={toDate} onChange={function (e) { setToDate(e.target.value); }} className="px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-200" />
+            <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). Balances/aging always use full history; only the statement rows below the window are hidden for normal users.">Visibility: <b className={ledgerFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{ledgerFloor ? <span> (statement from {ledgerFloor}; balances all-time)</span> : null}</span>
           </div>
 
           {/* Invoice list */}
@@ -435,7 +449,7 @@ export default function CustomerLedger(props) {
               <table className="w-full text-xs">
                 <thead><tr className="text-slate-400 border-b border-slate-800"><th className="px-2 py-1.5 text-left">Date</th><th className="px-2 py-1.5 text-left">Type</th><th className="px-2 py-1.5 text-left">Reference</th><th className="px-2 py-1.5 text-left">Description</th><th className="px-2 py-1.5 text-right">Debit</th><th className="px-2 py-1.5 text-right">Credit</th><th className="px-2 py-1.5 text-right">Running balance</th></tr></thead>
                 <tbody>
-                  {statement.map(function (e, idx) {
+                  {displayStatement.map(function (e, idx) {
                     return <tr key={idx} className="border-b border-slate-800">
                       <td className="px-2 py-1.5 text-slate-300">{e.date || '—'}</td>
                       <td className="px-2 py-1.5 text-slate-300">{e.type}</td>

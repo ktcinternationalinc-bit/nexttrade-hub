@@ -50,7 +50,15 @@ export async function POST(req) {
 
     var patch = {}; patch[field] = value;
     var up = await db.from('wave_business_registry').update(patch).eq('wave_business_id', waveBusinessId).select();
-    if (up && up.error) { return NextResponse.json({ ok: false, error: up.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (up && up.error) {
+      var em = up.error.message || '';
+      // v55.83-JP — the #1 reason the unlock "loops back OFF": the flag column doesn't exist on the
+      // live DB, so the write errors. Make that actionable instead of a raw Postgres string.
+      if (em.indexOf('column') >= 0 && (em.indexOf('does not exist') >= 0 || em.indexOf('schema cache') >= 0)) {
+        return NextResponse.json({ ok: false, error: 'The "' + field + '" column is missing on wave_business_registry, so the switch cannot save. Run sql/v55-83-JP-registry-flags-ensure.sql in Supabase, then try again. (' + em + ')', missing_column: field, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+      }
+      return NextResponse.json({ ok: false, error: em, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+    }
     if (!(up && up.data && up.data.length)) { return NextResponse.json({ ok: false, error: 'Update affected 0 rows — flag not saved.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
     var row = up.data[0];
     // v55.83-JN (Codex P0 — "unlock snaps back OFF") — VERIFY the readback actually equals what we

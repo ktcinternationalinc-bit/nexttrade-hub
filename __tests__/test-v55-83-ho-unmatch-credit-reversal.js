@@ -33,7 +33,7 @@ var bank = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Bank
 var route = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8');
 var umStart = route.indexOf("if (action === 'unmatch')");
 ok('0: server unmatch handler exists', umStart > -1);
-var unmatchSrc = route.substring(umStart, umStart + 1600);
+var unmatchSrc = route.substring(umStart, umStart + 2400);
 
 // 1. server unmatch reverses the overpayment credit, scoped correctly
 ok('1a: unmatch voids customer_credits',

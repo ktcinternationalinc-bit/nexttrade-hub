@@ -17,7 +17,7 @@ var bt = rd('src/components/BankTab.jsx');
 var route = rd('src/app/api/plaid/transactions/route.js');
 
 // 1. unmatch via service route, not client writes
-ok('1a: unmatch calls bankWrite("unmatch")', /bankWrite\('unmatch', \{ bank_transaction_id: t\.id \}\)/.test(br));
+ok('1a: unmatch calls bankWrite("unmatch")', /bankWrite\('unmatch', \{ bank_transaction_id: t\.id/.test(br));
 ok('1b: the unmatch() function no longer does direct supabase update chains on payment tables',
   (function () {
     var m = br.match(/function unmatch\(t\)\{?[\s\S]*?\n  \}/);
