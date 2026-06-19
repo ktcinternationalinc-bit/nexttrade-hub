@@ -55,34 +55,39 @@ ok('6b: OpenAccountsTab scopes line items to visible invoices (chunked .in by in
   // no blanket items select left embedded directly in a load/reload Promise.all
   !/_oaInvQR?,\s*\n\s*supabase\.from\('open_account_invoice_items'\)\.select\('\*'\)\.order/.test(oa));
 
-// --- Codex GUARD: every screen the panel CLAIMS as enforced must actually wire the policy ---
-// Parse the "Enforced now:" line and verify each named screen's source uses the visibility policy.
+// --- GUARD: every screen the panel CLAIMS ("Applies to") must actually wire the policy ---
 var SCREEN_SOURCES = {
   'Bank Review': 'src/components/BankReviewTab.jsx',
   'Bank tab': 'src/components/BankTab.jsx',
   'Invoices': 'src/components/AccountingInvoicesTab.jsx',
   'Open Accounts': 'src/components/OpenAccountsTab.jsx',
-  'Customer Ledger': 'src/components/CustomerLedger.jsx'
+  'Customer Ledger': 'src/components/CustomerLedger.jsx',
+  'Customer AR History': 'src/components/AccountingCustomerHistory.jsx'
 };
 function usesPolicy(src) {
   var s = rd(src);
   return /floorDateFor/.test(s) || /isWithinWindow/.test(s) || /\/api\/admin\/visibility/.test(s);
 }
-var enforcedMatch = panel.match(/Enforced now:<\/b>\s*([^<]+)</);
-ok('7: panel states an explicit "Enforced now" list', !!enforcedMatch);
-if (enforcedMatch) {
-  var named = enforcedMatch[1].split(',').map(function (x) { return x.replace(/\.$/, '').trim(); }).filter(Boolean);
+var appliesMatch = panel.match(/Applies to:<\/b>\s*([^<]+)</);
+ok('7: panel states an explicit "Applies to" list of screens', !!appliesMatch);
+if (appliesMatch) {
+  var named = appliesMatch[1].split(',').map(function (x) { return x.replace(/\.$/, '').trim(); }).filter(Boolean);
   var allWired = named.every(function (n) { return SCREEN_SOURCES[n] && usesPolicy(SCREEN_SOURCES[n]); });
-  ok('8: GUARD — every screen the panel claims as enforced actually imports/uses the visibility policy',
+  ok('8: GUARD — every screen the panel claims actually imports/uses the visibility policy',
     allWired, 'claimed: ' + named.join(' | '));
 }
-// And the panel must NOT claim Ledger / AR History as enforced yet (they are deferred to JM).
-ok('9: panel honestly defers AR History (open-balance needs full history) in Coming next',
-  /Coming next:[\s\S]{0,160}Customer AR History/.test(panel));
-ok('10: CustomerLedger windows DISPLAYED events but keeps all-time running balance (Codex AR-aging exemption)',
+// panel is a real admin tool: shows setup status + verifies the save persisted
+ok('8b: panel surfaces setup status (NOT ACTIVE if the table is missing) + verifies save read-back',
+  /NOT ACTIVE YET/.test(panel) && /v55-83-JE-visibility-window\.sql/.test(panel) && /Saved & verified/.test(panel) && /return refresh\(\)\.then/.test(panel));
+ok('9: CustomerLedger windows DISPLAYED events but keeps all-time running balance (AR-aging exemption)',
   /var displayStatement = useMemo/.test(rd('src/components/CustomerLedger.jsx')) &&
   /statement\.filter\(function \(e\) \{ return \(e\.date \|\| ''\) >= ledgerFloor/.test(rd('src/components/CustomerLedger.jsx')) &&
   /run \+= e\.debit - e\.credit; e\.running = run/.test(rd('src/components/CustomerLedger.jsx')));
+ok('10: AR History windows DISPLAYED detail rows (invoices/payments/proformas) but keeps all-time OPEN BALANCE',
+  /isWithinWindow\(i\.invoice_date, arFloor\)/.test(rd('src/components/AccountingCustomerHistory.jsx')) &&
+  /isWithinWindow\(pf\.proforma_date, arFloor\)/.test(rd('src/components/AccountingCustomerHistory.jsx')) &&
+  // summary() (open balance) must NOT be windowed — it iterates invoicesFor without a floor filter
+  /var invs = invoicesFor\(custId\);/.test(rd('src/components/AccountingCustomerHistory.jsx')));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JL visibility-wiring tests passed'); process.exit(0); }

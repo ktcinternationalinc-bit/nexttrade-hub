@@ -26,8 +26,9 @@ ok('8: setFlag surfaces a real failure instead of blindly reloading', /Could not
 // --- v55.83-JN: the readback CONTRACT that fixes "unlock snaps back OFF after confirm" ---
 ok('JN1: route REJECTS a readback mismatch (row[field] !== value → ok:false, not false success)',
   /if \(row\[field\] !== value\) \{/.test(route) && /Registry flag readback mismatch/.test(route));
-ok('JN2: route returns diagnostic context (requested/saved/registry_row_id/registry_label)',
-  /requested: value, saved: row\[field\], registry_row_id: row\.id, registry_label: row\.label/.test(route));
+ok('JN2: route returns diagnostic context (requested/saved/wave_business_id/registry_label) — no non-existent id column',
+  /requested: value, saved: row\[field\], wave_business_id: waveBusinessId, registry_label: row\.label/.test(route) &&
+  !/select\('id, wave_business_id/.test(route));
 ok('JN3: setFlag treats success ONLY when the readback equals the requested value',
   /var readback = j && \(typeof j\.value !== 'undefined' \? j\.value : \(j\.row \? j\.row\[field\] : undefined\)\)/.test(wsc) &&
   /var saved = j && j\.ok === true && readback === val/.test(wsc));

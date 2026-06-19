@@ -10,6 +10,7 @@ import { canViewAccountingCustomers, canViewCustomerAr, canSeeAmounts } from '..
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
+import { floorDateFor, labelForWindow, isWithinWindow } from '../lib/visibility-window';
 
 function n(v) { return v == null || v === '' ? 0 : Number(v) || 0; }
 function money(v, show) { if (!show) return '•••'; var x = n(v); return x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -36,9 +37,16 @@ export default function AccountingCustomerHistory(props) {
   var [filter, setFilter] = useState('all'); // all | review | open
   var [search, setSearch] = useState('');
 
+  // v55.83-JQ — admin history-visibility window. The customer's OPEN BALANCE / aging uses ALL-TIME
+  // data (loaded in full); the floor only hides older DETAIL rows (invoices/payments/proformas) for
+  // normal users. Super-admin always sees everything (floor = null).
+  var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null });
+  var arFloor = floorDateFor({ window: visCfg.window, customDays: visCfg.customDays, customFrom: visCfg.customFrom, isSuperAdmin: isSuperAdmin }, new Date());
+
   function safe(q) { return q.then(function (r) { return r && r.data ? r.data : []; }).catch(function () { return []; }); }
   useEffect(function () {
     if (!mayView) { setLoading(false); return; }
+    fetch('/api/admin/visibility').then(function (x) { return x.json(); }).then(function (j) { if (j && j.value) { setVisCfg(j.value); } }).catch(function () {});
     Promise.all([
       safe(fetchAllRows('accounting_customers', '*', 'company_name', true)),
       safe(fetchAllRows('accounting_invoices', '*')),
@@ -130,9 +138,10 @@ export default function AccountingCustomerHistory(props) {
         <div style={{ flex: 1, minWidth: 0 }}>
           {!selCust ? <div className="text-slate-400 italic text-sm p-4">Select a customer to see their receivables history.</div> : (
             <div>
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <div className="text-base font-extrabold">{selCust.company_name}</div>
                 {selCust.needs_review === true && <span className="text-[10px] bg-amber-400 text-amber-950 rounded px-1.5 py-0.5 font-bold">NEEDS REVIEW (placeholder from import)</span>}
+                <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). The OPEN BALANCE above always uses full history; only the detail rows below older than the window are hidden for normal users.">Visibility: <b className={arFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{arFloor ? <span> (detail from {arFloor}; balance all-time)</span> : null}</span>
               </div>
 
               {/* AR summary */}
@@ -154,7 +163,7 @@ export default function AccountingCustomerHistory(props) {
               <Section title="Invoices">
                 <div className="overflow-x-auto"><table className="w-full text-xs">
                   <thead><tr className="text-slate-400 text-left"><th className="py-1">Invoice</th><th>Source</th><th>Date</th><th>Due</th><th>Status</th><th className="text-right">Total</th><th className="text-right">Wave paid</th><th className="text-right">Hub paid</th><th className="text-right">Balance</th><th>Sync</th></tr></thead>
-                  <tbody>{invoicesFor(selCust.id).map(function (i) {
+                  <tbody>{invoicesFor(selCust.id).filter(function (i) { return isWithinWindow(i.invoice_date, arFloor); }).map(function (i) {
                     var hub = hubPaidForInvoice(i.id); var bal = n(i.total_amount) - n(i.wave_imported_paid) - hub; var dead = isDead(i);
                     return <tr key={i.id} className={'border-t border-slate-800 ' + (dead ? 'opacity-50 line-through' : '')}>
                       <td className="py-1 font-bold text-slate-100">{i.invoice_number || i.id.slice(0, 6)}</td>
@@ -173,7 +182,7 @@ export default function AccountingCustomerHistory(props) {
                 {paymentsFor(selCust.id).length === 0 ? <div className="text-slate-400 italic text-xs">No Hub/Plaid payments matched yet. (Wave-imported paid amounts are shown per invoice above, not as separate payments.)</div> :
                   <div className="overflow-x-auto"><table className="w-full text-xs">
                     <thead><tr className="text-slate-400 text-left"><th className="py-1">Date</th><th>Bank description</th><th className="text-right">Amount</th><th>Source</th><th>Sync to Wave</th></tr></thead>
-                    <tbody>{paymentsFor(selCust.id).map(function (p) {
+                    <tbody>{paymentsFor(selCust.id).filter(function (p) { return isWithinWindow(p.payment_date || (bankTxns[p.bank_transaction_id] && bankTxns[p.bank_transaction_id].posted_date), arFloor); }).map(function (p) {
                       var bt = p.bank_transaction_id ? bankTxns[p.bank_transaction_id] : null;
                       return <tr key={p.id} className="border-t border-slate-800">
                         <td className="py-1">{p.payment_date || (bt && bt.posted_date) || ''}</td>
@@ -191,7 +200,7 @@ export default function AccountingCustomerHistory(props) {
                 {proformasFor(selCust.id).length === 0 ? <div className="text-slate-400 italic text-xs">No proformas.</div> :
                   <div className="overflow-x-auto"><table className="w-full text-xs">
                     <thead><tr className="text-slate-400 text-left"><th className="py-1">Proforma</th><th>Status</th><th className="text-right">Total</th><th>Converted invoice</th></tr></thead>
-                    <tbody>{proformasFor(selCust.id).map(function (pf) {
+                    <tbody>{proformasFor(selCust.id).filter(function (pf) { return isWithinWindow(pf.proforma_date, arFloor); }).map(function (pf) {
                       return <tr key={pf.id} className="border-t border-slate-800"><td className="py-1 font-bold text-slate-100">{pf.proforma_number || pf.id.slice(0, 6)}</td><td>{pf.status || ''}</td><td className="text-right">{money(pf.total_amount, showAmt)}</td><td>{pf.converted_invoice_id ? 'yes' : '—'}</td></tr>;
                     })}</tbody>
                   </table></div>}

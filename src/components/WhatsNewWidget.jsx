@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JQ',
+    date: '2026-06-19',
+    label: 'FIXED: production Wave unlock now saves (real root cause found) + full A/R + Ledger visibility admin tool',
+    items: [
+      '**🔓 The production Wave unlock now actually turns ON.** The real cause is fixed: the save code was looking for a database column (`id`) that this table doesn\'t use, so every save errored out. That\'s gone — flip the switch in Wave Sync Center → Settings and it stays on (no SQL needed for this).',
+      '**🛠️ Real admin tool for history visibility (Settings → 📅 Accounting Visibility).** It now shows a clear status — green "Active" or a red "NOT ACTIVE — run this one SQL" — and after you save it **reads the value back to prove it stuck**. It now covers **all six screens**: Bank Review, Bank tab, Invoices, Open Accounts, Customer Ledger, and Customer AR History. You (super admin) always see everything; employees are limited to the window you pick. Balances and aging stay correct (all-time); only older detail rows are hidden.',
+      { superAdminOnly: true, text: 'v55.83-JQ. PRODUCTION UNLOCK ROOT CAUSE (Max live: "column wave_business_registry.id does not exist"): the registry-flags route selected/returned `id`, but this table is keyed by wave_business_id (no id column) — the select errored before the update ran. Removed all `id` refs; return wave_business_id/registry_label instead. No SQL needed for the unlock itself. VISIBILITY: AccountingCustomerHistory now windows displayed detail rows (invoices/payments/proformas via isWithinWindow) while summary()/open-balance stays all-time; chip added. AccountingVisibilityPanel rebuilt as an admin tool: live setup-status (green Active / red NOT-ACTIVE w/ sql/v55-83-JE-visibility-window.sql), save now re-reads to VERIFY persistence, lists all 6 enforced screens ("Applies to"). JL guard updated to parse "Applies to" + assert AR History wired; IZ JN2 updated (no id column). Tests jl(+8b/10)+iz; runner green. NOTE: app_settings (JE SQL) still required for the visibility window to PERSIST — the panel now says so loudly; the production unlock is independent and needs no SQL.' },
+    ],
+  },
+  {
     version: 'v55.83-JP',
     date: '2026-06-19',
     label: 'Fine-tooth-comb sweep: silo guards, balance-corruption fixes, A/R + Ledger visibility, unlock diagnosis',
