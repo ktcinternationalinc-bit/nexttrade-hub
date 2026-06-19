@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IY',
+    date: '2026-06-19',
+    label: 'Invoices: pick the real Wave product per line (not one default for the whole invoice)',
+    items: [
+      '**🧾 Each invoice line can now choose its own Wave product.** When creating/editing an invoice, every line has a Wave-product selector sourced from that silo’s Wave catalog — so a multi-line invoice pushes each line under the correct Wave product, not one generic default. The printed description stays editable. Pull the silo’s products once in Wave Sync Center if the list is empty.',
+      { superAdminOnly: true, text: 'v55.83-IY (Codex/Max P0 — per-line Wave product). (1) sql/v55-83-IY: wave_products catalog (per silo, RLS-open) + wave_product_id/name(/source) on accounting_invoice_items + accounting_proforma_items. (2) NEW /api/wave/sync-products (service-role, READ-ONLY Wave products query, paginated; explicit single-business pull includes production like categories; upserts wave_products by biz+product). (3) push-invoice-v2 builds lineItems with each line’s wave_product_id, default product only as a fallback for blank lines (tracked via usedFallback). (4) AccountingInvoicesTab: per-line Wave product <select> (silo-scoped, excludes archived) via setLineWaveProduct (prefills description if blank); save persists wave_product_id/name; openEdit loads them. Test test-v55-83-iy (11) added to runner (23/23 required). SETUP: run sql/v55-83-IY, then Wave Sync Center → pull products for the silo (uses the new sync-products route). STILL OPEN (Codex): wire a "Pull products" button in Wave Sync Center UI; block/warn on push when a line has no product AND no default; store Wave product id/name on invoice/estimate IMPORT; admin history-window; freshness strip; proforma partial-import atomicity; live verification.' },
+    ],
+  },
+  {
     version: 'v55.83-IX',
     date: '2026-06-19',
     label: 'Real KTC can now pull its Wave categories (categorize dropdown no longer empty)',

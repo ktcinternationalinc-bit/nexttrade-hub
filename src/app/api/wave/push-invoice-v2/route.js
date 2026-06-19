@@ -134,10 +134,15 @@ export async function POST(req) {
       return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr } }, { status: 409 });
     }
 
+    // v55.83-IY — PER-LINE Wave product: each line uses its own selected wave_product_id; the Settings
+    // default product is only a FALLBACK for lines with no selection (surfaced in the dry-run/log).
     var lineItems = [];
+    var usedFallback = 0;
     var k;
     for (k = 0; k < items.length; k++) {
-      lineItems.push({ productId: productId, description: items[k].description || 'Hub invoice line', quantity: Number(items[k].quantity) || 1, unitPrice: Number(items[k].unit_price) || 0 });
+      var lineProd = items[k].wave_product_id || productId;
+      if (!items[k].wave_product_id) { usedFallback++; }
+      lineItems.push({ productId: lineProd, description: items[k].description || 'Hub invoice line', quantity: Number(items[k].quantity) || 1, unitPrice: Number(items[k].unit_price) || 0 });
     }
 
     // v55.83-EO — LOCAL PREFLIGHT: never call Wave unless every final line item has a productId.

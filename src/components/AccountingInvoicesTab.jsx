@@ -13,7 +13,7 @@ import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePa
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function blankItem() { return { description: '', quantity: '1', unit_price: '0', sku: '', product_ref: '' }; }
+function blankItem() { return { description: '', quantity: '1', unit_price: '0', sku: '', product_ref: '', wave_product_id: '', wave_product_name: '' }; }
 function itemTotal(it) { return roundMoney((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)); }
 function docTotal(items) { var t = 0; (items || []).forEach(function (it) { t += itemTotal(it); }); return roundMoney(t); }
 function Field(props) { return <div><div className="text-[10px] text-slate-400 font-semibold">{props.label}</div><div className="text-slate-100 font-medium">{props.value}</div></div>; }
@@ -66,6 +66,7 @@ export default function AccountingInvoicesTab(props) {
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
   var [proformas, setProformas] = useState([]);
+  var [waveProducts, setWaveProducts] = useState([]); // v55.83-IY — per-silo Wave product catalog for per-line selection
   var [pmCount, setPmCount] = useState({});
   var [hubPaidMap, setHubPaidMap] = useState({});
   var [showArchived, setShowArchived] = useState(false);
@@ -94,7 +95,9 @@ export default function AccountingInvoicesTab(props) {
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('invoice_id, voided').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id, amount, voided, sync_status').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('wave_products').select('wave_business_id, wave_product_id, name, is_archived').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(function (r) {
+      setWaveProducts((r[7] && r[7].data) || []);
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
       if (b) { setBusinessId(b.id); if (b.name) setBusinessName(b.name); }
       setCustomers((r[1] && r[1].data) || []);
@@ -197,7 +200,7 @@ export default function AccountingInvoicesTab(props) {
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
     setHdr(Object.assign({}, row)); setEditing(row); setItems([blankItem()]);
     supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
-      var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '' }; });
+      var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '', wave_product_id: it.wave_product_id || '', wave_product_name: it.wave_product_name || '' }; });
       setItems(its.length ? its : [blankItem()]);
     });
   }
@@ -242,6 +245,15 @@ export default function AccountingInvoicesTab(props) {
   }
   function uh(k, v) { var c = Object.assign({}, hdr); c[k] = v; setHdr(c); }
   function ui(i, k, v) { var c = items.slice(); c[i] = Object.assign({}, c[i]); c[i][k] = v; setItems(c); }
+  // v55.83-IY — select a Wave product for a line: stores id+name and prefills the description if blank.
+  function setLineWaveProduct(i, productId) {
+    var prod = null; waveProducts.forEach(function (p) { if (p.wave_product_id === productId) { prod = p; } });
+    var c = items.slice(); c[i] = Object.assign({}, c[i]);
+    c[i].wave_product_id = productId || '';
+    c[i].wave_product_name = prod ? (prod.name || '') : '';
+    if (prod && !(c[i].description || '').trim()) { c[i].description = prod.name || ''; }
+    setItems(c);
+  }
   function addItem() { setItems(items.concat([blankItem()])); }
   function rmItem(i) { var c = items.slice(); c.splice(i, 1); setItems(c.length ? c : [blankItem()]); }
 
@@ -285,6 +297,8 @@ export default function AccountingInvoicesTab(props) {
         clean.forEach(function (it, idx) {
           chain = chain.then(function () {
             var payload = { business_id: businessId, description: it.description || null, quantity: Number(it.quantity) || 0, unit_price: Number(it.unit_price) || 0, line_total: itemTotal(it), sku: it.sku || null, product_ref: it.product_ref || null, sort_order: idx };
+            // v55.83-IY — persist the per-line Wave product selection (printed description stays separate).
+            if (it.wave_product_id) { payload.wave_product_id = it.wave_product_id; payload.wave_product_name = it.wave_product_name || null; if (isInvoice()) { payload.wave_product_source = 'selected'; } }
             payload[fk] = docId;
             return dbInsert(itemTbl, payload, userProfile && userProfile.id);
           });
@@ -556,17 +570,25 @@ export default function AccountingInvoicesTab(props) {
           </div>
 
           <div className="text-[11px] font-bold text-slate-200 mb-1">Line items</div>
-          {items.map(function (it, i) {
+          {(function () {
+            var siloProducts = waveProducts.filter(function (p) { return (!waveBiz || waveBiz === 'all' || p.wave_business_id === waveBiz) && p.is_archived !== true; }).sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+            return items.map(function (it, i) {
             return (
-              <div key={i} className="flex gap-1 mb-1 items-center">
-                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Description" className={inp + ' flex-1'} />
+              <div key={i} className="flex gap-1 mb-1 items-center flex-wrap">
+                {/* v55.83-IY — per-line Wave product selector (the product Wave receives on push) */}
+                <select value={it.wave_product_id || ''} disabled={locked(editing)} onChange={function (e) { setLineWaveProduct(i, e.target.value); }} className="w-40 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product for this line (pushed to Wave). Pull the silo's products in Wave Sync Center if this is empty.">
+                  <option value="">{siloProducts.length ? '— Wave product (default) —' : '— no products pulled —'}</option>
+                  {siloProducts.map(function (p) { return <option key={p.wave_product_id} value={p.wave_product_id}>{p.name || p.wave_product_id}</option>; })}
+                </select>
+                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Description (printed)" className={inp + ' flex-1'} />
                 <input value={it.quantity} disabled={locked(editing)} onChange={function (e) { ui(i, 'quantity', e.target.value); }} placeholder="Qty" className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <input value={it.unit_price} disabled={locked(editing)} onChange={function (e) { ui(i, 'unit_price', e.target.value); }} placeholder="Unit" className="w-20 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <div className="w-24 text-right text-xs font-mono text-slate-200">{fmt(itemTotal(it))}</div>
                 {!locked(editing) && <button onClick={function () { rmItem(i); }} className="text-rose-300 text-xs px-1 font-bold">✕</button>}
               </div>
             );
-          })}
+            });
+          })()}
           {!locked(editing) && <button onClick={addItem} className="text-[11px] text-indigo-300 font-bold mb-2">+ add line</button>}
           <div className="text-right text-sm font-bold mb-2">Total: {fmt(liveTotal)}</div>
 
