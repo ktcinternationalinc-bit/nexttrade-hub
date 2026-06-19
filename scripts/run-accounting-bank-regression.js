@@ -27,6 +27,7 @@ var MANIFEST = [
   { f: 'test-v55-83-ie-no-local-reverse-of-synced.js', label: 'must-pass', why: 'block local reverse of Wave-synced payments' },
   { f: 'test-v55-83-hn-overpayment-credit.js', label: 'must-pass', why: 'overpayment → customer credit' },
   { f: 'test-v55-83-hr-accounting-doc-permissions.js', label: 'must-pass', why: 'accounting doc permissions not gated by bank.view' },
+  { f: 'test-v55-83-iw-customer-ledger-scope.js', label: 'new', why: 'Customer Ledger picker silo-scoped (no cross-silo bleed), no silent 40-cap, clears selection on silo switch' },
   // Wave push + import + categories + estimates
   { f: 'test-v55-83-fq-launch-critical.js', label: 'must-pass', why: 'launch-critical accounting invariants' },
   { f: 'test-v55-83-fl-real-payment-push.js', label: 'must-pass', why: 'real Wave payment push guards' },

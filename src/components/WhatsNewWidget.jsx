@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IW',
+    date: '2026-06-19',
+    label: 'Customer Ledger: picker now shows only the selected silo’s customers (and all of them)',
+    items: [
+      '**👥 The Customer Ledger picker is now silo-specific.** With Real KTC selected you no longer see Kandil/other-silo customers, and the list is no longer silently capped at 40 — it shows a clear count ("Showing 50 of 327 customers in this silo — search to narrow"). Switching silo also clears a selected customer that doesn’t belong to the new silo.',
+      { superAdminOnly: true, text: 'v55.83-IW (Codex P0 — Customer Ledger cross-silo + hard-cap). Added scopedCustomers memo: includes customers assigned to the active wave_business_id PLUS legacy/untagged customers with invoices/payments scoped to that silo; EXCLUDES customers explicitly assigned to another silo. Root cause of the bleed: scopeToBusiness includes null/legacy rows for production silos, so untagged customers showed under Real KTC. Picker now searches scopedCustomers (not raw customers), removed the silent .slice(0,40) → CAP 50 with a count label, and an effect clears selectedId when it’s out of the active scope. Test test-v55-83-iw-customer-ledger-scope.js (8) added to the runner (now 22/22 required). NOTE: legacy customers with no activity yet won’t appear in a silo until assigned or they get a scoped invoice — acceptable for launch; a labeled legacy/repair mode can follow.' },
+    ],
+  },
+  {
     version: 'v55.83-IV',
     date: '2026-06-19',
     label: 'Banking: assign each bank ACCOUNT to its own silo (6338 → KTC, 6353 → Kandil)',

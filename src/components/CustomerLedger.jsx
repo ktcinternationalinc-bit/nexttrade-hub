@@ -119,6 +119,29 @@ export default function CustomerLedger(props) {
     var c = null; customers.forEach(function (x) { if (x.id === selectedId) c = x; }); return c;
   }, [customers, selectedId]);
 
+  // v55.83-IW (Codex P0) — the customer picker must be SILO-SCOPED. Show only customers explicitly
+  // assigned to the active Wave business, plus legacy/untagged customers that have invoices/payments
+  // in this silo. Exclude customers explicitly assigned to a DIFFERENT silo (no cross-silo bleed).
+  var scopedCustomers = useMemo(function () {
+    if (!activeBiz || activeBiz === 'all') { return customers; }
+    var keep = {};
+    customers.forEach(function (c) { if (c.wave_business_id === activeBiz) { keep[c.id] = c; } });
+    var actIds = {};
+    invoices.forEach(function (i) { if (i.accounting_customer_id && i.wave_business_id === activeBiz) { actIds[i.accounting_customer_id] = true; } });
+    payments.forEach(function (p) { if (p.accounting_customer_id && p.wave_business_id === activeBiz) { actIds[p.accounting_customer_id] = true; } });
+    customers.forEach(function (c) {
+      if (keep[c.id]) { return; }
+      if (c.wave_business_id && c.wave_business_id !== activeBiz) { return; } // assigned elsewhere → never show here
+      if (actIds[c.id]) { keep[c.id] = c; } // legacy/untagged but has activity in THIS silo
+    });
+    return Object.keys(keep).map(function (k) { return keep[k]; });
+  }, [customers, invoices, payments, activeBiz]);
+
+  // Clear a selected customer that isn't in the active silo's scope (e.g. after switching silo).
+  useEffect(function () {
+    if (selectedId && scopedCustomers.length && !scopedCustomers.some(function (c) { return c.id === selectedId; })) { setSelectedId(''); }
+  }, [activeBiz, scopedCustomers, selectedId]);
+
   // invoices for the active currency
   var curInvoices = useMemo(function () {
     return custInvoices.filter(function (i) { return (i.currency || 'USD') === currency; });
@@ -229,11 +252,15 @@ export default function CustomerLedger(props) {
   }
   if (loading) return <div className="p-6 text-slate-400 text-sm">Loading customer accounting data…</div>;
 
-  var matches = customers.filter(function (c) {
+  // v55.83-IW — search within the SILO-SCOPED list; show counts instead of a silent 40-row cap.
+  var CAP = 50;
+  var allScoped = scopedCustomers.filter(function (c) {
     if (!search) return true;
     var q = search.toLowerCase();
     return (String(c.company_name || '').toLowerCase().indexOf(q) >= 0) || (String(c.email || '').toLowerCase().indexOf(q) >= 0) || (String(c.name || '').toLowerCase().indexOf(q) >= 0);
-  }).slice(0, 40);
+  });
+  var matches = allScoped.slice(0, CAP);
+  var pickerCountLabel = 'Showing ' + matches.length + ' of ' + allScoped.length + ' ' + (activeBiz && activeBiz !== 'all' ? 'customers in this silo' : 'customers') + (allScoped.length > CAP ? ' — search to narrow' : '');
 
   function Card(p) { return (<div className={'rounded-lg p-3 ' + (p.bg || 'bg-slate-800')}><div className="text-[10px] font-bold uppercase tracking-wider opacity-80">{p.label}</div><div className="text-lg font-extrabold mt-0.5">{p.val}</div></div>); }
 
@@ -270,6 +297,7 @@ export default function CustomerLedger(props) {
       {/* Customer select */}
       <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
         <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder="Search customer by name, company or email…" className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 text-slate-100 text-sm" />
+        <div className="mt-1 text-[10px] text-slate-400">{pickerCountLabel}{activeBiz && activeBiz !== 'all' ? '' : ' · all businesses'}</div>
         {(!selectedId || search) && (
           <div className="mt-2 max-h-48 overflow-y-auto flex flex-col gap-1">
             {matches.map(function (c) {
