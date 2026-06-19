@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IZ',
+    date: '2026-06-19',
+    label: 'Real KTC production Wave push unlock now actually saves',
+    items: [
+      '**🔓 The super-admin "Enable REAL production Wave push" switch now persists.** It was silently not saving (a database permission rule blocked the browser write), so the unlock kept reverting to OFF. The toggle now saves through a secure server route and tells you clearly if it can\'t. The push flags (writes enabled, customer/invoice/payment push) save the same way.',
+      { superAdminOnly: true, text: 'v55.83-IZ (Codex P0 launch blocker — production unlock save failure). Root cause = the RLS write-trap again: WaveSyncCenter.setFlag did supabase.from(wave_business_registry).update(...) client-side, ignored error + rows-affected, and reloaded → under email-auth RLS the write was filtered to 0 rows and the switch snapped back to OFF. Fix: NEW /api/wave/registry-flags (service-role, assertPermission wave.settings.manage, field allowlist, production_push_unlocked requires a real super_admin role, verifies the registry row exists, updates + reads back, reports 0-row as an error). setFlag now POSTs to it and surfaces real failures. Test test-v55-83-iz (8); runner 24/24 required green. NOW the go-live path works: select Real KTC → Settings → Enable REAL production push (persists) → enable writes + per-action push flags → dry-run → one real payment → verify. STILL OPEN (Codex): wire Pull-products button; push block/warn on missing product+no default; admin history window; freshness strip; live KTC/Kandil end-to-end verification.' },
+    ],
+  },
+  {
     version: 'v55.83-IY',
     date: '2026-06-19',
     label: 'Invoices: pick the real Wave product per line (not one default for the whole invoice)',

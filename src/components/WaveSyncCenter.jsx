@@ -585,9 +585,16 @@ export default function WaveSyncCenter(props) {
       toast.error('Unlock real production push first (super-admin switch in Settings).'); return;
     }
     setSavingFlags(true);
-    var patch = {}; patch[field] = val;
-    supabase.from('wave_business_registry').update(patch).eq('wave_business_id', active)
-      .then(function () { load(); }).catch(function (e) { toast.error('Could not save: ' + (e.message || e)); })
+    // v55.83-IZ — save through the SERVICE-ROLE route. The old direct client update was silently
+    // filtered by RLS (email-auth) and ignored the error/0-row result, so the unlock never persisted.
+    fetch('/api/wave/registry-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ waveBusinessId: active, field: field, value: val, user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.ok) { toast.error('Could not save "' + field + '": ' + ((j && j.error) || 'unknown error')); }
+        else { toast.success((val ? 'Enabled' : 'Disabled') + ': ' + field); }
+        load();
+      })
+      .catch(function (e) { toast.error('Could not save: ' + ((e && e.message) || e)); })
       .finally(function () { setSavingFlags(false); });
   }
 

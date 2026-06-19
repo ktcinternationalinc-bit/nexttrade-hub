@@ -31,6 +31,7 @@ var MANIFEST = [
   // Wave push + import + categories + estimates
   { f: 'test-v55-83-fq-launch-critical.js', label: 'must-pass', why: 'launch-critical accounting invariants' },
   { f: 'test-v55-83-fl-real-payment-push.js', label: 'must-pass', why: 'real Wave payment push guards' },
+  { f: 'test-v55-83-iz-registry-flags.js', label: 'new', why: 'production unlock + push flags save via service-role route (super-admin gated)' },
   { f: 'test-v55-83-fj-match-guards.js', label: 'must-pass', why: 'match guards' },
   { f: 'test-v55-83-fm-wave-categories.js', label: 'updated', why: 'Wave categories in categorize dropdown, silo-scoped' },
   { f: 'test-v55-83-iq-estimates-proformas.js', label: 'new', why: 'Wave estimates → Hub proformas per silo' },
