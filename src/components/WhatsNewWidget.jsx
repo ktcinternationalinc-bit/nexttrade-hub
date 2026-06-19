@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JI',
+    date: '2026-06-19',
+    label: 'Made the customer-credit allocation check work without needing a database change',
+    items: [
+      '**🛡️ Removed a hidden database dependency that could have broken approvals on the live system.** The previous build read a customer-credit column that may not exist in production; if missing, marking a transaction reviewed/approved would have errored out. It now uses the credit status only (a reversed credit is already marked "void"), so it works on the current database with no migration.',
+      { superAdminOnly: true, text: 'v55.83-JI (Codex P0 schema-compat). JH added customer_credits.voided to the server + client allocation selects, but live customer_credits has no guaranteed voided column → column-not-found would throw in allocationForTxn and break set_status reviewed/approved. Reverted to status-only (count !status||status===open); unmatch already sets reversed credits to status=void so they are excluded without a migration. Updated regression G3/H1/H4 + added H6 (asserts no customer_credits.voided select remains, server or client). Clean .next build green; 29/29 required. Note: not claiming the bank-write path is "sealed" — Codex still wants a live HTTP direct-POST proof (needs seeded DB) and the P1s remain: split/park browser writes -> service route; visibility floor into Invoices/AR/Ledger/Open Accounts; Plaid backfill/incremental.' },
+    ],
+  },
+  {
     version: 'v55.83-JH',
     date: '2026-06-19',
     label: 'Money-conservation: customer credits now count on screen too, and categorizing can never approve',

@@ -132,7 +132,7 @@ export default function BankReviewTab(props) {
       supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
       supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount'),
       supabase.from('unapplied_deposits').select('bank_transaction_id, amount, status'),
-      supabase.from('customer_credits').select('source_transaction_id, amount, status, voided'),
+      supabase.from('customer_credits').select('source_transaction_id, amount, status'),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
@@ -167,8 +167,7 @@ export default function BankReviewTab(props) {
       // the UI and is wrongly blocked. Mirrors the server allocationForTxn.
       ((res[11] && res[11].data) || []).forEach(function (c) {
         if (!c || !c.source_transaction_id) { return; }
-        if (c.voided === true) { return; }
-        if (c.status && c.status !== 'open') { return; }
+        if (c.status && c.status !== 'open') { return; } // reversed credits are status 'void' — excluded (schema-safe: no `voided` column dependency)
         bucket(c.source_transaction_id).unapplied += Number(c.amount) || 0;
       });
       var pa = {}; ((res[5] && res[5].data) || []).forEach(function (a) { if (a.plaid_account_id) { pa[a.plaid_account_id] = a; } });

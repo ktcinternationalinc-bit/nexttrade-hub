@@ -72,7 +72,7 @@ ok('G2: set_status blocks reviewed/approved server-side when not fully allocated
   /if \(alloc && !alloc\.complete\)[\s\S]{0,160}is unallocated\./.test(route) &&
   /if \(alloc && alloc\.overAllocated\)/.test(route));
 ok('G3: allocation math includes customer_credits (overpayment routed to a credit is not under-counted)',
-  /from\('customer_credits'\)\.select\('amount, status, voided'\)\.eq\('source_transaction_id', txnId\)/.test(route));
+  /from\('customer_credits'\)\.select\('amount, status'\)\.eq\('source_transaction_id', txnId\)/.test(route));
 ok('G4: classify/set_wave_category strip the auto-review when the txn is not fully allocated (no category-side bypass)',
   /cPatch\.review_status === 'reviewed' \|\| cPatch\.review_status === 'approved'/.test(route) &&
   /delete cPatch\.review_status; delete cPatch\.reviewed_by; delete cPatch\.reviewed_at; autoReviewStripped = true/.test(route));
@@ -81,15 +81,18 @@ var withCredit = pm.bankAllocationStatus({ txnAmount: 1000, paid: 800, unapplied
 ok('G5: 800 invoice payment + 200 parked (credit/unapplied) fully allocates a 1000 deposit', withCredit.complete === true && Math.abs(withCredit.remaining) < 0.001);
 
 // --- H. JH: client UI counts credits too + categorize actions are whitelisted (no approve via patch) ---
-ok('H1: server skips VOIDED customer credits in allocation', /cr\[i\]\.voided !== true && \(!cr\[i\]\.status \|\| cr\[i\]\.status === 'open'\)/.test(route));
+ok('H1: server counts only OPEN customer credits (schema-safe; no voided-column dependency, reversed=void excluded by status)',
+  /for \(i = 0; i < cr\.length; i\+\+\) \{ if \(!cr\[i\]\.status \|\| cr\[i\]\.status === 'open'\)/.test(route) && !/customer_credits'\)\.select\('amount, status, voided'/.test(route));
 ok('H2: classify/set_wave_category whitelist patch fields (no arbitrary columns)',
   /var CLASSIFY_FIELDS = \{[\s\S]{0,200}\}/.test(route) && /if \(Object\.prototype\.hasOwnProperty\.call\(rawPatch, fk\) && CLASSIFY_FIELDS\[fk\]\)/.test(route));
 ok('H3: categorize actions can never write approved (approval is a separate higher-permission action)',
   /if \(cPatch\.review_status === 'approved'\) \{ delete cPatch\.review_status; \}/.test(route));
-ok('H4: BankReviewTab loads customer_credits and folds OPEN, non-void credits into allocation',
-  /from\('customer_credits'\)\.select\('source_transaction_id, amount, status, voided'\)/.test(br) &&
-  /if \(c\.voided === true\) \{ return; \}/.test(br) &&
+ok('H4: BankReviewTab loads customer_credits and folds OPEN credits into allocation (schema-safe, status-only)',
+  /from\('customer_credits'\)\.select\('source_transaction_id, amount, status'\)/.test(br) &&
+  /if \(c\.status && c\.status !== 'open'\) \{ return; \}/.test(br) &&
   /bucket\(c\.source_transaction_id\)\.unapplied \+= Number\(c\.amount\) \|\| 0/.test(br));
+ok('H6: no schema-fragile customer_credits.voided dependency remains (server or client)',
+  !/customer_credits'\)\.select\([^)]*voided/.test(route) && !/customer_credits'\)\.select\([^)]*voided/.test(br));
 // runtime: 250 = 100 payment + 150 credit is complete; the same without the credit is NOT
 var withCr = pm.bankAllocationStatus({ txnAmount: 250, paid: 100, unapplied: 150 });
 var withoutCr = pm.bankAllocationStatus({ txnAmount: 250, paid: 100, unapplied: 0 });

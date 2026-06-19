@@ -45,10 +45,14 @@ async function allocationForTxn(db, txnId) {
   for (i = 0; i < ur.length; i++) { if (!ur[i].status || ur[i].status === 'open') { unapplied += Number(ur[i].amount) || 0; } }
   // v55.83-JG (Codex) — overpayment can land in customer_credits (keyed by source_transaction_id),
   // not unapplied_deposits. Count it too, or an over-paid deposit looks under-allocated and is blocked.
-  var cR = await db.from('customer_credits').select('amount, status, voided').eq('source_transaction_id', txnId);
+  // v55.83-JI (Codex P0 schema-safe) — rely on status only; customer_credits has no guaranteed
+  // `voided` column on live/prod, and selecting it would throw column-not-found and break the whole
+  // approval path. unmatch already sets reversed credits to status='void', so the open-status check
+  // excludes them without a migration.
+  var cR = await db.from('customer_credits').select('amount, status').eq('source_transaction_id', txnId);
   if (cR && cR.error) { throw cR.error; }
   var cr = (cR && cR.data) || [];
-  for (i = 0; i < cr.length; i++) { if (cr[i].voided !== true && (!cr[i].status || cr[i].status === 'open')) { unapplied += Number(cr[i].amount) || 0; } }
+  for (i = 0; i < cr.length; i++) { if (!cr[i].status || cr[i].status === 'open') { unapplied += Number(cr[i].amount) || 0; } }
   return bankAllocationStatus({ txnAmount: total, paid: paid, split: split, unapplied: unapplied });
 }
 
