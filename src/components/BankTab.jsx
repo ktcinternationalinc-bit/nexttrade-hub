@@ -70,7 +70,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       // v55.83-IS (Codex FAIL) — scope by the active silo at the QUERY before the 500 limit, so a
       // silo's freshly-synced rows can't be truncated out by other silos' transactions.
       const _activeBizScope = getActiveWaveBusiness();
-      let _txq = supabase.from('bank_transactions').select('*').order('date', { ascending: false });
+      // v55.83-IT (Codex FAIL) — order by posted_date (canonical date) to match Bank Review, so the
+      // same silo/account shows the same newest transaction on both screens.
+      let _txq = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false });
       if (_activeBizScope) { _txq = _txq.eq('wave_business_id', _activeBizScope); }
       const { data: txns } = await _txq.limit(500);
       setTransactions(scopeIfRegistered(txns || [], getActiveWaveBusiness(), bizRegistry, true));

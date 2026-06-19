@@ -99,8 +99,15 @@ export default function BankReviewTab(props) {
 
   function load() {
     setLoading(true);
+    // v55.83-IT (Codex FAIL — data consistency) — scope by the active silo at the QUERY before the
+    // 1000 limit, exactly like BankTab. Previously a global limit(1000) could fill up with other
+    // silos' newer rows and leave the active silo a stale subset (KTC 6338 "stopping at June 11").
+    var _activeBizRev = getActiveWaveBusiness();
+    var _txQRev = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false });
+    if (_activeBizRev) { _txQRev = _txQRev.eq('wave_business_id', _activeBizRev); }
+    _txQRev = _txQRev.limit(1000);
     Promise.all([
-      supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false }).limit(1000),
+      _txQRev,
       supabase.from('payment_matches').select('*'),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
@@ -166,9 +173,9 @@ export default function BankReviewTab(props) {
         var deepHit = null;
         t.forEach(function (x) { if (x.id === deepId) { deepHit = x; } });
         if (deepHit) {
-          // Clear filters that could hide the row, then select it (the matching panel opens from sel
-          // regardless of the list filter, so the user can match immediately).
-          setFStatus('all'); setFAccount('all'); setSearch('');
+          // v55.83-IT (Codex FAIL) — preserve the bank-account context the user came from instead of
+          // resetting to All accounts. Clear status/search so the row is visible, but keep its account.
+          setFStatus('all'); setFAccount(deepHit.account_id || 'all'); setSearch('');
           openTxn(deepHit);
           if (toast && toast.success) { toast.success('Opened the transaction for matching.'); }
         } else if (toast && toast.error) {

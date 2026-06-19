@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-IT',
+    date: '2026-06-19',
+    label: 'Banking: same account now shows the same newest transactions on every screen',
+    items: [
+      '**🏦 Fixed inconsistent bank dates across screens.** The Bank tab and Bank Review now show the same newest transactions for the same account/silo. Before, Bank Review could show stale (older) transactions for a silo because it loaded a global batch and trimmed it before filtering — so a busy account looked "stuck" on an old date.',
+      '**🔗 "Match in Bank Review" keeps your account selected** instead of resetting to "All accounts."',
+      { superAdminOnly: true, text: 'v55.83-IT (Codex user-reported data-consistency FAIL: account 6338 showing different newest dates per screen). (1) BankReviewTab.load now scopes bank_transactions by active wave_business_id at the QUERY before limit(1000) (was global-1000-then-scope → stale subset for the active silo). (2) Both BankTab + BankReviewTab now order by posted_date (canonical date) so the same silo/account shows the same newest row. (3) deep-link sets fAccount = deepHit.account_id (was reset to all). Test test-v55-83-it-bank-consistency.js added to npm run test:accounting-bank (now 20/20 required). STILL OPEN (Codex, next): account-level silo mapping (a Plaid connection can hold accounts in different silos; 6353→Kandil, 6338→KTC must not bleed) + super-admin diagnostic/repair view for rows with wrong wave_business_id + a data-freshness strip (silo/account/newest date/count/last sync/active filters) + rewrite the stale-excluded dl-wave-sync test to the current Wave-push contract.' },
+    ],
+  },
+  {
     version: 'v55.83-IS',
     date: '2026-06-19',
     label: 'Bank Review reverse/unmatch is now reliable; bank-sync shows the right silo',

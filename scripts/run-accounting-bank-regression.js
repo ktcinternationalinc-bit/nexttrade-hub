@@ -16,6 +16,7 @@ var MANIFEST = [
   { f: 'test-v55-83-x-bank-ingest.js', label: 'must-pass', why: 'Plaid transaction mapping/ingest' },
   { f: 'test-v55-83-fg-plaid-sync-defensive.js', label: 'must-pass', why: 'Plaid sync defensive handling' },
   { f: 'test-v55-83-is-unmatch-and-plaid-scope.js', label: 'new', why: 'unmatch→service route; BankTab silo-scope-before-limit; Plaid requires service-role' },
+  { f: 'test-v55-83-it-bank-consistency.js', label: 'new', why: 'Bank Review scope-before-limit; canonical posted_date on both screens; deep-link keeps account' },
   // Bank Review core writes (service-role, RLS-proof)
   { f: 'test-v55-83-ip-bank-write-serverside.js', label: 'new', why: 'categorize/status/match/unmatch via /api/accounting/bank-write' },
   { f: 'test-v55-83-im-accounting-qa-hardening.js', label: 'updated', why: 'res.error guards, over-apply cap, void handling, currency guard' },
