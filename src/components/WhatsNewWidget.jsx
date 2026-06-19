@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JO',
+    date: '2026-06-19',
+    label: 'Now tells you the real reason Wave categories are empty, and why a bank stopped syncing',
+    items: [
+      '**🏷️ Pulling Wave categories for a silo now tells the truth.** Before, if the pull failed for a specific business (e.g. Real KTC) it still said "Done. 0 new" as if it worked. Now it clearly says whether Wave returned an error, returned 0 accounts, or actually pulled the Chart of Accounts — so you know immediately if the Wave login simply can\'t see that business\'s accounts.',
+      '**🔄 A bank that quietly stopped syncing now says so.** If a bank connection is frozen on an old date because Plaid needs you to re-authenticate (very common in production), the Bank tab now shows a clear "re-connect this bank" message instead of looking like it just has no new activity. Your existing transactions and matches are kept when you re-connect.',
+      { superAdminOnly: true, text: 'v55.83-JO (Max live report — Real KTC categories empty in Bank Review + bank stale at Jun 11). CATEGORIES: WaveSyncCenter.runCategoryPull ignored results[0].ok/.error/.total and showed "Done. 0 new" + success toast on a failed/empty per-business pull; now surfaces per-business failure ("Wave token likely cannot access this business"), 0-accounts, or real count. NOTE ROOT CAUSE: sync-categories uses a single WAVE_ACCESS_TOKEN for all businesses — if that token\'s Wave login does not include Real KTC (Production), its Chart of Accounts can never pull and the Bank Review dropdown stays empty. This build makes that visible; the real fix is a Real-KTC-scoped Wave token (env/config) or per-business OAuth. STALE: plaid/transactions returns needs_relink + records last_sync_error on ITEM_LOGIN_REQUIRED/PENDING_EXPIRATION; BankTab shows a re-connect CTA. Real KTC last_synced Jun 14 while KANDIL synced today → almost certainly an ITEM_LOGIN_REQUIRED re-auth. Test jo(6); runner 32/32. ACTION FOR MAX: (1) click Sync on Real KTC and read the new error; (2) Wave Sync Center → Real KTC → Pull Wave categories and read the new message — it will say if the token can\'t see Real KTC.' },
+    ],
+  },
+  {
     version: 'v55.83-JN',
     date: '2026-06-19',
     label: 'Production Wave unlock now stays ON and tells you if a save fails (launch-critical fix)',

@@ -41,6 +41,7 @@ var MANIFEST = [
   { f: 'test-v55-83-fj-match-guards.js', label: 'must-pass', why: 'match guards' },
   { f: 'test-v55-83-fm-wave-categories.js', label: 'updated', why: 'Wave categories in categorize dropdown, silo-scoped' },
   { f: 'test-v55-83-ja-category-dropdown.js', label: 'new', why: 'categories load via service-role route (RLS-proof) + reason-specific empty state' },
+  { f: 'test-v55-83-jo-category-pull-truth-and-relink.js', label: 'new', why: 'category pull surfaces per-silo failure/0-accounts (not false success); Plaid needs_relink CTA for stale connections' },
   { f: 'test-v55-83-iq-estimates-proformas.js', label: 'new', why: 'Wave estimates → Hub proformas per silo' },
   { f: 'test-v55-83-iy-perline-wave-product.js', label: 'new', why: 'per-line Wave product selection on invoices + read-only product catalog pull' },
   { f: 'test-v55-83-at-invoice-import.js', label: 'updated', why: 'invoice import anti-double-count invariant' },

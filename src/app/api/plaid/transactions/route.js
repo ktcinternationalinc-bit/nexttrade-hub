@@ -56,7 +56,15 @@ export async function POST(req) {
       try { await supabase.from('bank_connections').update({ last_sync_status: 'preparing', last_sync_error: 'Plaid is still preparing transactions' }).eq('id', conn.id); } catch (ePrep) {}
       return NextResponse.json({ pending: true, error_code: 'PRODUCT_NOT_READY', message: 'Your bank is connected. Plaid is still preparing the first batch of transactions (usually under a minute). It will retry automatically.' });
     }
-    if (data.error_code) return NextResponse.json({ error: data.error_message || data.error_code }, { status: 400 });
+    if (data.error_code) {
+      // v55.83-JO — ITEM_LOGIN_REQUIRED / PENDING_EXPIRATION mean Plaid needs the user to re-auth this
+      // bank (common in production, e.g. after a password change). Surface a re-link CTA + record the
+      // error so the connection clearly shows WHY it stopped pulling (this is the "stale at June 11"
+      // symptom: the item silently stopped syncing). Other error codes still surface their message.
+      var needsRelink = (data.error_code === 'ITEM_LOGIN_REQUIRED' || data.error_code === 'PENDING_EXPIRATION');
+      try { await supabase.from('bank_connections').update({ last_sync_status: 'error', last_sync_error: (data.error_message || data.error_code) }).eq('id', conn.id); } catch (eErr) {}
+      return NextResponse.json({ error: data.error_message || data.error_code, error_code: data.error_code, needs_relink: needsRelink, connection_id: conn.id }, { status: 400 });
+    }
 
     var rawTxns = data.transactions || [];
     // Index Plaid accounts so each transaction knows its account type/subtype

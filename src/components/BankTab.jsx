@@ -231,7 +231,16 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
         }
         return;
       }
-      if (data.error) { setError(data.error); setSyncing(false); return; }
+      if (data.error) {
+        // v55.83-JO — a Plaid re-auth requirement is the usual reason a connection silently stops
+        // pulling (stuck on an old date). Make it explicit + actionable instead of a generic error.
+        if (data.needs_relink) {
+          setError('⚠ This bank needs to be re-connected to Plaid before it will sync again (Plaid: ' + data.error + '). Click "+ Connect Bank" and re-authenticate this bank — your existing transactions and matches are kept. Until then it will stay frozen on the last successful sync date.');
+        } else {
+          setError('Sync failed (Plaid: ' + data.error + ').');
+        }
+        setSyncing(false); return;
+      }
       await loadData();
       // v55.83-IR — never leave sync silent. Report exactly what Plaid returned so "nothing happened"
       // becomes actionable (0 new, scoped to another silo, or widen the date range).

@@ -287,15 +287,29 @@ export default function WaveSyncCenter(props) {
     fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.text().then(function (t) { var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || ''; if (!r.ok || ct.indexOf('application/json') < 0) { throw new Error('Got HTTP ' + r.status + ': ' + t.slice(0, 200)); } return JSON.parse(t); }); })
       .then(function (d) {
+        // v55.83-JO — the pull is per-business and can FAIL or return 0 accounts for THIS silo even
+        // when the overall request is ok:true (e.g. the single Wave token can't access Real KTC's
+        // business). The old code showed "Done. 0 new" + a success toast and hid that — exactly why
+        // Real KTC looked "pulled" but had no categories. Surface the real per-business result.
         if (d && d.results && d.results.length) {
-          var sum = d.results[0].summary || d.results[0];
-          setCatMsg('Done. ' + (sum.created || 0) + ' new, ' + (sum.updated || 0) + ' updated, ' + (sum.skipped || 0) + ' unchanged.');
+          var res0 = d.results[0];
+          var sum = res0.summary || res0;
+          if (res0.ok === false) {
+            setCatMsg('⛔ ' + (res0.business || 'This silo') + ': Wave returned an error — ' + (res0.error || (res0.errors && res0.errors.join('; ')) || 'unknown') + '. The Wave token likely cannot access this business, or it has no Chart of Accounts. No categories were pulled.');
+            toast.error('Category pull failed for this silo'); loadCatCount(); return;
+          }
+          var totalAcc = (res0.total != null) ? res0.total : ((sum.created || 0) + (sum.updated || 0) + (sum.skipped || 0));
+          if (!totalAcc) {
+            setCatMsg('⚠ ' + (res0.business || 'This silo') + ': Wave returned 0 accounts. Either the Wave token has no access to this business, or this business has no Chart of Accounts yet. Nothing to categorize with until this returns accounts.');
+            toast.error('No Wave accounts returned for this silo'); loadCatCount(); return;
+          }
+          setCatMsg('✅ ' + (res0.business || 'Done') + ': ' + totalAcc + ' Wave accounts (' + (sum.created || 0) + ' new, ' + (sum.updated || 0) + ' updated, ' + (sum.skipped || 0) + ' unchanged).');
           toast.success('Wave categories synced'); loadCatCount();
         } else if (d && (d.created != null || d.updated != null)) {
           setCatMsg('Done. ' + (d.created || 0) + ' new, ' + (d.updated || 0) + ' updated, ' + (d.skipped || 0) + ' unchanged.');
           toast.success('Wave categories synced'); loadCatCount();
-        } else if (d && d.message) { setCatMsg(d.message); loadCatCount(); }
-        else if (d && d.error) { setCatMsg('Error: ' + d.error); toast.error('Category sync failed'); }
+        } else if (d && d.message) { setCatMsg('⚠ ' + d.message); toast.error('No categories pulled — see message'); loadCatCount(); }
+        else if (d && d.error) { setCatMsg('⛔ Error: ' + d.error); toast.error('Category sync failed'); }
         else { setCatMsg(JSON.stringify(d).slice(0, 300)); loadCatCount(); }
       })
       .catch(function (e) { setCatMsg('Request failed: ' + ((e && e.message) || String(e))); toast.error('Category sync failed'); })
