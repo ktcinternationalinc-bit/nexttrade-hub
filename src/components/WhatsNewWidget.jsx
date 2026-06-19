@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JJ',
+    date: '2026-06-19',
+    label: 'Splitting a deposit and parking an unapplied amount now save reliably (server-side)',
+    items: [
+      '**💾 Split-save and "park as unapplied deposit" now save through the secure server path** — the same fix already applied to matching, categorizing and approving. Before, these wrote straight from the browser and could silently do nothing under the database permission rules. They now persist reliably and confirm the save, and a split must still account for the full transaction amount.',
+      { superAdminOnly: true, text: 'v55.83-JJ (Codex P1, pre-build-reviewed). NEW bank-write actions save_splits + create_unapplied (service-role, payments.match). save_splits: validates each line > 0, no money-out invoice links, not approved, sum===amount_abs (full allocation); inserts bank_transaction_splits (with Wave fields + base-column fallback), and for invoice lines creates payment_matches + payment row + recompute with overpayment→customer_credits/unapplied (mirrors match_invoice), rolling back the match if the payment insert fails; marks reviewed only when allocationForTxn complete. create_unapplied: inserts the open deposit, marks reviewed only when the park completes allocation. BankReviewTab.saveSplits/createUnapplied now POST to these (no more dbInsert on bank_transaction_splits/payment_matches/unapplied_deposits); client still resolves wave:<id> + enforces fullyAllocated pre-flight. Test test-v55-83-jj (12); clean build green; runner 30/30 required. NEXT (Codex): wire visibility floor into Invoices/AR/Ledger/Open Accounts (panel currently overclaims coverage); Plaid backfill/incremental; live direct-POST proofs.' },
+    ],
+  },
+  {
     version: 'v55.83-JI',
     date: '2026-06-19',
     label: 'Made the customer-credit allocation check work without needing a database change',

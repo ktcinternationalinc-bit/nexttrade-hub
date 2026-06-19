@@ -534,56 +534,27 @@ export default function BankReviewTab(props) {
     });
     if (badWave) { toast.error('A split line has an unrecognized Wave category — re-pick it and try again.'); return; }
     setBusy(true);
-    var chain = Promise.resolve();
-    splitRows.forEach(function (r) {
-      var amt = roundMoney(Number(r.amount));
-      if (!(amt > 0)) return;
-      chain = chain.then(function () {
-        var splitRow = { business_id: t.business_id, bank_transaction_id: t.id, split_amount: amt, category: r.category || null, linked_type: r.invoice_id ? 'invoice' : (r.customer_id ? 'customer' : null), linked_id: r.invoice_id || r.customer_id || null, notes: r.notes || null, created_by: userProfile && userProfile.id };
-        // v55.83-HD (Codex QA FAIL fix) — if the split row picked a Wave category (value "wave:<id>"),
-        // persist the real Wave fields (matching the single-txn path + preflight schema for
-        // bank_transaction_splits) instead of saving the raw "wave:<uuid>" string. Without this the
-        // split looked categorized in the UI but saved as a plain string, making Wave sync ambiguous.
-        if (r.category && r.category.indexOf('wave:') === 0) {
-          var _wid = r.category.slice(5);
-          var _cat = null; var _ci;
-          for (_ci = 0; _ci < waveCategories.length; _ci++) { if (waveCategories[_ci].wave_account_id === _wid) { _cat = waveCategories[_ci]; break; } }
-          if (_cat) {
-            splitRow.category = _cat.wave_account_name;
-            splitRow.wave_business_id = t.wave_business_id || getActiveWaveBusiness() || _cat.wave_business_id || null;
-            splitRow.wave_account_id = _cat.wave_account_id;
-            splitRow.wave_account_name = _cat.wave_account_name;
-            splitRow.category_source = 'wave';
-            splitRow.category_status = 'pending_wave_sync';
-          }
-        }
-        return dbInsert('bank_transaction_splits', splitRow, userProfile && userProfile.id)
-          .catch(function (err) {
-            // v55.83-HH (LAUNCH SAFETY) — if the DB doesn't yet have the split Wave columns
-            // (sql/v55-83-HE migration not run), don't fail the whole split save: retry with the
-            // base columns only. The split still saves with the readable category name; the Wave
-            // metadata is simply omitted until the migration is applied.
-            if (splitRow.wave_account_id) {
-              var base = { business_id: splitRow.business_id, bank_transaction_id: splitRow.bank_transaction_id, split_amount: splitRow.split_amount, category: splitRow.category, linked_type: splitRow.linked_type, linked_id: splitRow.linked_id, notes: splitRow.notes, created_by: splitRow.created_by };
-              return dbInsert('bank_transaction_splits', base, userProfile && userProfile.id);
-            }
-            throw err;
-          });
-      });
-      if (r.invoice_id) {
-        chain = chain.then(function () {
-          var inv = acctInvoices.find(function (i) { return i.id === r.invoice_id; });
-          if (!inv) return null;
-          if (t.business_id && inv.business_id && t.business_id !== inv.business_id) { toast.error('Skipped an invoice from another business.'); return null; }
-          return dbInsert('payment_matches', { business_id: t.business_id, wave_business_id: (t.wave_business_id || getActiveWaveBusiness() || null), bank_transaction_id: t.id, invoice_id: r.invoice_id, matched_amount: amt, match_type: 'partial', is_manual_override: true, notes: 'split', matched_by: userProfile && userProfile.id, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
-            .then(function (matchRow) { return createInvPaymentRow(inv, t, amt, matchRow && matchRow.id, 'split'); })
-            .then(function () { return recomputeInvoice(r.invoice_id); });
-        });
+    // v55.83-JJ — the WRITE now goes through the service-role route (RLS-proof). Resolve each line's
+    // Wave category client-side (so the server gets a real wave_account_id, not a "wave:<uuid>" token),
+    // then POST the resolved rows. The server inserts splits + invoice match/payment/recompute and only
+    // marks the txn reviewed when it is fully allocated. (Was a browser dbInsert/dbUpdate chain.)
+    var outRows = splitRows.map(function (r) {
+      var row = { amount: roundMoney(Number(r.amount)), category: r.category || null, customer_id: r.customer_id || null, invoice_id: r.invoice_id || null, notes: r.notes || null };
+      if (r.category && r.category.indexOf('wave:') === 0) {
+        var _wid = r.category.slice(5); var _cat = null; var _ci;
+        for (_ci = 0; _ci < waveCategories.length; _ci++) { if (waveCategories[_ci].wave_account_id === _wid) { _cat = waveCategories[_ci]; break; } }
+        if (_cat) { row.category = _cat.wave_account_name; row.wave_account_id = _cat.wave_account_id; row.wave_account_name = _cat.wave_account_name; }
       }
+      return row;
     });
-    chain.then(function () { return patchTxn(t, { review_status: t.review_status === 'unreviewed' ? 'reviewed' : t.review_status, accounting_customer_id: t.accounting_customer_id }, 'Split bank txn ' + (t.name || t.id) + ' into ' + splitRows.length + ' line(s)'); })
+    bankWrite('save_splits', {
+      txn: { id: t.id, business_id: t.business_id, wave_business_id: t.wave_business_id, amount_abs: t.amount_abs, amount: t.amount, posted_date: t.posted_date, date: t.date, direction: t.direction, classification: t.classification, review_status: t.review_status },
+      rows: outRows,
+      wave_business_id: t.wave_business_id || getActiveWaveBusiness() || null,
+      accounting_customer_id: t.accounting_customer_id || null
+    })
       .then(function () { toast.success('Split saved (' + splitRows.length + ' lines)'); setSplitMode(false); setSplitRows([]); onReload(); load(); })
-      .catch(function (e) { console.error('[save] Split failed: ', e); toast.error('Split failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .catch(function (e) { console.error('[save] Split failed: ', e); toast.error('Split failed: ' + ((e && e.message) || 'unknown error') + ' — screenshot for Claude.'); })
       .finally(function () { setBusy(false); });
   }
 
@@ -658,10 +629,18 @@ export default function BankReviewTab(props) {
     var parkRemaining = roundMoney(allocU.total - afterPark);
     var parkComplete = !(allocU.total > 0) || parkRemaining <= 0.01;
     setBusy(true);
-    dbInsert('unapplied_deposits', { business_id: t.business_id, wave_business_id: (t.wave_business_id || getActiveWaveBusiness() || null), bank_transaction_id: t.id, accounting_customer_id: mCustomerId || null, amount: amt, status: 'open', notes: mNotes || null, created_by: userProfile && userProfile.id }, userProfile && userProfile.id)
-      .then(function () { return patchTxn(t, { accounting_customer_id: mCustomerId || t.accounting_customer_id, classification: t.classification || 'customer_payment', review_status: (t.review_status === 'unreviewed' && parkComplete) ? 'reviewed' : t.review_status }, 'Created unapplied deposit ' + fmt(amt) + ' from bank txn ' + (t.name || t.id)); })
-      .then(function () { toast.success(parkComplete ? 'Unapplied deposit created — awaiting allocation' : ('Unapplied deposit of ' + fmt(amt) + ' created. ' + fmt(parkRemaining) + ' of this deposit is still unallocated — the transaction stays open until every dollar is handled.')); load(); })
-      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
+    // v55.83-JJ — the WRITE now goes through the service-role route (RLS-proof). The server inserts the
+    // unapplied deposit and only marks the txn reviewed when the park completes the allocation. (Was a
+    // browser dbInsert + patchTxn chain that could silently 0-row under RLS.)
+    bankWrite('create_unapplied', {
+      txn: { id: t.id, business_id: t.business_id, wave_business_id: t.wave_business_id, classification: t.classification, review_status: t.review_status },
+      amount: amt,
+      customer_id: mCustomerId || null,
+      wave_business_id: t.wave_business_id || getActiveWaveBusiness() || null,
+      notes: mNotes || null
+    })
+      .then(function () { toast.success(parkComplete ? 'Unapplied deposit created — awaiting allocation' : ('Unapplied deposit of ' + fmt(amt) + ' created. ' + fmt(parkRemaining) + ' of this deposit is still unallocated — the transaction stays open until every dollar is handled.')); onReload(); load(); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Could not park the deposit: ' + ((e && e.message) || 'unknown error') + ' — screenshot for Claude.'); })
       .finally(function () { setBusy(false); });
   }
 

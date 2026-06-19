@@ -46,8 +46,9 @@ ok('C1: saveSplits blocks when the split is not fully allocated',
 // --- D. Partial apply / park no longer silently finalize the transaction ---
 ok('D1: applyToInvoice toast is honest about an unallocated remainder',
   /j\.fully_allocated === false && rem > 0\.01/.test(br) && /still unallocated/.test(br));
-ok('D2: createUnapplied only flips to reviewed when the park completes allocation',
-  /parkComplete \? 'reviewed' : t\.review_status/.test(br) || /\(t\.review_status === 'unreviewed' && parkComplete\) \? 'reviewed'/.test(br));
+ok('D2: createUnapplied routes through the service route, which only flips reviewed when the park completes allocation (v55.83-JJ)',
+  /bankWrite\('create_unapplied'/.test(br) &&
+  /uRow0\.review_status === 'unreviewed' && uAlloc && uAlloc\.complete/.test(rd('src/app/api/accounting/bank-write/route.js')));
 
 // --- E. Explicit residual action (no silent auto-uncategorize) ---
 ok('E1: split mode has an explicit "remainder as Needs review" button (Hub-only)',
