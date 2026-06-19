@@ -312,17 +312,21 @@ export default function AccountingInvoicesTab(props) {
       .finally(function () { setBusy(false); });
   }
 
+  // v55.83-JD — approval now goes through the SERVICE-ROLE route /api/accounting/invoice-write. The
+  // old browser dbUpdate was silently filtered to 0 rows by RLS (app auth is by email, users.id !=
+  // auth.uid()), so "Approve" toasted success but the invoice stayed DRAFT and could never reach Wave.
   function setApproval(row, status) {
     if (status === 'approved' && !mayApprove) { toast.error('Only an Owner/Admin or Accounting Manager can approve invoices.'); return; }
     if (!mayEdit && status !== 'approved') { toast.error('No permission.'); return; }
     setBusy(true);
-    var patch = { approval_status: status, updated_by: userProfile && userProfile.id };
-    if (status === 'approved') { patch.approved_by = userProfile && userProfile.id; patch.approved_at = new Date().toISOString(); patch.ready_for_wave = true; }
-    if (status !== 'approved') { patch.ready_for_wave = false; }
-    dbUpdate('accounting_invoices', row.id, patch, userProfile && userProfile.id)
-      .then(function () { return logActivity(userProfile && userProfile.id, 'Invoice ' + (row.invoice_number || row.id) + ' -> ' + status, 'accounting_invoices'); })
+    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: status, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.ok) { throw new Error((j && j.error) || 'approval did not save'); }
+        return logActivity(userProfile && userProfile.id, 'Invoice ' + (row.invoice_number || row.id) + ' -> ' + status, 'accounting_invoices').then(function () { return j; });
+      })
       .then(function () { toast.success('Invoice ' + status.replace('_', ' ')); load(); })
-      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Could not ' + (status === 'approved' ? 'approve' : 'update') + ' invoice: ' + ((e && e.message) || 'unknown error') + ' (screenshot for Claude)'); })
       .finally(function () { setBusy(false); });
   }
   function reopenInvoice(row) {
@@ -331,9 +335,9 @@ export default function AccountingInvoicesTab(props) {
     if (!reason.trim()) { toast.error('Reason required.'); return; }
     setBusy(true);
     var waveTouch = (row.source === 'wave_import' || row.wave_sync_status === 'synced');
-    var rpatch = { approval_status: 'internal_review', ready_for_wave: false, updated_by: userProfile && userProfile.id };
-    if (waveTouch) { rpatch.wave_sync_status = 'pending_sync'; }
-    dbUpdate('accounting_invoices', row.id, rpatch, userProfile && userProfile.id)
+    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reopen', invoice_id: row.id, wave_touch: waveTouch, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'reopen did not save'); } return j; })
       .then(function () { return logActivity(userProfile && userProfile.id, 'Reopened invoice ' + (row.invoice_number || row.id) + ' (' + reason.trim() + ')' + (waveTouch ? ' [marked pending Wave re-sync]' : ''), 'accounting_invoices'); })
       .then(function () {
         toast.success('Reopened — now editable' + (waveTouch ? ' (will need Wave re-sync)' : ''));

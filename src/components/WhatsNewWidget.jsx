@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JD',
+    date: '2026-06-19',
+    label: 'Approving an invoice now actually saves (it was silently doing nothing)',
+    items: [
+      '**✅ Invoice Approve / Submit for Review / Reopen now persist.** Clicking Approve showed a success message but the invoice quietly stayed a draft — so it could never be pushed to Wave. The save was being blocked at the database-permission layer with no error. Approval now goes through a secure server route that confirms the change really saved (and tells you the exact reason if it ever does not).',
+      { superAdminOnly: true, text: 'v55.83-JD (user P0 — "why can\'t I approve invoices"). Same RLS/email-auth write trap as Bank Review: AccountingInvoicesTab.setApproval/reopenInvoice used browser dbUpdate on accounting_invoices → auth.uid()-keyed RLS filtered to 0 rows, toast lied. NEW /api/accounting/invoice-write (service-role) actions set_approval (approve gated invoices.approve, submit/draft gated invoices.edit) + reopen (invoices.approve): writes with .select(), 0-row = explicit 404, reads back approval_status, sets approved_by/at + ready_for_wave. setApproval/reopenInvoice now POST to it and throw on !ok. Test test-v55-83-jd (9). NEXT: admin history-visibility window (1mo/3mo/6mo/1yr/current-yr/all/custom across Bank Review/BankTab/invoices/AR/ledger/Open Accounts, super-admin sees all) + data-freshness strip — still not built; building next.' },
+    ],
+  },
+  {
     version: 'v55.83-JC',
     date: '2026-06-19',
     label: 'Every dollar of a bank deposit must now be accounted for before it can be reviewed or approved',
