@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KM',
+    date: '2026-06-20',
+    label: 'The transaction "View" account picker now shows active accounts only (no archived duplicates)',
+    items: [
+      '**👁 The account picker only lists live accounts now.** After you archived an old bank link, its account number could still appear a second time in the "View" dropdown above the transaction list. Now archived links\' accounts are gone from the picker — you only pick from accounts that are actually active. If you were viewing an archived account, it switches back to "All accounts" automatically.',
+      { superAdminOnly: true, text: 'v55.83-KM (Max live: 2× ··6338 in the VIEW picker after archiving the old link). Cause: archiving drops the connection from `connections`/connById, so its account gets key "?|mask" (no institution) → no longer a superseded alias → leaked into the picker (scopedTxns still excluded its txns, so list/totals were fine — picker only). Fix: the picker forEach skips `t.connection_id && !activeConnIds[t.connection_id]` (archived); effAcctFilter now falls back to All when the selected account is superseded OR belongs to an archived connection. Test km(4); runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KL',
     date: '2026-06-20',
     label: 'Reconnecting a bank no longer risks losing or double-counting any transaction',

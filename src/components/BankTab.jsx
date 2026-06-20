@@ -372,8 +372,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const supersededConnIds = {}; connections.forEach(c => { const has = plaidAccts.some(a => a.connection_id === c.id); if (has && !connHasCanonical[c.id]) { supersededConnIds[c.id] = true; } });
   // newest posted date across ALL aliases of a real account (so the canonical row tells the true freshness).
   const newestForKey = (k) => { let nd = ''; const ids = aliasIdsByKey[k] || []; transactions.forEach(t => { if (ids.indexOf(t.account_id) >= 0) { const d = String(t.posted_date || t.date || '').slice(0, 10); if (d > nd) { nd = d; } } }); return nd; };
-  // if the user had a now-superseded (old alias) account selected, fall back to All so they see the fresh data.
-  const effAcctFilter = (acctFilter !== 'all' && !supersededAcctIds[acctFilter]) ? acctFilter : 'all';
+  // if the user had a now-superseded (old alias) OR archived-connection account selected, fall back to All
+  // so they see the fresh data (v55.83-KM — an archived link's account must never stay selected/listed).
+  const effAcctFilter = (function () {
+    if (acctFilter === 'all') { return 'all'; }
+    if (supersededAcctIds[acctFilter]) { return 'all'; }
+    var _a = null; plaidAccts.forEach(function (x) { if (x.plaid_account_id === acctFilter) { _a = x; } });
+    if (_a && _a.connection_id && !activeConnIds[_a.connection_id]) { return 'all'; } // belongs to an archived link
+    return acctFilter;
+  })();
   // v55.83-KL (Codex money-truth) — RECONCILE alias transactions instead of blindly excluding them. A
   // relink re-pulls the same history under new ids; those are true DUPLICATES (drop). But an old link may
   // hold a transaction the fresh link did NOT return — that one is UNIQUE and must NOT be silently lost.
@@ -733,6 +740,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                 reconciledTxns.forEach(function (t) { // v55.83-KL — reconciled set: superseded aliases are re-stamped to canonical
                   if (!t.account_id || seen[t.account_id]) { return; }
                   if (supersededAcctIds[t.account_id]) { return; }
+                  if (t.connection_id && !activeConnIds[t.connection_id]) { return; } // v55.83-KM — only ACTIVE (non-archived) accounts in the picker
                   seen[t.account_id] = true;
                   var a = paMap[t.account_id];
                   var label = a ? ((a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')) : ('Account ••' + String(t.account_id).slice(-4));

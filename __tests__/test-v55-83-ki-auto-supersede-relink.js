@@ -21,7 +21,7 @@ ok('2: superseded alias transactions are reconciled out of the canonical totals 
   /const reconciledTxns = transactions\.map\(t => \{/.test(bank) &&
   /const scopedTxns = reconciledTxns\.filter/.test(bank));
 ok('3: the account filter falls back to All when the selected account was superseded (so fresh data shows)',
-  /const effAcctFilter = \(acctFilter !== 'all' && !supersededAcctIds\[acctFilter\]\) \? acctFilter : 'all';/.test(bank) &&
+  /if \(supersededAcctIds\[acctFilter\]\) \{ return 'all'; \}/.test(bank) &&
   /if \(effAcctFilter !== 'all' && t\.account_id !== effAcctFilter\) return false;/.test(bank));
 ok('4: the VIEW account dropdown is built from the reconciled set + still skips any superseded account',
   /reconciledTxns\.forEach\(function \(t\) \{ \/\/ v55\.83-KL/.test(bank) &&
