@@ -352,9 +352,26 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // duplicate bank link actually removes its re-imported rows from the list, counts and totals (no
   // double-count). Legacy rows with no connection_id are kept.
   const activeConnIds = {}; connections.forEach(c => { activeConnIds[c.id] = true; });
+  // v55.83-KI (Max: "of course it has transactions after 6/11") — when you RECONNECT a bank, Plaid issues
+  // a new link with new account ids and re-pulls the history; the OLD link is left behind, stale, capped
+  // at its last sync (e.g. 6/11). AUTO-SUPERSEDE the older link per bank: hide its account + exclude its
+  // stale transactions immediately (no manual archive), so the FRESH link's data is what shows.
+  const supersededConnIds = (function () {
+    const byInst = {}; const sup = {};
+    connections.slice().sort((a, b) => ((b.last_synced || '') < (a.last_synced || '') ? -1 : 1)).forEach(c => {
+      const k = c.institution_id || c.institution_name || c.id;
+      if (byInst[k]) { sup[c.id] = true; } else { byInst[k] = true; }
+    });
+    return sup;
+  })();
+  const supersededAcctIds = {}; plaidAccts.forEach(a => { if (a && a.connection_id && supersededConnIds[a.connection_id]) { supersededAcctIds[a.plaid_account_id] = true; } });
+  // if the user had the now-superseded (old) account selected, fall back to All so they see the fresh data.
+  const effAcctFilter = (acctFilter !== 'all' && !supersededAcctIds[acctFilter]) ? acctFilter : 'all';
   const scopedTxns = transactions.filter(t => {
     if (t.connection_id && !activeConnIds[t.connection_id]) return false;
-    if (acctFilter !== 'all' && t.account_id !== acctFilter) return false;
+    if (t.connection_id && supersededConnIds[t.connection_id]) return false;
+    if (t.account_id && supersededAcctIds[t.account_id]) return false;
+    if (effAcctFilter !== 'all' && t.account_id !== effAcctFilter) return false;
     if (rangeCutoff) {
       const td = t.date ? new Date(t.date) : null;
       if (!td || td < rangeCutoff) return false;
@@ -554,6 +571,8 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                       var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
                       var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
                       var newestD = ''; transactions.forEach(function (t) { if (t.account_id === a.plaid_account_id) { var _d = String(t.posted_date || t.date || '').slice(0, 10); if (_d > newestD) { newestD = _d; } } });
+                      var _agoDays = newestD ? Math.floor((new Date().getTime() - new Date(newestD + 'T00:00:00').getTime()) / 86400000) : null;
+                      var _stale = _agoDays != null && _agoDays > 7;
                       return (
                         <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100 gap-2 flex-wrap">
                           <div className="text-xs text-slate-900">
@@ -562,7 +581,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                             <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}{newestD ? (' · newest ' + newestD) : ' · none yet'}</span>
+                            <span className={'text-[10px] ' + (_stale ? 'text-amber-700 font-bold' : 'text-slate-500')}>{cnt} txn{cnt === 1 ? '' : 's'}{newestD ? (' · newest ' + newestD + (_stale ? ' ⚠ ' + _agoDays + 'd ago — Sync or Reconnect' : '')) : ' · none yet'}</span>
                             <select value={acctAssignSel[a.plaid_account_id] || a.wave_business_id || ''} onChange={function (e) { var v = e.target.value; setAcctAssignSel(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = v; return n; }); }} className="px-1 py-0.5 border border-slate-300 rounded text-[10px] text-slate-900 bg-white" title="Move THIS account to a silo (6338 → Real KTC, 6353 → Kandil) and re-tag its transactions">
                               <option value="">— silo —</option>
                               {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Prod)')}</option>; })}
@@ -685,6 +704,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                 plaidAccts.forEach(function (a) { if (a && a.plaid_account_id) { paMap[a.plaid_account_id] = a; } });
                 transactions.forEach(function (t) {
                   if (!t.account_id || seen[t.account_id]) { return; }
+                  if (supersededAcctIds[t.account_id]) { return; } // v55.83-KI — hide the old relink's account
                   seen[t.account_id] = true;
                   var a = paMap[t.account_id];
                   var label = a ? ((a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')) : ('Account ••' + String(t.account_id).slice(-4));

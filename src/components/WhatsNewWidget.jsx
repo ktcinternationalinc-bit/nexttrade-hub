@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KI',
+    date: '2026-06-20',
+    label: 'Reconnecting a bank now shows the FRESH data (old stale link is auto-hidden)',
+    items: [
+      '**🔄 The stale old link is gone automatically.** When you reconnect a bank, the previous link is left behind by the bank and stops updating (frozen at its last date). Before, you could end up looking at that frozen copy. Now the older link is hidden automatically — its account and its old transactions drop out — so the list, counts and totals reflect the freshly reconnected account. You don\'t have to archive anything first.',
+      '**⚠ Stale accounts are flagged.** If an account hasn\'t had a new transaction in over a week, its line shows "⚠ N days ago — Sync or Reconnect," so you can tell the difference between "no activity" and "this link needs attention."',
+      'Together with the earlier "one line per account" change, reconnecting Real KTC should now show one account with the newest transactions — not a duplicate stuck on an old date.',
+      { superAdminOnly: true, text: 'v55.83-KI (Max: "of course it has transactions after 6/11"). Root: reconnect creates a new Plaid item+account_ids and re-pulls; the OLD item is left stale/capped (often ITEM_LOGIN_REQUIRED) and the VIEW filter was pointed at its account. Fix: component-scope supersededConnIds (newest connection per institution_id||name wins) + supersededAcctIds; scopedTxns now excludes superseded connection AND account txns automatically (no manual archive); effAcctFilter falls back to All when the selected account is superseded; the VIEW dropdown hides superseded accounts; account row flags stale (>7d) with "Sync or Reconnect". This surfaces the FRESH account so its post-6/11 data shows. NOTE: if the fresh account itself still stops at a date after a Sync, Plaid genuinely lacks newer data for that item (feed lag / needs reconnect) — the stale flag will say so; permanent fix = migrate to /transactions/sync cursor + Plaid update-mode relink. Tests ki(5); runner green. STILL OPEN (Codex): match-edit overpayment/recompute/restamp error-handling (KG note overclaims "exactly"); promote silo switcher into the top banner.' },
+    ],
+  },
+  {
     version: 'v55.83-KH',
     date: '2026-06-20',
     label: 'Bank page: one line per account (no more duplicate connections) + clearer info',
@@ -49,7 +60,7 @@ export const BUILD_HISTORY = [
     label: 'Silo switcher on the Bank page + made editing a matched deposit fail-safe',
     items: [
       '**🔀 Switch silos right on the Bank page.** There\'s now a "Silo" dropdown at the top of Connected Accounts — pick a silo and the bank accounts below instantly switch to that silo\'s accounts. No more hunting through the global selector or the "Other silos" expander.',
-      '**🛟 Editing a matched deposit can no longer leave it half-changed.** The change now applies the new match first and only then reverses the old one — and if anything goes wrong mid-way, it puts the original match back exactly as it was. You\'ll see "no change was made, your original match is intact" rather than a deposit stuck unmatched.',
+      '**🛟 Editing a matched deposit is much safer.** The change now applies the new match first and only then reverses the old one — so if the new match can\'t be saved, your original match is left untouched ("no change was made, your original match is intact"). A few rarer mid-step failures are still being hardened.',
       { superAdminOnly: true, text: 'v55.83-KG (Codex money-safety + Max silo-toggle). update_match reordered to APPLY-NEW-FIRST then REVERSE-OLD: insert new match → insert new payment (on payment failure, void new match → original untouched, returns "no change made") → insert overpayment credit/unapplied (track ids) → void OLD rows excluding the new ids (.neq id) → on any void error, RESTORE old matches/payments to their snapshot voided/sync_status + void the new rows + recompute → return {restored:true}. Anti-double-count on the new invoice now excludes this txn\'s to-be-voided payments. (Supabase UPDATE is per-statement atomic; cross-statement restore via snapshot. A true SQL-RPC transaction remains the ideal future hardening.) BankTab: imports setActiveWaveBusiness; switchSilo(id) sets active silo + mirrors siloSel + dispatches wave-business-changed + loadData(); silo <select> in the Connected Accounts header. Tests kg(7); ke assertion 3 now index-ordered (apply-before-reverse). Runner green.' },
     ],
   },

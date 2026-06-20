@@ -35,6 +35,7 @@ var MANIFEST = [
   { f: 'test-v55-83-kc-customer-wave-linkage.js', label: 'new', why: 'AL MOUSTAFA undercount — AR History + Customer Ledger match invoices by accounting_customer_id OR wave_customer_id (Wave-imported)' },
   { f: 'test-v55-83-jz-ar-count-and-preview.js', label: 'new', why: 'AR count breakdown + visibility employee-preview' },
   { f: 'test-v55-83-ke-update-match-atomic.js', label: 'new', why: 'atomic update_match server action: reverse old + apply new, recompute both invoices, block Wave-synced; client + sync-state display' },
+  { f: 'test-v55-83-ki-auto-supersede-relink.js', label: 'new', why: 'reconnect leaves a stale old link; auto-supersede older relink (hide account + exclude its txns), fall back filter to All, flag stale account' },
   { f: 'test-v55-83-kh-bank-dedup.js', label: 'new', why: 'one line per bank (dedup duplicate re-link connections, archive in one click), per-account newest-txn date, exclude archived-connection txns from totals' },
   { f: 'test-v55-83-kg-match-safety-and-silo-toggle.js', label: 'new', why: 'update_match apply-new-first + restore-on-failure (money-safety); Bank-page silo switcher' },
   { f: 'test-v55-83-kf-live-fixes.js', label: 'new', why: 'live P0 batch: ledger crash import, AR date sort+pill contrast, bank account-silo grouping, deposit-remaining warning, Wave category pull diagnostic' },

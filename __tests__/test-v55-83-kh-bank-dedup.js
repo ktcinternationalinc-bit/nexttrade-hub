@@ -23,7 +23,7 @@ ok('2: a one-click banner archives all duplicate bank links (newest kept, txns/m
   /dupConns\.forEach\(function \(d\) \{ archiveConnection\(d\); \}\)/.test(bank));
 ok('3: each account row shows its NEWEST transaction date (so "stuck at 6/11" reads as "no newer activity")',
   /var newestD = ''; transactions\.forEach\(function \(t\) \{ if \(t\.account_id === a\.plaid_account_id\)/.test(bank) &&
-  /\{newestD \? \(' · newest ' \+ newestD\) : ' · none yet'\}/.test(bank));
+  /' · newest ' \+ newestD/.test(bank) && /: ' · none yet'/.test(bank));
 ok('4: scopedTxns excludes transactions from ARCHIVED (duplicate) connections (no double-count in totals)',
   /const activeConnIds = \{\}; connections\.forEach\(c => \{ activeConnIds\[c\.id\] = true; \}\)/.test(bank) &&
   /if \(t\.connection_id && !activeConnIds\[t\.connection_id\]\) return false;/.test(bank));
