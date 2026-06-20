@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KK',
+    date: '2026-06-20',
+    label: 'Truly one line per real bank account (and a different account is never hidden)',
+    items: [
+      '**🏦 One line per real account — done properly.** A bank account is now identified by the bank + its account number (mask), so the same real account from a reconnect collapses to a single line showing the freshest data, while a genuinely different account (e.g. a second account at the same bank) always stays visible. The earlier version grouped by bank, which could have hidden a real second account — this fixes that.',
+      '**📆 The account\'s newest date now looks across all its copies**, so the date shown is the true latest transaction for that real account regardless of how many times the bank was relinked.',
+      { superAdminOnly: true, text: 'v55.83-KK (Codex: one line per REAL ACCOUNT, not per institution — KH/KI were institution-level and could hide a legit different account in an older link). Canonical identity = instOf(connection)+"|"+(mask||plaid_account_id). Sort accounts by their connection last_synced desc; first per key = canonical, rest = supersededAcctIds (aliases). connHasCanonical → a connection is in supersededConnIds ONLY if it has accounts and ALL are aliases. scopedTxns excludes superseded aliases (account-level) so totals never double-count across relinks; render: thisSilo/otherSilo = connHasActive/Other && !supersededConnIds, renderConnCard filters supersededAcctIds, dupConns = fully-superseded (archive banner). newestForKey(acctKey) aggregates newest posted date across aliases. Replaced KH/KI institution-dedupe tests; new kk(6) asserts the business rule incl. "different account in an older link is kept." Runner green. Still open (Codex UX): promote silo switcher into the top banner; permanent backend fix = Plaid update-mode relink + /transactions/sync.' },
+    ],
+  },
+  {
     version: 'v55.83-KJ',
     date: '2026-06-20',
     label: 'Editing a matched deposit is now fully all-or-nothing (money-safe)',

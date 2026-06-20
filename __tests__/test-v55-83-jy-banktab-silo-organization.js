@@ -16,9 +16,9 @@ var bank = rd('src/components/BankTab.jsx');
 var exch = rd('src/app/api/plaid/exchange/route.js');
 
 // Layout contract: partition by active silo + collapse other silos
-ok('1: connections are partitioned this-silo vs other-silo by each ACCOUNT\'s effective silo, then deduped to newest-per-bank (v55.83-KF/KH)',
-  /dedupeNewest\(connections\.filter\(connHasActive\)\)/.test(bank) &&
-  /dedupeNewest\(connections\.filter\(connHasOther\)\)/.test(bank) &&
+ok('1: connections are partitioned this-silo vs other-silo by each ACCOUNT\'s effective silo, excluding fully-superseded relinks (v55.83-KF/KK)',
+  /var thisSilo = connections\.filter\(function \(c\) \{ return connHasActive\(c\) && !supersededConnIds\[c\.id\]; \}\)/.test(bank) &&
+  /var otherSilo = connections\.filter\(function \(c\) \{ return connHasOther\(c\) && !supersededConnIds\[c\.id\]; \}\)/.test(bank) &&
   /var effSilo = function \(a, c\) \{ return \(a && a\.wave_business_id\) \|\| \(c && c\.wave_business_id\) \|\| null; \}/.test(bank));
 ok('2: the active silo is the PRIMARY section ("Bank accounts for <silo>")',
   /Bank accounts for \{bizLabel\(activeBiz\)\}/.test(bank));

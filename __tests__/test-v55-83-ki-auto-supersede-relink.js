@@ -14,9 +14,9 @@ function ok(label, cond, hint) {
 function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); }
 var bank = rd('src/components/BankTab.jsx');
 
-ok('1: older relink connections are auto-superseded (newest per institution wins)',
-  /const supersededConnIds = \(function \(\) \{[\s\S]{0,400}byInst\[k\][\s\S]{0,80}sup\[c\.id\] = true/.test(bank) &&
-  /const supersededAcctIds = \{\}; plaidAccts\.forEach\(a => \{ if \(a && a\.connection_id && supersededConnIds\[a\.connection_id\]\)/.test(bank));
+ok('1: older relink accounts are auto-superseded (account-level canonical — newest link instance wins; see KK)',
+  /if \(canonicalByKey\[k\]\) \{ supersededAcctIds\[a\.plaid_account_id\] = true; \}/.test(bank) &&
+  /const supersededConnIds = \{\}; connections\.forEach\(c => \{ const has = plaidAccts\.some/.test(bank));
 ok('2: scopedTxns excludes superseded connection + account transactions automatically (no manual archive)',
   /if \(t\.connection_id && supersededConnIds\[t\.connection_id\]\) return false;/.test(bank) &&
   /if \(t\.account_id && supersededAcctIds\[t\.account_id\]\) return false;/.test(bank));

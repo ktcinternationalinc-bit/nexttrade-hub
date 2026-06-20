@@ -14,15 +14,13 @@ function ok(label, cond, hint) {
 function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); }
 var bank = rd('src/components/BankTab.jsx');
 
-ok('1: connections are deduped to the NEWEST per bank (institution); older links collected as duplicates',
-  /var instKey = function \(c\) \{ return c\.institution_id \|\| c\.institution_name \|\| c\.id; \}/.test(bank) &&
-  /var dedupeNewest = function \(list\) \{[\s\S]{0,260}seen\[k\][\s\S]{0,120}kept\.push\(c\)[\s\S]{0,80}dups\.push\(c\)/.test(bank) &&
-  /var dupConns = thisDD\.dups\.concat\(otherDD\.dups\)/.test(bank));
+ok('1: fully-superseded (duplicate relink) connections are collected for one-click archive (account-level — see KK)',
+  /var dupConns = connections\.filter\(function \(c\) \{ return supersededConnIds\[c\.id\]; \}\)/.test(bank));
 ok('2: a one-click banner archives all duplicate bank links (newest kept, txns/matches preserved)',
   /duplicate bank link\{dupConns\.length === 1 \? '' : 's'\} detected/.test(bank) &&
   /dupConns\.forEach\(function \(d\) \{ archiveConnection\(d\); \}\)/.test(bank));
 ok('3: each account row shows its NEWEST transaction date (so "stuck at 6/11" reads as "no newer activity")',
-  /var newestD = ''; transactions\.forEach\(function \(t\) \{ if \(t\.account_id === a\.plaid_account_id\)/.test(bank) &&
+  /var newestD = newestForKey\(acctKey\(a\)\);/.test(bank) &&
   /' · newest ' \+ newestD/.test(bank) && /: ' · none yet'/.test(bank));
 ok('4: scopedTxns excludes transactions from ARCHIVED (duplicate) connections (no double-count in totals)',
   /const activeConnIds = \{\}; connections\.forEach\(c => \{ activeConnIds\[c\.id\] = true; \}\)/.test(bank) &&

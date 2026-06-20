@@ -352,20 +352,27 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // duplicate bank link actually removes its re-imported rows from the list, counts and totals (no
   // double-count). Legacy rows with no connection_id are kept.
   const activeConnIds = {}; connections.forEach(c => { activeConnIds[c.id] = true; });
-  // v55.83-KI (Max: "of course it has transactions after 6/11") — when you RECONNECT a bank, Plaid issues
-  // a new link with new account ids and re-pulls the history; the OLD link is left behind, stale, capped
-  // at its last sync (e.g. 6/11). AUTO-SUPERSEDE the older link per bank: hide its account + exclude its
-  // stale transactions immediately (no manual archive), so the FRESH link's data is what shows.
-  const supersededConnIds = (function () {
-    const byInst = {}; const sup = {};
-    connections.slice().sort((a, b) => ((b.last_synced || '') < (a.last_synced || '') ? -1 : 1)).forEach(c => {
-      const k = c.institution_id || c.institution_name || c.id;
-      if (byInst[k]) { sup[c.id] = true; } else { byInst[k] = true; }
-    });
-    return sup;
-  })();
-  const supersededAcctIds = {}; plaidAccts.forEach(a => { if (a && a.connection_id && supersededConnIds[a.connection_id]) { supersededAcctIds[a.plaid_account_id] = true; } });
-  // if the user had the now-superseded (old) account selected, fall back to All so they see the fresh data.
+  // v55.83-KK (Codex: ONE LINE PER REAL ACCOUNT, not per bank) — canonical account identity is
+  // (institution + mask). When you reconnect a bank, Plaid issues a new link with NEW account ids and
+  // re-pulls the history; the OLD link's same-mask account is a stale ALIAS. The NEWEST link's instance
+  // of each (institution+mask) is canonical; older aliases are superseded (hidden + their txns excluded).
+  // A connection is only FULLY superseded when ALL its accounts are aliases of a newer link — so a
+  // genuinely DIFFERENT account in an older link is never hidden (the KI/KH institution-level risk).
+  const connById = {}; connections.forEach(c => { connById[c.id] = c; });
+  const instOf = (c) => (c && (c.institution_id || c.institution_name || c.id)) || '?';
+  const acctKey = (a) => instOf(connById[a.connection_id]) + '|' + (a.mask || a.plaid_account_id);
+  const canonicalByKey = {}; const supersededAcctIds = {}; const aliasIdsByKey = {};
+  plaidAccts.slice().sort((a, b) => (((connById[b.connection_id] || {}).last_synced || '') < ((connById[a.connection_id] || {}).last_synced || '') ? -1 : 1)).forEach(a => {
+    const k = acctKey(a);
+    if (!aliasIdsByKey[k]) { aliasIdsByKey[k] = []; }
+    aliasIdsByKey[k].push(a.plaid_account_id);
+    if (canonicalByKey[k]) { supersededAcctIds[a.plaid_account_id] = true; } else { canonicalByKey[k] = a.plaid_account_id; }
+  });
+  const connHasCanonical = {}; plaidAccts.forEach(a => { if (!supersededAcctIds[a.plaid_account_id]) { connHasCanonical[a.connection_id] = true; } });
+  const supersededConnIds = {}; connections.forEach(c => { const has = plaidAccts.some(a => a.connection_id === c.id); if (has && !connHasCanonical[c.id]) { supersededConnIds[c.id] = true; } });
+  // newest posted date across ALL aliases of a real account (so the canonical row tells the true freshness).
+  const newestForKey = (k) => { let nd = ''; const ids = aliasIdsByKey[k] || []; transactions.forEach(t => { if (ids.indexOf(t.account_id) >= 0) { const d = String(t.posted_date || t.date || '').slice(0, 10); if (d > nd) { nd = d; } } }); return nd; };
+  // if the user had a now-superseded (old alias) account selected, fall back to All so they see the fresh data.
   const effAcctFilter = (acctFilter !== 'all' && !supersededAcctIds[acctFilter]) ? acctFilter : 'all';
   const scopedTxns = transactions.filter(t => {
     if (t.connection_id && !activeConnIds[t.connection_id]) return false;
@@ -526,19 +533,16 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           var acctOther = function (a, c) { var s = effSilo(a, c); return s && s !== activeBiz; };
           var connHasActive = function (c) { var x = acctsByConn(c); if (!x.length) { return !c.wave_business_id || c.wave_business_id === activeBiz; } return x.some(function (a) { return acctActive(a, c); }); };
           var connHasOther = function (c) { var x = acctsByConn(c); if (!x.length) { return c.wave_business_id && c.wave_business_id !== activeBiz; } return x.some(function (a) { return acctOther(a, c); }); };
-          // v55.83-KH (Max: "one line item per account, always") — re-linking a bank creates a NEW Plaid
-          // item + new account ids, which duplicated the whole card. Keep only the NEWEST connection per
-          // bank (institution); older duplicate links are collected so they can be archived in one click.
-          var byNewest = function (a, b) { return (b.last_synced || '') < (a.last_synced || '') ? -1 : 1; };
-          var instKey = function (c) { return c.institution_id || c.institution_name || c.id; };
-          var dedupeNewest = function (list) { var sorted = list.slice().sort(byNewest); var kept = []; var dups = []; var seen = {}; sorted.forEach(function (c) { var k = instKey(c); if (!seen[k]) { seen[k] = true; kept.push(c); } else { dups.push(c); } }); return { kept: kept, dups: dups }; };
-          var thisDD = dedupeNewest(connections.filter(connHasActive));
-          var otherDD = dedupeNewest(connections.filter(connHasOther));
-          var thisSilo = thisDD.kept; var otherSilo = otherDD.kept;
-          var dupConns = thisDD.dups.concat(otherDD.dups);
+          // v55.83-KK (Codex: ONE LINE PER REAL ACCOUNT) — render every connection that still owns a
+          // CANONICAL account (account-level identity = institution+mask, computed above). A connection
+          // whose accounts are ALL stale aliases of a newer relink is fully superseded → not rendered
+          // (offered for one-click archive below). A genuinely different account in an older link stays.
+          var thisSilo = connections.filter(function (c) { return connHasActive(c) && !supersededConnIds[c.id]; });
+          var otherSilo = connections.filter(function (c) { return connHasOther(c) && !supersededConnIds[c.id]; });
+          var dupConns = connections.filter(function (c) { return supersededConnIds[c.id]; });
           var renderConnCard = function (c, dimmed, mode) {
             var allAccts = acctsByConn(c);
-            var accts = allAccts.length ? allAccts.filter(function (a) { return mode === 'other' ? acctOther(a, c) : acctActive(a, c); }) : [];
+            var accts = allAccts.length ? allAccts.filter(function (a) { return (mode === 'other' ? acctOther(a, c) : acctActive(a, c)) && !supersededAcctIds[a.plaid_account_id]; }) : [];
             var siloSet = {}; accts.forEach(function (a) { siloSet[effSilo(a, c) || '__un'] = true; });
             var siloKeys = Object.keys(siloSet);
             var siloName = allAccts.length === 0 ? bizLabel(c.wave_business_id) : (siloKeys.length === 1 ? bizLabel(siloKeys[0] === '__un' ? null : siloKeys[0]) : (siloKeys.length + ' silos'));
@@ -570,7 +574,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                     {accts.map(function (a) {
                       var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
                       var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
-                      var newestD = ''; transactions.forEach(function (t) { if (t.account_id === a.plaid_account_id) { var _d = String(t.posted_date || t.date || '').slice(0, 10); if (_d > newestD) { newestD = _d; } } });
+                      var newestD = newestForKey(acctKey(a)); // v55.83-KK — newest across all aliases of this real account
                       var _agoDays = newestD ? Math.floor((new Date().getTime() - new Date(newestD + 'T00:00:00').getTime()) / 86400000) : null;
                       var _stale = _agoDays != null && _agoDays > 7;
                       return (
