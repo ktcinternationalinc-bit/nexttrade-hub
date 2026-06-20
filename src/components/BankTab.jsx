@@ -474,11 +474,24 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           // silo's banks are the primary operational area; OTHER silos' connections live in a collapsed
           // admin-diagnostics section so a user can't accidentally sync/repair the wrong silo's bank.
           var activeBiz = getActiveWaveBusiness();
-          var thisSilo = connections.filter(function (c) { return !c.wave_business_id || c.wave_business_id === activeBiz; });
-          var otherSilo = connections.filter(function (c) { return c.wave_business_id && c.wave_business_id !== activeBiz; });
-          var renderConnCard = function (c, dimmed) {
-            var accts = plaidAccts.filter(function (a) { return a.connection_id === c.id; });
-            var siloName = bizLabel(c.wave_business_id);
+          // v55.83-KF (Max P0) — group by each ACCOUNT'S EFFECTIVE SILO, not the parent connection's tag.
+          // Moving 6353 → Kandil must surface it under KANDIL even though its Chase login stays tagged Real
+          // KTC. A connection whose accounts span silos appears under EACH silo, showing ONLY that silo's
+          // accounts — so the header above an account can never contradict the account's own silo.
+          var effSilo = function (a, c) { return (a && a.wave_business_id) || (c && c.wave_business_id) || null; };
+          var acctsByConn = function (c) { return plaidAccts.filter(function (a) { return a.connection_id === c.id; }); };
+          var acctActive = function (a, c) { var s = effSilo(a, c); return !s || s === activeBiz; };
+          var acctOther = function (a, c) { var s = effSilo(a, c); return s && s !== activeBiz; };
+          var connHasActive = function (c) { var x = acctsByConn(c); if (!x.length) { return !c.wave_business_id || c.wave_business_id === activeBiz; } return x.some(function (a) { return acctActive(a, c); }); };
+          var connHasOther = function (c) { var x = acctsByConn(c); if (!x.length) { return c.wave_business_id && c.wave_business_id !== activeBiz; } return x.some(function (a) { return acctOther(a, c); }); };
+          var thisSilo = connections.filter(connHasActive);
+          var otherSilo = connections.filter(connHasOther);
+          var renderConnCard = function (c, dimmed, mode) {
+            var allAccts = acctsByConn(c);
+            var accts = allAccts.length ? allAccts.filter(function (a) { return mode === 'other' ? acctOther(a, c) : acctActive(a, c); }) : [];
+            var siloSet = {}; accts.forEach(function (a) { siloSet[effSilo(a, c) || '__un'] = true; });
+            var siloKeys = Object.keys(siloSet);
+            var siloName = allAccts.length === 0 ? bizLabel(c.wave_business_id) : (siloKeys.length === 1 ? bizLabel(siloKeys[0] === '__un' ? null : siloKeys[0]) : (siloKeys.length + ' silos'));
             return (
               <div key={c.id} className={'rounded-lg p-3 border ' + (dimmed ? 'bg-slate-100 border-slate-300 opacity-90' : 'bg-slate-50 border-slate-200')}>
                 <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
@@ -538,16 +551,16 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           return (
             <div className="space-y-3">
               <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">Bank accounts for {bizLabel(activeBiz)}</div>
-              {thisSilo.length === 0 ? <div className="text-[11px] text-slate-400 italic">No bank connections assigned to this silo yet. Click “Connect Bank” above (choose this silo), or assign an account to it below.</div> : thisSilo.map(function (c) { return renderConnCard(c, false); })}
+              {thisSilo.length === 0 ? <div className="text-[11px] text-slate-400 italic">No bank accounts assigned to this silo yet. Click “Connect Bank” above (choose this silo), or use “Move account to silo &amp; repair” on an account below.</div> : thisSilo.map(function (c) { return renderConnCard(c, false, 'active'); })}
               {canViewAllAccounts && otherSilo.length > 0 && (
                 <div className="mt-2 border-t border-slate-200 pt-2">
                   <button onClick={() => setShowOtherSilos(!showOtherSilos)} className="text-[11px] font-bold text-slate-500 hover:text-slate-700">
-                    {showOtherSilos ? '▾' : '▸'} Other silos / admin diagnostics ({otherSilo.length} connection{otherSilo.length === 1 ? '' : 's'} not in {bizLabel(activeBiz)})
+                    {showOtherSilos ? '▾' : '▸'} Other silos / admin diagnostics ({otherSilo.length} bank{otherSilo.length === 1 ? '' : 's'} with accounts not in {bizLabel(activeBiz)})
                   </button>
                   {showOtherSilos && (
                     <div className="space-y-3 mt-2">
-                      <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">⚠ These belong to OTHER silos. Shown for cleanup/diagnostics only — switch the active silo (top of page) to operate on them normally, or Archive duplicates.</div>
-                      {otherSilo.map(function (c) { return renderConnCard(c, true); })}
+                      <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">⚠ These accounts belong to OTHER silos. Shown for cleanup/diagnostics only — switch the active silo (top of page) to operate on them normally, or Archive duplicates.</div>
+                      {otherSilo.map(function (c) { return renderConnCard(c, true, 'other'); })}
                     </div>
                   )}
                 </div>

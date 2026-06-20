@@ -103,6 +103,8 @@ export default function BankReviewTab(props) {
   var [splitRows, setSplitRows] = useState([]);
   var [waveCategories, setWaveCategories] = useState([]);
   var [catDiag, setCatDiag] = useState(null); // v55.83-JA — {total, usable, hidden_receivable, error} for the dropdown empty-state
+  var [catPulling, setCatPulling] = useState(false); // v55.83-KF — inline "Pull Wave categories now"
+  var [catPullMsg, setCatPullMsg] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -198,17 +200,7 @@ export default function BankReviewTab(props) {
       // v55.83-JA — load categories via the SERVICE-ROLE route too (bypasses RLS). The client query
       // above can come back empty under RLS even when Sync Center shows "89 loaded". The route returns
       // the usable list + diagnostic counts so the dropdown is authoritative and the empty-state honest.
-      (function () {
-        var abiz = getActiveWaveBusiness();
-        if (!abiz || abiz === 'all') { setCatDiag(null); return; }
-        fetch('/api/wave/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: abiz, user_id: userProfile && userProfile.id }) })
-          .then(function (r) { return r.json(); })
-          .then(function (j) {
-            if (j && j.ok) { setWaveCategories(j.categories || []); setCatDiag({ total: j.total, usable: j.usable_count, hidden_receivable: j.hidden_receivable_count, error: null }); }
-            else { setCatDiag({ error: (j && j.error) || 'category load failed' }); }
-          })
-          .catch(function (e) { setCatDiag({ error: (e && e.message) || 'network error' }); });
-      })();
+      reloadCats();
       // v55.83-GD — auto-load this silo's default bank account into the account filter, once per
       // mount (the component remounts on silo switch via its key). User can still switch manually.
       try {
@@ -306,6 +298,39 @@ export default function BankReviewTab(props) {
     // (a silent 0-row / RLS-filtered update would otherwise look like a successful save).
     return dbUpdate('bank_transactions', t.id, Object.assign({ updated_by: userProfile && userProfile.id }, patch), userProfile && userProfile.id)
       .then(function (row) { if (activity) logActivity(userProfile && userProfile.id, activity, 'bank_review'); return row; });
+  }
+
+  // v55.83-KF — load the silo's usable Wave categories via the service-role route (RLS-proof).
+  function reloadCats() {
+    var abiz = getActiveWaveBusiness();
+    if (!abiz || abiz === 'all') { setCatDiag(null); return; }
+    fetch('/api/wave/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: abiz, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.ok) { setWaveCategories(j.categories || []); setCatDiag({ total: j.total, usable: j.usable_count, hidden_receivable: j.hidden_receivable_count, error: null }); }
+        else { setCatDiag({ error: (j && j.error) || 'category load failed' }); }
+      })
+      .catch(function (e) { setCatDiag({ error: (e && e.message) || 'network error' }); });
+  }
+
+  // v55.83-KF (Max — "for the 100th time, categories aren't flowing"): pull THIS silo's Wave Chart of
+  // Accounts on demand, right from Bank Review, and surface the exact Wave result inline (incl. a Wave
+  // access error verbatim — the usual root cause is the configured token not seeing this Wave business).
+  function pullCategories() {
+    var abiz = getActiveWaveBusiness();
+    if (!abiz || abiz === 'all') { toast.error('Pick a specific silo (top of page) first.'); return; }
+    setCatPulling(true); setCatPullMsg(null);
+    fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: abiz, includeProduction: true, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.ok) {
+          var res = (j.results && j.results[0]) || {};
+          if (res.ok === false) { setCatPullMsg('✕ Wave rejected this silo: ' + (res.error || 'unknown') + '. The configured Wave token likely can\'t access this Wave business — that\'s why the dropdown is empty.'); }
+          else { setCatPullMsg('✓ Pulled from Wave: ' + (res.created || 0) + ' new, ' + (res.updated || 0) + ' updated, ' + (res.skipped || 0) + ' unchanged. Reloading…'); reloadCats(); }
+        } else { setCatPullMsg('✕ Pull failed: ' + ((j && j.error) || 'unknown')); }
+      })
+      .catch(function (e) { setCatPullMsg('✕ Pull error: ' + ((e && e.message) || 'network')); })
+      .finally(function () { setCatPulling(false); });
   }
 
   function setClassification(t, cls) {
@@ -526,23 +551,21 @@ export default function BankReviewTab(props) {
     if (depositAmt > 0 && newAmt > depositAmt + 0.01) { toast.error('Amount can\'t exceed the deposit (' + fmt(depositAmt) + ').'); return; }
     var syncedPay = (paysByTxn[t.id] || []).some(function (p) { return p && (p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'); });
     if (syncedPay) { toast.error('This payment was already pushed to Wave — change it in Wave, then re-import. Local edit is blocked to keep Hub and Wave in sync.'); return; }
-    if (!window.confirm('Update the matched amount on this deposit to ' + fmt(newAmt) + '?\n\nThis reverses the current match(es) on this transaction and re-applies ' + fmt(newAmt) + ' to invoice ' + (inv.invoice_number || inv.id) + '. (Done atomically; an overpayment becomes a customer credit.)')) { return; }
+    if (!window.confirm('Update the matched amount on this deposit to ' + fmt(newAmt) + '?\n\nThis reverses the current match(es) and re-applies ' + fmt(newAmt) + ' to invoice ' + (inv.invoice_number || inv.id) + ' — atomically (an overpayment becomes a customer credit).')) { return; }
     setBusy(true);
     var activeBiz = getActiveWaveBusiness();
     var siloId = activeBiz || inv.wave_business_id || t.wave_business_id || null;
     var custForWave = acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; });
-    bankWrite('unmatch', { bank_transaction_id: t.id, wave_business_id: t.wave_business_id || activeBiz || null })
-      .then(function () {
-        return bankWrite('match_invoice', {
-          txn: { id: t.id, business_id: t.business_id, wave_business_id: t.wave_business_id, amount_abs: t.amount_abs, amount: t.amount, posted_date: t.posted_date, date: t.date, classification: t.classification, accounting_customer_id: t.accounting_customer_id, review_status: t.review_status },
-          invoice: { id: inv.id, business_id: inv.business_id, wave_business_id: inv.wave_business_id, total_amount: invoiceTotal(inv), wave_imported_paid: inv.wave_imported_paid, accounting_customer_id: inv.accounting_customer_id, invoice_number: inv.invoice_number, wave_invoice_id: inv.wave_invoice_id },
-          amount: newAmt, wave_business_id: siloId,
-          wave_customer_id: custForWave && custForWave.wave_customer_id ? custForWave.wave_customer_id : null,
-          credit_customer_id: inv.accounting_customer_id || null
-        });
-      })
+    // v55.83-KE — ONE atomic server transition (update_match): reverses old + applies new + recomputes
+    // both invoices, blocks Wave-synced rows. No more two-call unmatch→match (which could leave the
+    // deposit unmatched if the second call failed).
+    bankWrite('update_match', {
+      bank_transaction_id: t.id, new_invoice_id: inv.id, amount: newAmt, wave_business_id: siloId,
+      wave_customer_id: custForWave && custForWave.wave_customer_id ? custForWave.wave_customer_id : null,
+      credit_customer_id: inv.accounting_customer_id || null, match_customer_id: inv.accounting_customer_id || null
+    })
       .then(function (j) { toast.success('Match updated to ' + fmt((j && j.applied) || newAmt) + ((j && j.overpayment > 0) ? ' · ' + fmt(j.overpayment) + ' to customer credit' : '')); setEditMatchAmt({}); onReload(); load(); })
-      .catch(function (e) { console.error('[update-match]', e); toast.error('Update failed: ' + ((e && e.message) || 'unknown error') + ' — the deposit may now be unmatched; re-apply it. Screenshot for Claude.'); load(); })
+      .catch(function (e) { console.error('[update-match]', e); toast.error('Update failed: ' + ((e && e.message) || 'unknown error') + (/pushed to Wave/.test((e && e.message) || '') ? '' : ' — screenshot for Claude.')); load(); })
       .finally(function () { setBusy(false); });
   }
 
@@ -859,13 +882,19 @@ export default function BankReviewTab(props) {
                   {sel.direction === 'in' && <div className="text-[10px] text-slate-500 mt-0.5">Money-in: if this is a customer invoice payment, match it to the invoice below instead of categorizing.</div>}
                 </div>
               ) : (
-                <div className="text-[10px] text-amber-300">{
-                  catDiag && catDiag.error
-                    ? ('Could not load Wave categories: ' + catDiag.error)
-                    : (catDiag && catDiag.total > 0 && catDiag.usable === 0
-                        ? (catDiag.total + ' Wave accounts loaded, but 0 are usable as bank categories after hiding ' + (catDiag.hidden_receivable || 0) + ' receivable/system account(s).')
-                        : 'No Wave categories loaded for this silo. Go to Wave Sync Center → select this business → Pull Wave categories.')
-                }</div>
+                <div className="text-[10px] text-amber-300 space-y-1">
+                  <div className="font-semibold">{
+                    catDiag && catDiag.error
+                      ? ('Could not load Wave categories: ' + catDiag.error)
+                      : (catDiag && catDiag.total > 0 && catDiag.usable === 0
+                          ? (catDiag.total + ' Wave accounts loaded, but 0 are usable as categories after hiding ' + (catDiag.hidden_receivable || 0) + ' receivable/system account(s).')
+                          : 'No Wave categories loaded for this silo yet.')
+                  }</div>
+                  {/* v55.83-KF — full live diagnostic + one-click pull, right beside the dropdown (Codex/Max). */}
+                  <div className="text-slate-400">Silo: <b className="text-slate-200">{getActiveWaveBusiness() || '(none — pick a specific silo)'}</b> · stored in Hub: total {catDiag ? catDiag.total : 0}, usable {catDiag ? (catDiag.usable != null ? catDiag.usable : 0) : 0}{catDiag && catDiag.hidden_receivable ? (', hidden ' + catDiag.hidden_receivable + ' receivable/system') : ''}.</div>
+                  {mayClassify && <button onClick={pullCategories} disabled={catPulling} className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[11px] font-bold disabled:opacity-50">{catPulling ? 'Pulling from Wave…' : '⟳ Pull Wave categories now'}</button>}
+                  {catPullMsg && <div className="text-slate-100 bg-slate-800 rounded px-2 py-1">{catPullMsg}</div>}
+                </div>
               )}
             </div>
 
@@ -888,7 +917,23 @@ export default function BankReviewTab(props) {
                     </div>
                   );
                 })}
-                <div className="text-[10px] mt-0.5">Wave sync: Pending Wave sync (push is a later build). “Update amount” reverses &amp; re-applies; “Unmatch” fully reverses.</div>
+                {/* v55.83-KF — show how much of the deposit is still unaccounted-for (Max: "warn me if the
+                    full amount is not accounted for"). Live, before they even try to save/approve. */}
+                {(function () {
+                  var dep = roundMoney(Number(sel.amount_abs != null ? sel.amount_abs : Math.abs(Number(sel.amount) || 0)));
+                  var matchedSum = (matchesByTxn[sel.id] || []).reduce(function (a, m) { return a + (Number(m.matched_amount) || 0); }, 0);
+                  var rem = roundMoney(dep - matchedSum);
+                  if (rem > 0.005) { return <div className="mt-1 px-2 py-1 rounded bg-amber-200 text-amber-950 text-[11px] font-bold">⚠ {fmt(rem)} of this {fmt(dep)} deposit is still unallocated — apply it to another invoice (split below), park it, or mark the remainder Needs review before approving.</div>; }
+                  if (rem < -0.005) { return <div className="mt-1 px-2 py-1 rounded bg-rose-200 text-rose-950 text-[11px] font-bold">⚠ Over-allocated by {fmt(Math.abs(rem))} — reduce a match amount.</div>; }
+                  return <div className="mt-1 text-[10px] text-emerald-700 font-bold">✓ Fully allocated ({fmt(dep)}).</div>;
+                })()}
+                {/* v55.83-KE — show the REAL current attachment + Wave sync state (Codex). */}
+                {(function () {
+                  var ps = (paysByTxn[sel.id] || []).filter(function (p) { return !isPaymentVoid(p); });
+                  var pushed = ps.some(function (p) { return p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'; });
+                  var st = pushed ? 'synced to Wave' : (ps.length ? 'pending Wave sync' : 'no payment row');
+                  return <div className="text-[10px] mt-0.5">Wave sync: <b>{st}</b>{ps.length ? (' · ' + ps.length + ' payment row(s)') : ''}. {pushed ? 'Already in Wave — change it in Wave then re-import.' : '“Update amount” reverses & re-applies; “Unmatch” fully reverses.'}</div>;
+                })()}
                 {mayMatch && !isLocked(sel) && <button onClick={function () { unmatch(sel); }} disabled={busy} className="mt-1.5 px-2 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px] font-bold disabled:opacity-50">Unmatch (reverse)</button>}
                 {isLocked(sel) && <div className="text-[10px] mt-1">Reopen the transaction to unmatch.</div>}
               </div>

@@ -34,6 +34,8 @@ var MANIFEST = [
   { f: 'test-v55-83-hr-accounting-doc-permissions.js', label: 'must-pass', why: 'accounting doc permissions not gated by bank.view' },
   { f: 'test-v55-83-kc-customer-wave-linkage.js', label: 'new', why: 'AL MOUSTAFA undercount — AR History + Customer Ledger match invoices by accounting_customer_id OR wave_customer_id (Wave-imported)' },
   { f: 'test-v55-83-jz-ar-count-and-preview.js', label: 'new', why: 'AR count breakdown + visibility employee-preview' },
+  { f: 'test-v55-83-ke-update-match-atomic.js', label: 'new', why: 'atomic update_match server action: reverse old + apply new, recompute both invoices, block Wave-synced; client + sync-state display' },
+  { f: 'test-v55-83-kf-live-fixes.js', label: 'new', why: 'live P0 batch: ledger crash import, AR date sort+pill contrast, bank account-silo grouping, deposit-remaining warning, Wave category pull diagnostic' },
   { f: 'test-v55-83-kd-match-edit-and-ledger-window.js', label: 'new', why: 'edit existing match amount (reverse+re-apply); Customer Ledger list+payment history windowed' },
   { f: 'test-v55-83-iw-customer-ledger-scope.js', label: 'new', why: 'Customer Ledger picker silo-scoped (no cross-silo bleed), no silent 40-cap, clears selection on silo switch' },
   // Wave push + import + categories + estimates

@@ -21,8 +21,8 @@ ok('3: route returns diagnostic counts (total/active/usable/hidden_receivable)',
   /total: total, active_count: active\.length, usable_count: usable\.length, hidden_receivable_count: hiddenReceivable/.test(route));
 ok('4: Bank Review loads categories from the service-role route', /fetch\('\/api\/wave\/categories'/.test(br) && /setWaveCategories\(j\.categories \|\| \[\]\)/.test(br));
 ok('5: Bank Review records a category diagnostic for the empty-state', /setCatDiag\(\{ total: j\.total, usable: j\.usable_count/.test(br));
-ok('6: empty-state is reason-specific (error / all-filtered / truly-missing)',
-  /Could not load Wave categories: ' \+ catDiag\.error/.test(br) && /but 0 are usable as bank categories/.test(br));
+ok('6: empty-state is reason-specific (error / all-filtered / truly-missing) + inline pull (v55.83-KF)',
+  /Could not load Wave categories: ' \+ catDiag\.error/.test(br) && /but 0 are usable as categories/.test(br) && /Pull Wave categories now/.test(br));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JA category-dropdown tests passed'); process.exit(0); }

@@ -18,7 +18,7 @@ var br = rd('src/components/BankReviewTab.jsx');
 ok('1: route has save_splits + create_unapplied actions',
   /action === 'save_splits'/.test(route) && /action === 'create_unapplied'/.test(route));
 ok('2: both actions require payments.match (they allocate money)',
-  /action === 'save_splits' \|\| action === 'create_unapplied'\) \? 'payments\.match'/.test(route));
+  /action === 'save_splits' \|\| action === 'create_unapplied'/.test(route) && /\? 'payments\.match'/.test(route));
 ok('3: save_splits enforces FULL allocation (sum must equal amount_abs)',
   /Math\.abs\(sum - depAmt\) > 0\.01/.test(route) && /A split must allocate the full amount/.test(route));
 ok('4: save_splits blocks money-out invoice links + approved txns',

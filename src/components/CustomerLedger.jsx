@@ -12,7 +12,7 @@ import { isArEligible } from '../lib/ar-eligibility';
 import { canViewCustomerAr, canViewInvoices } from '../lib/bank-permissions';
 import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, canWriteToWaveBusiness } from '../lib/wave-business';
 import { isPaymentVoid as isPaymentVoidCanonical } from '../lib/payment-matching';
-import { floorDateFor, labelForWindow } from '../lib/visibility-window';
+import { floorDateFor, labelForWindow, isWithinWindow } from '../lib/visibility-window';
 
 function num(v) { var n = Number(String(v == null ? 0 : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function money(v, cur) { return (cur || 'USD') + ' ' + num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

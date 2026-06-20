@@ -16,9 +16,9 @@ var br = rd('src/components/BankReviewTab.jsx');
 var led = rd('src/components/CustomerLedger.jsx');
 
 // (1) Edit an existing match amount
-ok('1: updateMatchAmount reverses then re-applies the new amount (unmatch -> match_invoice)',
+ok('1: updateMatchAmount persists the new amount via the atomic update_match action (v55.83-KE)',
   /function updateMatchAmount\(m\)/.test(br) &&
-  /bankWrite\('unmatch'[\s\S]{0,400}return bankWrite\('match_invoice'/.test(br));
+  /bankWrite\('update_match', \{/.test(br));
 ok('2: update is blocked for Wave-synced payments + capped at the deposit',
   /already pushed to Wave — change it in Wave/.test(br) && /Amount can\\'t exceed the deposit/.test(br));
 ok('3: the matched row exposes an inline amount input + "Update amount" button (not a silent no-op)',

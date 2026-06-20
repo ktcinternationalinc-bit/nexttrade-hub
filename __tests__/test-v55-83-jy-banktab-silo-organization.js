@@ -16,9 +16,10 @@ var bank = rd('src/components/BankTab.jsx');
 var exch = rd('src/app/api/plaid/exchange/route.js');
 
 // Layout contract: partition by active silo + collapse other silos
-ok('1: connections are partitioned into this-silo vs other-silo by the ACTIVE accounting silo',
-  /var thisSilo = connections\.filter\(function \(c\) \{ return !c\.wave_business_id \|\| c\.wave_business_id === activeBiz; \}\)/.test(bank) &&
-  /var otherSilo = connections\.filter\(function \(c\) \{ return c\.wave_business_id && c\.wave_business_id !== activeBiz; \}\)/.test(bank));
+ok('1: connections are partitioned this-silo vs other-silo by each ACCOUNT\'s effective silo (v55.83-KF)',
+  /var thisSilo = connections\.filter\(connHasActive\)/.test(bank) &&
+  /var otherSilo = connections\.filter\(connHasOther\)/.test(bank) &&
+  /var effSilo = function \(a, c\) \{ return \(a && a\.wave_business_id\) \|\| \(c && c\.wave_business_id\) \|\| null; \}/.test(bank));
 ok('2: the active silo is the PRIMARY section ("Bank accounts for <silo>")',
   /Bank accounts for \{bizLabel\(activeBiz\)\}/.test(bank));
 ok('3: other silos are collapsed behind a super-admin toggle (admin diagnostics), not shown as normal cards',
@@ -26,7 +27,7 @@ ok('3: other silos are collapsed behind a super-admin toggle (admin diagnostics)
   /Other silos \/ admin diagnostics/.test(bank) &&
   /showOtherSilos &&/.test(bank));
 ok('4: cross-silo cards carry a clear warning when expanded',
-  /These belong to OTHER silos/.test(bank));
+  /These accounts belong to OTHER silos/.test(bank));
 
 // Business-language buttons
 ok('5: buttons use business language (Sync new transactions / Re-pull history / Archive duplicate / Move account to silo & repair)',

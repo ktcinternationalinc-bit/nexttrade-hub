@@ -36,6 +36,7 @@ export default function AccountingCustomerHistory(props) {
   var [sel, setSel] = useState(null);
   var [filter, setFilter] = useState('all'); // all | review | open
   var [search, setSearch] = useState('');
+  var [invSort, setInvSort] = useState('desc'); // v55.83-KF — invoice date sort: 'desc' = newest first (default)
 
   // v55.83-JQ — admin history-visibility window. The customer's OPEN BALANCE / aging uses ALL-TIME
   // data (loaded in full); the floor only hides older DETAIL rows (invoices/payments/proformas) for
@@ -190,11 +191,11 @@ export default function AccountingCustomerHistory(props) {
               </div>
               <div className="text-[10px] text-slate-500 mb-2 -mt-1">{sum.windowed ? <span>These totals show the permitted window only: <b>{labelForWindow(visCfg.window, visCfg.customDays)}</b> (from {arFloor}). A super-admin set this in Settings → Accounting Visibility.</span> : <span>Showing <b>all history</b> (super-admin).</span>}</div>
               <div className="flex gap-2 mb-2 text-[11px]">
-                <Pill label="Open" v={sum.openCount} c="bg-rose-200 text-rose-950" />
-                <Pill label="Paid" v={sum.paidCount} c="bg-emerald-200 text-emerald-950" />
-                <Pill label="Partial" v={sum.partialCount} c="bg-amber-200 text-amber-950" />
-                <Pill label="Overdue" v={sum.overdueCount} c="bg-rose-300 text-rose-950" />
-                <Pill label="Total paid" v={money(sum.totalPaid, showAmt)} c="bg-slate-200 text-slate-900" />
+                <Pill label="Open" v={sum.openCount} c="bg-rose-600 text-white" />
+                <Pill label="Paid" v={sum.paidCount} c="bg-emerald-600 text-white" />
+                <Pill label="Partial" v={sum.partialCount} c="bg-amber-500 text-amber-950" />
+                <Pill label="Overdue" v={sum.overdueCount} c="bg-rose-800 text-white" />
+                <Pill label="Total paid" v={money(sum.totalPaid, showAmt)} c="bg-slate-700 text-white" />
               </div>
               {/* v55.83-JZ — invoice-count breakdown so a "98 vs 53" mismatch is explainable on-screen. */}
               {(function () {
@@ -212,8 +213,8 @@ export default function AccountingCustomerHistory(props) {
               {/* invoices */}
               <Section title="Invoices">
                 <div className="overflow-x-auto"><table className="w-full text-xs">
-                  <thead><tr className="text-slate-400 text-left"><th className="py-1">Invoice</th><th>Source</th><th>Date</th><th>Due</th><th>Status</th><th className="text-right">Total</th><th className="text-right">Wave paid</th><th className="text-right">Hub paid</th><th className="text-right">Balance</th><th>Sync</th></tr></thead>
-                  <tbody>{invoicesFor(selCust.id).filter(function (i) { return isWithinWindow(i.invoice_date, arFloor); }).map(function (i) {
+                  <thead><tr className="text-slate-400 text-left"><th className="py-1">Invoice</th><th>Source</th><th className="cursor-pointer select-none text-sky-300 hover:text-sky-200" onClick={function () { setInvSort(invSort === 'desc' ? 'asc' : 'desc'); }} title="Click to sort by date">Date {invSort === 'desc' ? '▼' : '▲'}</th><th>Due</th><th>Status</th><th className="text-right">Total</th><th className="text-right">Wave paid</th><th className="text-right">Hub paid</th><th className="text-right">Balance</th><th>Sync</th></tr></thead>
+                  <tbody>{invoicesFor(selCust.id).filter(function (i) { return isWithinWindow(i.invoice_date, arFloor); }).slice().sort(function (a, b) { var da = a.invoice_date || ''; var db = b.invoice_date || ''; if (da === db) return 0; return (invSort === 'desc' ? (da < db ? 1 : -1) : (da < db ? -1 : 1)); }).map(function (i) {
                     var hub = hubPaidForInvoice(i.id); var bal = n(i.total_amount) - n(i.wave_imported_paid) - hub; var dead = isDead(i);
                     return <tr key={i.id} className={'border-t border-slate-800 ' + (dead ? 'opacity-50 line-through' : '')}>
                       <td className="py-1 font-bold text-slate-100">{i.invoice_number || i.id.slice(0, 6)}</td>

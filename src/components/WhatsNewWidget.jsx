@@ -33,6 +33,29 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KF',
+    date: '2026-06-20',
+    label: 'Fixed the Account Ledger crash + match-edit + bank silo grouping + AR sorting + Wave categories',
+    items: [
+      '**🛠 Account Ledger no longer crashes.** Opening Account Ledger → selecting a customer was throwing an error; it works again.',
+      '**✏️ Editing a matched deposit is now one safe operation** (no more "changed it and nothing happened"). Open a matched transaction → change the amount on the match row → "Update amount". It reverses the old match and applies the new one in a single server step, restores the old invoice, and recomputes the new one. If it was already pushed to Wave, it blocks you (reverse it in Wave first) rather than silently overwriting. The panel now shows exactly what the deposit is attached to, the Wave sync state, and **how much is still unallocated** — so you\'re warned before you approve.',
+      '**📅 Customer AR History sorts by date** — newest first by default; click the Date column to flip. And the Paid / Partial / Total-paid chips are now solid, high-contrast, and readable.',
+      '**🏦 Bank accounts now group by the silo the ACCOUNT belongs to.** Move account ··6353 to Kandil Egypt and it immediately appears under Kandil — even though its Chase login is still tagged Real KTC. A bank with accounts in two silos now shows under each, listing only that silo\'s accounts. No more "Bank accounts for Real KTC" sitting above a Kandil account.',
+      '**🧾 Wave categories: see why they\'re empty and pull them on the spot.** The category box now shows the silo id, how many categories are stored, and a "⟳ Pull Wave categories now" button. If Wave rejects the pull (e.g. the token can\'t reach that business), it tells you exactly that.',
+      { superAdminOnly: true, text: 'v55.83-KF (Max live P0 batch). (1) CRASH: CustomerLedger.jsx used isWithinWindow without importing it (KB/KD regression — static grep tests miss runtime ReferenceErrors) → added to the visibility-window import. (2) Match edit = KE atomic update_match server action kept (reverse+apply+recompute both invoices, block Wave-synced via needs_wave_reversal); client updateMatchAmount = single call; matched panel shows attachment + real sync state + live remaining-unallocated banner. (3) AR History: invSort state default desc + clickable Date header + .slice().sort by invoice_date; Paid/Partial/Total-paid pills → solid bg + white text. (4) BankTab: regroup by effSilo(account)=account.wave_business_id||connection.wave_business_id; connHasActive/connHasOther; renderConnCard(c,dimmed,mode) renders only mode-matching accounts; a multi-silo connection appears under each silo. (5) BankReview: reloadCats() + pullCategories() POST /api/wave/sync-categories {wave_business_id, includeProduction:true}; empty-state shows silo id + stored total/usable/hidden + inline pull button + verbatim Wave error (root cause is usually WAVE_ACCESS_TOKEN not scoped to the production business). Tests kf(8)+ke(8); runner green. LESSON: static greps passed while the page crashed — added the build as the runtime check.' },
+    ],
+  },
+  {
+    version: 'v55.83-KE',
+    date: '2026-06-20',
+    label: 'Changing a matched deposit\'s invoice/amount is now one clean, safe operation',
+    items: [
+      '**🔁 Editing a match is now atomic and safe.** Changing the amount (or invoice) on a matched deposit happens in a single step on the server: it reverses the old match, restores the old invoice, applies the new amount to the chosen invoice, and recomputes both — with no chance of leaving the deposit half-matched. If the payment was already pushed to Wave, it clearly blocks you (change it in Wave first) instead of silently overwriting.',
+      '**🔎 The matched panel now shows the real status** — whether the payment is pending Wave sync or already synced, and how many payment rows are attached — so you always know what a transaction is actually attached to.',
+      { superAdminOnly: true, text: 'v55.83-KE (Codex P0 — needs a real match-edit state machine, not two client calls). NEW bank-write action update_match (payments.match): one atomic transition — block if approved / over-deposit / cross-silo; block + needs_wave_reversal if any active payment has wave_payment_id or sync_status synced/manual_done; void old payment_matches + accounting_invoice_payments + open customer_credits/unapplied_deposits for the txn; anti-double-count on the NEW invoice; insert one new match+payment (rollback match if payment fails); overpayment → credit/unapplied; recompute OLD invoice(s) + NEW invoice; re-stamp the bank txn to the new invoice. Client updateMatchAmount now calls update_match (single call) instead of unmatch→match_invoice. Matched panel shows real sync state (pending/synced + payment-row count). Test ke(8); runner green. Still open (Codex, live): Wave category dropdown live-load for the active silo; full Apply/Update/Reverse-and-replace section split is partially done (Update amount + Add-another exist); changing the invoice on edit is supported by the route (new_invoice_id) — UI currently edits amount on the same invoice.' },
+    ],
+  },
+  {
     version: 'v55.83-KD',
     date: '2026-06-20',
     label: 'You can now change the amount on an already-matched deposit (it used to silently do nothing)',
