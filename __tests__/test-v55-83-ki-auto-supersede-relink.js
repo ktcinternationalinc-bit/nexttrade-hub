@@ -17,14 +17,15 @@ var bank = rd('src/components/BankTab.jsx');
 ok('1: older relink accounts are auto-superseded (account-level canonical — newest link instance wins; see KK)',
   /if \(canonicalByKey\[k\]\) \{ supersededAcctIds\[a\.plaid_account_id\] = true; \}/.test(bank) &&
   /const supersededConnIds = \{\}; connections\.forEach\(c => \{ const has = plaidAccts\.some/.test(bank));
-ok('2: scopedTxns excludes superseded connection + account transactions automatically (no manual archive)',
-  /if \(t\.connection_id && supersededConnIds\[t\.connection_id\]\) return false;/.test(bank) &&
-  /if \(t\.account_id && supersededAcctIds\[t\.account_id\]\) return false;/.test(bank));
+ok('2: superseded alias transactions are reconciled out of the canonical totals automatically (no manual archive; see KL)',
+  /const reconciledTxns = transactions\.map\(t => \{/.test(bank) &&
+  /const scopedTxns = reconciledTxns\.filter/.test(bank));
 ok('3: the account filter falls back to All when the selected account was superseded (so fresh data shows)',
   /const effAcctFilter = \(acctFilter !== 'all' && !supersededAcctIds\[acctFilter\]\) \? acctFilter : 'all';/.test(bank) &&
   /if \(effAcctFilter !== 'all' && t\.account_id !== effAcctFilter\) return false;/.test(bank));
-ok('4: the VIEW account dropdown hides the superseded (old relink) account',
-  /if \(supersededAcctIds\[t\.account_id\]\) \{ return; \} \/\/ v55\.83-KI/.test(bank));
+ok('4: the VIEW account dropdown is built from the reconciled set + still skips any superseded account',
+  /reconciledTxns\.forEach\(function \(t\) \{ \/\/ v55\.83-KL/.test(bank) &&
+  /if \(supersededAcctIds\[t\.account_id\]\) \{ return; \}/.test(bank));
 ok('5: an account whose newest transaction is >7 days old is flagged stale (Sync or Reconnect)',
   /var _stale = _agoDays != null && _agoDays > 7;/.test(bank) &&
   /d ago — Sync or Reconnect/.test(bank));

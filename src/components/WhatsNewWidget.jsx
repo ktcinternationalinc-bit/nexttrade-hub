@@ -33,9 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KL',
+    date: '2026-06-20',
+    label: 'Reconnecting a bank no longer risks losing or double-counting any transaction',
+    items: [
+      '**🧮 Old-link transactions are reconciled, not dropped.** When you reconnect a bank, the old link is collapsed into the current one. Transactions the new link already has are hidden as duplicates (so nothing double-counts), but anything that was ONLY on the old link — or was matched to an invoice — is kept and folded into the single account, so no real transaction ever disappears. A small line tells you exactly how many were merged vs. kept.',
+      { superAdminOnly: true, text: 'v55.83-KL (Codex money-truth: reconcile, don\'t exclude). KK excluded superseded-alias txns, which could silently drop a txn unique to the old link. Now reconciledTxns: a superseded-alias txn is dropped ONLY if unmatched AND its fingerprint (posted-date|cents|normName) matches a canonical-account txn (true re-pulled duplicate); otherwise it is KEPT and re-stamped onto canonAcctOf(account) so it shows under the one account and stays in totals. Matched alias txns are never dropped. scopedTxns/account-dropdown/row-count all derive from reconciledTxns (consistent counts/date/totals — Codex #3). Reconciliation counts surfaced (reconHiddenDup / reconKeptUnique / reconKeptMatched) — "nothing dropped from totals". Softened KK "done properly". Test kl(6); runner green. STILL OPEN (Codex, longer-term backend): durable canonical-account/alias table + exchange relink detection + server-side txn dedupe; live Real KTC reconnect confirmation; promote silo switcher to top banner.' },
+    ],
+  },
+  {
     version: 'v55.83-KK',
     date: '2026-06-20',
-    label: 'Truly one line per real bank account (and a different account is never hidden)',
+    label: 'One line per real bank account (and a different account is never hidden)',
     items: [
       '**🏦 One line per real account — done properly.** A bank account is now identified by the bank + its account number (mask), so the same real account from a reconnect collapses to a single line showing the freshest data, while a genuinely different account (e.g. a second account at the same bank) always stays visible. The earlier version grouped by bank, which could have hidden a real second account — this fixes that.',
       '**📆 The account\'s newest date now looks across all its copies**, so the date shown is the true latest transaction for that real account regardless of how many times the bank was relinked.',

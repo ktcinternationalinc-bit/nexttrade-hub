@@ -36,6 +36,7 @@ var MANIFEST = [
   { f: 'test-v55-83-jz-ar-count-and-preview.js', label: 'new', why: 'AR count breakdown + visibility employee-preview' },
   { f: 'test-v55-83-ke-update-match-atomic.js', label: 'new', why: 'atomic update_match server action: reverse old + apply new, recompute both invoices, block Wave-synced; client + sync-state display' },
   { f: 'test-v55-83-kj-match-edit-rollback-hardening.js', label: 'new', why: 'update_match money-safety: overpayment-insert rollback, old credit/unapplied void errors trigger restore, restore re-opens old credits/unapplied, recompute/restamp surfaced as warning' },
+  { f: 'test-v55-83-kl-alias-reconciliation.js', label: 'new', why: 'reconnect alias txns RECONCILED not dropped: drop only unmatched same-fingerprint duplicates, keep unique/matched (re-stamp to canonical), surface counts' },
   { f: 'test-v55-83-kk-canonical-account-identity.js', label: 'new', why: 'ONE LINE PER REAL ACCOUNT: canonical identity=institution+mask, newest link wins, older aliases superseded; a different account in an older link is NOT hidden' },
   { f: 'test-v55-83-ki-auto-supersede-relink.js', label: 'new', why: 'reconnect leaves a stale old link; auto-supersede older relink (hide account + exclude its txns), fall back filter to All, flag stale account' },
   { f: 'test-v55-83-kh-bank-dedup.js', label: 'new', why: 'one line per bank (dedup duplicate re-link connections, archive in one click), per-account newest-txn date, exclude archived-connection txns from totals' },

@@ -374,10 +374,28 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const newestForKey = (k) => { let nd = ''; const ids = aliasIdsByKey[k] || []; transactions.forEach(t => { if (ids.indexOf(t.account_id) >= 0) { const d = String(t.posted_date || t.date || '').slice(0, 10); if (d > nd) { nd = d; } } }); return nd; };
   // if the user had a now-superseded (old alias) account selected, fall back to All so they see the fresh data.
   const effAcctFilter = (acctFilter !== 'all' && !supersededAcctIds[acctFilter]) ? acctFilter : 'all';
-  const scopedTxns = transactions.filter(t => {
-    if (t.connection_id && !activeConnIds[t.connection_id]) return false;
-    if (t.connection_id && supersededConnIds[t.connection_id]) return false;
-    if (t.account_id && supersededAcctIds[t.account_id]) return false;
+  // v55.83-KL (Codex money-truth) — RECONCILE alias transactions instead of blindly excluding them. A
+  // relink re-pulls the same history under new ids; those are true DUPLICATES (drop). But an old link may
+  // hold a transaction the fresh link did NOT return — that one is UNIQUE and must NOT be silently lost.
+  // Rule: a superseded-alias txn is dropped ONLY if it's an unmatched, same-fingerprint duplicate of a
+  // CANONICAL-account txn. Unique or matched alias txns are KEPT and re-stamped onto the canonical account
+  // so the single account row + totals stay complete and consistent. Counts are surfaced (never silent).
+  const acctById = {}; plaidAccts.forEach(a => { if (a && a.plaid_account_id) { acctById[a.plaid_account_id] = a; } });
+  const canonAcctOf = (aid) => { const a = acctById[aid]; if (!a) { return aid; } return canonicalByKey[acctKey(a)] || aid; };
+  const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24);
+  const txnFp = (t) => String(t.posted_date || t.date || '').slice(0, 10) + '|' + Math.round(Number(t.amount || 0) * 100) + '|' + normName(t.name);
+  const canonFp = {}; transactions.forEach(t => { if (t.account_id && !supersededAcctIds[t.account_id]) { canonFp[txnFp(t)] = true; } });
+  let reconHiddenDup = 0; let reconKeptUnique = 0; let reconKeptMatched = 0;
+  const reconciledTxns = transactions.map(t => {
+    if (!t.account_id || !supersededAcctIds[t.account_id]) { return t; }
+    var dup = !!canonFp[txnFp(t)];
+    if (dup && !t.matched_invoice_id) { reconHiddenDup++; return null; } // clean re-pulled duplicate → drop
+    if (t.matched_invoice_id) { reconKeptMatched++; } else { reconKeptUnique++; }
+    return Object.assign({}, t, { account_id: canonAcctOf(t.account_id) }); // keep; show under the canonical account
+  }).filter(Boolean);
+  const reconKeptOld = reconKeptUnique + reconKeptMatched;
+  const scopedTxns = reconciledTxns.filter(t => {
+    if (t.connection_id && !activeConnIds[t.connection_id]) return false; // archived link
     if (effAcctFilter !== 'all' && t.account_id !== effAcctFilter) return false;
     if (rangeCutoff) {
       const td = t.date ? new Date(t.date) : null;
@@ -573,7 +591,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                   <div className="space-y-1">
                     {accts.map(function (a) {
                       var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
-                      var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
+                      var cnt = reconciledTxns.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
                       var newestD = newestForKey(acctKey(a)); // v55.83-KK — newest across all aliases of this real account
                       var _agoDays = newestD ? Math.floor((new Date().getTime() - new Date(newestD + 'T00:00:00').getTime()) / 86400000) : null;
                       var _stale = _agoDays != null && _agoDays > 7;
@@ -603,6 +621,12 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           return (
             <div className="space-y-3">
               <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">Bank accounts for {bizLabel(activeBiz)}</div>
+              {/* v55.83-KL — never silently drop: report exactly how a reconnected link was reconciled. */}
+              {(reconHiddenDup > 0 || reconKeptOld > 0) && (
+                <div className="text-[10px] text-slate-500 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                  ℹ Reconnected link reconciled: {reconHiddenDup} duplicate transaction{reconHiddenDup === 1 ? '' : 's'} hidden (already on the current link){reconKeptOld > 0 ? (', ' + reconKeptOld + ' kept from the old link (' + reconKeptUnique + ' unique' + (reconKeptMatched > 0 ? ', ' + reconKeptMatched + ' matched' : '') + ')') : ''}. Nothing was dropped from totals.
+                </div>
+              )}
               {/* v55.83-KH — one-click cleanup of duplicate bank links created by reconnecting. */}
               {canViewAllAccounts && dupConns.length > 0 && (
                 <div className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">
@@ -706,9 +730,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                 // not every Plaid account, so staff don't see other silos' accounts.
                 var seen = {}; var opts = []; var paMap = {};
                 plaidAccts.forEach(function (a) { if (a && a.plaid_account_id) { paMap[a.plaid_account_id] = a; } });
-                transactions.forEach(function (t) {
+                reconciledTxns.forEach(function (t) { // v55.83-KL — reconciled set: superseded aliases are re-stamped to canonical
                   if (!t.account_id || seen[t.account_id]) { return; }
-                  if (supersededAcctIds[t.account_id]) { return; } // v55.83-KI — hide the old relink's account
+                  if (supersededAcctIds[t.account_id]) { return; }
                   seen[t.account_id] = true;
                   var a = paMap[t.account_id];
                   var label = a ? ((a.name || a.official_name || 'Account') + (a.mask ? (' ••' + a.mask) : '')) : ('Account ••' + String(t.account_id).slice(-4));

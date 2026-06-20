@@ -23,8 +23,9 @@ ok('2: newest link instance per (institution+mask) is canonical; older same-key 
 ok('3: a connection is FULLY superseded only when ALL its accounts are aliases (different account in an old link is kept)',
   /const connHasCanonical = \{\}; plaidAccts\.forEach\(a => \{ if \(!supersededAcctIds\[a\.plaid_account_id\]\) \{ connHasCanonical\[a\.connection_id\] = true; \} \}\)/.test(bank) &&
   /const has = plaidAccts\.some\(a => a\.connection_id === c\.id\); if \(has && !connHasCanonical\[c\.id\]\) \{ supersededConnIds\[c\.id\] = true; \}/.test(bank));
-ok('4: superseded alias transactions are excluded from the list/totals (no double-count across relinks)',
-  /if \(t\.account_id && supersededAcctIds\[t\.account_id\]\) return false;/.test(bank));
+ok('4: superseded alias transactions are reconciled (deduped) into the canonical account — no double-count (see KL)',
+  /const reconciledTxns = transactions\.map\(t => \{/.test(bank) &&
+  /if \(dup && !t\.matched_invoice_id\) \{ reconHiddenDup\+\+; return null; \}/.test(bank));
 ok('5: render shows connections with a canonical account; fully-superseded links are offered for archive only',
   /var thisSilo = connections\.filter\(function \(c\) \{ return connHasActive\(c\) && !supersededConnIds\[c\.id\]; \}\)/.test(bank) &&
   /var dupConns = connections\.filter\(function \(c\) \{ return supersededConnIds\[c\.id\]; \}\)/.test(bank) &&
