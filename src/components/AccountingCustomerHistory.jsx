@@ -74,25 +74,23 @@ export default function AccountingCustomerHistory(props) {
     return payments.filter(function (p) { return p.accounting_customer_id === custId || invIds[p.accounting_invoice_id]; });
   }
 
-  // v55.83-KA (Codex FAIL) — PERIOD activity cards (invoiced/paid/counts) must reflect the SAME visible
-  // window as the invoice rows below; only the Open balance stays ALL-TIME (labeled). For a super-admin
-  // arFloor is null, so period == all-time (no change for the admin). `openAllTime` is the true balance.
+  // v55.83-KB (Max, final call — overrides the earlier AR-aging-exemption): EMPLOYEES see ONLY the
+  // permitted period in EVERY bubble, INCLUDING Open balance. Only a super-admin sees the full all-time
+  // numbers. arFloor is null for super-admin → window == all-time (they see everything); for an employee
+  // arFloor is set → every total/count is limited to invoices dated within the window.
   function summary(custId) {
     var invs = invoicesFor(custId);
-    var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, openAllTime: 0, openCount: 0, paidCount: 0, partialCount: 0, overdueCount: 0, windowed: !!arFloor };
+    var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, open: 0, openCount: 0, paidCount: 0, partialCount: 0, overdueCount: 0, windowed: !!arFloor };
     var today = new Date().toISOString().substring(0, 10);
     invs.forEach(function (i) {
       if (!isArEligible(i)) return;  // shared rule: drafts + void/cancelled/archived/deleted excluded; unsent INCLUDED
       if ((i.currency || 'USD') !== 'USD') return; // keep currencies separate — USD summary only
+      if (!isWithinWindow(i.invoice_date, arFloor)) { return; } // employees: ONLY the permitted period (every bubble)
       var total = n(i.total_amount);
       var wave = n(i.wave_imported_paid);
       var hub = hubPaidForInvoice(i.id);
       var bal = total - wave - hub;
-      // Open balance is ALWAYS all-time (true money owed) — never windowed.
-      s.openAllTime += bal;
-      // Activity cards + counts: only invoices within the visible window count (matches the rows below).
-      if (!isWithinWindow(i.invoice_date, arFloor)) { return; }
-      s.invoiced += total; s.waveePaid += wave; s.hubPaid += hub;
+      s.invoiced += total; s.waveePaid += wave; s.hubPaid += hub; s.open += bal;
       if (bal <= 0.0001) s.paidCount++;
       else { s.openCount++; if (wave + hub > 0.0001) s.partialCount++; if (i.due_date && i.due_date < today) s.overdueCount++; }
     });
@@ -130,7 +128,7 @@ export default function AccountingCustomerHistory(props) {
 
   var listed = customers.filter(function (c) {
     if (filter === 'review' && c.needs_review !== true) return false;
-    if (filter === 'open' && summary(c.id).openAllTime <= 0.0001) return false;
+    if (filter === 'open' && summary(c.id).open <= 0.0001) return false;
     if (search.trim()) { var q = search.trim().toLowerCase(); if ((c.company_name || '').toLowerCase().indexOf(q) < 0 && (c.email || '').toLowerCase().indexOf(q) < 0) return false; }
     return true;
   });
@@ -173,17 +171,17 @@ export default function AccountingCustomerHistory(props) {
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <div className="text-base font-extrabold">{selCust.company_name}</div>
                 {selCust.needs_review === true && <span className="text-[10px] bg-amber-400 text-amber-950 rounded px-1.5 py-0.5 font-bold">NEEDS REVIEW (placeholder from import)</span>}
-                <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). The OPEN BALANCE above always uses full history; only the detail rows below older than the window are hidden for normal users.">Visibility: <b className={arFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{arFloor ? <span> (detail from {arFloor}; balance all-time)</span> : null}</span>
+                <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). Employees see ONLY this window — every total, count and balance is limited to it. Super-admin sees all history.">Visibility: <b className={arFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{arFloor ? <span> (everything from {arFloor})</span> : null}</span>
               </div>
 
-              {/* AR summary — v55.83-KA: activity cards reflect the visible window; Open balance is all-time. */}
+              {/* AR summary — v55.83-KB: EVERY bubble reflects the permitted window for employees; super-admin sees all. */}
               <div className="grid grid-cols-4 gap-2 mb-3">
-                <Card label={sum.windowed ? 'Total invoiced (in view)' : 'Total invoiced'} val={money(sum.invoiced, showAmt)} bg="bg-slate-100 text-slate-900" />
-                <Card label={sum.windowed ? 'Paid · Wave (in view)' : 'Paid (Wave)'} val={money(sum.waveePaid, showAmt)} bg="bg-sky-100 text-sky-950" />
-                <Card label={sum.windowed ? 'Paid · Hub/Plaid (in view)' : 'Paid (Hub/Plaid)'} val={money(sum.hubPaid, showAmt)} bg="bg-violet-100 text-violet-950" />
-                <Card label="Open balance (all-time)" val={money(sum.openAllTime, showAmt)} bg="bg-rose-100 text-rose-950" />
+                <Card label="Total invoiced" val={money(sum.invoiced, showAmt)} bg="bg-slate-100 text-slate-900" />
+                <Card label="Paid (Wave)" val={money(sum.waveePaid, showAmt)} bg="bg-sky-100 text-sky-950" />
+                <Card label="Paid (Hub/Plaid)" val={money(sum.hubPaid, showAmt)} bg="bg-violet-100 text-violet-950" />
+                <Card label="Open balance" val={money(sum.open, showAmt)} bg="bg-rose-100 text-rose-950" />
               </div>
-              {sum.windowed ? <div className="text-[10px] text-slate-500 mb-2 -mt-1">Activity cards above show the visible window ({labelForWindow(visCfg.window, visCfg.customDays)}); <b>Open balance is all-time</b>. Switch the window in Settings → Accounting Visibility.</div> : null}
+              <div className="text-[10px] text-slate-500 mb-2 -mt-1">{sum.windowed ? <span>These totals show the permitted window only: <b>{labelForWindow(visCfg.window, visCfg.customDays)}</b> (from {arFloor}). A super-admin set this in Settings → Accounting Visibility.</span> : <span>Showing <b>all history</b> (super-admin).</span>}</div>
               <div className="flex gap-2 mb-2 text-[11px]">
                 <Pill label="Open" v={sum.openCount} c="bg-rose-200 text-rose-950" />
                 <Pill label="Paid" v={sum.paidCount} c="bg-emerald-200 text-emerald-950" />
@@ -199,7 +197,7 @@ export default function AccountingCustomerHistory(props) {
                   <div className="mb-4 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2 leading-5">
                     <b>Invoice count for this customer:</b> {b.total} total · <b>{b.arUsd}</b> counted in AR all-time (USD) = {b.open} open + {b.paid} paid.
                     {excluded > 0 ? <span> · {excluded} excluded from AR ({b.excludedDraft} draft, {b.excludedDead} void/cancelled/archived/deleted, {b.excludedNonUsd} non-USD).</span> : null}
-                    {arFloor ? <span> · The activity cards above are limited to the visible window ({b.displayed} invoice row(s) shown, {b.hiddenByWindow} older hidden from employees); <b>Open balance is all-time</b>.</span> : null}
+                    {arFloor ? <span> · Employees see only the window: <b>{b.displayed} invoice row(s) shown, {b.hiddenByWindow} older hidden</b>, and every total/balance above is limited to that window. (You, super-admin, see all-time.)</span> : null}
                   </div>
                 );
               })()}

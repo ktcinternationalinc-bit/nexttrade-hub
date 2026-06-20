@@ -154,22 +154,20 @@ export default function CustomerLedger(props) {
   }, [custInvoices, currency]);
 
   // SUMMARY (current currency). AR-eligible only for AR totals; drafts separated.
-  // v55.83-KA (Codex FAIL) — activity cards (invoiced/paid/counts) reflect the visible window; Balance
-  // due is ALL-TIME (true money owed), labeled as such. Super-admin: ledgerFloor null → period == all-time.
+  // v55.83-KB (Max, final call): EMPLOYEES see ONLY the permitted period in EVERY card, INCLUDING the
+  // balance. Super-admin (ledgerFloor null) sees all-time. Everything is gated by the same window.
   var summary = useMemo(function () {
     var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, balance: 0, openCount: 0, overdue: 0, draftValue: 0, draftCount: 0, windowed: !!ledgerFloor };
     var today = todayStr();
     curInvoices.forEach(function (i) {
-      if (isDraftInv(i)) { if (isWithinWindow(i.invoice_date, ledgerFloor)) { s.draftValue += num(i.total_amount); s.draftCount += 1; } return; }
+      if (!isWithinWindow(i.invoice_date, ledgerFloor)) { return; } // employees: only the permitted period (every card)
+      if (isDraftInv(i)) { s.draftValue += num(i.total_amount); s.draftCount += 1; return; }
       if (!isArEligible(i)) return; // dead (void/cancelled/archived/deleted) — excluded
-      // Balance due is ALWAYS all-time.
-      s.balance += invBalance(i);
-      // Activity + counts only for invoices in the visible window (matches the statement rows).
-      if (!isWithinWindow(i.invoice_date, ledgerFloor)) { return; }
       s.invoiced += num(i.total_amount);
       s.waveePaid += num(i.wave_imported_paid);
       s.hubPaid += hubPaid(i.id);
       var bal = invBalance(i);
+      s.balance += bal;
       if (bal > 0.005) { s.openCount += 1; if (i.due_date && i.due_date < today) s.overdue += 1; }
     });
     return s;
@@ -225,11 +223,14 @@ export default function CustomerLedger(props) {
     return ev;
   }, [curInvoices, paymentHistory]);
 
-  // v55.83-JP — DISPLAY window: the running balance above is accumulated over ALL events (so each
-  // shown row's balance is still correct), but non-super-admins only SEE events on/after the floor.
+  // v55.83-KB — for an employee with a window, show ONLY the permitted period AND a running balance that
+  // is computed over that period (not the all-time cumulative), so the statement is self-consistent with
+  // the windowed totals above. Super-admin (ledgerFloor null) sees the full all-time statement unchanged.
   var displayStatement = useMemo(function () {
     if (!ledgerFloor) { return statement; }
-    return statement.filter(function (e) { return (e.date || '') >= ledgerFloor; });
+    var win = statement.filter(function (e) { return (e.date || '') >= ledgerFloor; });
+    var run = 0;
+    return win.map(function (e) { run += e.debit - e.credit; return Object.assign({}, e, { running: run }); });
   }, [statement, ledgerFloor]);
 
   function toggle(id) { setExpanded(function (p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); }
@@ -342,11 +343,11 @@ export default function CustomerLedger(props) {
 
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-100">
-            <Card label={summary.windowed ? 'Total invoiced (in view)' : 'Total invoiced (AR)'} val={money(summary.invoiced, currency)} bg="bg-slate-800" />
-            <Card label={summary.windowed ? 'Wave paid (in view)' : 'Wave-imported paid'} val={money(summary.waveePaid, currency)} bg="bg-slate-800" />
-            <Card label={summary.windowed ? 'Hub/Plaid paid (in view)' : 'Hub / Plaid / manual paid'} val={money(summary.hubPaid, currency)} bg="bg-slate-800" />
-            <Card label={summary.windowed ? 'Total paid (in view)' : 'Total paid'} val={money(summary.waveePaid + summary.hubPaid, currency)} bg="bg-emerald-100 text-emerald-950" />
-            <Card label="Balance due (all-time)" val={money(summary.balance, currency)} bg="bg-rose-100 text-rose-950" />
+            <Card label="Total invoiced (AR)" val={money(summary.invoiced, currency)} bg="bg-slate-800" />
+            <Card label="Wave-imported paid" val={money(summary.waveePaid, currency)} bg="bg-slate-800" />
+            <Card label="Hub / Plaid / manual paid" val={money(summary.hubPaid, currency)} bg="bg-slate-800" />
+            <Card label="Total paid" val={money(summary.waveePaid + summary.hubPaid, currency)} bg="bg-emerald-100 text-emerald-950" />
+            <Card label="Balance due" val={money(summary.balance, currency)} bg="bg-rose-100 text-rose-950" />
             <Card label="Open invoices" val={summary.openCount} bg="bg-slate-800" />
             <Card label="Overdue invoices" val={summary.overdue} bg="bg-amber-100 text-amber-950" />
             <Card label={'Drafts (not in AR)'} val={summary.draftCount + ' · ' + money(summary.draftValue, currency)} bg="bg-slate-800" />
@@ -362,7 +363,7 @@ export default function CustomerLedger(props) {
             <input type="date" value={fromDate} onChange={function (e) { setFromDate(e.target.value); }} className="px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-200" />
             <span className="text-slate-500">to</span>
             <input type="date" value={toDate} onChange={function (e) { setToDate(e.target.value); }} className="px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-200" />
-            <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). Balances/aging always use full history; only the statement rows below the window are hidden for normal users.">Visibility: <b className={ledgerFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{ledgerFloor ? <span> (statement from {ledgerFloor}; balances all-time)</span> : null}</span>
+            <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). Employees see ONLY this window — totals, balance and statement are all limited to it. Super-admin sees all history.">Visibility: <b className={ledgerFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{ledgerFloor ? <span> (everything from {ledgerFloor})</span> : null}</span>
           </div>
 
           {/* Invoice list */}

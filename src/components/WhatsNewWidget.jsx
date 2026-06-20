@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KB',
+    date: '2026-06-20',
+    label: 'Employees now see ONLY the permitted period in every customer number — super-admin sees all',
+    items: [
+      '**🔒 The history window now applies to every number an employee sees.** In Customer AR History and Customer Ledger, all the summary tiles — Total invoiced, Paid, counts, **and the Open balance / Balance due** — reflect only the period you permit for employees (e.g. last 1 year). The customer statement they see is limited to that period too, with its own running balance. **You (super admin) still see the full all-time numbers.**',
+      { superAdminOnly: true, text: 'v55.83-KB (Max final call — overrides the earlier AR-aging-exemption). AccountingCustomerHistory.summary() + CustomerLedger.summary(): the isWithinWindow(arFloor/ledgerFloor) filter now gates the WHOLE bubble set including open balance (removed the openAllTime / all-time-balance bypass). Cards relabeled to plain names (no "in view"/"all-time" split). CustomerLedger displayStatement recomputes the running balance over the windowed events (period-based) for employees; super-admin (floor null) unchanged = all-time. Chips/breakdown wording: "Employees see ONLY this window — every total, count and balance is limited to it; super-admin sees all." JZ/KB test rewritten to prove the whole summary windows (no all-time bypass) + ledger period running balance. runner 37/37. NOTE: this deliberately overrides Codex\'s AR-aging-exemption per Max\'s explicit decision; flagged in handoff.' },
+    ],
+  },
+  {
     version: 'v55.83-KA',
     date: '2026-06-20',
     label: 'Customer AR/Ledger activity totals now match the period you\'re viewing (balance stays all-time)',

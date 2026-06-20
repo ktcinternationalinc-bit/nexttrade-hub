@@ -26,17 +26,22 @@ ok('2: breakdown classifies dead (void/cancelled/archived/deleted), draft, non-U
   /b\.arUsd\+\+/.test(ar));
 ok('3: the breakdown is rendered on the customer detail (explains total vs counted vs excluded vs hidden)',
   /Invoice count for this customer:/.test(ar) && /counted in AR all-time \(USD\)/.test(ar) && /excluded from AR/.test(ar));
-// v55.83-KA (Codex FAIL) — PERIOD activity cards must reflect the window; only Open balance is all-time.
-ok('4: summary() period activity is WINDOWED (out-of-window invoices do not inflate the cards/counts)',
-  /s\.openAllTime \+= bal;/.test(ar) &&
-  /if \(!isWithinWindow\(i\.invoice_date, arFloor\)\) \{ return; \}\s*\n\s*s\.invoiced \+= total; s\.waveePaid \+= wave; s\.hubPaid \+= hub;/.test(ar));
-ok('KA-AR1: cards labeled "(in view)" for activity + "Open balance (all-time)"',
-  /Total invoiced \(in view\)/.test(ar) && /Open balance \(all-time\)/.test(ar) && /val=\{money\(sum\.openAllTime, showAmt\)\}/.test(ar));
+// v55.83-KB (Max final call) — EMPLOYEES see ONLY the permitted window in EVERY bubble incl. Open
+// balance; super-admin (arFloor null) sees all. So the window filter gates the WHOLE summary, and
+// there is NO all-time open-balance bypass.
+ok('4: AR summary() windows EVERYTHING (filter gates the whole bubble incl. open balance; no all-time bypass)',
+  /if \(!isWithinWindow\(i\.invoice_date, arFloor\)\) \{ return; \} \/\/ employees: ONLY the permitted period/.test(ar) &&
+  /s\.invoiced \+= total; s\.waveePaid \+= wave; s\.hubPaid \+= hub; s\.open \+= bal;/.test(ar) &&
+  !/openAllTime/.test(ar));
+ok('KB-AR1: AR Open balance card uses the windowed sum.open (not an all-time value)',
+  /<Card label="Open balance" val=\{money\(sum\.open, showAmt\)\}/.test(ar));
 var led = rd('src/components/CustomerLedger.jsx');
-ok('KA-LED1: CustomerLedger summary activity is windowed; Balance due is all-time + labeled',
-  /if \(!isWithinWindow\(i\.invoice_date, ledgerFloor\)\) \{ return; \}/.test(led) &&
-  /s\.balance \+= invBalance\(i\);/.test(led) &&
-  /Balance due \(all-time\)/.test(led) && /Total invoiced \(in view\)/.test(led));
+ok('KB-LED1: CustomerLedger summary windows EVERYTHING incl. the balance (no all-time bypass)',
+  /if \(!isWithinWindow\(i\.invoice_date, ledgerFloor\)\) \{ return; \} \/\/ employees: only the permitted period/.test(led) &&
+  /s\.balance \+= bal;/.test(led) &&
+  /<Card label="Balance due" val=\{money\(summary\.balance, currency\)\}/.test(led));
+ok('KB-LED2: ledger statement running balance is period-based for employees (recomputed over the window)',
+  /var win = statement\.filter\(function \(e\) \{ return \(e\.date \|\| ''\) >= ledgerFloor; \}\);[\s\S]{0,120}run \+= e\.debit - e\.credit; return Object\.assign\(\{\}, e, \{ running: run \}\)/.test(led));
 
 // Employee-preview cutoff date in the visibility panel
 ok('5: visibility panel shows the EXACT employee cutoff date (preview as a non-super-admin)',
