@@ -71,6 +71,12 @@ ok('JT4: route reports markers_persisted + the UI warns when they did NOT save (
   /markers_persisted: markersPersisted/.test(route) && /data\.markers_persisted === false/.test(bank) && /Incremental markers could NOT be saved/.test(bank));
 ok('JT5: exchange reports backfill_saved + the UI warns when the backfill date did NOT save',
   /backfill_saved: backfillSaved/.test(exch) && /exData\.backfill_saved === false/.test(bank));
+// JU (Codex) — if the window exceeds the page cap, FAIL LOUD; do not import a partial set or advance the marker
+ok('JU1: route fails loud when the backfill exceeds the page cap (no partial import + no marker advance)',
+  /if \(totalAvail != null && allTxns\.length < totalAvail\) \{/.test(route) &&
+  /Nothing was imported \(to avoid a partial\/gap\)/.test(route) &&
+  // the guard is BEFORE rawTxns/upsert/marker write
+  route.indexOf('allTxns.length < totalAvail') < route.indexOf('var rawTxns = allTxns'));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JR plaid-incremental-sync tests passed'); process.exit(0); }

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JU',
+    date: '2026-06-20',
+    label: 'A very large backfill now refuses to import a partial set (no silent history gaps)',
+    items: [
+      '**🛡️ Safety on huge backfills.** If you ask a bank for more history than one sync can pull in a single pass (30,000 transactions), it now stops and tells you to narrow the date range instead of quietly importing only part of it — which would have left a hidden gap. Nothing is imported in that case, so the synced data is always complete.',
+      { superAdminOnly: true, text: 'v55.83-JU (Codex JT page-guard FAIL). plaid/transactions: after the paging loop and BEFORE upsert/marker-advance, if totalAvail != null && allTxns.length < totalAvail (i.e. the 60-page / 30k single-pass cap was hit before fetching the whole window), FAIL LOUD: do not upsert, do not move last_successful_posted_date, set last_sync_error, return 400 {partial:true,total,fetched} so the admin narrows the backfill. Test jr +JU1 (guard exists + sits before rawTxns). runner green. Long-term: /transactions/sync cursor migration removes the single-pass cap entirely.' },
+    ],
+  },
+  {
     version: 'v55.83-JT',
     date: '2026-06-20',
     label: 'Choose how far back to pull when connecting a bank + admin "Deep re-pull history"',

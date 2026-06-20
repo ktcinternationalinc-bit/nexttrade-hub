@@ -101,6 +101,14 @@ export async function POST(req) {
       return NextResponse.json({ error: data.error_message || data.error_code, error_code: data.error_code, needs_relink: needsRelink, connection_id: conn.id }, { status: 400 });
     }
 
+    // v55.83-JU (Codex) — FAIL LOUD if we hit the page-safety cap before fetching the whole window.
+    // Importing a partial set AND advancing last_successful_posted_date would create exactly the
+    // silent historical gap we are eliminating. Do NOT upsert or move the marker — tell the admin to
+    // narrow the backfill window (or sync in smaller passes).
+    if (totalAvail != null && allTxns.length < totalAvail) {
+      try { await supabase.from('bank_connections').update({ last_sync_status: 'error', last_sync_error: 'Backfill window too large: ' + totalAvail + ' transactions exceed the ' + (60 * 500) + '-row single-pass cap.' }).eq('id', conn.id); } catch (eCap) {}
+      return NextResponse.json({ error: 'This backfill window has ' + totalAvail + ' transactions — more than one sync can pull in a single pass (' + (60 * 500) + '). Nothing was imported (to avoid a partial/gap). Narrow the backfill start date and try again, or backfill in smaller windows.', total: totalAvail, fetched: allTxns.length, partial: true, api_build_marker: 'v55.83-JU' }, { status: 400 });
+    }
     var rawTxns = allTxns; // v55.83-JR — ALL pages, not just the first 500
     // Index Plaid accounts so each transaction knows its account type/subtype
     // (depository vs credit). Credit/loan accounts get flagged unsupported.
