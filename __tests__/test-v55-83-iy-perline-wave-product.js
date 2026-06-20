@@ -37,6 +37,18 @@ ok('4c: save persists wave_product_id/name on the item', /payload\.wave_product_
 ok('4d: editor loads the silo Wave product catalog', /from\('wave_products'\)\.select/.test(ui) && /setWaveProducts/.test(ui));
 ok('4e: product list is scoped to the active silo + excludes archived', /p\.wave_business_id === waveBiz\) && p\.is_archived !== true/.test(ui));
 
+// 5. v55.83-JS — Wave DESCRIPTION selection/use (Codex FAIL): editor loads description, surfaces it in
+// the selector, and selecting a product applies the Wave description to the line (which pushes to Wave).
+ok('5a: editor loads wave_products.description with the catalog',
+  /from\('wave_products'\)\.select\('wave_business_id, wave_product_id, name, description, is_archived'\)/.test(ui));
+ok('5b: the line selector shows the Wave description next to the name',
+  /var d = \(p\.description && p\.description\.trim\(\)\) \? \(' — ' \+ p\.description\.substring\(0, 40\)\) : ''/.test(ui));
+ok('5c: selecting a Wave product fills the line description from prod.description (falls back to name)',
+  /var waveDesc = \(prod\.description && prod\.description\.trim\(\)\) \? prod\.description : \(prod\.name \|\| ''\)/.test(ui) &&
+  /c\[i\]\.description = waveDesc/.test(ui));
+ok('5d: push-invoice-v2 sends the (Wave-derived) line description to Wave',
+  /description: items\[k\]\.description \|\| 'Hub invoice line'/.test(push));
+
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-IY per-line Wave product tests passed'); process.exit(0); }
 else { console.log('❌ ' + failures.length + ' FAILED:'); failures.forEach(function (f) { console.log('   - ' + f); }); process.exit(1); }

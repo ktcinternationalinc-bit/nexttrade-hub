@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JS',
+    date: '2026-06-20',
+    label: 'Invoice lines now use the real Wave product description (not just a free-text line)',
+    items: [
+      '**🧾 Picking a Wave product on an invoice line now brings its Wave-recognized description.** The per-line product picker shows the Wave name *and* its description, and when you choose one it fills the line description with the exact text Wave knows — which is what gets sent to Wave on push. You can still edit it, but you\'re no longer guessing or relying only on the Settings default product.',
+      { superAdminOnly: true, text: 'v55.83-JS (Codex FAIL — invoice-line Wave DESCRIPTION selection). AccountingInvoicesTab: load wave_products.description with the catalog; selector option shows name + " — description"; setLineWaveProduct fills the line description from prod.description||prod.name (only when blank or still equal to the previously-selected product text, so a deliberately-typed description is never clobbered); line-description input relabeled "Line description (sent to Wave)" with tooltip. push-invoice-v2 already sends items[k].description (now Wave-derived). IY test +5a-5d. runner green. NOTE: customer-facing description IS the Wave line description (no new column needed); proforma→invoice already carries wave_product (JP).' },
+    ],
+  },
+  {
     version: 'v55.83-JR',
     date: '2026-06-19',
     label: 'Bank sync no longer goes stale — it now pulls forward from where it left off and never stops at 500',

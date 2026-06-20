@@ -105,7 +105,7 @@ export default function AccountingInvoicesTab(props) {
       fetchAllRows('accounting_proformas', '*', 'created_at', false, _proFloor),
       supabase.from('company_profile').select('*').limit(1),
       supabase.from('payment_matches').select('invoice_id, voided').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
-      supabase.from('wave_products').select('wave_business_id, wave_product_id, name, is_archived').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
+      supabase.from('wave_products').select('wave_business_id, wave_product_id, name, description, is_archived').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
     ]).then(async function (r) {
       setWaveProducts((r[6] && r[6].data) || []);
       var b = (r[0] && r[0].data && r[0].data[0]) || null;
@@ -273,10 +273,20 @@ export default function AccountingInvoicesTab(props) {
   // v55.83-IY — select a Wave product for a line: stores id+name and prefills the description if blank.
   function setLineWaveProduct(i, productId) {
     var prod = null; waveProducts.forEach(function (p) { if (p.wave_product_id === productId) { prod = p; } });
-    var c = items.slice(); c[i] = Object.assign({}, c[i]);
+    var c = items.slice(); var prev = c[i] || {}; c[i] = Object.assign({}, prev);
     c[i].wave_product_id = productId || '';
     c[i].wave_product_name = prod ? (prod.name || '') : '';
-    if (prod && !(c[i].description || '').trim()) { c[i].description = prod.name || ''; }
+    // v55.83-JS (Codex) — picking a Wave product brings its Wave-recognized DESCRIPTION onto the line
+    // (this IS what pushes to Wave). Prefer the Wave product description, fall back to its name. Only
+    // overwrite when the line description is blank OR still equals the previously-selected product's
+    // text (so we never clobber a description the user deliberately typed).
+    if (prod) {
+      var waveDesc = (prod.description && prod.description.trim()) ? prod.description : (prod.name || '');
+      var prevProd = null; waveProducts.forEach(function (p) { if (p.wave_product_id === prev.wave_product_id) { prevProd = p; } });
+      var prevText = prevProd ? ((prevProd.description && prevProd.description.trim()) ? prevProd.description : (prevProd.name || '')) : '';
+      var cur = (c[i].description || '').trim();
+      if (!cur || cur === (prevText || '').trim() || cur === (prevProd && prevProd.name ? prevProd.name : '')) { c[i].description = waveDesc; }
+    }
     setItems(c);
   }
   function addItem() { setItems(items.concat([blankItem()])); }
@@ -630,11 +640,14 @@ export default function AccountingInvoicesTab(props) {
             return (
               <div key={i} className="flex gap-1 mb-1 items-center flex-wrap">
                 {/* v55.83-IY — per-line Wave product selector (the product Wave receives on push) */}
-                <select value={it.wave_product_id || ''} disabled={locked(editing)} onChange={function (e) { setLineWaveProduct(i, e.target.value); }} className="w-40 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product for this line (pushed to Wave). Pull the silo's products in Wave Sync Center if this is empty.">
+                {/* v55.83-IY/JS — per-line Wave product selector. Options show the Wave name + its
+                    recognized description so staff pick the exact Wave item; selecting it fills the
+                    line description (below) with the Wave description, which is what pushes to Wave. */}
+                <select value={it.wave_product_id || ''} disabled={locked(editing)} onChange={function (e) { setLineWaveProduct(i, e.target.value); }} className="w-44 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product + description for this line (pushed to Wave). Selecting one fills the line description with the Wave-recognized text. Pull the silo's products in Wave Sync Center if empty.">
                   <option value="">{siloProducts.length ? '— Wave product (default) —' : '— no products pulled —'}</option>
-                  {siloProducts.map(function (p) { return <option key={p.wave_product_id} value={p.wave_product_id}>{p.name || p.wave_product_id}</option>; })}
+                  {siloProducts.map(function (p) { var d = (p.description && p.description.trim()) ? (' — ' + p.description.substring(0, 40)) : ''; return <option key={p.wave_product_id} value={p.wave_product_id}>{(p.name || p.wave_product_id) + d}</option>; })}
                 </select>
-                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Description (printed)" className={inp + ' flex-1'} />
+                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Line description (sent to Wave)" title="This text is the Wave line description on push. Picking a Wave product above fills it with the Wave-recognized description; you can still edit it." className={inp + ' flex-1'} />
                 <input value={it.quantity} disabled={locked(editing)} onChange={function (e) { ui(i, 'quantity', e.target.value); }} placeholder="Qty" className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <input value={it.unit_price} disabled={locked(editing)} onChange={function (e) { ui(i, 'unit_price', e.target.value); }} placeholder="Unit" className="w-20 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <div className="w-24 text-right text-xs font-mono text-slate-200">{fmt(itemTotal(it))}</div>
