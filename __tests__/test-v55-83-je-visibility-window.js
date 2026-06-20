@@ -38,6 +38,11 @@ ok('B3: GET returns the current value, POST validates the window key',
 ok('B4: POST writes both new + legacy app_settings shapes (satisfies a NOT-NULL setting_key) with fallback',
   /setting_key: SETTING_KEY, setting_value: JSON\.stringify\(value\)/.test(route) &&
   /setting_key\|setting_value\|column.*\.test\(up\.error\.message/.test(route));
+// v55.83-JW — GET must read robustly across both shapes (key OR setting_key; value jsonb OR parsed setting_value)
+ok('B5: GET matches the row by key OR setting_key and parses setting_value when value jsonb is absent',
+  /\.or\('key\.eq\.' \+ SETTING_KEY \+ ',setting_key\.eq\.' \+ SETTING_KEY\)/.test(route) &&
+  /val = JSON\.parse\(row\.setting_value\)/.test(route) &&
+  /row\.value && typeof row\.value === 'object'/.test(route));
 
 // --- C. Wiring: Bank Review + BankTab clamp the query and show the window ---
 var br = rd('src/components/BankReviewTab.jsx');

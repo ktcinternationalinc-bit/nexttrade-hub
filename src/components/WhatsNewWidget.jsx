@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JW',
+    date: '2026-06-20',
+    label: 'History-visibility window reads correctly from your existing settings table too',
+    items: [
+      '**📅 Final piece of the visibility control.** Saving was fixed last build; now reading it back is just as robust — it works whether the value lives in your settings table\'s old or new fields, so what you saved is exactly what shows after a refresh.',
+      { superAdminOnly: true, text: 'v55.83-JW (Codex JV review). readSetting now matches the row by key OR setting_key (.or) and takes the value from value(jsonb) OR JSON.parse(setting_value), with a fallback select if the legacy column is absent. Pairs with JV (POST writes both shapes). JE test +B5. runner green. Accounting Visibility is now read+write-robust on the live app_settings(setting_key,setting_value) schema — pending Max live save+refresh confirm.' },
+    ],
+  },
+  {
     version: 'v55.83-JV',
     date: '2026-06-20',
     label: 'Saving the history-visibility window now works on your existing settings table',

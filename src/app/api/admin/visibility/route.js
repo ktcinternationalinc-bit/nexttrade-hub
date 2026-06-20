@@ -17,10 +17,23 @@ function admin() {
 }
 
 async function readSetting(db) {
-  var res = await db.from('app_settings').select('value, updated_at, updated_by').eq('key', SETTING_KEY).limit(1);
-  if (res && res.error) { return { ok: false, error: res.error.message, value: DEFAULT_VALUE, table_missing: true }; }
+  // v55.83-JW (Codex) — read robustly across BOTH app_settings shapes: the new key/value(jsonb) AND
+  // the legacy setting_key/setting_value(text). Match the row by key OR setting_key, and take the value
+  // from `value` jsonb, falling back to a parsed `setting_value` text — so a live legacy-only row still
+  // shows the right window after refresh/readback. Select '*' so missing columns don't error the query.
+  var res = await db.from('app_settings').select('*').or('key.eq.' + SETTING_KEY + ',setting_key.eq.' + SETTING_KEY).limit(1);
+  if (res && res.error) {
+    // Fallback for DBs without the legacy setting_key column (the .or would reference a missing column).
+    res = await db.from('app_settings').select('*').eq('key', SETTING_KEY).limit(1);
+    if (res && res.error) { return { ok: false, error: res.error.message, value: DEFAULT_VALUE, table_missing: true }; }
+  }
   var row = (res && res.data && res.data.length) ? res.data[0] : null;
-  return { ok: true, value: (row && row.value) || DEFAULT_VALUE, updated_at: row ? row.updated_at : null };
+  var val = null;
+  if (row) {
+    if (row.value && typeof row.value === 'object') { val = row.value; }
+    else if (row.setting_value) { try { val = JSON.parse(row.setting_value); } catch (eP) { val = null; } }
+  }
+  return { ok: true, value: val || DEFAULT_VALUE, updated_at: row ? row.updated_at : null };
 }
 
 export async function GET() {
