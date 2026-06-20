@@ -105,11 +105,15 @@ export default function CustomerLedger(props) {
 
   var custInvoices = useMemo(function () {
     if (!selectedId) return [];
-    var mine = invoices.filter(function (i) { return i.accounting_customer_id === selectedId; });
+    // v55.83-KC (Codex/Max — "AL MOUSTAFA 98 vs 53") — Wave-imported invoices link by wave_customer_id,
+    // not accounting_customer_id; match both so the customer's count isn't undercounted.
+    var selCust = null; customers.forEach(function (c) { if (c.id === selectedId) selCust = c; });
+    var wcid = selCust && selCust.wave_customer_id ? selCust.wave_customer_id : null;
+    var mine = invoices.filter(function (i) { return i.accounting_customer_id === selectedId || (wcid && i.wave_customer_id && i.wave_customer_id === wcid); });
     // Wall off other Wave businesses (test vs real KTC). Untagged legacy rows
     // stay visible under the active business until backfill completes.
     return scopeIfRegistered(mine, activeBiz, registry, true);
-  }, [invoices, selectedId, activeBiz]);
+  }, [invoices, selectedId, activeBiz, customers]);
 
   // currencies present for this customer
   var currencies = useMemo(function () {

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KC',
+    date: '2026-06-20',
+    label: 'Fixed customers showing too few invoices (Wave-imported invoices were not being counted)',
+    items: [
+      '**🧾 A customer\'s full invoice history now shows up.** Invoices imported from Wave link to a customer by their Wave ID, but Customer AR History and Customer Ledger were only matching the Hub link — so a customer like "Al Moustafa" could show far fewer invoices than they really have. Both screens now match by either link, and AR History shows the breakdown (e.g. "98 total — 60 linked directly, 38 linked via Wave customer id") so the number is verifiable. No re-import needed; nothing is duplicated.',
+      { superAdminOnly: true, text: 'v55.83-KC (Codex/Max — AL MOUSTAFA 98 vs 53 = customer-linkage undercount, NOT windowing). AccountingCustomerHistory.invoicesFor/proformasFor + CustomerLedger.custInvoices now match accounting_customer_id OR the customer\'s wave_customer_id (guarded non-null → no bleed). breakdown() adds byAcctId/byWaveId provenance shown in the box. paymentsFor inherits the fix via invoicesFor. This is the real fix — Wave-imported invoices link by wave_customer_id; matching only accounting_customer_id dropped them. No re-import required (idempotent upsert by wave_invoice_id anyway). Test kc(5); runner green. DIAGNOSTIC for Max\'s "will it show 98": open the customer → the breakdown line now reports total + linked-directly + linked-via-Wave + excluded(draft/dead/non-USD) + window-hidden; if total is still < expected, the missing rows are genuinely absent in Hub (then a Wave import pulls them) OR a duplicate customer row exists.' },
+    ],
+  },
+  {
     version: 'v55.83-KB',
     date: '2026-06-20',
     label: 'Employees now see ONLY the permitted period in every customer number — super-admin sees all',

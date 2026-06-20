@@ -67,8 +67,12 @@ export default function AccountingCustomerHistory(props) {
   function hubPaidForInvoice(invId) {
     var sum = 0; payments.forEach(function (p) { if (p.accounting_invoice_id === invId && !isPaymentVoid(p)) sum += n(p.amount); }); return sum;
   }
-  function invoicesFor(custId) { return invoices.filter(function (i) { return i.accounting_customer_id === custId; }); }
-  function proformasFor(custId) { return proformas.filter(function (p) { return p.accounting_customer_id === custId; }); }
+  // v55.83-KC (Codex/Max — "AL MOUSTAFA 98 vs 53"): Wave-IMPORTED invoices link by wave_customer_id, NOT
+  // accounting_customer_id, so matching only on accounting_customer_id UNDER-COUNTS a customer's invoices.
+  // Also match by the customer's wave_customer_id when present (no bleed: only this customer's Wave id).
+  function custWaveId(custId) { var c = customers.find(function (x) { return x.id === custId; }); return c && c.wave_customer_id ? c.wave_customer_id : null; }
+  function invoicesFor(custId) { var w = custWaveId(custId); return invoices.filter(function (i) { return i.accounting_customer_id === custId || (w && i.wave_customer_id && i.wave_customer_id === w); }); }
+  function proformasFor(custId) { var w = custWaveId(custId); return proformas.filter(function (p) { return p.accounting_customer_id === custId || (w && p.wave_customer_id && p.wave_customer_id === w); }); }
   function paymentsFor(custId) {
     var invIds = {}; invoicesFor(custId).forEach(function (i) { invIds[i.id] = true; });
     return payments.filter(function (p) { return p.accounting_customer_id === custId || invIds[p.accounting_invoice_id]; });
@@ -104,8 +108,11 @@ export default function AccountingCustomerHistory(props) {
   // non-super-admins (balances stay all-time). So total = arEligibleUsd + excluded; displayed ≤ total.
   function breakdown(custId) {
     var invs = invoicesFor(custId);
-    var b = { total: invs.length, arUsd: 0, paid: 0, open: 0, excludedDraft: 0, excludedDead: 0, excludedNonUsd: 0, hiddenByWindow: 0, displayed: 0 };
+    var w = custWaveId(custId);
+    var b = { total: invs.length, arUsd: 0, paid: 0, open: 0, excludedDraft: 0, excludedDead: 0, excludedNonUsd: 0, hiddenByWindow: 0, displayed: 0, byAcctId: 0, byWaveId: 0 };
     invs.forEach(function (i) {
+      // linkage provenance — proves where the count comes from (direct Hub link vs Wave-imported link).
+      if (i.accounting_customer_id === custId) { b.byAcctId++; } else if (w && i.wave_customer_id === w) { b.byWaveId++; }
       var dead = isDead(i);
       var elig = isArEligible(i);
       var usd = (i.currency || 'USD') === 'USD';
@@ -195,7 +202,7 @@ export default function AccountingCustomerHistory(props) {
                 var excluded = b.excludedDraft + b.excludedDead + b.excludedNonUsd;
                 return (
                   <div className="mb-4 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2 leading-5">
-                    <b>Invoice count for this customer:</b> {b.total} total · <b>{b.arUsd}</b> counted in AR all-time (USD) = {b.open} open + {b.paid} paid.
+                    <b>Invoice count for this customer:</b> {b.total} total ({b.byAcctId} linked directly{b.byWaveId > 0 ? ', ' + b.byWaveId + ' linked via Wave customer id' : ''}) · <b>{b.arUsd}</b> counted in AR all-time (USD) = {b.open} open + {b.paid} paid.
                     {excluded > 0 ? <span> · {excluded} excluded from AR ({b.excludedDraft} draft, {b.excludedDead} void/cancelled/archived/deleted, {b.excludedNonUsd} non-USD).</span> : null}
                     {arFloor ? <span> · Employees see only the window: <b>{b.displayed} invoice row(s) shown, {b.hiddenByWindow} older hidden</b>, and every total/balance above is limited to that window. (You, super-admin, see all-time.)</span> : null}
                   </div>
