@@ -33,7 +33,9 @@ ok(/from\('bank_data_assignment_audit'\)\.insert/.test(bw),'writes assignment au
 ok(/if \(!conn\.wave_business_id\) \{ return NextResponse\.json\(\{ error: 'This bank connection is not assigned/.test(rt),'sync blocked when connection unassigned');
 ok(/const connectBank = async \(chosenBiz\) =>/.test(bt) && /if \(!chosenBiz\) \{ setError/.test(bt),'connect refuses without a chosen silo');
 ok(/Unassigned Bank Data \(/.test(bt),'Unassigned Bank Data panel');
-ok(/from\('bank_data_assignment_audit'\)\.insert/.test(bt),'connection-level assign still writes audit');
+// v55.83-JX — connection-level assign now goes through the service-role route (RLS-proof + schema-safe),
+// not a browser write with assigned_at/audit columns that don't exist on the live table.
+ok(/action: 'assign_connection_silo'/.test(bt),'connection-level assign routes through the service action (assign_connection_silo)');
 
 // SQL
 ok(/ALTER TABLE plaid_accounts ADD COLUMN IF NOT EXISTS wave_business_id/.test(sql),'SQL adds plaid_accounts.wave_business_id');

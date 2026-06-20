@@ -384,9 +384,16 @@ export async function POST(req) {
       var newBiz = body.wave_business_id || null;
       if (!pacct) { return NextResponse.json({ ok: false, error: 'plaid_account_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var nowIso = new Date().toISOString();
-      // 1) set the per-account assignment
-      var aRes = await db.from('plaid_accounts').update({ wave_business_id: newBiz, assigned_by: by, assigned_at: nowIso, assignment_source: 'manual' }).eq('plaid_account_id', pacct).select('id');
+      // 1) set the per-account assignment. v55.83-JX (Max live: "Could not find the 'assigned_at' column
+      // of plaid_accounts") — the audit columns (assigned_by/assigned_at/assignment_source) don't exist
+      // on the live table, which failed the WHOLE assignment. Try the full payload, then fall back to
+      // just wave_business_id so the silo assignment ALWAYS lands. Surface the real DB reason on failure.
+      var aRes = await db.from('plaid_accounts').update({ wave_business_id: newBiz, assigned_by: by, assigned_at: nowIso, assignment_source: 'manual' }).eq('plaid_account_id', pacct).select('plaid_account_id');
+      if (aRes && aRes.error && /column|assigned_at|assigned_by|assignment_source|schema cache/i.test(aRes.error.message || '')) {
+        aRes = await db.from('plaid_accounts').update({ wave_business_id: newBiz }).eq('plaid_account_id', pacct).select('plaid_account_id');
+      }
       if (aRes && aRes.error) { return NextResponse.json({ ok: false, error: 'Could not set account assignment: ' + aRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!(aRes && aRes.data && aRes.data.length)) { return NextResponse.json({ ok: false, error: 'Account ' + pacct + ' not found in plaid_accounts (0 rows updated) — re-sync the connection first.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       // 2) REPAIR: restamp existing bank_transactions for this account to the new silo
       var rRes = await db.from('bank_transactions').update({ wave_business_id: newBiz, updated_by: by }).eq('account_id', pacct).select('id');
       if (rRes && rRes.error) { return NextResponse.json({ ok: false, error: 'Assignment saved but restamping existing transactions failed: ' + rRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -394,6 +401,35 @@ export async function POST(req) {
       // 3) audit
       try { await db.from('bank_data_assignment_audit').insert({ record_type: 'plaid_account', transaction_count: restamped, new_wave_business_id: newBiz, assigned_by: by, notes: 'account-level assignment for plaid_account ' + pacct }); } catch (eAud) {}
       return NextResponse.json({ ok: true, restamped: restamped, plaid_account_id: pacct, wave_business_id: newBiz, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── assign_connection_silo: connection-level silo assignment + restamp (service-role, schema-safe) ──
+    // v55.83-JX — was a browser write that also tried assigned_at/assigned_by (missing columns) and was
+    // RLS-exposed. Stamps bank_connections.wave_business_id + restamps its transactions + stamps its
+    // still-unassigned accounts to the same silo. Writes ONLY wave_business_id (no audit columns).
+    if (action === 'assign_connection_silo') {
+      var cid = body.connection_id; var cBiz = body.wave_business_id || null;
+      if (!cid) { return NextResponse.json({ ok: false, error: 'connection_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var ccRes = await db.from('bank_connections').update({ wave_business_id: cBiz }).eq('id', cid).select('id');
+      if (ccRes && ccRes.error) { return NextResponse.json({ ok: false, error: 'Could not assign the connection: ' + ccRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!(ccRes && ccRes.data && ccRes.data.length)) { return NextResponse.json({ ok: false, error: 'Connection not found (0 rows).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      var ctRes = await db.from('bank_transactions').update({ wave_business_id: cBiz, updated_by: by }).eq('connection_id', cid).select('id');
+      if (ctRes && ctRes.error) { return NextResponse.json({ ok: false, error: 'Connection assigned but restamping transactions failed: ' + ctRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // stamp this connection's UNASSIGNED accounts to the same silo (preserve deliberate per-account picks)
+      try { await db.from('plaid_accounts').update({ wave_business_id: cBiz }).eq('connection_id', cid).is('wave_business_id', null); } catch (ePa) {}
+      return NextResponse.json({ ok: true, restamped: (ctRes && ctRes.data) ? ctRes.data.length : 0, connection_id: cid, wave_business_id: cBiz, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── archive_connection: hide a duplicate/relinked connection without deleting its data (service-role) ──
+    // v55.83-JX (Max: "only one group per silo") — lets the admin clean up duplicate Chase groups.
+    // Sets status='archived' so it drops out of the active list; transactions/matches are untouched.
+    if (action === 'archive_connection') {
+      var acid = body.connection_id;
+      if (!acid) { return NextResponse.json({ ok: false, error: 'connection_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var arRes = await db.from('bank_connections').update({ status: 'archived' }).eq('id', acid).select('id');
+      if (arRes && arRes.error) { return NextResponse.json({ ok: false, error: 'Could not archive the connection: ' + arRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!(arRes && arRes.data && arRes.data.length)) { return NextResponse.json({ ok: false, error: 'Connection not found (0 rows).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      return NextResponse.json({ ok: true, connection_id: acid, api_build_marker: API_BUILD_MARKER });
     }
 
     return NextResponse.json({ ok: false, error: 'Unknown action: ' + action, api_build_marker: API_BUILD_MARKER }, { status: 400 });

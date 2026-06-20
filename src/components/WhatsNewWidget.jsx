@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JX',
+    date: '2026-06-20',
+    label: 'Fixed bank account silo assignment + tools to clean up duplicate bank groups',
+    items: [
+      '**🏦 "Set & repair" works again.** The account→silo assignment was failing with a database column error ("assigned_at … not found"); it now saves the silo reliably and re-tags that account\'s transactions. So you can put account 6353 on Kandil and 6338 on Real KTC and have it stick.',
+      '**🧹 New tools to fix the duplicate-Chase-groups mess.** When you connect a bank under a silo, its new accounts now land in that silo immediately (not "Unassigned"). And each connection has an admin **🗄 Archive** button to remove duplicate/old connection groups (transactions are kept), plus connection-level assignment now saves reliably — so you can get to one clean group per silo.',
+      { superAdminOnly: true, text: 'v55.83-JX (Max live + Codex FAIL — duplicate Chase groups + "Could not find assigned_at column of plaid_accounts"). bank-write assign_account_silo: try full payload then FALL BACK to wave_business_id-only on missing audit columns (assigned_at/assigned_by/assignment_source) + 0-row error surfaced. exchange: stamp the connection wave_business_id onto its plaid_accounts where wave_business_id IS NULL (new accounts land in the chosen silo, not Unassigned; deliberate per-account picks preserved). NEW actions assign_connection_silo (RLS-proof, schema-safe, restamps txns + null accounts) + archive_connection (status=archived). BankTab: assignConnection routes through the service action (was a browser write with assigned_at), NEW archiveConnection + 🗄 Archive button (admin), archived connections filtered from the active list. Test jx(7); runner green. NOTE: product "auto one-group-per-silo merge" not done — admin now has Archive + per-account/connection assign to consolidate manually. The wrong-silo-on-connect needs Max live re-test (exchange sets connection wave_business_id=chosenBiz + stamps accounts).' },
+    ],
+  },
+  {
     version: 'v55.83-JW',
     date: '2026-06-20',
     label: 'History-visibility window reads correctly from your existing settings table too',

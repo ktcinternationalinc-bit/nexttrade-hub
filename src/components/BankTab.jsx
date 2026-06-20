@@ -33,18 +33,30 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
   const canViewAllAccounts = isSuperAdmin || (userProfile && (userProfile.role === 'admin' || userProfile.role === 'owner')) || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
+  // v55.83-JX — connection-level assign via the service-role route (RLS-proof + schema-safe; the old
+  // browser write tried assigned_at/assigned_by columns that don't exist on the live table → "Assign failed").
   const assignConnection = async (conn) => {
     const bizId = assignSel[conn.id];
     if (!bizId) { setError('Choose an accounting silo to assign this bank connection to.'); return; }
     setAssigning(true); setError('');
     try {
-      let cnt = 0;
-      try { const cr = await supabase.from('bank_transactions').select('id', { count: 'exact', head: true }).eq('connection_id', conn.id); cnt = (cr && cr.count) || 0; } catch (eC) {}
-      await supabase.from('bank_connections').update({ wave_business_id: bizId, assigned_by: (user && user.id) || null, assigned_at: new Date().toISOString() }).eq('id', conn.id);
-      await supabase.from('bank_transactions').update({ wave_business_id: bizId }).eq('connection_id', conn.id);
-      try { await supabase.from('bank_data_assignment_audit').insert({ record_type: 'bank_connection', bank_connection_id: conn.id, transaction_count: cnt, old_wave_business_id: conn.wave_business_id || null, new_wave_business_id: bizId, assigned_by: (user && user.id) || null }); } catch (eA) { console.error('[bank-assign] audit', eA); }
-      await loadData();
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'assign_connection_silo', connection_id: conn.id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
+      const j = await res.json();
+      if (!j || !j.ok) { setError('Assign failed: ' + ((j && j.error) || 'unknown')); }
+      else { setNotice('Connection assigned to ' + bizLabel(bizId) + ' — ' + (j.restamped || 0) + ' transaction(s) restamped.'); await loadData(); }
     } catch (e) { console.error('[bank-assign]', e); setError('Assign failed: ' + ((e && e.message) || e)); }
+    setAssigning(false);
+  };
+  // v55.83-JX — archive a duplicate/relinked connection (cleans up the multiple-Chase-groups mess).
+  const archiveConnection = async (conn) => {
+    if (!window.confirm('Archive this bank connection?\n\nIt will be hidden from the active list. Its transactions and matches are kept; you can re-connect later if needed. Use this to remove duplicate/old connection groups.')) return;
+    setAssigning(true); setError('');
+    try {
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'archive_connection', connection_id: conn.id, user_id: (userProfile && userProfile.id) || null }) });
+      const j = await res.json();
+      if (!j || !j.ok) { setError('Archive failed: ' + ((j && j.error) || 'unknown')); }
+      else { setNotice('Connection archived — duplicate group removed from the active list.'); await loadData(); }
+    } catch (e) { setError('Archive failed: ' + ((e && e.message) || e)); }
     setAssigning(false);
   };
   // v55.83-IV — ACCOUNT-LEVEL assignment + repair via the service-role route (RLS-proof). Sets the
@@ -83,7 +95,8 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     setLoading(true);
     try {
       const { data: conns } = await supabase.from('bank_connections').select('*').order('created_at', { ascending: false });
-      setConnections(conns || []);
+      // v55.83-JX — hide archived/duplicate connections from the active list.
+      setConnections((conns || []).filter(c => c.status !== 'archived'));
       try { const pa = await supabase.from('plaid_accounts').select('*'); setPlaidAccts((pa && pa.data) || []); } catch (ePA) { setPlaidAccts([]); }
 
       // v55.83-IS (Codex FAIL) — scope by the active silo at the QUERY before the 500 limit, so a
@@ -475,6 +488,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                       {canViewAllAccounts && (
                         <button onClick={() => { var s = backfillStartDate(); var e = new Date().toISOString().split('T')[0]; if (window.confirm('Deep re-pull history for this bank?\n\nThis backfills transactions from ' + s + ' to ' + e + ' (window: ' + backfillLabel() + ', change it in the BACKFILL selector below).\n\nIt is idempotent — existing transactions and matches are kept, nothing is duplicated.')) { syncTransactions(c.id, 0, true); } }} disabled={syncing} title="Admin: backfill older history from the BACKFILL window below. Idempotent — never duplicates. Normal Sync stays incremental." className="px-2 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50">
                           ⏬ Deep re-pull history
+                        </button>
+                      )}
+                      {canViewAllAccounts && (
+                        <button onClick={() => archiveConnection(c)} disabled={syncing} title="Archive this connection (e.g. a duplicate or old re-link). Hidden from the list; transactions/matches are kept." className="px-2 py-1.5 bg-rose-100 text-rose-700 rounded-lg text-[11px] font-semibold hover:bg-rose-200 disabled:opacity-50">
+                          🗄 Archive
                         </button>
                       )}
                     </div>

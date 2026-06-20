@@ -19,6 +19,7 @@ var MANIFEST = [
   { f: 'test-v55-83-is-unmatch-and-plaid-scope.js', label: 'new', why: 'unmatch→service route; BankTab silo-scope-before-limit; Plaid requires service-role' },
   { f: 'test-v55-83-it-bank-consistency.js', label: 'new', why: 'Bank Review scope-before-limit; canonical posted_date on both screens; deep-link keeps account' },
   { f: 'test-v55-83-db-bank-assign.js', label: 'updated', why: 'ACCOUNT-level bank→silo mapping (6338/6353), ingestion stamps by account, assign+repair endpoint' },
+  { f: 'test-v55-83-jx-bank-connect-silo.js', label: 'new', why: 'assign schema-safe (assigned_at column gone), exchange stamps new accounts to chosen silo, connection assign+archive actions for one-group-per-silo cleanup' },
   // Bank Review core writes (service-role, RLS-proof)
   { f: 'test-v55-83-ip-bank-write-serverside.js', label: 'new', why: 'categorize/status/match/unmatch via /api/accounting/bank-write' },
   { f: 'test-v55-83-im-accounting-qa-hardening.js', label: 'updated', why: 'res.error guards, over-apply cap, void handling, currency guard' },

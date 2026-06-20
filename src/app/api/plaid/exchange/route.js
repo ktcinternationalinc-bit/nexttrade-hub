@@ -90,6 +90,13 @@ export async function POST(req) {
         }));
         if (accRows.length) {
           await supabase.from('plaid_accounts').upsert(accRows, { onConflict: 'plaid_account_id' });
+          // v55.83-JX (Max live: new accounts show "Unassigned" + landed under the wrong silo) — stamp
+          // the connection's chosen silo onto its accounts that have NO assignment yet, so a KANDIL
+          // connect shows its accounts under KANDIL immediately. Only NULL rows are touched, so an
+          // account deliberately reassigned to another silo is preserved.
+          if (wave_business_id) {
+            try { await supabase.from('plaid_accounts').update({ wave_business_id }).eq('connection_id', conn.id).is('wave_business_id', null); } catch (eStamp) {}
+          }
         }
       }
     } catch (accErr) {
