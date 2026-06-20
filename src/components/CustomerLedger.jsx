@@ -154,21 +154,26 @@ export default function CustomerLedger(props) {
   }, [custInvoices, currency]);
 
   // SUMMARY (current currency). AR-eligible only for AR totals; drafts separated.
+  // v55.83-KA (Codex FAIL) — activity cards (invoiced/paid/counts) reflect the visible window; Balance
+  // due is ALL-TIME (true money owed), labeled as such. Super-admin: ledgerFloor null → period == all-time.
   var summary = useMemo(function () {
-    var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, balance: 0, openCount: 0, overdue: 0, draftValue: 0, draftCount: 0 };
+    var s = { invoiced: 0, waveePaid: 0, hubPaid: 0, balance: 0, openCount: 0, overdue: 0, draftValue: 0, draftCount: 0, windowed: !!ledgerFloor };
     var today = todayStr();
     curInvoices.forEach(function (i) {
-      if (isDraftInv(i)) { s.draftValue += num(i.total_amount); s.draftCount += 1; return; }
+      if (isDraftInv(i)) { if (isWithinWindow(i.invoice_date, ledgerFloor)) { s.draftValue += num(i.total_amount); s.draftCount += 1; } return; }
       if (!isArEligible(i)) return; // dead (void/cancelled/archived/deleted) — excluded
+      // Balance due is ALWAYS all-time.
+      s.balance += invBalance(i);
+      // Activity + counts only for invoices in the visible window (matches the statement rows).
+      if (!isWithinWindow(i.invoice_date, ledgerFloor)) { return; }
       s.invoiced += num(i.total_amount);
       s.waveePaid += num(i.wave_imported_paid);
       s.hubPaid += hubPaid(i.id);
       var bal = invBalance(i);
-      s.balance += bal;
       if (bal > 0.005) { s.openCount += 1; if (i.due_date && i.due_date < today) s.overdue += 1; }
     });
     return s;
-  }, [curInvoices, payByInv]);
+  }, [curInvoices, payByInv, ledgerFloor]);
 
   // FILTERED invoice list (current currency)
   var listInvoices = useMemo(function () {
@@ -337,11 +342,11 @@ export default function CustomerLedger(props) {
 
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-100">
-            <Card label="Total invoiced (AR)" val={money(summary.invoiced, currency)} bg="bg-slate-800" />
-            <Card label="Wave-imported paid" val={money(summary.waveePaid, currency)} bg="bg-slate-800" />
-            <Card label="Hub / Plaid / manual paid" val={money(summary.hubPaid, currency)} bg="bg-slate-800" />
-            <Card label="Total paid" val={money(summary.waveePaid + summary.hubPaid, currency)} bg="bg-emerald-100 text-emerald-950" />
-            <Card label="Balance due" val={money(summary.balance, currency)} bg="bg-rose-100 text-rose-950" />
+            <Card label={summary.windowed ? 'Total invoiced (in view)' : 'Total invoiced (AR)'} val={money(summary.invoiced, currency)} bg="bg-slate-800" />
+            <Card label={summary.windowed ? 'Wave paid (in view)' : 'Wave-imported paid'} val={money(summary.waveePaid, currency)} bg="bg-slate-800" />
+            <Card label={summary.windowed ? 'Hub/Plaid paid (in view)' : 'Hub / Plaid / manual paid'} val={money(summary.hubPaid, currency)} bg="bg-slate-800" />
+            <Card label={summary.windowed ? 'Total paid (in view)' : 'Total paid'} val={money(summary.waveePaid + summary.hubPaid, currency)} bg="bg-emerald-100 text-emerald-950" />
+            <Card label="Balance due (all-time)" val={money(summary.balance, currency)} bg="bg-rose-100 text-rose-950" />
             <Card label="Open invoices" val={summary.openCount} bg="bg-slate-800" />
             <Card label="Overdue invoices" val={summary.overdue} bg="bg-amber-100 text-amber-950" />
             <Card label={'Drafts (not in AR)'} val={summary.draftCount + ' · ' + money(summary.draftValue, currency)} bg="bg-slate-800" />

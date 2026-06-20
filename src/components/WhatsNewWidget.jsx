@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KA',
+    date: '2026-06-20',
+    label: 'Customer AR/Ledger activity totals now match the period you\'re viewing (balance stays all-time)',
+    items: [
+      '**📊 The summary cards now agree with the rows below them.** When a history window is set (e.g. Last 1 year), Customer AR History and Customer Ledger show "Total invoiced (in view)" and "Paid (in view)" for that period — so the totals match the invoices actually displayed, instead of quietly showing all-time activity over a 1-year list. The true **Open balance / Balance due is kept all-time and clearly labeled**, because that\'s real money owed.',
+      { superAdminOnly: true, text: 'v55.83-KA (Codex FAIL — period rows filtered but summary cards showed all-time). AccountingCustomerHistory.summary(): activity (invoiced/waveePaid/hubPaid/counts) now gated by isWithinWindow(invoice_date, arFloor); openAllTime sums ALL invoices; cards relabeled "(in view)" + "Open balance (all-time)" with a note. CustomerLedger.summary(): same — activity windowed by isWithinWindow(ledgerFloor), balance all-time, cards relabeled "Balance due (all-time)". For super-admin arFloor/ledgerFloor=null so period==all-time. JZ test rewritten to PROVE period cards exclude out-of-window invoices (was a false-pass asserting all-time). runner 37/37. (The JZ breakdown box + employee-preview from the prior build remain; wording corrected to "Open balance is all-time".) NOTE: JZ badge/What\'s New superseded by KA — period-card math now actually fixed, not just explained.' },
+    ],
+  },
+  {
     version: 'v55.83-JZ',
     date: '2026-06-20',
     label: 'Customer AR History explains its invoice count + you can preview the employee cutoff date',

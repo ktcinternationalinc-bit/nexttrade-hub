@@ -25,9 +25,18 @@ ok('2: breakdown classifies dead (void/cancelled/archived/deleted), draft, non-U
   /else if \(!usd\) \{ b\.excludedNonUsd\+\+; \}/.test(ar) &&
   /b\.arUsd\+\+/.test(ar));
 ok('3: the breakdown is rendered on the customer detail (explains total vs counted vs excluded vs hidden)',
-  /Invoice count for this customer:/.test(ar) && /counted in AR \(USD\)/.test(ar) && /excluded from AR/.test(ar));
-ok('4: window-hidden detail rows are shown in the breakdown but balances use ALL invoices',
-  /Visibility window hides \{b\.hiddenByWindow\}/.test(ar) && /balances above use ALL \{b\.total\}/.test(ar));
+  /Invoice count for this customer:/.test(ar) && /counted in AR all-time \(USD\)/.test(ar) && /excluded from AR/.test(ar));
+// v55.83-KA (Codex FAIL) — PERIOD activity cards must reflect the window; only Open balance is all-time.
+ok('4: summary() period activity is WINDOWED (out-of-window invoices do not inflate the cards/counts)',
+  /s\.openAllTime \+= bal;/.test(ar) &&
+  /if \(!isWithinWindow\(i\.invoice_date, arFloor\)\) \{ return; \}\s*\n\s*s\.invoiced \+= total; s\.waveePaid \+= wave; s\.hubPaid \+= hub;/.test(ar));
+ok('KA-AR1: cards labeled "(in view)" for activity + "Open balance (all-time)"',
+  /Total invoiced \(in view\)/.test(ar) && /Open balance \(all-time\)/.test(ar) && /val=\{money\(sum\.openAllTime, showAmt\)\}/.test(ar));
+var led = rd('src/components/CustomerLedger.jsx');
+ok('KA-LED1: CustomerLedger summary activity is windowed; Balance due is all-time + labeled',
+  /if \(!isWithinWindow\(i\.invoice_date, ledgerFloor\)\) \{ return; \}/.test(led) &&
+  /s\.balance \+= invBalance\(i\);/.test(led) &&
+  /Balance due \(all-time\)/.test(led) && /Total invoiced \(in view\)/.test(led));
 
 // Employee-preview cutoff date in the visibility panel
 ok('5: visibility panel shows the EXACT employee cutoff date (preview as a non-super-admin)',
