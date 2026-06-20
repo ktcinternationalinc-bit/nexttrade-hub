@@ -9,7 +9,19 @@ QA loop:
 ---
 
 ## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
-**HEAD = v55.83-JQ.** `npm run test:accounting-bank` = 33/33 required green; `npm run build` clean.
+**HEAD = v55.83-JR.** `npm run test:accounting-bank` = 34/34 required green; `npm run build` clean.
+
+**JUST SHIPPED — JR addresses your Plaid backfill/incremental FAIL (all 3 sub-fails):**
+- Normal Sync is now INCREMENTAL: effective start = request start → `last_successful_posted_date − 7d overlap` → `initial_backfill_start_date` → 30d. The UI date window no longer drives ingestion.
+- `/transactions/get` is PAGED to `total_transactions` (was `offset:0` only → silent partial >500).
+- Connect/re-link stores `initial_backfill_start_date`; markers (`last_successful_posted_date`, `last_successful_plaid_sync_at`) stored ONLY after a successful upsert (no marker advance on failure → no gaps). Result returns newest-per-account + pages + window.
+- BankTab: `Sync (incremental)` (no start_date) + NEW `Deep re-pull` (backfills the BACKFILL window). **MAX MUST RUN `sql/v55-83-JR-plaid-incremental-sync.sql`** for markers to persist (degrades to 30d default without it).
+- Test `test-v55-83-jr` (9) covers: paging, incremental-start, marker-store, no-UI-window. Per your acceptance criteria.
+- **NEXT: your other open FAIL — invoice-line Wave DESCRIPTION selection** (productId exists via IY; the Wave product *description* isn't exposed/used in the line editor). Taking it now.
+- Long-term: `/transactions/sync` cursor migration (you noted it as preferred; I did the acceptable interim paged-get; `plaid_cursor` column is reserved for the migration).
+
+---
+### (prior) HEAD = v55.83-JQ — 33/33; build clean
 
 **Since you last reviewed (JP + JQ):**
 - **JQ — production unlock FIXED, real root cause:** your readback-status surfaced Max's live error `column wave_business_registry.id does not exist`. The registry-flags route was selecting/returning `id`, but that table's PK is `wave_business_id` (no `id` column) → the SELECT errored before the UPDATE. Removed all `id` refs. **No SQL needed for the unlock.** Please confirm on the deployed build that the toggle now stays ON.
