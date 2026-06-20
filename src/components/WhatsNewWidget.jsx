@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KJ',
+    date: '2026-06-20',
+    label: 'Editing a matched deposit is now fully all-or-nothing (money-safe)',
+    items: [
+      '**🛡 Match edits can no longer lose or duplicate money.** Changing a matched deposit\'s amount/invoice now checks every step: if the overpayment credit can\'t be recorded, or the old records can\'t be reversed cleanly, it puts everything back exactly as it was and tells you "no change was made." If a balance recalculation hiccups after the change saved, it now says so instead of looking fine.',
+      { superAdminOnly: true, text: 'v55.83-KJ (Codex money-safety, closes the KG cautions). update_match now: (1) error-checks the overpayment customer_credits/unapplied_deposits INSERT — on failure voids the new match+payment and returns "no change made" (was unchecked → could void old + lose the overpayment); (2) captures OLD credit/unapplied VOID errors into uVoidErr (was swallowed) so they trigger the restore path; (3) snapshots old open credits/unapplied and RE-OPENS them in the restore (full money-row restore, not just matches/payments); (4) surfaces recompute(old/new) + final restamp errors as a response `warning` (was swallowed) and the client toasts it. Now genuinely all-or-restored, or honest about a post-commit recompute warning. Test kj(5); runner green. Still open (Codex UX): promote the Bank silo switcher into the top Current-Accounting-Silo banner.' },
+    ],
+  },
+  {
     version: 'v55.83-KI',
     date: '2026-06-20',
     label: 'Reconnecting a bank now shows the FRESH data (old stale link is auto-hidden)',

@@ -421,9 +421,14 @@ export async function POST(req) {
       // if reversing the old rows fails, we restore them to their prior state and void the new rows so
       // the deposit is never left half-changed (Supabase UPDATE is per-statement atomic; we snapshot +
       // restore across statements).
-      // Snapshot old matches (old payments are already in uEx) so we can restore on failure.
+      // Snapshot old matches + old open credits/unapplied (old payments are already in uEx) so we can
+      // restore EVERY money row on failure (v55.83-KJ — Codex: don't leave overpayment artifacts orphaned).
       var uOldMatchR = await db.from('payment_matches').select('id, voided').eq('bank_transaction_id', uTid);
       var uOldMatches = (uOldMatchR && uOldMatchR.data) || [];
+      var uOldCredR = await db.from('customer_credits').select('id').eq('source_transaction_id', uTid).eq('status', 'open');
+      var uOldCredits = (uOldCredR && uOldCredR.data) || [];
+      var uOldUnapR = await db.from('unapplied_deposits').select('id').eq('bank_transaction_id', uTid).eq('status', 'open');
+      var uOldUnapplied = (uOldUnapR && uOldUnapR.data) || [];
       // anti-double-count on the NEW invoice — EXCLUDE this deposit's (to-be-voided) payments so the
       // calc is correct regardless of the void timing.
       var uIpR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status, bank_transaction_id').eq('accounting_invoice_id', uNi.id);
@@ -442,8 +447,12 @@ export async function POST(req) {
       var uCreditId = null; var uUnapId = null;
       if (uCc.overpayment > 0) {
         var uCredCust = body.credit_customer_id || uNi.accounting_customer_id || null;
-        if (uCredCust) { var uCrIns = await db.from('customer_credits').insert({ business_id: uBiz, wave_business_id: uSilo, accounting_customer_id: uCredCust, source_transaction_id: uTid, amount: uCc.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (uNi.invoice_number || uNi.id) + ' (match edit)', created_by: by }).select(); if (uCrIns && uCrIns.data && uCrIns.data.length) { uCreditId = uCrIns.data[0].id; } }
-        else { var uUnIns = await db.from('unapplied_deposits').insert({ business_id: uBiz, wave_business_id: uSilo, bank_transaction_id: uTid, accounting_customer_id: null, amount: uCc.overpayment, status: 'open', notes: 'Overpayment (match edit, no customer)', created_by: by }).select(); if (uUnIns && uUnIns.data && uUnIns.data.length) { uUnapId = uUnIns.data[0].id; } }
+        var uOvErr = null;
+        if (uCredCust) { var uCrIns = await db.from('customer_credits').insert({ business_id: uBiz, wave_business_id: uSilo, accounting_customer_id: uCredCust, source_transaction_id: uTid, amount: uCc.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (uNi.invoice_number || uNi.id) + ' (match edit)', created_by: by }).select(); if (uCrIns && uCrIns.error) { uOvErr = uCrIns.error.message; } else if (uCrIns && uCrIns.data && uCrIns.data.length) { uCreditId = uCrIns.data[0].id; } }
+        else { var uUnIns = await db.from('unapplied_deposits').insert({ business_id: uBiz, wave_business_id: uSilo, bank_transaction_id: uTid, accounting_customer_id: null, amount: uCc.overpayment, status: 'open', notes: 'Overpayment (match edit, no customer)', created_by: by }).select(); if (uUnIns && uUnIns.error) { uOvErr = uUnIns.error.message; } else if (uUnIns && uUnIns.data && uUnIns.data.length) { uUnapId = uUnIns.data[0].id; } }
+        // v55.83-KJ — if the overpayment artifact can't be recorded, DON'T proceed to void the old rows
+        // (that would lose money). Roll back the new match+payment → original match intact.
+        if (uOvErr) { try { await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('id', uPid); } catch (eOv1) {} try { await db.from('payment_matches').update({ voided: true }).eq('id', uMid); } catch (eOv2) {} return NextResponse.json({ ok: false, error: 'Could not record the overpayment — NO change was made, your original match is intact: ' + uOvErr, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       }
       // 2) REVERSE OLD (exclude the rows we just created). Void matches first, then payments, so a
       // failure restore is straightforward. Each UPDATE is per-statement atomic.
@@ -451,13 +460,17 @@ export async function POST(req) {
       var uVm = await db.from('payment_matches').update({ voided: true }).eq('bank_transaction_id', uTid).neq('id', uMid || ZERO_UUID);
       if (uVm && uVm.error) { uVoidErr = 'matches: ' + uVm.error.message; }
       if (!uVoidErr) { var uVp = await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', uTid).neq('id', uPid || ZERO_UUID); if (uVp && uVp.error) { uVoidErr = 'payments: ' + uVp.error.message; } }
-      if (!uVoidErr) { try { await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', uTid).eq('status', 'open').neq('id', uCreditId || ZERO_UUID); } catch (eUC) {} }
-      if (!uVoidErr) { try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', uTid).eq('status', 'open').neq('id', uUnapId || ZERO_UUID); } catch (eUD) {} }
+      // v55.83-KJ (Codex) — these voids are NO LONGER swallowed: a failure triggers the restore path so we
+      // can't leave a duplicate open credit/deposit while returning success.
+      if (!uVoidErr) { var uVc = await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', uTid).eq('status', 'open').neq('id', uCreditId || ZERO_UUID); if (uVc && uVc.error) { uVoidErr = 'old credits: ' + uVc.error.message; } }
+      if (!uVoidErr) { var uVu = await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', uTid).eq('status', 'open').neq('id', uUnapId || ZERO_UUID); if (uVu && uVu.error) { uVoidErr = 'old unapplied: ' + uVu.error.message; } }
       if (uVoidErr) {
-        // RESTORE old rows to prior state + void the new rows → original match intact, no change applied.
+        // RESTORE every old money row to prior state + void the new rows → original match intact, no change.
         var uri;
         for (uri = 0; uri < uOldMatches.length; uri++) { if (uOldMatches[uri].id !== uMid) { try { await db.from('payment_matches').update({ voided: uOldMatches[uri].voided === true }).eq('id', uOldMatches[uri].id); } catch (eRM) {} } }
         for (uri = 0; uri < uEx.length; uri++) { if (uEx[uri].id !== uPid) { try { await db.from('accounting_invoice_payments').update({ voided: uEx[uri].voided === true, sync_status: uEx[uri].sync_status || null }).eq('id', uEx[uri].id); } catch (eRP) {} } }
+        for (uri = 0; uri < uOldCredits.length; uri++) { try { await db.from('customer_credits').update({ status: 'open' }).eq('id', uOldCredits[uri].id); } catch (eRC) {} }
+        for (uri = 0; uri < uOldUnapplied.length; uri++) { try { await db.from('unapplied_deposits').update({ status: 'open' }).eq('id', uOldUnapplied[uri].id); } catch (eRU) {} }
         try { await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('id', uPid); } catch (eVN) {}
         try { await db.from('payment_matches').update({ voided: true }).eq('id', uMid); } catch (eVM) {}
         if (uCreditId) { try { await db.from('customer_credits').update({ status: 'void' }).eq('id', uCreditId); } catch (eVC) {} }
@@ -466,13 +479,16 @@ export async function POST(req) {
         var uok0; for (uok0 in oldInvIds) { try { await recompute(db, uok0); } catch (eRR2) {} }
         return NextResponse.json({ ok: false, error: 'Could not complete the change cleanly (' + uVoidErr + '). Restored your original match — nothing was changed. Please retry; if it persists, screenshot for Claude.', restored: true, api_build_marker: API_BUILD_MARKER }, { status: 500 });
       }
-      // 3) recompute OLD invoice(s) + the NEW invoice.
+      // 3) recompute OLD invoice(s) + the NEW invoice — surface (not swallow) any recompute/restamp issue
+      // so the caller knows balances/linkage may be momentarily stale (v55.83-KJ, Codex).
+      var uWarn = null;
       var uOldKeys = Object.keys(oldInvIds); var uok;
-      for (uok = 0; uok < uOldKeys.length; uok++) { if (uOldKeys[uok] !== uNi.id) { try { await recompute(db, uOldKeys[uok]); } catch (eR1) {} } }
-      var uRecomputed = null; try { uRecomputed = await recompute(db, uNi.id); } catch (eR2) {}
+      for (uok = 0; uok < uOldKeys.length; uok++) { if (uOldKeys[uok] !== uNi.id) { try { await recompute(db, uOldKeys[uok]); } catch (eR1) { uWarn = 'recompute (old invoice) failed: ' + ((eR1 && eR1.message) || eR1); } } }
+      var uRecomputed = null; try { uRecomputed = await recompute(db, uNi.id); } catch (eR2) { uWarn = 'recompute (new invoice) failed: ' + ((eR2 && eR2.message) || eR2); }
       // 4) re-stamp the deposit to the new invoice.
-      await db.from('bank_transactions').update({ classification: uTx.classification || 'customer_payment', linked_type: 'invoice', linked_id: uNi.id, matched_invoice_id: uNi.id, accounting_customer_id: body.match_customer_id || uNi.accounting_customer_id || uTx.accounting_customer_id || null, updated_by: by }).eq('id', uTid);
-      return NextResponse.json({ ok: true, applied: uCc.applied_to_invoice, overpayment: uCc.overpayment, type: uCc.type, new_invoice_id: uNi.id, invoice: uRecomputed, reversed_invoices: uOldKeys.length, api_build_marker: API_BUILD_MARKER });
+      var uStamp = await db.from('bank_transactions').update({ classification: uTx.classification || 'customer_payment', linked_type: 'invoice', linked_id: uNi.id, matched_invoice_id: uNi.id, accounting_customer_id: body.match_customer_id || uNi.accounting_customer_id || uTx.accounting_customer_id || null, updated_by: by }).eq('id', uTid);
+      if (uStamp && uStamp.error) { uWarn = 'transaction re-link failed: ' + uStamp.error.message; }
+      return NextResponse.json({ ok: true, applied: uCc.applied_to_invoice, overpayment: uCc.overpayment, type: uCc.type, new_invoice_id: uNi.id, invoice: uRecomputed, reversed_invoices: uOldKeys.length, warning: uWarn, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── assign_account_silo: account-level bank→silo mapping + repair existing rows (v55.83-IV) ──

@@ -564,7 +564,7 @@ export default function BankReviewTab(props) {
       wave_customer_id: custForWave && custForWave.wave_customer_id ? custForWave.wave_customer_id : null,
       credit_customer_id: inv.accounting_customer_id || null, match_customer_id: inv.accounting_customer_id || null
     })
-      .then(function (j) { toast.success('Match updated to ' + fmt((j && j.applied) || newAmt) + ((j && j.overpayment > 0) ? ' · ' + fmt(j.overpayment) + ' to customer credit' : '')); setEditMatchAmt({}); onReload(); load(); })
+      .then(function (j) { toast.success('Match updated to ' + fmt((j && j.applied) || newAmt) + ((j && j.overpayment > 0) ? ' · ' + fmt(j.overpayment) + ' to customer credit' : '')); if (j && j.warning) { toast.error('Saved, but: ' + j.warning + ' — refresh; if balances look off, screenshot for Claude.'); } setEditMatchAmt({}); onReload(); load(); })
       .catch(function (e) { console.error('[update-match]', e); toast.error('Update failed: ' + ((e && e.message) || 'unknown error') + (/pushed to Wave/.test((e && e.message) || '') ? '' : ' — screenshot for Claude.')); load(); })
       .finally(function () { setBusy(false); });
   }
