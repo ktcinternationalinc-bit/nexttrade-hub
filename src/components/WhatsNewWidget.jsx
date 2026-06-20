@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JV',
+    date: '2026-06-20',
+    label: 'Saving the history-visibility window now works on your existing settings table',
+    items: [
+      '**📅 Fixed: "Save & apply to employees" on Accounting Visibility.** Your settings table required an older field that the save wasn\'t filling in, so it errored. The save now writes both the old and new fields, so picking a window (e.g. "Last 1 year") and saving works and is confirmed.',
+      { superAdminOnly: true, text: 'v55.83-JV (live: "null value in column setting_key of relation app_settings violates not-null constraint"). /api/admin/visibility POST now upserts BOTH shapes: key/value(jsonb) + setting_key/setting_value(text mirror = JSON.stringify(value)), satisfying the legacy NOT-NULL setting_key. Falls back to key/value-only if the legacy columns are absent. Clearer errors for table-missing vs NOT-NULL. JE test +B4. runner green. (The JE SQL already backfills/seeds setting_key; this handles inserts the route makes after.)' },
+    ],
+  },
+  {
     version: 'v55.83-JU',
     date: '2026-06-20',
     label: 'A very large backfill now refuses to import a partial set (no silent history gaps)',

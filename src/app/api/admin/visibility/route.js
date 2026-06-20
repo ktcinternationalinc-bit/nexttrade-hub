@@ -59,11 +59,22 @@ export async function POST(req) {
     }
     var value = { window: win, customDays: customDays, customFrom: customFrom };
 
-    var up = await db.from('app_settings').upsert({ key: SETTING_KEY, value: value, updated_by: by, updated_at: new Date().toISOString() }, { onConflict: 'key' }).select();
+    // v55.83-JV — older app_settings rows use setting_key/setting_value (often NOT NULL). Write BOTH
+    // the new (key/value jsonb) AND the legacy (setting_key/setting_value text) shapes so the insert
+    // satisfies a NOT-NULL setting_key constraint. If the legacy columns don't exist on this DB, retry
+    // with the new shape only.
+    var fullRow = { key: SETTING_KEY, value: value, setting_key: SETTING_KEY, setting_value: JSON.stringify(value), updated_by: by, updated_at: new Date().toISOString() };
+    var up = await db.from('app_settings').upsert(fullRow, { onConflict: 'key' }).select();
+    if (up && up.error && /setting_key|setting_value|column/.test(up.error.message || '')) {
+      up = await db.from('app_settings').upsert({ key: SETTING_KEY, value: value, updated_by: by, updated_at: new Date().toISOString() }, { onConflict: 'key' }).select();
+    }
     if (up && up.error) {
       var msg = up.error.message || '';
-      if (msg.indexOf('app_settings') >= 0 || msg.indexOf('does not exist') >= 0 || msg.indexOf('relation') >= 0) {
+      if (/relation .*app_settings.* does not exist|could not find the table|schema cache/i.test(msg)) {
         return NextResponse.json({ ok: false, error: 'The settings table is not set up yet. Run sql/v55-83-JE-visibility-window.sql, then try again. (' + msg + ')', api_build_marker: API_BUILD_MARKER }, { status: 400 });
+      }
+      if (/null value in column "setting_key"|not-null constraint/i.test(msg)) {
+        return NextResponse.json({ ok: false, error: 'Your app_settings table requires setting_key. This build now writes it; if you still see this, re-run sql/v55-83-JE-visibility-window.sql (it backfills setting_key) and retry. (' + msg + ')', api_build_marker: API_BUILD_MARKER }, { status: 400 });
       }
       return NextResponse.json({ ok: false, error: 'Could not save the window: ' + msg, api_build_marker: API_BUILD_MARKER }, { status: 400 });
     }

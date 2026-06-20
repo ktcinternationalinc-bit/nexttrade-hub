@@ -33,6 +33,11 @@ ok('B2: route degrades gracefully when the settings table is missing',
   /table_missing/.test(route) && /v55-83-JE-visibility-window\.sql/.test(route));
 ok('B3: GET returns the current value, POST validates the window key',
   /export async function GET/.test(route) && /isValidWindowKey\(win\)/.test(route));
+// v55.83-JV — write BOTH key/value (new) and setting_key/setting_value (legacy NOT-NULL) shapes, with
+// a fallback to the new shape only if the legacy columns don't exist.
+ok('B4: POST writes both new + legacy app_settings shapes (satisfies a NOT-NULL setting_key) with fallback',
+  /setting_key: SETTING_KEY, setting_value: JSON\.stringify\(value\)/.test(route) &&
+  /setting_key\|setting_value\|column.*\.test\(up\.error\.message/.test(route));
 
 // --- C. Wiring: Bank Review + BankTab clamp the query and show the window ---
 var br = rd('src/components/BankReviewTab.jsx');
