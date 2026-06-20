@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
@@ -17,6 +18,8 @@ function admin() {
 // component, but the rules must match wave-silo-guard.assertCanPush exactly).
 function canPush(reg, record, waveBusinessId, action, unlockPhrase, dryRun) {
   if (!waveBusinessId) { return { ok: false, message: 'No accounting silo selected.' }; }
+  // v55.83-KO (audit) — name the REAL blocker for a placeholder silo before the lock/approval gate.
+  if (isPlaceholderWaveBusiness(waveBusinessId)) { return { ok: false, message: 'This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection before pushing customers.' }; }
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
   // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
   var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';

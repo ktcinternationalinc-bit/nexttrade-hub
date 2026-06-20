@@ -4,16 +4,22 @@
 // includeProduction. Service-role + assertPermission(wave.categories.pull). SWC-safe: var + concat.
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function fetchProducts(token, businessId) {
   var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ products(page:$page, pageSize:100){ pageInfo{ currentPage totalPages } edges{ node{ id name description isSold isArchived } } } } }';
   function page(p, acc) {
+    var _httpOk = true; var _st = 0;
     return fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: { bid: businessId, page: p } }) })
-      .then(function (r) { return r.json(); })
+      .then(function (r) { _httpOk = r.ok; _st = r.status; return r.json(); })
       .then(function (j) {
+        // v55.83-KO (audit) — don't swallow real failures as an empty catalog. Surface HTTP status,
+        // GraphQL errors[], and business===null (token has no access) instead of returning nodes:[].
+        if (!_httpOk) { return { error: 'Wave rejected the product read: ' + ((j && j.errors && j.errors[0] && j.errors[0].message) || ('HTTP ' + _st)), raw: j, nodes: acc }; }
         if (!j || j.errors) { return { error: (j && j.errors) ? j.errors.map(function (e) { return e.message; }).join(' | ') : 'Wave product read failed', raw: j, nodes: acc }; }
+        if (j.data && Object.prototype.hasOwnProperty.call(j.data, 'business') && j.data.business === null) { return { error: 'Wave returned no business for id ' + businessId + ' — the configured token cannot access it. Bind this silo to a Wave business the token can read (Accounting -> Wave Connection).', raw: j, nodes: acc }; }
         var conn = j.data && j.data.business && j.data.business.products;
         if (!conn) { return { nodes: acc }; }
         (conn.edges || []).forEach(function (e) { if (e && e.node) { acc.push(e.node); } });
@@ -39,6 +45,11 @@ export async function POST(request) {
 
   var includeProduction = !!(bodyJson && bodyJson.includeProduction === true);
   var onlyBiz = (bodyJson && bodyJson.wave_business_id) ? bodyJson.wave_business_id : null;
+  // v55.83-KO (audit) — a placeholder silo id is not a real Wave business; say so instead of round-tripping
+  // to Wave and surfacing a confusing raw error (matches sync-categories' guard).
+  if (onlyBiz && isPlaceholderWaveBusiness(onlyBiz)) {
+    return Response.json({ ok: false, placeholder: true, wave_business_id: onlyBiz, error: 'This silo is not connected to a real Wave business yet — its ID (' + onlyBiz + ') is a placeholder. Go to Accounting -> Wave Connection, Test the connection, and BIND this silo to its real Wave business.' }, { status: 400 });
+  }
   var regRes = await db.from('wave_business_registry').select('wave_business_id, label, is_production');
   var allBiz = (regRes && regRes.data) || [];
   // Same rule as category pull: an explicit single-business request pulls even if production (read-only).

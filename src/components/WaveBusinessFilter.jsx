@@ -6,7 +6,7 @@
 // the wall simply isn't turned on, so there's nothing to toggle.
 import { useState, useEffect } from 'react';
 import { fetchAllRows } from '../lib/fetch-all-rows';
-import { getActiveWaveBusiness, setActiveWaveBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
 
 export default function WaveBusinessFilter(props) {
   var [registry, setRegistry] = useState([]);
@@ -37,7 +37,18 @@ export default function WaveBusinessFilter(props) {
         })}
       </select>
       {sel
-        ? <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (sel.is_production !== false ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-100 text-amber-950')}>{sel.is_production !== false ? '🔒 Real — read-only' : '🧪 Test'}</span>
+        ? (function () {
+            // v55.83-KN — the badge must reflect the ACTUAL write state (matches SiloBanner). Before, it
+            // hardcoded "Real — read-only" for any production business even when production writes were
+            // enabled — contradicting the page banner and confusing the user.
+            var isTest = sel.is_production === false;
+            var canWrite = canWriteToWaveBusiness(sel);
+            var cls = isTest ? 'bg-amber-100 text-amber-950' : (canWrite ? 'bg-rose-100 text-rose-950' : 'bg-emerald-100 text-emerald-950');
+            // v55.83-KO (audit) — writes_enabled is WRITE PERMISSION, not full push READINESS (push also
+            // needs allow_payment_push + a deposit account). Say "writes enabled", never "push ON".
+            var label = isTest ? '🧪 Test' : (canWrite ? '🔓 Real — writes enabled' : '🔒 Real — read-only');
+            return <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + cls}>{label}</span>;
+          })()
         : <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-800">Showing all businesses</span>}
     </div>
   );

@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
 var API_BUILD_MARKER = 'v55.83-GD-default-bank-account';
 var API_ROUTE = '/api/wave/default-bank-account';
@@ -27,6 +28,8 @@ export async function POST(req) {
     var _perm = await assertPermission(db, body.user_id, 'wave.settings.manage', req);
     if (!_perm.ok) { return NextResponse.json({ error: _perm.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: _perm.status }); }
     if (!bid) { return NextResponse.json({ error: 'No Wave business selected.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+    // v55.83-KO (audit) — consistent placeholder message (matches product-setup / payment-account-setup).
+    if (isPlaceholderWaveBusiness(bid)) { return NextResponse.json({ error: 'This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection first.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
 
     var accId = body.default_plaid_account_id || null;
     var accName = body.default_plaid_account_name || null;

@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
 var API_BUILD_MARKER = 'v55.83-EP-push-invoice-v2-productid';
 var API_ROUTE = '/api/wave/push-invoice-v2';
@@ -16,6 +17,8 @@ function admin() {
 
 function canPush(reg, record, waveBusinessId, unlockPhrase, dryRun) {
   if (!waveBusinessId) { return { ok: false, message: 'No accounting silo selected.' }; }
+  // v55.83-KO (audit) — name the REAL blocker for a placeholder silo before the lock/approval gate.
+  if (isPlaceholderWaveBusiness(waveBusinessId)) { return { ok: false, message: 'This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection before pushing invoices.' }; }
   if (!reg) { return { ok: false, message: 'This Wave business is not registered.' }; }
   // v55.83-EF — HARD GUARD: a real push may only target the approved KANDIL EGYPT test business.
   var APPROVED = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -165,9 +168,16 @@ export async function POST(req) {
     var ic = data && data.data && data.data.invoiceCreate;
     var ok = ic && ic.didSucceed && ic.invoice && ic.invoice.id;
 
-    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ok ? ic.invoice.id : null, action: 'push', dry_run: false, request_payload: reqPayload, response_payload: data, success: !!ok, error_message: ok ? null : 'Wave invoiceCreate failed — see response_payload', attempted_by: by });
+    // v55.83-KO (audit) — surface the REAL Wave reason (top-level GraphQL errors[] + invoiceCreate
+    // inputErrors[]) instead of the constant "Wave did not accept the invoice", mirroring push-payment.
+    var _ipParts = []; var _ip;
+    if (data && data.errors && data.errors.length) { for (_ip = 0; _ip < data.errors.length; _ip++) { if (data.errors[_ip] && data.errors[_ip].message) { _ipParts.push(data.errors[_ip].message); } } }
+    if (ic && ic.inputErrors && ic.inputErrors.length) { for (_ip = 0; _ip < ic.inputErrors.length; _ip++) { var _ie = ic.inputErrors[_ip]; if (_ie && _ie.message) { _ipParts.push(_ie.message + (_ie.path ? (' [' + (Array.isArray(_ie.path) ? _ie.path.join('.') : _ie.path) + ']') : '')); } } }
+    var _icReason = _ipParts.length ? _ipParts.join(' | ') : (resp.ok ? 'Wave reported didSucceed=false with no error detail.' : ('HTTP ' + resp.status));
 
-    if (!ok) { return NextResponse.json({ error: 'Wave did not accept the invoice. See sync log.', response: data }, { status: 502 }); }
+    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ok ? ic.invoice.id : null, action: 'push', dry_run: false, request_payload: reqPayload, response_payload: data, success: !!ok, error_message: ok ? null : _icReason, attempted_by: by });
+
+    if (!ok) { return NextResponse.json({ error: 'Wave rejected the invoice: ' + _icReason, response: data, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 502 }); }
 
     // v55.83-IN — CURRENCY GUARANTEE. The Hub does not set the Wave invoice currency (Wave derives it
     // from the customer/business), so verify the currency Wave actually assigned MATCHES the Hub

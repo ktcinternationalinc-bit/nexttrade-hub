@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, dbUpdate } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isPaymentVoid } from '../lib/payment-matching';
-import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
+import { getActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness } from '../lib/wave-business';
 import { dryRunRecord } from '../lib/wave-sync-eligibility';
 import SiloBanner from './SiloBanner';
 
@@ -644,6 +644,15 @@ export default function WaveSyncCenter(props) {
       <div className="text-lg font-extrabold mb-3">🔄 Wave Sync Center</div>
       <SiloBanner registered={!!reg} isTest={!!(reg && reg.is_production === false)} canWrite={!!(reg && reg.writes_enabled === true)} label={reg ? (reg.label || active) : (active || 'No business selected')} />
 
+      {/* v55.83-KN — THE root cause when nothing Wave-related works for a silo: it's bound to a seed
+          placeholder id, never to a real Wave business. Say it loudly + point to the bind tool. */}
+      {isPlaceholderWaveBusiness(active) && (
+        <div className="mb-3 rounded-lg px-3 py-2.5 text-sm" style={{ background: '#7f1d1d', color: '#fff' }}>
+          <div className="font-extrabold mb-1">⚠ This silo is NOT connected to a real Wave business yet</div>
+          <div className="text-xs font-medium">Its Wave ID is a placeholder (<code>{active}</code>), not a real Wave business. That is why categories won&apos;t pull, products/deposit accounts can&apos;t be set, and pushes are blocked — every Wave call for a placeholder id fails. <b>Fix:</b> go to <b>Accounting → Wave Connection</b>, Test the connection, then <b>Bind this silo</b> to its real Wave business. Everything Wave-related will work once it&apos;s bound.</div>
+        </div>
+      )}
+
       {isProd && !productionUnlocked && (
         <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#7f1d1d', color: '#fff' }}>
           🔒 Production Wave pushes are LOCKED for this business. A super admin can enable them in Settings after testing on the test silo.
@@ -884,26 +893,51 @@ export default function WaveSyncCenter(props) {
           </div>
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
           {reg && (!isProd || productionUnlocked) && (function () {
-            var checks = [
-              ['Writes enabled', reg.writes_enabled === true],
-              ['Payment push enabled', reg.allow_payment_push === true],
-              ['Payment deposit account set', !!(prodSetup && prodSetup.default_payment_account_id)],
-              ['Invoice product set', !!(prodSetup && prodSetup.default_invoice_product_id)],
-              ['Wave categories loaded', catCount > 0]
+            // v55.83-KO (audit) — PAYMENT push and INVOICE push have DIFFERENT requirements; conflating
+            // them made the checklist lie. Verified against the routes:
+            //   • push-payment needs: writes_enabled + allow_payment_push + a deposit account, AND the
+            //     invoice must ALREADY be in Wave (it does NOT read any product or category).
+            //   • push-invoice needs: writes_enabled + allow_invoice_push + a default invoice product,
+            //     AND the customer pushed to Wave first.
+            // So we show TWO panels; neither lists categories (those only label expenses).
+            function Panel(title, checks, doneMsg, blockedMsg, note) {
+              return <div className="mb-3 border border-slate-300 rounded-lg p-3 bg-white">
+                <div className="font-bold text-slate-900 mb-2 text-sm">{title}</div>
+                <div className="space-y-1">
+                  {checks.map(function (c) {
+                    return <div key={c[0]} className="flex items-center gap-2 text-xs text-slate-900">
+                      <span className={c[1] ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>{c[1] ? '✓' : '✗'}</span>
+                      <span className={c[1] ? 'text-slate-700' : 'text-rose-700 font-semibold'}>{c[0]}</span>
+                    </div>;
+                  })}
+                </div>
+                {checks.every(function (c) { return c[1]; })
+                  ? <div className="mt-2 text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 font-medium">{doneMsg}</div>
+                  : <div className="mt-2 text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 font-medium">{blockedMsg}</div>}
+                {note ? <div className="mt-2 text-[11px] text-slate-500 border-t border-slate-200 pt-1">{note}</div> : null}
+              </div>;
+            }
+            var payChecks = [
+              ['Writes enabled (super-admin toggle)', reg.writes_enabled === true],
+              ['Payment push enabled (super-admin toggle)', reg.allow_payment_push === true],
+              ['Payment deposit account set (one-time setup below)', !!(prodSetup && prodSetup.default_payment_account_id)]
             ];
-            return <div className="mb-3 border border-slate-300 rounded-lg p-3 bg-white">
-              <div className="font-bold text-slate-900 mb-2 text-sm">Payment push readiness</div>
-              <div className="space-y-1">
-                {checks.map(function (c) {
-                  return <div key={c[0]} className="flex items-center gap-2 text-xs text-slate-900">
-                    <span className={c[1] ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>{c[1] ? '✓' : '✗'}</span>
-                    <span className={c[1] ? 'text-slate-700' : 'text-rose-700 font-semibold'}>{c[0]}</span>
-                  </div>;
-                })}
-              </div>
-              {checks.every(function (c) { return c[1]; })
-                ? <div className="mt-2 text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 font-medium">All set — you can dry-run and push one payment.</div>
-                : <div className="mt-2 text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 font-medium">Finish the red items above before pushing payments.</div>}
+            var invChecks = [
+              ['Writes enabled (super-admin toggle)', reg.writes_enabled === true],
+              ['Invoice push enabled (super-admin toggle)', reg.allow_invoice_push === true],
+              ['Default Invoice Product set (one-time setup below)', !!(prodSetup && prodSetup.default_invoice_product_id)]
+            ];
+            return <div>
+              {Panel('Payment push readiness',
+                payChecks,
+                'Setup complete — you can push payments for invoices that are already in Wave.',
+                'Finish the red items before pushing payments. (The toggles are super-admin switches; the deposit account is set in the box above.)',
+                <span>Each payment also requires its <b>invoice to already be in Wave</b> — match the deposit in Bank Review; if the invoice isn’t in Wave yet, push it first. Wave categories are <b>not</b> needed for payments ({catCount > 0 ? (catCount + ' loaded') : 'none loaded'} — categories only label expenses/transfers).</span>)}
+              {Panel('Invoice push readiness',
+                invChecks,
+                'Setup complete — you can push Hub invoices to Wave.',
+                'Finish the red items before pushing invoices. (Set the Default Invoice Product in the box above.)',
+                <span>Each invoice’s <b>customer must be in Wave first</b> (push the customer). Invoice-imported-from-Wave records don’t need this — they’re already there.</span>)}
             </div>;
           })()}
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : (

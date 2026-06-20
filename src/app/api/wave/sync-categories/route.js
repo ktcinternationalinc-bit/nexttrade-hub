@@ -37,9 +37,22 @@ async function fetchAccounts(token, businessId) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
       body: JSON.stringify({ query: query, variables: { bid: businessId, page: page } })
     });
-    var data = await resp.json();
+    var data = null; try { data = await resp.json(); } catch (eP) { data = null; }
+    // v55.83-KO (audit) — surface the REAL Wave reason instead of a constant "Unexpected Wave response".
+    // Priority: HTTP status -> GraphQL errors[] -> business===null (token has no access) -> shape mismatch.
+    if (!resp.ok) {
+      var hMsg = (data && data.errors && data.errors[0] && data.errors[0].message) ? data.errors[0].message : ('HTTP ' + resp.status);
+      return { error: 'Wave rejected the request: ' + hMsg, raw: data };
+    }
+    if (data && data.errors && data.errors.length) {
+      var parts = []; var ge; for (ge = 0; ge < data.errors.length; ge++) { if (data.errors[ge] && data.errors[ge].message) { parts.push(data.errors[ge].message); } }
+      return { error: 'Wave API error: ' + (parts.length ? parts.join(' | ') : 'unknown'), raw: data };
+    }
+    if (data && data.data && Object.prototype.hasOwnProperty.call(data.data, 'business') && data.data.business === null) {
+      return { error: 'Wave returned no business for id ' + businessId + ' — the configured Wave token cannot access this business. Bind this silo to a Wave business the token can read (Accounting -> Wave Connection).', raw: data };
+    }
     var acc = data && data.data && data.data.business && data.data.business.accounts;
-    if (!acc) { return { error: 'Unexpected Wave response', raw: data }; }
+    if (!acc) { return { error: 'Unexpected Wave response (no accounts field): ' + JSON.stringify(data || {}).slice(0, 300), raw: data }; }
     var edges = acc.edges || [];
     var j;
     for (j = 0; j < edges.length; j++) { if (edges[j] && edges[j].node) { out.push(edges[j].node); } }
@@ -71,6 +84,14 @@ async function runSync(request) {
 
   // Optional: scope to a single business id from the body (UI passes the active silo).
   var onlyBiz = (bodyJson && bodyJson.wave_business_id) ? bodyJson.wave_business_id : null;
+
+  // v55.83-KN — a placeholder silo id (REAL_KTC_WAVE_BUSINESS_ID / TEST_WAVE_BUSINESS_ID) is NOT a real
+  // Wave business — Wave will always reject it. Say so plainly (the misleading "token can't access this
+  // business" hid the real cause) and point to the bind tool, instead of round-tripping to Wave.
+  var PLACEHOLDER_BIDS = { 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 };
+  if (onlyBiz && PLACEHOLDER_BIDS[String(onlyBiz)]) {
+    return Response.json({ ok: false, placeholder: true, wave_business_id: onlyBiz, error: 'This silo is not connected to a real Wave business yet — its ID (' + onlyBiz + ') is a placeholder. Go to Accounting -> Wave Connection, Test the connection, and BIND this silo to its real Wave business. Categories, products and payment push will all stay blocked until it is bound.' }, { status: 400 });
+  }
 
   var regRes = await db.from('wave_business_registry').select('wave_business_id, label, is_production');
   var allBiz = (regRes && regRes.data) || [];

@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -65,6 +66,8 @@ export async function POST(req) {
 
     if (!token) { return NextResponse.json({ ok: false, error: 'Wave token not configured.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     if (!hubId) { return NextResponse.json({ ok: false, error: 'No payment row id provided.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    // v55.83-KO (audit) — name the REAL blocker for a placeholder silo (not the production-lock message).
+    if (waveBusinessId && isPlaceholderWaveBusiness(waveBusinessId)) { return NextResponse.json({ ok: false, placeholder: true, error: 'This silo is not connected to a real Wave business yet (placeholder id). Go to Accounting -> Wave Connection and BIND this silo before pushing payments.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
     // v55.83-HI — allow the approved test business OR a production business a super admin has
     // explicitly unlocked (production_push_unlocked + writes_enabled + allow_payment_push on the

@@ -33,6 +33,32 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KO',
+    date: '2026-06-20',
+    label: 'Made every Wave status/readiness message tell the truth (full audit) — and fixed a bind data bug',
+    items: [
+      '**🧾 Payment readiness vs invoice readiness are now separate and correct.** Pushing a customer payment needs the deposit account (and the invoice to already be in Wave) — it does NOT need a product or categories, which were wrongly listed as blockers. Pushing a Hub invoice is a separate checklist (needs the invoice product + the customer in Wave first). Two clear panels now, each with only its real requirements.',
+      '**🟢 The badge says "writes enabled," not "push ON."** Turning on writes is permission, not full push-readiness, so the label no longer overstates it.',
+      '**🔎 Wave errors now tell you the real reason.** When a category/product pull or invoice push fails, you see Wave\'s actual message (or "the token can\'t access this business") instead of a generic "unexpected response."',
+      '**🛠 Bind fix:** when you bind a silo to its real Wave business, it now also moves the silo\'s product catalog and split categorizations (those were being left behind on the old placeholder — which would have re-broken product selection right after binding).',
+      '**⚠ Every Wave action now names the real blocker** for an unbound silo ("not connected to a real Wave business — bind it first") instead of a misleading lock/permission message.',
+      { superAdminOnly: true, text: 'v55.83-KO (multi-agent truth-audit: 6 parallel auditors + adversarial synthesis, 16 findings → 9 verified, all confirmed vs source). FIXES: (P0) bind-business SCOPED_TABLES += wave_products, bank_transaction_splits (were orphaned to the placeholder id on rebind; dry-run undercounted). (P1) WaveBusinessFilter badge "Real — writes enabled" not "(push ON)". (P1) WaveSyncCenter: split single panel into Payment (writes+allow_payment_push+deposit account; note "invoice must already be in Wave") and Invoice (writes+allow_invoice_push+default product; note "customer in Wave first"); neither gates on categories. (P1) sync-categories fetchAccounts surfaces HTTP status / GraphQL errors[] / business===null instead of constant "Unexpected Wave response". (P1) sync-products: isPlaceholderWaveBusiness guard + fetchProducts handles resp.ok + business===null (was false-success empty catalog). (P2) push-payment/push-invoice-v2/push-customer + default-bank-account: early isPlaceholderWaveBusiness guard naming the bind fix. (P2) push-invoice-v2 surfaces errors[]+inputErrors[] like push-payment. Tests ko(9)+kn(8); runner green. Aligned with Codex; no remaining truth gaps in the audited surface. Backend canonical-account model + Plaid update-mode relink remain the only deferred long-term items.' },
+    ],
+  },
+  {
+    version: 'v55.83-KN',
+    date: '2026-06-20',
+    label: 'Found the real reason Wave wasn\'t working for Real KTC — and gave you a one-click fix',
+    items: [
+      '**🎯 The root cause: Real KTC was never connected to a real Wave business.** Its silo was pointing at a placeholder ID, so every Wave action (pull categories, set product/deposit account, push payments) failed with "unexpected Wave response." That one thing explains most of the Wave frustration.',
+      '**🔗 New: bind a silo to its real Wave business.** Go to **Accounting → Wave Connection → Test connection** — each business now shows its real Wave ID and a **"Bind this business"** button. Pick your Real KTC silo, bind it, and it re-tags that silo to the real Wave business (it shows you how many records will move first). After that, categories pull and push readiness work.',
+      '**🟢 The "read-only / read-write" labels now agree.** The business dropdown used to always say "Real — read-only" even when you\'d turned production push ON. It now shows "Real — read-write (push ON)" to match the page, so there\'s no contradiction.',
+      '**✅ Wave categories no longer block paying invoices.** Categories are only for labeling expenses — they were wrongly listed as a requirement for pushing customer payments. Payment readiness now needs just the two toggles + the deposit account + the invoice product.',
+      '**⚠ A clear warning when a silo isn\'t bound** tells you exactly what to do instead of leaving you guessing why nothing works.',
+      { superAdminOnly: true, text: 'v55.83-KN (Max+Codex screenshot tangle, root-caused). ROOT: Real KTC silo wave_business_id === placeholder REAL_KTC_WAVE_BUSINESS_ID → Wave returns null for the fake id → all ops fail. Fixes: (1) WaveBusinessFilter badge uses canWriteToWaveBusiness(sel) → "Real — read-write (push ON)" vs "read-only" (was hardcoded read-only, contradicting SiloBanner). (2) WaveSyncCenter payment-push readiness drops "Wave categories loaded" from the checks.every gate (categorize ≠ invoice-payment push); categories shown as informational; setup vs toggle items labeled. (3) isPlaceholderWaveBusiness() helper in wave-business.js; placeholder banner in WaveSyncCenter; sync-categories returns placeholder-specific error (was misleading "token can\'t access"). (4) NEW /api/wave/bind-business (wave.settings.manage gate): validates target GUID via Wave business(id) query, refuses placeholder/collision, dry-run counts, then re-stamps wave_business_registry + 13 scoped tables wave_business_id from→to; WaveConnectionTab shows each business GUID + bind control (dry-run → confirm → execute → reload). Test kn(8); runner green. NOTE: binding requires the WAVE_ACCESS_TOKEN to actually see the Real KTC business in Wave Connection — if it isn\'t listed, the token lacks access to that Wave account (then a token/OAuth for that account is needed).' },
+    ],
+  },
+  {
     version: 'v55.83-KM',
     date: '2026-06-20',
     label: 'The transaction "View" account picker now shows active accounts only (no archived duplicates)',

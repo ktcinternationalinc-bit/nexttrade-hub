@@ -23,6 +23,14 @@ export function canWriteToWaveBusiness(reg) {
   return reg.writes_enabled === true;
 }
 
+// v55.83-KN — a silo whose wave_business_id is a seed PLACEHOLDER (never bound to a real Wave business).
+// While a silo holds one of these, NO Wave op works (categories, products, push) — Wave returns
+// "unexpected response" for a fake id. Detect it so the UI can say so plainly and point to the bind tool.
+export var PLACEHOLDER_WAVE_BUSINESS_IDS = { 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 };
+export function isPlaceholderWaveBusiness(id) {
+  return !!(id && PLACEHOLDER_WAVE_BUSINESS_IDS[String(id)]);
+}
+
 export function waveBusinessLabel(reg, id) {
   if (reg && reg.label) { return reg.label; }
   return id ? ('Business ' + String(id).slice(0, 8)) : 'Unknown business';
