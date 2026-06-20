@@ -5,7 +5,7 @@
 // service-role route /api/admin/visibility. The panel proves the setting actually persists (it re-reads
 // after every save) and tells the admin exactly what to do if the backing table isn't set up yet.
 import { useState, useEffect } from 'react';
-import { WINDOW_OPTIONS, labelForWindow } from '../lib/visibility-window';
+import { WINDOW_OPTIONS, labelForWindow, floorDateFor } from '../lib/visibility-window';
 
 export default function AccountingVisibilityPanel({ userProfile, toast }) {
   var [win, setWin] = useState('all');
@@ -113,6 +113,17 @@ export default function AccountingVisibilityPanel({ userProfile, toast }) {
           </div>
         </div>
       )}
+
+      {/* v55.83-JZ — employee-preview: show the EXACT cutoff date employees are limited to, so the super
+          admin can verify the staff window without switching accounts. */}
+      {(function () {
+        var f = floorDateFor({ window: win, customDays: (win === 'custom' && !customFrom) ? parseInt(customDays, 10) : null, customFrom: (win === 'custom' && customFrom) ? customFrom : null, isSuperAdmin: false }, new Date());
+        return (
+          <div className="mb-3 text-[12px] text-slate-700 bg-blue-50 border border-blue-200 rounded p-2">
+            👁 <b>Employee preview:</b> with this setting, a normal employee will see accounting history {f ? <span>dated <b>on or after {f}</b> (older invoices/AR/ledger/bank rows hidden from them).</span> : <span><b>all the way back</b> (no restriction).</span>} You always see everything.
+          </div>
+        );
+      })()}
 
       <button onClick={save} disabled={saving} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-sm font-bold">{saving ? 'Saving & verifying…' : 'Save & apply to employees'}</button>
 

@@ -93,6 +93,31 @@ export default function AccountingCustomerHistory(props) {
     return s;
   }
 
+  // v55.83-JZ (Codex — "AL MOUSTAFA 53 vs 98"): explain the invoice count. Shows exactly why the AR
+  // summary counts fewer invoices than the customer's total: drafts, void/cancelled/archived/deleted,
+  // and non-USD currencies are excluded from AR; the visibility window hides older DETAIL rows for
+  // non-super-admins (balances stay all-time). So total = arEligibleUsd + excluded; displayed ≤ total.
+  function breakdown(custId) {
+    var invs = invoicesFor(custId);
+    var b = { total: invs.length, arUsd: 0, paid: 0, open: 0, excludedDraft: 0, excludedDead: 0, excludedNonUsd: 0, hiddenByWindow: 0, displayed: 0 };
+    invs.forEach(function (i) {
+      var dead = isDead(i);
+      var elig = isArEligible(i);
+      var usd = (i.currency || 'USD') === 'USD';
+      if (dead) { b.excludedDead++; }
+      else if (!elig) { b.excludedDraft++; }   // remaining non-eligible = true drafts
+      else if (!usd) { b.excludedNonUsd++; }
+      else {
+        b.arUsd++;
+        var bal = n(i.total_amount) - n(i.wave_imported_paid) - hubPaidForInvoice(i.id);
+        if (bal <= 0.0001) { b.paid++; } else { b.open++; }
+      }
+      // displayed in the windowed detail list (super-admin: arFloor null → all shown)
+      if (isWithinWindow(i.invoice_date, arFloor)) { b.displayed++; } else { b.hiddenByWindow++; }
+    });
+    return b;
+  }
+
   if (!mayView) return <div className="p-6"><RestrictedNotice title="Customer AR History restricted" message="Requires Accounting Customers: View (ACCT-002) or Customer: View AR. Bank View is NOT required." /></div>;
   if (loading) return <div className="p-6 text-slate-300">Loading customer AR history…</div>;
 
@@ -151,13 +176,26 @@ export default function AccountingCustomerHistory(props) {
                 <Card label="Paid (Hub/Plaid)" val={money(sum.hubPaid, showAmt)} bg="bg-violet-100 text-violet-950" />
                 <Card label="Open balance" val={money(sum.open, showAmt)} bg="bg-rose-100 text-rose-950" />
               </div>
-              <div className="flex gap-2 mb-4 text-[11px]">
+              <div className="flex gap-2 mb-2 text-[11px]">
                 <Pill label="Open" v={sum.openCount} c="bg-rose-200 text-rose-950" />
                 <Pill label="Paid" v={sum.paidCount} c="bg-emerald-200 text-emerald-950" />
                 <Pill label="Partial" v={sum.partialCount} c="bg-amber-200 text-amber-950" />
                 <Pill label="Overdue" v={sum.overdueCount} c="bg-rose-300 text-rose-950" />
                 <Pill label="Total paid" v={money(sum.totalPaid, showAmt)} c="bg-slate-200 text-slate-900" />
               </div>
+              {/* v55.83-JZ — invoice-count breakdown so a "98 vs 53" mismatch is explainable on-screen. */}
+              {(function () {
+                var b = breakdown(selCust.id);
+                var excluded = b.excludedDraft + b.excludedDead + b.excludedNonUsd;
+                return (
+                  <div className="mb-4 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2 leading-5">
+                    <b>Invoice count for this customer:</b> {b.total} total · <b>{b.arUsd}</b> counted in AR (USD) = {b.open} open + {b.paid} paid.
+                    {excluded > 0 ? <span> · {excluded} excluded from AR ({b.excludedDraft} draft, {b.excludedDead} void/cancelled/archived/deleted, {b.excludedNonUsd} non-USD).</span> : null}
+                    {arFloor ? <span> · Visibility window hides {b.hiddenByWindow} older invoice row(s) from employees ({b.displayed} shown); balances above use ALL {b.total}.</span> : null}
+                    {(b.arUsd !== sum.openCount + sum.paidCount) ? <span className="text-amber-700"> · note: counts differ — refresh.</span> : null}
+                  </div>
+                );
+              })()}
 
               {/* invoices */}
               <Section title="Invoices">

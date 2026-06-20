@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JZ',
+    date: '2026-06-20',
+    label: 'Customer AR History explains its invoice count + you can preview the employee cutoff date',
+    items: [
+      '**📒 No more "why does this customer show 53 invoices, not 98?"** Customer AR History now shows a clear breakdown under the summary: how many invoices are counted in AR (USD), how many are excluded and why (drafts, void/cancelled/archived/deleted, non-USD), and how many older rows the visibility window hides from employees — while balances always use every invoice.',
+      '**👁 Preview the employee cutoff.** In Settings → Accounting Visibility, the panel now shows the exact date employees are limited to (e.g. "employees see history on or after 2025-06-20"), so you can confirm the staff window without logging in as an employee.',
+      { superAdminOnly: true, text: 'v55.83-JZ (Codex cautions). AccountingCustomerHistory: NEW breakdown(custId) → {total, arUsd, open, paid, excludedDraft, excludedDead, excludedNonUsd, hiddenByWindow, displayed}; rendered as a line under the AR summary so "AL MOUSTAFA 98 vs 53" is explainable (excluded statuses/currency + window-hidden; balances all-time). AccountingVisibilityPanel: employee-preview line via floorDateFor({window, isSuperAdmin:false}) showing the exact cutoff date. Test jz(5); runner green. Remaining Codex cautions: live BankTab confirm (Max), AL MOUSTAFA live count diagnostic, long-term Plaid /transactions/sync cursor.' },
+    ],
+  },
+  {
     version: 'v55.83-JY',
     date: '2026-06-20',
     label: 'Bank tab is now organized by silo — you see this silo\'s banks first, others tucked away',
