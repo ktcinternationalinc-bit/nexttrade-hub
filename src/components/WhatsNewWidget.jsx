@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KP',
+    date: '2026-06-20',
+    label: 'One-glance "Wave setup status" at the top of Settings — no more guessing what\'s ready',
+    items: [
+      '**📊 A clear status summary tops the Wave Sync Center → Settings.** Four lines — Production writes, Payment push, Invoice push, Category dropdown — each marked **READY** or **BLOCKED**, and every BLOCKED line tells you the exact next step ("Set the payment deposit account," "Set the Default Invoice Product," "Pull Wave categories," or "Bind this silo"). You no longer have to read five checkboxes and red lines to figure out where you stand.',
+      { superAdminOnly: true, text: 'v55.83-KP (Codex: don\'t make users infer readiness from scattered checkboxes). Top-of-Settings summary block: computes payReady (canOperate+canWrite+allow_payment_push+deposit account), invReady (…+allow_invoice_push+invoice product), catReady (catCount>0), production-writes ON/OFF; each BLOCKED row names its concrete next action; placeholder silo shows the universal "bind first" warning. Payment readiness deliberately NOT gated on invoice product (consistent with KO). Test kp(5); runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KO',
     date: '2026-06-20',
     label: 'Made every Wave status/readiness message tell the truth (full audit) — and fixed a bind data bug',

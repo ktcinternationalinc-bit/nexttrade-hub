@@ -799,6 +799,38 @@ export default function WaveSyncCenter(props) {
 
       {tab === 'settings' && canManageSettings && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
+          {/* v55.83-KP (Codex) — ONE-GLANCE status summary so the user never has to infer readiness from
+              five scattered checkboxes/red lines. Each red item names the exact next action. */}
+          {(function () {
+            var ph = isPlaceholderWaveBusiness(active);
+            var canOperate = !isProd || productionUnlocked;
+            var canWrite = !!(reg && (reg.is_production === false || reg.writes_enabled === true));
+            var hasPayAcct = !!(prodSetup && prodSetup.default_payment_account_id);
+            var hasInvProd = !!(prodSetup && prodSetup.default_invoice_product_id);
+            var payReady = !ph && canOperate && canWrite && !!(reg && reg.allow_payment_push === true) && hasPayAcct;
+            var invReady = !ph && canOperate && canWrite && !!(reg && reg.allow_invoice_push === true) && hasInvProd;
+            var catReady = !ph && catCount > 0;
+            function payNext() { if (ph) return 'Bind this silo (Wave Connection)'; if (!canOperate) return 'Unlock production push (below)'; if (!canWrite) return 'Enable writes (below)'; if (!(reg && reg.allow_payment_push === true)) return 'Enable payment push (below)'; if (!hasPayAcct) return 'Set the payment deposit account (below)'; return ''; }
+            function invNext() { if (ph) return 'Bind this silo (Wave Connection)'; if (!canOperate) return 'Unlock production push (below)'; if (!canWrite) return 'Enable writes (below)'; if (!(reg && reg.allow_invoice_push === true)) return 'Enable invoice push (below)'; if (!hasInvProd) return 'Set the Default Invoice Product (below)'; return ''; }
+            function catNext() { if (ph) return 'Bind this silo (Wave Connection)'; return 'Pull Wave categories (below) / check token access'; }
+            function Row(label, ready, nextAction, okText) {
+              return <div className="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">
+                <span className="text-xs font-semibold text-slate-700">{label}</span>
+                <span className="flex items-center gap-2">
+                  <span className={'text-[10px] font-bold px-1.5 py-0.5 rounded ' + (ready ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white')}>{ready ? (okText || 'READY') : 'BLOCKED'}</span>
+                  {!ready && nextAction ? <span className="text-[10px] text-rose-700 font-semibold">→ {nextAction}</span> : null}
+                </span>
+              </div>;
+            }
+            return <div className="mb-4 border-2 border-slate-300 rounded-lg p-3 bg-white">
+              <div className="font-extrabold text-slate-900 mb-1 text-sm">Wave setup status — {reg ? (reg.label || active) : 'no silo selected'}</div>
+              {ph && <div className="text-[11px] text-rose-700 font-bold mb-1">⚠ This silo is not connected to a real Wave business (placeholder id) — bind it in Accounting → Wave Connection. Everything below stays BLOCKED until then.</div>}
+              {Row(isProd ? 'Production writes' : 'Test silo writes', isProd ? (reg && reg.writes_enabled === true) : true, isProd ? 'Enable writes (below)' : '', isProd ? 'ON' : 'ON (test)')}
+              {Row('Payment push', payReady, payNext())}
+              {Row('Invoice push', invReady, invNext())}
+              {Row('Category dropdown', catReady, catNext(), catCount + ' loaded')}
+            </div>;
+          })()}
           <div className="mb-4 border border-slate-300 bg-slate-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Database setup check</div>
             <div className="text-xs text-slate-700 mb-2">Confirms the database has every column the Wave payment, settings, and category features need. Run this first if anything fails to save with a "column not found" error.</div>
