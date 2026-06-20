@@ -160,9 +160,15 @@ export async function POST(req) {
     });
     var connPatch = { last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null, last_successful_plaid_sync_at: new Date().toISOString() };
     if (newestOverall) { connPatch.last_successful_posted_date = newestOverall; }
-    // schema-safe: if the JR columns aren't present yet, retry with the base fields only.
+    // schema-safe: if the JR columns aren't present yet, retry with the base fields only — but DO NOT
+    // pretend the markers saved. v55.83-JT (Codex) — surface markers_persisted:false so the UI warns the
+    // admin (otherwise the next sync silently falls back to the legacy 30-day window = the gap we fix).
+    var markersPersisted = true;
+    var markerError = null;
     var cu = await supabase.from('bank_connections').update(connPatch).eq('id', conn.id);
     if (cu && cu.error) {
+      markersPersisted = false;
+      markerError = cu.error.message || 'marker columns missing';
       try { await supabase.from('bank_connections').update({ last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null }).eq('id', conn.id); } catch (eBase) {}
     }
 
@@ -174,7 +180,9 @@ export async function POST(req) {
       pages: pageGuard,
       window: { start: effStart, end: effEnd, incremental: !start_date },
       newest_posted_date: newestOverall,
-      newest_by_account: newestByAccount
+      newest_by_account: newestByAccount,
+      markers_persisted: markersPersisted,
+      marker_error: markerError
     });
   } catch (e) {
     return NextResponse.json({ error: (e && e.message) || String(e) }, { status: 500 });

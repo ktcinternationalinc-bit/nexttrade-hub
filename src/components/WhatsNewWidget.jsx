@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JT',
+    date: '2026-06-20',
+    label: 'Choose how far back to pull when connecting a bank + admin "Deep re-pull history"',
+    items: [
+      '**🏦 When you connect (or re-connect) a bank, you now pick how far back to pull** — 1 month, 3/6 months, 1 year, current year, all available (~2 years), or a custom start date — right in the connect window, before Plaid opens. The button shows the exact date it will pull from.',
+      '**⏬ "Deep re-pull history" (admin-only)** next to each connection backfills older history on demand (with a confirmation showing the exact date range); normal Sync stays incremental. And if the database isn\'t set up for the sync markers yet, the app now **warns you loudly** instead of quietly falling back to a 30-day window.',
+      { superAdminOnly: true, text: 'v55.83-JT (Codex JR follow-up — 3 FAILs). (1) Backfill control moved INTO the Connect modal (was a filter-bar dropdown hidden until transactions existed); options 1mo/3mo/6mo/1yr/current-year/all/custom-date; resolved date shown + sent as initial_backfill_start_date; first connect auto-runs a full backfill (deepPull). (2) Deep re-pull history button is admin-only (canViewAllAccounts) with a window.confirm showing start→end; normal Sync stays incremental; filter-bar BACKFILL dropdown now drives the same backfillWin state. (3) NO silent marker loss: transactions route returns markers_persisted + marker_error, exchange returns backfill_saved; BankTab warns "run sql/v55-83-JR…" when either is false (prevents the silent 30-day fallback). Removed dead dateRange state. JR test +JT1-JT5; runner green. Long-term still: /transactions/sync cursor migration.' },
+    ],
+  },
+  {
     version: 'v55.83-JS',
     date: '2026-06-20',
     label: 'Invoice lines now use the real Wave product description (not just a free-text line)',

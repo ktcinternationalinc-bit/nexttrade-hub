@@ -49,8 +49,12 @@ export async function POST(req) {
     const connInsert = Object.assign({}, baseConn);
     if (initial_backfill_start_date) { connInsert.initial_backfill_start_date = String(initial_backfill_start_date).substring(0, 10); }
     let conn, error;
+    let backfillSaved = !!initial_backfill_start_date;
     ({ data: conn, error } = await supabase.from('bank_connections').upsert(connInsert, { onConflict: 'plaid_item_id' }).select().single());
     if (error && /initial_backfill_start_date|column/.test(error.message || '')) {
+      // v55.83-JT (Codex) — the JR column is missing; don't silently drop the admin's chosen backfill
+      // date. Save the base row but report backfill_saved:false so the UI warns to run the JR SQL.
+      backfillSaved = false;
       ({ data: conn, error } = await supabase.from('bank_connections').upsert(baseConn, { onConflict: 'plaid_item_id' }).select().single());
     }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -92,7 +96,7 @@ export async function POST(req) {
       // Connection still succeeds even if account pull fails; accounts refresh on next sync.
     }
 
-    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name } });
+    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
