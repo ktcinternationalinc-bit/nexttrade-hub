@@ -19,21 +19,27 @@ export default function WaveConnectionTab(props) {
   var [bindSel, setBindSel] = useState({}); // { waveBusinessId(real) : siloWaveBusinessId(to rebind) }
   var [binding, setBinding] = useState(false);
   var [bindMsg, setBindMsg] = useState('');
+  var [advancedRebind, setAdvancedRebind] = useState(false); // v55.83-KQ — normal mode binds placeholder silos ONLY
   useEffect(function () { fetchAllRows('wave_business_registry', '*').then(function (r) { setRegistry((r && r.data) || []); }).catch(function () {}); }, []);
   function reloadRegistry() { fetchAllRows('wave_business_registry', '*').then(function (r) { setRegistry((r && r.data) || []); }).catch(function () {}); }
   function bindBusiness(realId, realName) {
     var siloFrom = bindSel[realId];
     if (!siloFrom) { setBindMsg('Pick which silo to bind to "' + (realName || realId) + '" first.'); return; }
+    // v55.83-KQ — rebinding an ALREADY-connected (non-placeholder) silo is a migration, not first-time
+    // setup; require an extra, explicit confirmation so it can't happen by accident.
+    if (!isPlaceholderWaveBusiness(siloFrom)) {
+      if (!window.confirm('⚠ ADVANCED: that silo is already connected to a real Wave business (' + siloFrom + '). Rebinding it MOVES all its data to a different Wave business and is rarely what you want. Are you sure you want to re-bind an already-connected silo?')) { setBindMsg('Cancelled — already-connected silo not rebound.'); return; }
+    }
     setBinding(true); setBindMsg('Checking…');
     var payload = { from_wave_business_id: siloFrom, to_wave_business_id: realId, to_label: realName || null, user_id: (userProfile && userProfile.id) || null, dry_run: true };
     fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || j.ok === false) { setBinding(false); setBindMsg('✕ ' + ((j && j.error) || 'Could not preview the bind.')); return null; }
-        if (!window.confirm(j.message + '\n\nBind this silo to "' + (realName || realId) + '" now? This re-tags the silo\'s data to the real Wave business.')) { setBinding(false); setBindMsg('Cancelled — nothing changed.'); return null; }
+        if (!window.confirm(j.message + '\n\nBind this silo to "' + (realName || realId) + '" now? This re-tags the silo\'s data to the real Wave business (all-or-nothing — it rolls back if anything fails).')) { setBinding(false); setBindMsg('Cancelled — nothing changed.'); return null; }
         return fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, payload, { dry_run: false })) }).then(function (r2) { return r2.json(); });
       })
-      .then(function (j2) { if (!j2) { return; } setBindMsg((j2.ok ? '✓ ' : '⚠ ') + (j2.message || 'Done.') + (j2.errors && j2.errors.length ? (' Errors: ' + j2.errors.join('; ')) : '')); reloadRegistry(); })
+      .then(function (j2) { if (!j2) { return; } setBindMsg((j2.ok ? '✓ ' : '✕ ') + (j2.message || j2.error || 'Done.')); reloadRegistry(); })
       .catch(function (e) { setBindMsg('✕ Bind failed: ' + ((e && e.message) || 'network error')); })
       .finally(function () { setBinding(false); });
   }
@@ -82,8 +88,9 @@ export default function WaveConnectionTab(props) {
               {(state.businesses || []).length === 0 ? <div className="text-xs">No businesses found on this token.</div> :
                 (state.businesses || []).map(function (b, i) {
                   var boundSilo = null; registry.forEach(function (r) { if (r.wave_business_id === b.id) { boundSilo = r; } });
-                  // silos NOT yet bound to a real business (placeholder) — these are the ones to bind.
-                  var bindable = registry.filter(function (r) { return isPlaceholderWaveBusiness(r.wave_business_id) || r.wave_business_id !== b.id; });
+                  // v55.83-KQ — NORMAL mode lists only UNBOUND (placeholder) silos, so an already-connected
+                  // silo can't be rebound by accident. Advanced repair (rebind a real silo) is opt-in.
+                  var bindable = registry.filter(function (r) { return advancedRebind ? (r.wave_business_id !== b.id) : isPlaceholderWaveBusiness(r.wave_business_id); });
                   return (
                     <div key={i} className="bg-white rounded px-2 py-1.5 mb-1 text-xs">
                       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -110,7 +117,8 @@ export default function WaveConnectionTab(props) {
                   );
                 })}
               {bindMsg && <div className="text-[11px] mt-2 bg-slate-900 text-slate-100 rounded px-2 py-1 whitespace-pre-wrap">{bindMsg}</div>}
-              <div className="text-[11px] text-emerald-900 mt-2">Bind your <b>Real KTC</b> silo to the matching business above (it shows its real Wave id). That replaces the placeholder id and unblocks categories, products and payment push for that silo.</div>
+              <div className="text-[11px] text-emerald-900 mt-2">Bind your <b>Real KTC</b> silo to the matching business above (it shows its real Wave id). That replaces the placeholder id and unblocks categories, products and payment push for that silo. Binding is <b>all-or-nothing</b> — if anything fails it rolls back and nothing changes.</div>
+              <label className="flex items-center gap-1 text-[10px] text-slate-600 mt-1"><input type="checkbox" checked={advancedRebind} onChange={function (e) { setAdvancedRebind(e.target.checked); }} /> Advanced: allow rebinding an already-connected silo (migration — use with care)</label>
             </div>
           ) : (
             <div className="bg-rose-100 text-rose-950 rounded-lg p-3">

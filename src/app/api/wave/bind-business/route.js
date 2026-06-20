@@ -61,52 +61,64 @@ export async function POST(req) {
     var existsRes = await db.from('wave_business_registry').select('wave_business_id, label').eq('wave_business_id', toId).limit(1);
     if (existsRes && existsRes.data && existsRes.data.length) { return NextResponse.json({ ok: false, error: 'Another silo ("' + (existsRes.data[0].label || toId) + '") is already bound to that Wave business. Remove/rename it first.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
 
-    // 3) Count (and, unless dry_run, re-stamp) every silo-scoped table from old id -> real id.
-    var counts = {}; var total = 0; var errors = [];
-    var i;
+    // 3) COUNT every silo-scoped table + the registry row (this is the dry-run preview total). No mutation.
+    var counts = {}; var total = 0; var i;
     for (i = 0; i < SCOPED_TABLES.length; i++) {
       var tbl = SCOPED_TABLES[i];
       try {
         var cRes = await db.from(tbl).select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId);
-        if (cRes && cRes.error) { errors.push(tbl + ': ' + cRes.error.message); continue; }
-        var n = (cRes && typeof cRes.count === 'number') ? cRes.count : 0;
+        var n = (cRes && !cRes.error && typeof cRes.count === 'number') ? cRes.count : 0;
         counts[tbl] = n; total = total + n;
-        if (!dryRun && n > 0) {
-          var uRes = await db.from(tbl).update({ wave_business_id: toId }).eq('wave_business_id', fromId);
-          if (uRes && uRes.error) { errors.push(tbl + ' (update): ' + uRes.error.message); }
-        }
-      } catch (eTbl) { errors.push(tbl + ': ' + ((eTbl && eTbl.message) || String(eTbl))); }
+      } catch (eC) { counts[tbl] = 0; }
+    }
+    var rgC = await db.from('wave_business_registry').select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId);
+    var regCount = (rgC && !rgC.error && typeof rgC.count === 'number') ? rgC.count : 0;
+
+    if (dryRun) {
+      return NextResponse.json({ ok: true, dry_run: true, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, message: 'Preview: binding will re-tag ' + total + ' data row(s) + ' + regCount + ' registry row to "' + (realName || toId) + '". Nothing changed yet.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
-    // 4) The registry row itself (rebind its id + adopt the real Wave name as the label if none given).
-    var regCount = 0; var regErr = null;
-    try {
-      var rgC = await db.from('wave_business_registry').select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId);
-      regCount = (rgC && typeof rgC.count === 'number') ? rgC.count : 0;
-      if (!dryRun && regCount > 0) {
+    // 4) EXECUTE — ALL-OR-NOTHING (Codex live-safety blocker). Re-stamp each table from->to; if ANY fails,
+    // ROLL BACK every table already changed (to->from) so silo ownership is NEVER left partial. Registry
+    // last. No partial-success path exists anymore: any failure rolls back and returns a hard error.
+    var updatedTables = []; var failTbl = null; var failMsg = null; var k;
+    for (k = 0; k < SCOPED_TABLES.length; k++) {
+      var t2 = SCOPED_TABLES[k];
+      if (!counts[t2]) { continue; }
+      try {
+        var u2 = await db.from(t2).update({ wave_business_id: toId }).eq('wave_business_id', fromId);
+        if (u2 && u2.error) { failTbl = t2; failMsg = u2.error.message; break; }
+        updatedTables.push(t2);
+      } catch (eU) { failTbl = t2; failMsg = (eU && eU.message) || String(eU); break; }
+    }
+    var regFail = null;
+    if (!failTbl) {
+      try {
         var regPatch = { wave_business_id: toId };
         if (toLabel) { regPatch.label = toLabel; } else if (realName) { regPatch.label = realName; }
         var rgU = await db.from('wave_business_registry').update(regPatch).eq('wave_business_id', fromId);
-        if (rgU && rgU.error) { regErr = rgU.error.message; }
-      }
-    } catch (eRg) { regErr = (eRg && eRg.message) || String(eRg); }
-    if (regErr) { errors.push('wave_business_registry: ' + regErr); }
+        if (rgU && rgU.error) { regFail = rgU.error.message; }
+      } catch (eRg) { regFail = (eRg && eRg.message) || String(eRg); }
+    }
 
-    return NextResponse.json({
-      ok: errors.length === 0,
-      dry_run: dryRun,
-      from_wave_business_id: fromId,
-      to_wave_business_id: toId,
-      wave_business_name: realName,
-      registry_rows: regCount,
-      data_rows_total: total,
-      counts: counts,
-      errors: errors,
-      message: dryRun
-        ? ('Preview: binding will re-tag ' + total + ' data row(s) + ' + regCount + ' registry row to "' + (realName || toId) + '". Nothing changed yet.')
-        : (errors.length === 0 ? ('Bound to "' + (realName || toId) + '". Re-tagged ' + total + ' data row(s). Now Test/Pull categories.') : ('Bind completed with ' + errors.length + ' error(s) — review them.')),
-      api_build_marker: API_BUILD_MARKER
-    }, { status: errors.length === 0 ? 200 : 207 });
+    if (failTbl || regFail) {
+      // roll back every data table we already moved (the registry was updated last, so on a registry
+      // failure the data tables moved but the registry didn't — reverse the data tables either way).
+      var rbErrors = []; var rb;
+      for (rb = 0; rb < updatedTables.length; rb++) {
+        try { var rr = await db.from(updatedTables[rb]).update({ wave_business_id: fromId }).eq('wave_business_id', toId); if (rr && rr.error) { rbErrors.push(updatedTables[rb] + ': ' + rr.error.message); } }
+        catch (eRB) { rbErrors.push(updatedTables[rb] + ': ' + ((eRB && eRB.message) || String(eRB))); }
+      }
+      var why = failTbl ? (failTbl + ': ' + failMsg) : ('wave_business_registry: ' + regFail);
+      var restoredOk = rbErrors.length === 0;
+      return NextResponse.json({ ok: false, restored: restoredOk, from_wave_business_id: fromId, to_wave_business_id: toId,
+        error: restoredOk
+          ? ('Bind failed and was fully rolled back — NO change was made (' + why + '). Fix the cause and retry.')
+          : ('Bind FAILED mid-way and rollback ALSO failed — silo ownership may be inconsistent. DO NOT retry; screenshot for Claude. Failure: ' + why + ' | rollback errors: ' + rbErrors.join('; ')),
+        api_build_marker: API_BUILD_MARKER }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, dry_run: false, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, message: 'Bound to "' + (realName || toId) + '". Re-tagged ' + total + ' data row(s) + the registry. Now Test / Pull categories.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }

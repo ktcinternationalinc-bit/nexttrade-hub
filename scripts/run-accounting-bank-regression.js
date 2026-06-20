@@ -36,6 +36,7 @@ var MANIFEST = [
   { f: 'test-v55-83-jz-ar-count-and-preview.js', label: 'new', why: 'AR count breakdown + visibility employee-preview' },
   { f: 'test-v55-83-ke-update-match-atomic.js', label: 'new', why: 'atomic update_match server action: reverse old + apply new, recompute both invoices, block Wave-synced; client + sync-state display' },
   { f: 'test-v55-83-kj-match-edit-rollback-hardening.js', label: 'new', why: 'update_match money-safety: overpayment-insert rollback, old credit/unapplied void errors trigger restore, restore re-opens old credits/unapplied, recompute/restamp surfaced as warning' },
+  { f: 'test-v55-83-kq-bind-safety.js', label: 'new', why: 'bind tool live-safety: all-or-nothing re-stamp with rollback (no partial silo ownership), normal mode binds placeholder silos only, advanced rebind opt-in' },
   { f: 'test-v55-83-kp-readiness-summary.js', label: 'new', why: 'top-of-Settings one-glance Wave readiness summary (Production writes/Payment/Invoice/Category READY-BLOCKED) with next-action per blocked item' },
   { f: 'test-v55-83-ko-wave-truth-audit-fixes.js', label: 'new', why: 'multi-agent Wave truth-audit fixes: bind re-stamps wave_products+splits (P0), payment vs invoice readiness split, real Wave error surfacing, placeholder guards on all push/sync/setup routes' },
   { f: 'test-v55-83-kn-wave-bind-and-readiness.js', label: 'new', why: 'ROOT CAUSE: placeholder Wave business id. Bind tool (re-stamp registry+data to real GUID w/ dry-run), read-only/write badge fix, categories not a payment-push gate, placeholder surfaced loudly' },
