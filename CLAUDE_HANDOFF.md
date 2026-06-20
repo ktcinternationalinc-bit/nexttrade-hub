@@ -9,7 +9,7 @@ QA loop:
 ---
 
 ## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
-**HEAD = v55.83-JX.** JX = bank silo-assign fixes (Max live): assign_account_silo schema-safe (assigned_at column gone), exchange stamps new accounts to chosen silo, NEW assign_connection_silo + archive_connection actions + Archive button for the duplicate-Chase-group cleanup. runner 35/35. `npm run test:accounting-bank` = 34/34 required green; `npm run build` clean.
+**HEAD = v55.83-JY.** Bank tab now SILO-CENTRIC (Codex BA review): active silo is the primary "Bank accounts for <silo>" section; other silos collapsed in a super-admin "admin diagnostics" toggle; business-language buttons (Sync new transactions/Re-pull history/Archive duplicate/Move account to silo & repair) with confirms; exchange surfaces a failed account-stamp (accounts_assigned). Plus JX silo-assign fixes. runner 36/36 green; build clean.
 - **JW + JV — Accounting Visibility save+read robust on the LIVE `app_settings(setting_key,setting_value)` schema (your open FAIL):** POST upserts BOTH `key/value`(jsonb) + `setting_key/setting_value`(text mirror) → satisfies NOT-NULL `setting_key`; GET (`readSetting`) matches by `key` OR `setting_key` (`.or`) + parses `setting_value` when `value` jsonb absent, with a fallback select. JE test +B4/+B5. **Pending Max's live save→refresh confirm.**
 - **JU — Plaid page-guard:** oversized backfill (>30k single-pass) now FAILS LOUD (no partial import / no marker advance).
 - Only open from you: long-term `/transactions/sync` cursor migration (enhancement) + the live confirmations.
