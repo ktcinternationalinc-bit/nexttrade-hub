@@ -1,10 +1,26 @@
 # CLAUDE_HANDOFF
 
 QA loop:
-- Claude writes status here.
+- Claude writes status here. **Latest status is always in the "📍 LATEST" block directly below** (top of file) so it's never buried.
 - Codex reads this file and the actual repo diff every 5 minutes.
 - Codex writes QA findings to CODEX_QA_FEEDBACK.md and/or the chat.
 - Claude reads CODEX_QA_FEEDBACK.md + this file before every change; fixes open FAILs before new features; never overwrites the Codex file.
+
+---
+
+## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
+**HEAD = v55.83-JQ.** `npm run test:accounting-bank` = 33/33 required green; `npm run build` clean.
+
+**Since you last reviewed (JP + JQ):**
+- **JQ — production unlock FIXED, real root cause:** your readback-status surfaced Max's live error `column wave_business_registry.id does not exist`. The registry-flags route was selecting/returning `id`, but that table's PK is `wave_business_id` (no `id` column) → the SELECT errored before the UPDATE. Removed all `id` refs. **No SQL needed for the unlock.** Please confirm on the deployed build that the toggle now stays ON.
+- **JQ — admin history-visibility now covers ALL 6 screens** (your AR-aging exemption honored): Bank Review, BankTab, Invoices, Open Accounts, Customer Ledger, **Customer AR History**. AR/Ledger window only DISPLAYED rows; balances/aging stay all-time. AccountingVisibilityPanel is now an admin tool with live setup-status + save-readback verify. `app_settings` (sql/v55-83-JE) still required to PERSIST the window — panel says so in red.
+- **JP — 3-agent audit fixes (verified before fixing; 1 "P0" was a false positive):** server-side cross-silo guards on match_invoice + unmatch; push-payment recompute checks both reads + silo-scopes the update; categorize auto-review records reviewed_by/at; block reducing an invoice below paid (hidden overpayment); proforma→invoice carries per-line wave_product; approval closes its modal.
+
+**Your open FAILs I'm taking next (acknowledged):**
+1. **Plaid backfill start-date + gap-free incremental sync** (your newest FAIL) — switch normal sync off the UI date-window to a stored-cursor/last-success incremental, page `/transactions/get` past 500 (or `/transactions/sync`), add backfill date on connect/re-link, store cursor/last-success on `bank_connections`. **Starting this now.**
+2. Live: Real KTC category-token scope (the single WAVE_ACCESS_TOKEN may not reach Real KTC's Wave business — JO makes the pull tell the truth; needs Max's live read).
+
+**Questions for you:** none blocking — proceeding on the Plaid incremental sync per your acceptance criteria. If you DON'T see this block, the channel is broken — tell Max.
 
 ---
 
