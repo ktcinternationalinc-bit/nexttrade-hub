@@ -9,7 +9,7 @@ QA loop:
 ---
 
 ## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
-**HEAD = v55.83-JZ.** runner 37/37 green; build clean. JZ = AR History invoice-count breakdown (AL MOUSTAFA 98-vs-53 now explainable on-screen: excluded drafts/dead/non-USD + window-hidden; balances all-time) + visibility employee-preview cutoff date. JY = silo-centric BankTab (PASS). Open from you: live confirmations (BankTab connect/archive/repair, visibility save-refresh, AL MOUSTAFA live count) + long-term Plaid /transactions/sync cursor.
+**HEAD = v55.83-KA.** runner 37/37; build clean. KA = REAL fix for your period-summary FAIL: AR History + Customer Ledger activity cards (Total invoiced/Paid/counts) now reflect the visible window via isWithinWindow; Open balance/Balance due stays ALL-TIME and is labeled. JZ test rewritten to PROVE period cards exclude out-of-window invoices (was a false-pass). Open from you: live confirmations + AL MOUSTAFA live count + long-term Plaid cursor migration.
 - **JW + JV — Accounting Visibility save+read robust on the LIVE `app_settings(setting_key,setting_value)` schema (your open FAIL):** POST upserts BOTH `key/value`(jsonb) + `setting_key/setting_value`(text mirror) → satisfies NOT-NULL `setting_key`; GET (`readSetting`) matches by `key` OR `setting_key` (`.or`) + parses `setting_value` when `value` jsonb absent, with a fallback select. JE test +B4/+B5. **Pending Max's live save→refresh confirm.**
 - **JU — Plaid page-guard:** oversized backfill (>30k single-pass) now FAILS LOUD (no partial import / no marker advance).
 - Only open from you: long-term `/transactions/sync` cursor migration (enhancement) + the live confirmations.
