@@ -19,6 +19,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // v55.83-JT — explicit Plaid BACKFILL window chosen in the Connect flow (and used by Deep re-pull).
   const [backfillWin, setBackfillWin] = useState('90');   // 30/90/180/365/cy/all/custom (days or 'cy'/'all')
   const [backfillCustom, setBackfillCustom] = useState(''); // explicit start date when backfillWin==='custom'
+  const [showOtherSilos, setShowOtherSilos] = useState(false); // v55.83-JY — collapse cross-silo connections (admin diagnostics)
   const [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE admin visibility window
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -203,9 +204,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           });
           const exData = await exRes.json();
           if (exData.error) { setError(exData.error); return; }
-          // v55.83-JT — if the JR column is missing, the chosen backfill date was NOT saved. Say so.
+          // v55.83-JT/JY — surface a backfill-date-not-saved OR account-not-assigned problem immediately.
           if (exData.backfill_saved === false && _bfStart) {
-            setNotice('Bank connected, but the backfill start date (' + _bfStart + ') could not be saved — run sql/v55-83-JR-plaid-incremental-sync.sql, then use “Deep re-pull history” to backfill.');
+            setNotice('Bank connected, but the backfill start date (' + _bfStart + ') could not be saved — run sql/v55-83-JR-plaid-incremental-sync.sql, then use “Re-pull history” to backfill.');
+          } else if (exData.accounts_assigned === false) {
+            setError('Bank connected, but its accounts could not be auto-assigned to ' + bizLabel(chosenBiz) + (exData.account_assignment_error ? (' (' + exData.account_assignment_error + ')') : '') + '. Use “Move account to silo & repair” on each account below to assign them.');
           }
           await loadData();
           // Auto-sync after connecting: a first connect should pull the full chosen backfill window.
@@ -466,70 +469,92 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
               <p className="text-[10px] mt-1 text-slate-300">Production mode — use your real bank login</p>
             )}
           </div>
-        ) : (
-          <div className="space-y-3">
-            {connections.filter(function (c) { return canViewAllAccounts || !c.wave_business_id || c.wave_business_id === getActiveWaveBusiness(); }).map(c => {
-              var accts = plaidAccts.filter(function (a) { return a.connection_id === c.id; });
-              var siloName = bizLabel(c.wave_business_id);
-              return (
-                <div key={c.id} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <div className="font-bold text-sm">{c.institution_name || 'Bank'}</div>
-                      <div className="text-[10px] text-slate-500">
-                        Assigned to: <span className="font-semibold">{siloName}</span> · Last synced: {c.last_synced ? fmtET(c.last_synced, 'datetime') : 'Never'}
-                        <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.status}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => syncTransactions(c.id)} disabled={syncing} title="Pulls forward from the last synced date (gap-free incremental). The list date filter does not affect this." className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
-                        {syncing ? '⏳ Syncing...' : '🔄 Sync (incremental)'}
-                      </button>
-                      {canViewAllAccounts && (
-                        <button onClick={() => { var s = backfillStartDate(); var e = new Date().toISOString().split('T')[0]; if (window.confirm('Deep re-pull history for this bank?\n\nThis backfills transactions from ' + s + ' to ' + e + ' (window: ' + backfillLabel() + ', change it in the BACKFILL selector below).\n\nIt is idempotent — existing transactions and matches are kept, nothing is duplicated.')) { syncTransactions(c.id, 0, true); } }} disabled={syncing} title="Admin: backfill older history from the BACKFILL window below. Idempotent — never duplicates. Normal Sync stays incremental." className="px-2 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50">
-                          ⏬ Deep re-pull history
-                        </button>
-                      )}
-                      {canViewAllAccounts && (
-                        <button onClick={() => archiveConnection(c)} disabled={syncing} title="Archive this connection (e.g. a duplicate or old re-link). Hidden from the list; transactions/matches are kept." className="px-2 py-1.5 bg-rose-100 text-rose-700 rounded-lg text-[11px] font-semibold hover:bg-rose-200 disabled:opacity-50">
-                          🗄 Archive
-                        </button>
-                      )}
+        ) : (() => {
+          // v55.83-JY (Codex BA review) — organize by ACCOUNTING SILO, not raw connections. The active
+          // silo's banks are the primary operational area; OTHER silos' connections live in a collapsed
+          // admin-diagnostics section so a user can't accidentally sync/repair the wrong silo's bank.
+          var activeBiz = getActiveWaveBusiness();
+          var thisSilo = connections.filter(function (c) { return !c.wave_business_id || c.wave_business_id === activeBiz; });
+          var otherSilo = connections.filter(function (c) { return c.wave_business_id && c.wave_business_id !== activeBiz; });
+          var renderConnCard = function (c, dimmed) {
+            var accts = plaidAccts.filter(function (a) { return a.connection_id === c.id; });
+            var siloName = bizLabel(c.wave_business_id);
+            return (
+              <div key={c.id} className={'rounded-lg p-3 border ' + (dimmed ? 'bg-slate-100 border-slate-300 opacity-90' : 'bg-slate-50 border-slate-200')}>
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                  <div>
+                    <div className="font-bold text-sm">{c.institution_name || 'Bank'} <span className="text-[10px] font-semibold text-slate-500">→ {siloName}</span></div>
+                    <div className="text-[10px] text-slate-500">
+                      Last synced: {c.last_synced ? fmtET(c.last_synced, 'datetime') : 'Never'}
+                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.status}</span>
                     </div>
                   </div>
-                  {accts.length === 0 ? (
-                    <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">Account details pending — click Sync connection to pull account names &amp; masks.</div>
-                  ) : (
-                    <div className="space-y-1">
-                      {accts.map(function (a) {
-                        var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
-                        var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
-                        return (
-                          <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100 gap-2 flex-wrap">
-                            <div className="text-xs text-slate-900">
-                              <span className="font-semibold">{nm}</span>{a.mask ? <span className="font-mono text-slate-600"> ··{a.mask}</span> : null}
-                              {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
-                              <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}</span>
-                              {/* v55.83-IV — account-level silo assignment + repair (super-admin / bank.classify) */}
-                              <select value={acctAssignSel[a.plaid_account_id] || a.wave_business_id || ''} onChange={function (e) { var v = e.target.value; setAcctAssignSel(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = v; return n; }); }} className="px-1 py-0.5 border border-slate-300 rounded text-[10px] text-slate-900 bg-white" title="Assign THIS account to a silo (6338 → Real KTC, 6353 → Kandil)">
-                                <option value="">— silo —</option>
-                                {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Prod)')}</option>; })}
-                              </select>
-                              <button onClick={function () { assignAccount(a); }} disabled={assigning} className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-[10px] font-bold rounded" title="Assign this account + restamp its existing transactions to the chosen silo">{assigning ? '…' : 'Set & repair'}</button>
-                            </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => syncTransactions(c.id)} disabled={syncing} title="Pull new transactions for this bank (forward from the last synced date). The list date filter does not affect this." className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
+                      {syncing ? '⏳ Syncing…' : '🔄 Sync new transactions'}
+                    </button>
+                    {canViewAllAccounts && (
+                      <button onClick={() => { var s = backfillStartDate(); var e = new Date().toISOString().split('T')[0]; if (window.confirm('Re-pull history for ' + (c.institution_name || 'this bank') + ' → ' + siloName + '?\n\nBackfills transactions from ' + s + ' to ' + e + ' (window: ' + backfillLabel() + ', change it in the BACKFILL selector below).\n\nIdempotent — existing transactions and matches are kept, nothing is duplicated.')) { syncTransactions(c.id, 0, true); } }} disabled={syncing} title="Admin: backfill older history from the BACKFILL window below. Idempotent. Normal Sync stays incremental." className="px-2 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50">
+                        ⏬ Re-pull history
+                      </button>
+                    )}
+                    {canViewAllAccounts && (
+                      <button onClick={() => archiveConnection(c)} disabled={syncing} title="Archive this connection (e.g. a duplicate or old re-link). Hidden from the list; transactions/matches are kept." className="px-2 py-1.5 bg-rose-100 text-rose-700 rounded-lg text-[11px] font-semibold hover:bg-rose-200 disabled:opacity-50">
+                        🗄 Archive duplicate
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {accts.length === 0 ? (
+                  <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">Account details pending — click “Sync new transactions” to pull account names &amp; masks.</div>
+                ) : (
+                  <div className="space-y-1">
+                    {accts.map(function (a) {
+                      var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
+                      var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
+                      return (
+                        <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100 gap-2 flex-wrap">
+                          <div className="text-xs text-slate-900">
+                            <span className="font-semibold">{nm}</span>{a.mask ? <span className="font-mono text-slate-600"> ··{a.mask}</span> : null}
+                            {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
+                            <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
                           </div>
-                        );
-                      })}
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}</span>
+                            <select value={acctAssignSel[a.plaid_account_id] || a.wave_business_id || ''} onChange={function (e) { var v = e.target.value; setAcctAssignSel(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = v; return n; }); }} className="px-1 py-0.5 border border-slate-300 rounded text-[10px] text-slate-900 bg-white" title="Move THIS account to a silo (6338 → Real KTC, 6353 → Kandil) and re-tag its transactions">
+                              <option value="">— silo —</option>
+                              {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Prod)')}</option>; })}
+                            </select>
+                            <button onClick={function () { var bizId = acctAssignSel[a.plaid_account_id] || a.wave_business_id; if (!bizId) { setError('Choose a silo for this account.'); return; } if (window.confirm('Move account ··' + (a.mask || a.plaid_account_id) + ' to ' + bizLabel(bizId) + ' and re-tag its ' + cnt + ' transaction(s)?')) { assignAccount(a); } }} disabled={assigning} className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-[10px] font-bold rounded" title="Move this account to the chosen silo + restamp its existing transactions">{assigning ? '…' : 'Move account to silo & repair'}</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          };
+          return (
+            <div className="space-y-3">
+              <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">Bank accounts for {bizLabel(activeBiz)}</div>
+              {thisSilo.length === 0 ? <div className="text-[11px] text-slate-400 italic">No bank connections assigned to this silo yet. Click “Connect Bank” above (choose this silo), or assign an account to it below.</div> : thisSilo.map(function (c) { return renderConnCard(c, false); })}
+              {canViewAllAccounts && otherSilo.length > 0 && (
+                <div className="mt-2 border-t border-slate-200 pt-2">
+                  <button onClick={() => setShowOtherSilos(!showOtherSilos)} className="text-[11px] font-bold text-slate-500 hover:text-slate-700">
+                    {showOtherSilos ? '▾' : '▸'} Other silos / admin diagnostics ({otherSilo.length} connection{otherSilo.length === 1 ? '' : 's'} not in {bizLabel(activeBiz)})
+                  </button>
+                  {showOtherSilos && (
+                    <div className="space-y-3 mt-2">
+                      <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">⚠ These belong to OTHER silos. Shown for cleanup/diagnostics only — switch the active silo (top of page) to operate on them normally, or Archive duplicates.</div>
+                      {otherSilo.map(function (c) { return renderConnCard(c, true); })}
                     </div>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Summary Cards */}

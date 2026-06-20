@@ -61,6 +61,8 @@ export async function POST(req) {
 
     // Pull accounts so we can show account names/masks. Balances are stored here but
     // only shown to admins (bank.view_account_balances) at display time. Non-fatal.
+    var accountsAssigned = !!wave_business_id; // v55.83-JY — did new accounts get stamped to the chosen silo?
+    var accountAssignmentError = null;
     try {
       const accRes = await fetch(`${base}/accounts/get`, {
         method: 'POST',
@@ -95,15 +97,20 @@ export async function POST(req) {
           // connect shows its accounts under KANDIL immediately. Only NULL rows are touched, so an
           // account deliberately reassigned to another silo is preserved.
           if (wave_business_id) {
-            try { await supabase.from('plaid_accounts').update({ wave_business_id }).eq('connection_id', conn.id).is('wave_business_id', null); } catch (eStamp) {}
+            // v55.83-JY (Codex) — don't hide a stamp failure; surface it so BankTab can warn instead of
+            // the admin discovering "Unassigned" later.
+            var stampRes = await supabase.from('plaid_accounts').update({ wave_business_id }).eq('connection_id', conn.id).is('wave_business_id', null);
+            if (stampRes && stampRes.error) { accountsAssigned = false; accountAssignmentError = stampRes.error.message || 'account stamp failed'; }
           }
         }
       }
     } catch (accErr) {
+      accountsAssigned = false;
+      accountAssignmentError = (accErr && accErr.message) || String(accErr);
       // Connection still succeeds even if account pull fails; accounts refresh on next sync.
     }
 
-    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null });
+    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null, accounts_assigned: accountsAssigned, account_assignment_error: accountAssignmentError });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

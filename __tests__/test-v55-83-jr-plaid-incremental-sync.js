@@ -65,8 +65,8 @@ ok('JT1: Connect modal has an explicit backfill-window control (1mo/3mo/6mo/1yr/
   /backfillStartDate\(\)/.test(bank));
 ok('JT2: connect sends the chosen backfill date + first sync is a full backfill (deepPull)',
   /initial_backfill_start_date: _bfStart/.test(bank) && /syncTransactions\(exData\.connection\.id, 0, true\)/.test(bank));
-ok('JT3: Deep re-pull is admin-only (canViewAllAccounts) with a confirm showing start/end dates',
-  /canViewAllAccounts && \(/.test(bank) && /Deep re-pull history for this bank\?/.test(bank) && /syncTransactions\(c\.id, 0, true\)/.test(bank));
+ok('JT3: Re-pull history is admin-only (canViewAllAccounts) with a confirm showing the silo + start/end dates',
+  /canViewAllAccounts && \(/.test(bank) && /Re-pull history for ' \+ \(c\.institution_name/.test(bank) && /syncTransactions\(c\.id, 0, true\)/.test(bank));
 ok('JT4: route reports markers_persisted + the UI warns when they did NOT save (no silent fallback)',
   /markers_persisted: markersPersisted/.test(route) && /data\.markers_persisted === false/.test(bank) && /Incremental markers could NOT be saved/.test(bank));
 ok('JT5: exchange reports backfill_saved + the UI warns when the backfill date did NOT save',

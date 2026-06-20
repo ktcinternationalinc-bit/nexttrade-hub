@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JY',
+    date: '2026-06-20',
+    label: 'Bank tab is now organized by silo — you see this silo\'s banks first, others tucked away',
+    items: [
+      '**🏦 The Bank tab now leads with the silo you\'re in.** A clear "Bank accounts for [silo]" section shows only the banks/accounts for your current silo. Other silos\' connections (e.g. Kandil\'s when you\'re in Real KTC) are moved into a collapsed "Other silos / admin diagnostics" section, so you can\'t accidentally sync or repair the wrong silo\'s bank — and the screen stops looking like a pile of duplicate Chase cards.',
+      '**🔤 Plain-language buttons:** "Sync new transactions," "Re-pull history," "Archive duplicate," and "Move account to silo & repair" (with a confirmation showing exactly which silo and how many transactions move). And if connecting a bank can\'t auto-assign its accounts, you\'re told immediately instead of finding them "Unassigned" later.',
+      { superAdminOnly: true, text: 'v55.83-JY (Codex BA review — Bank tab not silo-centric). BankTab connections partitioned by getActiveWaveBusiness(): thisSilo (active or unassigned) rendered as the primary "Bank accounts for <silo>" section; otherSilo (assigned to a different silo) collapsed behind a super-admin "Other silos / admin diagnostics" toggle (showOtherSilos) with a cross-silo warning. renderConnCard helper; business-language labels (Sync new transactions / Re-pull history / Archive duplicate / Move account to silo & repair) + confirm dialogs showing silo + txn count. exchange: post-upsert account stamp no longer swallowed — returns accounts_assigned/account_assignment_error; BankTab connect surfaces it. Test jy(8); runner green. Layout-contract acceptance met (active silo primary; cross-silo only in admin diagnostics). NOTE: still connection-card-based within the silo (not a full per-account merge); good enough for one-clean-area-per-silo + Archive.' },
+    ],
+  },
+  {
     version: 'v55.83-JX',
     date: '2026-06-20',
     label: 'Fixed bank account silo assignment + tools to clean up duplicate bank groups',
