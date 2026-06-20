@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KD',
+    date: '2026-06-20',
+    label: 'You can now change the amount on an already-matched deposit (it used to silently do nothing)',
+    items: [
+      '**✏️ Editing a matched amount now works.** On a transaction already matched to an invoice, the match row has an amount box + "Update amount" button — change it (e.g. 1,245 → 1,000) and it reverses the old match and re-applies the new amount in one step (an overpayment becomes a customer credit). Before, typing a new amount in the lower field did nothing because that field only adds a *new* match — which is now clearly labelled "Add another invoice (split)."',
+      '**🔒 Customer Ledger fully respects the history window now** — the invoice list and payment history are limited to the permitted period for employees too (not just the totals/statement).',
+      { superAdminOnly: true, text: 'v55.83-KD (Codex P0 — match amount edit silent no-op + KB ledger completeness). BankReviewTab: NEW updateMatchAmount(m) — reverse (unmatch) then re-apply (match_invoice) at the new amount via the tested atomic service routes; blocked for Wave-synced payments + capped at deposit; inline amount input + "Update amount" on each matched row; the lower "Match to invoice" panel relabels to "Add ANOTHER invoice (split)" + a hint to use Update amount when already matched. CustomerLedger: listInvoices + paymentHistory now gated by isWithinWindow(ledgerFloor) (KB rule — employees see only the window everywhere). Test kd(6); runner green. Still open (Codex): Wave category dropdown live-load trust for the active silo; BankTab one-group-per-silo live confirm; AL MOUSTAFA live count.' },
+    ],
+  },
+  {
     version: 'v55.83-KC',
     date: '2026-06-20',
     label: 'Fixed customers showing too few invoices (Wave-imported invoices were not being counted)',

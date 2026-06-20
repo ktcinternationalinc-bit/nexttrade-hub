@@ -97,6 +97,7 @@ export default function BankReviewTab(props) {
   var [mCustomerId, setMCustomerId] = useState('');
   var [mInvoiceId, setMInvoiceId] = useState('');
   var [mAmount, setMAmount] = useState('');
+  var [editMatchAmt, setEditMatchAmt] = useState({}); // v55.83-KD — per-match amount editor (reverse & re-apply)
   var [mNotes, setMNotes] = useState('');
   var [splitMode, setSplitMode] = useState(false);
   var [splitRows, setSplitRows] = useState([]);
@@ -510,6 +511,41 @@ export default function BankReviewTab(props) {
       .finally(function () { setBusy(false); });
   }
 
+  // v55.83-KD (Codex P0 — "editing a matched amount silently no-ops") — there was NO way to change an
+  // existing match's amount; the amount field below only ADDS a new match. This reverses the current
+  // match(es) on the deposit and re-applies the chosen amount to the same invoice, via the already-tested
+  // service-role unmatch + match_invoice routes (atomic each), so an edit actually persists.
+  function updateMatchAmount(m) {
+    var t = sel; if (!t || !mayMatch) { toast.error('You do not have Payments: Match permission.'); return; }
+    if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    var inv = acctInvoices.find(function (i) { return i.id === m.invoice_id; });
+    if (!inv) { toast.error('Could not find the matched invoice.'); return; }
+    var newAmt = roundMoney(Number(editMatchAmt[m.id]));
+    if (!(newAmt > 0)) { toast.error('Enter a new amount greater than zero.'); return; }
+    var depositAmt = roundMoney(Number(t.amount_abs != null ? t.amount_abs : (t.amount || 0)));
+    if (depositAmt > 0 && newAmt > depositAmt + 0.01) { toast.error('Amount can\'t exceed the deposit (' + fmt(depositAmt) + ').'); return; }
+    var syncedPay = (paysByTxn[t.id] || []).some(function (p) { return p && (p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'); });
+    if (syncedPay) { toast.error('This payment was already pushed to Wave — change it in Wave, then re-import. Local edit is blocked to keep Hub and Wave in sync.'); return; }
+    if (!window.confirm('Update the matched amount on this deposit to ' + fmt(newAmt) + '?\n\nThis reverses the current match(es) on this transaction and re-applies ' + fmt(newAmt) + ' to invoice ' + (inv.invoice_number || inv.id) + '. (Done atomically; an overpayment becomes a customer credit.)')) { return; }
+    setBusy(true);
+    var activeBiz = getActiveWaveBusiness();
+    var siloId = activeBiz || inv.wave_business_id || t.wave_business_id || null;
+    var custForWave = acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; });
+    bankWrite('unmatch', { bank_transaction_id: t.id, wave_business_id: t.wave_business_id || activeBiz || null })
+      .then(function () {
+        return bankWrite('match_invoice', {
+          txn: { id: t.id, business_id: t.business_id, wave_business_id: t.wave_business_id, amount_abs: t.amount_abs, amount: t.amount, posted_date: t.posted_date, date: t.date, classification: t.classification, accounting_customer_id: t.accounting_customer_id, review_status: t.review_status },
+          invoice: { id: inv.id, business_id: inv.business_id, wave_business_id: inv.wave_business_id, total_amount: invoiceTotal(inv), wave_imported_paid: inv.wave_imported_paid, accounting_customer_id: inv.accounting_customer_id, invoice_number: inv.invoice_number, wave_invoice_id: inv.wave_invoice_id },
+          amount: newAmt, wave_business_id: siloId,
+          wave_customer_id: custForWave && custForWave.wave_customer_id ? custForWave.wave_customer_id : null,
+          credit_customer_id: inv.accounting_customer_id || null
+        });
+      })
+      .then(function (j) { toast.success('Match updated to ' + fmt((j && j.applied) || newAmt) + ((j && j.overpayment > 0) ? ' · ' + fmt(j.overpayment) + ' to customer credit' : '')); setEditMatchAmt({}); onReload(); load(); })
+      .catch(function (e) { console.error('[update-match]', e); toast.error('Update failed: ' + ((e && e.message) || 'unknown error') + ' — the deposit may now be unmatched; re-apply it. Screenshot for Claude.'); load(); })
+      .finally(function () { setBusy(false); });
+  }
+
   function addSplitRow() { setSplitRows(splitRows.concat([{ amount: '', category: '', customer_id: '', invoice_id: '', notes: '' }])); }
   function updSplitRow(i, k, v) { var c = splitRows.slice(); c[i] = Object.assign({}, c[i]); c[i][k] = v; setSplitRows(c); }
   function rmSplitRow(i) { var c = splitRows.slice(); c.splice(i, 1); setSplitRows(c); }
@@ -839,9 +875,20 @@ export default function BankReviewTab(props) {
                 {matchesByTxn[sel.id].map(function (m) {
                   var inv = acctInvoices.find(function (i) { return i.id === m.invoice_id; });
                   var cust = inv ? acctCustomers.find(function (cc) { return cc.id === inv.accounting_customer_id; }) : null;
-                  return <div key={m.id} className="flex items-center justify-between gap-2"><span>{cust ? (cust.company_name + ' · ') : ''}Invoice {(inv && (inv.invoice_number || inv.id)) || m.invoice_id} · {fmt(m.matched_amount)}{m.match_type ? (' · ' + labelize(m.match_type)) : ''}</span></div>;
+                  return (
+                    <div key={m.id} className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                      <span>{cust ? (cust.company_name + ' · ') : ''}Invoice {(inv && (inv.invoice_number || inv.id)) || m.invoice_id} · {fmt(m.matched_amount)}{m.match_type ? (' · ' + labelize(m.match_type)) : ''}</span>
+                      {/* v55.83-KD — edit the EXISTING match amount (reverse & re-apply), so the amount field isn't a silent no-op. */}
+                      {mayMatch && !isLocked(sel) && (
+                        <span className="flex items-center gap-1">
+                          <input value={editMatchAmt[m.id] != null ? editMatchAmt[m.id] : String(m.matched_amount)} onChange={function (e) { var v = e.target.value; setEditMatchAmt(function (p) { var nx = Object.assign({}, p); nx[m.id] = v; return nx; }); }} className="w-20 bg-white border border-indigo-300 rounded px-1 py-0.5 text-indigo-950 text-[11px]" title="Change the matched amount, then click Update" />
+                          <button onClick={function () { updateMatchAmount(m); }} disabled={busy} className="px-1.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-[10px] font-bold disabled:opacity-50">Update amount</button>
+                        </span>
+                      )}
+                    </div>
+                  );
                 })}
-                <div className="text-[10px] mt-0.5">Wave sync: Pending Wave sync (push is a later build).</div>
+                <div className="text-[10px] mt-0.5">Wave sync: Pending Wave sync (push is a later build). “Update amount” reverses &amp; re-applies; “Unmatch” fully reverses.</div>
                 {mayMatch && !isLocked(sel) && <button onClick={function () { unmatch(sel); }} disabled={busy} className="mt-1.5 px-2 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-[11px] font-bold disabled:opacity-50">Unmatch (reverse)</button>}
                 {isLocked(sel) && <div className="text-[10px] mt-1">Reopen the transaction to unmatch.</div>}
               </div>
@@ -861,7 +908,8 @@ export default function BankReviewTab(props) {
             {/* Match to invoice */}
             {mayMatch && !isLocked(sel) && (
               <div className="border-t border-slate-700 pt-2 mb-2">
-                <div className="text-[11px] font-bold text-slate-200 mb-1">Match to invoice</div>
+                <div className="text-[11px] font-bold text-slate-200 mb-1">{(matchesByTxn[sel.id] && matchesByTxn[sel.id].length > 0) ? 'Add ANOTHER invoice to this deposit (split)' : 'Match to invoice'}</div>
+                {(matchesByTxn[sel.id] && matchesByTxn[sel.id].length > 0) ? <div className="text-[10px] text-amber-300 mb-1">Already matched above. To CHANGE the amount, use “Update amount” on the match. This panel ADDS a second invoice (a split).</div> : null}
                 <Typeahead items={acctCustomers} value={mCustomerId} allowClear={true} placeholder="Search accounting customer…"
                   getLabel={function (c) { return (c.company_name || c.contact_name || c.id) + (c.email ? ' · ' + c.email : ''); }}
                   onPick={function (id) { setMCustomerId(id); setMInvoiceId(''); }} />

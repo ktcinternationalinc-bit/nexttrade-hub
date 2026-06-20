@@ -181,6 +181,7 @@ export default function CustomerLedger(props) {
   var listInvoices = useMemo(function () {
     var today = todayStr();
     return curInvoices.filter(function (i) {
+      if (!isWithinWindow(i.invoice_date, ledgerFloor)) return false; // v55.83-KD — employees: only the permitted window
       if (sourceFilter === 'wave' && !i.wave_invoice_id) return false;
       if (sourceFilter === 'hub' && i.wave_invoice_id) return false;
       if (fromDate && (i.invoice_date || '') < fromDate) return false;
@@ -191,7 +192,7 @@ export default function CustomerLedger(props) {
       if (statusFilter === 'overdue' && !(isArEligible(i) && bal > 0.005 && i.due_date && i.due_date < today)) return false;
       return true;
     }).sort(function (a, b) { return (a.invoice_date || '') < (b.invoice_date || '') ? -1 : 1; });
-  }, [curInvoices, statusFilter, sourceFilter, fromDate, toDate, payByInv]);
+  }, [curInvoices, statusFilter, sourceFilter, fromDate, toDate, payByInv, ledgerFloor]);
 
   // PAYMENT HISTORY (current currency invoices)
   var paymentHistory = useMemo(function () {
@@ -201,11 +202,14 @@ export default function CustomerLedger(props) {
       if (!invIds[p.accounting_invoice_id]) return;
       if (isPaymentVoid(p)) return;
       if (pendingSyncOnly && p.sync_status !== 'pending_wave_sync') return;
+      // v55.83-KD — employees: only payments within the permitted window (matches the rest of the screen).
+      var pd = p.payment_date || (invIds[p.accounting_invoice_id] && invIds[p.accounting_invoice_id].invoice_date);
+      if (!isWithinWindow(pd, ledgerFloor)) return;
       rows.push({ p: p, inv: invIds[p.accounting_invoice_id] });
     });
     rows.sort(function (a, b) { return (a.p.payment_date || '') < (b.p.payment_date || '') ? -1 : 1; });
     return rows;
-  }, [payments, curInvoices, pendingSyncOnly]);
+  }, [payments, curInvoices, pendingSyncOnly, ledgerFloor]);
 
   // RUNNING STATEMENT (current currency). Invoice total = Debit; wave-imported
   // paid + each hub payment = Credit. Running balance accumulates by date.
