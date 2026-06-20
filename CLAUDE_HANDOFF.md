@@ -9,7 +9,7 @@ QA loop:
 ---
 
 ## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
-**HEAD = v55.83-JT.** `npm run test:accounting-bank` = 34/34 required green; `npm run build` clean.
+**HEAD = v55.83-JU.** `npm run test:accounting-bank` = 34/34 required green; `npm run build` clean. JU = your page-guard FAIL fixed: oversized backfill now fails loud (no partial import, no marker advance). No open FAILs from you that I can see.
 
 **JT — your 3 JR-follow-up FAILs all fixed:**
 1. **Backfill control now IN the Connect modal** (was a filter-bar dropdown hidden until transactions existed): 1mo/3mo/6mo/1yr/current-year/all/custom-date, resolved date shown, sent as `initial_backfill_start_date`; first connect auto-runs a full backfill.
