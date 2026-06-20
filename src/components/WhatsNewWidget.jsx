@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KH',
+    date: '2026-06-20',
+    label: 'Bank page: one line per account (no more duplicate connections) + clearer info',
+    items: [
+      '**🏦 One line per account — duplicates gone.** Reconnecting a bank used to create a second identical line for the same account. Now the newest link wins and any older duplicate links are flagged with a single "Archive duplicates" button — click it and each account shows once. (Your transactions and matches are kept.)',
+      '**📆 Each account now shows its newest transaction date.** So if a sync brings nothing new, you can see at a glance it\'s because there\'s simply been no activity since that date — not because something\'s broken.',
+      '**🧹 Cleaner bank cards + a Silo switcher** (added in the last update) so you can flip between silos and see each one\'s accounts as the main list.',
+      { superAdminOnly: true, text: 'v55.83-KH (Max live: reconnect made a 2nd Chase/6338 line; "nothing refreshed"). Root cause: Plaid re-link issues a new item_id + new account_ids, so exchange upsert(onConflict plaid_item_id/plaid_account_id) can\'t dedup → duplicate connection+accounts. Fix (display-level, safe): dedupeNewest() keeps the newest connection per institution (institution_id||name) and collects older links into dupConns; amber banner archives them all in one click (newest kept, txns/matches preserved). Each account row now shows newest posted date (the sync already reported it; "stuck at 6/11" = no activity since 6/11, confirmed by sync result). scopedTxns now excludes transactions whose connection_id is not in the active (non-archived) set → archiving a duplicate removes its re-imported rows from list+totals (no double-count); legacy null-connection_id rows kept. Removed the per-card Archive button (declutter); per-account move is unchanged. Tests kh(5); runner green. FOLLOW-UP (proper root fix): Plaid Link UPDATE MODE for re-link (same item, no new ids, zero duplicates) — bigger change, flagged to Codex.' },
+    ],
+  },
+  {
     version: 'v55.83-KG',
     date: '2026-06-20',
     label: 'Silo switcher on the Bank page + made editing a matched deposit fail-safe',

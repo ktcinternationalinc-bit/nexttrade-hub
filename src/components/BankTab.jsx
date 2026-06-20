@@ -348,7 +348,12 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   })();
   // Account + display-range scope (NOT matched/unmatched) — counts, cards, and tab badges
   // all derive from this so the whole screen reflects the selected account and date window.
+  // v55.83-KH — exclude transactions that belong to an ARCHIVED (duplicate) connection so archiving a
+  // duplicate bank link actually removes its re-imported rows from the list, counts and totals (no
+  // double-count). Legacy rows with no connection_id are kept.
+  const activeConnIds = {}; connections.forEach(c => { activeConnIds[c.id] = true; });
   const scopedTxns = transactions.filter(t => {
+    if (t.connection_id && !activeConnIds[t.connection_id]) return false;
     if (acctFilter !== 'all' && t.account_id !== acctFilter) return false;
     if (rangeCutoff) {
       const td = t.date ? new Date(t.date) : null;
@@ -504,8 +509,16 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           var acctOther = function (a, c) { var s = effSilo(a, c); return s && s !== activeBiz; };
           var connHasActive = function (c) { var x = acctsByConn(c); if (!x.length) { return !c.wave_business_id || c.wave_business_id === activeBiz; } return x.some(function (a) { return acctActive(a, c); }); };
           var connHasOther = function (c) { var x = acctsByConn(c); if (!x.length) { return c.wave_business_id && c.wave_business_id !== activeBiz; } return x.some(function (a) { return acctOther(a, c); }); };
-          var thisSilo = connections.filter(connHasActive);
-          var otherSilo = connections.filter(connHasOther);
+          // v55.83-KH (Max: "one line item per account, always") — re-linking a bank creates a NEW Plaid
+          // item + new account ids, which duplicated the whole card. Keep only the NEWEST connection per
+          // bank (institution); older duplicate links are collected so they can be archived in one click.
+          var byNewest = function (a, b) { return (b.last_synced || '') < (a.last_synced || '') ? -1 : 1; };
+          var instKey = function (c) { return c.institution_id || c.institution_name || c.id; };
+          var dedupeNewest = function (list) { var sorted = list.slice().sort(byNewest); var kept = []; var dups = []; var seen = {}; sorted.forEach(function (c) { var k = instKey(c); if (!seen[k]) { seen[k] = true; kept.push(c); } else { dups.push(c); } }); return { kept: kept, dups: dups }; };
+          var thisDD = dedupeNewest(connections.filter(connHasActive));
+          var otherDD = dedupeNewest(connections.filter(connHasOther));
+          var thisSilo = thisDD.kept; var otherSilo = otherDD.kept;
+          var dupConns = thisDD.dups.concat(otherDD.dups);
           var renderConnCard = function (c, dimmed, mode) {
             var allAccts = acctsByConn(c);
             var accts = allAccts.length ? allAccts.filter(function (a) { return mode === 'other' ? acctOther(a, c) : acctActive(a, c); }) : [];
@@ -531,11 +544,6 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                         ⏬ Re-pull history
                       </button>
                     )}
-                    {canViewAllAccounts && (
-                      <button onClick={() => archiveConnection(c)} disabled={syncing} title="Archive this connection (e.g. a duplicate or old re-link). Hidden from the list; transactions/matches are kept." className="px-2 py-1.5 bg-rose-100 text-rose-700 rounded-lg text-[11px] font-semibold hover:bg-rose-200 disabled:opacity-50">
-                        🗄 Archive duplicate
-                      </button>
-                    )}
                   </div>
                 </div>
                 {accts.length === 0 ? (
@@ -545,6 +553,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                     {accts.map(function (a) {
                       var nm = a.name || a.official_name || (a.subtype ? (String(a.subtype).charAt(0).toUpperCase() + String(a.subtype).slice(1)) : 'Account');
                       var cnt = transactions.filter(function (t) { return t.account_id === a.plaid_account_id; }).length;
+                      var newestD = ''; transactions.forEach(function (t) { if (t.account_id === a.plaid_account_id) { var _d = String(t.posted_date || t.date || '').slice(0, 10); if (_d > newestD) { newestD = _d; } } });
                       return (
                         <div key={a.plaid_account_id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100 gap-2 flex-wrap">
                           <div className="text-xs text-slate-900">
@@ -553,7 +562,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                             <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}</span>
+                            <span className="text-[10px] text-slate-500">{cnt} txn{cnt === 1 ? '' : 's'}{newestD ? (' · newest ' + newestD) : ' · none yet'}</span>
                             <select value={acctAssignSel[a.plaid_account_id] || a.wave_business_id || ''} onChange={function (e) { var v = e.target.value; setAcctAssignSel(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = v; return n; }); }} className="px-1 py-0.5 border border-slate-300 rounded text-[10px] text-slate-900 bg-white" title="Move THIS account to a silo (6338 → Real KTC, 6353 → Kandil) and re-tag its transactions">
                               <option value="">— silo —</option>
                               {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' (Test)' : ' (Prod)')}</option>; })}
@@ -571,6 +580,13 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           return (
             <div className="space-y-3">
               <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">Bank accounts for {bizLabel(activeBiz)}</div>
+              {/* v55.83-KH — one-click cleanup of duplicate bank links created by reconnecting. */}
+              {canViewAllAccounts && dupConns.length > 0 && (
+                <div className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">
+                  <span className="text-[11px] text-amber-900 font-semibold">⚠ {dupConns.length} duplicate bank link{dupConns.length === 1 ? '' : 's'} detected (you reconnected a bank that was already linked). They add no new data — archive so each account shows once.</span>
+                  <button onClick={() => { if (window.confirm('Archive ' + dupConns.length + ' duplicate bank link(s)?\n\nThe newest link of each bank is kept; all transactions and matches are preserved.')) { dupConns.forEach(function (d) { archiveConnection(d); }); } }} disabled={syncing} className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold whitespace-nowrap">Archive duplicate{dupConns.length === 1 ? '' : 's'}</button>
+                </div>
+              )}
               {thisSilo.length === 0 ? <div className="text-[11px] text-slate-400 italic">No bank accounts assigned to this silo yet. Click “Connect Bank” above (choose this silo), or use “Move account to silo &amp; repair” on an account below.</div> : thisSilo.map(function (c) { return renderConnCard(c, false, 'active'); })}
               {canViewAllAccounts && otherSilo.length > 0 && (
                 <div className="mt-2 border-t border-slate-200 pt-2">

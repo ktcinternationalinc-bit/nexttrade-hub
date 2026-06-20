@@ -16,9 +16,9 @@ var bank = rd('src/components/BankTab.jsx');
 var exch = rd('src/app/api/plaid/exchange/route.js');
 
 // Layout contract: partition by active silo + collapse other silos
-ok('1: connections are partitioned this-silo vs other-silo by each ACCOUNT\'s effective silo (v55.83-KF)',
-  /var thisSilo = connections\.filter\(connHasActive\)/.test(bank) &&
-  /var otherSilo = connections\.filter\(connHasOther\)/.test(bank) &&
+ok('1: connections are partitioned this-silo vs other-silo by each ACCOUNT\'s effective silo, then deduped to newest-per-bank (v55.83-KF/KH)',
+  /dedupeNewest\(connections\.filter\(connHasActive\)\)/.test(bank) &&
+  /dedupeNewest\(connections\.filter\(connHasOther\)\)/.test(bank) &&
   /var effSilo = function \(a, c\) \{ return \(a && a\.wave_business_id\) \|\| \(c && c\.wave_business_id\) \|\| null; \}/.test(bank));
 ok('2: the active silo is the PRIMARY section ("Bank accounts for <silo>")',
   /Bank accounts for \{bizLabel\(activeBiz\)\}/.test(bank));
@@ -31,7 +31,7 @@ ok('4: cross-silo cards carry a clear warning when expanded',
 
 // Business-language buttons
 ok('5: buttons use business language (Sync new transactions / Re-pull history / Archive duplicate / Move account to silo & repair)',
-  /🔄 Sync new transactions/.test(bank) && /⏬ Re-pull history/.test(bank) && /🗄 Archive duplicate/.test(bank) && /Move account to silo & repair/.test(bank));
+  /🔄 Sync new transactions/.test(bank) && /⏬ Re-pull history/.test(bank) && /Archive duplicate/.test(bank) && /Move account to silo & repair/.test(bank));
 ok('6: the account move/repair asks for confirmation showing the silo + transaction count',
   /Move account ··' \+ \(a\.mask \|\| a\.plaid_account_id\) \+ ' to ' \+ bizLabel\(bizId\) \+ ' and re-tag its ' \+ cnt/.test(bank));
 

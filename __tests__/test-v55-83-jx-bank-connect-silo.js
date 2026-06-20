@@ -39,8 +39,8 @@ ok('5: archive_connection action hides a duplicate connection (status=archived),
 ok('6: assignConnection routes through the service action (not the old browser write with assigned_at)',
   /action: 'assign_connection_silo'/.test(bank) &&
   !/bank_connections'\)\.update\(\{ wave_business_id: bizId, assigned_by/.test(bank));
-ok('7: archiveConnection wired + Archive button present + archived filtered from the active list',
-  /action: 'archive_connection'/.test(bank) && /🗄 Archive/.test(bank) && /filter\(c => c\.status !== 'archived'\)/.test(bank));
+ok('7: archiveConnection wired + duplicate-archive control present + archived filtered from the active list',
+  /action: 'archive_connection'/.test(bank) && /Archive duplicate/.test(bank) && /filter\(c => c\.status !== 'archived'\)/.test(bank));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-JX bank-connect-silo tests passed'); process.exit(0); }
