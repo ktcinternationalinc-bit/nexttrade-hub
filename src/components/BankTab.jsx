@@ -161,10 +161,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       const handler = window.Plaid.create({
         token: linkData.link_token,
         onSuccess: async (public_token, metadata) => {
+          // v55.83-JR — pass the admin's chosen BACKFILL start date so first connect / re-link pulls
+          // history back to here (stored on bank_connections.initial_backfill_start_date). Derived from
+          // the SYNC PULL window selector (default 30d); 'all' backfills ~2yr (Plaid's default history).
+          const _bfDays = dateRange === 'all' ? 730 : (parseInt(dateRange, 10) || 30);
+          const _bfStart = new Date(Date.now() - _bfDays * 86400000).toISOString().split('T')[0];
           const exRes = await fetch('/api/plaid/exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ public_token, metadata, wave_business_id: chosenBiz || null }),
+            body: JSON.stringify({ public_token, metadata, wave_business_id: chosenBiz || null, initial_backfill_start_date: _bfStart }),
           });
           const exData = await exRes.json();
           if (exData.error) { setError(exData.error); return; }
@@ -204,20 +209,26 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   };
 
   // Sync transactions from Plaid
-  const syncTransactions = async (connId, attempt) => {
+  const syncTransactions = async (connId, attempt, deepPull) => {
     attempt = attempt || 0;
     setSyncing(true);
     setError('');
     setNotice('');
     try {
-      const days = parseInt(dateRange) || 30;
-      const end = new Date().toISOString().split('T')[0];
-      const start = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
-
+      // v55.83-JR — normal Sync is INCREMENTAL: send NO start_date so the server pulls FORWARD from the
+      // connection's last successful posted date (with a 7-day overlap) and pages past 500. The screen's
+      // visibility/date window no longer controls ingestion. A "deep re-pull" explicitly backfills from
+      // the SYNC PULL window (used to recover history or fill a gap).
+      const body = { connection_id: connId };
+      if (deepPull) {
+        const days = dateRange === 'all' ? 730 : (parseInt(dateRange, 10) || 30);
+        body.start_date = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+        body.end_date = new Date().toISOString().split('T')[0];
+      }
       const res = await fetch('/api/plaid/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connId, start_date: start, end_date: end }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.pending) {
@@ -244,10 +255,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       await loadData();
       // v55.83-IR — never leave sync silent. Report exactly what Plaid returned so "nothing happened"
       // becomes actionable (0 new, scoped to another silo, or widen the date range).
+      // v55.83-JR — report the incremental window, page count, and newest posted date so "stale" is
+      // diagnosable at a glance.
       var procN = Number(data.synced) || 0;
       var totalN = (data.total != null) ? Number(data.total) : null;
-      var msg = '✅ Plaid sync done — ' + procN + ' transaction(s) processed' + (totalN != null ? (' (Plaid reported ' + totalN + ' in the last ' + (parseInt(dateRange) || 30) + ' days)') : '') + '.';
-      if (procN === 0) { msg += ' No transactions returned for that window — widen the date range above, or this account may have no recent activity.'; }
+      var win = data.window || {};
+      var msg = '✅ Sync done — ' + procN + ' transaction(s) processed' + (totalN != null ? (' (Plaid total in window: ' + totalN + ')') : '') + (data.pages > 1 ? (' across ' + data.pages + ' pages') : '') + '.';
+      if (win.start) { msg += ' Pulled ' + (win.incremental ? 'forward from ' : 'from ') + win.start + ' → ' + (win.end || 'today') + '.'; }
+      if (data.newest_posted_date) { msg += ' Newest posted: ' + data.newest_posted_date + '.'; }
+      if (procN === 0) { msg += ' No new transactions since the last sync — this account may have no recent activity (use “Deep re-pull” to backfill older history).'; }
       setNotice(msg);
     } catch (e) { setError(e.message); }
     setSyncing(false);
@@ -412,9 +428,14 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                         <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.status}</span>
                       </div>
                     </div>
-                    <button onClick={() => syncTransactions(c.id)} disabled={syncing} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
-                      {syncing ? '⏳ Syncing...' : '🔄 Sync connection'}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => syncTransactions(c.id)} disabled={syncing} title="Pulls forward from the last synced date (gap-free incremental). The list date filter does not affect this." className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
+                        {syncing ? '⏳ Syncing...' : '🔄 Sync (incremental)'}
+                      </button>
+                      <button onClick={() => syncTransactions(c.id, 0, true)} disabled={syncing} title="Backfill older history from the window selected in SYNC PULL above (use to recover history or fill a gap). Idempotent — never duplicates." className="px-2 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50">
+                        ⏬ Deep re-pull
+                      </button>
+                    </div>
                   </div>
                   {accts.length === 0 ? (
                     <div className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1">Account details pending — click Sync connection to pull account names &amp; masks.</div>
@@ -507,12 +528,15 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       {transactions.length > 0 && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
-            <label className="text-[10px] text-amber-800 font-bold">⟳ SYNC PULL</label>
-            <select value={dateRange} onChange={e => setDateRange(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-amber-900 font-semibold" title="How far back the NEXT Plaid sync will import. Does not change what is shown below.">
+            <label className="text-[10px] text-amber-800 font-bold">⟳ BACKFILL</label>
+            <select value={dateRange} onChange={e => setDateRange(e.target.value)} className="text-xs bg-transparent border-0 focus:ring-0 text-amber-900 font-semibold" title="How far back to backfill on Connect Bank and on 'Deep re-pull'. Normal 'Sync (incremental)' ignores this and pulls forward from the last synced date.">
               <option value="7">7 days</option>
               <option value="30">30 days</option>
               <option value="60">60 days</option>
               <option value="90">90 days</option>
+              <option value="180">6 months</option>
+              <option value="365">1 year</option>
+              <option value="all">All (~2 yr)</option>
             </select>
           </div>
           <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">

@@ -15,6 +15,7 @@ var MANIFEST = [
   // Bank/Plaid ingestion + display
   { f: 'test-v55-83-x-bank-ingest.js', label: 'must-pass', why: 'Plaid transaction mapping/ingest' },
   { f: 'test-v55-83-fg-plaid-sync-defensive.js', label: 'must-pass', why: 'Plaid sync defensive handling' },
+  { f: 'test-v55-83-jr-plaid-incremental-sync.js', label: 'new', why: 'Plaid gap-free incremental sync: pages past 500, pulls forward from last_successful_posted_date (not UI window), backfill date on connect, markers stored' },
   { f: 'test-v55-83-is-unmatch-and-plaid-scope.js', label: 'new', why: 'unmatch→service route; BankTab silo-scope-before-limit; Plaid requires service-role' },
   { f: 'test-v55-83-it-bank-consistency.js', label: 'new', why: 'Bank Review scope-before-limit; canonical posted_date on both screens; deep-link keeps account' },
   { f: 'test-v55-83-db-bank-assign.js', label: 'updated', why: 'ACCOUNT-level bank→silo mapping (6338/6353), ingestion stamps by account, assign+repair endpoint' },

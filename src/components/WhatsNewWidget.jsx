@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-JR',
+    date: '2026-06-19',
+    label: 'Bank sync no longer goes stale — it now pulls forward from where it left off and never stops at 500',
+    items: [
+      '**🔄 "Sync" now catches up automatically.** Instead of only re-checking a fixed date window, the normal Sync button now pulls **forward from the last date it successfully synced** (with a few days of overlap to catch late-posting items) — so a connection can\'t silently freeze on an old date. It also **pages through everything**; before, a bank with more than 500 transactions in the window only imported the first 500.',
+      '**⏬ New "Deep re-pull" button + Backfill window** for recovering older history or filling a gap, and when you Connect/re-connect a bank you choose how far back to pull (up to ~2 years). The sync result now tells you the window pulled, how many pages, and the newest transaction date — so "is it stale?" is answerable at a glance.',
+      { superAdminOnly: true, text: 'v55.83-JR (Codex launch FAIL — Plaid backfill/incremental sync). plaid/transactions: effective start = request start_date → else last_successful_posted_date−7d overlap → else initial_backfill_start_date → else 30d; PAGES /transactions/get to total_transactions (was offset:0 only → silent partial >500); stores last_successful_posted_date + last_successful_plaid_sync_at AFTER a successful upsert (no marker advance on failure → no gaps); returns newest_posted_date + newest_by_account + pages + window. BankTab: normal Sync sends NO start_date (incremental); NEW Deep re-pull sends the BACKFILL window; SYNC PULL relabeled BACKFILL (+6mo/1yr/all). exchange stores initial_backfill_start_date (schema-safe). NEW sql/v55-83-JR-plaid-incremental-sync.sql (initial_backfill_start_date, last_successful_posted_date, last_successful_plaid_sync_at, plaid_cursor — MAX MUST RUN for markers to persist; degrades to 30d default without it). Ingestion stores full authorized history independent of the per-user visibility window. Test jr(9); runner green. NEXT (Codex): /transactions/sync cursor migration is the long-term form; invoice-line Wave DESCRIPTION selection (his other open FAIL).' },
+    ],
+  },
+  {
     version: 'v55.83-JQ',
     date: '2026-06-19',
     label: 'FIXED: production Wave unlock now saves (real root cause found) + full A/R + Ledger visibility admin tool',

@@ -14,7 +14,7 @@ const supabase = createClient(
 
 export async function POST(req) {
   try {
-    const { public_token, metadata, wave_business_id } = await req.json();
+    const { public_token, metadata, wave_business_id, initial_backfill_start_date } = await req.json();
     const env = process.env.PLAID_ENV || 'sandbox';
     const base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
@@ -35,8 +35,9 @@ export async function POST(req) {
     const { access_token, item_id } = data;
     const institution = metadata?.institution || {};
 
-    // Store connection in Supabase
-    const { data: conn, error } = await supabase.from('bank_connections').upsert({
+    // Store connection in Supabase. v55.83-JR — also record the admin's chosen backfill start date so
+    // sync can pull history back to it. Schema-safe: if the JR column isn't present yet, retry without.
+    const baseConn = {
       plaid_item_id: item_id,
       access_token,
       institution_id: institution.institution_id || null,
@@ -44,8 +45,14 @@ export async function POST(req) {
       status: 'active',
       wave_business_id: wave_business_id || null,
       last_synced: new Date().toISOString(),
-    }, { onConflict: 'plaid_item_id' }).select().single();
-
+    };
+    const connInsert = Object.assign({}, baseConn);
+    if (initial_backfill_start_date) { connInsert.initial_backfill_start_date = String(initial_backfill_start_date).substring(0, 10); }
+    let conn, error;
+    ({ data: conn, error } = await supabase.from('bank_connections').upsert(connInsert, { onConflict: 'plaid_item_id' }).select().single());
+    if (error && /initial_backfill_start_date|column/.test(error.message || '')) {
+      ({ data: conn, error } = await supabase.from('bank_connections').upsert(baseConn, { onConflict: 'plaid_item_id' }).select().single());
+    }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     // Pull accounts so we can show account names/masks. Balances are stored here but
