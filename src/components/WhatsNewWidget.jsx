@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KG',
+    date: '2026-06-20',
+    label: 'Silo switcher on the Bank page + made editing a matched deposit fail-safe',
+    items: [
+      '**🔀 Switch silos right on the Bank page.** There\'s now a "Silo" dropdown at the top of Connected Accounts — pick a silo and the bank accounts below instantly switch to that silo\'s accounts. No more hunting through the global selector or the "Other silos" expander.',
+      '**🛟 Editing a matched deposit can no longer leave it half-changed.** The change now applies the new match first and only then reverses the old one — and if anything goes wrong mid-way, it puts the original match back exactly as it was. You\'ll see "no change was made, your original match is intact" rather than a deposit stuck unmatched.',
+      { superAdminOnly: true, text: 'v55.83-KG (Codex money-safety + Max silo-toggle). update_match reordered to APPLY-NEW-FIRST then REVERSE-OLD: insert new match → insert new payment (on payment failure, void new match → original untouched, returns "no change made") → insert overpayment credit/unapplied (track ids) → void OLD rows excluding the new ids (.neq id) → on any void error, RESTORE old matches/payments to their snapshot voided/sync_status + void the new rows + recompute → return {restored:true}. Anti-double-count on the new invoice now excludes this txn\'s to-be-voided payments. (Supabase UPDATE is per-statement atomic; cross-statement restore via snapshot. A true SQL-RPC transaction remains the ideal future hardening.) BankTab: imports setActiveWaveBusiness; switchSilo(id) sets active silo + mirrors siloSel + dispatches wave-business-changed + loadData(); silo <select> in the Connected Accounts header. Tests kg(7); ke assertion 3 now index-ordered (apply-before-reverse). Runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KF',
     date: '2026-06-20',
     label: 'Fixed the Account Ledger crash + match-edit + bank silo grouping + AR sorting + Wave categories',

@@ -378,11 +378,12 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, unmatched_invoices: ik.length, api_build_marker: API_BUILD_MARKER });
     }
 
-    // ── update_match: ATOMICALLY change an existing match's invoice and/or amount (Codex P0). One state
-    // transition: reverse the current Hub match(es)/payment(s) for the deposit, recompute the OLD
-    // invoice(s), then create ONE new match+payment on the chosen invoice at the new amount, recompute
-    // the NEW invoice (overpayment → credit). BLOCKS if the existing payment was already pushed to Wave
-    // (returns needs_wave_reversal) — never silently overwrites a synced row. No orphans/duplicates.
+    // ── update_match: change an existing match's invoice and/or amount safely (Codex P0 money-safety).
+    // Ordering is APPLY-NEW-FIRST, THEN REVERSE-OLD, with restore on any failure: the original match
+    // stays intact until the new match+payment are written; if reversing the old rows then fails, the
+    // old rows are restored and the new rows voided so the deposit is NEVER left half-changed. BLOCKS if
+    // the existing payment was already pushed to Wave (returns needs_wave_reversal) — never silently
+    // overwrites a synced row. Recomputes the OLD invoice(s) + the NEW invoice. No orphans/duplicates.
     if (action === 'update_match') {
       var uTid = body.bank_transaction_id; var uNewInv = body.new_invoice_id; var uNewAmt = roundMoney(Number(body.amount));
       if (!uTid || !uNewInv) { return NextResponse.json({ ok: false, error: 'bank_transaction_id and new_invoice_id are required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -413,33 +414,63 @@ export async function POST(req) {
       }
       var uBiz = uTx.business_id || uNi.business_id || null;
       var uSilo = body.wave_business_id || uNi.wave_business_id || uTx.wave_business_id || null;
-      // 1) reverse the current match(es)/payment(s) + overpayment artifacts for this deposit.
-      await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', uTid);
-      await db.from('payment_matches').update({ voided: true }).eq('bank_transaction_id', uTid);
-      try { await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', uTid).eq('status', 'open'); } catch (eUC) {}
-      try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', uTid).eq('status', 'open'); } catch (eUD) {}
-      // 2) anti-double-count on the NEW invoice (after voiding the old rows above).
-      var uIpR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('accounting_invoice_id', uNi.id);
+      var ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+      // v55.83-KG (Codex money-safety): APPLY-NEW-FIRST, THEN REVERSE-OLD, with full restore on any
+      // failure. The old version voided the old rows BEFORE the new insert, so a failed new insert left
+      // the deposit unmatched. Now the original match stays intact until the new one is safely written;
+      // if reversing the old rows fails, we restore them to their prior state and void the new rows so
+      // the deposit is never left half-changed (Supabase UPDATE is per-statement atomic; we snapshot +
+      // restore across statements).
+      // Snapshot old matches (old payments are already in uEx) so we can restore on failure.
+      var uOldMatchR = await db.from('payment_matches').select('id, voided').eq('bank_transaction_id', uTid);
+      var uOldMatches = (uOldMatchR && uOldMatchR.data) || [];
+      // anti-double-count on the NEW invoice — EXCLUDE this deposit's (to-be-voided) payments so the
+      // calc is correct regardless of the void timing.
+      var uIpR = await db.from('accounting_invoice_payments').select('amount, voided, sync_status, bank_transaction_id').eq('accounting_invoice_id', uNi.id);
       var uPaid = Number(uNi.wave_imported_paid) || 0; var uipr = (uIpR && uIpR.data) || []; var uy;
-      for (uy = 0; uy < uipr.length; uy++) { if (!isPaymentVoid(uipr[uy])) { uPaid += Number(uipr[uy].amount) || 0; } }
+      for (uy = 0; uy < uipr.length; uy++) { if (!isPaymentVoid(uipr[uy]) && uipr[uy].bank_transaction_id !== uTid) { uPaid += Number(uipr[uy].amount) || 0; } }
       var uCc = classifyApplication(Number(uNi.total_amount) || 0, roundMoney(uPaid), uNewAmt);
-      // 3) new match + payment.
+      // 1) APPLY NEW FIRST (old still intact). Match.
       var uMi = await db.from('payment_matches').insert({ business_id: uBiz, wave_business_id: uSilo, bank_transaction_id: uTid, invoice_id: uNi.id, matched_amount: uCc.applied_to_invoice, match_type: uCc.type, is_manual_override: true, notes: 'match edit', matched_by: by, created_by: by }).select();
-      if (uMi && uMi.error) { return NextResponse.json({ ok: false, error: 'Could not save the updated match: ' + uMi.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (uMi && uMi.error) { return NextResponse.json({ ok: false, error: 'Could not save the updated match (no change made): ' + uMi.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var uMid = (uMi && uMi.data && uMi.data.length) ? uMi.data[0].id : null;
+      // Payment. If this fails, void the new match → original match is untouched.
       var uPi = await db.from('accounting_invoice_payments').insert({ business_id: uBiz, wave_business_id: uSilo, accounting_invoice_id: uNi.id, accounting_customer_id: uNi.accounting_customer_id || null, amount: uCc.applied_to_invoice, payment_date: uTx.posted_date || uTx.date || null, source: 'plaid_match', bank_transaction_id: uTid, payment_match_id: uMid, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: uNi.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: 'match edit', created_by: by }).select();
-      if (uPi && uPi.error) { try { await db.from('payment_matches').update({ voided: true }).eq('id', uMid); } catch (eR) {} return NextResponse.json({ ok: false, error: 'Updated match created but the payment failed (rolled back): ' + uPi.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      // 4) overpayment → credit/unapplied.
+      if (uPi && uPi.error) { try { await db.from('payment_matches').update({ voided: true }).eq('id', uMid); } catch (eR) {} return NextResponse.json({ ok: false, error: 'Could not save the payment — NO change was made, your original match is intact: ' + uPi.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var uPid = (uPi && uPi.data && uPi.data.length) ? uPi.data[0].id : null;
+      // overpayment → credit/unapplied (track ids so we can exclude/roll them back).
+      var uCreditId = null; var uUnapId = null;
       if (uCc.overpayment > 0) {
         var uCredCust = body.credit_customer_id || uNi.accounting_customer_id || null;
-        if (uCredCust) { await db.from('customer_credits').insert({ business_id: uBiz, wave_business_id: uSilo, accounting_customer_id: uCredCust, source_transaction_id: uTid, amount: uCc.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (uNi.invoice_number || uNi.id) + ' (match edit)', created_by: by }); }
-        else { await db.from('unapplied_deposits').insert({ business_id: uBiz, wave_business_id: uSilo, bank_transaction_id: uTid, accounting_customer_id: null, amount: uCc.overpayment, status: 'open', notes: 'Overpayment (match edit, no customer)', created_by: by }); }
+        if (uCredCust) { var uCrIns = await db.from('customer_credits').insert({ business_id: uBiz, wave_business_id: uSilo, accounting_customer_id: uCredCust, source_transaction_id: uTid, amount: uCc.overpayment, status: 'open', notes: 'Overpayment on invoice ' + (uNi.invoice_number || uNi.id) + ' (match edit)', created_by: by }).select(); if (uCrIns && uCrIns.data && uCrIns.data.length) { uCreditId = uCrIns.data[0].id; } }
+        else { var uUnIns = await db.from('unapplied_deposits').insert({ business_id: uBiz, wave_business_id: uSilo, bank_transaction_id: uTid, accounting_customer_id: null, amount: uCc.overpayment, status: 'open', notes: 'Overpayment (match edit, no customer)', created_by: by }).select(); if (uUnIns && uUnIns.data && uUnIns.data.length) { uUnapId = uUnIns.data[0].id; } }
       }
-      // 5) recompute OLD invoice(s) + the NEW invoice.
+      // 2) REVERSE OLD (exclude the rows we just created). Void matches first, then payments, so a
+      // failure restore is straightforward. Each UPDATE is per-statement atomic.
+      var uVoidErr = null;
+      var uVm = await db.from('payment_matches').update({ voided: true }).eq('bank_transaction_id', uTid).neq('id', uMid || ZERO_UUID);
+      if (uVm && uVm.error) { uVoidErr = 'matches: ' + uVm.error.message; }
+      if (!uVoidErr) { var uVp = await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', uTid).neq('id', uPid || ZERO_UUID); if (uVp && uVp.error) { uVoidErr = 'payments: ' + uVp.error.message; } }
+      if (!uVoidErr) { try { await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', uTid).eq('status', 'open').neq('id', uCreditId || ZERO_UUID); } catch (eUC) {} }
+      if (!uVoidErr) { try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', uTid).eq('status', 'open').neq('id', uUnapId || ZERO_UUID); } catch (eUD) {} }
+      if (uVoidErr) {
+        // RESTORE old rows to prior state + void the new rows → original match intact, no change applied.
+        var uri;
+        for (uri = 0; uri < uOldMatches.length; uri++) { if (uOldMatches[uri].id !== uMid) { try { await db.from('payment_matches').update({ voided: uOldMatches[uri].voided === true }).eq('id', uOldMatches[uri].id); } catch (eRM) {} } }
+        for (uri = 0; uri < uEx.length; uri++) { if (uEx[uri].id !== uPid) { try { await db.from('accounting_invoice_payments').update({ voided: uEx[uri].voided === true, sync_status: uEx[uri].sync_status || null }).eq('id', uEx[uri].id); } catch (eRP) {} } }
+        try { await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('id', uPid); } catch (eVN) {}
+        try { await db.from('payment_matches').update({ voided: true }).eq('id', uMid); } catch (eVM) {}
+        if (uCreditId) { try { await db.from('customer_credits').update({ status: 'void' }).eq('id', uCreditId); } catch (eVC) {} }
+        if (uUnapId) { try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('id', uUnapId); } catch (eVU) {} }
+        try { await recompute(db, uNi.id); } catch (eRR) {}
+        var uok0; for (uok0 in oldInvIds) { try { await recompute(db, uok0); } catch (eRR2) {} }
+        return NextResponse.json({ ok: false, error: 'Could not complete the change cleanly (' + uVoidErr + '). Restored your original match — nothing was changed. Please retry; if it persists, screenshot for Claude.', restored: true, api_build_marker: API_BUILD_MARKER }, { status: 500 });
+      }
+      // 3) recompute OLD invoice(s) + the NEW invoice.
       var uOldKeys = Object.keys(oldInvIds); var uok;
       for (uok = 0; uok < uOldKeys.length; uok++) { if (uOldKeys[uok] !== uNi.id) { try { await recompute(db, uOldKeys[uok]); } catch (eR1) {} } }
       var uRecomputed = null; try { uRecomputed = await recompute(db, uNi.id); } catch (eR2) {}
-      // 6) re-stamp the deposit to the new invoice.
+      // 4) re-stamp the deposit to the new invoice.
       await db.from('bank_transactions').update({ classification: uTx.classification || 'customer_payment', linked_type: 'invoice', linked_id: uNi.id, matched_invoice_id: uNi.id, accounting_customer_id: body.match_customer_id || uNi.accounting_customer_id || uTx.accounting_customer_id || null, updated_by: by }).eq('id', uTid);
       return NextResponse.json({ ok: true, applied: uCc.applied_to_invoice, overpayment: uCc.overpayment, type: uCc.type, new_invoice_id: uNi.id, invoice: uRecomputed, reversed_invoices: uOldKeys.length, api_build_marker: API_BUILD_MARKER });
     }

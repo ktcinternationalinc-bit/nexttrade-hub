@@ -20,10 +20,15 @@ ok('1: update_match action exists + is payments.match gated',
 ok('2: blocks editing a match whose payment is already in Wave (needs_wave_reversal, no silent overwrite)',
   /pp\.wave_payment_id \|\| pp\.sync_status === 'synced' \|\| pp\.sync_status === 'manual_done'/.test(route) &&
   /needs_wave_reversal: true/.test(route));
-ok('3: atomically reverses old match+payment (+credits/unapplied) then creates ONE new match+payment',
-  /from\('accounting_invoice_payments'\)\.update\(\{ voided: true, sync_status: 'void' \}\)\.eq\('bank_transaction_id', uTid\)/.test(route) &&
-  /from\('payment_matches'\)\.update\(\{ voided: true \}\)\.eq\('bank_transaction_id', uTid\)/.test(route) &&
-  /from\('payment_matches'\)\.insert\(\{[\s\S]{0,260}match edit/.test(route));
+ok('3: APPLY-NEW-FIRST then REVERSE-OLD — new match+payment inserted before old rows are voided (v55.83-KG money-safety)',
+  (function () {
+    var iApply = route.indexOf('1) APPLY NEW FIRST');
+    var iNewMatch = route.indexOf("from('payment_matches').insert({", iApply);
+    var iReverse = route.indexOf('2) REVERSE OLD');
+    var iVoidOld = route.indexOf("from('payment_matches').update({ voided: true }).eq('bank_transaction_id', uTid).neq('id', uMid");
+    var hasVoidPay = route.indexOf("from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', uTid).neq('id', uPid") >= 0;
+    return iApply >= 0 && iNewMatch > iApply && iReverse > iNewMatch && iVoidOld > iReverse && hasVoidPay;
+  })());
 ok('4: recomputes BOTH the old invoice(s) and the new invoice',
   /for \(uok = 0; uok < uOldKeys\.length; uok\+\+\)[\s\S]{0,120}recompute\(db, uOldKeys\[uok\]\)/.test(route) &&
   /uRecomputed = await recompute\(db, uNi\.id\)/.test(route));

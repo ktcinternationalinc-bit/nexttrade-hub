@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { fmtET } from '../lib/et-time';
-import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
+import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
@@ -20,6 +20,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const [backfillWin, setBackfillWin] = useState('90');   // 30/90/180/365/cy/all/custom (days or 'cy'/'all')
   const [backfillCustom, setBackfillCustom] = useState(''); // explicit start date when backfillWin==='custom'
   const [showOtherSilos, setShowOtherSilos] = useState(false); // v55.83-JY — collapse cross-silo connections (admin diagnostics)
+  const [siloSel, setSiloSel] = useState(''); // v55.83-KG — Bank-page silo switcher (mirrors the active accounting silo)
   const [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE admin visibility window
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -147,6 +148,17 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // v55.83-GI — re-runs when bizRegistry loads, so the first scope isn't computed against an empty
   // registry (which would briefly show all silos' transactions).
   useEffect(() => { loadData(); }, [loadData]);
+
+  // v55.83-KG (Max — "where is the toggle to go from one silo to the next") — keep the page-level silo
+  // switcher in sync with the active accounting silo, and switching it re-scopes the whole Bank page.
+  useEffect(() => { setSiloSel(getActiveWaveBusiness() || ''); }, []);
+  function switchSilo(id) {
+    setActiveWaveBusiness(id || '');
+    setSiloSel(id || '');
+    try { if (typeof window !== 'undefined') window.dispatchEvent(new Event('wave-business-changed')); } catch (e) {}
+    setShowOtherSilos(false);
+    loadData();
+  }
 
   // v55.83-JT — resolve the explicit backfill start date from the chosen window (used by connect +
   // Deep re-pull). Options: N days, 'cy' (Jan 1 this year), 'all' (~2yr Plaid default), 'custom' (date).
@@ -451,11 +463,19 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
 
       {/* Connected Banks */}
       <div className="bg-white rounded-xl p-4 mb-3 shadow-sm border">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h3 className="font-bold text-sm">Connected Accounts / حسابات متصلة</h3>
-          <button onClick={function () { setError(''); setConnectBizSel(getActiveWaveBusiness() || ''); setConnectModalOpen(true); }} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
-            + Connect Bank
-          </button>
+          <div className="flex items-center gap-2">
+            {/* v55.83-KG — silo switcher: flip silos and see each one's accounts as the primary view. */}
+            <label className="text-[11px] font-bold text-slate-500">Silo:</label>
+            <select value={siloSel} onChange={function (e) { switchSilo(e.target.value); }} className="px-2 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 bg-white" title="Switch the accounting silo — the bank accounts below update to that silo">
+              {bizRegistry.length === 0 ? <option value="">(loading silos…)</option> : null}
+              {bizRegistry.map(function (b) { return <option key={b.wave_business_id} value={b.wave_business_id}>{(b.label || b.wave_business_id) + (b.is_production === false ? ' · Test' : ' · Prod')}</option>; })}
+            </select>
+            <button onClick={function () { setError(''); setConnectBizSel(getActiveWaveBusiness() || ''); setConnectModalOpen(true); }} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
+              + Connect Bank
+            </button>
+          </div>
         </div>
 
         {connections.length === 0 ? (
