@@ -61,21 +61,38 @@ export async function POST(req) {
     var existsRes = await db.from('wave_business_registry').select('wave_business_id, label').eq('wave_business_id', toId).limit(1);
     if (existsRes && existsRes.data && existsRes.data.length) { return NextResponse.json({ ok: false, error: 'Another silo ("' + (existsRes.data[0].label || toId) + '") is already bound to that Wave business. Remove/rename it first.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
 
-    // 3) COUNT every silo-scoped table + the registry row (this is the dry-run preview total). No mutation.
-    var counts = {}; var total = 0; var i;
+    // 3) COUNT every silo-scoped table + the registry row (dry-run preview total). No mutation here.
+    // v55.83-KR (Codex caution) — an UNEXPECTED count error must ABORT before any mutation (never skip a
+    // table then declare success, which could leave rows on the old id). A genuinely-ABSENT optional table
+    // (undefined_table/column) is the only allowed skip, and it's REPORTED (skipped_optional_tables), not
+    // silent — so the operator can see exactly what was and wasn't covered.
+    var isMissingObjErr = function (err) {
+      if (!err) { return false; }
+      var c = String(err.code || ''); var m = String(err.message || '').toLowerCase();
+      return c === '42P01' || c === '42703' || c.indexOf('PGRST') === 0 || m.indexOf('does not exist') >= 0 || m.indexOf('could not find') >= 0 || m.indexOf('schema cache') >= 0;
+    };
+    var counts = {}; var total = 0; var skipped = {}; var i;
     for (i = 0; i < SCOPED_TABLES.length; i++) {
       var tbl = SCOPED_TABLES[i];
-      try {
-        var cRes = await db.from(tbl).select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId);
-        var n = (cRes && !cRes.error && typeof cRes.count === 'number') ? cRes.count : 0;
-        counts[tbl] = n; total = total + n;
-      } catch (eC) { counts[tbl] = 0; }
+      var cErr = null; var cRes = null;
+      try { cRes = await db.from(tbl).select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId); if (cRes && cRes.error) { cErr = cRes.error; } }
+      catch (eC) { cErr = { message: (eC && eC.message) || String(eC) }; }
+      if (cErr) {
+        if (isMissingObjErr(cErr)) { skipped[tbl] = (cErr.message || 'table/column absent'); counts[tbl] = 0; continue; }
+        return NextResponse.json({ ok: false, error: 'Bind aborted BEFORE any change — could not read table "' + tbl + '" to verify what would move: ' + (cErr.message || 'unknown') + '. NOTHING was changed. Retry; if it persists, screenshot for Claude.', api_build_marker: API_BUILD_MARKER }, { status: 500 });
+      }
+      var n = (cRes && typeof cRes.count === 'number') ? cRes.count : 0;
+      counts[tbl] = n; total = total + n;
     }
-    var rgC = await db.from('wave_business_registry').select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId);
-    var regCount = (rgC && !rgC.error && typeof rgC.count === 'number') ? rgC.count : 0;
+    var rgC = null; var rgErr = null;
+    try { rgC = await db.from('wave_business_registry').select('*', { count: 'exact', head: true }).eq('wave_business_id', fromId); if (rgC && rgC.error) { rgErr = rgC.error; } }
+    catch (eRgC) { rgErr = { message: (eRgC && eRgC.message) || String(eRgC) }; }
+    if (rgErr) { return NextResponse.json({ ok: false, error: 'Bind aborted BEFORE any change — could not read the registry to verify the silo: ' + (rgErr.message || 'unknown') + '. NOTHING was changed.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+    var regCount = (rgC && typeof rgC.count === 'number') ? rgC.count : 0;
+    var skippedKeys = Object.keys(skipped);
 
     if (dryRun) {
-      return NextResponse.json({ ok: true, dry_run: true, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, message: 'Preview: binding will re-tag ' + total + ' data row(s) + ' + regCount + ' registry row to "' + (realName || toId) + '". Nothing changed yet.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
+      return NextResponse.json({ ok: true, dry_run: true, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, skipped_optional_tables: skipped, message: 'Preview: binding will re-tag ' + total + ' data row(s) + ' + regCount + ' registry row to "' + (realName || toId) + '".' + (skippedKeys.length ? (' Skipped ' + skippedKeys.length + ' absent optional table(s): ' + skippedKeys.join(', ') + '.') : '') + ' Nothing changed yet.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 
     // 4) EXECUTE — ALL-OR-NOTHING (Codex live-safety blocker). Re-stamp each table from->to; if ANY fails,
@@ -118,7 +135,7 @@ export async function POST(req) {
         api_build_marker: API_BUILD_MARKER }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, dry_run: false, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, message: 'Bound to "' + (realName || toId) + '". Re-tagged ' + total + ' data row(s) + the registry. Now Test / Pull categories.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
+    return NextResponse.json({ ok: true, dry_run: false, from_wave_business_id: fromId, to_wave_business_id: toId, wave_business_name: realName, registry_rows: regCount, data_rows_total: total, counts: counts, skipped_optional_tables: skipped, message: 'Bound to "' + (realName || toId) + '". Re-tagged ' + total + ' data row(s) + the registry.' + (skippedKeys.length ? (' (' + skippedKeys.length + ' absent optional table(s) skipped: ' + skippedKeys.join(', ') + '.)') : '') + ' Now Test / Pull categories.', api_build_marker: API_BUILD_MARKER }, { status: 200 });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }

@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KR',
+    date: '2026-06-20',
+    label: 'Bind tool: aborts safely if it can\'t fully verify the data first',
+    items: [
+      '**🧷 Extra safety on binding.** Before moving anything, the bind tool now reads every table to confirm what will move. If it can\'t read one (a glitch or database hiccup), it stops *before* touching anything and tells you — rather than skipping that table and reporting success. A table that genuinely doesn\'t exist in your database is the only thing it skips, and it now lists exactly which ones, so nothing is hidden.',
+      { superAdminOnly: true, text: 'v55.83-KR (Codex KQ caution). bind-business precheck: isMissingObjErr() recognizes only undefined_table/column (42P01/42703/PGRST/"does not exist"/"could not find"/"schema cache") as an allowed optional skip → reported in skipped_optional_tables (dry-run + result). ANY other count error (table read or registry read), or a thrown error, ABORTS before mutation with "Bind aborted BEFORE any change". Removes the prior silent error→0→skip→success path. Test kq/kr(8). Runner green. Handoff refreshed to KR.' },
+    ],
+  },
+  {
     version: 'v55.83-KQ',
     date: '2026-06-20',
     label: 'Made the "bind to Wave business" tool safe to run on real data',

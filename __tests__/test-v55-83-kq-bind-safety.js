@@ -32,6 +32,14 @@ ok('5: NORMAL bind mode lists ONLY placeholder silos; advanced rebind is opt-in'
   /Advanced: allow rebinding an already-connected silo/.test(conn));
 ok('6: rebinding an already-connected (non-placeholder) silo requires an extra explicit confirmation',
   /if \(!isPlaceholderWaveBusiness\(siloFrom\)\) \{[\s\S]{0,200}ADVANCED: that silo is already connected/.test(conn));
+// v55.83-KR — precheck count errors must ABORT before mutation, not silently become 0 then succeed.
+ok('7 (KR): an UNEXPECTED count/precheck error aborts BEFORE any mutation (no skip-then-succeed)',
+  /var isMissingObjErr = function \(err\)/.test(bind) &&
+  /Bind aborted BEFORE any change — could not read table/.test(bind) &&
+  /Bind aborted BEFORE any change — could not read the registry/.test(bind));
+ok('8 (KR): a genuinely-absent optional table is skipped but REPORTED (not silent)',
+  /skipped\[tbl\] = \(cErr\.message/.test(bind) &&
+  /skipped_optional_tables: skipped/.test(bind));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-KQ bind-safety tests passed'); process.exit(0); }
