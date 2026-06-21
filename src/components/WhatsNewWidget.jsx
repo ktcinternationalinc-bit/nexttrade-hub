@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KV',
+    date: '2026-06-21',
+    label: 'The "Connect to Wave" button is now in the Settings tab too (so you can\'t miss it)',
+    items: [
+      '**🔗 Connect button everywhere it\'s needed.** The "Connect this silo to Wave now" button is now in the Settings tab as well as the red banner at the top — so however you scrolled, the actual button is right there, not just a note pointing elsewhere.',
+      { superAdminOnly: true, text: 'v55.83-KV. Added the connectToWave button + connectMsg + pick-list to the Settings-tab placeholder branch (was a note pointing to the top banner). Same one-click action. Runner 53/53; clean build.' },
+    ],
+  },
+  {
     version: 'v55.83-KU',
     date: '2026-06-21',
     label: 'Connect-to-Wave now auto-picks the right business (one click)',

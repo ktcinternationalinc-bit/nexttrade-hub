@@ -870,7 +870,20 @@ export default function WaveSyncCenter(props) {
       {tab === 'settings' && canManageSettings && isPlaceholderWaveBusiness(active) && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
           <div className="text-sm font-bold text-slate-900 mb-1">Connect this silo to Wave first</div>
-          <div className="text-xs text-slate-600">All the setup below (deposit account, invoice product, categories, push toggles) only works once this silo is bound to a real Wave business — Wave rejects every call for a placeholder id. Use the red banner above → <b>Wave Connection → Bind this silo</b>, then come back here to finish setup.</div>
+          <div className="text-xs text-slate-600 mb-3">All the setup (deposit account, invoice product, categories, push toggles) only works once this silo is bound to a real Wave business — Wave rejects every call for a placeholder id. Click below to connect it (same one-click action as the red banner above):</div>
+          {/* v55.83-KV — put the actual Connect button HERE too, so it's wherever the user is looking. */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={connectToWave} disabled={connecting} className="px-4 py-2 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-sm font-extrabold disabled:opacity-60">{connecting ? 'Connecting…' : '🔗 Connect this silo to Wave now'}</button>
+            {props.onGoToWaveConnection && <button onClick={function () { props.onGoToWaveConnection(); }} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-bold">or open Wave Connection</button>}
+          </div>
+          {connectMsg && <div className="text-xs mt-2 bg-slate-900 text-slate-100 rounded px-2 py-1 whitespace-pre-wrap">{connectMsg}</div>}
+          {connectChoices && connectChoices.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+              {connectChoices.map(function (b, i) {
+                return <button key={i} onClick={function () { setConnecting(true); doBind(b.id, b.name); }} disabled={connecting} className="text-left px-2 py-1 bg-rose-100 text-rose-900 rounded text-xs font-bold hover:bg-rose-200 disabled:opacity-60">Connect to: {b.name}{b.isClassicInvoicing ? ' (⚠ classic invoicing)' : ''}</button>;
+              })}
+            </div>
+          )}
         </div>
       )}
       {tab === 'settings' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
