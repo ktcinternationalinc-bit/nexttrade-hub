@@ -19,6 +19,7 @@ var banner = rd('src/components/SiloBanner.jsx');
 var filter = rd('src/components/WaveBusinessFilter.jsx');
 var sync = rd('src/components/WaveSyncCenter.jsx');
 var acct = rd('src/components/AccountingTab.jsx');
+var conn = rd('src/components/WaveConnectionTab.jsx');
 
 ok('1: SiloBanner shows "NOT CONNECTED TO WAVE" (red) for a placeholder silo, not READ-WRITE',
   /var notConnected = props\.notConnected;/.test(banner) &&
@@ -50,6 +51,16 @@ ok('7: an ambiguous match lets the user pick from what the token actually sees (
 ok('8: the primary "Connect this silo to Wave now" button + tab-nav fallback are wired',
   /🔗 Connect this silo to Wave now/.test(sync) &&
   /onGoToWaveConnection=\{function \(\) \{ setSub\('wave'\); \}\}/.test(acct));
+// v55.83-KW (Codex) — a successful bind MUST switch the browser's active business off the placeholder.
+ok('9 (KW): after a successful connect, WaveSyncCenter switches the active business to the new real GUID (not the placeholder)',
+  /import \{ getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness \}/.test(sync) &&
+  /setActiveWaveBusiness\(res\.to_wave_business_id \|\| toId\)/.test(sync));
+ok('10 (KW): WaveConnectionTab also switches the active business to the real GUID after binding the active silo',
+  /import \{ isPlaceholderWaveBusiness, setActiveWaveBusiness, getActiveWaveBusiness \}/.test(conn) &&
+  /if \(getActiveWaveBusiness\(\) === siloFrom\) \{ setActiveWaveBusiness\(realId\); \}/.test(conn));
+ok('11 (KW): one-click connect auto-binds ONLY a confident name match — never a single non-matching business',
+  /var match = \(cands\.length === 1\) \? cands\[0\] : null;/.test(sync) &&
+  !/bizs\.length === 1 \? bizs\[0\]/.test(sync));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-KT connect-to-Wave tests passed'); process.exit(0); }

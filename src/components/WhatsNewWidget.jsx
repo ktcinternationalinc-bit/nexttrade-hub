@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KW',
+    date: '2026-06-21',
+    label: 'After connecting a silo, the page actually switches to the connected business (bug fix)',
+    items: [
+      '**🔁 Connect now "sticks" visually.** Before, connecting a silo fixed it in the database but the page could still show it as the old unconnected placeholder after reloading — so it looked like nothing happened. Now, the moment a connect succeeds, the app switches to the real Wave business and reloads onto the connected state. No more "I connected it but it still looks broken."',
+      '**🛡 Safer auto-connect.** The one-click connect now only auto-picks a business when its name actually matches the silo. If your Wave login shows a single business that doesn\'t match, it asks you to confirm it explicitly instead of binding to it automatically (so it can\'t connect to the wrong company\'s books).',
+      { superAdminOnly: true, text: 'v55.83-KW (Codex KT FAIL-to-close). (1) WaveSyncCenter imports setActiveWaveBusiness; on connect res.ok it calls setActiveWaveBusiness(res.to_wave_business_id || toId) BEFORE reload — fixes localStorage staying on the placeholder after a successful DB rebind. (2) WaveConnectionTab does the same after its bind when getActiveWaveBusiness()===siloFrom. (3) connectToWave match = cands.length===1 ? cands[0] : null — removed the auto-bind of a single NON-matching business (forces an explicit pick). Test kt(11) incl. the active-switch + no-auto-bind assertions. Runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KV',
     date: '2026-06-21',
     label: 'The "Connect to Wave" button is now in the Settings tab too (so you can\'t miss it)',

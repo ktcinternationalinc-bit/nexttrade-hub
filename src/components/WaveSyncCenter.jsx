@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, dbUpdate } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { isPaymentVoid } from '../lib/payment-matching';
-import { getActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness } from '../lib/wave-business';
 import { dryRunRecord } from '../lib/wave-sync-eligibility';
 import SiloBanner from './SiloBanner';
 
@@ -290,7 +290,7 @@ export default function WaveSyncCenter(props) {
         if (!window.confirm('Connect "' + ((reg && reg.label) || active) + '" to your Wave business "' + (toName || toId) + '"?\n\n' + dry.message)) { setConnecting(false); setConnectMsg('Cancelled — nothing changed.'); return null; }
         return fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, body, { dry_run: false })) }).then(function (r2) { return r2.json(); });
       })
-      .then(function (res) { if (!res) { return; } setConnecting(false); setConnectMsg((res.ok ? '✓ ' : '✕ ') + (res.message || res.error || 'done')); if (res.ok) { setConnectChoices(null); setTimeout(function () { if (typeof window !== 'undefined') { window.location.reload(); } }, 1400); } })
+      .then(function (res) { if (!res) { return; } setConnecting(false); setConnectMsg((res.ok ? '✓ ' : '✕ ') + (res.message || res.error || 'done')); if (res.ok) { setConnectChoices(null); /* v55.83-KW (Codex) — point the browser at the NEW real GUID before reload, else the page stays on the placeholder and still looks unconnected. */ try { setActiveWaveBusiness(res.to_wave_business_id || toId); } catch (eS) {} setTimeout(function () { if (typeof window !== 'undefined') { window.location.reload(); } }, 1400); } })
       .catch(function (e) { setConnecting(false); setConnectMsg('✕ Connect failed: ' + ((e && e.message) || 'network error')); });
   }
   function connectToWave() {
@@ -315,7 +315,9 @@ export default function WaveSyncCenter(props) {
           var bt = tokensOf(b.name);
           for (var ti = 0; ti < labelToks.length; ti++) { if (bt.indexOf(labelToks[ti]) >= 0) { cands.push(b); return; } }
         });
-        var match = (cands.length === 1) ? cands[0] : (!cands.length && bizs.length === 1 ? bizs[0] : null);
+        // v55.83-KW (Codex) — auto-connect ONLY a confident NAME match. Never auto-bind a single business
+        // that doesn't match the silo (it might be the wrong company's real books) — force an explicit pick.
+        var match = (cands.length === 1) ? cands[0] : null;
         if (match) { doBind(match.id, match.name); return; }
         // ambiguous (or no clear match) — let the user pick from what the token can see (one click each)
         setConnecting(false);
