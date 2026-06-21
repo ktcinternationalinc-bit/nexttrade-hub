@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KX',
+    date: '2026-06-21',
+    label: 'Refresh business names from Wave (after you rename a business in Wave)',
+    items: [
+      '**🔄 Renamed a business in Wave? Pull the new names into Hub in one click.** In **Accounting → Wave Connection** there\'s now a **"Refresh business names from Wave"** button. It reads the current names from Wave (read-only — it never changes anything in Wave) and updates each silo\'s label in Hub to match. It tells you exactly what changed (e.g. "Old Name → New Name"), and notes any silo that isn\'t connected yet or that your Wave login can\'t see.',
+      { superAdminOnly: true, text: 'v55.83-KX. NEW /api/wave/refresh-names (wave.settings.manage, service-role): GraphQL businesses{ id name } -> nameById; for each registry row update label where Wave name differs; placeholders skipped+reported; ids not visible to the token reported; surfaces real Wave HTTP/GraphQL errors. WaveConnectionTab: refreshNames() button next to Test connection, shows the diff + reloads the registry (service-role avoids the RLS write-trap). Test kx(6); runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KW',
     date: '2026-06-21',
     label: 'After connecting a silo, the page actually switches to the connected business (bug fix)',

@@ -22,6 +22,22 @@ export default function WaveConnectionTab(props) {
   var [advancedRebind, setAdvancedRebind] = useState(false); // v55.83-KQ — normal mode binds placeholder silos ONLY
   useEffect(function () { fetchAllRows('wave_business_registry', '*').then(function (r) { setRegistry((r && r.data) || []); }).catch(function () {}); }, []);
   function reloadRegistry() { fetchAllRows('wave_business_registry', '*').then(function (r) { setRegistry((r && r.data) || []); }).catch(function () {}); }
+  // v55.83-KX — you renamed a business in Wave; pull the current names and update Hub's labels to match.
+  var [refreshing, setRefreshing] = useState(false);
+  var [refreshMsg, setRefreshMsg] = useState('');
+  function refreshNames() {
+    setRefreshing(true); setRefreshMsg('Pulling current names from Wave…');
+    fetch('/api/wave/refresh-names', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || j.ok === false) { setRefreshMsg('✕ ' + ((j && j.error) || 'Could not refresh names.')); return; }
+        var changed = (j.updated || []).map(function (u) { return '"' + (u.old || '(none)') + '" -> "' + u.new + '"'; }).join('; ');
+        setRefreshMsg('✓ ' + j.message + (changed ? (' — ' + changed) : ''));
+        reloadRegistry();
+      })
+      .catch(function (e) { setRefreshMsg('✕ Refresh failed: ' + ((e && e.message) || 'network error')); })
+      .finally(function () { setRefreshing(false); });
+  }
   function bindBusiness(realId, realName) {
     var siloFrom = bindSel[realId];
     if (!siloFrom) { setBindMsg('Pick which silo to bind to "' + (realName || realId) + '" first.'); return; }
@@ -75,9 +91,16 @@ export default function WaveConnectionTab(props) {
         Wave stays your official accounting ledger. This screen only <b>checks</b> the connection — it never changes anything in Wave. Your token is stored securely on the server (Vercel env var <code>WAVE_ACCESS_TOKEN</code>) and is never shown in the browser.
       </div>
 
-      <button onClick={test} disabled={loading} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-bold disabled:opacity-50">
-        {loading ? 'Checking…' : 'Test Wave connection'}
-      </button>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={test} disabled={loading} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-bold disabled:opacity-50">
+          {loading ? 'Checking…' : 'Test Wave connection'}
+        </button>
+        {/* v55.83-KX — refresh Hub's silo labels to match the CURRENT names in Wave (after a Wave rename). */}
+        <button onClick={refreshNames} disabled={refreshing} title="Pull the current business names from Wave and update Hub's labels to match (read-only on Wave)." className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded text-sm font-bold disabled:opacity-50">
+          {refreshing ? 'Refreshing…' : '🔄 Refresh business names from Wave'}
+        </button>
+      </div>
+      {refreshMsg && <div className="mt-2 text-[11px] bg-slate-900 text-slate-100 rounded px-2 py-1 whitespace-pre-wrap">{refreshMsg}</div>}
 
       {state && (
         <div className="mt-4">
