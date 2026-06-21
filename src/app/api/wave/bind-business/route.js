@@ -9,8 +9,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { isMissingObjErr } from '../../../../lib/pg-missing-object';
 
-var API_BUILD_MARKER = 'v55.83-KN-bind-business';
+var API_BUILD_MARKER = 'v55.83-KS-bind-business';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var PLACEHOLDER_BIDS = { 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 };
 // Every table that carries a silo wave_business_id tag. Schema-safe: a missing table/column is skipped.
@@ -66,11 +67,6 @@ export async function POST(req) {
     // table then declare success, which could leave rows on the old id). A genuinely-ABSENT optional table
     // (undefined_table/column) is the only allowed skip, and it's REPORTED (skipped_optional_tables), not
     // silent — so the operator can see exactly what was and wasn't covered.
-    var isMissingObjErr = function (err) {
-      if (!err) { return false; }
-      var c = String(err.code || ''); var m = String(err.message || '').toLowerCase();
-      return c === '42P01' || c === '42703' || c.indexOf('PGRST') === 0 || m.indexOf('does not exist') >= 0 || m.indexOf('could not find') >= 0 || m.indexOf('schema cache') >= 0;
-    };
     var counts = {}; var total = 0; var skipped = {}; var i;
     for (i = 0; i < SCOPED_TABLES.length; i++) {
       var tbl = SCOPED_TABLES[i];

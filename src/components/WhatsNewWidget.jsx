@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KS',
+    date: '2026-06-21',
+    label: 'Final bind-tool hardening — only a truly-missing table is ever skipped',
+    items: [
+      '**🔐 The bind tool is now fully hardened for live use.** It only skips a table if that table genuinely doesn\'t exist in your database. A connection hiccup, a permissions error, or any other glitch now makes it stop before changing anything — it will never mistake one of those for "table not there" and move on.',
+      { superAdminOnly: true, text: 'v55.83-KS (Codex KR caution — narrow the PGRST whitelist). Extracted isMissingObjErr() to src/lib/pg-missing-object.js with an EXACT whitelist: codes 42P01/42703/PGRST205/PGRST204, or message "does not exist", or ("could not find" AND "schema cache"). Removed the broad `indexOf("PGRST")===0` that swallowed PGRST000/PGRST003/PGRST301 (connection/pool/JWT). Bumped API_BUILD_MARKER to v55.83-KS-bind-business (was stale KN). Added an executed behavioral truth-table test proving generic PGRST/connection errors ABORT, not skip. Test kq…ks(11); runner green. This closes the last Codex caution on the bind flow — it is now live-hardened (a true DB-RPC transaction remains an optional future nicety, not a blocker).' },
+    ],
+  },
+  {
     version: 'v55.83-KR',
     date: '2026-06-20',
     label: 'Bind tool: aborts safely if it can\'t fully verify the data first',
