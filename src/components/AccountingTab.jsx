@@ -66,7 +66,7 @@ export default function AccountingTab(props) {
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
       {sub === 'wave' && <WaveConnectionTab {...props} />}
       {sub === 'waveimport' && <WaveImportTab {...props} />}
-      {sub === 'wavesync' && canWaveSync && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} />}
+      {sub === 'wavesync' && canWaveSync && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} onGoToWaveConnection={function () { setSub('wave'); }} />}
     </div>
   );
 }

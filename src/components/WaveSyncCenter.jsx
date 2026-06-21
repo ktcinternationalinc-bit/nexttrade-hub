@@ -126,6 +126,9 @@ export default function WaveSyncCenter(props) {
   var ca0 = useState(false); var catBusy = ca0[0]; var setCatBusy = ca0[1];
   var ca1 = useState(''); var catMsg = ca1[0]; var setCatMsg = ca1[1];
   var ca2 = useState(0); var catCount = ca2[0]; var setCatCount = ca2[1];
+  var cn0 = useState(false); var connecting = cn0[0]; var setConnecting = cn0[1]; // v55.83-KT one-click connect-to-Wave
+  var cn1 = useState(''); var connectMsg = cn1[0]; var setConnectMsg = cn1[1];
+  var cn2 = useState(null); var connectChoices = cn2[0]; var setConnectChoices = cn2[1];
   var sp0 = useState(false); var schemaBusy = sp0[0]; var setSchemaBusy = sp0[1];
   var sp1 = useState(null); var schemaResult = sp1[0]; var setSchemaResult = sp1[1];
   var bk0 = useState([]); var bankAccts = bk0[0]; var setBankAccts = bk0[1];
@@ -271,6 +274,43 @@ export default function WaveSyncCenter(props) {
       .catch(function () { setCatCount(0); });
   }
   useEffect(function () { loadCatCount(); }, [active]);
+
+  // v55.83-KT — ONE-CLICK CONNECT. Stop telling the user to go hunt the bind tool. This: (1) asks the
+  // server what Wave businesses the configured token can actually access, (2) finds the one that matches
+  // this silo (by name), (3) binds it via the hardened, all-or-nothing bind route. If the token can't see
+  // a match, it says EXACTLY that (the one real blocker: the token doesn't have access to that Wave account).
+  function normName(s) { return String(s || '').toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9]/g, ''); }
+  function doBind(toId, toName) {
+    var body = { from_wave_business_id: active, to_wave_business_id: toId, to_label: toName || null, user_id: (userProfile && userProfile.id) || null };
+    setConnectMsg('Connecting "' + ((reg && reg.label) || active) + '" → "' + (toName || toId) + '"…');
+    fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, body, { dry_run: true })) })
+      .then(function (r) { return r.json(); })
+      .then(function (dry) {
+        if (!dry || dry.ok === false) { setConnecting(false); setConnectMsg('✕ ' + ((dry && dry.error) || 'Could not preview the connection.')); return null; }
+        if (!window.confirm('Connect "' + ((reg && reg.label) || active) + '" to your Wave business "' + (toName || toId) + '"?\n\n' + dry.message)) { setConnecting(false); setConnectMsg('Cancelled — nothing changed.'); return null; }
+        return fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, body, { dry_run: false })) }).then(function (r2) { return r2.json(); });
+      })
+      .then(function (res) { if (!res) { return; } setConnecting(false); setConnectMsg((res.ok ? '✓ ' : '✕ ') + (res.message || res.error || 'done')); if (res.ok) { setConnectChoices(null); setTimeout(function () { if (typeof window !== 'undefined') { window.location.reload(); } }, 1400); } })
+      .catch(function (e) { setConnecting(false); setConnectMsg('✕ Connect failed: ' + ((e && e.message) || 'network error')); });
+  }
+  function connectToWave() {
+    setConnecting(true); setConnectChoices(null); setConnectMsg('Checking what your Wave token can access…');
+    fetch('/api/wave/check').then(function (r) { return r.json(); })
+      .then(function (chk) {
+        if (!chk || chk.connected === false) { setConnecting(false); setConnectMsg('✕ ' + ((chk && chk.error) || 'Your Wave token is not connected. Add WAVE_ACCESS_TOKEN in Vercel, then redeploy.')); return; }
+        var bizs = (chk.businesses || []).filter(function (b) { return b && !b.isPersonal; });
+        if (!bizs.length) { setConnecting(false); setConnectMsg('✕ Your Wave token can\'t see ANY Wave businesses. It needs access to the Wave account that owns this silo\'s books — add/replace WAVE_ACCESS_TOKEN in Vercel with a token for that account.'); return; }
+        var labelCore = normName((reg && reg.label) || active);
+        var match = null; bizs.forEach(function (b) { var n = normName(b.name); if (n && labelCore && (n.indexOf(labelCore) >= 0 || labelCore.indexOf(n) >= 0)) { match = b; } });
+        if (!match && bizs.length === 1) { match = bizs[0]; }
+        if (match) { doBind(match.id, match.name); return; }
+        // ambiguous — let the user pick from what the token can see (one click each)
+        setConnecting(false);
+        setConnectChoices(bizs);
+        setConnectMsg('Your Wave token sees ' + bizs.length + ' business(es) but none clearly matches "' + ((reg && reg.label) || active) + '". Pick the right one:');
+      })
+      .catch(function (e) { setConnecting(false); setConnectMsg('✕ Could not reach Wave: ' + ((e && e.message) || 'network error')); });
+  }
 
   function runSchemaCheck() {
     setSchemaBusy(true); setSchemaResult(null);
@@ -642,25 +682,40 @@ export default function WaveSyncCenter(props) {
   return (
     <div className="p-4 text-slate-100">
       <div className="text-lg font-extrabold mb-3">🔄 Wave Sync Center</div>
-      <SiloBanner registered={!!reg} isTest={!!(reg && reg.is_production === false)} canWrite={!!(reg && reg.writes_enabled === true)} label={reg ? (reg.label || active) : (active || 'No business selected')} />
+      <SiloBanner registered={!!reg} isTest={!!(reg && reg.is_production === false)} canWrite={!!(reg && reg.writes_enabled === true)} notConnected={isPlaceholderWaveBusiness(active)} label={reg ? (reg.label || active) : (active || 'No business selected')} />
 
-      {/* v55.83-KN — THE root cause when nothing Wave-related works for a silo: it's bound to a seed
-          placeholder id, never to a real Wave business. Say it loudly + point to the bind tool. */}
-      {isPlaceholderWaveBusiness(active) && (
-        <div className="mb-3 rounded-lg px-3 py-2.5 text-sm" style={{ background: '#7f1d1d', color: '#fff' }}>
-          <div className="font-extrabold mb-1">⚠ This silo is NOT connected to a real Wave business yet</div>
-          <div className="text-xs font-medium">Its Wave ID is a placeholder (<code>{active}</code>), not a real Wave business. That is why categories won&apos;t pull, products/deposit accounts can&apos;t be set, and pushes are blocked — every Wave call for a placeholder id fails. <b>Fix:</b> go to <b>Accounting → Wave Connection</b>, Test the connection, then <b>Bind this silo</b> to its real Wave business. Everything Wave-related will work once it&apos;s bound.</div>
+      {/* v55.83-KT — when the silo is on a placeholder id this is the ONLY thing that matters: it's not
+          connected to Wave, so every toggle/readiness below is moot. Show ONE clear call-to-action and
+          SUPPRESS the contradictory "production push ENABLED / LOCKED" banners (they imply it's working). */}
+      {isPlaceholderWaveBusiness(active) ? (
+        <div className="mb-3 rounded-lg px-4 py-3" style={{ background: '#7f1d1d', color: '#fff' }}>
+          <div className="font-extrabold mb-1 text-base">⚠ This silo is NOT connected to a real Wave business yet</div>
+          <div className="text-xs font-medium mb-2">Its Wave ID is a placeholder (<code>{active}</code>), not a real Wave business — so the toggles and setup below do nothing yet, and categories/products/pushes are all blocked. Click below and I&apos;ll connect it:</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={connectToWave} disabled={connecting} className="px-4 py-2 bg-white text-rose-800 rounded-lg text-sm font-extrabold hover:bg-rose-50 disabled:opacity-60">{connecting ? 'Connecting…' : '🔗 Connect this silo to Wave now'}</button>
+            {props.onGoToWaveConnection && <button onClick={function () { props.onGoToWaveConnection(); }} className="px-3 py-1.5 bg-rose-950/40 text-white rounded-lg text-xs font-bold hover:bg-rose-950/60">or open Wave Connection</button>}
+          </div>
+          {connectMsg && <div className="text-xs mt-2 bg-rose-950/50 rounded px-2 py-1 whitespace-pre-wrap">{connectMsg}</div>}
+          {connectChoices && connectChoices.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+              {connectChoices.map(function (b, i) {
+                return <button key={i} onClick={function () { setConnecting(true); doBind(b.id, b.name); }} disabled={connecting} className="text-left px-2 py-1 bg-white text-rose-900 rounded text-xs font-bold hover:bg-rose-50 disabled:opacity-60">Connect to: {b.name}{b.isClassicInvoicing ? ' (⚠ classic invoicing)' : ''}</button>;
+              })}
+            </div>
+          )}
         </div>
-      )}
-
-      {isProd && !productionUnlocked && (
-        <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#7f1d1d', color: '#fff' }}>
-          🔒 Production Wave pushes are LOCKED for this business. A super admin can enable them in Settings after testing on the test silo.
-        </div>
-      )}
-      {isProd && productionUnlocked && (
-        <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#b45309', color: '#fff' }}>
-          ⚠ REAL PRODUCTION Wave push is ENABLED for this business — pushes will write to your real Wave books. Disable in Settings when not actively syncing.
+      ) : (
+        <div>
+          {isProd && !productionUnlocked && (
+            <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#7f1d1d', color: '#fff' }}>
+              🔒 Production Wave pushes are LOCKED for this business. A super admin can enable them in Settings after testing on the test silo.
+            </div>
+          )}
+          {isProd && productionUnlocked && (
+            <div className="mb-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: '#b45309', color: '#fff' }}>
+              ⚠ REAL PRODUCTION Wave push is ENABLED for this business — pushes will write to your real Wave books. Disable in Settings when not actively syncing.
+            </div>
+          )}
         </div>
       )}
 
@@ -797,7 +852,13 @@ export default function WaveSyncCenter(props) {
         </div>
       )}
 
-      {tab === 'settings' && canManageSettings && (
+      {tab === 'settings' && canManageSettings && isPlaceholderWaveBusiness(active) && (
+        <div className="bg-white rounded-lg p-4 text-slate-900">
+          <div className="text-sm font-bold text-slate-900 mb-1">Connect this silo to Wave first</div>
+          <div className="text-xs text-slate-600">All the setup below (deposit account, invoice product, categories, push toggles) only works once this silo is bound to a real Wave business — Wave rejects every call for a placeholder id. Use the red banner above → <b>Wave Connection → Bind this silo</b>, then come back here to finish setup.</div>
+        </div>
+      )}
+      {tab === 'settings' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
           {/* v55.83-KP (Codex) — ONE-GLANCE status summary so the user never has to infer readiness from
               five scattered checkboxes/red lines. Each red item names the exact next action. */}

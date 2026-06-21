@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KT',
+    date: '2026-06-21',
+    label: 'One button to connect a silo to Wave — and the contradictory "enabled but blocked" mess is gone',
+    items: [
+      '**🔗 "Connect this silo to Wave now" — one click.** On a silo that isn\'t connected yet, there\'s now a single button that checks what your Wave login can access, finds the matching business, and connects it. If your Wave token genuinely can\'t see that business, it tells you exactly that (you\'d need a Wave login for that account) — no more "go here, do this, then that."',
+      '**🧹 No more contradictions.** A silo that isn\'t connected used to show "writes enabled / READ-WRITE / production push ENABLED" right next to a wall of "BLOCKED." Now an unconnected silo simply says **NOT CONNECTED TO WAVE** everywhere, and the toggles/setup that don\'t work yet are hidden until it\'s connected. One clear state, one clear action.',
+      { superAdminOnly: true, text: 'v55.83-KT (Max: "it needs to connect to Wave. PERIOD."). connectToWave(): GET /api/wave/check → filter non-personal businesses → normName match to reg.label → if match (or single) doBind() = bind-business dry-run→confirm→execute (the hardened all-or-nothing route) → reload; zero businesses → "token can\'t see any, add WAVE_ACCESS_TOKEN for that account"; ambiguous → pick-list of what the token sees. Contradiction fix: SiloBanner notConnected prop (red, "⚠ NOT CONNECTED TO WAVE"); WaveBusinessFilter badge "Not connected to Wave" for placeholder; WaveSyncCenter suppresses the production LOCKED/ENABLED banners + gates the ENTIRE Settings body (toggles/readiness/setup) behind !placeholder, showing a "connect first" note instead; AccountingTab passes onGoToWaveConnection. Test kt(8); runner green. NOTE: if connect reports the token can\'t see the business, that is the genuine remaining blocker (a Wave token with access to that account is required) — surfaced, not hidden.' },
+    ],
+  },
+  {
     version: 'v55.83-KS',
     date: '2026-06-21',
     label: 'Final bind-tool hardening — only a truly-missing table is ever skipped',

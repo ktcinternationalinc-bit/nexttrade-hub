@@ -6,7 +6,7 @@
 // the wall simply isn't turned on, so there's nothing to toggle.
 import { useState, useEffect } from 'react';
 import { fetchAllRows } from '../lib/fetch-all-rows';
-import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } from '../lib/wave-business';
+import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness, isPlaceholderWaveBusiness } from '../lib/wave-business';
 
 export default function WaveBusinessFilter(props) {
   var [registry, setRegistry] = useState([]);
@@ -43,10 +43,13 @@ export default function WaveBusinessFilter(props) {
             // enabled — contradicting the page banner and confusing the user.
             var isTest = sel.is_production === false;
             var canWrite = canWriteToWaveBusiness(sel);
-            var cls = isTest ? 'bg-amber-100 text-amber-950' : (canWrite ? 'bg-rose-100 text-rose-950' : 'bg-emerald-100 text-emerald-950');
+            // v55.83-KT — a placeholder silo isn't connected to Wave at all; show THAT, not a write state
+            // (showing "writes enabled" next to a fully-blocked page was the core contradiction).
+            var notConnected = isPlaceholderWaveBusiness(sel.wave_business_id);
+            var cls = notConnected ? 'bg-rose-200 text-rose-950' : (isTest ? 'bg-amber-100 text-amber-950' : (canWrite ? 'bg-rose-100 text-rose-950' : 'bg-emerald-100 text-emerald-950'));
             // v55.83-KO (audit) — writes_enabled is WRITE PERMISSION, not full push READINESS (push also
             // needs allow_payment_push + a deposit account). Say "writes enabled", never "push ON".
-            var label = isTest ? '🧪 Test' : (canWrite ? '🔓 Real — writes enabled' : '🔒 Real — read-only');
+            var label = notConnected ? '⚠ Not connected to Wave' : (isTest ? '🧪 Test' : (canWrite ? '🔓 Real — writes enabled' : '🔒 Real — read-only'));
             return <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + cls}>{label}</span>;
           })()
         : <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-800">Showing all businesses</span>}
