@@ -300,14 +300,29 @@ export default function WaveSyncCenter(props) {
         if (!chk || chk.connected === false) { setConnecting(false); setConnectMsg('✕ ' + ((chk && chk.error) || 'Your Wave token is not connected. Add WAVE_ACCESS_TOKEN in Vercel, then redeploy.')); return; }
         var bizs = (chk.businesses || []).filter(function (b) { return b && !b.isPersonal; });
         if (!bizs.length) { setConnecting(false); setConnectMsg('✕ Your Wave token can\'t see ANY Wave businesses. It needs access to the Wave account that owns this silo\'s books — add/replace WAVE_ACCESS_TOKEN in Vercel with a token for that account.'); return; }
+        // v55.83-KU — match the silo to a business the token can see. STRONG = substring either way;
+        // otherwise a shared DISTINCTIVE word (len>=3, minus generic terms like production/test/inc) — so
+        // "Real KTC (Production)" auto-matches a Wave business named e.g. "KTC International". Exactly one
+        // candidate -> auto-connect; more than one -> show a pick-list (safe; bind is dry-run-confirmed).
+        var STOP = { production: 1, prod: 1, test: 1, the: 1, and: 1, inc: 1, llc: 1, ltd: 1, co: 1, company: 1, corp: 1 };
+        var tokensOf = function (s) { return String(s || '').toLowerCase().replace(/\(.*?\)/g, '').split(/[^a-z0-9]+/).filter(function (t) { return t && t.length >= 3 && !STOP[t]; }); };
         var labelCore = normName((reg && reg.label) || active);
-        var match = null; bizs.forEach(function (b) { var n = normName(b.name); if (n && labelCore && (n.indexOf(labelCore) >= 0 || labelCore.indexOf(n) >= 0)) { match = b; } });
-        if (!match && bizs.length === 1) { match = bizs[0]; }
+        var labelToks = tokensOf((reg && reg.label) || active);
+        var cands = [];
+        bizs.forEach(function (b) {
+          var n = normName(b.name);
+          if (n && labelCore && (n.indexOf(labelCore) >= 0 || labelCore.indexOf(n) >= 0)) { cands.push(b); return; }
+          var bt = tokensOf(b.name);
+          for (var ti = 0; ti < labelToks.length; ti++) { if (bt.indexOf(labelToks[ti]) >= 0) { cands.push(b); return; } }
+        });
+        var match = (cands.length === 1) ? cands[0] : (!cands.length && bizs.length === 1 ? bizs[0] : null);
         if (match) { doBind(match.id, match.name); return; }
-        // ambiguous — let the user pick from what the token can see (one click each)
+        // ambiguous (or no clear match) — let the user pick from what the token can see (one click each)
         setConnecting(false);
-        setConnectChoices(bizs);
-        setConnectMsg('Your Wave token sees ' + bizs.length + ' business(es) but none clearly matches "' + ((reg && reg.label) || active) + '". Pick the right one:');
+        setConnectChoices(cands.length > 1 ? cands : bizs);
+        setConnectMsg(cands.length > 1
+          ? ('More than one of your Wave businesses could be "' + ((reg && reg.label) || active) + '". Pick the right one:')
+          : ('Your Wave token sees ' + bizs.length + ' business(es) but none clearly matches "' + ((reg && reg.label) || active) + '". Pick the right one:'));
       })
       .catch(function (e) { setConnecting(false); setConnectMsg('✕ Could not reach Wave: ' + ((e && e.message) || 'network error')); });
   }

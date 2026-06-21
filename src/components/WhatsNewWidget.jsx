@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KU',
+    date: '2026-06-21',
+    label: 'Connect-to-Wave now auto-picks the right business (one click)',
+    items: [
+      '**🎯 Smarter match.** "Connect this silo to Wave now" now recognizes the business even when the name isn\'t identical — e.g. "Real KTC (Production)" matches a Wave business named "KTC International" by the shared word "KTC". If exactly one business fits, it connects in a single click; only if two could fit does it ask you to pick.',
+      { superAdminOnly: true, text: 'v55.83-KU. connectToWave match upgraded: STRONG substring OR a shared distinctive token (len>=3 minus generic stopwords production/test/inc/llc/…). Exactly one candidate -> auto-doBind; >1 -> pick-list of the candidates; 0 candidates + 1 business -> that one. Bind stays dry-run-confirmed + all-or-nothing. Test kt(8) updated.' },
+    ],
+  },
+  {
     version: 'v55.83-KT',
     date: '2026-06-21',
     label: 'One button to connect a silo to Wave — and the contradictory "enabled but blocked" mess is gone',

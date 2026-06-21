@@ -45,7 +45,7 @@ ok('6: if the token can\'t see any business, it says exactly that (the one real 
   /see ANY Wave businesses[\s\S]{0,30}It needs access to the Wave account/.test(sync) &&
   /add\/replace WAVE_ACCESS_TOKEN in Vercel/.test(sync));
 ok('7: an ambiguous match lets the user pick from what the token actually sees (one click each)',
-  /setConnectChoices\(bizs\)/.test(sync) &&
+  /setConnectChoices\(cands\.length > 1 \? cands : bizs\)/.test(sync) &&
   /connectChoices\.map\(function \(b, i\)/.test(sync));
 ok('8: the primary "Connect this silo to Wave now" button + tab-nav fallback are wired',
   /🔗 Connect this silo to Wave now/.test(sync) &&
