@@ -834,7 +834,7 @@ export default function BankReviewTab(props) {
                       /* v55.83-LF mirror — show the WAVE category + where it came from (Wave vs Hub), falling
                          back to the Hub classification. This is the "categorized transactions from Wave" view. */
                       t.wave_account_name
-                        ? <span className="inline-flex items-center gap-1"><span className="truncate">{t.wave_account_name}</span>{(t.category_source === 'wave' || t.category_source === 'wave_csv') ? <span className="text-[9px] bg-sky-500/20 text-sky-200 border border-sky-500/40 rounded px-1">⇐ Wave</span> : <span className="text-[9px] bg-slate-600/40 text-slate-300 rounded px-1">Hub</span>}</span>
+                        ? <span className="inline-flex items-center gap-1"><span className="truncate">{t.wave_account_name}</span>{(t.category_source === 'wave_csv' || t.category_source === 'wave_import') ? <span className="text-[9px] bg-sky-500/20 text-sky-200 border border-sky-500/40 rounded px-1">⇐ Wave</span> : <span className="text-[9px] bg-slate-600/40 text-slate-300 rounded px-1">Hub</span>}</span>
                         : (t.classification ? labelize(t.classification) : <span className="text-slate-500 italic">—</span>)
                     }</div>
                     <div className="px-2 py-1.5">
@@ -855,7 +855,10 @@ export default function BankReviewTab(props) {
                           return <span className={'block mt-1 text-[9px] px-1.5 py-0.5 rounded font-bold w-fit ' + pcls}>{(pushed ? '✓ Wave payment · ' : '⧖ Pending → Wave · ') + invTxt}</span>;
                         }
                         var cs = t.category_status;
-                        var fromWave = (t.category_source === 'wave' || t.category_source === 'wave_csv');
+                        // v55.83-LG (Codex) — "from Wave" means the category was MIRRORED IN (CSV/import),
+                        // NOT a Hub-picked Wave chart account (Hub selection also writes category_source
+                        // 'wave'). Only wave_csv / wave_import are inbound; everything else is Hub-side.
+                        var fromWave = (t.category_source === 'wave_csv' || t.category_source === 'wave_import');
                         var wlabel = (fromWave && cs === 'synced') ? '⇐ from Wave' : cs === 'pending_wave_sync' ? '⧖ Wave: pending' : cs === 'synced' ? '✓ Wave: synced' : (cs === 'sync_failed' || cs === 'failed') ? '✕ Wave: failed' : cs === 'local_only' ? 'Hub only' : (t.wave_account_id ? '⧖ Wave: pending' : 'Wave: not synced');
                         var wcls = cs === 'synced' ? (fromWave ? 'bg-sky-800 text-sky-100' : 'bg-emerald-800 text-emerald-100') : (cs === 'sync_failed' || cs === 'failed') ? 'bg-rose-800 text-rose-100' : cs === 'pending_wave_sync' ? 'bg-violet-700 text-white' : 'bg-slate-700 text-slate-400';
                         return <span className={'block mt-1 text-[9px] px-1.5 py-0.5 rounded font-bold w-fit ' + wcls}>{wlabel}</span>;

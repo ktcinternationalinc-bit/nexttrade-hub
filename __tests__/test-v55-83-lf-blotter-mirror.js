@@ -20,9 +20,10 @@ ok('1: migration adds bank_transactions.wave_transaction_id (+ index) so the mir
   exists('sql/v55-83-LF-bank-txn-wave-id.sql') &&
   /ADD COLUMN IF NOT EXISTS wave_transaction_id text/.test(rd('sql/v55-83-LF-bank-txn-wave-id.sql')) &&
   /CREATE INDEX IF NOT EXISTS ix_bt_wave_txn_id/.test(rd('sql/v55-83-LF-bank-txn-wave-id.sql')));
-ok('2: blotter Classification cell shows the WAVE category + an origin chip (⇐ Wave vs Hub), not just the Hub classification',
+ok('2: Classification cell shows the WAVE category + origin chip; "⇐ Wave" ONLY for inbound (wave_csv/wave_import), NOT Hub-picked Wave categories (Codex LG)',
   /t\.wave_account_name/.test(br) &&
-  /\(t\.category_source === 'wave' \|\| t\.category_source === 'wave_csv'\)/.test(br) &&
+  /\(t\.category_source === 'wave_csv' \|\| t\.category_source === 'wave_import'\)/.test(br) &&
+  !/\(t\.category_source === 'wave' \|\| t\.category_source === 'wave_csv'\)/.test(br) &&
   /⇐ Wave/.test(br) &&
   />Hub</.test(br));
 ok('3: the Wave badge is SPLIT-AWARE — a matched deposit shows it syncs as a PAYMENT with the linked INV# + status',
@@ -30,8 +31,8 @@ ok('3: the Wave badge is SPLIT-AWARE — a matched deposit shows it syncs as a P
   /acctInvoices\.find\(function \(iv\) \{ return iv\.id === ms\[0\]\.invoice_id; \}\)/.test(br) &&
   /'INV ' \+ \(inv\.invoice_number \|\| inv\.id\)/.test(br) &&
   /\? '✓ Wave payment · ' : '⧖ Pending → Wave · '/.test(br));
-ok('4: a categorization that came FROM Wave is shown as "⇐ from Wave" (mirrored IN), distinct from a Hub push',
-  /var fromWave = \(t\.category_source === 'wave' \|\| t\.category_source === 'wave_csv'\);/.test(br) &&
+ok('4: "⇐ from Wave" means MIRRORED IN (wave_csv/wave_import) only — a Hub-picked Wave category is NOT labeled inbound (Codex LG)',
+  /var fromWave = \(t\.category_source === 'wave_csv' \|\| t\.category_source === 'wave_import'\);/.test(br) &&
   /\(fromWave && cs === 'synced'\) \? '⇐ from Wave'/.test(br));
 ok('5: payment sync state reads the real payment rows (wave_payment_id / synced / manual_done), not just review status',
   /var ps = \(paysByTxn\[t\.id\] \|\| \[\]\)\.filter\(function \(p\) \{ return !isPaymentVoid\(p\); \}\);/.test(br) &&

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LG',
+    date: '2026-06-22',
+    label: 'See the payments Wave already has — and a fix so "from Wave" means what it says',
+    items: [
+      '**👀 "Check Wave payments" (read-only).** In Wave Sync Center → Import from Wave, there\'s now a button that reads back the payments Wave already has against your invoices — how many, which bank account each hit, with samples. Nothing is written; it just shows you what Wave knows, and confirms those payments can be linked to your deposits (that linking is the next step).',
+      '**🏷 Accurate "from Wave" labeling.** A category you pick in the Hub (which happens to be a Wave account) is no longer mislabeled as "⇐ Wave" on the blotter — only categories that genuinely came in from Wave (a CSV import) show that tag. Your own Hub categorizations correctly read as "Hub".',
+      { superAdminOnly: true, text: 'v55.83-LG. (1) Codex FAIL fix: BankReviewTab mirror used category_source===\'wave\' to mean "from Wave", but Hub category selection ALSO writes category_source \'wave\' (BankReviewTab:377, bank-write:191) — so Hub picks were mislabeled inbound. Now only wave_csv/wave_import are treated as mirrored-IN; the LF test was updated to lock the correct semantics. (2) NEW read-only /api/wave/payment-readback: paginates invoice.payments{ id amount paymentDate paymentMethod memo account{id name} } (the READABLE path — no business-level invoicePayments connection), bounded to max_pages, reports payments_found / payments_with_bank_account / distinct Wave accounts / samples, logs a readback_probe row. NO mutations, no Hub data writes. This is the design\'s Step-1 GATE: confirm on live books that Wave-native payments + their bank account are visible before building auto-linking (which must preserve the wave_imported_paid double-count guard at import-invoices:201-207). UI: "Check Wave payments" button in the Import-from-Wave tab. NEXT (LH): extend import-invoices payments{} to upsert Wave-native payment rows + link unique deposit matches (double-count-safe), then the 7 CSV-hardening items. Test lg(5); runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-LF',
     date: '2026-06-22',
     label: 'The blotter now mirrors Wave — category source + linked invoice on every line',

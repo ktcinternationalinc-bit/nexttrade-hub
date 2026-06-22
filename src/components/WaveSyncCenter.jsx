@@ -661,6 +661,18 @@ export default function WaveSyncCenter(props) {
       })
       .catch(function (e) { setCsvBusy(false); toast.error((e && e.message) || 'Import failed.'); });
   }
+  // v55.83-LG — READ-ONLY probe of Wave's invoice PAYMENTS (these are API-readable, unlike money txns).
+  // Confirms, on the live books, that Wave-native payments + the bank account they hit are visible — the
+  // gate before auto-linking them to Hub deposits.
+  var [probeBusy, setProbeBusy] = useState(false);
+  var [probeResult, setProbeResult] = useState(null);
+  function runPaymentReadback() {
+    setProbeBusy(true); setProbeResult(null);
+    fetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setProbeResult(d); setProbeBusy(false); if (!d || (!d.ok && !d.payments_found)) { toast.error((d && d.error) || 'Read-back failed.'); } else { toast.success('Wave shows ' + (d.payments_found || 0) + ' payment(s) across ' + (d.invoices_scanned || 0) + ' invoice(s).'); } })
+      .catch(function (e) { setProbeBusy(false); toast.error((e && e.message) || 'Read-back failed.'); });
+  }
 
   function pushSelected() {
     if (isProd && !productionUnlocked) { toast.error('Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
@@ -937,6 +949,29 @@ export default function WaveSyncCenter(props) {
           <div>
             <div className="text-sm font-bold text-slate-900">Import existing categorizations from Wave (CSV)</div>
             <div className="text-xs text-slate-600 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
+          </div>
+          {/* v55.83-LG — invoice PAYMENTS are API-readable (unlike money transactions). This probe shows
+              what Wave reports so payments recorded directly in Wave can be mirrored + linked to deposits. */}
+          <div className="border border-emerald-200 bg-emerald-50 rounded p-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-[11px] text-slate-700"><b>Invoice payments mirror (read-only):</b> check what Wave already has — payments recorded in Wave, and the bank account each hit, are readable and can be linked to your deposits.</div>
+              <button onClick={runPaymentReadback} disabled={probeBusy} className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{probeBusy ? 'Checking…' : 'Check Wave payments'}</button>
+            </div>
+            {probeResult && (
+              <div className="mt-2 text-[11px] text-slate-800">
+                {probeResult.error && !probeResult.payments_found ? <div className="text-rose-700">Could not read: {probeResult.error}</div> : (
+                  <div className="space-y-1">
+                    <div className="font-bold">{probeResult.payments_found} payment(s) across {probeResult.invoices_scanned} invoice(s) · {probeResult.payments_with_bank_account} carry a bank account{probeResult.error ? ' (partial: ' + probeResult.error + ')' : ''}.</div>
+                    {probeResult.distinct_bank_accounts && probeResult.distinct_bank_accounts.length > 0 && <div className="text-slate-600">Wave bank/cash accounts seen: {probeResult.distinct_bank_accounts.map(function (a) { return a.name; }).join(', ')}</div>}
+                    {probeResult.samples && probeResult.samples.length > 0 && (
+                      <details><summary className="cursor-pointer text-slate-700">Sample payments</summary>
+                        <div className="mt-1 max-h-48 overflow-auto">{probeResult.samples.map(function (s, i) { return <div key={i} className="border-t border-emerald-100 py-0.5">{s.date} · {s.amount} · INV {s.invoice} · {s.account_name || 'no bank account'}{s.method ? (' · ' + s.method) : ''}</div>; })}</div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the exported CSV here (including the header row)…" rows={6} className="w-full border border-slate-300 rounded p-2 text-xs font-mono text-slate-900" />
           <div className="flex gap-2">
