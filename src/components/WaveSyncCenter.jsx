@@ -1009,6 +1009,7 @@ export default function WaveSyncCenter(props) {
                   <span className="text-indigo-700">{prefillResult.dry_run ? (prefillResult.counts.would_link + ' would link') : (prefillResult.counts.applied + ' linked')}</span>
                   {prefillResult.counts.ambiguous ? <span className="text-orange-700">{prefillResult.counts.ambiguous} ambiguous (manual)</span> : null}
                   {prefillResult.counts.no_candidate ? <span className="text-amber-700">{prefillResult.counts.no_candidate} no matching deposit</span> : null}
+                  {prefillResult.counts.account_mismatch ? <span className="text-orange-700">{prefillResult.counts.account_mismatch} different bank account (skipped)</span> : null}
                   {prefillResult.counts.already_materialized ? <span className="text-slate-500">{prefillResult.counts.already_materialized} already linked</span> : null}
                   {prefillResult.counts.invoice_not_imported ? <span className="text-rose-700">{prefillResult.counts.invoice_not_imported} invoice not imported yet</span> : null}
                 </div>

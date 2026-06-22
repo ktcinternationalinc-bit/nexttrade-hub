@@ -23,7 +23,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
 
-var API_BUILD_MARKER = 'v55.83-LN-prefill-payment-links';
+var API_BUILD_MARKER = 'v55.83-LO-prefill-payment-links';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
@@ -75,8 +75,27 @@ export async function POST(req) {
     ((pr && pr.data) || []).forEach(function (p) { if (p.wave_payment_id) { paidWaveIds[p.wave_payment_id] = true; } });
 
     // candidate deposits in this silo (money-in, not yet linked, not Wave-pushed).
-    var depRes = await db.from('bank_transactions').select('id, name, amount, amount_abs, posted_date, date, direction, matched_invoice_id, wave_transaction_id, accounting_customer_id, business_id, classification').eq('wave_business_id', waveBusinessId).eq('direction', 'in');
+    var depRes = await db.from('bank_transactions').select('id, name, amount, amount_abs, posted_date, date, direction, matched_invoice_id, wave_transaction_id, accounting_customer_id, business_id, classification, account_id').eq('wave_business_id', waveBusinessId).eq('direction', 'in');
     if (depRes && depRes.error) { return NextResponse.json({ ok: false, error: 'Deposit read failed: ' + depRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+
+    // v55.83-LO (Codex) — ACCOUNT-AWARE matching. Map each Hub deposit's plaid account -> its mask, and
+    // decide whether this silo holds MORE THAN ONE bank account. In a multi-account silo we must not link a
+    // Wave payment (which carries the Wave bank account it hit) to a deposit from a DIFFERENT bank account
+    // just because the amount+date collide. We confirm the account by the last-4 mask appearing in the Wave
+    // account name; if it can't be confirmed in a multi-account silo, we DO NOT link (conservative).
+    var acctMaskById = {}; var distinctMask = {};
+    var paRes = await db.from('plaid_accounts').select('plaid_account_id, mask').eq('wave_business_id', waveBusinessId);
+    ((paRes && paRes.data) || []).forEach(function (a) { if (a && a.plaid_account_id) { var mk = a.mask ? String(a.mask) : null; acctMaskById[a.plaid_account_id] = mk; if (mk) { distinctMask[mk] = true; } } });
+    var multiAccount = Object.keys(distinctMask).length > 1;
+    function waveAcctOkForDeposit(payAcctName, dep) {
+      if (!multiAccount) { return { ok: true }; } // single-account silo: account is unambiguous
+      var nm = String(payAcctName || '');
+      var toks = nm.match(/\d{4}/g) || [];
+      if (toks.length === 0) { return { ok: false, reason: 'account_undetermined' }; } // can't attribute safely
+      var dm = acctMaskById[dep.account_id] ? String(acctMaskById[dep.account_id]) : '';
+      if (dm && toks.indexOf(dm) >= 0) { return { ok: true }; }
+      return { ok: false, reason: 'account_mismatch' };
+    }
 
     // v55.83-LN (Codex) — a deposit may already carry an ACTIVE match or payment row even without
     // matched_invoice_id set. Exclude those too, so the prefill never double-links or overrides an
@@ -94,7 +113,7 @@ export async function POST(req) {
     // ── Wave invoice payments (read only) ────────────────────────────────────
     var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ totalPages } edges{ node{ id invoiceNumber payments{ id amount{ value } paymentDate account{ id name } } } } } } }';
     var page = 1; var totalPages = 1; var safety = 0; var firstError = null;
-    var used = {}; var plan = []; var counts = { invoices_scanned: 0, payments_found: 0, already_materialized: 0, invoice_not_imported: 0, would_link: 0, ambiguous: 0, no_candidate: 0, applied: 0, apply_errors: 0, claim_conflict: 0 };
+    var used = {}; var plan = []; var counts = { invoices_scanned: 0, payments_found: 0, already_materialized: 0, invoice_not_imported: 0, would_link: 0, ambiguous: 0, no_candidate: 0, account_mismatch: 0, applied: 0, apply_errors: 0, claim_conflict: 0 };
 
     while (page <= totalPages && safety < maxPages) {
       safety++;
@@ -129,6 +148,14 @@ export async function POST(req) {
             hits.push(t);
           }
           if (hits.length === 0) { counts.no_candidate++; plan.push({ wave_payment_id: pay.id, invoice: node.invoiceNumber || node.id, amount: amt, date: pd, action: 'no_candidate' }); continue; }
+          // v55.83-LO — ACCOUNT-AWARE filter (multi-account silos only): keep only candidates whose bank
+          // account matches the Wave payment's account (by last-4 mask). If none qualify, do NOT link.
+          if (multiAccount) {
+            var accHits = []; var ad; var reasonAcc = 'account_mismatch';
+            for (ad = 0; ad < hits.length; ad++) { var chk = waveAcctOkForDeposit(pay.account && pay.account.name, hits[ad]); if (chk.ok) { accHits.push(hits[ad]); } else { reasonAcc = chk.reason; } }
+            if (accHits.length === 0) { counts.account_mismatch++; plan.push({ wave_payment_id: pay.id, invoice: node.invoiceNumber || node.id, amount: amt, date: pd, wave_account: pay.account && pay.account.name, candidate_count: hits.length, action: reasonAcc }); continue; }
+            hits = accHits;
+          }
           if (hits.length > 1) { counts.ambiguous++; plan.push({ wave_payment_id: pay.id, invoice: node.invoiceNumber || node.id, amount: amt, date: pd, candidate_count: hits.length, action: 'ambiguous' }); continue; }
           var dep = hits[0];
           // Display match amount = the Wave payment's actual amount, capped at the deposit. We do NOT run

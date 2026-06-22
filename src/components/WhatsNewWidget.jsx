@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LO',
+    date: '2026-06-22',
+    label: 'Prefill links: only matches deposits from the right bank account',
+    items: [
+      '**🏦 Account-aware linking.** If a silo has more than one bank account, the invoice-link prefill now only links a Wave payment to a deposit from the *same* bank account (confirmed by the account\'s last-4) — so a payment can never be linked to a same-amount deposit from a different account. If it can\'t confirm the account, it skips rather than guess. Single-account silos are unaffected.',
+      { superAdminOnly: true, text: 'v55.83-LO (Codex LN FAIL #3 — account-aware). prefill-payment-links now loads plaid_accounts → acctMaskById + distinctMask; multiAccount = >1 distinct mask. In a multi-account silo the candidate set is filtered by waveAcctOkForDeposit(pay.account.name, dep): matches the last-4 mask token in the Wave account name against the deposit\'s plaid mask; no mask token in the name → account_undetermined (not linked); mask present but ≠ → account_mismatch (not linked). Single-account silos pass through (account unambiguous). New counts.account_mismatch + plan actions account_mismatch/account_undetermined; UI shows "N different bank account (skipped)". deposits select now includes account_id. test lm #10 added. marker LN→LO; runner re-run. Display-link invariant unchanged. Note: a stored Wave-account↔plaid-account map (vs the last-4 heuristic) is the v2 hardening if Wave account names lack the mask.' },
+    ],
+  },
+  {
     version: 'v55.83-LN',
     date: '2026-06-22',
     label: 'Prefill links: orphan-proof + never double-links',

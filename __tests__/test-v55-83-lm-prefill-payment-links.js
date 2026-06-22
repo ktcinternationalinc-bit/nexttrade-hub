@@ -62,6 +62,12 @@ ok('9: (Codex LN) deposits already carrying an ACTIVE match or payment row are e
   /from\('accounting_invoice_payments'\)\.select\('bank_transaction_id, voided, sync_status'\)/.test(route) &&
   /!isPaymentVoid\(p\)/.test(route) &&
   /!t\.matched_invoice_id && !t\.wave_transaction_id && !claimedDep\[t\.id\]/.test(route));
+ok('10: (Codex LO) ACCOUNT-AWARE — multi-account silo links only when the Wave account mask matches the deposit\'s bank account; else skipped (not linked)',
+  /var multiAccount = Object\.keys\(distinctMask\)\.length > 1;/.test(route) &&
+  /function waveAcctOkForDeposit\(payAcctName, dep\)/.test(route) &&
+  /toks\.indexOf\(dm\) >= 0/.test(route) &&
+  /if \(multiAccount\) \{[\s\S]{0,400}if \(accHits\.length === 0\) \{ counts\.account_mismatch\+\+;/.test(route) &&
+  /account_id/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LM prefill-payment-links tests passed'); process.exit(0); }
