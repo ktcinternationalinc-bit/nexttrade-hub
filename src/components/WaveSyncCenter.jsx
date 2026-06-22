@@ -627,6 +627,23 @@ export default function WaveSyncCenter(props) {
     seq.then(function () { setDryResults(results); setTab('dryrun'); });
   }
   var [dryResults, setDryResults] = useState([]);
+  // v55.83-LD — CSV import: pull Wave-UI categorizations the API can't read (see WAVE_API_TRANSACTION_EVIDENCE.md).
+  var [csvText, setCsvText] = useState('');
+  var [csvBusy, setCsvBusy] = useState(false);
+  var [csvResult, setCsvResult] = useState(null);
+  function runCsvImport(apply) {
+    if (!csvText.trim()) { toast.error('Paste the CSV you exported from Wave first.'); return; }
+    setCsvBusy(true); setCsvResult(null);
+    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, csv: csvText, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        setCsvResult(d); setCsvBusy(false);
+        if (!d || !d.ok) { toast.error((d && d.error) || 'Import failed.'); return; }
+        if (d.dry_run) { toast.success('Preview: ' + d.matched_count + ' matched, ' + d.unmatched_count + ' unmatched.'); }
+        else { toast.success('Applied: ' + d.applied + ' transaction categories reflected from Wave.'); load(); }
+      })
+      .catch(function (e) { setCsvBusy(false); toast.error((e && e.message) || 'Import failed.'); });
+  }
 
   function pushSelected() {
     if (isProd && !productionUnlocked) { toast.error('Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
@@ -718,9 +735,10 @@ export default function WaveSyncCenter(props) {
 
   if (loading) { return <div className="p-4 text-slate-400 italic">Loading Wave Sync Center…</div>; }
 
-  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['settings', 'Settings']].filter(function (t) {
+  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['import', 'Import from Wave'], ['settings', 'Settings']].filter(function (t) {
     if (t[0] === 'log') { return canViewLog; }
     if (t[0] === 'settings') { return canManageSettings; }
+    if (t[0] === 'import') { return canManageSettings && !isPlaceholderWaveBusiness(active); }
     return true;
   });
 
@@ -894,6 +912,42 @@ export default function WaveSyncCenter(props) {
                 </div>
               );
             })}
+        </div>
+      )}
+
+      {tab === 'import' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
+        <div className="bg-white rounded-lg p-4 text-slate-900 space-y-3">
+          <div>
+            <div className="text-sm font-bold text-slate-900">Import existing categorizations from Wave (CSV)</div>
+            <div className="text-xs text-slate-600 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
+          </div>
+          <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the exported CSV here (including the header row)…" rows={6} className="w-full border border-slate-300 rounded p-2 text-xs font-mono text-slate-900" />
+          <div className="flex gap-2">
+            <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold">{csvBusy ? 'Working…' : 'Preview match (dry run)'}</button>
+            <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
+          </div>
+          {csvResult && csvResult.ok && (
+            <div className="border border-slate-200 rounded p-3 text-xs text-slate-800 space-y-2">
+              {csvResult.detected_columns && <div className="text-[11px] text-slate-600">Detected columns — date: <b>{String(csvResult.detected_columns.date)}</b>, amount: <b>{String(csvResult.detected_columns.amount)}</b>, category: <b>{String(csvResult.detected_columns.category)}</b>, description: <b>{String(csvResult.detected_columns.description)}</b></div>}
+              <div className="flex gap-4 flex-wrap font-bold">
+                <span className="text-emerald-700">{csvResult.dry_run ? csvResult.matched_count + ' would match' : csvResult.applied + ' applied'}</span>
+                <span className="text-amber-700">{csvResult.unmatched_count} unmatched</span>
+                {csvResult.category_unresolved_count ? <span className="text-rose-700">{csvResult.category_unresolved_count} category name not found in this silo's Wave chart</span> : null}
+                {csvResult.hub_candidate_count != null ? <span className="text-slate-500">{csvResult.hub_candidate_count} Hub candidates</span> : null}
+              </div>
+              {csvResult.matched && csvResult.matched.length > 0 && (
+                <details><summary className="cursor-pointer text-slate-700">Matched rows</summary>
+                  <div className="mt-1 max-h-48 overflow-auto">{csvResult.matched.map(function (m) { return <div key={m.row} className="border-t border-slate-100 py-0.5">{m.hub_date} · {m.amount} · {m.hub_name} → <b>{m.csv_category}</b>{m.category_resolved ? '' : ' (name not in Wave chart — saved as label only)'}</div>; })}</div>
+                </details>
+              )}
+              {csvResult.unmatched && csvResult.unmatched.length > 0 && (
+                <details><summary className="cursor-pointer text-amber-700">Unmatched CSV rows</summary>
+                  <div className="mt-1 max-h-48 overflow-auto">{csvResult.unmatched.map(function (u, i) { return <div key={i} className="border-t border-slate-100 py-0.5">{u.date} · {u.amount} · {u.category || ''} — {u.reason}</div>; })}</div>
+                </details>
+              )}
+              {csvResult.apply_errors && csvResult.apply_errors.length > 0 && <div className="text-rose-700">Apply errors: {csvResult.apply_errors.length}</div>}
+            </div>
+          )}
         </div>
       )}
 

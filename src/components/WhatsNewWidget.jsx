@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LD',
+    date: '2026-06-22',
+    label: 'Import the categories you already set in Wave (CSV)',
+    items: [
+      '**📥 New "Import from Wave" tab in Wave Sync Center.** For transactions you categorized directly in Wave (not through the Hub), Wave\'s API gives no way to read them back — so this brings them in from a CSV. In Wave: Accounting → Transactions → Export, then paste the CSV into the new tab.',
+      '**🔎 Preview before anything changes.** "Preview match" shows which transactions it lines up (by date, amount, and description) and which it can\'t — and which category names it recognized in your Wave chart of accounts. Only when you click Apply does it tag the matched Hub transactions as already-in-Wave (so they\'re never pushed again). Nothing is ever written back to Wave.',
+      { superAdminOnly: true, text: 'v55.83-LD (Max item 2 / "do it"). NEW /api/wave/import-transaction-csv: parses Wave CSV export (quoted-field CSV parser, auto-detects date/amount/category columns + reports them), matches each row to a bank_transactions row in the silo (EQUAL abs(amount), date within ±4d window, token-overlap description sim; excludes matched_invoice_id + already-synced), resolves category name→wave_account_id via wave_categories, dry_run DEFAULT (must pass dry_run:false to apply), apply sets category_source=wave_csv + category_status=synced (.neq synced guard) + logs action=import_csv. Gated bank.classify, placeholder-blocked, does NOT call Wave. UI: WaveSyncCenter "Import from Wave" tab (admin + non-placeholder) — textarea, Preview(dry)/Apply, shows detected columns + matched/unmatched/unresolved + per-row details. This is the answer to "pull existing categorizations": API read is impossible (WAVE_API_TRANSACTION_EVIDENCE.md) so CSV is the supported path. Test ld(6); runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-LC',
     date: '2026-06-22',
     label: 'Transaction push is now money-safe (QA hardening before it touches real books)',
