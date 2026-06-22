@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LA',
+    date: '2026-06-21',
+    label: 'Category list: close the last "Accounts Payable" leak',
+    items: [
+      '**🧹 No more stray system accounts in the category list.** A few "Accounts Payable / System" rows could still slip through the filter depending on how Wave labeled them. The filter now catches them by either their type or their name, so the Wave Category picker only shows real expense/income accounts.',
+      { superAdminOnly: true, text: 'v55.83-LA (Codex). isHiddenForCategorize now applies hit(s)=SYSTEM/PAYABLE/RECEIVABLE to BOTH subtype AND name (was name-only RECEIVABLE → "Accounts Payable (System Payable Bill)" with a generic subtype could leak). Bumped categories route API_BUILD_MARKER JA→LA so live diagnostics prove the deployed route. KY test #1 updated; ja-category + ky both green; runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-KZ',
     date: '2026-06-21',
     label: 'Categorized bank transactions can now actually be pushed to Wave',

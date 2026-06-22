@@ -17,9 +17,10 @@ function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); 
 var route = rd('src/app/api/wave/categories/route.js');
 var br = rd('src/components/BankReviewTab.jsx');
 
-ok('1: categories route hides SYSTEM / PAYABLE / RECEIVABLE accounts (the system sub-account flood)',
+ok('1: categories route hides SYSTEM / PAYABLE / RECEIVABLE in EITHER subtype OR name (no name-only leak — Codex LA)',
   /function isHiddenForCategorize\(c\)/.test(route) &&
-  /sub\.indexOf\('SYSTEM'\) >= 0 \|\| sub\.indexOf\('RECEIVABLE'\) >= 0 \|\| sub\.indexOf\('PAYABLE'\) >= 0/.test(route));
+  /function hit\(s\) \{ return s\.indexOf\('SYSTEM'\) >= 0 \|\| s\.indexOf\('PAYABLE'\) >= 0 \|\| s\.indexOf\('RECEIVABLE'\) >= 0; \}/.test(route) &&
+  /return hit\(sub\) \|\| hit\(nm\);/.test(route));
 ok('2: categories route collapses duplicate NAMES and sorts by name',
   /if \(nmKey && seenName\[nmKey\]\) \{ hiddenDupName\+\+; return; \}/.test(route) &&
   /usable\.sort\(function \(a, b\)/.test(route));

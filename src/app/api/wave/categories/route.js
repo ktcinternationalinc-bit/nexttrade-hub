@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-JA-categories';
+var API_BUILD_MARKER = 'v55.83-LA-categories';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -20,7 +20,11 @@ function admin() {
 function isHiddenForCategorize(c) {
   var sub = String(c.subtype || '').toUpperCase();
   var nm = String(c.wave_account_name || '').toUpperCase();
-  return sub.indexOf('SYSTEM') >= 0 || sub.indexOf('RECEIVABLE') >= 0 || sub.indexOf('PAYABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0;
+  // v55.83-LA (Codex) — match SYSTEM/PAYABLE/RECEIVABLE in EITHER subtype OR name. Wave's flood rows show
+  // as name "Accounts Payable (System Payable Bill)" and may carry a generic subtype, so a name-only
+  // "RECEIVABLE" check let them leak. Hide on either field.
+  function hit(s) { return s.indexOf('SYSTEM') >= 0 || s.indexOf('PAYABLE') >= 0 || s.indexOf('RECEIVABLE') >= 0; }
+  return hit(sub) || hit(nm);
 }
 
 export async function POST(req) {
