@@ -674,6 +674,23 @@ export default function WaveSyncCenter(props) {
       .then(function (d) { setProbeResult(d); setProbeBusy(false); if (!d || (!d.ok && !d.payments_found)) { toast.error((d && d.error) || 'Read-back failed.'); } else { toast.success('Wave shows ' + (d.payments_found || 0) + ' payment(s) across ' + (d.invoices_scanned || 0) + ' invoice(s).'); } })
       .catch(function (e) { setProbeBusy(false); toast.error((e && e.message) || 'Read-back failed.'); });
   }
+  // v55.83-LM — PREFILL deposit→invoice links from Wave's invoice payments (display-link only; never
+  // changes a paid/balance amount). Dry-run preview first, then apply.
+  var [prefillBusy, setPrefillBusy] = useState(false);
+  var [prefillResult, setPrefillResult] = useState(null);
+  function runPrefillLinks(apply) {
+    setPrefillBusy(true); setPrefillResult(null);
+    fetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        setPrefillResult(d); setPrefillBusy(false);
+        if (!d || (!d.ok && !(d.counts && d.counts.payments_found))) { toast.error((d && d.error) || 'Prefill failed.'); return; }
+        var c = d.counts || {};
+        if (d.dry_run) { toast.success('Preview: ' + (c.would_link || 0) + ' deposit→invoice links · ' + (c.ambiguous || 0) + ' ambiguous · ' + (c.no_candidate || 0) + ' no match.'); }
+        else { toast.success('Linked ' + (c.applied || 0) + ' deposits to their Wave invoices.'); load(); }
+      })
+      .catch(function (e) { setPrefillBusy(false); toast.error((e && e.message) || 'Prefill failed.'); });
+  }
 
   function pushSelected() {
     if (isProd && !productionUnlocked) { toast.error('Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
@@ -973,6 +990,34 @@ export default function WaveSyncCenter(props) {
                     )}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+          {/* v55.83-LM — PREFILL deposit→invoice links from Wave's existing invoice payments. Display-link
+              only: it never changes a paid/balance amount (those already reflect Wave). Dry-run first. */}
+          <div className="border border-indigo-200 bg-indigo-50 rounded p-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-[11px] text-slate-700"><b>Prefill invoice links:</b> link your existing bank deposits to the invoices Wave already shows them paying (by amount + date). Preview first; it only links a deposit when there's exactly one match, and never changes any balance.</div>
+              <div className="flex gap-2">
+                <button onClick={function () { runPrefillLinks(false); }} disabled={prefillBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{prefillBusy ? 'Working…' : 'Preview links (dry run)'}</button>
+                <button onClick={function () { runPrefillLinks(true); }} disabled={prefillBusy || !prefillResult || !prefillResult.dry_run || !(prefillResult.counts && prefillResult.counts.would_link)} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">Apply {prefillResult && prefillResult.dry_run && prefillResult.counts ? '(' + (prefillResult.counts.would_link || 0) + ')' : ''}</button>
+              </div>
+            </div>
+            {prefillResult && prefillResult.counts && (
+              <div className="mt-2 text-[11px] text-slate-800 space-y-1">
+                <div className="flex gap-3 flex-wrap font-bold">
+                  <span className="text-indigo-700">{prefillResult.dry_run ? (prefillResult.counts.would_link + ' would link') : (prefillResult.counts.applied + ' linked')}</span>
+                  {prefillResult.counts.ambiguous ? <span className="text-orange-700">{prefillResult.counts.ambiguous} ambiguous (manual)</span> : null}
+                  {prefillResult.counts.no_candidate ? <span className="text-amber-700">{prefillResult.counts.no_candidate} no matching deposit</span> : null}
+                  {prefillResult.counts.already_materialized ? <span className="text-slate-500">{prefillResult.counts.already_materialized} already linked</span> : null}
+                  {prefillResult.counts.invoice_not_imported ? <span className="text-rose-700">{prefillResult.counts.invoice_not_imported} invoice not imported yet</span> : null}
+                </div>
+                {prefillResult.plan && prefillResult.plan.length > 0 && (
+                  <details><summary className="cursor-pointer text-slate-700">Plan</summary>
+                    <div className="mt-1 max-h-48 overflow-auto">{prefillResult.plan.map(function (p, i) { return <div key={i} className="border-t border-indigo-100 py-0.5">{p.date || ''} · {p.amount} · INV {p.invoice} · <b>{p.action}</b>{p.deposit_name ? (' → ' + p.deposit_name) : ''}{p.candidate_count ? (' (' + p.candidate_count + ' candidates)') : ''}</div>; })}</div>
+                  </details>
+                )}
+                {prefillResult.counts.invoice_not_imported ? <div className="text-[10px] text-slate-500">Tip: run "Import invoices from Wave" first so every invoice exists in the Hub, then prefill.</div> : null}
               </div>
             )}
           </div>

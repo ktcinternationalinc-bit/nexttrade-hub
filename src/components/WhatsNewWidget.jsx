@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LM',
+    date: '2026-06-22',
+    label: 'Prefill: link existing deposits to the invoices Wave already shows them paying',
+    items: [
+      '**🔗 One click to back-link your history.** New "Prefill invoice links" in Wave Sync Center → Import from Wave: it reads the payments Wave already has on your invoices and links each one to the matching bank deposit, so the blotter shows which deposit paid which invoice — across your existing transactions, not just new ones.',
+      '**🔒 Can\'t move a number.** It only adds the *link* for display; it does not create payment entries or change any paid/balance amount (those already reflect Wave). Preview first, it links a deposit only when there\'s exactly one clear match (ambiguous ones are left for you), it skips anything already linked, and it never writes to Wave.',
+      { superAdminOnly: true, text: 'v55.83-LM (Max: "prefill existing transactions and links to invoices"; verified design wf_6bd10609). NEW /api/wave/prefill-payment-links: reads invoice.payments[] (the readable path), and for each Wave-native payment (wave_payment_id not already on a Hub payment row) finds the UNIQUE unlinked money-in deposit (|amount|±0.01, date within window, matched_invoice_id null, wave_transaction_id null) and DISPLAY-LINKS it — inserts a payment_matches row (matched_amount = payment capped at deposit; type full/partial) + stamps bank_transactions.matched_invoice_id/linked_type/linked_id/classification/customer, mirroring the match_invoice write. Deliberately does NOT insert accounting_invoice_payments and does NOT touch wave_imported_paid, so paid = wave_imported_paid + SUM(rows) is provably unchanged (Wave paid already lives in wave_imported_paid; full payment-row itemization is a later, separately-tested step). dry_run DEFAULT returns the per-payment plan (writes nothing); unique-only (0/>1 → ambiguous/none, not applied); idempotent (skip already-materialized wave_payment_id + matched_invoice_id-is-null apply guard); gated wave.import.run; placeholder-blocked; NO Wave writes. UI: WaveSyncCenter "Prefill invoice links" dry-run/apply with counts + plan. Test lm(8); runner re-run. NOTE: requires invoices imported first (reports invoice_not_imported); v2 can use the exact payment txn-id key if the readback probe proves it. This is the readable-payment-path mirror — the CSV path remains the non-invoice fallback.' },
+    ],
+  },
+  {
     version: 'v55.83-LL',
     date: '2026-06-22',
     label: 'Deferred/ambiguous/conflict rows stay on screen after you click Apply',
