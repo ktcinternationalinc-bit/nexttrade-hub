@@ -1009,6 +1009,13 @@ export default function WaveSyncCenter(props) {
                   <div className="mt-1 max-h-48 overflow-auto">{csvResult.conflicts.map(function (c, i) { return <div key={i} className="border-t border-rose-100 py-0.5">{c.hub_name} · {c.amount} — existing <b>{c.existing_category}</b> vs CSV <b>{c.csv_category}</b></div>; })}</div>
                 </details>
               )}
+              {/* v55.83-LK (Codex) — show WHICH rows were deferred as invoice/payment, not just a count, so
+                  the operator can reconcile them via the payment path and confirm nothing vanished. */}
+              {csvResult.needs_manual_invoice_link && csvResult.needs_manual_invoice_link.length > 0 && (
+                <details><summary className="cursor-pointer text-indigo-700">Invoice/payment rows deferred (reconcile via payment sync, not category import)</summary>
+                  <div className="mt-1 max-h-48 overflow-auto">{csvResult.needs_manual_invoice_link.map(function (n, i) { return <div key={i} className="border-t border-indigo-100 py-0.5">{n.date} · {n.amount} · INV <b>{n.invoice}</b>{n.customer ? (' · ' + n.customer) : ''}{n.category ? (' · ' + n.category) : ''} — {n.reason}</div>; })}</div>
+                </details>
+              )}
               {csvResult.unmatched && csvResult.unmatched.length > 0 && (
                 <details><summary className="cursor-pointer text-amber-700">Unmatched CSV rows</summary>
                   <div className="mt-1 max-h-48 overflow-auto">{csvResult.unmatched.map(function (u, i) { return <div key={i} className="border-t border-slate-100 py-0.5">{u.date} · {u.amount} · {u.category || ''} — {u.reason}</div>; })}</div>

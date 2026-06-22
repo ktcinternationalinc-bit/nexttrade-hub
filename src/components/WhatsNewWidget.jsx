@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LK',
+    date: '2026-06-22',
+    label: 'CSV import: see exactly which invoice rows were set aside',
+    items: [
+      '**📋 Deferred rows are now listed, not just counted.** When the CSV import sets aside rows that belong to invoices (to be handled by payment sync), it now shows you each one — date, amount, invoice number, customer — so you can reconcile them and confirm nothing was lost.',
+      { superAdminOnly: true, text: 'v55.83-LK (Codex LJ review). (1) Wave Sync Center Import tab adds a collapsible "Invoice/payment rows deferred" detail list from needs_manual_invoice_link (row/date/amount/invoice/customer/category/reason), matching the other buckets\' detail lists. (2) Corrected the LJ test\'s idempotency wording — the audit is for review; re-applying the same category to a local_only/uncategorized row is idempotent in EFFECT (synced/pushed excluded), but there is no row_hash dedupe of a re-imported CSV (it re-processes unchanged rows harmlessly). marker LJ→LK; test lj #6 added; runner re-run. The only remaining mirror piece is the readable invoice-payment auto-link, gated on a live "Check Wave payments" run.' },
+    ],
+  },
+  {
     version: 'v55.83-LJ',
     date: '2026-06-22',
     label: 'CSV import: invoice payments handled correctly + full audit trail',

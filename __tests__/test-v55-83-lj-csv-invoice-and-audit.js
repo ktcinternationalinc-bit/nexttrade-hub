@@ -5,7 +5,10 @@
 //     relationship is known from a category import).
 //  2. The conflict guard catches LABEL-ONLY existing categories (wave_account_name without an id), not just
 //     resolved ids — no silent overwrite of any existing category.
-//  3. Audit stores before/after + raw row + row hash + matched bank txn id + applied_by/at (idempotent review).
+//  3. Audit stores before/after + raw row + row hash + matched bank txn id + applied_by/at, so every change
+//     is reviewable. (Re-applying the same category to a local_only/uncategorized row is idempotent in
+//     EFFECT — it sets the same value; synced/pushed rows are already excluded — but the route does not
+//     hash-dedupe a re-imported CSV, so it re-processes unchanged rows harmlessly rather than skipping them.)
 // ============================================================
 var fs = require('fs');
 var path = require('path');
@@ -35,6 +38,9 @@ ok('4: audit records before/after + raw row + row hash + matched bank txn id + a
   /applied_by: by, applied_at: appliedAt/.test(route));
 ok('5: the UI surfaces the invoice-linked count (so the user routes those to payment sync)',
   /invoice-linked → use payment sync/.test(sync));
+ok('6: (LK) the UI lists WHICH invoice/payment rows were deferred (row/amount/invoice/customer), not just a count',
+  /Invoice\/payment rows deferred/.test(sync) &&
+  /csvResult\.needs_manual_invoice_link\.map\(function \(n, i\)/.test(sync));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LJ csv-invoice-and-audit tests passed'); process.exit(0); }
