@@ -17,12 +17,12 @@ function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); 
 var route = rd('src/app/api/wave/categories/route.js');
 var br = rd('src/components/BankReviewTab.jsx');
 
-ok('1: categories route hides SYSTEM / PAYABLE / RECEIVABLE in EITHER subtype OR name (no name-only leak — Codex LA)',
+ok('1: categories route hides ONLY Wave system rows ("(SYSTEM" name or SYSTEM subtype), NOT real Payable/Receivable accounts (LE)',
   /function isHiddenForCategorize\(c\)/.test(route) &&
-  /function hit\(s\) \{ return s\.indexOf\('SYSTEM'\) >= 0 \|\| s\.indexOf\('PAYABLE'\) >= 0 \|\| s\.indexOf\('RECEIVABLE'\) >= 0; \}/.test(route) &&
-  /return hit\(sub\) \|\| hit\(nm\);/.test(route));
-ok('2: categories route collapses duplicate NAMES and sorts by name',
-  /if \(nmKey && seenName\[nmKey\]\) \{ hiddenDupName\+\+; return; \}/.test(route) &&
+  /return nm\.indexOf\('\(SYSTEM'\) >= 0 \|\| sub\.indexOf\('SYSTEM'\) >= 0;/.test(route));
+ok('2: categories route dedupes by wave_account_id ONLY (no name-collapse that drops distinct accounts) and sorts by name (LE)',
+  !/seenName\[nmKey\]/.test(route) &&
+  /if \(!c\.wave_account_id \|\| seen\[c\.wave_account_id\]\) \{ return; \}/.test(route) &&
   /usable\.sort\(function \(a, b\)/.test(route));
 ok('3: the Wave Category picker is a SEARCHABLE Typeahead (not a scroll-only select)',
   /Search Wave categories…/.test(br) &&

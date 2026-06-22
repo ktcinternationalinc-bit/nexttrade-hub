@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LE',
+    date: '2026-06-22',
+    label: 'The full chart of accounts shows up — and the transaction sync goes through',
+    items: [
+      '**📂 You can now see your whole chart of accounts.** The category picker was only ever showing 10 items even when many more existed — they were loaded, just hidden by a display cap. Now it shows a long, scrollable, searchable list, tells you the true total (e.g. "47 categories available"), and lets you refresh from Wave right there. Real accounts like "Loan Payable", "Sales Tax Payable", and "Credit Card" are no longer wrongly filtered out — only Wave\'s auto-generated system rows are hidden.',
+      '**✅ The transaction sync now goes through.** A safety check meant to stop posting to the wrong bank account was mis-counting reconnected/old copies of the same account as if they were separate accounts, and blocking the push. It now counts only your real, active accounts — so a single-bank silo pushes normally. (Genuinely multi-account silos are still protected.)',
+      '**🔁 Categories load automatically when you connect.** Right after you connect a silo to Wave, the Hub now pulls that business\'s chart of accounts for you — no separate "Pull categories" step before you can classify.',
+      { superAdminOnly: true, text: 'v55.83-LE (multi-agent diagnosis of Max\'s two bugs). CATEGORY ~10: (2a) BankReviewTab Typeahead hard .slice(0,10) → CAP 50 + "+N more of X — type to narrow" + always-on usable-count & refresh; (2b) categories/route isHiddenForCategorize now hides only nm "(SYSTEM" OR SYSTEM subtype (was substring PAYABLE/RECEIVABLE → dropped Loan/Sales-Tax/Notes Payable, A/R), and removed the name-collapse that dropped distinct same-named accounts (per-id dedup + UI label disambiguation remain). Pull verified complete (paginates all pages, no type filter) — loss was read+UI, not sync. PUSH BLOCKED: LC multi-account guard read plaid_accounts raw with mask||plaid_account_id, so reconnect alias rows + null-mask rows tripped >1 on a single-bank silo. Now counts DISTINCT CANONICAL (institution+mask like BankTab), drops null-mask aliases, excludes archived-connection rows; only ≥2 distinct canonical blocks. +1c: outer catch resets orphaned syncing→pending_wave_sync (retryable) + logs. +P3: doBind/bindBusiness auto-POST sync-categories (includeProduction) for the new GUID after a real bind. Markers push/categories→LE. Tests le(6); ky/lc updated; runner re-run. NOTE: if push still 400s it is now the anchor — default_payment_account_id (Settings → Payment deposit account) is a SEPARATE setting from the GD default bank picker; LB surfaces that message + LE logs it.' },
+    ],
+  },
+  {
     version: 'v55.83-LD',
     date: '2026-06-22',
     label: 'Import the categories you already set in Wave (CSV)',

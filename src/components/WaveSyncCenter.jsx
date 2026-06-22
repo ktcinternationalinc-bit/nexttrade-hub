@@ -290,7 +290,24 @@ export default function WaveSyncCenter(props) {
         if (!window.confirm('Connect "' + ((reg && reg.label) || active) + '" to your Wave business "' + (toName || toId) + '"?\n\n' + dry.message)) { setConnecting(false); setConnectMsg('Cancelled — nothing changed.'); return null; }
         return fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, body, { dry_run: false })) }).then(function (r2) { return r2.json(); });
       })
-      .then(function (res) { if (!res) { return; } setConnecting(false); setConnectMsg((res.ok ? '✓ ' : '✕ ') + (res.message || res.error || 'done')); if (res.ok) { setConnectChoices(null); /* v55.83-KW (Codex) — point the browser at the NEW real GUID before reload, else the page stays on the placeholder and still looks unconnected. */ try { setActiveWaveBusiness(res.to_wave_business_id || toId); } catch (eS) {} setTimeout(function () { if (typeof window !== 'undefined') { window.location.reload(); } }, 1400); } })
+      .then(function (res) {
+        if (!res) { return; }
+        setConnecting(false);
+        setConnectMsg((res.ok ? '✓ ' : '✕ ') + (res.message || res.error || 'done'));
+        if (res.ok) {
+          setConnectChoices(null);
+          /* v55.83-KW (Codex) — point the browser at the NEW real GUID before reload, else the page stays on the placeholder and still looks unconnected. */
+          var newGuid = res.to_wave_business_id || toId;
+          try { setActiveWaveBusiness(newGuid); } catch (eS) {}
+          /* v55.83-LE (workflow P3) — a freshly-bound real GUID has NO Wave categories yet (the placeholder
+             had none to carry over), so the categorize dropdown would be empty until a manual pull. Auto-pull
+             the chart of accounts now (production needs includeProduction:true), THEN reload. */
+          setConnectMsg('✓ Connected. Pulling this business’s Wave chart of accounts…');
+          fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: newGuid, includeProduction: true, user_id: (userProfile && userProfile.id) || null }) })
+            .then(function (rc) { return rc.json(); }).catch(function () { return null; })
+            .then(function () { setTimeout(function () { if (typeof window !== 'undefined') { window.location.reload(); } }, 1200); });
+        }
+      })
       .catch(function (e) { setConnecting(false); setConnectMsg('✕ Connect failed: ' + ((e && e.message) || 'network error')); });
   }
   function connectToWave() {

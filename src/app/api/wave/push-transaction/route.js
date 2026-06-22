@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
-var API_BUILD_MARKER = 'v55.83-LC-push-transaction';
+var API_BUILD_MARKER = 'v55.83-LE-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
@@ -79,13 +79,32 @@ export async function POST(req) {
     var anchorName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
     if (!anchorAcct) { return blocked('No Wave bank account configured for this silo. Set it in Wave Sync Center -> Settings -> Payment deposit account (it is the bank side of the transaction).', 400); }
 
-    // v55.83-LC (Codex money-safety) — the anchor is ONE silo-level Wave bank account. If this silo holds
-    // MORE THAN ONE real bank account, posting them all to that single anchor would book them to the WRONG
-    // Wave bank account (e.g. a ··6353 txn landing in the ··6338 Wave account). Block until a per-account
-    // anchor mapping exists. Single-account silos are unambiguous and proceed.
-    var paRes = await db.from('plaid_accounts').select('mask, plaid_account_id').eq('wave_business_id', waveBusinessId);
-    var masks = {}; ((paRes && paRes.data) || []).forEach(function (a) { var m = a.mask || a.plaid_account_id; if (m) { masks[m] = true; } });
-    if (Object.keys(masks).length > 1) { return blocked('This silo has ' + Object.keys(masks).length + ' bank accounts, but a transaction can only safely anchor to ONE Wave bank account. Per-account Wave-bank mapping is required before pushing transactions for a multi-account silo (so a ··6338 transaction never posts to the ··6353 Wave account). Single-account silos push fine.', 409); }
+    // v55.83-LC/LE (Codex money-safety, then workflow fix) — the anchor is ONE silo-level Wave bank
+    // account, so a genuinely MULTI-account silo must be blocked (else a ··6353 txn lands in the ··6338
+    // Wave account). BUT the LC raw count wrongly blocked a single-bank silo: a bank reconnect leaves
+    // stale ALIAS rows in plaid_accounts, and the old `mask || plaid_account_id` fallback let a null-mask
+    // alias count as a 2nd account. Count DISTINCT CANONICAL accounts the way BankTab does: key =
+    // institution+mask; DROP null-mask alias/pending rows; EXCLUDE archived reconnect links; reconnect
+    // aliases of the same (institution+mask) collapse. Only >=2 distinct canonical accounts blocks.
+    var paRes = await db.from('plaid_accounts').select('plaid_account_id, mask, connection_id').eq('wave_business_id', waveBusinessId);
+    var paRows = (paRes && paRes.data) || [];
+    var _connIds = {}; paRows.forEach(function (a) { if (a.connection_id) { _connIds[a.connection_id] = true; } });
+    var _connList = Object.keys(_connIds);
+    var _connById = {};
+    if (_connList.length) {
+      var bcRes = await db.from('bank_connections').select('id, institution_id, institution_name, status').in('id', _connList);
+      ((bcRes && bcRes.data) || []).forEach(function (c) { _connById[c.id] = c; });
+    }
+    var canonKeys = {};
+    paRows.forEach(function (a) {
+      if (!a.mask) { return; } // null-mask = alias/pending row, not a distinct account
+      var c = _connById[a.connection_id] || {};
+      if (c.status === 'archived') { return; } // superseded reconnect link
+      var inst = c.institution_id || c.institution_name || a.connection_id || '?';
+      canonKeys[inst + '|' + a.mask] = true;
+    });
+    var distinctAccts = Object.keys(canonKeys).length;
+    if (distinctAccts > 1) { return blocked('This silo has ' + distinctAccts + ' distinct bank accounts, but a transaction can only safely anchor to ONE Wave bank account. Map each account to its Wave bank account before pushing transactions for a multi-account silo (so a ··6338 transaction never posts to the ··6353 Wave account). Single-account silos push fine.', 409); }
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
     if (!(amount > 0)) { return blocked('Transaction amount must be positive.', 400); }
@@ -149,6 +168,11 @@ export async function POST(req) {
 
     return NextResponse.json({ ok: true, wave_transaction_id: waveTxnId, message: 'Pushed to Wave (' + dir.toLowerCase() + ' ' + amount + ' -> categorized).', api_build_marker: API_BUILD_MARKER });
   } catch (e) {
+    // v55.83-LE (workflow 1c) — if we crashed AFTER claiming 'syncing' but before a terminal write, the
+    // row would vanish from Pending (which lists pending_wave_sync) with no retry path but the 409. Reset
+    // it back to pending_wave_sync (best-effort, only if still 'syncing') so a failed push stays retryable.
+    try { if (typeof hubId !== 'undefined' && hubId) { await db.from('bank_transactions').update({ category_status: 'pending_wave_sync' }).eq('id', hubId).eq('category_status', 'syncing'); } } catch (eRst) {}
+    try { if (typeof hubId !== 'undefined' && hubId) { await db.from('wave_sync_log').insert({ wave_business_id: (typeof waveBusinessId !== 'undefined' ? waveBusinessId : null), entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: (e && e.message) || String(e), attempted_by: (typeof by !== 'undefined' ? by : null) }); } } catch (eRl) {}
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
 }

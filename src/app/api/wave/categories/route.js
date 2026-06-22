@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-LA-categories';
+var API_BUILD_MARKER = 'v55.83-LE-categories';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -20,11 +20,12 @@ function admin() {
 function isHiddenForCategorize(c) {
   var sub = String(c.subtype || '').toUpperCase();
   var nm = String(c.wave_account_name || '').toUpperCase();
-  // v55.83-LA (Codex) — match SYSTEM/PAYABLE/RECEIVABLE in EITHER subtype OR name. Wave's flood rows show
-  // as name "Accounts Payable (System Payable Bill)" and may carry a generic subtype, so a name-only
-  // "RECEIVABLE" check let them leak. Hide on either field.
-  function hit(s) { return s.indexOf('SYSTEM') >= 0 || s.indexOf('PAYABLE') >= 0 || s.indexOf('RECEIVABLE') >= 0; }
-  return hit(sub) || hit(nm);
+  // v55.83-LE (workflow 2b) — hide ONLY Wave's auto-generated SYSTEM rows, not legitimate hand-named
+  // Payable/Receivable accounts. The KY/LA rule hid ANY name containing PAYABLE/RECEIVABLE, which wrongly
+  // dropped real accounts a bank txn legitimately classifies to (Loan Payable, Sales Tax Payable, Credit
+  // Card Payable, Notes Payable, Accounts Receivable). Wave's flood rows are named "... (System ... )"
+  // and/or carry a SYSTEM subtype, so match the "(SYSTEM" parenthetical OR a SYSTEM subtype only.
+  return nm.indexOf('(SYSTEM') >= 0 || sub.indexOf('SYSTEM') >= 0;
 }
 
 export async function POST(req) {
@@ -45,15 +46,14 @@ export async function POST(req) {
     var total = all.length;
     var active = all.filter(function (c) { return c.is_active !== false; });
     var hiddenSystem = 0; var hiddenDupName = 0;
-    var seen = {}; var seenName = {}; var usable = [];
+    var seen = {}; var usable = [];
+    // v55.83-LE (workflow 2b) — dedupe by wave_account_id ONLY. The old name-collapse dropped legitimately
+    // DISTINCT accounts that happen to share a display name (the UI label appends subtype + type, so they
+    // are distinguishable). True duplicate rows are already prevented by the per-id dedup below.
     active.forEach(function (c) {
       if (!c.wave_account_id || seen[c.wave_account_id]) { return; }
       seen[c.wave_account_id] = true;
       if (isHiddenForCategorize(c)) { hiddenSystem++; return; }
-      // collapse duplicate NAMES so the list isn't a wall of identical labels.
-      var nmKey = String(c.wave_account_name || '').trim().toUpperCase();
-      if (nmKey && seenName[nmKey]) { hiddenDupName++; return; }
-      if (nmKey) { seenName[nmKey] = true; }
       usable.push(c);
     });
     // stable, human-friendly order: by name.

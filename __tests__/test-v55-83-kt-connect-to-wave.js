@@ -54,7 +54,8 @@ ok('8: the primary "Connect this silo to Wave now" button + tab-nav fallback are
 // v55.83-KW (Codex) — a successful bind MUST switch the browser's active business off the placeholder.
 ok('9 (KW): after a successful connect, WaveSyncCenter switches the active business to the new real GUID (not the placeholder)',
   /import \{ getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness \}/.test(sync) &&
-  /setActiveWaveBusiness\(res\.to_wave_business_id \|\| toId\)/.test(sync));
+  /var newGuid = res\.to_wave_business_id \|\| toId;/.test(sync) &&
+  /setActiveWaveBusiness\(newGuid\)/.test(sync));
 ok('10 (KW): WaveConnectionTab also switches the active business to the real GUID after binding the active silo',
   /import \{ isPlaceholderWaveBusiness, setActiveWaveBusiness, getActiveWaveBusiness \}/.test(conn) &&
   /if \(getActiveWaveBusiness\(\) === siloFrom\) \{ setActiveWaveBusiness\(realId\); \}/.test(conn));

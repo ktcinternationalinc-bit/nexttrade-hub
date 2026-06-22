@@ -55,7 +55,20 @@ export default function WaveConnectionTab(props) {
         if (!window.confirm(j.message + '\n\nBind this silo to "' + (realName || realId) + '" now? This re-tags the silo\'s data to the real Wave business (all-or-nothing — it rolls back if anything fails).')) { setBinding(false); setBindMsg('Cancelled — nothing changed.'); return null; }
         return fetch('/api/wave/bind-business', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, payload, { dry_run: false })) }).then(function (r2) { return r2.json(); });
       })
-      .then(function (j2) { if (!j2) { return; } setBindMsg((j2.ok ? '✓ ' : '✕ ') + (j2.message || j2.error || 'Done.')); if (j2.ok) { /* v55.83-KW (Codex) — if the silo we just bound was the active one, point the browser at the new real GUID so the app stops showing the placeholder. */ try { if (getActiveWaveBusiness() === siloFrom) { setActiveWaveBusiness(realId); } } catch (eS) {} } reloadRegistry(); })
+      .then(function (j2) {
+        if (!j2) { return; }
+        setBindMsg((j2.ok ? '✓ ' : '✕ ') + (j2.message || j2.error || 'Done.'));
+        if (j2.ok) {
+          /* v55.83-KW (Codex) — if the silo we just bound was the active one, point the browser at the new real GUID so the app stops showing the placeholder. */
+          try { if (getActiveWaveBusiness() === siloFrom) { setActiveWaveBusiness(realId); } } catch (eS) {}
+          /* v55.83-LE (workflow P3) — auto-pull the newly-bound business's Wave chart of accounts so the
+             categorize dropdown isn't empty (the placeholder had no categories to carry over). */
+          setBindMsg('✓ Connected. Pulling this business’s Wave chart of accounts…');
+          fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: realId, includeProduction: true, user_id: (userProfile && userProfile.id) || null }) })
+            .then(function (rc) { return rc.json(); }).catch(function () { return null; })
+            .then(function (rc) { if (rc && rc.ok) { setBindMsg('✓ Connected and pulled the Wave chart of accounts.'); } reloadRegistry(); });
+        } else { reloadRegistry(); }
+      })
       .catch(function (e) { setBindMsg('✕ Bind failed: ' + ((e && e.message) || 'network error')); })
       .finally(function () { setBinding(false); });
   }

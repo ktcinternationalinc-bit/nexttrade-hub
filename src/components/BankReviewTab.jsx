@@ -33,7 +33,14 @@ function Typeahead(props) {
   var st = useState(''); var q = st[0]; var setQ = st[1];
   var os = useState(false); var open = os[0]; var setOpen = os[1];
   var selected = items.find(function (x) { return x.id === value; });
-  var shown = (q.trim() ? items.filter(function (x) { return getLabel(x).toLowerCase().indexOf(q.trim().toLowerCase()) >= 0; }) : items).slice(0, 10);
+  // v55.83-LE (Max: "only ~10 chart of accounts… where are the rest" / Codex transparency FAIL) — the
+  // picker used to hard-cap at 10, so the rest of a full chart of accounts was invisible (it was there,
+  // just not rendered). Show a generous, scrollable window (50) and ALWAYS surface the true total +
+  // how many more match, so the full list is reachable by typing and the count is never a mystery.
+  var CAP = 50;
+  var filtered = q.trim() ? items.filter(function (x) { return getLabel(x).toLowerCase().indexOf(q.trim().toLowerCase()) >= 0; }) : items;
+  var shown = filtered.slice(0, CAP);
+  var more = filtered.length - shown.length;
   return (
     <div className="relative mb-1">
       <input value={open ? q : (selected ? getLabel(selected) : '')} placeholder={props.placeholder}
@@ -42,10 +49,12 @@ function Typeahead(props) {
         onChange={function (e) { setQ(e.target.value); setOpen(true); }}
         className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs" />
       {open && (
-        <div className="absolute z-20 left-0 right-0 bg-slate-900 border border-slate-600 rounded mt-0.5 max-h-48 overflow-auto shadow-xl">
+        <div className="absolute z-20 left-0 right-0 bg-slate-900 border border-slate-600 rounded mt-0.5 max-h-64 overflow-auto shadow-xl">
           {props.allowClear && <div onMouseDown={function () { onPick(''); setOpen(false); }} className="px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 cursor-pointer">— clear —</div>}
-          {shown.length === 0 ? <div className="px-2 py-1 text-[11px] text-slate-500 italic">no matches</div> :
+          {shown.length === 0 ? <div className="px-2 py-1 text-[11px] text-slate-500 italic">no matches{items.length ? (' (' + items.length + ' available — adjust your search)') : ''}</div> :
             shown.map(function (x) { return <div key={x.id} onMouseDown={function () { onPick(x.id); setOpen(false); }} className="px-2 py-1 text-[11px] text-slate-100 hover:bg-indigo-600/40 cursor-pointer">{getLabel(x)}</div>; })}
+          {more > 0 && <div className="px-2 py-1 text-[10px] text-amber-300 bg-slate-950 sticky bottom-0 border-t border-slate-700">+{more} more of {filtered.length} — type to narrow</div>}
+          {more === 0 && shown.length > 0 && <div className="px-2 py-1 text-[10px] text-slate-500 bg-slate-950 sticky bottom-0 border-t border-slate-800">{shown.length} shown{q.trim() ? '' : (' of ' + items.length + ' total')}</div>}
         </div>
       )}
     </div>
@@ -886,6 +895,8 @@ export default function BankReviewTab(props) {
                       onPick={function (id) { setWaveCategory(sel, id); }} />
                   )}
                   {sel.wave_account_id && <div className="text-[10px] text-violet-300 mt-0.5">Selected: {sel.wave_account_name}{sel.category_status ? (' · ' + sel.category_status) : ''}</div>}
+                  {/* v55.83-LE — always show the true usable total + a refresh, so it's clear the full chart of accounts is loaded (not just the ~10 visible). */}
+                  <div className="text-[10px] text-slate-500 mt-0.5">{(catDiag && catDiag.usable != null ? catDiag.usable : waveCategories.length) + ' categories available'}{catDiag && catDiag.hidden_receivable ? (' · ' + catDiag.hidden_receivable + ' system/AP/AR hidden') : ''}{mayClassify ? ' · ' : ''}{mayClassify && <button onMouseDown={function (e) { e.preventDefault(); }} onClick={pullCategories} disabled={catPulling} className="underline hover:text-slate-300 disabled:opacity-50">{catPulling ? 'refreshing…' : 'refresh from Wave'}</button>}</div>
                   {sel.direction === 'in' && <div className="text-[10px] text-slate-500 mt-0.5">Money-in: if this is a customer invoice payment, match it to the invoice below instead of categorizing.</div>}
                 </div>
               ) : (
