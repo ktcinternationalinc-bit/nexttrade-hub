@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LB',
+    date: '2026-06-22',
+    label: 'Pushing a transaction now tells you exactly what happened (no more silent "nothing")',
+    items: [
+      '**🗣 The push now reports the result.** When you push a transaction to Wave and it can\'t go through, you now get the exact reason on screen — most often "No Wave bank account configured — set it in Settings → Payment deposit account" (that\'s the bank side of the transaction, and it needs to be set once per silo after connecting). Every attempt — success or blocked — is now written to the Sync Log, so there\'s always a record.',
+      '**🔑 The right setup to push a transaction:** the silo connected to Wave (done), a Wave Category on the transaction (you have that), production push enabled, AND a Payment deposit account set in Settings (this is almost certainly the missing piece — set it and the push will go).',
+      { superAdminOnly: true, text: 'v55.83-LB (Max: "push did nothing, no sync logs"). Root: validation 400s (no anchor/category, lock) returned BEFORE any logging, and pushSelected swallowed the reason. Fix: push-transaction blocked(reason,status) helper writes a wave_sync_log row + returns the specific error for EVERY block (no-anchor, no-category, locked, matched, placeholder, token). pushSelected now captures each result\'s d.error (+ HTTP status) into errs[], shows them in prodMsg + a specific toast. Transaction gate relaxed to master switches (production_push_unlocked + writes_enabled), dropped the payment-specific allow_payment_push requirement. Most likely live cause: default_payment_account_id not set on the freshly-connected silo → now surfaced clearly. Test lb(4); kz still green; runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-LA',
     date: '2026-06-21',
     label: 'Category list: close the last "Accounts Payable" leak',

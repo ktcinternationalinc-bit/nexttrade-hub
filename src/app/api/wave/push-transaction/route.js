@@ -38,40 +38,51 @@ export async function POST(req) {
     var isDry = body.dry_run === true;
     var token = process.env.WAVE_ACCESS_TOKEN;
 
+    // v55.83-LB (Max: "nothing happened and no sync logs") — EVERY blocked/failed push now writes a
+    // wave_sync_log row + returns the specific reason, so the Sync Log shows exactly what happened
+    // (previously the validation 400s returned before any logging).
+    async function blocked(reason, status) {
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId || null, entity_type: 'bank_transaction', hub_record_id: hubId || null, action: 'push', dry_run: !!isDry, success: false, error_message: reason, attempted_by: by }); } catch (eLB) {}
+      return NextResponse.json({ ok: false, error: reason, api_build_marker: API_BUILD_MARKER }, { status: status || 400 });
+    }
+
     var gate = await assertPermission(db, by, 'wave.payments.push', req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
-    if (!token) { return NextResponse.json({ ok: false, error: 'Wave token not configured.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (!token) { return blocked('Wave token not configured.', 400); }
     if (!waveBusinessId || !hubId) { return NextResponse.json({ ok: false, error: 'wave_business_id and hub_record_id are required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-    if (isPlaceholderWaveBusiness(waveBusinessId)) { return NextResponse.json({ ok: false, placeholder: true, error: 'This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection first.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (isPlaceholderWaveBusiness(waveBusinessId)) { return blocked('This silo is not connected to a real Wave business yet (placeholder id). Bind it under Accounting -> Wave Connection first.', 400); }
 
     // Same lock gate as push-payment: approved test business, or a super-admin-unlocked production business.
     var _regRes = await db.from('wave_business_registry').select('is_production, writes_enabled, allow_payment_push, production_push_unlocked, label').eq('wave_business_id', waveBusinessId);
     var _preg = (_regRes && _regRes.data && _regRes.data.length) ? _regRes.data[0] : null;
     var _isApprovedTest = (waveBusinessId === APPROVED_PUSH_BUSINESS_ID);
-    var _prodUnlocked = !!(_preg && _preg.is_production !== false && _preg.production_push_unlocked === true && _preg.writes_enabled === true && _preg.allow_payment_push === true);
-    if (!_isApprovedTest && !_prodUnlocked) { return NextResponse.json({ ok: false, error: 'Production transaction push is locked. A super admin must enable real production push (writes_enabled + allow_payment_push + production unlock) for this business.', api_build_marker: API_BUILD_MARKER }, { status: 403 }); }
+    // v55.83-LB — transactions need the MASTER switches (writes_enabled + production unlock); they are
+    // NOT gated on allow_payment_push (that's the payment-specific sub-toggle) so turning that off doesn't
+    // wrongly block a categorized-transaction push.
+    var _prodUnlocked = !!(_preg && _preg.is_production !== false && _preg.production_push_unlocked === true && _preg.writes_enabled === true);
+    if (!_isApprovedTest && !_prodUnlocked) { return blocked('Production transaction push is locked. A super admin must enable real production push (Writes enabled + production unlock) for this business in Settings.', 403); }
 
     // Load the bank transaction.
     var btRes = await db.from('bank_transactions').select('*').eq('id', hubId);
     var bt = (btRes && btRes.data && btRes.data.length) ? btRes.data[0] : null;
-    if (!bt) { return NextResponse.json({ ok: false, error: 'Bank transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
-    if (bt.wave_business_id && bt.wave_business_id !== waveBusinessId) { return NextResponse.json({ ok: false, error: 'This transaction belongs to a different silo.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
-    if (bt.matched_invoice_id) { return NextResponse.json({ ok: false, error: 'This deposit is matched to an invoice — it reaches Wave as an invoice PAYMENT (Bank Review), not as a categorized transaction.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-    if (bt.category_status === 'synced' || bt.wave_transaction_id) { return NextResponse.json({ ok: false, error: 'Already pushed to Wave.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (!bt) { return blocked('Bank transaction not found.', 404); }
+    if (bt.wave_business_id && bt.wave_business_id !== waveBusinessId) { return blocked('This transaction belongs to a different silo.', 409); }
+    if (bt.matched_invoice_id) { return blocked('This deposit is matched to an invoice — it reaches Wave as an invoice PAYMENT (Bank Review), not as a categorized transaction.', 400); }
+    if (bt.category_status === 'synced' || bt.wave_transaction_id) { return blocked('Already pushed to Wave.', 400); }
 
     var categoryAcct = bt.wave_account_id || null;
-    if (!categoryAcct) { return NextResponse.json({ ok: false, error: 'No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', api_build_marker: API_BUILD_MARKER, needs_category: true }, { status: 400 }); }
+    if (!categoryAcct) { return blocked('No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', 400); }
 
     // The bank side (anchor) = the silo's configured Wave bank/deposit account.
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id').eq('wave_business_id', waveBusinessId);
     var anchorAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
-    if (!anchorAcct) { return NextResponse.json({ ok: false, error: 'No Wave bank account configured for this silo. Set it in Wave Sync Center -> Settings -> Payment deposit account (it is the bank side of the transaction).', api_build_marker: API_BUILD_MARKER, needs_payment_account: true }, { status: 400 }); }
+    if (!anchorAcct) { return blocked('No Wave bank account configured for this silo. Set it in Wave Sync Center -> Settings -> Payment deposit account (it is the bank side of the transaction).', 400); }
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
-    if (!(amount > 0)) { return NextResponse.json({ ok: false, error: 'Transaction amount must be positive.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (!(amount > 0)) { return blocked('Transaction amount must be positive.', 400); }
     var dir = (bt.direction === 'in' || (bt.direction !== 'out' && Number(bt.amount) < 0)) ? 'DEPOSIT' : 'WITHDRAWAL';
     var date = String(bt.posted_date || bt.date || '').slice(0, 10);
-    if (!date) { return NextResponse.json({ ok: false, error: 'Transaction date is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    if (!date) { return blocked('Transaction date is required.', 400); }
     var desc = String(bt.name || bt.merchant_name || 'Bank transaction').slice(0, 140);
     var externalId = 'hub-bt-' + String(hubId);
 

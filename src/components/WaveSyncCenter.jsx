@@ -641,17 +641,23 @@ export default function WaveSyncCenter(props) {
     }
     setBusy(true);
     var seq = Promise.resolve();
-    var done = 0, failed = 0;
+    var done = 0, failed = 0; var errs = []; // v55.83-LB — capture the SPECIFIC reason so a failed push
+    // isn't a silent "nothing happened" (e.g. "no Wave deposit account set" after a fresh connect).
     selectedRows.forEach(function (q) {
       seq = seq.then(function () {
         var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : (q.action === 'transaction' ? '/api/wave/push-transaction' : '/api/wave/push-payment'));
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
-          .then(function (r) { return r.json(); })
-          .then(function (d) { if (d && (d.success || d.ok)) { done++; } else { failed++; } })
-          .catch(function () { failed++; });
+          .then(function (r) { return r.json().then(function (d) { return { http: r.status, d: d }; }); })
+          .then(function (x) { var d = x.d || {}; if (d.success || d.ok) { done++; } else { failed++; errs.push((q.label || q.action) + ': ' + (d.error || ('HTTP ' + x.http))); } })
+          .catch(function (e) { failed++; errs.push((q.label || q.action) + ': ' + ((e && e.message) || 'network error')); });
       });
     });
-    seq.then(function () { setBusy(false); toast.success('Push finished — ' + done + ' ok, ' + failed + ' blocked/failed. See Sync Log.'); setSel({}); load(); });
+    seq.then(function () {
+      setBusy(false);
+      if (failed > 0) { setProdMsg('Push: ' + done + ' ok, ' + failed + ' failed.\n' + errs.join('\n')); toast.error('Push: ' + done + ' ok, ' + failed + ' failed — ' + (errs[0] || '')); }
+      else { toast.success('Push finished — ' + done + ' pushed to Wave.'); }
+      setSel({}); load();
+    });
   }
 
   function setFlag(field, val) {
