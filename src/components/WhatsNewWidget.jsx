@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LP',
+    date: '2026-06-22',
+    label: 'One guided "Prefill from Wave" flow — no more hunting across tabs',
+    items: [
+      '**🧭 One ordered path to mirror your Wave history.** Wave Sync Center → Import from Wave now opens with a single guided panel: **Step 1 — Import invoices & customers** (one button), **Step 2 — Import categories (CSV)**, **Step 3 — Prefill invoice links** (Preview first). Run them top to bottom and your existing Wave data — invoices, the categories you set in Wave, and which deposit paid which invoice — all land in the Hub. Nothing is ever written back to Wave, and every step is safe to re-run.',
+      '**▶️ Step 3 is Preview-first.** The invoice-link step still defaults to a dry-run preview so you see exactly what it will link before anything is applied — that\'s the live check to run on Real KTC.',
+      { superAdminOnly: true, text: 'v55.83-LP (Max options 1+2). Option 1: consolidated the 3 prefill actions into one guided panel at the top of the WaveSyncCenter Import tab. Step 1 = NEW runImportInvoicesCustomers() → POST /api/wave/import-customers then /api/wave/import-invoices (businessId=active silo, userId) — reuses the same routes WaveImportTab uses, customers first so invoices link; shows created/updated/total counts + errors. Steps 2 (CSV categories) + 3 (prefill links) are the existing blocks, now numbered, with Step 3 keeping its Preview-first (dry-run) default. UI-only orchestration of already-tested routes; NO new money logic, nothing writes to Wave. Option 2 (the live dry-run) is enabled as the one-click "Preview links (dry run)" in Step 3 — it must be run from Max\'s logged-in session against the live books (can\'t be executed server-side from dev). test lp(5); runner re-run. Cross-tab note: the standalone ⬇️ Wave Import tab still exists for granular control (estimates, reconcile); the guided panel is the simple path.' },
+    ],
+  },
+  {
     version: 'v55.83-LO',
     date: '2026-06-22',
     label: 'Prefill links: only matches deposits from the right bank account',

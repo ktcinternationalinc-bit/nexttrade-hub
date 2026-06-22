@@ -355,6 +355,31 @@ export default function WaveSyncCenter(props) {
       .finally(function () { setSchemaBusy(false); });
   }
 
+  // v55.83-LP — guided prefill Step 1: import customers then invoices for the active silo (so invoices
+  // exist in the Hub before the link prefill runs). Reuses the existing import routes (WaveImportTab uses
+  // the same ones); customers first because invoices link to them.
+  var [impBusy, setImpBusy] = useState(false);
+  var [impResult, setImpResult] = useState(null);
+  function runImportInvoicesCustomers() {
+    if (!active) { toast.error('Select a Wave business first.'); return; }
+    setImpBusy(true); setImpResult(null);
+    var uid = (userProfile && userProfile.id) || null;
+    fetch('/api/wave/import-customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: active, userId: uid }) })
+      .then(function (r) { return r.json(); })
+      .then(function (cust) {
+        return fetch('/api/wave/import-invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ businessId: active, userId: uid }) })
+          .then(function (r2) { return r2.json(); })
+          .then(function (inv) { return { cust: cust, inv: inv }; });
+      })
+      .then(function (res) {
+        setImpResult(res); setImpBusy(false);
+        var custOk = res.cust && res.cust.ok; var invOk = res.inv && res.inv.ok;
+        if (custOk && invOk) { toast.success('Imported customers + invoices from Wave.'); load(); }
+        else { toast.error('Import issue: ' + ((res.cust && res.cust.error) || (res.inv && res.inv.error) || 'see details below')); }
+      })
+      .catch(function (e) { setImpBusy(false); toast.error((e && e.message) || 'Import failed.'); });
+  }
+
   function runCategoryPull() {
     if (!active) { toast.error('Select a Wave business first.'); return; }
     setCatBusy(true); setCatMsg('Pulling Wave Chart of Accounts…');
@@ -964,8 +989,27 @@ export default function WaveSyncCenter(props) {
 
       {tab === 'import' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
         <div className="bg-white rounded-lg p-4 text-slate-900 space-y-3">
+          {/* v55.83-LP — guided "Prefill from Wave" flow: run these three in order to mirror existing Wave
+              data into the Hub. Each step reuses an existing, tested action; nothing here writes to Wave. */}
+          <div className="border-2 border-indigo-300 bg-indigo-50/60 rounded-lg p-3 space-y-2">
+            <div className="text-sm font-extrabold text-indigo-900">Prefill from Wave — run these in order</div>
+            <div className="text-[11px] text-slate-600">Brings your existing Wave data into the Hub: invoices &amp; customers, then the categories you set in Wave, then the deposit→invoice links. Nothing is written back to Wave. Safe to re-run.</div>
+            <div className="border border-indigo-200 bg-white rounded p-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-[12px] text-slate-800"><b>Step 1 — Import invoices &amp; customers</b><div className="text-[11px] text-slate-500">Pulls every Wave invoice (with paid/balance/status) + its customer into the Hub, so the links in Step 3 have invoices to attach to.</div></div>
+                <button onClick={runImportInvoicesCustomers} disabled={impBusy} className="bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{impBusy ? 'Importing…' : (impResult ? 'Re-import' : 'Import invoices & customers')}</button>
+              </div>
+              {impResult && (
+                <div className="mt-1 text-[11px] text-slate-700">
+                  {impResult.cust && impResult.cust.report ? <span className="mr-3">Customers: {impResult.cust.report.created || 0} new · {impResult.cust.report.updated || 0} updated</span> : (impResult.cust && impResult.cust.error ? <span className="text-rose-700 mr-3">Customers: {impResult.cust.error}</span> : null)}
+                  {impResult.inv && impResult.inv.report ? <span className="text-emerald-700">Invoices: {impResult.inv.report.created || 0} new · {impResult.inv.report.updated || 0} updated · {impResult.inv.report.total || 0} total</span> : (impResult.inv && impResult.inv.error ? <span className="text-rose-700">Invoices: {impResult.inv.error}</span> : null)}
+                </div>
+              )}
+            </div>
+            <div className="text-[11px] text-slate-600">↓ <b>Step 2</b> (categories) and <b>Step 3</b> (invoice links) are below.</div>
+          </div>
           <div>
-            <div className="text-sm font-bold text-slate-900">Import existing categorizations from Wave (CSV)</div>
+            <div className="text-sm font-bold text-slate-900">Step 2 — Import existing categorizations from Wave (CSV)</div>
             <div className="text-xs text-slate-600 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
           </div>
           {/* v55.83-LG — invoice PAYMENTS are API-readable (unlike money transactions). This probe shows
@@ -997,7 +1041,7 @@ export default function WaveSyncCenter(props) {
               only: it never changes a paid/balance amount (those already reflect Wave). Dry-run first. */}
           <div className="border border-indigo-200 bg-indigo-50 rounded p-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-[11px] text-slate-700"><b>Prefill invoice links:</b> link your existing bank deposits to the invoices Wave already shows them paying (by amount + date). Preview first; it only links a deposit when there's exactly one match, and never changes any balance.</div>
+              <div className="text-[11px] text-slate-700"><b>Step 3 — Prefill invoice links:</b> link your existing bank deposits to the invoices Wave already shows them paying (by amount + date). <b>Preview first</b> (dry run, writes nothing); it only links a deposit when there's exactly one match, and never changes any balance. Run Step 1 first so the invoices exist.</div>
               <div className="flex gap-2">
                 <button onClick={function () { runPrefillLinks(false); }} disabled={prefillBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{prefillBusy ? 'Working…' : 'Preview links (dry run)'}</button>
                 <button onClick={function () { runPrefillLinks(true); }} disabled={prefillBusy || !prefillResult || !prefillResult.dry_run || !(prefillResult.counts && prefillResult.counts.would_link)} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">Apply {prefillResult && prefillResult.dry_run && prefillResult.counts ? '(' + (prefillResult.counts.would_link || 0) + ')' : ''}</button>
