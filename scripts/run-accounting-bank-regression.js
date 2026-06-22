@@ -36,6 +36,7 @@ var MANIFEST = [
   { f: 'test-v55-83-jz-ar-count-and-preview.js', label: 'new', why: 'AR count breakdown + visibility employee-preview' },
   { f: 'test-v55-83-ke-update-match-atomic.js', label: 'new', why: 'atomic update_match server action: reverse old + apply new, recompute both invoices, block Wave-synced; client + sync-state display' },
   { f: 'test-v55-83-kj-match-edit-rollback-hardening.js', label: 'new', why: 'update_match money-safety: overpayment-insert rollback, old credit/unapplied void errors trigger restore, restore re-opens old credits/unapplied, recompute/restamp surfaced as warning' },
+  { f: 'test-v55-83-ky-category-and-account-dedup.js', label: 'new', why: 'Bank Review: hide Wave SYSTEM/AP/AR category flood + dedupe names + searchable category picker; account filter keyed by mask (reconnected duplicate account shows once)' },
   { f: 'test-v55-83-kx-refresh-names.js', label: 'new', why: 'Refresh business names from Wave: read-only pull of current Wave names -> update Hub silo labels (service-role, super-admin), skip+flag placeholders/not-visible' },
   { f: 'test-v55-83-kt-connect-to-wave.js', label: 'new', why: 'one-click Connect-to-Wave (check token -> match silo -> bind) + kill placeholder-state UI contradiction (banner/badge/settings show NOT CONNECTED, moot toggles hidden)' },
   { f: 'test-v55-83-kq-bind-safety.js', label: 'new', why: 'bind tool live-safety: all-or-nothing re-stamp with rollback (no partial silo ownership), normal mode binds placeholder silos only, advanced rebind opt-in' },

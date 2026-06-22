@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KY',
+    date: '2026-06-21',
+    label: 'Wave category picker is searchable + de-cluttered; duplicate accounts in Bank Review collapsed',
+    items: [
+      '**🔎 The Wave Category picker is now searchable** — type to find the exact account instead of scrolling. And it no longer floods with dozens of identical "Accounts Payable (System Payable Bill)" rows (Wave auto-creates one of those per bill — they\'re not categories you\'d ever pick). Duplicate names are collapsed and the list is sorted, so your real expense/income accounts are easy to find.',
+      '**🏦 One account, not two, in Bank Review.** After reconnecting a bank, the same account could appear twice in the account filter. Now it shows once, and selecting it shows that account\'s transactions across both the old and new connection (current + historical together).',
+      { superAdminOnly: true, text: 'v55.83-KY. /api/wave/categories: isHiddenForCategorize() drops subtype/name containing SYSTEM/PAYABLE/RECEIVABLE (system AP/AR sub-accounts), collapses duplicate names (seenName), sorts by name; returns hidden_system_count + hidden_duplicate_name_count. BankReviewTab Wave Category = searchable Typeahead (direction-ordered items, type shown), read-only when locked/no-perm. Account filter keyed by maskKeyOf(account_id) so reconnect duplicates collapse to one entry; filter + default + deep-link all use the mask key. Test ky(6); runner green.' },
+    ],
+  },
+  {
     version: 'v55.83-KX',
     date: '2026-06-21',
     label: 'Refresh business names from Wave (after you rename a business in Wave)',

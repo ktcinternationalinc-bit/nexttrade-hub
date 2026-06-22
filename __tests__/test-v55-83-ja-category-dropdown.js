@@ -15,10 +15,10 @@ var route = rd('src/app/api/wave/categories/route.js');
 var br = rd('src/components/BankReviewTab.jsx');
 
 ok('1: categories route is service-role + permission-gated', /SUPABASE_SERVICE_ROLE_KEY/.test(route) && /assertPermission\(db, by, 'bank\.classify', req\)/.test(route));
-ok('2: route scopes by wave_business_id + applies usable filters (active, dedupe, hide receivable)',
-  /\.eq\('wave_business_id', waveBusinessId\)/.test(route) && /isReceivable\(c\)/.test(route) && /seen\[c\.wave_account_id\]/.test(route));
-ok('3: route returns diagnostic counts (total/active/usable/hidden_receivable)',
-  /total: total, active_count: active\.length, usable_count: usable\.length, hidden_receivable_count: hiddenReceivable/.test(route));
+ok('2: route scopes by wave_business_id + applies usable filters (active, dedupe, hide system AP/AR — v55.83-KY)',
+  /\.eq\('wave_business_id', waveBusinessId\)/.test(route) && /isHiddenForCategorize\(c\)/.test(route) && /seen\[c\.wave_account_id\]/.test(route));
+ok('3: route returns diagnostic counts (total/active/usable/hidden)',
+  /total: total, active_count: active\.length, usable_count: usable\.length, hidden_receivable_count: hiddenSystem/.test(route));
 ok('4: Bank Review loads categories from the service-role route', /fetch\('\/api\/wave\/categories'/.test(br) && /setWaveCategories\(j\.categories \|\| \[\]\)/.test(br));
 ok('5: Bank Review records a category diagnostic for the empty-state', /setCatDiag\(\{ total: j\.total, usable: j\.usable_count/.test(br));
 ok('6: empty-state is reason-specific (error / all-filtered / truly-missing) + inline pull (v55.83-KF)',

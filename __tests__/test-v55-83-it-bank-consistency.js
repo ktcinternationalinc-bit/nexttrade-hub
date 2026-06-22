@@ -26,8 +26,8 @@ ok('2b: Bank Tab orders by posted_date (matches Bank Review)', /_txq = supabase\
 ok('2c: Bank Tab still scopes by active silo before its limit', /_txq = _txq\.eq\('wave_business_id', _activeBizScope\)/.test(bt));
 
 // 3. Deep-link preserves the bank account context
-ok('3a: deep-link sets fAccount to the txn account_id (not "all")',
-  /setFAccount\(deepHit\.account_id \|\| 'all'\)/.test(br));
+ok('3a: deep-link keeps the txn account context (by mask key, not "all")',
+  /setFAccount\(deepHit\.account_id \? maskKeyOf\(deepHit\.account_id, pa\) : 'all'\)/.test(br));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-IT bank-consistency tests passed'); process.exit(0); }

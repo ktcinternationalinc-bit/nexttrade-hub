@@ -208,7 +208,7 @@ export default function BankReviewTab(props) {
         if (!autoAcctDone && activeBizA) {
           var defAcct = null;
           ((res[7] && res[7].data) || []).forEach(function (s) { if (s && s.wave_business_id === activeBizA && s.default_plaid_account_id) { defAcct = s.default_plaid_account_id; } });
-          if (defAcct && t.some(function (x) { return x.account_id === defAcct; })) { setFAccount(defAcct); }
+          if (defAcct && t.some(function (x) { return x.account_id === defAcct; })) { setFAccount(maskKeyOf(defAcct, pa)); }
           setAutoAcctDone(true);
         }
       } catch (eAuto) {}
@@ -224,7 +224,7 @@ export default function BankReviewTab(props) {
         if (deepHit) {
           // v55.83-IT (Codex FAIL) — preserve the bank-account context the user came from instead of
           // resetting to All accounts. Clear status/search so the row is visible, but keep its account.
-          setFStatus('all'); setFAccount(deepHit.account_id || 'all'); setSearch('');
+          setFStatus('all'); setFAccount(deepHit.account_id ? maskKeyOf(deepHit.account_id, pa) : 'all'); setSearch('');
           openTxn(deepHit);
           if (toast && toast.success) { toast.success('Opened the transaction for matching.'); }
         } else if (toast && toast.error) {
@@ -251,16 +251,21 @@ export default function BankReviewTab(props) {
     var idTail = t.account_id ? (' \u00b7\u00b7' + String(t.account_id).slice(-4)) : '';
     return src + sub + idTail + ' (mask pending re-sync)';
   }
+  // v55.83-KY — the account FILTER must show ONE entry per real account. Reconnecting a bank gives the
+  // same account a new id, so two "··6338" used to appear. Key by mask so duplicates collapse into one
+  // entry, and selecting it shows that real account's transactions across BOTH ids (current + historical).
+  function maskKeyOf(accountId, mapOverride) { var a = (mapOverride || plaidAccts)[accountId]; return (a && a.mask) ? ('mask:' + a.mask) : ('acct:' + accountId); }
   var accounts = useMemo(function () {
-    var s = {}; txns.forEach(function (t) { if (t.account_id && !s[t.account_id]) { s[t.account_id] = acctLabel(t); } });
-    return Object.keys(s).map(function (id) { return { id: id, label: s[id] }; });
+    var s = {}; var order = [];
+    txns.forEach(function (t) { if (!t.account_id) { return; } var k = maskKeyOf(t.account_id); if (!s[k]) { s[k] = acctLabel(t); order.push(k); } });
+    return order.map(function (k) { return { id: k, label: s[k] }; });
   }, [txns, plaidAccts]);
 
   var filtered = useMemo(function () {
     var list = txns.slice();
     if (fStatus !== 'all') list = list.filter(function (t) { return (t.review_status || 'unreviewed') === fStatus; });
     if (fDirection !== 'all') list = list.filter(function (t) { return t.direction === fDirection; });
-    if (fAccount !== 'all') list = list.filter(function (t) { return t.account_id === fAccount; });
+    if (fAccount !== 'all') list = list.filter(function (t) { return maskKeyOf(t.account_id) === fAccount; });
     if (fUnsupported) list = list.filter(function (t) { return t.unsupported_account === true; });
     if (fFrom) list = list.filter(function (t) { return (t.posted_date || t.date) >= fFrom; });
     if (fTo) list = list.filter(function (t) { return (t.posted_date || t.date) <= fTo; });
@@ -868,16 +873,18 @@ export default function BankReviewTab(props) {
               <div className="text-[11px] text-slate-400 mb-1">Wave Category (Chart of Accounts)</div>
               {waveCategories.length > 0 ? (
                 <div>
-                  <select value={sel.wave_account_id || ''} disabled={!mayClassify || isLocked(sel)} onChange={function (e) { setWaveCategory(sel, e.target.value); }} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-xs disabled:opacity-50">
-                    <option value="">— none —</option>
-                    {orderedCatGroups(sel.direction).map(function (grp) {
-                      return (
-                        <optgroup key={grp.type} label={grp.type}>
-                          {grp.items.map(function (c) { return <option key={c.wave_account_id} value={c.wave_account_id}>{c.wave_account_name}{c.subtype ? (' (' + c.subtype + ')') : ''}</option>; })}
-                        </optgroup>
-                      );
-                    })}
-                  </select>
+                  {/* v55.83-KY — SEARCHABLE category picker (was a native <select> you had to scroll). Items
+                      stay in direction-aware order (expense-first for money-out, income-first for money-in);
+                      type is shown so two similarly-named accounts are distinguishable. */}
+                  {(!mayClassify || isLocked(sel)) ? (
+                    <div className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300 text-xs">{sel.wave_account_name || '— none —'}{isLocked(sel) ? ' (reopen to change)' : ''}</div>
+                  ) : (
+                    <Typeahead
+                      items={[].concat.apply([], orderedCatGroups(sel.direction).map(function (grp) { return grp.items.map(function (c) { return { id: c.wave_account_id, name: c.wave_account_name, subtype: c.subtype, type: grp.type }; }); }))}
+                      value={sel.wave_account_id || ''} allowClear={true} placeholder="Search Wave categories…"
+                      getLabel={function (c) { return c.name + (c.subtype ? ' (' + c.subtype + ')' : '') + (c.type ? ' · ' + c.type : ''); }}
+                      onPick={function (id) { setWaveCategory(sel, id); }} />
+                  )}
                   {sel.wave_account_id && <div className="text-[10px] text-violet-300 mt-0.5">Selected: {sel.wave_account_name}{sel.category_status ? (' · ' + sel.category_status) : ''}</div>}
                   {sel.direction === 'in' && <div className="text-[10px] text-slate-500 mt-0.5">Money-in: if this is a customer invoice payment, match it to the invoice below instead of categorizing.</div>}
                 </div>

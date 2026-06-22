@@ -12,10 +12,15 @@ var API_BUILD_MARKER = 'v55.83-JA-categories';
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 }
-function isReceivable(c) {
+// v55.83-KY — hide accounts that are NOT bank-categorization targets. The big one: Wave auto-creates a
+// SYSTEM payable/receivable sub-account per bill/invoice, so the list floods with dozens of identical
+// "Accounts Payable (System Payable Bill)" rows that bury the real expense/income accounts. You categorize
+// a bank transaction as an expense/income account (or match it to an invoice) — never as these system AP/AR
+// sub-accounts. Hide subtype/name containing SYSTEM, PAYABLE, or RECEIVABLE.
+function isHiddenForCategorize(c) {
   var sub = String(c.subtype || '').toUpperCase();
   var nm = String(c.wave_account_name || '').toUpperCase();
-  return sub.indexOf('RECEIVABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0;
+  return sub.indexOf('SYSTEM') >= 0 || sub.indexOf('RECEIVABLE') >= 0 || sub.indexOf('PAYABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0;
 }
 
 export async function POST(req) {
@@ -35,14 +40,21 @@ export async function POST(req) {
     var all = (res && res.data) || [];
     var total = all.length;
     var active = all.filter(function (c) { return c.is_active !== false; });
-    var hiddenReceivable = 0;
-    var seen = {}; var usable = [];
+    var hiddenSystem = 0; var hiddenDupName = 0;
+    var seen = {}; var seenName = {}; var usable = [];
     active.forEach(function (c) {
       if (!c.wave_account_id || seen[c.wave_account_id]) { return; }
-      if (isReceivable(c)) { hiddenReceivable++; return; }
-      seen[c.wave_account_id] = true; usable.push(c);
+      seen[c.wave_account_id] = true;
+      if (isHiddenForCategorize(c)) { hiddenSystem++; return; }
+      // collapse duplicate NAMES so the list isn't a wall of identical labels.
+      var nmKey = String(c.wave_account_name || '').trim().toUpperCase();
+      if (nmKey && seenName[nmKey]) { hiddenDupName++; return; }
+      if (nmKey) { seenName[nmKey] = true; }
+      usable.push(c);
     });
-    return NextResponse.json({ ok: true, wave_business_id: waveBusinessId, total: total, active_count: active.length, usable_count: usable.length, hidden_receivable_count: hiddenReceivable, categories: usable, api_build_marker: API_BUILD_MARKER });
+    // stable, human-friendly order: by name.
+    usable.sort(function (a, b) { var an = String(a.wave_account_name || '').toLowerCase(); var bn = String(b.wave_account_name || '').toLowerCase(); return an < bn ? -1 : (an > bn ? 1 : 0); });
+    return NextResponse.json({ ok: true, wave_business_id: waveBusinessId, total: total, active_count: active.length, usable_count: usable.length, hidden_receivable_count: hiddenSystem, hidden_system_count: hiddenSystem, hidden_duplicate_name_count: hiddenDupName, categories: usable, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
