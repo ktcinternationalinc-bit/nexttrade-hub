@@ -17,6 +17,7 @@ function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); 
 var filter = rd('src/components/WaveBusinessFilter.jsx');
 var sync = rd('src/components/WaveSyncCenter.jsx');
 var lib = rd('src/lib/wave-business.js');
+var sharedLib = rd('src/lib/wave-business-shared.js');
 var cat = rd('src/app/api/wave/sync-categories/route.js');
 var bind = rd('src/app/api/wave/bind-business/route.js');
 var conn = rd('src/components/WaveConnectionTab.jsx');
@@ -27,9 +28,11 @@ ok('1: the business badge reflects the real write state (writes enabled, NOT "pu
 ok('2: payment-push readiness no longer includes "Wave categories loaded" or invoice product as a gate',
   !/\['Wave categories loaded', catCount > 0\]/.test(sync) &&
   /Wave categories are <b>not<\/b> needed for payments/.test(sync));
-ok('3: shared placeholder-detection helper exists',
-  /export function isPlaceholderWaveBusiness\(id\)/.test(lib) &&
-  /export var PLACEHOLDER_WAVE_BUSINESS_IDS = \{ 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 \}/.test(lib));
+ok('3: shared placeholder-detection helper exists in a server-safe module and is re-exported for UI',
+  /export function isPlaceholderWaveBusiness\(id\)/.test(sharedLib) &&
+  /export var PLACEHOLDER_WAVE_BUSINESS_IDS = \{ 'REAL_KTC_WAVE_BUSINESS_ID': 1, 'TEST_WAVE_BUSINESS_ID': 1 \}/.test(sharedLib) &&
+  /from '\.\/wave-business-shared'/.test(lib) &&
+  /export \{ PLACEHOLDER_WAVE_BUSINESS_IDS, isPlaceholderWaveBusiness \}/.test(lib));
 ok('4: a placeholder silo is surfaced loudly in Wave Sync Center with the bind instruction',
   /isPlaceholderWaveBusiness\(active\)/.test(sync) &&
   /NOT connected to a real Wave business yet/.test(sync) &&

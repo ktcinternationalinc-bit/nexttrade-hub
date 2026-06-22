@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
-import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
+import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 

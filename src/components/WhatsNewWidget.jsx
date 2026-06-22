@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LQ',
+    date: '2026-06-22',
+    label: 'FIXED: the live "is not a function" crash on every Wave push',
+    items: [
+      '**🔧 Pushing to Wave works now.** The error you kept hitting — *"(0 , d.ln) is not a function"* — was a real bug, and it affected every Wave action that runs on the server (pushing transactions and payments, the read-back, the prefill, the CSV import). It\'s fixed. The transaction push should go through now (assuming the deposit account is set and the silo is unlocked).',
+      { superAdminOnly: true, text: 'v55.83-LQ (LIVE P0 — Max: "fail 100 times before you fix it"). ROOT CAUSE: src/lib/wave-business.js carries \'use client\', but 10 SERVER routes imported isPlaceholderWaveBusiness from it. A server module importing a function from a \'use client\' module receives a CLIENT-REFERENCE PROXY, not the function — calling it server-side throws "(0, x.y) is not a function" (minified → "(0, d.ln)"). It compiles green; only a live server call dies — the static-tests-miss-runtime-imports trap exactly. The crash fired at the isPlaceholderWaveBusiness(...) guard line on every push. FIX: all 10 routes (push-transaction, push-payment, push-customer, push-invoice-v2, payment-readback, prefill-payment-links, import-transaction-csv, refresh-names, sync-products, default-bank-account) now import from the server-safe lib/wave-business-shared (no \'use client\'; re-exported by wave-business.js for client use). NEW guard test-v55-83-lq scans EVERY src/app/api route and fails if any imports from the bare \'use client\' lib/wave-business — so this class can\'t recur. push-transaction marker LE→LQ; badge LP→LQ. runner re-run. This is why pushes "failed 100 times": the route never reached the Wave call — it died at the placeholder check.' },
+    ],
+  },
+  {
     version: 'v55.83-LP',
     date: '2026-06-22',
     label: 'One guided "Prefill from Wave" flow — no more hunting across tabs',
