@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LR',
+    date: '2026-06-22',
+    label: 'Deposit-account picker now actually shows your bank/cash accounts',
+    items: [
+      '**🏦 "200 accounts, none usable" → fixed.** The Payment Deposit Account picker was only reading the first 200 accounts in your Wave chart, so on a large chart your real Cash/Bank account never showed up — leaving nothing to select and blocking the transaction push. It now reads your **entire** chart and recognizes bank/cash accounts more reliably (by type and name, not just one label). Click "List bank/cash accounts" again and your deposit account should now appear with a "Use this" button. The message also tells you how many are actually usable.',
+      '**ℹ️ Two different "account" settings — here\'s which is which:** The **Payment Deposit Account (Wave)** at the top is the one the push needs — it\'s the Wave bank/cash account each transaction posts to. The **Default Bank Account for This Silo** below it is unrelated to the push — it only controls which local Plaid account auto-loads in Bank Review. You do **not** need to touch that one for the push.',
+      { superAdminOnly: true, text: 'v55.83-LR (Max: "200 accounts, nothing I can use"). payment-account-setup listAccounts was accounts(page:1,pageSize:200) — single page, so a chart >200 hid the CASH_AND_BANK account → 0 capable → push blocked at the anchor. Fix: paginate ALL pages (pageInfo.totalPages loop, pageSize 100, 50-page guard); detect capable = subtype CASH_AND_BANK/CASH/BANK/MONEY OR (type ASSET + name cash/bank/checking/chequing/savings/paypal/stripe), exclude RECEIVABLE/PAYABLE (subtype or name), skip isArchived. UI "Found N accounts (M usable bank/cash)" + 0-case guidance. marker FH→LR; badge LQ→LR; test lr(4); runner re-run. NOTE the "2 accounts for the same account" in the Default Bank Account (Plaid) picker is the reconnect-alias dup (separate from the Wave deposit account; NOT needed for the push) — dedup-by-mask there is a follow-up if Max wants it.' },
+    ],
+  },
+  {
     version: 'v55.83-LQ',
     date: '2026-06-22',
     label: 'FIXED: the live "is not a function" crash on every Wave push',

@@ -257,7 +257,7 @@ export default function WaveSyncCenter(props) {
     fetch('/api/wave/payment-account-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d && d.accounts) { setPayList(d.accounts); setPayMsg('Found ' + d.accounts.length + ' accounts. Pick the bank/cash account where Wave should record invoice payments.'); }
+        if (d && d.accounts) { setPayList(d.accounts); var _cap = d.accounts.filter(function (ac) { return ac.payment_capable; }).length; setPayMsg('Found ' + d.accounts.length + ' accounts (' + _cap + ' usable bank/cash). Pick the bank/cash account where Wave should record invoice payments.' + (_cap === 0 ? ' If 0, your Wave business may have no Cash & Bank account yet — create a "Cash on Hand" in Wave, then refresh.' : '')); }
         else if (d && d.saved) { setPayMsg('Saved. Payment account set to ' + (d.default_payment_account_name || d.default_payment_account_id) + '.'); loadProdSetup(); setPayList(null); toast.success('Wave payment account configured'); }
         else if (d && d.db_error) { setPayMsg('Database save FAILED: ' + d.db_error + '\n\nIf this mentions a missing column, run:\nALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_name text;'); toast.error('Save failed — see message'); }
         else if (d && d.error) { setPayMsg('Error: ' + d.error); }

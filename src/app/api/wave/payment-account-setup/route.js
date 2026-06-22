@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-FH-payment-account-setup';
+var API_BUILD_MARKER = 'v55.83-LR-payment-account-setup';
 var API_ROUTE = '/api/wave/payment-account-setup';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -23,33 +23,39 @@ function gql(token, query, variables) {
   return fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: variables || {} }) }).then(function (r) { return r.json(); });
 }
 
+// v55.83-LR — PAGINATE ALL pages (was page 1 / pageSize 200, so a chart with >200 accounts hid the real
+// Cash/Bank account → "200 accounts, 0 usable"). Also detect cash/bank by subtype OR (asset + bank-ish
+// name), and skip archived, so the deposit account is actually selectable.
 function listAccounts(token, bid) {
-  var q = 'query($bid:ID!){ business(id:$bid){ accounts(page:1,pageSize:200){ edges{ node{ id name type{ value } subtype{ name value } } } } } }';
-  return gql(token, q, { bid: bid }).then(function (j) {
-    var out = [];
-    try {
-      var edges = j && j.data && j.data.business && j.data.business.accounts && j.data.business.accounts.edges;
-      if (edges) {
-        var i;
-        for (i = 0; i < edges.length; i++) {
-          var n = edges[i].node;
-          if (!n) { continue; }
-          var st = (n.subtype && (n.subtype.value || n.subtype.name)) || '';
-          var stU = String(st).toUpperCase();
-          var ty = (n.type && n.type.value) || '';
-          var tyU = String(ty).toUpperCase();
-          // A payment-capable account is a real bank/cash/money account Wave can deposit
-          // received payments into. Receivables/payables/income/expense accounts are NOT
-          // valid deposit targets and must be excluded.
-          var isReceivableOrPayable = (stU.indexOf('RECEIVABLE') >= 0 || stU.indexOf('PAYABLE') >= 0);
-          var looksCashBank = (stU === 'CASH_AND_BANK' || stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0);
-          var payable = looksCashBank && !isReceivableOrPayable;
-          out.push({ id: n.id, name: n.name, subtype: st, type: ty, payment_capable: payable });
-        }
+  var q = 'query($bid:ID!,$page:Int!){ business(id:$bid){ accounts(page:$page,pageSize:100){ pageInfo{ currentPage totalPages } edges{ node{ id name isArchived type{ value name } subtype{ name value } } } } } }';
+  var out = []; var page = 1; var guard = 0;
+  function loop() {
+    return gql(token, q, { bid: bid, page: page }).then(function (j) {
+      var acc = j && j.data && j.data.business && j.data.business.accounts;
+      var edges = (acc && acc.edges) || [];
+      var i;
+      for (i = 0; i < edges.length; i++) {
+        var n = edges[i].node;
+        if (!n || n.isArchived === true) { continue; }
+        var st = (n.subtype && (n.subtype.value || n.subtype.name)) || '';
+        var stU = String(st).toUpperCase();
+        var nmU = String(n.name || '').toUpperCase();
+        var ty = (n.type && (n.type.value || n.type.name)) || '';
+        var tyU = String(ty).toUpperCase();
+        // A payment-capable account is a real bank/cash/money account Wave can deposit received payments
+        // into. Receivables/payables/income/expense accounts are NOT valid deposit targets.
+        var isReceivableOrPayable = (stU.indexOf('RECEIVABLE') >= 0 || stU.indexOf('PAYABLE') >= 0 || nmU.indexOf('RECEIVABLE') >= 0 || nmU.indexOf('PAYABLE') >= 0);
+        var subtypeCashBank = (stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0);
+        var nameCashBank = (nmU.indexOf('CASH') >= 0 || nmU.indexOf('BANK') >= 0 || nmU.indexOf('CHECKING') >= 0 || nmU.indexOf('CHEQUING') >= 0 || nmU.indexOf('SAVINGS') >= 0 || nmU.indexOf('PAYPAL') >= 0 || nmU.indexOf('STRIPE') >= 0);
+        var payable = (subtypeCashBank || (tyU.indexOf('ASSET') >= 0 && nameCashBank)) && !isReceivableOrPayable;
+        out.push({ id: n.id, name: n.name, subtype: st, type: ty, payment_capable: payable });
       }
-    } catch (e) {}
-    return out;
-  });
+      var pi = (acc && acc.pageInfo) || {}; guard++;
+      if (guard < 50 && pi.totalPages && page < pi.totalPages) { page++; return loop(); }
+      return out;
+    });
+  }
+  return loop().then(function (r) { return r; }).catch(function () { return out; });
 }
 
 function saveDefault(db, bid, accId, accName) {
