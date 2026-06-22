@@ -604,12 +604,27 @@ export default function WaveSyncCenter(props) {
   function runDryRun() {
     if (isProd && !productionUnlocked) { toast.error('Production push is locked. A super admin must enable real production push in Settings first.'); return; }
     if (selectedRows.length === 0) { toast.error('Select at least one record.'); return; }
-    var results = selectedRows.map(function (q) {
-      var v = dryRunRecord({ action: q.action, record: q.record, waveBusinessId: active, registry: registry });
-      return { label: q.label, verdict: v.verdict, message: v.message, wouldDo: v.wouldDo };
+    // v55.83-LC (Codex) — transaction rows dry-run against the SERVER so the preview shows the exact Wave
+    // anchor (bank-side) account + direction, and surfaces a block reason (e.g. multi-account silo, no
+    // deposit account). Other entity types keep the client-side dryRunRecord preview.
+    var seq = Promise.resolve(); var results = [];
+    selectedRows.forEach(function (q) {
+      seq = seq.then(function () {
+        if (q.action !== 'transaction') {
+          var v = dryRunRecord({ action: q.action, record: q.record, waveBusinessId: active, registry: registry });
+          results.push({ label: q.label, verdict: v.verdict, message: v.message, wouldDo: v.wouldDo });
+          return null;
+        }
+        return fetch('/api/wave/push-transaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok && d.dry_run) { results.push({ label: q.label, verdict: 'WOULD POST', message: 'Bank side (anchor): ' + (d.anchor_account || '?') + ' · ' + d.direction + ' ' + d.amount + ' → category: ' + (d.category_name || d.category_account_id), wouldDo: d.would_send }); }
+            else { results.push({ label: q.label, verdict: 'BLOCKED', message: (d && d.error) || 'blocked', wouldDo: null }); }
+          })
+          .catch(function (e) { results.push({ label: q.label, verdict: 'ERROR', message: (e && e.message) || 'error', wouldDo: null }); });
+      });
     });
-    setDryResults(results);
-    setTab('dryrun');
+    seq.then(function () { setDryResults(results); setTab('dryrun'); });
   }
   var [dryResults, setDryResults] = useState([]);
 

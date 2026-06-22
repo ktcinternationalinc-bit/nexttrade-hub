@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LC',
+    date: '2026-06-22',
+    label: 'Transaction push is now money-safe (QA hardening before it touches real books)',
+    items: [
+      '**🔍 Dry Run now previews a transaction properly.** Before you push, Dry Run shows exactly which Wave bank account it will post to (the "bank side"), the direction (deposit/withdrawal), the amount, and the category — so you can confirm it\'s right before anything is written.',
+      '**🛡 No posting to the wrong bank account.** If a silo has more than one bank account, the transaction push is blocked (with a clear message) until each account is mapped to its own Wave bank account — so a transaction from one account can never land in another account\'s Wave books. Single-account silos are unaffected.',
+      '**🔒 Can\'t accidentally re-categorize after pushing.** Once a transaction is pushed to Wave, its category is locked in the Hub (Wave\'s API can\'t edit or delete a posted transaction) — if you need to change it, reverse it in Wave first, then re-push. Every failed push now reliably records itself in the Sync Log.',
+      { superAdminOnly: true, text: 'v55.83-LC (Codex KZ money-safety review — 5 items). (1) runDryRun routes transaction rows to the SERVER dry_run → shows anchor_account/direction/amount/category (others keep client dryRunRecord). (2) push-transaction blocks when the silo has >1 plaid_accounts mask (no safe single anchor) — single-account proceeds; per-account anchor mapping is the future enhancement. (3) logFail now async + awaited at both Wave-rejection sites → reliable category_status=sync_failed + wave_sync_log row. (4) bank-write classify/set_wave_category blocks a wave_account_id change when category_status=synced || wave_transaction_id (Wave has no money-transaction update/delete) with a reverse-in-Wave message. (5) WAVE_API_TRANSACTION_EVIDENCE.md saves the raw introspection proof (Business has no transactions/moneyTransactions; Transaction exposes only id; moneyTransactionCreate input shape). Marker bumped KZ→LC. Tests lc(5); kz/lb green; runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-LB',
     date: '2026-06-22',
     label: 'Pushing a transaction now tells you exactly what happened (no more silent "nothing")',

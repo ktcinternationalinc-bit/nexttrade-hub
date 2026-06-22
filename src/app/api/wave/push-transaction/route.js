@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
-var API_BUILD_MARKER = 'v55.83-KZ-push-transaction';
+var API_BUILD_MARKER = 'v55.83-LC-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
@@ -74,9 +74,18 @@ export async function POST(req) {
     if (!categoryAcct) { return blocked('No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', 400); }
 
     // The bank side (anchor) = the silo's configured Wave bank/deposit account.
-    var setRes = await db.from('wave_business_settings').select('default_payment_account_id').eq('wave_business_id', waveBusinessId);
+    var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
     var anchorAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
+    var anchorName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
     if (!anchorAcct) { return blocked('No Wave bank account configured for this silo. Set it in Wave Sync Center -> Settings -> Payment deposit account (it is the bank side of the transaction).', 400); }
+
+    // v55.83-LC (Codex money-safety) — the anchor is ONE silo-level Wave bank account. If this silo holds
+    // MORE THAN ONE real bank account, posting them all to that single anchor would book them to the WRONG
+    // Wave bank account (e.g. a ··6353 txn landing in the ··6338 Wave account). Block until a per-account
+    // anchor mapping exists. Single-account silos are unambiguous and proceed.
+    var paRes = await db.from('plaid_accounts').select('mask, plaid_account_id').eq('wave_business_id', waveBusinessId);
+    var masks = {}; ((paRes && paRes.data) || []).forEach(function (a) { var m = a.mask || a.plaid_account_id; if (m) { masks[m] = true; } });
+    if (Object.keys(masks).length > 1) { return blocked('This silo has ' + Object.keys(masks).length + ' bank accounts, but a transaction can only safely anchor to ONE Wave bank account. Per-account Wave-bank mapping is required before pushing transactions for a multi-account silo (so a ··6338 transaction never posts to the ··6353 Wave account). Single-account silos push fine.', 409); }
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
     if (!(amount > 0)) { return blocked('Transaction amount must be positive.', 400); }
@@ -92,7 +101,7 @@ export async function POST(req) {
       lineItems: [{ accountId: categoryAcct, amount: String(amount), balance: 'INCREASE' }]
     };
 
-    if (isDry) { return NextResponse.json({ ok: true, dry_run: true, would_send: input, api_build_marker: API_BUILD_MARKER }); }
+    if (isDry) { return NextResponse.json({ ok: true, dry_run: true, anchor_account: anchorName || anchorAcct, direction: dir, amount: amount, category_account_id: categoryAcct, category_name: bt.wave_account_name || null, would_send: input, api_build_marker: API_BUILD_MARKER }); }
 
     // Idempotency claim: mark 'syncing' only if not already synced.
     var claim = await db.from('bank_transactions').update({ category_status: 'syncing' }).eq('id', hubId).neq('category_status', 'synced').select();
@@ -102,15 +111,16 @@ export async function POST(req) {
     var resp = await gql(token, mutation, { input: input });
     var data = resp.data;
 
-    function logFail(msg, extra) {
-      try { db.from('bank_transactions').update({ category_status: 'sync_failed' }).eq('id', hubId); } catch (e1) {}
-      try { db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: msg, request_payload: input, response_payload: Object.assign({ error: msg }, extra || {}), attempted_by: by }); } catch (e2) {}
+    async function logFail(msg, extra) {
+      // v55.83-LC (Codex) — AWAIT both writes so a Wave rejection reliably lands as sync_failed + a log row.
+      try { await db.from('bank_transactions').update({ category_status: 'sync_failed' }).eq('id', hubId); } catch (e1) {}
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: msg, request_payload: input, response_payload: Object.assign({ error: msg }, extra || {}), attempted_by: by }); } catch (e2) {}
     }
 
     if (data && data.errors && data.errors.length) {
       var msgs = []; var ei; for (ei = 0; ei < data.errors.length; ei++) { msgs.push(data.errors[ei].message); }
       var joined = msgs.join(' | ');
-      logFail(joined, { wave_errors: data.errors });
+      await logFail(joined, { wave_errors: data.errors });
       return NextResponse.json({ ok: false, error: 'Wave rejected the transaction: ' + joined, wave_errors: data.errors, api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
     var result = data && data.data && data.data.moneyTransactionCreate;
@@ -125,7 +135,7 @@ export async function POST(req) {
         try { await db.from('bank_transactions').update({ category_status: 'synced', last_synced_at: new Date().toISOString() }).eq('id', hubId); } catch (eDup) {}
         return NextResponse.json({ ok: true, already_in_wave: true, message: 'This transaction was already in Wave (matched by reference). Marked synced.', api_build_marker: API_BUILD_MARKER });
       }
-      logFail(ieJoined, { input_errors: inputErrors });
+      await logFail(ieJoined, { input_errors: inputErrors });
       return NextResponse.json({ ok: false, error: 'Wave rejected the transaction: ' + ieJoined, input_errors: inputErrors, api_build_marker: API_BUILD_MARKER }, { status: 200 });
     }
 

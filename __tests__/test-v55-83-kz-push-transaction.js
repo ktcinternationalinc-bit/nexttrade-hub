@@ -22,7 +22,7 @@ ok('1: route calls Wave moneyTransactionCreate (the live-verified mutation), gat
   /assertPermission\(db, by, 'wave\.payments\.push', req\)/.test(route) &&
   /if \(!_isApprovedTest && !_prodUnlocked\)/.test(route) &&
   /isPlaceholderWaveBusiness\(waveBusinessId\)/.test(route) &&
-  /if \(isDry\) \{ return NextResponse\.json\(\{ ok: true, dry_run: true, would_send: input/.test(route));
+  /if \(isDry\) \{ return NextResponse\.json\(\{ ok: true, dry_run: true, anchor_account:[\s\S]{0,160}would_send: input/.test(route));
 ok('2: correct double-entry — anchor = deposit account (DEPOSIT in / WITHDRAWAL out), line = category, balance INCREASE',
   /anchor: \{ accountId: anchorAcct, amount: String\(amount\), direction: dir \}/.test(route) &&
   /lineItems: \[\{ accountId: categoryAcct, amount: String\(amount\), balance: 'INCREASE' \}\]/.test(route) &&

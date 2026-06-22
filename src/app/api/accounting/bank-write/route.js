@@ -233,6 +233,14 @@ export async function POST(req) {
 
     // ── classify / set_wave_category: categorization on a bank transaction ──
     if (action === 'classify' || action === 'set_wave_category') {
+      // v55.83-LC (Codex money-safety) — edit-after-push guard. Once a transaction is pushed to Wave, its
+      // category CANNOT be changed from the Hub: Wave's public API has no money-transaction update/delete.
+      // So block a category change on an already-synced txn with a clear reversal path; other edits pass.
+      var preRes = await db.from('bank_transactions').select('category_status, wave_transaction_id, wave_account_id').eq('id', body.bank_transaction_id);
+      var preRow = (preRes && preRes.data && preRes.data.length) ? preRes.data[0] : null;
+      var alreadyPushed = !!(preRow && (preRow.category_status === 'synced' || preRow.wave_transaction_id));
+      var changingCat = !!(body.patch && Object.prototype.hasOwnProperty.call(body.patch, 'wave_account_id') && body.patch.wave_account_id !== (preRow ? preRow.wave_account_id : null));
+      if (alreadyPushed && changingCat) { return NextResponse.json({ ok: false, already_pushed: true, error: 'This transaction was already pushed to Wave — its category can\'t be changed here. Wave\'s API can\'t update or delete a posted transaction; reverse/delete it in Wave first, then re-categorize and re-push.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       // v55.83-JH (Codex P0) — NEVER trust the raw client patch. Whitelist only categorization fields,
       // so a direct POST can't set arbitrary columns (e.g. approved_by) on bank_transactions. And the
       // categorize actions (bank.classify permission) may ONLY ever auto-advance to 'reviewed', never
