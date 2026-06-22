@@ -830,15 +830,34 @@ export default function BankReviewTab(props) {
                     <div className="px-2 py-1.5 text-[11px] font-bold">{t.direction === 'in' ? <span className="text-emerald-300">IN</span> : <span className="text-rose-300">OUT</span>}</div>
                     <div className="px-2 py-1.5 text-xs text-slate-100 truncate">{t.name}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}</div>
                     <div className="px-2 py-1.5 text-right text-xs font-mono font-bold text-slate-100">{seeAmounts ? fmt(t.amount_abs || Math.abs(Number(t.amount))) : maskAmount(null, false)}</div>
-                    <div className="px-2 py-1.5 text-[11px] text-slate-300">{t.classification ? labelize(t.classification) : <span className="text-slate-500 italic">—</span>}</div>
+                    <div className="px-2 py-1.5 text-[11px] text-slate-300">{
+                      /* v55.83-LF mirror — show the WAVE category + where it came from (Wave vs Hub), falling
+                         back to the Hub classification. This is the "categorized transactions from Wave" view. */
+                      t.wave_account_name
+                        ? <span className="inline-flex items-center gap-1"><span className="truncate">{t.wave_account_name}</span>{(t.category_source === 'wave' || t.category_source === 'wave_csv') ? <span className="text-[9px] bg-sky-500/20 text-sky-200 border border-sky-500/40 rounded px-1">⇐ Wave</span> : <span className="text-[9px] bg-slate-600/40 text-slate-300 rounded px-1">Hub</span>}</span>
+                        : (t.classification ? labelize(t.classification) : <span className="text-slate-500 italic">—</span>)
+                    }</div>
                     <div className="px-2 py-1.5">
                       <span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + (t.review_status === 'approved' ? 'bg-blue-700 text-white' : t.review_status === 'reviewed' ? 'bg-emerald-700 text-white' : t.review_status === 'ignored' || t.review_status === 'duplicate' ? 'bg-slate-600 text-white' : t.review_status === 'needs_clarification' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-200')}>{labelize(t.review_status || 'unreviewed')}</span>
-                      {/* v55.83-GR — Wave sync status is SEPARATE from Hub review. "Approved" never
-                          means "synced to Wave"; this badge tells the truth about the Wave side. */}
+                      {/* v55.83-GR/LF — Wave sync status is SEPARATE from Hub review. "Approved" never means
+                          "synced to Wave". The mirror badge is split-aware: a deposit MATCHED to an invoice
+                          syncs as an invoice PAYMENT (show INV# + status); an unmatched categorized txn syncs
+                          as a money transaction; a category that came FROM Wave shows "⇐ from Wave". */}
                       {(function () {
+                        var ms = matchesByTxn[t.id] || [];
+                        var isPayment = ms.length > 0 || !!t.matched_invoice_id;
+                        if (isPayment) {
+                          var inv = ms.length ? acctInvoices.find(function (iv) { return iv.id === ms[0].invoice_id; }) : null;
+                          var ps = (paysByTxn[t.id] || []).filter(function (p) { return !isPaymentVoid(p); });
+                          var pushed = ps.some(function (p) { return p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'; });
+                          var invTxt = inv ? ('INV ' + (inv.invoice_number || inv.id) + (inv.payment_status ? (' · ' + inv.payment_status) : '')) : 'invoice';
+                          var pcls = pushed ? 'bg-emerald-800 text-emerald-100' : 'bg-violet-700 text-white';
+                          return <span className={'block mt-1 text-[9px] px-1.5 py-0.5 rounded font-bold w-fit ' + pcls}>{(pushed ? '✓ Wave payment · ' : '⧖ Pending → Wave · ') + invTxt}</span>;
+                        }
                         var cs = t.category_status;
-                        var wlabel = cs === 'pending_wave_sync' ? '⧖ Wave: pending' : cs === 'synced' ? '✓ Wave: synced' : (cs === 'sync_failed' || cs === 'failed') ? '✕ Wave: failed' : cs === 'local_only' ? 'Hub only' : (t.wave_account_id ? '⧖ Wave: pending' : 'Wave: not synced');
-                        var wcls = cs === 'synced' ? 'bg-emerald-800 text-emerald-100' : (cs === 'sync_failed' || cs === 'failed') ? 'bg-rose-800 text-rose-100' : cs === 'pending_wave_sync' ? 'bg-violet-700 text-white' : 'bg-slate-700 text-slate-400';
+                        var fromWave = (t.category_source === 'wave' || t.category_source === 'wave_csv');
+                        var wlabel = (fromWave && cs === 'synced') ? '⇐ from Wave' : cs === 'pending_wave_sync' ? '⧖ Wave: pending' : cs === 'synced' ? '✓ Wave: synced' : (cs === 'sync_failed' || cs === 'failed') ? '✕ Wave: failed' : cs === 'local_only' ? 'Hub only' : (t.wave_account_id ? '⧖ Wave: pending' : 'Wave: not synced');
+                        var wcls = cs === 'synced' ? (fromWave ? 'bg-sky-800 text-sky-100' : 'bg-emerald-800 text-emerald-100') : (cs === 'sync_failed' || cs === 'failed') ? 'bg-rose-800 text-rose-100' : cs === 'pending_wave_sync' ? 'bg-violet-700 text-white' : 'bg-slate-700 text-slate-400';
                         return <span className={'block mt-1 text-[9px] px-1.5 py-0.5 rounded font-bold w-fit ' + wcls}>{wlabel}</span>;
                       })()}
                     </div>

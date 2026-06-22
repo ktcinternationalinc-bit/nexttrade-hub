@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LF',
+    date: '2026-06-22',
+    label: 'The blotter now mirrors Wave — category source + linked invoice on every line',
+    items: [
+      '**🪞 Each transaction shows where its category came from.** The Classification column now shows the actual Wave category, with a tag: "⇐ Wave" when it came from Wave (a push round-trip or a CSV import of something you categorized in Wave) versus "Hub" when you categorized it here. So the transactions you previously categorized in Wave are visible and labeled as such.',
+      '**🔗 Deposits show the invoice they\'re applied to.** A deposit matched to an invoice now shows, right on the blotter line, the invoice number and its status (e.g. "✓ Wave payment · INV 1042 · paid" or "⧖ Pending → Wave · INV 1042"). You can see at a glance what\'s linked and which direction it has synced.',
+      '**↔ Clear sync direction.** Every line tells you the truth about the Wave side independently of the Hub review state: synced out as a payment, synced out as a categorized transaction, came in from Wave, pending, or failed.',
+      { superAdminOnly: true, text: 'v55.83-LF — Wave two-way MIRROR, keystone view (multi-agent design wf_0d4e872f). Step 3: BankReviewTab blotter — Classification cell shows wave_account_name + origin chip from category_source (wave/wave_csv→"⇐ Wave", else "Hub"); the Wave badge is now SPLIT-AWARE: matched/ matched_invoice_id deposits read accounting_invoice_payments (wave_payment_id/synced/manual_done) + show linked INV#+payment_status as an invoice PAYMENT; unmatched categorized read category_status; wave-imported synced show "⇐ from Wave". Step 0: sql/v55-83-LF adds bank_transactions.wave_transaction_id + index (push wrote it via try/fallback with no migration); fallback kept until the SQL is run. Uses ONLY existing data (no new pull) so it is safe + immediate. NEXT (LG): pull individual Wave invoice PAYMENTS (extend import-invoices payments{}) to auto-link Wave-native payments to deposits — must preserve the wave_imported_paid double-count guard; read-back diagnostic (payment-readback) to verify transactionId/accountingTransactionId before matching on them. THEN (LH): the 7 CSV-hardening items. Honest limit unchanged: raw Wave-UI money-transaction categorizations have no API read (CSV only); invoices/customers/payments DO mirror via API. Test lf(5); runner re-run.' },
+    ],
+  },
+  {
     version: 'v55.83-LE',
     date: '2026-06-22',
     label: 'The full chart of accounts shows up — and the transaction sync goes through',
