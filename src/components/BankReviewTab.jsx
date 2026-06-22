@@ -816,7 +816,7 @@ export default function BankReviewTab(props) {
         <div className="border border-slate-700 rounded overflow-hidden">
           <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '90px 70px 1fr 110px 120px 110px' }}>
             <div className="px-2 py-1.5">Date</div><div className="px-2 py-1.5">Dir</div><div className="px-2 py-1.5">Description</div>
-            <div className="px-2 py-1.5 text-right">Amount</div><div className="px-2 py-1.5">Classification</div><div className="px-2 py-1.5">Status</div>
+            <div className="px-2 py-1.5 text-right">Amount</div><div className="px-2 py-1.5">Category (Wave/Hub)</div><div className="px-2 py-1.5">Status / Wave</div>
           </div>
           <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
             {filtered.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No transactions match these filters.</div> :
@@ -847,7 +847,10 @@ export default function BankReviewTab(props) {
                         var ms = matchesByTxn[t.id] || [];
                         var isPayment = ms.length > 0 || !!t.matched_invoice_id;
                         if (isPayment) {
-                          var inv = ms.length ? acctInvoices.find(function (iv) { return iv.id === ms[0].invoice_id; }) : null;
+                          // v55.83-LH (Codex) — resolve the invoice from the active match OR the stored
+                          // matched_invoice_id (so the link shows even when no live payment_match row exists).
+                          var invId = ms.length ? ms[0].invoice_id : t.matched_invoice_id;
+                          var inv = invId ? acctInvoices.find(function (iv) { return iv.id === invId; }) : null;
                           var ps = (paysByTxn[t.id] || []).filter(function (p) { return !isPaymentVoid(p); });
                           var pushed = ps.some(function (p) { return p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'; });
                           var invTxt = inv ? ('INV ' + (inv.invoice_number || inv.id) + (inv.payment_status ? (' · ' + inv.payment_status) : '')) : 'invoice';

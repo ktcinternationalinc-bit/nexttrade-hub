@@ -962,6 +962,8 @@ export default function WaveSyncCenter(props) {
                 {probeResult.error && !probeResult.payments_found ? <div className="text-rose-700">Could not read: {probeResult.error}</div> : (
                   <div className="space-y-1">
                     <div className="font-bold">{probeResult.payments_found} payment(s) across {probeResult.invoices_scanned} invoice(s) · {probeResult.payments_with_bank_account} carry a bank account{probeResult.error ? ' (partial: ' + probeResult.error + ')' : ''}.</div>
+                    {/* v55.83-LH — the exact linkage answer that gates LH auto-linking. */}
+                    <div className="text-slate-600">Link key: <b>{probeResult.recommended_link_key || 'account+amount+date'}</b>{probeResult.link_fields_supported ? (' · Wave txn-id fields present on ' + (probeResult.payments_with_transaction_id || 0) + '/' + (probeResult.payments_with_accounting_transaction_id || 0) + ' payments') : ' · Wave does not expose payment txn-ids (will match on account+amount+date)'}</div>
                     {probeResult.distinct_bank_accounts && probeResult.distinct_bank_accounts.length > 0 && <div className="text-slate-600">Wave bank/cash accounts seen: {probeResult.distinct_bank_accounts.map(function (a) { return a.name; }).join(', ')}</div>}
                     {probeResult.samples && probeResult.samples.length > 0 && (
                       <details><summary className="cursor-pointer text-slate-700">Sample payments</summary>

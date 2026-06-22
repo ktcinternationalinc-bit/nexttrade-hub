@@ -40,18 +40,32 @@ export async function POST(req) {
     if (isPlaceholderWaveBusiness(waveBusinessId)) { return NextResponse.json({ ok: false, error: 'This silo is not connected to a real Wave business yet (placeholder id).', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
     // invoice.payments is the readable path (there is NO business-level invoicePayments connection).
-    var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ currentPage totalPages totalCount } edges{ node{ id invoiceNumber status payments{ id amount{ value currency{ code } } paymentDate paymentMethod memo account{ id name } } } } } } }';
+    // We probe with the txn-link fields (transactionId / accountingTransactionId) — these are the EXACT
+    // keys LH would use to tie a Wave payment back to bank_transactions.wave_transaction_id. If Wave's
+    // schema rejects them, we fall back to the safe field set and record the rejection EXPLICITLY, so LH
+    // is never built on an unproven key (Codex gate requirement).
+    function buildQuery(withLinkFields) {
+      var payFields = 'id amount{ value currency{ code } } paymentDate paymentMethod memo account{ id name }' + (withLinkFields ? ' transactionId accountingTransactionId' : '');
+      return 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ currentPage totalPages totalCount } edges{ node{ id invoiceNumber status payments{ ' + payFields + ' } } } } } }';
+    }
 
     var page = 1; var totalPages = 1; var safety = 0;
     var invoicesScanned = 0; var paymentsFound = 0; var withAccount = 0; var samples = []; var accounts = {};
     var firstError = null;
-    while (page <= totalPages && safety < maxPages) {
+    var linkFieldsSupported = true; var linkFieldError = null; // proven by the live probe below
+    var withTxnId = 0; var withAcctTxnId = 0;
+    while (page <= totalPages && safety < (maxPages + 1)) {
       safety++;
-      var resp = await gql(token, query, { bid: waveBusinessId, page: page });
+      var resp = await gql(token, buildQuery(linkFieldsSupported), { bid: waveBusinessId, page: page });
       var data = resp.data;
       if (!resp.okHttp || (data && data.errors && data.errors.length)) {
-        firstError = (data && data.errors && data.errors[0] && data.errors[0].message) ? data.errors[0].message : ('HTTP ' + resp.status);
-        break;
+        var em = (data && data.errors && data.errors[0] && data.errors[0].message) ? data.errors[0].message : ('HTTP ' + resp.status);
+        // If Wave rejected the txn-link fields specifically, record it and RETRY the same page with the
+        // safe field set — that's the definitive "schema does not expose them" answer LH needs.
+        if (linkFieldsSupported && /transactionId|accountingTransactionId|Cannot query field/i.test(em)) {
+          linkFieldsSupported = false; linkFieldError = em; safety--; continue;
+        }
+        firstError = em; break;
       }
       var conn = data && data.data && data.data.business && data.data.business.invoices;
       if (!conn) { firstError = 'No invoices field returned (token may not access this business).'; break; }
@@ -65,14 +79,19 @@ export async function POST(req) {
           var pay = pays[p]; paymentsFound++;
           var acctId = pay.account && pay.account.id ? pay.account.id : null;
           if (acctId) { withAccount++; accounts[acctId] = (pay.account.name || acctId); }
+          if (linkFieldsSupported && pay.transactionId) { withTxnId++; }
+          if (linkFieldsSupported && pay.accountingTransactionId) { withAcctTxnId++; }
           if (samples.length < 12) {
-            samples.push({ invoice: inv.invoiceNumber || inv.id, wave_payment_id: pay.id, amount: num(pay.amount), date: pay.paymentDate || null, method: pay.paymentMethod || null, memo: pay.memo || null, account_id: acctId, account_name: pay.account && pay.account.name ? pay.account.name : null });
+            samples.push({ invoice: inv.invoiceNumber || inv.id, wave_payment_id: pay.id, amount: num(pay.amount), date: pay.paymentDate || null, method: pay.paymentMethod || null, memo: pay.memo || null, account_id: acctId, account_name: pay.account && pay.account.name ? pay.account.name : null, transaction_id: linkFieldsSupported ? (pay.transactionId || null) : null, accounting_transaction_id: linkFieldsSupported ? (pay.accountingTransactionId || null) : null });
           }
         }
       }
       page++;
     }
 
+    // LH-gate verdict: which key can LH safely match Wave-native payments on?
+    var linkKey = 'account+amount+date'; // always available (account is readable)
+    if (linkFieldsSupported && (withTxnId > 0 || withAcctTxnId > 0)) { linkKey = (withAcctTxnId >= withTxnId ? 'accountingTransactionId' : 'transactionId') + ' (exact) + account+amount+date fallback'; }
     var result = {
       ok: !firstError || paymentsFound > 0,
       wave_business_id: waveBusinessId,
@@ -80,13 +99,19 @@ export async function POST(req) {
       pages_read: safety,
       payments_found: paymentsFound,
       payments_with_bank_account: withAccount,
+      // The exact LH-gate answer Codex required: are the txn-link fields exposed, and are they populated?
+      link_fields_supported: linkFieldsSupported,
+      link_field_error: linkFieldError,
+      payments_with_transaction_id: withTxnId,
+      payments_with_accounting_transaction_id: withAcctTxnId,
+      recommended_link_key: linkKey,
       distinct_bank_accounts: Object.keys(accounts).map(function (k) { return { id: k, name: accounts[k] }; }),
       samples: samples,
-      note: 'READ-ONLY probe. invoice.payments + payment.account are readable, so Wave-native payments CAN be auto-linked to Hub deposits by bank account + amount + date. Money transactions remain unreadable (CSV-only). Bounded to ' + maxPages + ' pages.',
+      note: 'READ-ONLY probe. invoice.payments + payment.account ARE readable, so Wave-native payments CAN be auto-linked to Hub deposits by ' + linkKey + '. ' + (linkFieldsSupported ? ('Wave accepts transactionId/accountingTransactionId; populated on ' + withTxnId + '/' + withAcctTxnId + ' of ' + paymentsFound + ' payments.') : ('Wave REJECTS the txn-link fields (' + (linkFieldError || 'schema mismatch') + ') → LH must match on account+amount+date, NOT an id.')) + ' Money transactions remain unreadable (CSV-only). Bounded to ' + maxPages + ' pages.',
       error: firstError || null,
       api_build_marker: API_BUILD_MARKER
     };
-    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'invoice_payment', action: 'readback_probe', dry_run: true, success: !firstError, error_message: firstError, response_payload: { invoices_scanned: invoicesScanned, payments_found: paymentsFound, payments_with_bank_account: withAccount }, attempted_by: by }); } catch (eL) {}
+    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'invoice_payment', action: 'readback_probe', dry_run: true, success: !firstError, error_message: firstError, response_payload: { invoices_scanned: invoicesScanned, payments_found: paymentsFound, payments_with_bank_account: withAccount, link_fields_supported: linkFieldsSupported, link_field_error: linkFieldError, payments_with_transaction_id: withTxnId, payments_with_accounting_transaction_id: withAcctTxnId }, attempted_by: by }); } catch (eL) {}
     return NextResponse.json(result, { status: firstError && paymentsFound === 0 ? 400 : 200 });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });

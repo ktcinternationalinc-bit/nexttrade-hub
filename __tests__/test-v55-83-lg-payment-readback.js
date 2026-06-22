@@ -24,13 +24,17 @@ ok('1: payment-readback route exists, is gated, and is READ-ONLY (no GraphQL mut
   /assertPermission\(db, by, 'wave\.import\.run', req\)/.test(route) &&
   !/mutation/.test(route) &&
   !/\.update\(|\.insert\(\{[^}]*bank_transactions/.test(route));
-ok('2: it reads the READABLE path — invoice.payments with the bank/cash account on each payment',
-  /invoices\(page:\$page[\s\S]{0,200}payments\{ id amount\{ value currency\{ code \} \} paymentDate paymentMethod memo account\{ id name \} \}/.test(route) &&
+ok('2: it reads invoice.payments WITH the bank account AND probes the txn-link fields (transactionId/accountingTransactionId) — Codex gate',
+  /payments\{ ' \+ payFields \+ ' \}/.test(route) &&
+  /account\{ id name \}'[\s\S]{0,80}withLinkFields \? ' transactionId accountingTransactionId'/.test(route) &&
   /payments_with_bank_account/.test(route));
-ok('3: it is bounded (page cap) and reports distinct Wave bank accounts + samples so the linkage is verifiable',
-  /var maxPages = Math\.min\(/.test(route) &&
-  /distinct_bank_accounts/.test(route) &&
-  /samples\.push\(/.test(route));
+ok('3: if Wave REJECTS the txn-link fields it records that explicitly and retries safely (never builds LH on an unproven key)',
+  /if \(linkFieldsSupported && \/transactionId\|accountingTransactionId\|Cannot query field\/i\.test\(em\)\) \{/.test(route) &&
+  /linkFieldsSupported = false; linkFieldError = em;/.test(route) &&
+  /link_fields_supported: linkFieldsSupported/.test(route) &&
+  /payments_with_transaction_id: withTxnId/.test(route) &&
+  /payments_with_accounting_transaction_id: withAcctTxnId/.test(route) &&
+  /recommended_link_key/.test(route));
 ok('4: Wave Sync Center Import tab has a "Check Wave payments" button wired to the read-back route',
   /function runPaymentReadback\(\)/.test(sync) &&
   /fetch\('\/api\/wave\/payment-readback'/.test(sync) &&

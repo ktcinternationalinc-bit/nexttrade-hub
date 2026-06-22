@@ -26,9 +26,10 @@ ok('2: Classification cell shows the WAVE category + origin chip; "⇐ Wave" ONL
   !/\(t\.category_source === 'wave' \|\| t\.category_source === 'wave_csv'\)/.test(br) &&
   /⇐ Wave/.test(br) &&
   />Hub</.test(br));
-ok('3: the Wave badge is SPLIT-AWARE — a matched deposit shows it syncs as a PAYMENT with the linked INV# + status',
+ok('3: the Wave badge is SPLIT-AWARE — a matched deposit shows it syncs as a PAYMENT with the linked INV# + status (invoice resolved from match OR matched_invoice_id)',
   /var isPayment = ms\.length > 0 \|\| !!t\.matched_invoice_id;/.test(br) &&
-  /acctInvoices\.find\(function \(iv\) \{ return iv\.id === ms\[0\]\.invoice_id; \}\)/.test(br) &&
+  /var invId = ms\.length \? ms\[0\]\.invoice_id : t\.matched_invoice_id;/.test(br) &&
+  /var inv = invId \? acctInvoices\.find\(function \(iv\) \{ return iv\.id === invId; \}\) : null;/.test(br) &&
   /'INV ' \+ \(inv\.invoice_number \|\| inv\.id\)/.test(br) &&
   /\? '✓ Wave payment · ' : '⧖ Pending → Wave · '/.test(br));
 ok('4: "⇐ from Wave" means MIRRORED IN (wave_csv/wave_import) only — a Hub-picked Wave category is NOT labeled inbound (Codex LG)',
@@ -37,6 +38,9 @@ ok('4: "⇐ from Wave" means MIRRORED IN (wave_csv/wave_import) only — a Hub-p
 ok('5: payment sync state reads the real payment rows (wave_payment_id / synced / manual_done), not just review status',
   /var ps = \(paysByTxn\[t\.id\] \|\| \[\]\)\.filter\(function \(p\) \{ return !isPaymentVoid\(p\); \}\);/.test(br) &&
   /var pushed = ps\.some\(function \(p\) \{ return p\.wave_payment_id \|\| p\.sync_status === 'synced' \|\| p\.sync_status === 'manual_done'; \}\);/.test(br));
+ok('6: preflight-schema now checks bank_transactions.wave_transaction_id (Codex) so a missing migration is caught',
+  /wave_transaction_id/.test(rd('src/app/api/wave/preflight-schema/route.js')) &&
+  /'category_status', 'wave_transaction_id'\]/.test(rd('src/app/api/wave/preflight-schema/route.js')));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LF blotter-mirror tests passed'); process.exit(0); }

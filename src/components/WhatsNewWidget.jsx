@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LH',
+    date: '2026-06-22',
+    label: 'The payment check now answers the key question — can we link Wave payments exactly?',
+    items: [
+      '**🔎 "Check Wave payments" now reports the link key.** Beyond counting payments, it now tells you whether Wave exposes a transaction id on each payment (the exact key to tie a Wave payment to a Hub deposit) or whether linking will use bank-account + amount + date. So the next step is built on a confirmed fact, not a guess.',
+      '**🧷 Blotter polish.** The category column is now labeled "Category (Wave/Hub)", and a deposit shows its linked invoice even if the live match row is gone (it falls back to the stored link).',
+      { superAdminOnly: true, text: 'v55.83-LH (Codex LG-gate FAIL + LF cautions). LG probe FAIL: it claimed to verify transactionId/accountingTransactionId but did not query them. Now /api/wave/payment-readback probes WITH transactionId+accountingTransactionId; if Wave rejects them it records link_field_error + retries the same page with the safe field set (definitive "schema does not expose them"), and reports link_fields_supported / payments_with_transaction_id / payments_with_accounting_transaction_id / recommended_link_key. UI shows the link key. LF cautions: blotter header "Classification"→"Category (Wave/Hub)"; payment badge resolves invoice from match OR matched_invoice_id fallback; preflight-schema now checks bank_transactions.wave_transaction_id. Tests lf(6)/lg(5) updated; runner re-run. STILL GATED: LH-real (import-invoices payments{} upsert + deposit auto-link, double-count-safe) waits on a live readback run to pick the proven key; then the 7 CSV-hardening items.' },
+    ],
+  },
+  {
     version: 'v55.83-LG',
     date: '2026-06-22',
     label: 'See the payments Wave already has — and a fix so "from Wave" means what it says',
