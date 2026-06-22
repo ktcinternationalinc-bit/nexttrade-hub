@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-KZ',
+    date: '2026-06-21',
+    label: 'Categorized bank transactions can now actually be pushed to Wave',
+    items: [
+      '**🚀 Bank transactions now sync to Wave.** The old message ("Wave\'s API can\'t accept transaction pushes") was wrong — Wave *does* accept them. We verified it against Wave\'s live system. So a bank transaction that you\'ve given a Wave Category now appears as **pushable** in Wave Sync Center → Pending Sync (it posts to Wave as a real money transaction: your bank account on one side, the category on the other). Uncategorized ones still wait for a category; split-line push is the next step.',
+      '**🛟 Safe by design.** It only works on the test silo or a super-admin-unlocked production silo, you Dry-Run to preview first, it goes one at a time, and it can\'t double-post (Wave rejects a repeat of the same transaction).',
+      { superAdminOnly: true, text: 'v55.83-KZ. NEW /api/wave/push-transaction → Wave moneyTransactionCreate (live-introspection-verified 2026-06-21, overturns the deferred "no transaction mutation" belief). Double-entry: anchor = silo default_payment_account_id (Wave Cash&Bank), direction DEPOSIT(in)/WITHDRAWAL(out); single lineItem = bt.wave_account_id (category), balance INCREASE. externalId="hub-bt-"+id (Wave-side idempotency); category_status claim->synced; duplicate-externalId => already_in_wave (mark synced, not a failure); blocks matched deposits (those push as invoice payments). Gated like push-payment (approved test OR prod-unlock), placeholder-guarded, dry_run. WaveSyncCenter: categorized bank txns are action="transaction" (pushable, in actionableQueue), uncategorized stay hubOnly; dispatch routes to push-transaction; one-at-a-time books safety incl. transactions; corrected the misleading Hub-only copy. NOTE/limits (from the research): bank-to-bank TRANSFERS + raw journal entries are NOT in Wave\'s API; split-line push is a follow-up. Anchor currently uses the single per-silo deposit account (per-bank-account anchor mapping is a future enhancement). Test kz(7); runner green. Pull of Wave\'s EXISTING categorizations (Max item 2) is the next build — read-query research in flight.' },
+    ],
+  },
+  {
     version: 'v55.83-KY',
     date: '2026-06-21',
     label: 'Wave category picker is searchable + de-cluttered; duplicate accounts in Bank Review collapsed',

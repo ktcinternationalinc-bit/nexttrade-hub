@@ -517,18 +517,22 @@ export default function WaveSyncCenter(props) {
       // Do NOT also list it here as a "Hub-only" categorization — that made a matched deposit look
       // blocked/stuck when its payment is really what pushes to Wave.
       if (matchedTxnIds[bt.id] || bt.matched_invoice_id || bt.linked_id) { return; }
+      // v55.83-KZ — Wave DOES accept categorized transactions (moneyTransactionCreate, verified live).
+      // A categorized bank txn is now a real PUSH; an uncategorized one stays Hub-only until classified.
+      var hasCat = !!bt.wave_account_id;
       var bb = [];
       if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
       if (bt.classification) { bb.push('class: ' + bt.classification); }
       if (bt.wave_account_name) { bb.push('→ ' + bt.wave_account_name); }
-      bb.push('ℹ Stays in the Hub — Wave\'s API can\'t accept raw transaction/category pushes. Customer payments reach Wave by matching them to an invoice in Bank Review.');
+      if (hasCat) { bb.push('posts to Wave as a money transaction (bank side = this silo\'s deposit account)'); }
+      else { bb.push('ℹ Pick a Wave Category for this transaction in Bank Review, then it can post to Wave.'); }
       rows.push({
-        key: 'banktxn:' + bt.id, action: 'bank_transaction', id: bt.id,
+        key: 'banktxn:' + bt.id, action: 'transaction', id: bt.id,
         label: 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
         amount: Number(bt.amount_abs) || 0,
         sub: bb.join(' · '),
-        blocked: 'Hub-only — Wave\'s API does not accept transaction pushes.',
-        hubOnly: true,
+        blocked: hasCat ? null : 'Pick a Wave category first (Bank Review).',
+        hubOnly: !hasCat,
         record: bt
       });
     });
@@ -540,13 +544,13 @@ export default function WaveSyncCenter(props) {
       if (sp.category_status !== 'pending_wave_sync') { return; }
       var sb = [];
       if (sp.wave_account_name) { sb.push('→ ' + sp.wave_account_name); }
-      sb.push('ℹ Stays in the Hub — Wave\'s API can\'t accept category pushes for split lines.');
+      sb.push('ℹ Split-line transaction push to Wave is the next step; for now the split stays in the Hub. (Single-category bank transactions DO push now.)');
       rows.push({
         key: 'split:' + sp.id, action: 'bank_transaction_split', id: sp.id,
         label: 'Split line · ' + (sp.wave_account_name || 'Wave category'),
         amount: Number(sp.split_amount) || 0,
         sub: sb.join(' · '),
-        blocked: 'Hub-only — Wave\'s API does not accept category pushes.',
+        blocked: 'Split-line Wave push coming next — stays in the Hub for now.',
         hubOnly: true,
         record: sp
       });
@@ -617,19 +621,22 @@ export default function WaveSyncCenter(props) {
       if (q.action === 'customer') { return !canPushCustomer; }
       if (q.action === 'invoice') { return !canPushInvoice; }
       if (q.action === 'payment') { return !canPushPayment; }
+      if (q.action === 'transaction') { return !canPushPayment; } // v55.83-KZ — same write-to-books permission
       return false;
     });
     if (lacksPerm) { toast.error('You do not have permission to push one or more of the selected record types.'); return; }
     // PAYMENT-PUSH SAFETY (launch): payments go one at a time until Wave's behavior (incl. the
     // paymentMethod enum) is fully confirmed on live data. Customer/invoice pushes are proven
     // and may still go in a batch.
-    var selectedPayments = selectedRows.filter(function (q) { return q.action === 'payment'; });
-    if (selectedPayments.length > 1) {
-      toast.error('Push payments ONE at a time for now. Select a single payment, Dry Run, then Push. (This limit is lifted once the first live payments are confirmed in Wave.)');
+    // v55.83-KZ — anything that posts to real Wave books (payments + categorized transactions) goes ONE
+    // at a time until the first live ones are confirmed, and never mixed with other record types.
+    var selectedBooks = selectedRows.filter(function (q) { return q.action === 'payment' || q.action === 'transaction'; });
+    if (selectedBooks.length > 1) {
+      toast.error('Push payments/transactions ONE at a time for now. Select a single one, Dry Run, then Push. (This limit lifts once the first live ones are confirmed in Wave.)');
       return;
     }
-    if (selectedPayments.length === 1 && selectedRows.length > 1) {
-      toast.error('Push a payment by itself (do not mix it with other records). Select just the one payment.');
+    if (selectedBooks.length === 1 && selectedRows.length > 1) {
+      toast.error('Push a payment/transaction by itself (do not mix it with other records). Select just the one.');
       return;
     }
     setBusy(true);
@@ -637,7 +644,7 @@ export default function WaveSyncCenter(props) {
     var done = 0, failed = 0;
     selectedRows.forEach(function (q) {
       seq = seq.then(function () {
-        var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : '/api/wave/push-payment');
+        var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : (q.action === 'transaction' ? '/api/wave/push-transaction' : '/api/wave/push-payment'));
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) { if (d && (d.success || d.ok)) { done++; } else { failed++; } })
@@ -746,11 +753,11 @@ export default function WaveSyncCenter(props) {
         <div className="border border-slate-700 rounded overflow-hidden">
           {queue.some(function (q) { return q.hubOnly; }) && (
             <div className="bg-slate-800/40 border-b border-slate-700 px-3 py-2 text-[11px] text-slate-300">
-              ℹ <span className="font-bold">About "Hub-only" bank transactions:</span> Wave's API does not accept raw bank-transaction or category pushes, so categorized bank transactions stay in the Hub — this is a Wave platform limit, not an error. <span className="font-semibold">Customer payments still reach Wave</span> the right way: match the deposit to its invoice in Bank Review &amp; Matching, which posts a real payment to Wave.
+              ℹ <span className="font-bold">What\'s "Hub-only" below:</span> a bank transaction can post to Wave once it has a Wave Category — those now appear as pushable above. The ones listed as Hub-only are either <span className="font-semibold">not categorized yet</span> (pick a category in Bank Review) or <span className="font-semibold">split lines</span> (split-line push is the next step). Customer-invoice payments still reach Wave by matching the deposit to its invoice in Bank Review.
             </div>
           )}
           <div className="bg-slate-800/70 px-3 py-2 flex items-center justify-between">
-            <div className="text-xs font-bold">Pending in this silo: {actionableQueue.length}<span className="ml-2 font-normal text-slate-400">({actionableQueue.filter(function (q) { return q.action === 'customer'; }).length} customers · {actionableQueue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {actionableQueue.filter(function (q) { return q.action === 'payment'; }).length} payments)</span></div>
+            <div className="text-xs font-bold">Pending in this silo: {actionableQueue.length}<span className="ml-2 font-normal text-slate-400">({actionableQueue.filter(function (q) { return q.action === 'customer'; }).length} customers · {actionableQueue.filter(function (q) { return q.action === 'invoice'; }).length} invoices · {actionableQueue.filter(function (q) { return q.action === 'payment'; }).length} payments · {actionableQueue.filter(function (q) { return q.action === 'transaction'; }).length} transactions)</span></div>
             <div className="flex gap-2">
               <button onClick={runDryRun} disabled={(isProd && !productionUnlocked) || selectedRows.length === 0 || !canDryRun} title={!canDryRun ? 'Requires the Wave: Dry Run permission' : ''} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold rounded">Dry Run Selected ({selectedRows.length})</button>
               <button onClick={pushSelected} disabled={(isProd && !productionUnlocked) || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
