@@ -989,6 +989,7 @@ export default function WaveSyncCenter(props) {
                 <span className="text-emerald-700">{csvResult.dry_run ? csvResult.matched_count + ' would apply' : csvResult.applied + ' applied'}</span>
                 {csvResult.ambiguous_count ? <span className="text-orange-700">{csvResult.ambiguous_count} ambiguous (manual)</span> : null}
                 {csvResult.conflict_count ? <span className="text-rose-700">{csvResult.conflict_count} conflict{csvResult.conflict_count === 1 ? '' : 's'} (need override)</span> : null}
+                {csvResult.needs_manual_invoice_link_count ? <span className="text-indigo-700">{csvResult.needs_manual_invoice_link_count} invoice-linked → use payment sync</span> : null}
                 <span className="text-amber-700">{csvResult.unmatched_count} unmatched</span>
                 {csvResult.category_unresolved_count ? <span className="text-sky-700">{csvResult.category_unresolved_count} unresolved → saved label-only (not synced)</span> : null}
                 {csvResult.hub_candidate_count != null ? <span className="text-slate-500">{csvResult.hub_candidate_count} Hub candidates</span> : null}

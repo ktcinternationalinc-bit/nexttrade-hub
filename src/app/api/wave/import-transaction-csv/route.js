@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
-var API_BUILD_MARKER = 'v55.83-LI-import-transaction-csv';
+var API_BUILD_MARKER = 'v55.83-LJ-import-transaction-csv';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -119,12 +119,17 @@ export async function POST(req) {
       // v55.83-LI (Codex #3) — support SEPARATE Debit/Credit columns (debit = money out, credit = in).
       debit: findCol(headers, ['debit', 'withdrawal'], ['balance']),
       credit: findCol(headers, ['credit', 'deposit'], ['balance']),
+      // v55.83-LJ (Codex) — detect invoice/customer reference columns. A CSV row that references an invoice
+      // is a PAYMENT, not a plain categorization, and must NOT be applied as a category (that linkage is the
+      // readable invoice-payment path's job). Such rows are routed to needs_manual_invoice_link.
+      invoice: findCol(headers, ['invoice'], ['date']),
+      customer: findCol(headers, ['customer', 'contact', 'client']),
       // category column — prefer "category", then "account", but AVOID the bank-account column name
       category: findCol(headers, ['category'], null)
     };
     if (ci.category < 0) { ci.category = findCol(headers, ['account'], ['bank', 'asset', 'checking']); }
     var hasAmount = (ci.amount >= 0) || (ci.debit >= 0) || (ci.credit >= 0);
-    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, debit: ci.debit >= 0 ? headers[ci.debit] : null, credit: ci.credit >= 0 ? headers[ci.credit] : null, category: ci.category >= 0 ? headers[ci.category] : null };
+    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, debit: ci.debit >= 0 ? headers[ci.debit] : null, credit: ci.credit >= 0 ? headers[ci.credit] : null, category: ci.category >= 0 ? headers[ci.category] : null, invoice: ci.invoice >= 0 ? headers[ci.invoice] : null, customer: ci.customer >= 0 ? headers[ci.customer] : null };
     if (ci.date < 0 || !hasAmount || ci.category < 0) {
       return NextResponse.json({ ok: false, error: 'Could not detect the required columns. Need a Date column, an Amount (or Debit/Credit) column, and a Category/Account column. Detected headers: ' + JSON.stringify(headers), detected_columns: detected, api_build_marker: API_BUILD_MARKER }, { status: 400 });
     }
@@ -152,14 +157,21 @@ export async function POST(req) {
     var catRes = await db.from('wave_categories').select('wave_account_id, wave_account_name').eq('wave_business_id', waveBusinessId);
     var catByName = {}; ((catRes && catRes.data) || []).forEach(function (c) { var k = norm(c.wave_account_name); if (k && !catByName[k]) { catByName[k] = c; } });
 
+    function rowHash(rowArr) { var s = rowArr.join(''); var h = 0; var i; for (i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h); }
     var allowOverride = body.override_conflicts === true; // Codex #4 — explicit opt-in to replace an existing category
-    var used = {}; var matched = []; var ambiguous = []; var conflicts = []; var unmatched = []; var r;
+    var used = {}; var matched = []; var ambiguous = []; var conflicts = []; var unmatched = []; var needsInvoiceLink = []; var r;
     for (r = 1; r < grid.length; r++) {
       var rowArr = grid[r];
       var cDate = parseDate(rowArr[ci.date]);
       var cSigned = rowSigned(rowArr);
       var cDesc = ci.desc >= 0 ? rowArr[ci.desc] : '';
       var cCat = rowArr[ci.category];
+      // v55.83-LJ (Codex #1) — a row that references an invoice is a PAYMENT, not a categorization. Do NOT
+      // apply it as a category; route it to needs_manual_invoice_link so the blotter never implies the
+      // invoice relationship is known from a category import (that linkage is the payment path's job).
+      var cInv = ci.invoice >= 0 ? String(rowArr[ci.invoice] || '').trim() : '';
+      var cCust = ci.customer >= 0 ? String(rowArr[ci.customer] || '').trim() : '';
+      if (cInv) { needsInvoiceLink.push({ row: r, date: cDate, amount: cSigned == null ? null : roundMoney(Math.abs(cSigned)), invoice: cInv, customer: cCust, category: cCat, reason: 'CSV row references invoice ' + cInv + ' — this is a PAYMENT; reconcile via invoice-payment sync, not category import' }); continue; }
       if (cSigned == null || !cDate || !String(cCat || '').trim()) { unmatched.push({ row: r, date: cDate, amount: cSigned, category: cCat, reason: 'missing date/amount/category in CSV row' }); continue; }
       var target = roundMoney(Math.abs(cSigned));
       var csvDir = cSigned < 0 ? 'out' : 'in';
@@ -182,24 +194,27 @@ export async function POST(req) {
       if (hits.length > 1) { ambiguous.push({ row: r, date: cDate, amount: target, direction: csvDir, category: cCat, description: cDesc, candidate_count: hits.length, hub_ids: hits.map(function (h) { return h.t.id; }), reason: hits.length + ' Hub transactions match amount+direction+date — resolve manually (NOT auto-applied)' }); continue; }
       var best = hits[0].t;
       var resolved = catByName[norm(cCat)] || null;
-      // Codex #4 — an existing DIFFERENT Hub category is a conflict; do not silently overwrite.
+      // Codex #4 — an existing DIFFERENT Hub category is a conflict; do not silently overwrite. Widened
+      // (LJ) to ANY existing category (a label-only wave_account_name counts, not just a resolved id).
+      var hasExistingCat = !!(best.wave_account_id || best.wave_account_name);
       var wouldChange = resolved ? (best.wave_account_id !== resolved.wave_account_id) : (norm(best.wave_account_name) !== norm(cCat));
-      if (best.wave_account_id && wouldChange && !allowOverride) {
-        conflicts.push({ row: r, hub_id: best.id, hub_name: best.name, amount: target, direction: csvDir, existing_category: best.wave_account_name, existing_source: best.category_source, csv_category: cCat, reason: 'Hub already has a different category — re-run with “override conflicts” to replace' });
+      if (hasExistingCat && wouldChange && !allowOverride) {
+        conflicts.push({ row: r, hub_id: best.id, hub_name: best.name, amount: target, direction: csvDir, existing_category: best.wave_account_name, existing_account_id: best.wave_account_id || null, existing_source: best.category_source, existing_status: best.category_status, csv_category: cCat, reason: 'Hub already has a different category — re-run with “override existing Hub categories” to replace' });
         continue;
       }
       used[best.id] = true;
-      matched.push({ row: r, hub_id: best.id, hub_name: best.name, hub_date: String(best.posted_date || best.date || '').slice(0, 10), amount: target, direction: csvDir, csv_category: cCat, resolved_wave_account_id: resolved ? resolved.wave_account_id : null, resolved_wave_account_name: resolved ? resolved.wave_account_name : null, category_resolved: !!resolved, overwrote: !!best.wave_account_id, score: Math.round(hits[0].score * 100) / 100 });
+      matched.push({ row: r, hub_id: best.id, hub_name: best.name, hub_date: String(best.posted_date || best.date || '').slice(0, 10), amount: target, direction: csvDir, csv_category: cCat, resolved_wave_account_id: resolved ? resolved.wave_account_id : null, resolved_wave_account_name: resolved ? resolved.wave_account_name : null, category_resolved: !!resolved, overwrote: hasExistingCat, row_hash: rowHash(rowArr), raw_row: rowArr.join(' | ').slice(0, 300), before: { wave_account_id: best.wave_account_id || null, wave_account_name: best.wave_account_name || null, category_source: best.category_source || null, category_status: best.category_status || null }, score: Math.round(hits[0].score * 100) / 100 });
     }
 
     if (isDry) {
-      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, ambiguous: ambiguous, conflicts: conflicts, unmatched: unmatched, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, ambiguous: ambiguous, conflicts: conflicts, unmatched: unmatched, needs_manual_invoice_link: needsInvoiceLink, api_build_marker: API_BUILD_MARKER });
     }
 
     // APPLY. Codex #6 — a RESOLVED category name (maps to this silo's Wave chart) is marked 'synced' (it is
     // a real Wave account already in Wave). An UNRESOLVED name keeps the label but category_status='local_only'
     // so it can NEVER masquerade as fully reflected in Wave. Codex #7 — full per-row audit + batch id.
     var batchId = 'csv-' + Date.now();
+    var appliedAt = new Date().toISOString();
     var applied = 0; var appliedUnresolved = 0; var applyErrors = []; var auditRows = []; var m;
     for (m = 0; m < matched.length; m++) {
       var mm = matched[m];
@@ -209,11 +224,15 @@ export async function POST(req) {
       // Codex #5 — never overwrite an already-pushed row (status synced OR a Wave txn id present).
       var upd = await db.from('bank_transactions').update(patch).eq('id', mm.hub_id).neq('category_status', 'synced').is('wave_transaction_id', null).select('id');
       if (upd && upd.error) { applyErrors.push({ hub_id: mm.hub_id, error: upd.error.message }); }
-      else if (upd && upd.data && upd.data.length) { applied++; if (!mm.resolved_wave_account_id) { appliedUnresolved++; } auditRows.push({ hub_id: mm.hub_id, csv_row: mm.row, set_category: patch.wave_account_name, status: patch.category_status, resolved: mm.category_resolved, overwrote: mm.overwrote }); }
+      else if (upd && upd.data && upd.data.length) {
+        applied++; if (!mm.resolved_wave_account_id) { appliedUnresolved++; }
+        // Codex #7 (LJ) — full before/after audit per row: raw row + hash, matched bank txn id, who/when.
+        auditRows.push({ matched_bank_transaction_id: mm.hub_id, csv_row: mm.row, row_hash: mm.row_hash, raw_row: mm.raw_row, before: mm.before, after: { wave_account_id: patch.wave_account_id || null, wave_account_name: patch.wave_account_name, category_source: 'wave_csv', category_status: patch.category_status }, resolved: mm.category_resolved, overwrote: mm.overwrote, applied_by: by, applied_at: appliedAt });
+      }
     }
-    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { batch_id: batchId, filename: body.filename || null, detected_columns: detected, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched: matched.length, ambiguous: ambiguous.length, conflicts: conflicts.length, unmatched: unmatched.length, override_conflicts: allowOverride, rows: auditRows }, attempted_by: by }); } catch (eLog) {}
+    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { batch_id: batchId, filename: body.filename || null, applied_at: appliedAt, applied_by: by, detected_columns: detected, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched: matched.length, ambiguous: ambiguous.length, conflicts: conflicts.length, unmatched: unmatched.length, needs_manual_invoice_link: needsInvoiceLink.length, override_conflicts: allowOverride, rows: auditRows }, attempted_by: by }); } catch (eLog) {}
 
-    return NextResponse.json({ ok: true, dry_run: false, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, apply_errors: applyErrors, batch_id: batchId, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
+    return NextResponse.json({ ok: true, dry_run: false, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, apply_errors: applyErrors, batch_id: batchId, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }

@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LJ',
+    date: '2026-06-22',
+    label: 'CSV import: invoice payments handled correctly + full audit trail',
+    items: [
+      '**🧾 Invoice payments stay payments.** If a row in the Wave CSV references an invoice, it\'s a payment — the import no longer treats it as a plain category. It\'s flagged "use payment sync" so the invoice relationship is never faked from a category import.',
+      '**🛡 Stronger overwrite protection + full log.** The conflict check now catches *any* existing category (even a plain label), and every import records a complete before/after trail per row (with the raw CSV row, who ran it, and when) so you can review and trust exactly what changed.',
+      { superAdminOnly: true, text: 'v55.83-LJ (Codex LI review). import-transaction-csv: (1) detect invoice/customer columns → a row with an invoice ref goes to needs_manual_invoice_link[] (NOT applied as a category; that linkage is the readable invoice-payment path, by design — avoids duplicating the payment path / double-count). (2) conflict guard widened: hasExistingCat = wave_account_id OR wave_account_name (label-only counts) → conflict unless override_conflicts. (3) audit per applied row now stores matched_bank_transaction_id, csv_row, row_hash, raw_row, before{id,name,source,status}, after{...}, resolved, overwrote, applied_by, applied_at; log adds applied_at/by. UI shows the invoice-linked count. marker LI→LJ; tests lj(5), li #4/#7 updated; runner re-run. NOTE to Codex: full invoice/payment reconciliation is the READABLE invoice-payment path (gated on the live Check-Wave-payments run), NOT the CSV — CSV is the fallback for non-invoice Wave-UI categorizations only.' },
+    ],
+  },
+  {
     version: 'v55.83-LI',
     date: '2026-06-22',
     label: 'CSV import from Wave is now money-safe — no mis-matches, no silent overwrites',

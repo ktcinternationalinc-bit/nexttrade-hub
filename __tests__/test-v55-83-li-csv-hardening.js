@@ -33,7 +33,7 @@ ok('3: separate Debit/Credit columns are detected and turned into a signed amoun
   /if \(dv > 0 && cv === 0\) \{ return -dv; \}/.test(route));
 ok('4: an existing DIFFERENT Hub category is a conflict that needs an explicit override (no silent overwrite)',
   /var allowOverride = body\.override_conflicts === true;/.test(route) &&
-  /if \(best\.wave_account_id && wouldChange && !allowOverride\) \{[\s\S]{0,120}conflicts\.push\(/.test(route) &&
+  /if \(hasExistingCat && wouldChange && !allowOverride\) \{[\s\S]{0,120}conflicts\.push\(/.test(route) &&
   /override existing Hub categories/.test(sync));
 ok('5: the pushed/synced guard is widened to wave_transaction_id (candidate filter + apply guard)',
   /!t\.matched_invoice_id && t\.category_status !== 'synced' && !t\.wave_transaction_id/.test(route) &&
@@ -41,10 +41,10 @@ ok('5: the pushed/synced guard is widened to wave_transaction_id (candidate filt
 ok('6: an unresolved category name is saved as local_only (never marked synced / masquerading as in Wave)',
   /patch\.category_status = 'synced';/.test(route) &&
   /else \{ patch\.wave_account_name = mm\.csv_category; patch\.category_status = 'local_only'; \}/.test(route));
-ok('7: richer audit — batch id, filename, and per-row before/after written to wave_sync_log',
+ok('7: richer audit — batch id, filename, and per-row before/after (+raw row, matched id, who/when) to wave_sync_log',
   /var batchId = 'csv-' \+ Date\.now\(\);/.test(route) &&
   /batch_id: batchId, filename: body\.filename \|\| null/.test(route) &&
-  /auditRows\.push\(\{ hub_id: mm\.hub_id, csv_row: mm\.row/.test(route));
+  /auditRows\.push\(\{ matched_bank_transaction_id: mm\.hub_id[\s\S]{0,120}before: mm\.before, after:/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LI csv-hardening tests passed'); process.exit(0); }
