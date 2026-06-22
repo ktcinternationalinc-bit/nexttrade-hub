@@ -25,9 +25,10 @@ ok('1: route exists, gated (wave.import.run), placeholder-blocked, default dry-r
   /isPlaceholderWaveBusiness\(waveBusinessId\)/.test(route) &&
   /var isDry = body\.dry_run !== false;/.test(route) &&
   !/mutation/.test(route));
-ok('2: imports resolve — roundMoney is a real export of payment-matching (static-tests-miss-runtime guard)',
-  /import \{ roundMoney \} from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/payment-matching'/.test(route) &&
-  /export function roundMoney/.test(lib));
+ok('2: imports resolve — roundMoney + isPaymentVoid are real exports of payment-matching (static-tests-miss-runtime guard)',
+  /import \{ roundMoney, isPaymentVoid \} from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/payment-matching'/.test(route) &&
+  /export function roundMoney/.test(lib) &&
+  /export function isPaymentVoid/.test(lib));
 ok('3: DISPLAY-LINK — writes a payment_matches row + stamps bank_transactions.matched_invoice_id (mirrors the match path)',
   /from\('payment_matches'\)\.insert\(/.test(route) &&
   /matched_invoice_id: inv\.id/.test(route) &&
@@ -51,6 +52,16 @@ ok('7: Wave Sync Center has a "Prefill invoice links" dry-run/apply UI wired to 
   /fetch\('\/api\/wave\/prefill-payment-links'/.test(sync) &&
   /Prefill invoice links/.test(sync) &&
   /Preview links \(dry run\)/.test(sync));
+ok('8: (Codex LN orphan-prevention) deposit CLAIMED first (bank update before match insert), zero updated rows = conflict (not success), match rolled back on insert failure',
+  route.indexOf("update({ linked_type: 'invoice'") > -1 &&
+  route.indexOf("update({ linked_type: 'invoice'") < route.indexOf("from('payment_matches').insert(") &&
+  /if \(!\(txnRes && txnRes\.data && txnRes\.data\.length\)\) \{ used\[dep\.id\] = true; counts\.claim_conflict\+\+;/.test(route) &&
+  /matched_invoice_id: null, linked_type: null, linked_id: null/.test(route));
+ok('9: (Codex LN) deposits already carrying an ACTIVE match or payment row are excluded from candidacy',
+  /from\('payment_matches'\)\.select\('bank_transaction_id, voided'\)/.test(route) &&
+  /from\('accounting_invoice_payments'\)\.select\('bank_transaction_id, voided, sync_status'\)/.test(route) &&
+  /!isPaymentVoid\(p\)/.test(route) &&
+  /!t\.matched_invoice_id && !t\.wave_transaction_id && !claimedDep\[t\.id\]/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LM prefill-payment-links tests passed'); process.exit(0); }

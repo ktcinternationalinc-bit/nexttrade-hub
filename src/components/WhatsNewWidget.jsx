@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LN',
+    date: '2026-06-22',
+    label: 'Prefill links: orphan-proof + never double-links',
+    items: [
+      '**🛟 Safer apply on the invoice-link prefill.** Hardened so a link is only ever recorded when the deposit is cleanly claimed — if two things race for the same deposit it backs off instead of leaving a half-link, and it now skips any deposit that already has a match or payment recorded (so it can never double-link or override your existing work).',
+      { superAdminOnly: true, text: 'v55.83-LN (Codex LM write-safety FAIL). prefill-payment-links Apply hardened: (1) CLAIM-FIRST — bank_transactions update with the matched_invoice_id-null guard runs BEFORE the payment_matches insert; a zero-row result = claim_conflict (skip, no orphan match); on match-insert failure the claim is ROLLED BACK (matched_invoice_id/linked_type/linked_id reverted). (2) candidacy now also excludes deposits already carrying an ACTIVE (non-void) payment_matches OR accounting_invoice_payments row (not just matched_invoice_id), via claimedDep set — never double-links/overrides an existing application. LM test extended (lm #8 claim-first ordering + zero-row + rollback, #9 active-link exclusion) so it fails on the pre-fix route. marker LM→LN; runner re-run. Display-link-only invariant unchanged (no payment row, no wave_imported_paid write). Account-aware matching (Wave bank account ↔ Hub plaid account) noted as a v2 enhancement once a mapping exists; unique-candidate + amount+date+direction remains the load-bearing safety.' },
+    ],
+  },
+  {
     version: 'v55.83-LM',
     date: '2026-06-22',
     label: 'Prefill: link existing deposits to the invoices Wave already shows them paying',

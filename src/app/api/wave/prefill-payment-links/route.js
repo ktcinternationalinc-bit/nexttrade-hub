@@ -21,9 +21,9 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
-import { roundMoney } from '../../../../lib/payment-matching';
+import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
 
-var API_BUILD_MARKER = 'v55.83-LM-prefill-payment-links';
+var API_BUILD_MARKER = 'v55.83-LN-prefill-payment-links';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
@@ -77,12 +77,24 @@ export async function POST(req) {
     // candidate deposits in this silo (money-in, not yet linked, not Wave-pushed).
     var depRes = await db.from('bank_transactions').select('id, name, amount, amount_abs, posted_date, date, direction, matched_invoice_id, wave_transaction_id, accounting_customer_id, business_id, classification').eq('wave_business_id', waveBusinessId).eq('direction', 'in');
     if (depRes && depRes.error) { return NextResponse.json({ ok: false, error: 'Deposit read failed: ' + depRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-    var deposits = ((depRes && depRes.data) || []).filter(function (t) { return !t.matched_invoice_id && !t.wave_transaction_id; });
+
+    // v55.83-LN (Codex) — a deposit may already carry an ACTIVE match or payment row even without
+    // matched_invoice_id set. Exclude those too, so the prefill never double-links or overrides an
+    // existing application. Build the set of bank_transaction_ids that already have a non-void match/payment.
+    var claimedDep = {};
+    var pmRes = await db.from('payment_matches').select('bank_transaction_id, voided').eq('wave_business_id', waveBusinessId);
+    if (pmRes && pmRes.error) { return NextResponse.json({ ok: false, error: 'Match read failed: ' + pmRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    ((pmRes && pmRes.data) || []).forEach(function (m) { if (m && m.bank_transaction_id && m.voided !== true) { claimedDep[m.bank_transaction_id] = true; } });
+    var aipRes = await db.from('accounting_invoice_payments').select('bank_transaction_id, voided, sync_status').eq('wave_business_id', waveBusinessId);
+    if (aipRes && aipRes.error) { return NextResponse.json({ ok: false, error: 'Payment-link read failed: ' + aipRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+    ((aipRes && aipRes.data) || []).forEach(function (p) { if (p && p.bank_transaction_id && !isPaymentVoid(p)) { claimedDep[p.bank_transaction_id] = true; } });
+
+    var deposits = ((depRes && depRes.data) || []).filter(function (t) { return !t.matched_invoice_id && !t.wave_transaction_id && !claimedDep[t.id]; });
 
     // ── Wave invoice payments (read only) ────────────────────────────────────
     var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ totalPages } edges{ node{ id invoiceNumber payments{ id amount{ value } paymentDate account{ id name } } } } } } }';
     var page = 1; var totalPages = 1; var safety = 0; var firstError = null;
-    var used = {}; var plan = []; var counts = { invoices_scanned: 0, payments_found: 0, already_materialized: 0, invoice_not_imported: 0, would_link: 0, ambiguous: 0, no_candidate: 0, applied: 0, apply_errors: 0 };
+    var used = {}; var plan = []; var counts = { invoices_scanned: 0, payments_found: 0, already_materialized: 0, invoice_not_imported: 0, would_link: 0, ambiguous: 0, no_candidate: 0, applied: 0, apply_errors: 0, claim_conflict: 0 };
 
     while (page <= totalPages && safety < maxPages) {
       safety++;
@@ -129,12 +141,20 @@ export async function POST(req) {
           var planRow = { wave_payment_id: pay.id, invoice: node.invoiceNumber || node.id, hub_invoice_id: inv.id, amount: amt, applied: matchAmt, deposit_id: dep.id, deposit_name: dep.name, date: pd, action: 'link' };
           if (isDry) { used[dep.id] = true; plan.push(planRow); continue; }
 
-          // APPLY (display-link only): payment_matches row + stamp bank_transactions. NO payment row, NO
-          // wave_imported_paid change, NO recompute -> paid invariant provably untouched.
-          var mIns = await db.from('payment_matches').insert({ business_id: dep.business_id || inv.business_id || null, wave_business_id: waveBusinessId, bank_transaction_id: dep.id, invoice_id: inv.id, matched_amount: matchAmt, match_type: matchType, is_manual_override: false, notes: 'prefill: Wave payment ' + pay.id, matched_by: by, created_by: by }).select('id');
-          if (mIns && mIns.error) { counts.apply_errors++; planRow.action = 'error'; planRow.error = mIns.error.message; plan.push(planRow); continue; }
+          // APPLY (display-link only): NO payment row, NO wave_imported_paid change, NO recompute -> the
+          // paid invariant is provably untouched. v55.83-LN (Codex orphan-prevention): CLAIM the deposit
+          // FIRST with the matched_invoice_id-null guard; a ZERO-row result means it was claimed elsewhere
+          // (conflict — skip, never insert a match). Only after a successful claim do we insert the match;
+          // if the match insert then fails, ROLL BACK the claim so we never leave a link with no match row.
           var txnRes = await db.from('bank_transactions').update({ linked_type: 'invoice', linked_id: inv.id, matched_invoice_id: inv.id, classification: dep.classification || 'customer_payment', accounting_customer_id: dep.accounting_customer_id || inv.accounting_customer_id || null, updated_by: by }).eq('id', dep.id).is('matched_invoice_id', null).select('id');
-          if (txnRes && txnRes.error) { counts.apply_errors++; planRow.action = 'error'; planRow.error = txnRes.error.message; plan.push(planRow); continue; }
+          if (txnRes && txnRes.error) { used[dep.id] = true; counts.apply_errors++; planRow.action = 'error'; planRow.error = txnRes.error.message; plan.push(planRow); continue; }
+          if (!(txnRes && txnRes.data && txnRes.data.length)) { used[dep.id] = true; counts.claim_conflict++; planRow.action = 'skipped_already_linked'; plan.push(planRow); continue; }
+          var mIns = await db.from('payment_matches').insert({ business_id: dep.business_id || inv.business_id || null, wave_business_id: waveBusinessId, bank_transaction_id: dep.id, invoice_id: inv.id, matched_amount: matchAmt, match_type: matchType, is_manual_override: false, notes: 'prefill: Wave payment ' + pay.id, matched_by: by, created_by: by }).select('id');
+          if (mIns && mIns.error) {
+            // roll back the claim — never leave a matched_invoice_id with no match row.
+            try { await db.from('bank_transactions').update({ matched_invoice_id: null, linked_type: null, linked_id: null, classification: dep.classification || null, accounting_customer_id: dep.accounting_customer_id || null }).eq('id', dep.id); } catch (eRb) {}
+            used[dep.id] = true; counts.apply_errors++; planRow.action = 'error'; planRow.error = mIns.error.message; plan.push(planRow); continue;
+          }
           used[dep.id] = true; counts.applied++; planRow.action = 'linked'; plan.push(planRow);
         }
       }
