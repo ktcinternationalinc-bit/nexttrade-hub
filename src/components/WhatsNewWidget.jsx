@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LL',
+    date: '2026-06-22',
+    label: 'Deferred/ambiguous/conflict rows stay on screen after you click Apply',
+    items: [
+      '**📌 The review lists no longer vanish on Apply.** Previously, the deferred-invoice / ambiguous / conflict lists showed in the preview but disappeared once you applied. Now they stay visible after Apply too, so you always have the exact list of rows still to reconcile — and the deferred rows are saved to the sync log.',
+      { superAdminOnly: true, text: 'v55.83-LL (Codex LK review). The apply (non-dry-run) response of import-transaction-csv now returns needs_manual_invoice_link + ambiguous + conflicts ARRAYS (not just counts), so setCsvResult(d) after Apply keeps the detail sections rendered (the preview-only detail no longer disappears). wave_sync_log.response_payload also persists needs_manual_invoice_link_rows. marker LJ→LL; test lj #7 added (asserts the apply route returns the arrays + logs the deferred rows); runner re-run. The only remaining mirror piece is the readable invoice-payment auto-link, gated on a live "Check Wave payments" run.' },
+    ],
+  },
+  {
     version: 'v55.83-LK',
     date: '2026-06-22',
     label: 'CSV import: see exactly which invoice rows were set aside',

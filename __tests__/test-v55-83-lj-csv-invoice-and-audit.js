@@ -41,6 +41,9 @@ ok('5: the UI surfaces the invoice-linked count (so the user routes those to pay
 ok('6: (LK) the UI lists WHICH invoice/payment rows were deferred (row/amount/invoice/customer), not just a count',
   /Invoice\/payment rows deferred/.test(sync) &&
   /csvResult\.needs_manual_invoice_link\.map\(function \(n, i\)/.test(sync));
+ok('7: (LL) the APPLY response returns the deferred/ambiguous/conflict detail arrays (not just counts) so they survive after Apply, + logs the deferred rows',
+  /dry_run: false[\s\S]{0,500}needs_manual_invoice_link: needsInvoiceLink, ambiguous: ambiguous, conflicts: conflicts/.test(route) &&
+  /needs_manual_invoice_link_rows: needsInvoiceLink/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LJ csv-invoice-and-audit tests passed'); process.exit(0); }

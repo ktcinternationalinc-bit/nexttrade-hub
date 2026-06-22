@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
-var API_BUILD_MARKER = 'v55.83-LJ-import-transaction-csv';
+var API_BUILD_MARKER = 'v55.83-LL-import-transaction-csv';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -230,9 +230,12 @@ export async function POST(req) {
         auditRows.push({ matched_bank_transaction_id: mm.hub_id, csv_row: mm.row, row_hash: mm.row_hash, raw_row: mm.raw_row, before: mm.before, after: { wave_account_id: patch.wave_account_id || null, wave_account_name: patch.wave_account_name, category_source: 'wave_csv', category_status: patch.category_status }, resolved: mm.category_resolved, overwrote: mm.overwrote, applied_by: by, applied_at: appliedAt });
       }
     }
-    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { batch_id: batchId, filename: body.filename || null, applied_at: appliedAt, applied_by: by, detected_columns: detected, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched: matched.length, ambiguous: ambiguous.length, conflicts: conflicts.length, unmatched: unmatched.length, needs_manual_invoice_link: needsInvoiceLink.length, override_conflicts: allowOverride, rows: auditRows }, attempted_by: by }); } catch (eLog) {}
+    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { batch_id: batchId, filename: body.filename || null, applied_at: appliedAt, applied_by: by, detected_columns: detected, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched: matched.length, ambiguous: ambiguous.length, conflicts: conflicts.length, unmatched: unmatched.length, needs_manual_invoice_link: needsInvoiceLink.length, needs_manual_invoice_link_rows: needsInvoiceLink, override_conflicts: allowOverride, rows: auditRows }, attempted_by: by }); } catch (eLog) {}
 
-    return NextResponse.json({ ok: true, dry_run: false, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, apply_errors: applyErrors, batch_id: batchId, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
+    // v55.83-LL (Codex) — the apply response also returns the detail arrays (deferred/ambiguous/conflicts),
+    // not just counts, so the operator does NOT lose the rows-to-reconcile list when the preview is replaced
+    // by the apply result. needs_manual_invoice_link is also persisted in the log payload below.
+    return NextResponse.json({ ok: true, dry_run: false, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, needs_manual_invoice_link: needsInvoiceLink, ambiguous: ambiguous, conflicts: conflicts, apply_errors: applyErrors, batch_id: batchId, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
