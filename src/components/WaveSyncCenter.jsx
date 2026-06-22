@@ -1220,22 +1220,24 @@ export default function WaveSyncCenter(props) {
               <button onClick={function () { runPaymentAccountSetup('list'); }} disabled={payBusy} className="text-xs bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">List bank/cash accounts</button>
             </div>
             {payMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{payMsg}</div>}
-            {payList && payList.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
-                {payList.filter(function (ac) { return ac.payment_capable; }).length === 0 && (
-                  <div className="px-2 py-2 text-xs bg-amber-100 text-amber-950 font-medium">No bank/cash accounts found in Wave. In Wave, create a Cash on Hand or bank account, then refresh this list.</div>
-                )}
-                {payList.slice().sort(function (a, b) { return (b.payment_capable ? 1 : 0) - (a.payment_capable ? 1 : 0); }).map(function (ac) {
-                  var capable = ac.payment_capable === true;
-                  return <div key={ac.id} className={'flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100 ' + (capable ? '' : 'bg-slate-50')}>
-                    <span className={capable ? 'text-slate-900' : 'text-slate-400'}>{ac.name}{ac.subtype ? <span className={capable ? 'text-slate-500' : 'text-slate-400'}> · {ac.subtype}</span> : null}{capable ? null : <span className="text-amber-700"> — not a deposit account</span>}</span>
-                    {capable
-                      ? <button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-0.5 font-bold">Use this</button>
-                      : <span className="text-slate-300 text-[10px] px-2">can't use</span>}
+            {/* v55.83-LS — show ONLY usable bank/cash accounts. A flooded chart (e.g. 1800+ accounts, mostly
+                Accounts Payable) made the picker a wall of "can't use" rows; now we hide those entirely and
+                show just the accounts you can pick — or one clear message if there are none. */}
+            {payList && (function () {
+              var capable = payList.filter(function (ac) { return ac.payment_capable === true; });
+              if (capable.length === 0) {
+                return <div className="mt-2 px-2 py-2 text-xs bg-amber-100 text-amber-950 rounded font-medium">No usable bank/cash account in your Wave chart (the {payList.length} accounts found are payables/receivables/expenses, which can't receive payments). In Wave: <b>Accounting → Chart of Accounts → Add account → type "Cash &amp; Bank"</b> (e.g. "Cash on Hand"), then click "List bank/cash accounts" again.</div>;
+              }
+              return <div className="mt-2 border border-slate-200 rounded">
+                <div className="px-2 py-1 text-[10px] text-slate-600 bg-slate-50 border-b border-slate-100">{capable.length} usable bank/cash account{capable.length === 1 ? '' : 's'} — pick the one your deposits land in:</div>
+                <div className="max-h-40 overflow-auto">{capable.map(function (ac) {
+                  return <div key={ac.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100">
+                    <span className="text-slate-900">{ac.name}{ac.subtype ? <span className="text-slate-500"> · {ac.subtype}</span> : null}</span>
+                    <button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-0.5 font-bold">Use this</button>
                   </div>;
-                })}
-              </div>
-            )}
+                })}</div>
+              </div>;
+            })()}
           </div>
           <div className="mb-4 border border-sky-200 bg-sky-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Default Bank Account for This Silo</div>

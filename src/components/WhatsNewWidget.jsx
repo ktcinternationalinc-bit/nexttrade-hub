@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LS',
+    date: '2026-06-22',
+    label: 'Deposit-account picker: only shows accounts you can actually pick',
+    items: [
+      '**🧹 No more wall of "can\'t use".** The Payment Deposit Account list now hides every account that isn\'t a bank/cash account (your chart has ~1,800, mostly Accounts Payable) and shows **only the ones you can select**, with a count. If there are none, you get one plain instruction: add a "Cash & Bank" account in Wave, then refresh. Combined with the previous fix that reads your *entire* chart, your real bank/cash account should now appear with a "Use this" button.',
+      { superAdminOnly: true, text: 'v55.83-LS (Max: "so confusing, can\'t tell what to update"). Builds on LR (paginate all + detect). Deposit picker now renders ONLY payment_capable accounts (removed the sorted-with-greyed-"can\'t use" rows that buried the usable ones in a flooded chart); count header; 0-case = single "Accounting → Chart of Accounts → Add account → Cash & Bank" message. NOTE for support: screenshot showed badge v55.83-LL — user was on a pre-LR deploy, so the page-1/200 + junk listing was the OLD behavior; a refresh onto LR/LS is required. Readiness panel already pinpoints the blocker correctly (✗ Payment deposit account set). badge LR→LS; test ls(3); runner re-run. The push needs ONLY the Wave deposit account; Default Bank Account (Plaid) + categories are separate.' },
+    ],
+  },
+  {
     version: 'v55.83-LR',
     date: '2026-06-22',
     label: 'Deposit-account picker now actually shows your bank/cash accounts',
