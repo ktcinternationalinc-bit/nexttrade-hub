@@ -23,19 +23,19 @@ ok('1: the import route exists, is gated (bank.classify), and does NOT call Wave
 ok('2: safety-first — defaults to DRY RUN (must explicitly pass dry_run:false to apply) and rejects placeholder silos',
   /var isDry = body\.dry_run !== false;/.test(route) &&
   /isPlaceholderWaveBusiness\(waveBusinessId\)/.test(route));
-ok('3: auto-detects date/amount/category columns and reports them (so the user can verify)',
+ok('3: auto-detects date/amount(+debit/credit)/category columns and reports them (so the user can verify)',
   /date: findCol\(headers, \['date'\]\)/.test(route) &&
-  /amount: findCol\(headers, \['amount', 'total', 'debit', 'credit'\]\)/.test(route) &&
+  /amount: findCol\(headers, \['amount', 'total'\]/.test(route) &&
   /detected_columns: detected/.test(route) &&
-  /if \(ci\.date < 0 \|\| ci\.amount < 0 \|\| ci\.category < 0\)/.test(route));
+  /if \(ci\.date < 0 \|\| !hasAmount \|\| ci\.category < 0\)/.test(route));
 ok('4: matches Hub txns by EQUAL abs(amount) + date window + description similarity, excludes matched/synced',
   /if \(amt !== target\) \{ continue; \}/.test(route) &&
   /if \(dd > windowDays\) \{ continue; \}/.test(route) &&
   /sim\(cDesc, t\.name \|\| t\.merchant_name\)/.test(route) &&
   /!t\.matched_invoice_id && t\.category_status !== 'synced'/.test(route));
-ok('5: apply reflects the Wave category (resolves name->wave_account_id), marks synced w/ source wave_csv, logs it',
+ok('5: apply reflects the Wave category (resolves name->wave_account_id), source wave_csv, dedup-safe, logs it',
   /catByName\[norm\(cCat\)\]/.test(route) &&
-  /category_source: 'wave_csv', category_status: 'synced'/.test(route) &&
+  /category_source: 'wave_csv'/.test(route) &&
   /\.neq\('category_status', 'synced'\)/.test(route) &&
   /action: 'import_csv'/.test(route));
 ok('6: Sync Center has an "Import from Wave" tab (admin, non-placeholder) wired to the route with preview+apply',

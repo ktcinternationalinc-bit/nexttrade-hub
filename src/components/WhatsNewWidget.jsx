@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LI',
+    date: '2026-06-22',
+    label: 'CSV import from Wave is now money-safe — no mis-matches, no silent overwrites',
+    items: [
+      '**🎯 It won\'t guess.** When a CSV row could match more than one of your transactions, it\'s now flagged "ambiguous" for you to resolve by hand instead of being auto-applied to the wrong one. And a money-in can never be matched to a money-out of the same amount — direction has to agree.',
+      '**🛑 It won\'t silently overwrite.** If a transaction already has a category in the Hub, the import flags it as a conflict and leaves it alone unless you tick "override existing Hub categories." Anything already pushed to Wave is never touched.',
+      '**🏷 Honest status.** If a CSV category name doesn\'t match an account in your Wave chart, it\'s saved as a label only — clearly *not* marked as synced to Wave (so nothing pretends to be in Wave when it isn\'t). Separate Debit/Credit columns are now understood too, and every import is fully logged.',
+      { superAdminOnly: true, text: 'v55.83-LI (Codex LD 7 money-safety items). import-transaction-csv: (1) collect ALL candidates → >1 = ambiguous[] (not applied); (2) signed amount → csvDir hard-filter (t.direction !== csvDir → skip); (3) separate debit/credit columns via rowSigned(); (4) existing best.wave_account_id that would change = conflicts[] unless body.override_conflicts; (5) candidate filter + apply both exclude wave_transaction_id (.neq synced .is wave_transaction_id null); (6) resolved → category_status synced, UNRESOLVED → local_only (never fake-synced); (7) wave_sync_log gets batch_id (Date.now), filename, detected_columns, per-row auditRows. UI: ambiguous/conflict/unresolved counts + detail sections + "override existing Hub categories" checkbox. marker LD→LI. Tests li(7); ld updated; runner re-run. The READABLE invoice-payment mirror auto-link (import-invoices payments{}) stays gated on a live "Check Wave payments" run to pick the proven link key.' },
+    ],
+  },
+  {
     version: 'v55.83-LH',
     date: '2026-06-22',
     label: 'The payment check now answers the key question — can we link Wave payments exactly?',

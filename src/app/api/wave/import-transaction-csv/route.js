@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business';
 
-var API_BUILD_MARKER = 'v55.83-LD-import-transaction-csv';
+var API_BUILD_MARKER = 'v55.83-LI-import-transaction-csv';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -115,71 +115,105 @@ export async function POST(req) {
     var ci = {
       date: findCol(headers, ['date']),
       desc: findCol(headers, ['description', 'memo', 'notes', 'payee']),
-      amount: findCol(headers, ['amount', 'total', 'debit', 'credit']),
+      amount: findCol(headers, ['amount', 'total'], ['running', 'balance']),
+      // v55.83-LI (Codex #3) — support SEPARATE Debit/Credit columns (debit = money out, credit = in).
+      debit: findCol(headers, ['debit', 'withdrawal'], ['balance']),
+      credit: findCol(headers, ['credit', 'deposit'], ['balance']),
       // category column — prefer "category", then "account", but AVOID the bank-account column name
       category: findCol(headers, ['category'], null)
     };
     if (ci.category < 0) { ci.category = findCol(headers, ['account'], ['bank', 'asset', 'checking']); }
-    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, category: ci.category >= 0 ? headers[ci.category] : null };
-    if (ci.date < 0 || ci.amount < 0 || ci.category < 0) {
-      return NextResponse.json({ ok: false, error: 'Could not detect the required columns. Need a Date column, an Amount column, and a Category/Account column. Detected headers: ' + JSON.stringify(headers), detected_columns: detected, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+    var hasAmount = (ci.amount >= 0) || (ci.debit >= 0) || (ci.credit >= 0);
+    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, debit: ci.debit >= 0 ? headers[ci.debit] : null, credit: ci.credit >= 0 ? headers[ci.credit] : null, category: ci.category >= 0 ? headers[ci.category] : null };
+    if (ci.date < 0 || !hasAmount || ci.category < 0) {
+      return NextResponse.json({ ok: false, error: 'Could not detect the required columns. Need a Date column, an Amount (or Debit/Credit) column, and a Category/Account column. Detected headers: ' + JSON.stringify(headers), detected_columns: detected, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+    }
+    // v55.83-LI (Codex #2/#3) — signed amount from the row: Debit/Credit are unambiguous (debit=out,
+    // credit=in); a lone signed Amount uses its sign (Wave: negative = withdrawal). Direction is then
+    // a HARD match filter so an IN and an OUT of the same amount can never be cross-matched.
+    function rowSigned(rowArr) {
+      if (ci.debit >= 0 || ci.credit >= 0) {
+        var dv = ci.debit >= 0 ? Math.abs(parseAmount(rowArr[ci.debit]) || 0) : 0;
+        var cv = ci.credit >= 0 ? Math.abs(parseAmount(rowArr[ci.credit]) || 0) : 0;
+        if (dv > 0 && cv === 0) { return -dv; }
+        if (cv > 0 && dv === 0) { return cv; }
+        if (ci.amount >= 0) { var a = parseAmount(rowArr[ci.amount]); return a == null ? null : a; }
+        return cv - dv;
+      }
+      return parseAmount(rowArr[ci.amount]);
     }
 
-    // Hub candidates: this silo's transactions that are not invoice-matched and not already pushed/synced.
-    var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_status, matched_invoice_id, wave_business_id').eq('wave_business_id', waveBusinessId);
-    var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id && t.category_status !== 'synced'; });
+    // Hub candidates: this silo's transactions that are not invoice-matched and not already pushed. (Codex
+    // #5) "pushed" is widened to also exclude any row carrying a Wave transaction id, not just status.
+    var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_source, category_status, matched_invoice_id, wave_transaction_id, wave_business_id').eq('wave_business_id', waveBusinessId);
+    var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id && t.category_status !== 'synced' && !t.wave_transaction_id; });
 
     // Wave categories for name->id resolution.
     var catRes = await db.from('wave_categories').select('wave_account_id, wave_account_name').eq('wave_business_id', waveBusinessId);
     var catByName = {}; ((catRes && catRes.data) || []).forEach(function (c) { var k = norm(c.wave_account_name); if (k && !catByName[k]) { catByName[k] = c; } });
 
-    var used = {}; var matched = []; var unmatched = []; var r;
+    var allowOverride = body.override_conflicts === true; // Codex #4 — explicit opt-in to replace an existing category
+    var used = {}; var matched = []; var ambiguous = []; var conflicts = []; var unmatched = []; var r;
     for (r = 1; r < grid.length; r++) {
       var rowArr = grid[r];
       var cDate = parseDate(rowArr[ci.date]);
-      var cAmt = parseAmount(rowArr[ci.amount]);
+      var cSigned = rowSigned(rowArr);
       var cDesc = ci.desc >= 0 ? rowArr[ci.desc] : '';
       var cCat = rowArr[ci.category];
-      if (cAmt == null || !cDate || !String(cCat || '').trim()) { unmatched.push({ row: r, date: cDate, amount: cAmt, category: cCat, reason: 'missing date/amount/category in CSV row' }); continue; }
-      var target = roundMoney(Math.abs(cAmt));
-      // best candidate by amount==, date proximity, description similarity
-      var best = null; var bestScore = -1; var k;
+      if (cSigned == null || !cDate || !String(cCat || '').trim()) { unmatched.push({ row: r, date: cDate, amount: cSigned, category: cCat, reason: 'missing date/amount/category in CSV row' }); continue; }
+      var target = roundMoney(Math.abs(cSigned));
+      var csvDir = cSigned < 0 ? 'out' : 'in';
+      // Codex #1 — collect ALL plausible candidates (amount==, DIRECTION==, within window). >1 => ambiguous.
+      var hits = []; var k;
       for (k = 0; k < cands.length; k++) {
         var t = cands[k];
         if (used[t.id]) { continue; }
         var amt = roundMoney(t.amount_abs != null ? t.amount_abs : Math.abs(Number(t.amount) || 0));
         if (amt !== target) { continue; }
+        if (t.direction && t.direction !== csvDir) { continue; } // Codex #2 — never cross IN/OUT
         var td = String(t.posted_date || t.date || '').slice(0, 10);
         if (!td) { continue; }
         var dd = dayDiff(cDate, td);
         if (dd > windowDays) { continue; }
         var score = (1 - dd / (windowDays + 1)) * 0.5 + sim(cDesc, t.name || t.merchant_name) * 0.5;
-        if (score > bestScore) { bestScore = score; best = t; }
+        hits.push({ t: t, score: score });
       }
-      if (!best) { unmatched.push({ row: r, date: cDate, amount: target, category: cCat, description: cDesc, reason: 'no Hub transaction with same amount within ' + windowDays + ' days' }); continue; }
-      used[best.id] = true;
+      if (hits.length === 0) { unmatched.push({ row: r, date: cDate, amount: target, direction: csvDir, category: cCat, description: cDesc, reason: 'no Hub transaction with same amount + direction within ' + windowDays + ' days' }); continue; }
+      if (hits.length > 1) { ambiguous.push({ row: r, date: cDate, amount: target, direction: csvDir, category: cCat, description: cDesc, candidate_count: hits.length, hub_ids: hits.map(function (h) { return h.t.id; }), reason: hits.length + ' Hub transactions match amount+direction+date — resolve manually (NOT auto-applied)' }); continue; }
+      var best = hits[0].t;
       var resolved = catByName[norm(cCat)] || null;
-      matched.push({ row: r, hub_id: best.id, hub_name: best.name, hub_date: String(best.posted_date || best.date || '').slice(0, 10), amount: target, csv_category: cCat, resolved_wave_account_id: resolved ? resolved.wave_account_id : null, resolved_wave_account_name: resolved ? resolved.wave_account_name : null, category_resolved: !!resolved, score: Math.round(bestScore * 100) / 100 });
+      // Codex #4 — an existing DIFFERENT Hub category is a conflict; do not silently overwrite.
+      var wouldChange = resolved ? (best.wave_account_id !== resolved.wave_account_id) : (norm(best.wave_account_name) !== norm(cCat));
+      if (best.wave_account_id && wouldChange && !allowOverride) {
+        conflicts.push({ row: r, hub_id: best.id, hub_name: best.name, amount: target, direction: csvDir, existing_category: best.wave_account_name, existing_source: best.category_source, csv_category: cCat, reason: 'Hub already has a different category — re-run with “override conflicts” to replace' });
+        continue;
+      }
+      used[best.id] = true;
+      matched.push({ row: r, hub_id: best.id, hub_name: best.name, hub_date: String(best.posted_date || best.date || '').slice(0, 10), amount: target, direction: csvDir, csv_category: cCat, resolved_wave_account_id: resolved ? resolved.wave_account_id : null, resolved_wave_account_name: resolved ? resolved.wave_account_name : null, category_resolved: !!resolved, overwrote: !!best.wave_account_id, score: Math.round(hits[0].score * 100) / 100 });
     }
 
     if (isDry) {
-      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, unmatched_count: unmatched.length, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, unmatched: unmatched, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, ambiguous: ambiguous, conflicts: conflicts, unmatched: unmatched, api_build_marker: API_BUILD_MARKER });
     }
 
-    // APPLY: reflect the Wave category onto each matched Hub row. It is already in Wave, so mark synced
-    // (won't be re-pushed) and tag the source so it's distinguishable from a Hub-originated push.
-    var applied = 0; var applyErrors = []; var m;
+    // APPLY. Codex #6 — a RESOLVED category name (maps to this silo's Wave chart) is marked 'synced' (it is
+    // a real Wave account already in Wave). An UNRESOLVED name keeps the label but category_status='local_only'
+    // so it can NEVER masquerade as fully reflected in Wave. Codex #7 — full per-row audit + batch id.
+    var batchId = 'csv-' + Date.now();
+    var applied = 0; var appliedUnresolved = 0; var applyErrors = []; var auditRows = []; var m;
     for (m = 0; m < matched.length; m++) {
       var mm = matched[m];
-      var patch = { wave_account_name: mm.csv_category, category_source: 'wave_csv', category_status: 'synced', updated_by: by };
-      if (mm.resolved_wave_account_id) { patch.wave_account_id = mm.resolved_wave_account_id; patch.wave_account_name = mm.resolved_wave_account_name; }
-      var upd = await db.from('bank_transactions').update(patch).eq('id', mm.hub_id).neq('category_status', 'synced').select();
+      var patch = { category_source: 'wave_csv', updated_by: by };
+      if (mm.resolved_wave_account_id) { patch.wave_account_id = mm.resolved_wave_account_id; patch.wave_account_name = mm.resolved_wave_account_name; patch.category_status = 'synced'; }
+      else { patch.wave_account_name = mm.csv_category; patch.category_status = 'local_only'; }
+      // Codex #5 — never overwrite an already-pushed row (status synced OR a Wave txn id present).
+      var upd = await db.from('bank_transactions').update(patch).eq('id', mm.hub_id).neq('category_status', 'synced').is('wave_transaction_id', null).select('id');
       if (upd && upd.error) { applyErrors.push({ hub_id: mm.hub_id, error: upd.error.message }); }
-      else if (upd && upd.data && upd.data.length) { applied++; }
+      else if (upd && upd.data && upd.data.length) { applied++; if (!mm.resolved_wave_account_id) { appliedUnresolved++; } auditRows.push({ hub_id: mm.hub_id, csv_row: mm.row, set_category: patch.wave_account_name, status: patch.category_status, resolved: mm.category_resolved, overwrote: mm.overwrote }); }
     }
-    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { applied: applied, matched: matched.length, unmatched: unmatched.length }, attempted_by: by }); } catch (eLog) {}
+    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', action: 'import_csv', dry_run: false, success: applyErrors.length === 0, error_message: applyErrors.length ? (applyErrors.length + ' row(s) failed') : null, response_payload: { batch_id: batchId, filename: body.filename || null, detected_columns: detected, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched: matched.length, ambiguous: ambiguous.length, conflicts: conflicts.length, unmatched: unmatched.length, override_conflicts: allowOverride, rows: auditRows }, attempted_by: by }); } catch (eLog) {}
 
-    return NextResponse.json({ ok: true, dry_run: false, applied: applied, matched_count: matched.length, unmatched_count: unmatched.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, apply_errors: applyErrors, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
+    return NextResponse.json({ ok: true, dry_run: false, applied: applied, applied_unresolved_local_only: appliedUnresolved, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, category_unresolved_count: matched.filter(function (mx) { return !mx.category_resolved; }).length, apply_errors: applyErrors, batch_id: batchId, detected_columns: detected, api_build_marker: API_BUILD_MARKER });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }

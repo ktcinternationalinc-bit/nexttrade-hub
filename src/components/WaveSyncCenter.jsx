@@ -648,16 +648,17 @@ export default function WaveSyncCenter(props) {
   var [csvText, setCsvText] = useState('');
   var [csvBusy, setCsvBusy] = useState(false);
   var [csvResult, setCsvResult] = useState(null);
+  var [csvOverride, setCsvOverride] = useState(false); // v55.83-LI — opt-in to replace an existing Hub category
   function runCsvImport(apply) {
     if (!csvText.trim()) { toast.error('Paste the CSV you exported from Wave first.'); return; }
     setCsvBusy(true); setCsvResult(null);
-    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, csv: csvText, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         setCsvResult(d); setCsvBusy(false);
         if (!d || !d.ok) { toast.error((d && d.error) || 'Import failed.'); return; }
-        if (d.dry_run) { toast.success('Preview: ' + d.matched_count + ' matched, ' + d.unmatched_count + ' unmatched.'); }
-        else { toast.success('Applied: ' + d.applied + ' transaction categories reflected from Wave.'); load(); }
+        if (d.dry_run) { toast.success('Preview: ' + d.matched_count + ' will apply · ' + (d.ambiguous_count || 0) + ' ambiguous · ' + (d.conflict_count || 0) + ' conflicts · ' + d.unmatched_count + ' unmatched.'); }
+        else { toast.success('Applied ' + d.applied + ' (' + (d.applied_unresolved_local_only || 0) + ' as label-only/unresolved).'); load(); }
       })
       .catch(function (e) { setCsvBusy(false); toast.error((e && e.message) || 'Import failed.'); });
   }
@@ -976,22 +977,35 @@ export default function WaveSyncCenter(props) {
             )}
           </div>
           <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the exported CSV here (including the header row)…" rows={6} className="w-full border border-slate-300 rounded p-2 text-xs font-mono text-slate-900" />
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center flex-wrap">
             <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold">{csvBusy ? 'Working…' : 'Preview match (dry run)'}</button>
             <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
+            <label className="text-[11px] text-slate-700 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
           </div>
           {csvResult && csvResult.ok && (
             <div className="border border-slate-200 rounded p-3 text-xs text-slate-800 space-y-2">
               {csvResult.detected_columns && <div className="text-[11px] text-slate-600">Detected columns — date: <b>{String(csvResult.detected_columns.date)}</b>, amount: <b>{String(csvResult.detected_columns.amount)}</b>, category: <b>{String(csvResult.detected_columns.category)}</b>, description: <b>{String(csvResult.detected_columns.description)}</b></div>}
               <div className="flex gap-4 flex-wrap font-bold">
-                <span className="text-emerald-700">{csvResult.dry_run ? csvResult.matched_count + ' would match' : csvResult.applied + ' applied'}</span>
+                <span className="text-emerald-700">{csvResult.dry_run ? csvResult.matched_count + ' would apply' : csvResult.applied + ' applied'}</span>
+                {csvResult.ambiguous_count ? <span className="text-orange-700">{csvResult.ambiguous_count} ambiguous (manual)</span> : null}
+                {csvResult.conflict_count ? <span className="text-rose-700">{csvResult.conflict_count} conflict{csvResult.conflict_count === 1 ? '' : 's'} (need override)</span> : null}
                 <span className="text-amber-700">{csvResult.unmatched_count} unmatched</span>
-                {csvResult.category_unresolved_count ? <span className="text-rose-700">{csvResult.category_unresolved_count} category name not found in this silo's Wave chart</span> : null}
+                {csvResult.category_unresolved_count ? <span className="text-sky-700">{csvResult.category_unresolved_count} unresolved → saved label-only (not synced)</span> : null}
                 {csvResult.hub_candidate_count != null ? <span className="text-slate-500">{csvResult.hub_candidate_count} Hub candidates</span> : null}
               </div>
               {csvResult.matched && csvResult.matched.length > 0 && (
                 <details><summary className="cursor-pointer text-slate-700">Matched rows</summary>
                   <div className="mt-1 max-h-48 overflow-auto">{csvResult.matched.map(function (m) { return <div key={m.row} className="border-t border-slate-100 py-0.5">{m.hub_date} · {m.amount} · {m.hub_name} → <b>{m.csv_category}</b>{m.category_resolved ? '' : ' (name not in Wave chart — saved as label only)'}</div>; })}</div>
+                </details>
+              )}
+              {csvResult.ambiguous && csvResult.ambiguous.length > 0 && (
+                <details><summary className="cursor-pointer text-orange-700">Ambiguous rows (matched more than one deposit — not applied)</summary>
+                  <div className="mt-1 max-h-48 overflow-auto">{csvResult.ambiguous.map(function (a, i) { return <div key={i} className="border-t border-orange-100 py-0.5">{a.date} · {a.amount} · {a.direction} · {a.category || ''} — {a.reason}</div>; })}</div>
+                </details>
+              )}
+              {csvResult.conflicts && csvResult.conflicts.length > 0 && (
+                <details><summary className="cursor-pointer text-rose-700">Conflicts (Hub already has a different category — turn on “override” to replace)</summary>
+                  <div className="mt-1 max-h-48 overflow-auto">{csvResult.conflicts.map(function (c, i) { return <div key={i} className="border-t border-rose-100 py-0.5">{c.hub_name} · {c.amount} — existing <b>{c.existing_category}</b> vs CSV <b>{c.csv_category}</b></div>; })}</div>
                 </details>
               )}
               {csvResult.unmatched && csvResult.unmatched.length > 0 && (
