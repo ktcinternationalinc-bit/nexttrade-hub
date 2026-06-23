@@ -43,6 +43,7 @@ function syncLogParts(l) {
   var rp = (l && l.response_payload) || {};
   var rq = (l && l.request_payload) || {};
   var pmt = rp.payment || {};
+  var bank = rp.bank_transaction || rq.bank_transaction || {};
   var inv = rp.invoice || {};
   var cust = rp.customer || {};
   var wv = rp.wave || {};
@@ -52,6 +53,12 @@ function syncLogParts(l) {
   var paymentDate = pmt.payment_date || rq.payment_date || null;
   var wavePaymentId = wv.wave_payment_id || rp.wave_payment_id || null;
   var bankTxn = pmt.bank_transaction_id || rq.bank_transaction_id || null;
+  var bankTxnId = bank.id || bankTxn || ((l && l.entity_type === 'bank_transaction' && l.hub_record_id) ? l.hub_record_id : null);
+  var bankDesc = bank.description || bank.name || rq.description || null;
+  var bankAmount = (bank.amount != null) ? bank.amount : (rq.anchor && rq.anchor.amount != null ? rq.anchor.amount : null);
+  var bankDate = bank.date || rq.date || null;
+  var bankDirection = bank.direction || (rq.anchor && rq.anchor.direction) || null;
+  var bankCategory = bank.category_name || rq.category_name || null;
   var matchId = pmt.payment_match_id || rq.payment_match_id || null;
   var acctName = wv.payment_account_name || rq.payment_account_name || null;
   var et = (l && l.entity_type) || 'record';
@@ -73,6 +80,12 @@ function syncLogParts(l) {
     primary = ib.join(' · ');
   } else if (et === 'customer' && customerName) {
     primary = 'Customer · ' + customerName;
+  } else if (et === 'bank_transaction' && (bankDesc || bankAmount != null || bankDate)) {
+    var bb = ['Bank transaction'];
+    if (bankDesc) { bb.push(bankDesc); }
+    if (bankAmount != null) { bb.push(Number(bankAmount).toLocaleString()); }
+    if (bankDate) { bb.push(bankDate); }
+    primary = bb.join(' Â· ');
   } else {
     // Old row / no context — fall back so it is never just "payment · push · error".
     primary = (et.charAt(0).toUpperCase() + et.slice(1)) + ' · ' + ((l && l.action) || '') + ((l && l.hub_record_id) ? (' · ' + String(l.hub_record_id).substring(0, 8)) : '');
@@ -84,6 +97,10 @@ function syncLogParts(l) {
     if (bankTxn) { detail.push('Bank txn: ' + String(bankTxn).substring(0, 8)); }
     if (matchId) { detail.push('Match: ' + String(matchId).substring(0, 8)); }
     if (acctName) { detail.push('Account: ' + acctName); }
+  } else if (et === 'bank_transaction') {
+    if (bankTxnId) { detail.push('Bank txn: ' + String(bankTxnId).substring(0, 8)); }
+    if (bankDirection) { detail.push('Direction: ' + bankDirection); }
+    if (bankCategory) { detail.push('Category: ' + bankCategory); }
   }
   return { primary: primary, detail: detail.join(' · ') };
 }
@@ -157,7 +174,7 @@ export default function WaveSyncCenter(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
       fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
-      fetchAllRows('bank_transactions', 'id, amount_abs, name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status'),
+      fetchAllRows('bank_transactions', 'id, amount_abs, name, merchant_name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status'),
       // v55.83-HE — split lines categorized to a Wave account. Resilient: if the table is missing
       // the Wave columns (migration not yet run), default to [] so the Sync Center still loads.
       supabase.from('bank_transaction_splits').select('id, bank_transaction_id, split_amount, wave_business_id, wave_account_name, category_status').then(function (x) { return x; }).catch(function () { return { data: [] }; })
@@ -182,7 +199,22 @@ export default function WaveSyncCenter(props) {
       // old `=== active` filter matched undefined and HID every audit row (push rows AND import rows,
       // which scope via wave_record_id/business_id). Show rows for the active silo PLUS any row not
       // tagged with a wave_business_id, so the audit trail is visible instead of silently blank.
-      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active || l.wave_record_id === active || l.wave_business_id == null; }));
+      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active || l.wave_record_id === active || l.wave_business_id == null; }).map(function (l) {
+        if (!l || l.entity_type !== 'bank_transaction' || !l.hub_record_id || !btMap[l.hub_record_id]) { return l; }
+        var bt = btMap[l.hub_record_id];
+        var bankCtx = {
+          id: bt.id || null,
+          description: bt.name || bt.merchant_name || 'Bank transaction',
+          amount: bt.amount_abs != null ? bt.amount_abs : null,
+          date: String(bt.posted_date || bt.date || '').slice(0, 10) || null,
+          direction: bt.direction || null,
+          category_name: bt.wave_account_name || null,
+          category_id: bt.wave_account_id || null
+        };
+        var rp = Object.assign({}, l.response_payload || {});
+        if (!rp.bank_transaction) { rp.bank_transaction = bankCtx; }
+        return Object.assign({}, l, { response_payload: rp });
+      }));
     }).catch(function (e) { console.error('[wave-sync] load', e); toast.error('Failed to load sync data'); })
       .finally(function () { setLoading(false); });
   }
@@ -990,48 +1022,47 @@ export default function WaveSyncCenter(props) {
       )}
 
       {tab === 'import' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
-        <div className="bg-white rounded-lg p-4 text-slate-900 space-y-3">
-          {/* v55.83-LP — guided "Prefill from Wave" flow: run these three in order to mirror existing Wave
-              data into the Hub. Each step reuses an existing, tested action; nothing here writes to Wave. */}
-          <div className="border-2 border-indigo-300 bg-indigo-50/60 rounded-lg p-3 space-y-2">
-            <div className="text-sm font-extrabold text-indigo-900">Prefill from Wave — run these in order</div>
-            <div className="text-[11px] text-slate-600">Brings your existing Wave data into the Hub: invoices &amp; customers, then the categories you set in Wave, then the deposit→invoice links. Nothing is written back to Wave. Safe to re-run.</div>
-            <div className="border border-indigo-200 bg-white rounded p-2">
+        <div className="bg-slate-900/40 border border-slate-700 rounded-lg p-4 text-slate-100 space-y-3">
+          {/* v55.83-LV — dark, high-contrast theme to match the rest of the app (the old bg-white/indigo-50
+              light panels rendered washed-out/illegible on the dark UI). */}
+          <div className="border border-indigo-500/50 bg-indigo-950/40 rounded-lg p-3 space-y-2">
+            <div className="text-base font-extrabold text-indigo-200">Prefill from Wave — run these in order</div>
+            <div className="text-xs text-slate-300">Brings your existing Wave data into the Hub: invoices &amp; customers, then the categories you set in Wave, then the deposit→invoice links. Nothing is written back to Wave. Safe to re-run.</div>
+            <div className="border border-slate-700 bg-slate-800/70 rounded p-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="text-[12px] text-slate-800"><b>Step 1 — Import invoices &amp; customers</b><div className="text-[11px] text-slate-500">Pulls every Wave invoice (with paid/balance/status) + its customer into the Hub, so the links in Step 3 have invoices to attach to.</div></div>
-                <button onClick={runImportInvoicesCustomers} disabled={impBusy} className="bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{impBusy ? 'Importing…' : (impResult ? 'Re-import' : 'Import invoices & customers')}</button>
+                <div className="text-xs text-slate-100"><b className="text-sm">Step 1 — Import invoices &amp; customers</b><div className="text-[11px] text-slate-400 mt-0.5">Pulls every Wave invoice (with paid/balance/status) + its customer into the Hub, so the links in Step 3 have invoices to attach to.</div></div>
+                <button onClick={runImportInvoicesCustomers} disabled={impBusy} className="bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{impBusy ? 'Importing…' : (impResult ? 'Re-import' : 'Import invoices & customers')}</button>
               </div>
               {impResult && (
-                <div className="mt-1 text-[11px] text-slate-700">
-                  {impResult.cust && impResult.cust.report ? <span className="mr-3">Customers: {impResult.cust.report.created || 0} new · {impResult.cust.report.updated || 0} updated</span> : (impResult.cust && impResult.cust.error ? <span className="text-rose-700 mr-3">Customers: {impResult.cust.error}</span> : null)}
-                  {impResult.inv && impResult.inv.report ? <span className="text-emerald-700">Invoices: {impResult.inv.report.created || 0} new · {impResult.inv.report.updated || 0} updated · {impResult.inv.report.total || 0} total</span> : (impResult.inv && impResult.inv.error ? <span className="text-rose-700">Invoices: {impResult.inv.error}</span> : null)}
+                <div className="mt-1 text-[11px] text-slate-200">
+                  {impResult.cust && impResult.cust.report ? <span className="mr-3">Customers: {impResult.cust.report.created || 0} new · {impResult.cust.report.updated || 0} updated</span> : (impResult.cust && impResult.cust.error ? <span className="text-rose-300 mr-3">Customers: {impResult.cust.error}</span> : null)}
+                  {impResult.inv && impResult.inv.report ? <span className="text-emerald-300">Invoices: {impResult.inv.report.created || 0} new · {impResult.inv.report.updated || 0} updated · {impResult.inv.report.total || 0} total</span> : (impResult.inv && impResult.inv.error ? <span className="text-rose-300">Invoices: {impResult.inv.error}</span> : null)}
                 </div>
               )}
             </div>
-            <div className="text-[11px] text-slate-600">↓ <b>Step 2</b> (categories) and <b>Step 3</b> (invoice links) are below.</div>
+            <div className="text-[11px] text-slate-300">↓ <b>Step 2</b> (categories) and <b>Step 3</b> (invoice links) are below.</div>
           </div>
           <div>
-            <div className="text-sm font-bold text-slate-900">Step 2 — Import existing categorizations from Wave (CSV)</div>
-            <div className="text-xs text-slate-600 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
+            <div className="text-sm font-bold text-slate-100">Step 2 — Import existing categorizations from Wave (CSV)</div>
+            <div className="text-xs text-slate-300 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
           </div>
           {/* v55.83-LG — invoice PAYMENTS are API-readable (unlike money transactions). This probe shows
               what Wave reports so payments recorded directly in Wave can be mirrored + linked to deposits. */}
-          <div className="border border-emerald-200 bg-emerald-50 rounded p-2">
+          <div className="border border-emerald-700/50 bg-emerald-950/40 rounded p-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-[11px] text-slate-700"><b>Invoice payments mirror (read-only):</b> check what Wave already has — payments recorded in Wave, and the bank account each hit, are readable and can be linked to your deposits.</div>
-              <button onClick={runPaymentReadback} disabled={probeBusy} className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{probeBusy ? 'Checking…' : 'Check Wave payments'}</button>
+              <div className="text-xs text-slate-200"><b>Invoice payments mirror (read-only):</b> check what Wave already has — payments recorded in Wave, and the bank account each hit, are readable and can be linked to your deposits.</div>
+              <button onClick={runPaymentReadback} disabled={probeBusy} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{probeBusy ? 'Checking…' : 'Check Wave payments'}</button>
             </div>
             {probeResult && (
-              <div className="mt-2 text-[11px] text-slate-800">
-                {probeResult.error && !probeResult.payments_found ? <div className="text-rose-700">Could not read: {probeResult.error}</div> : (
+              <div className="mt-2 text-[11px] text-slate-200">
+                {probeResult.error && !probeResult.payments_found ? <div className="text-rose-300">Could not read: {probeResult.error}</div> : (
                   <div className="space-y-1">
-                    <div className="font-bold">{probeResult.payments_found} payment(s) across {probeResult.invoices_scanned} invoice(s) · {probeResult.payments_with_bank_account} carry a bank account{probeResult.error ? ' (partial: ' + probeResult.error + ')' : ''}.</div>
-                    {/* v55.83-LH — the exact linkage answer that gates LH auto-linking. */}
-                    <div className="text-slate-600">Link key: <b>{probeResult.recommended_link_key || 'account+amount+date'}</b>{probeResult.link_fields_supported ? (' · Wave txn-id fields present on ' + (probeResult.payments_with_transaction_id || 0) + '/' + (probeResult.payments_with_accounting_transaction_id || 0) + ' payments') : ' · Wave does not expose payment txn-ids (will match on account+amount+date)'}</div>
-                    {probeResult.distinct_bank_accounts && probeResult.distinct_bank_accounts.length > 0 && <div className="text-slate-600">Wave bank/cash accounts seen: {probeResult.distinct_bank_accounts.map(function (a) { return a.name; }).join(', ')}</div>}
+                    <div className="font-bold text-emerald-200">{probeResult.payments_found} payment(s) across {probeResult.invoices_scanned} invoice(s) · {probeResult.payments_with_bank_account} carry a bank account{probeResult.error ? ' (partial: ' + probeResult.error + ')' : ''}.</div>
+                    <div className="text-slate-300">Link key: <b className="text-slate-100">{probeResult.recommended_link_key || 'account+amount+date'}</b>{probeResult.link_fields_supported ? (' · Wave txn-id fields present on ' + (probeResult.payments_with_transaction_id || 0) + '/' + (probeResult.payments_with_accounting_transaction_id || 0) + ' payments') : ' · Wave does not expose payment txn-ids (will match on account+amount+date)'}</div>
+                    {probeResult.distinct_bank_accounts && probeResult.distinct_bank_accounts.length > 0 && <div className="text-slate-300">Wave bank/cash accounts seen: {probeResult.distinct_bank_accounts.map(function (a) { return a.name; }).join(', ')}</div>}
                     {probeResult.samples && probeResult.samples.length > 0 && (
-                      <details><summary className="cursor-pointer text-slate-700">Sample payments</summary>
-                        <div className="mt-1 max-h-48 overflow-auto">{probeResult.samples.map(function (s, i) { return <div key={i} className="border-t border-emerald-100 py-0.5">{s.date} · {s.amount} · INV {s.invoice} · {s.account_name || 'no bank account'}{s.method ? (' · ' + s.method) : ''}</div>; })}</div>
+                      <details><summary className="cursor-pointer text-slate-300">Sample payments</summary>
+                        <div className="mt-1 max-h-48 overflow-auto">{probeResult.samples.map(function (s, i) { return <div key={i} className="border-t border-emerald-800/50 py-0.5 text-slate-200">{s.date} · {s.amount} · INV {s.invoice} · {s.account_name || 'no bank account'}{s.method ? (' · ' + s.method) : ''}</div>; })}</div>
                       </details>
                     )}
                   </div>
@@ -1041,50 +1072,50 @@ export default function WaveSyncCenter(props) {
           </div>
           {/* v55.83-LM — PREFILL deposit→invoice links from Wave's existing invoice payments. Display-link
               only: it never changes a paid/balance amount (those already reflect Wave). Dry-run first. */}
-          <div className="border border-indigo-200 bg-indigo-50 rounded p-2">
+          <div className="border border-indigo-700/50 bg-indigo-950/40 rounded p-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-[11px] text-slate-700"><b>Step 3 — Prefill invoice links:</b> link your existing bank deposits to the invoices Wave already shows them paying (by amount + date). <b>Preview first</b> (dry run, writes nothing); it only links a deposit when there's exactly one match, and never changes any balance. Run Step 1 first so the invoices exist.</div>
+              <div className="text-xs text-slate-200"><b>Step 3 — Prefill invoice links:</b> link your existing bank deposits to the invoices Wave already shows them paying (by amount + date). <b>Preview first</b> (dry run, writes nothing); it only links a deposit when there's exactly one match, and never changes any balance. Run Step 1 first so the invoices exist.</div>
               <div className="flex gap-2">
                 <button onClick={function () { runPrefillLinks(false); }} disabled={prefillBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">{prefillBusy ? 'Working…' : 'Preview links (dry run)'}</button>
                 <button onClick={function () { runPrefillLinks(true); }} disabled={prefillBusy || !prefillResult || !prefillResult.dry_run || !(prefillResult.counts && prefillResult.counts.would_link)} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold whitespace-nowrap">Apply {prefillResult && prefillResult.dry_run && prefillResult.counts ? '(' + (prefillResult.counts.would_link || 0) + ')' : ''}</button>
               </div>
             </div>
             {prefillResult && prefillResult.counts && (
-              <div className="mt-2 text-[11px] text-slate-800 space-y-1">
+              <div className="mt-2 text-[11px] text-slate-200 space-y-1">
                 <div className="flex gap-3 flex-wrap font-bold">
-                  <span className="text-indigo-700">{prefillResult.dry_run ? (prefillResult.counts.would_link + ' would link') : (prefillResult.counts.applied + ' linked')}</span>
-                  {prefillResult.counts.ambiguous ? <span className="text-orange-700">{prefillResult.counts.ambiguous} ambiguous (manual)</span> : null}
-                  {prefillResult.counts.no_candidate ? <span className="text-amber-700">{prefillResult.counts.no_candidate} no matching deposit</span> : null}
-                  {prefillResult.counts.account_mismatch ? <span className="text-orange-700">{prefillResult.counts.account_mismatch} different bank account (skipped)</span> : null}
-                  {prefillResult.counts.already_materialized ? <span className="text-slate-500">{prefillResult.counts.already_materialized} already linked</span> : null}
-                  {prefillResult.counts.invoice_not_imported ? <span className="text-rose-700">{prefillResult.counts.invoice_not_imported} invoice not imported yet</span> : null}
+                  <span className="text-indigo-300">{prefillResult.dry_run ? (prefillResult.counts.would_link + ' would link') : (prefillResult.counts.applied + ' linked')}</span>
+                  {prefillResult.counts.ambiguous ? <span className="text-orange-300">{prefillResult.counts.ambiguous} ambiguous (manual)</span> : null}
+                  {prefillResult.counts.no_candidate ? <span className="text-amber-300">{prefillResult.counts.no_candidate} no matching deposit</span> : null}
+                  {prefillResult.counts.account_mismatch ? <span className="text-orange-300">{prefillResult.counts.account_mismatch} different bank account (skipped)</span> : null}
+                  {prefillResult.counts.already_materialized ? <span className="text-slate-400">{prefillResult.counts.already_materialized} already linked</span> : null}
+                  {prefillResult.counts.invoice_not_imported ? <span className="text-rose-300">{prefillResult.counts.invoice_not_imported} invoice not imported yet</span> : null}
                 </div>
                 {prefillResult.plan && prefillResult.plan.length > 0 && (
-                  <details><summary className="cursor-pointer text-slate-700">Plan</summary>
-                    <div className="mt-1 max-h-48 overflow-auto">{prefillResult.plan.map(function (p, i) { return <div key={i} className="border-t border-indigo-100 py-0.5">{p.date || ''} · {p.amount} · INV {p.invoice} · <b>{p.action}</b>{p.deposit_name ? (' → ' + p.deposit_name) : ''}{p.candidate_count ? (' (' + p.candidate_count + ' candidates)') : ''}</div>; })}</div>
+                  <details><summary className="cursor-pointer text-slate-300">Plan</summary>
+                    <div className="mt-1 max-h-48 overflow-auto">{prefillResult.plan.map(function (p, i) { return <div key={i} className="border-t border-indigo-800/50 py-0.5 text-slate-200">{p.date || ''} · {p.amount} · INV {p.invoice} · <b>{p.action}</b>{p.deposit_name ? (' → ' + p.deposit_name) : ''}{p.candidate_count ? (' (' + p.candidate_count + ' candidates)') : ''}</div>; })}</div>
                   </details>
                 )}
-                {prefillResult.counts.invoice_not_imported ? <div className="text-[10px] text-slate-500">Tip: run "Import invoices from Wave" first so every invoice exists in the Hub, then prefill.</div> : null}
+                {prefillResult.counts.invoice_not_imported ? <div className="text-[10px] text-slate-400">Tip: run "Import invoices from Wave" first so every invoice exists in the Hub, then prefill.</div> : null}
               </div>
             )}
           </div>
-          <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the exported CSV here (including the header row)…" rows={6} className="w-full border border-slate-300 rounded p-2 text-xs font-mono text-slate-900" />
+          <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the exported CSV here (including the header row)…" rows={6} className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-xs font-mono text-slate-100 placeholder-slate-500" />
           <div className="flex gap-2 items-center flex-wrap">
             <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold">{csvBusy ? 'Working…' : 'Preview match (dry run)'}</button>
             <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
-            <label className="text-[11px] text-slate-700 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
+            <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
           </div>
           {csvResult && csvResult.ok && (
-            <div className="border border-slate-200 rounded p-3 text-xs text-slate-800 space-y-2">
-              {csvResult.detected_columns && <div className="text-[11px] text-slate-600">Detected columns — date: <b>{String(csvResult.detected_columns.date)}</b>, amount: <b>{String(csvResult.detected_columns.amount)}</b>, category: <b>{String(csvResult.detected_columns.category)}</b>, description: <b>{String(csvResult.detected_columns.description)}</b></div>}
+            <div className="border border-slate-700 rounded p-3 text-xs text-slate-200 space-y-2">
+              {csvResult.detected_columns && <div className="text-[11px] text-slate-300">Detected columns — date: <b>{String(csvResult.detected_columns.date)}</b>, amount: <b>{String(csvResult.detected_columns.amount)}</b>, category: <b>{String(csvResult.detected_columns.category)}</b>, description: <b>{String(csvResult.detected_columns.description)}</b></div>}
               <div className="flex gap-4 flex-wrap font-bold">
-                <span className="text-emerald-700">{csvResult.dry_run ? csvResult.matched_count + ' would apply' : csvResult.applied + ' applied'}</span>
-                {csvResult.ambiguous_count ? <span className="text-orange-700">{csvResult.ambiguous_count} ambiguous (manual)</span> : null}
-                {csvResult.conflict_count ? <span className="text-rose-700">{csvResult.conflict_count} conflict{csvResult.conflict_count === 1 ? '' : 's'} (need override)</span> : null}
-                {csvResult.needs_manual_invoice_link_count ? <span className="text-indigo-700">{csvResult.needs_manual_invoice_link_count} invoice-linked → use payment sync</span> : null}
-                <span className="text-amber-700">{csvResult.unmatched_count} unmatched</span>
-                {csvResult.category_unresolved_count ? <span className="text-sky-700">{csvResult.category_unresolved_count} unresolved → saved label-only (not synced)</span> : null}
-                {csvResult.hub_candidate_count != null ? <span className="text-slate-500">{csvResult.hub_candidate_count} Hub candidates</span> : null}
+                <span className="text-emerald-300">{csvResult.dry_run ? csvResult.matched_count + ' would apply' : csvResult.applied + ' applied'}</span>
+                {csvResult.ambiguous_count ? <span className="text-orange-300">{csvResult.ambiguous_count} ambiguous (manual)</span> : null}
+                {csvResult.conflict_count ? <span className="text-rose-300">{csvResult.conflict_count} conflict{csvResult.conflict_count === 1 ? '' : 's'} (need override)</span> : null}
+                {csvResult.needs_manual_invoice_link_count ? <span className="text-indigo-300">{csvResult.needs_manual_invoice_link_count} invoice-linked → use payment sync</span> : null}
+                <span className="text-amber-300">{csvResult.unmatched_count} unmatched</span>
+                {csvResult.category_unresolved_count ? <span className="text-sky-300">{csvResult.category_unresolved_count} unresolved → saved label-only (not synced)</span> : null}
+                {csvResult.hub_candidate_count != null ? <span className="text-slate-400">{csvResult.hub_candidate_count} Hub candidates</span> : null}
               </div>
               {csvResult.matched && csvResult.matched.length > 0 && (
                 <details><summary className="cursor-pointer text-slate-700">Matched rows</summary>

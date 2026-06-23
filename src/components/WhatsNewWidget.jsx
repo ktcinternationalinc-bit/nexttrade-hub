@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LV',
+    date: '2026-06-23',
+    label: 'Import-from-Wave screen: readable dark theme (no more washed-out text)',
+    items: [
+      '**🎨 Fixed the unreadable text on the Import-from-Wave tab.** The whole "Prefill from Wave" area was built with light panels on the dark app, so the headers and instructions came out faint and washed-out. It\'s now the same high-contrast dark theme as the rest of the app — the step headers, the "Check Wave payments" results, the prefill plan, and the CSV box are all clearly legible.',
+      '**🧾 Sync Log now shows the transaction details on a blocked push** (what amount/date/category it was), not just the error — so a failed push is easier to read at a glance.',
+      { superAdminOnly: true, text: 'v55.83-LV. Readability pass on WaveSyncCenter "Import from Wave" tab: converted the light panels (bg-white / bg-indigo-50 / bg-emerald-50 + dark text) that rendered washed-out on the dark UI to the app\'s dark palette (slate-900/40 container; indigo-950/40 + emerald-950/40 boxes; text-slate-100/200/300; colored counts → -300 variants; dark textarea). Co-edit (GBT/Codex): push-transaction → LV adds bankTxnLogContext(bt) so a blocked/failed push logs the bank txn description/amount/date/category in wave_sync_log (request_payload + response_payload), not just the error string; verified against kz/lb/lc/le (all pass). badge LU→LV. KNOWN small follow-up: the deep CSV detail-row <summary> colors (Matched/Ambiguous/Conflicts lists) still use -700 shades; low priority (only on expand).' },
+    ],
+  },
+  {
     version: 'v55.83-LU',
     date: '2026-06-23',
     label: 'Deposit account: a "Use anyway" escape hatch so you\'re never stuck',

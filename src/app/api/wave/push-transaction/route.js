@@ -15,12 +15,28 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LQ-push-transaction';
+var API_BUILD_MARKER = 'v55.83-LV-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+function bankTxnLogContext(bt) {
+  if (!bt) { return null; }
+  var amt = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
+  return {
+    bank_transaction: {
+      id: bt.id || null,
+      description: String(bt.name || bt.merchant_name || 'Bank transaction').slice(0, 180),
+      amount: amt,
+      date: String(bt.posted_date || bt.date || '').slice(0, 10) || null,
+      direction: bt.direction || null,
+      category_name: bt.wave_account_name || null,
+      category_id: bt.wave_account_id || null
+    },
+    api_build_marker: API_BUILD_MARKER
+  };
+}
 async function gql(token, query, variables) {
   var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: variables }) });
   var data = null; try { data = await resp.json(); } catch (e) { data = null; }
@@ -37,13 +53,14 @@ export async function POST(req) {
     var by = body.user_id || null;
     var isDry = body.dry_run === true;
     var token = process.env.WAVE_ACCESS_TOKEN;
+    var txCtx = null;
 
     // v55.83-LB (Max: "nothing happened and no sync logs") — EVERY blocked/failed push now writes a
     // wave_sync_log row + returns the specific reason, so the Sync Log shows exactly what happened
     // (previously the validation 400s returned before any logging).
     async function blocked(reason, status) {
-      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId || null, entity_type: 'bank_transaction', hub_record_id: hubId || null, action: 'push', dry_run: !!isDry, success: false, error_message: reason, attempted_by: by }); } catch (eLB) {}
-      return NextResponse.json({ ok: false, error: reason, api_build_marker: API_BUILD_MARKER }, { status: status || 400 });
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId || null, entity_type: 'bank_transaction', hub_record_id: hubId || null, action: 'push', dry_run: !!isDry, success: false, error_message: reason, request_payload: txCtx, response_payload: txCtx ? Object.assign({ error: reason }, txCtx) : { error: reason, api_build_marker: API_BUILD_MARKER }, attempted_by: by }); } catch (eLB) {}
+      return NextResponse.json({ ok: false, error: reason, bank_transaction: txCtx && txCtx.bank_transaction ? txCtx.bank_transaction : null, api_build_marker: API_BUILD_MARKER }, { status: status || 400 });
     }
 
     var gate = await assertPermission(db, by, 'wave.payments.push', req);
@@ -66,6 +83,7 @@ export async function POST(req) {
     var btRes = await db.from('bank_transactions').select('*').eq('id', hubId);
     var bt = (btRes && btRes.data && btRes.data.length) ? btRes.data[0] : null;
     if (!bt) { return blocked('Bank transaction not found.', 404); }
+    txCtx = bankTxnLogContext(bt);
     if (bt.wave_business_id && bt.wave_business_id !== waveBusinessId) { return blocked('This transaction belongs to a different silo.', 409); }
     if (bt.matched_invoice_id) { return blocked('This deposit is matched to an invoice — it reaches Wave as an invoice PAYMENT (Bank Review), not as a categorized transaction.', 400); }
     if (bt.category_status === 'synced' || bt.wave_transaction_id) { return blocked('Already pushed to Wave.', 400); }
@@ -133,7 +151,7 @@ export async function POST(req) {
     async function logFail(msg, extra) {
       // v55.83-LC (Codex) — AWAIT both writes so a Wave rejection reliably lands as sync_failed + a log row.
       try { await db.from('bank_transactions').update({ category_status: 'sync_failed' }).eq('id', hubId); } catch (e1) {}
-      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: msg, request_payload: input, response_payload: Object.assign({ error: msg }, extra || {}), attempted_by: by }); } catch (e2) {}
+      try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: msg, request_payload: Object.assign({}, input, txCtx || {}), response_payload: Object.assign({ error: msg }, txCtx || {}, extra || {}), attempted_by: by }); } catch (e2) {}
     }
 
     if (data && data.errors && data.errors.length) {
@@ -164,7 +182,7 @@ export async function POST(req) {
     var patch = { category_status: 'synced', last_synced_at: new Date().toISOString() };
     var wb = await db.from('bank_transactions').update(Object.assign({}, patch, { wave_transaction_id: waveTxnId })).eq('id', hubId);
     if (wb && wb.error) { try { await db.from('bank_transactions').update(patch).eq('id', hubId); } catch (eWb) {} }
-    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: true, wave_record_id: waveTxnId, request_payload: input, response_payload: { transaction_id: waveTxnId }, attempted_by: by }); } catch (eL) {}
+    try { await db.from('wave_sync_log').insert({ wave_business_id: waveBusinessId, entity_type: 'bank_transaction', hub_record_id: hubId, action: 'push', dry_run: false, success: true, wave_record_id: waveTxnId, request_payload: Object.assign({}, input, txCtx || {}), response_payload: Object.assign({ transaction_id: waveTxnId }, txCtx || {}), attempted_by: by }); } catch (eL) {}
 
     return NextResponse.json({ ok: true, wave_transaction_id: waveTxnId, message: 'Pushed to Wave (' + dir.toLowerCase() + ' ' + amount + ' -> categorized).', api_build_marker: API_BUILD_MARKER });
   } catch (e) {
