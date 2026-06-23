@@ -23,11 +23,16 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
 
-var API_BUILD_MARKER = 'v55.83-LO-prefill-payment-links';
+var API_BUILD_MARKER = 'v55.83-LT-prefill-payment-links';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
-function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
+// v55.83-LT — InvoicePayment.amount is a STRING scalar in Wave's API (not Money{value}). Parse tolerantly.
+function num(m) {
+  if (m == null) { return 0; }
+  if (typeof m === 'object') { if (m.value == null) { return 0; } var ov = Number(String(m.value).replace(/,/g, '')); return isNaN(ov) ? 0 : ov; }
+  var v = Number(String(m).replace(/[,$\s]/g, '')); return isNaN(v) ? 0 : v;
+}
 function dayDiff(a, b) { var da = Date.parse(String(a) + 'T00:00:00Z'); var db2 = Date.parse(String(b) + 'T00:00:00Z'); if (!isFinite(da) || !isFinite(db2)) { return 9999; } return Math.abs(Math.round((da - db2) / 86400000)); }
 async function gql(token, query, variables) {
   var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: variables }) });
@@ -111,7 +116,7 @@ export async function POST(req) {
     var deposits = ((depRes && depRes.data) || []).filter(function (t) { return !t.matched_invoice_id && !t.wave_transaction_id && !claimedDep[t.id]; });
 
     // ── Wave invoice payments (read only) ────────────────────────────────────
-    var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ totalPages } edges{ node{ id invoiceNumber payments{ id amount{ value } paymentDate account{ id name } } } } } } }';
+    var query = 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ totalPages } edges{ node{ id invoiceNumber payments{ id amount paymentDate account{ id name } } } } } } }';
     var page = 1; var totalPages = 1; var safety = 0; var firstError = null;
     var used = {}; var plan = []; var counts = { invoices_scanned: 0, payments_found: 0, already_materialized: 0, invoice_not_imported: 0, would_link: 0, ambiguous: 0, no_candidate: 0, account_mismatch: 0, applied: 0, apply_errors: 0, claim_conflict: 0 };
 

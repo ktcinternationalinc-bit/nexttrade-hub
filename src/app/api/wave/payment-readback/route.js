@@ -11,11 +11,17 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LG-payment-readback';
+var API_BUILD_MARKER = 'v55.83-LT-payment-readback';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
-function num(m) { if (!m || m.value == null) { return 0; } var v = Number(String(m.value).replace(/,/g, '')); return isNaN(v) ? 0 : v; }
+// v55.83-LT — InvoicePayment.amount is a STRING scalar in Wave's API (NOT a Money{value} object like
+// Invoice.total). Parse tolerantly: accept a string ("123.45"), a {value} object, or a number.
+function num(m) {
+  if (m == null) { return 0; }
+  if (typeof m === 'object') { if (m.value == null) { return 0; } var ov = Number(String(m.value).replace(/,/g, '')); return isNaN(ov) ? 0 : ov; }
+  var v = Number(String(m).replace(/[,$\s]/g, '')); return isNaN(v) ? 0 : v;
+}
 
 async function gql(token, query, variables) {
   var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: query, variables: variables }) });
@@ -45,7 +51,7 @@ export async function POST(req) {
     // schema rejects them, we fall back to the safe field set and record the rejection EXPLICITLY, so LH
     // is never built on an unproven key (Codex gate requirement).
     function buildQuery(withLinkFields) {
-      var payFields = 'id amount{ value currency{ code } } paymentDate paymentMethod memo account{ id name }' + (withLinkFields ? ' transactionId accountingTransactionId' : '');
+      var payFields = 'id amount paymentDate paymentMethod memo account{ id name }' + (withLinkFields ? ' transactionId accountingTransactionId' : '');
       return 'query($bid: ID!, $page: Int!){ business(id:$bid){ invoices(page:$page, pageSize:25){ pageInfo{ currentPage totalPages totalCount } edges{ node{ id invoiceNumber status payments{ ' + payFields + ' } } } } } }';
     }
 

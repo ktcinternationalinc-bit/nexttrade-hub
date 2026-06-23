@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LT',
+    date: '2026-06-23',
+    label: 'FIXED: "Check Wave payments" / prefill read error',
+    items: [
+      '**🔧 "Check Wave payments" works now.** It was erroring with *Field "amount" must not have a selection…* — we were asking Wave for the payment amount in the wrong shape (Wave returns it as a plain value, not a sub-object). Fixed, and the same fix applies to the invoice-link prefill, which used the same read. Click "Check Wave payments" again and it should read your Wave payments.',
+      { superAdminOnly: true, text: 'v55.83-LT (LIVE). Wave InvoicePayment.amount is a STRING scalar (unlike Invoice.total which is Money{value}). Both payment-readback (buildQuery) and prefill-payment-links (query) selected amount{ value currency{ code } } → GraphQL "Field amount must not have a selection since type String has no subfields" → the whole read failed. Fix: select `amount` as a scalar; num() in both routes now parses string|{value}|number (so amounts aren\'t silently 0 either). markers → LT (payment-readback, prefill); badge LS→LT. Guard test lt(3) asserts no amount{ subfield selection + string parsing in both. runner re-run. Same root class as the \'use client\' bug: an unverified Wave field shape that only fails at the live call.' },
+    ],
+  },
+  {
     version: 'v55.83-LS',
     date: '2026-06-22',
     label: 'Deposit-account picker: only shows accounts you can actually pick',
