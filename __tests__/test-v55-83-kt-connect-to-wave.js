@@ -48,9 +48,9 @@ ok('6: if the token can\'t see any business, it says exactly that (the one real 
 ok('7: an ambiguous match lets the user pick from what the token actually sees (one click each)',
   /setConnectChoices\(cands\.length > 1 \? cands : bizs\)/.test(sync) &&
   /connectChoices\.map\(function \(b, i\)/.test(sync));
-ok('8: the primary "Connect this silo to Wave now" button + tab-nav fallback are wired',
+ok('8: the primary "Connect this silo to Wave now" button + the "open Wave Connection" jump are wired (jump now lives in WaveHub → setStep(connect) after the MD tab consolidation)',
   /🔗 Connect this silo to Wave now/.test(sync) &&
-  /onGoToWaveConnection=\{function \(\) \{ setSub\('wave'\); \}\}/.test(acct));
+  /onGoToWaveConnection=\{function \(\) \{ setStep\('connect'\); \}\}/.test(rd('src/components/WaveHub.jsx')));
 // v55.83-KW (Codex) — a successful bind MUST switch the browser's active business off the placeholder.
 ok('9 (KW): after a successful connect, WaveSyncCenter switches the active business to the new real GUID (not the placeholder)',
   /import \{ getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered, isPlaceholderWaveBusiness \}/.test(sync) &&

@@ -6,9 +6,7 @@ import AccountingDashboard from './AccountingDashboard';
 import CompanyProfileTab from './CompanyProfileTab';
 import AccountingCustomerHistory from './AccountingCustomerHistory';
 import CustomerLedger from './CustomerLedger';
-import WaveConnectionTab from './WaveConnectionTab';
-import WaveImportTab from './WaveImportTab';
-import WaveSyncCenter from './WaveSyncCenter';
+import WaveHub from './WaveHub';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import BankReviewTab from './BankReviewTab';
@@ -17,7 +15,10 @@ import PurchaseOrdersTab from './PurchaseOrdersTab';
 export default function AccountingTab(props) {
   // v55.83-IN — open directly on a deep-linked sub-tab (e.g. Bank Review from the Bank tab's
   // "Match in Bank Review" button). props.deepLink = { sub, txnId }; txnId flows to children via {...props}.
-  var [sub, setSub] = useState((props.deepLink && props.deepLink.sub) || 'dashboard');
+  var _initSub = (props.deepLink && props.deepLink.sub) || 'dashboard';
+  // v55.83-MD — old deep-links to the three separate Wave tabs now land on the unified Wave hub.
+  if (_initSub === 'wave' || _initSub === 'waveimport' || _initSub === 'wavesync') { _initSub = 'wavehub'; }
+  var [sub, setSub] = useState(_initSub);
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
@@ -29,9 +30,9 @@ export default function AccountingTab(props) {
     ['proformas', '📄 Proformas'],
     ['purchaseorders', '📦 Purchase Orders'],
     ['review', '🏦 Bank Review & Matching'],
-    ['wave', '🌊 Wave Connection'],
-    ['waveimport', '⬇️ Wave Import'],
-    ['wavesync', '🔄 Wave Sync Center'],
+    // v55.83-MD — the three scattered Wave tabs (Connection / Import / Sync Center) are now ONE guided
+    // "🌊 Wave" tab (WaveHub) with a Connect → Import → Review&Push step flow.
+    ['wavehub', '🌊 Wave'],
   ];
   // v55.83-GB — Wave Sync Center is now permission-gated: only super_admin OR a user granted
   // wave.sync.view sees the tab and can mount the screen. (Server routes already enforce the
@@ -39,7 +40,6 @@ export default function AccountingTab(props) {
   var mp = props.modulePerms || {};
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
   var canWaveSync = isSuper || mp['wave.sync.view'] === true;
-  tabs = tabs.filter(function (t) { return t[0] !== 'wavesync' || canWaveSync; });
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
@@ -64,9 +64,7 @@ export default function AccountingTab(props) {
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
-      {sub === 'wave' && <WaveConnectionTab {...props} />}
-      {sub === 'waveimport' && <WaveImportTab {...props} />}
-      {sub === 'wavesync' && canWaveSync && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} onGoToWaveConnection={function () { setSub('wave'); }} />}
+      {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} />}
     </div>
   );
 }

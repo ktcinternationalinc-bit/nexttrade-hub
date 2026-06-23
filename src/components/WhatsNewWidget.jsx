@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MD',
+    date: '2026-06-23',
+    label: 'One "Wave" tab instead of three — a single guided flow',
+    items: [
+      '**🌊 The three Wave tabs are now one.** "Wave Connection," "Wave Import," and "Wave Sync Center" were three separate tabs for what is really one job — that\'s why it felt scattered. They\'re now a single **🌊 Wave** tab with clear steps across the top: **1 · Connect → 2 · Import / Mirror → 3 · Review & Push.** Click a step to go to it; nothing else moved, so everything you used still works — it\'s just in one place now.',
+      { superAdminOnly: true, text: 'v55.83-MD. NEW src/components/WaveHub.jsx — a thin wrapper that re-parents the existing (unchanged) WaveConnectionTab / WaveImportTab / WaveSyncCenter under one step nav (connect/mirror/sync). AccountingTab: the 3 tabs [wave|waveimport|wavesync] collapsed to one [wavehub, "🌊 Wave"]; the wavesync permission filter became per-step (canWaveSync gates the "3 · Review & Push" step); onGoToWaveConnection rewired to setStep(connect); legacy deep-links (sub=wave/waveimport/wavesync) normalize to wavehub so nothing 404s. Children untouched → zero behavior risk. test md(5); runner green; build clean. NEXT (ME): show prior Wave categories/links inside the Hub + the read-back "confirmed by Wave" status loop; dark-reskin the Settings white cards.' },
+    ],
+  },
+  {
     version: 'v55.83-MC',
     date: '2026-06-23',
     label: 'The real Wave plan: one source per bank account, so nothing ever doubles',
