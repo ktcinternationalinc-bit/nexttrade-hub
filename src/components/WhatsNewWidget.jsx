@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-ME',
+    date: '2026-06-23',
+    label: 'Wave tab polish: links land where you meant, and your account choices stick',
+    items: [
+      '**Small but real:** if something sends you to a specific Wave step (Import or Review), the new Wave tab now opens *there* instead of always starting at Connect. And pulling your Wave categories no longer wipes the "who feeds this account" choice you made.',
+      { superAdminOnly: true, text: 'v55.83-ME (Codex MD cautions). (1) deep-link intent: AccountingTab maps legacy sub wave→connect / waveimport→mirror / wavesync→sync and passes initialWaveStep to WaveHub (useState(props.initialWaveStep||connect)) so a go-to-import/settings jump no longer strands on Connect. (2) feed-owner persistence: confirmed sync-categories does .update(rowPayload) of a FIXED column set that omits wave_feed_owner → a category pull cannot erase the per-account owner; locked with test me(4). (3) PROCESS: CLAUDE_HANDOFF top block updated LY→ME (was multiple builds stale). test me(4); runner 84/84; clean build. STILL OPEN (Codex, the real ME): simplify the INNER WaveSyncCenter settings into Mirror / Resolve Exceptions / Confirm-Logs / Advanced with explicit per-row states; show prior Wave categories/links in the Hub + the readback "confirmed by Wave" loop.' },
+    ],
+  },
+  {
     version: 'v55.83-MD',
     date: '2026-06-23',
     label: 'One "Wave" tab instead of three — a single guided flow',

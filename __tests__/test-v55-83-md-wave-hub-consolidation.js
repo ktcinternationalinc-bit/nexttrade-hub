@@ -25,7 +25,8 @@ ok('2: AccountingTab renders WaveHub (and no longer the three components directl
   /sub === 'wavehub' && <WaveHub/.test(at) &&
   !/sub === 'wavesync'/.test(at) && !/sub === 'waveimport'/.test(at));
 ok('3: old deep-links to wave/waveimport/wavesync normalize to the unified hub',
-  /if \(_initSub === 'wave' \|\| _initSub === 'waveimport' \|\| _initSub === 'wavesync'\) \{ _initSub = 'wavehub'; \}/.test(at));
+  /if \(_initWaveStep\) \{ _initSub = 'wavehub'; \}/.test(at) &&
+  /_initSub === 'wave'\) \{ _initWaveStep = 'connect'; \}/.test(at));
 ok('4: WaveHub re-parents the three existing components under a step nav',
   /import WaveConnectionTab from '\.\/WaveConnectionTab'/.test(hub) &&
   /import WaveImportTab from '\.\/WaveImportTab'/.test(hub) &&

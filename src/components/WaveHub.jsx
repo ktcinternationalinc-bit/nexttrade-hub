@@ -18,7 +18,9 @@ export default function WaveHub(props) {
   ];
   if (canWaveSync) { steps.push(['sync', '3 · Review & Push', 'Categorize, link, push to Wave + settings']); }
 
-  var s0 = useState('connect'); var step = s0[0]; var setStep = s0[1];
+  // v55.83-ME — honor a deep-link's intended Wave sub-section so a "go to settings/import" jump doesn't
+  // strand the user on Connect. initialWaveStep is 'connect' | 'mirror' | 'sync'.
+  var s0 = useState(props.initialWaveStep || 'connect'); var step = s0[0]; var setStep = s0[1];
   // if the user loses sync access, never strand them on a hidden step
   if (step === 'sync' && !canWaveSync) { step = 'connect'; }
 

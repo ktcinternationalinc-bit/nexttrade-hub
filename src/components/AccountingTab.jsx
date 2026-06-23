@@ -16,8 +16,13 @@ export default function AccountingTab(props) {
   // v55.83-IN — open directly on a deep-linked sub-tab (e.g. Bank Review from the Bank tab's
   // "Match in Bank Review" button). props.deepLink = { sub, txnId }; txnId flows to children via {...props}.
   var _initSub = (props.deepLink && props.deepLink.sub) || 'dashboard';
-  // v55.83-MD — old deep-links to the three separate Wave tabs now land on the unified Wave hub.
-  if (_initSub === 'wave' || _initSub === 'waveimport' || _initSub === 'wavesync') { _initSub = 'wavehub'; }
+  // v55.83-MD/ME — old deep-links to the three separate Wave tabs now land on the unified Wave hub, but we
+  // PRESERVE which sub-section was intended so a go-to-import/sync jump doesn't strand the user on Connect.
+  var _initWaveStep = null;
+  if (_initSub === 'wave') { _initWaveStep = 'connect'; }
+  else if (_initSub === 'waveimport') { _initWaveStep = 'mirror'; }
+  else if (_initSub === 'wavesync') { _initWaveStep = 'sync'; }
+  if (_initWaveStep) { _initSub = 'wavehub'; }
   var [sub, setSub] = useState(_initSub);
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
@@ -64,7 +69,7 @@ export default function AccountingTab(props) {
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
-      {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} />}
+      {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} initialWaveStep={_initWaveStep} />}
     </div>
   );
 }
