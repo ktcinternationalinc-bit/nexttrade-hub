@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LY',
+    date: '2026-06-23',
+    label: 'Fixed: push errors showing in the wrong box + clicking push into a guaranteed failure',
+    items: [
+      '**🧯 That error inside "Default Invoice Product" is fixed.** Bank-transaction push failures were being written into the *invoice product* message area — wrong box, very confusing. Push results now show in **Pending Sync**, where they belong.',
+      '**🚧 No more clicking push into a wall.** If a transaction can\'t push because the Wave Deposit Account isn\'t set, Pending Sync now blocks that row up front with the exact reason and a **"Go to Settings → set it"** button — instead of letting you push and fail on the server.',
+      { superAdminOnly: true, text: 'v55.83-LY (Codex hard-FAIL on LX label-only). Real behavioral fixes: (1) NEW pushMsg/setPushMsg state — pushSelected wrote into prodMsg (rendered in the Default Invoice Product box), so bank-txn push failures appeared there; now push results render in the Pending Sync tab via pushMsg + dismiss. (2) queue useMemo now computes hasDeposit = !!prodSetup.default_payment_account_id and blocks a categorized transaction (btBlocked "Set the Wave Deposit Account first", needsDepositAccount flag) when it is missing — client-side, before the server round-trip; added prodSetup to the memo deps so it recomputes on load. (3) Pending Sync shows a one-line "deposit account needed → Go to Settings (setTab(settings))" banner when any txn needs it. LB test updated (setProdMsg→setPushMsg). test ly(5). NEXT (Build 2, still open per Codex): reorganize Settings into Setup-required / Bank-Review-defaults / Advanced-Danger-Zone; merge the 3 Wave tabs into one guided flow; single setup-model useMemo; product setup one-button. badge LX→LY.' },
+    ],
+  },
+  {
     version: 'v55.83-LX',
     date: '2026-06-23',
     label: 'Settings: the two look-alike "account" settings are now unmistakable',

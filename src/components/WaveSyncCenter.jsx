@@ -137,6 +137,10 @@ export default function WaveSyncCenter(props) {
   var ps1 = useState(false); var prodBusy = ps1[0]; var setProdBusy = ps1[1];
   var ps2 = useState(''); var prodMsg = ps2[0]; var setProdMsg = ps2[1];
   var ps3 = useState(null); var prodList = ps3[0]; var setProdList = ps3[1];
+  // v55.83-LY (Codex #1) — push results get their OWN message state, rendered in Pending Sync. Previously
+  // pushSelected wrote into prodMsg, so a bank-transaction push failure showed inside "Default Invoice
+  // Product" — wrong box, very confusing.
+  var psPush = useState(''); var pushMsg = psPush[0]; var setPushMsg = psPush[1];
   var pa0 = useState(false); var payBusy = pa0[0]; var setPayBusy = pa0[1];
   var pa1 = useState(''); var payMsg = pa1[0]; var setPayMsg = pa1[1];
   var pa2 = useState(null); var payList = pa2[0]; var setPayList = pa2[1];
@@ -596,18 +600,25 @@ export default function WaveSyncCenter(props) {
       // v55.83-KZ — Wave DOES accept categorized transactions (moneyTransactionCreate, verified live).
       // A categorized bank txn is now a real PUSH; an uncategorized one stays Hub-only until classified.
       var hasCat = !!bt.wave_account_id;
+      // v55.83-LY (Codex #2/#3) — a categorized txn ALSO needs the silo's Wave deposit account set (the
+      // bank side), or the server WILL reject it. Block it client-side with the exact next action instead
+      // of letting the user click push into a guaranteed failure.
+      var hasDeposit = !!(prodSetup && prodSetup.default_payment_account_id);
       var bb = [];
       if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
       if (bt.classification) { bb.push('class: ' + bt.classification); }
       if (bt.wave_account_name) { bb.push('→ ' + bt.wave_account_name); }
-      if (hasCat) { bb.push('posts to Wave as a money transaction (bank side = this silo\'s deposit account)'); }
+      if (hasCat && hasDeposit) { bb.push('posts to Wave as a money transaction (bank side = the Wave Deposit Account)'); }
+      else if (hasCat && !hasDeposit) { bb.push('⚠ Set the Wave Deposit Account in Settings first (the bank side).'); }
       else { bb.push('ℹ Pick a Wave Category for this transaction in Bank Review, then it can post to Wave.'); }
+      var btBlocked = !hasCat ? 'Pick a Wave category first (Bank Review).' : (!hasDeposit ? 'Set the Wave Deposit Account first — Settings → 🟢 Wave Deposit Account.' : null);
       rows.push({
         key: 'banktxn:' + bt.id, action: 'transaction', id: bt.id,
         label: 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
         amount: Number(bt.amount_abs) || 0,
         sub: bb.join(' · '),
-        blocked: hasCat ? null : 'Pick a Wave category first (Bank Review).',
+        blocked: btBlocked,
+        needsDepositAccount: hasCat && !hasDeposit,
         hubOnly: !hasCat,
         record: bt
       });
@@ -632,7 +643,7 @@ export default function WaveSyncCenter(props) {
       });
     });
     return rows;
-  }, [customers, invoices, payments, bankTxns, splitTxns, active]);
+  }, [customers, invoices, payments, bankTxns, splitTxns, active, prodSetup]);
 
   // v55.83-IN (Codex) — separate actionable Wave pushes (customers/invoices/payments) from
   // Hub-only bank categorizations that Wave's API cannot accept. They must NOT inflate the main
@@ -792,8 +803,8 @@ export default function WaveSyncCenter(props) {
     });
     seq.then(function () {
       setBusy(false);
-      if (failed > 0) { setProdMsg('Push: ' + done + ' ok, ' + failed + ' failed.\n' + errs.join('\n')); toast.error('Push: ' + done + ' ok, ' + failed + ' failed — ' + (errs[0] || '')); }
-      else { toast.success('Push finished — ' + done + ' pushed to Wave.'); }
+      if (failed > 0) { setPushMsg('Push: ' + done + ' ok, ' + failed + ' failed.\n' + errs.join('\n')); toast.error('Push: ' + done + ' ok, ' + failed + ' failed — ' + (errs[0] || '')); }
+      else { setPushMsg('✓ Push finished — ' + done + ' pushed to Wave.'); toast.success('Push finished — ' + done + ' pushed to Wave.'); }
       setSel({}); load();
     });
   }
@@ -908,6 +919,16 @@ export default function WaveSyncCenter(props) {
               <button onClick={pushSelected} disabled={(isProd && !productionUnlocked) || busy || selectedRows.length === 0 || !canPushAny} title={!canPushAny ? 'Requires a Wave push permission (customers / invoices / payments)' : ''} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded">{busy ? 'Pushing…' : 'Push Selected'}</button>
             </div>
           </div>
+          {/* v55.83-LY (Codex #1) — push RESULTS render HERE (Pending Sync), not in the Invoice Product box. */}
+          {pushMsg && <div className="px-3 py-2 text-[11px] whitespace-pre-wrap bg-slate-900 border-t border-slate-700 text-slate-100">{pushMsg} <button onClick={function () { setPushMsg(''); }} className="ml-2 text-slate-400 underline">dismiss</button></div>}
+          {/* v55.83-LY (Codex #2/#3) — if a categorized transaction can't push because the Wave Deposit
+              Account isn't set, say so once with a jump to where it's fixed. */}
+          {actionableQueue.some(function (q) { return q.needsDepositAccount; }) && (
+            <div className="px-3 py-2 text-[11px] bg-amber-950/50 border-t border-amber-700/50 text-amber-100 flex items-center justify-between gap-2 flex-wrap">
+              <span>⚠ Some transactions can't push yet — the <b>Wave Deposit Account</b> (bank side) isn't set for this silo.</span>
+              <button onClick={function () { setTab('settings'); }} className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold whitespace-nowrap">Go to Settings → set it</button>
+            </div>
+          )}
           {actionableQueue.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">Nothing pending — no Hub customers, invoices, or payments in this silo are waiting to go to Wave.</div> : (
             <div>
               {actionableQueue.map(function (q) {
