@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LV-push-transaction';
+var API_BUILD_MARKER = 'v55.83-LW-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
@@ -95,7 +95,17 @@ export async function POST(req) {
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
     var anchorAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
     var anchorName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
-    if (!anchorAcct) { return blocked('No Wave bank account configured for this silo. Set it in Wave Sync Center -> Settings -> Payment deposit account (it is the bank side of the transaction).', 400); }
+    if (!anchorAcct) {
+      // v55.83-LW — STOP failing blind. Diagnose WHY the anchor is missing so the Sync Log states the exact
+      // cause: (a) the settings READ errored (the default_payment_account_id column likely doesn't exist →
+      // run the ALTER TABLE), (b) NO settings row for this silo (never saved), or (c) a row exists but the
+      // deposit account is empty (picked but didn't save, or never picked).
+      var why;
+      if (setRes && setRes.error) { why = 'the settings table could not be read (' + (setRes.error.message || setRes.error.code || 'db error') + '). The default_payment_account_id column is probably missing — a super admin must run: ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text, ADD COLUMN IF NOT EXISTS default_payment_account_name text;'; }
+      else if (!(setRes && setRes.data && setRes.data.length)) { why = 'no settings were ever saved for this silo. Go to Wave Sync Center -> Settings -> Payment Deposit Account, click "List bank/cash accounts", pick your bank account ("Use this"), and confirm it shows the green "Saved" message.'; }
+      else { why = 'a settings row exists but the deposit account is empty (it was never picked, or the save failed). Go to Settings -> Payment Deposit Account, pick your bank account, and watch for the green "Saved" — if you see a red "Database save FAILED" instead, the column is missing (run the ALTER TABLE above).'; }
+      return blocked('No Wave bank account configured for this silo (the bank side of the transaction): ' + why, 400);
+    }
 
     // v55.83-LC/LE (Codex money-safety, then workflow fix) — the anchor is ONE silo-level Wave bank
     // account, so a genuinely MULTI-account silo must be blocked (else a ··6353 txn lands in the ··6338

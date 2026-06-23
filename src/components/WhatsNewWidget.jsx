@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LW',
+    date: '2026-06-23',
+    label: 'The push now tells you the EXACT reason the deposit account is missing',
+    items: [
+      '**🔎 No more identical failure — the Sync Log now diagnoses it.** Instead of repeating "No Wave bank account configured," a blocked push now states the precise cause: either (1) a database column is missing (and exactly which SQL to run), (2) you never saved a deposit account for this silo, or (3) a setting exists but is empty (the save didn\'t take). The likely culprit behind days of failures: the `default_payment_account_id` column was added manually long ago and may never have been run on the database — which means every "Use this" silently fails. There\'s now a one-line SQL fix for that.',
+      '**🧾 The transaction itself is shown** on the blocked Sync Log row (description, amount, date, category) — not just the error.',
+      { superAdminOnly: true, text: 'v55.83-LW (Max: 20× identical "No Wave bank account configured", "list the exact transaction"). push-transaction now self-diagnoses the no-anchor case: reads wave_business_settings and branches — setRes.error (column likely missing → emits the exact ALTER TABLE) vs no row (never saved) vs row-with-null (picked-but-save-failed/never-picked); the specific reason goes through blocked() into wave_sync_log. ROOT-CAUSE HYPOTHESIS: default_payment_account_id/name (added in FO as a manual ALTER) has NO migration file → likely never run on prod → deposit-account save fails → push blocked forever (while default_plaid_account_id from GD\'s migration saved fine, which is why the "Default Bank Account" worked but the Wave Payment Deposit Account never did). NEW sql/v55-83-LW-payment-account-columns.sql (idempotent ADD COLUMN IF NOT EXISTS). Bank txn details logged on blocked push via GBT\'s bankTxnLogContext (LV). marker LV→LW; test lw(5); runner re-run. ACTION FOR MAX: run sql/v55-83-LW then retry — the Sync Log will now say exactly what\'s wrong if anything remains.' },
+    ],
+  },
+  {
     version: 'v55.83-LV',
     date: '2026-06-23',
     label: 'Import-from-Wave screen: readable dark theme (no more washed-out text)',
