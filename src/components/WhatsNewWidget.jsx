@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LU',
+    date: '2026-06-23',
+    label: 'Deposit account: a "Use anyway" escape hatch so you\'re never stuck',
+    items: [
+      '**🔓 If your bank/cash account still isn\'t auto-detected, you can now pick it directly.** The Payment Deposit Account section has a new **"Show all accounts"** link — it lists every account in your Wave chart, and any one we didn\'t auto-flag gets a **"Use anyway"** button (with a confirm). So even if your bank account has an unusual name/type that the auto-filter misses, you can set it and unblock the push. Accounts Receivable/Payable stay blocked — they can never be the bank side.',
+      { superAdminOnly: true, text: 'v55.83-LU (Max: deposit account still unset / push blocked; built after the 2-min hold elapsed with no input). Escape hatch on payment-account-setup so a flooded/odd chart can\'t dead-end the setup. Route: listAccounts now returns ar_ap; select-mode reads body.allow_any — A/R/A/P is ALWAYS hard-blocked (never a deposit side), but any other non-auto-detected account is accepted when allow_any:true. UI: WaveSyncCenter deposit picker adds payShowAll toggle ("Show all accounts") rendering ALL accounts; capable → "Use this", A/R/A/P → "can\'t use", everything else → "Use anyway" (window.confirm → runPaymentAccountSetup(select, id, name, true)). marker LR→LU; badge LT→LU; test lu(5); runner re-run. This guarantees Max can set the deposit account and clear the last push blocker even if the LR/LS auto-detection misses his account.' },
+    ],
+  },
+  {
     version: 'v55.83-LT',
     date: '2026-06-23',
     label: 'FIXED: "Check Wave payments" / prefill read error',

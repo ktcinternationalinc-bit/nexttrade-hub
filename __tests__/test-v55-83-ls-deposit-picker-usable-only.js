@@ -13,13 +13,11 @@ function ok(label, cond, hint) {
 function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); }
 var sync = rd('src/components/WaveSyncCenter.jsx');
 
-ok('1: deposit picker renders ONLY payment_capable accounts (no "can\'t use" / non-capable rows)',
+ok('1: deposit picker DEFAULTS to usable bank/cash accounts only (capable filter; full list only via Show-all — LU)',
   /var capable = payList\.filter\(function \(ac\) \{ return ac\.payment_capable === true; \}\);/.test(sync) &&
-  /capable\.map\(function \(ac\)/.test(sync) &&
-  !/not a deposit account/.test(sync) &&
-  !/can't use<\/span>/.test(sync));
-ok('2: when 0 usable, ONE clear message says to add a Cash & Bank account in Wave',
-  /if \(capable\.length === 0\) \{/.test(sync) &&
+  /var rows = payShowAll \? payList : capable;/.test(sync));
+ok('2: when 0 usable (and not showing all), one clear message: Show all to override OR add a Cash & Bank account in Wave',
+  /capable\.length === 0 && !payShowAll/.test(sync) &&
   /Add account → type "Cash &amp; Bank"/.test(sync));
 ok('3: usable list shows a count header + "Use this" wired to select',
   /usable bank\/cash account/.test(sync) &&

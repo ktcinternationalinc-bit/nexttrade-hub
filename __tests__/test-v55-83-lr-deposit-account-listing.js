@@ -28,8 +28,8 @@ ok('2: cash/bank detection broadened — subtype OR (asset + bank-ish name), exc
 ok('3: the UI reports how many of the found accounts are actually USABLE (and what to do if 0)',
   /' usable bank\/cash\)\. Pick the bank\/cash account/.test(sync) &&
   /create a "Cash on Hand" in Wave/.test(sync));
-ok('4: route marker bumped so the deployed fix is provable live',
-  /var API_BUILD_MARKER = 'v55\.83-LR-payment-account-setup';/.test(route));
+ok('4: route marker is a v55.83 payment-account-setup build (bump-tolerant) so the deployed fix is provable live',
+  /var API_BUILD_MARKER = 'v55\.83-L[A-Z]-payment-account-setup';/.test(route));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LR deposit-account-listing tests passed'); process.exit(0); }

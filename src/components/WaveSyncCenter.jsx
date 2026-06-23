@@ -123,6 +123,7 @@ export default function WaveSyncCenter(props) {
   var pa0 = useState(false); var payBusy = pa0[0]; var setPayBusy = pa0[1];
   var pa1 = useState(''); var payMsg = pa1[0]; var setPayMsg = pa1[1];
   var pa2 = useState(null); var payList = pa2[0]; var setPayList = pa2[1];
+  var pa3 = useState(false); var payShowAll = pa3[0]; var setPayShowAll = pa3[1]; // v55.83-LU — reveal all accounts so a missed bank/cash account can be overridden
   var ca0 = useState(false); var catBusy = ca0[0]; var setCatBusy = ca0[1];
   var ca1 = useState(''); var catMsg = ca1[0]; var setCatMsg = ca1[1];
   var ca2 = useState(0); var catCount = ca2[0]; var setCatCount = ca2[1];
@@ -250,10 +251,11 @@ export default function WaveSyncCenter(props) {
       .finally(function () { setProdBusy(false); });
   }
 
-  function runPaymentAccountSetup(mode, accountId, accountName) {
+  function runPaymentAccountSetup(mode, accountId, accountName, allowAny) {
     setPayBusy(true); setPayMsg(''); if (mode !== 'select') { setPayList(null); }
     var payload = { wave_business_id: active, mode: mode, user_id: (userProfile && userProfile.id) || null };
     if (accountId) { payload.account_id = accountId; payload.account_name = accountName; }
+    if (allowAny) { payload.allow_any = true; } // v55.83-LU — explicit override for a bank/cash account my auto-detect missed
     fetch('/api/wave/payment-account-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -1225,17 +1227,26 @@ export default function WaveSyncCenter(props) {
                 show just the accounts you can pick — or one clear message if there are none. */}
             {payList && (function () {
               var capable = payList.filter(function (ac) { return ac.payment_capable === true; });
-              if (capable.length === 0) {
-                return <div className="mt-2 px-2 py-2 text-xs bg-amber-100 text-amber-950 rounded font-medium">No usable bank/cash account in your Wave chart (the {payList.length} accounts found are payables/receivables/expenses, which can't receive payments). In Wave: <b>Accounting → Chart of Accounts → Add account → type "Cash &amp; Bank"</b> (e.g. "Cash on Hand"), then click "List bank/cash accounts" again.</div>;
-              }
-              return <div className="mt-2 border border-slate-200 rounded">
-                <div className="px-2 py-1 text-[10px] text-slate-600 bg-slate-50 border-b border-slate-100">{capable.length} usable bank/cash account{capable.length === 1 ? '' : 's'} — pick the one your deposits land in:</div>
-                <div className="max-h-40 overflow-auto">{capable.map(function (ac) {
-                  return <div key={ac.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100">
-                    <span className="text-slate-900">{ac.name}{ac.subtype ? <span className="text-slate-500"> · {ac.subtype}</span> : null}</span>
-                    <button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-0.5 font-bold">Use this</button>
-                  </div>;
-                })}</div>
+              var rows = payShowAll ? payList : capable;
+              return <div className="mt-2 space-y-1">
+                {capable.length === 0 && !payShowAll && (
+                  <div className="px-2 py-2 text-xs bg-amber-100 text-amber-950 rounded font-medium">No bank/cash account auto-detected among {payList.length} Wave accounts. If your bank/cash account IS in Wave but isn't showing, click <b>"Show all accounts"</b> below and use <b>"Use anyway"</b> on it. Otherwise create one in Wave: <b>Accounting → Chart of Accounts → Add account → type "Cash &amp; Bank"</b>.</div>
+                )}
+                {rows.length > 0 && (
+                  <div className="border border-slate-200 rounded">
+                    <div className="px-2 py-1 text-[10px] text-slate-600 bg-slate-50 border-b border-slate-100">{payShowAll ? ('All ' + payList.length + ' accounts (' + capable.length + ' auto-detected as bank/cash)') : (capable.length + ' usable bank/cash account' + (capable.length === 1 ? '' : 's'))} — pick the one your deposits land in:</div>
+                    <div className="max-h-48 overflow-auto">{rows.map(function (ac) {
+                      var cap = ac.payment_capable === true; var arap = ac.ar_ap === true;
+                      return <div key={ac.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100">
+                        <span className={arap ? 'text-slate-400' : 'text-slate-900'}>{ac.name}{ac.subtype ? <span className="text-slate-500"> · {ac.subtype}</span> : null}{arap ? <span className="text-amber-700"> — A/R or A/P, can't be a deposit account</span> : (cap ? null : <span className="text-slate-400"> — not auto-detected</span>)}</span>
+                        {arap ? <span className="text-slate-300 text-[10px] px-2">can't use</span>
+                          : cap ? <button onClick={function () { runPaymentAccountSetup('select', ac.id, ac.name); }} className="bg-teal-600 hover:bg-teal-700 text-white rounded px-2 py-0.5 font-bold">Use this</button>
+                          : <button onClick={function () { if (typeof window !== 'undefined' && window.confirm('Use "' + ac.name + '" as the deposit (bank) account? It was NOT auto-detected as bank/cash — only confirm if you know this is your bank/cash account.')) { runPaymentAccountSetup('select', ac.id, ac.name, true); } }} className="bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-0.5 font-bold">Use anyway</button>}
+                      </div>;
+                    })}</div>
+                  </div>
+                )}
+                <button onClick={function () { setPayShowAll(!payShowAll); }} className="text-[11px] text-sky-700 underline">{payShowAll ? 'Show only bank/cash accounts' : 'Show all accounts (if my bank/cash account isn’t listed)'}</button>
               </div>;
             })()}
           </div>

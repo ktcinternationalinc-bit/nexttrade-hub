@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-LR-payment-account-setup';
+var API_BUILD_MARKER = 'v55.83-LU-payment-account-setup';
 var API_ROUTE = '/api/wave/payment-account-setup';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -48,7 +48,7 @@ function listAccounts(token, bid) {
         var subtypeCashBank = (stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0);
         var nameCashBank = (nmU.indexOf('CASH') >= 0 || nmU.indexOf('BANK') >= 0 || nmU.indexOf('CHECKING') >= 0 || nmU.indexOf('CHEQUING') >= 0 || nmU.indexOf('SAVINGS') >= 0 || nmU.indexOf('PAYPAL') >= 0 || nmU.indexOf('STRIPE') >= 0);
         var payable = (subtypeCashBank || (tyU.indexOf('ASSET') >= 0 && nameCashBank)) && !isReceivableOrPayable;
-        out.push({ id: n.id, name: n.name, subtype: st, type: ty, payment_capable: payable });
+        out.push({ id: n.id, name: n.name, subtype: st, type: ty, payment_capable: payable, ar_ap: isReceivableOrPayable });
       }
       var pi = (acc && acc.pageInfo) || {}; guard++;
       if (guard < 50 && pi.totalPages && page < pi.totalPages) { page++; return loop(); }
@@ -101,7 +101,12 @@ export async function POST(req) {
       var j;
       for (j = 0; j < accounts.length; j++) { if (accounts[j].id === accId) { match = accounts[j]; break; } }
       if (!match) { return NextResponse.json({ error: 'That account does not belong to the selected Wave business. Refresh the list and try again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
-      if (!match.payment_capable) { return NextResponse.json({ error: 'That account is not a bank/cash account and cannot receive payments. Pick a Cash on Hand or bank account (not Accounts Receivable).', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+      // v55.83-LU — Accounts Receivable/Payable can NEVER be the deposit (bank) side — hard block even on
+      // override. Anything else my auto-detection missed CAN be chosen explicitly via allow_any ("Use
+      // anyway"), so a real bank/cash account with an unusual subtype/name isn't a dead end.
+      var allowAny = body.allow_any === true;
+      if (match.ar_ap) { return NextResponse.json({ error: 'Accounts Receivable / Payable can never be the deposit (bank) side of a payment. Pick a real bank/cash account.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+      if (!match.payment_capable && !allowAny) { return NextResponse.json({ error: 'That account was not auto-detected as bank/cash. If it really is your bank/cash account, use "Show all accounts" → "Use anyway" to set it.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, needs_override: true }, { status: 400 }); }
       var saved = await saveDefault(db, bid, match.id, match.name);
       if (!saved.ok) { return NextResponse.json({ db_error: saved.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 }); }
       return NextResponse.json({ saved: true, default_payment_account_id: match.id, default_payment_account_name: match.name, saved_row: saved.row, api_build_marker: API_BUILD_MARKER, route: API_ROUTE });
