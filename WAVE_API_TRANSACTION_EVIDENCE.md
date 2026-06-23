@@ -1,7 +1,48 @@
 # Wave public GraphQL API — money-transaction capability (live-verified evidence)
 
 **Endpoint:** `https://gql.waveapps.com/graphql/public`
-**Verified:** live schema introspection on 2026-06-21 and re-confirmed 2026-06-22 (HTTP 200 both times).
+**Verified:** live schema introspection on 2026-06-21, re-confirmed 2026-06-22, and **2026-06-23 (the v55.83-MA payload-shape correction below)**.
+
+---
+
+## 0. v55.83-MA CORRECTION — the lineItems payload was WRONG (live error caught it)
+
+**Live evidence (2026-06-23 Sync Log):** a real `bank_transaction` push was REJECTED by Wave with:
+
+> `Transaction must have at least one debit and credit line item. [input,lineItems]`
+
+The old KZ/LC payload sent a SINGLE line item `{ accountId: category, amount, balance: 'INCREASE' }`. That is
+invalid. Re-introspecting the LIVE input types (`scripts/introspect-money-txn.mjs`, HTTP 200) returned:
+
+```
+MoneyTransactionCreateInput
+  businessId: ID!  externalId: String!  date: Date!  description: String!  notes: String
+  anchor: MoneyTransactionCreateAnchorInput!          # NAMES the bank account; not the whole journal
+  lineItems: [MoneyTransactionCreateLineItemInput!]!  # REQUIRED, NON-EMPTY
+MoneyTransactionCreateAnchorInput   { accountId: ID!  amount: Decimal!  direction: TransactionDirection! }
+MoneyTransactionCreateLineItemInput { accountId: ID!  amount: Decimal!  balance: BalanceType!  customerId  description  taxes }
+TransactionDirection enum: DEPOSIT, WITHDRAWAL
+BalanceType          enum: CREDIT, DEBIT, DECREASE, INCREASE
+```
+
+**Conclusion (evidence-based, not a guess):** the error path `[input,lineItems]` proves Wave validates the
+**lineItems themselves** as a complete double-entry — they must contain at least one DEBIT and one CREDIT.
+The anchor only names the bank account. The Hub now sends the explicit pair (`buildMoneyTxnLineItems`):
+
+```
+DEPOSIT  (money in):   [ { bank, amt, DEBIT },  { category, amt, CREDIT } ]
+WITHDRAWAL (money out):[ { category, amt, DEBIT }, { bank, amt, CREDIT } ]
+```
+
+Debits == Credits == amount → balanced. **STATUS: confirmed-pending-live-accept.** The local `.env.local`
+token is EXPIRED (business queries return `authentication expired`; only schema introspection works without
+a live token), so the final accept can only be proven by the next real push from Vercel (whose token IS
+valid — that is how the original error above was produced, not an auth error). The dry-run response now
+returns the exact `debit`/`credit` lines + `would_send` so the shape is inspectable before sending.
+
+---
+
+**Earlier verifications:** live schema introspection on 2026-06-21 and re-confirmed 2026-06-22 (HTTP 200 both times).
 **Why this file exists:** Codex QA required raw introspection evidence saved (not "trust me") before
 the bank-transaction Wave sync is considered closed. This documents exactly what the public API can and
 cannot do, so nobody re-litigates it from memory.
@@ -28,10 +69,13 @@ Input shape (from the live `MoneyTransactionCreateInput` / anchor / line-item in
   `lineItems: [MoneyTransactionCreateLineItemInput!]!`.
 - `MoneyTransactionCreateAnchorInput` (the bank/cash side): `accountId: ID!`, `amount: Decimal!` (unsigned),
   `direction: TransactionDirection!` = `DEPOSIT | WITHDRAWAL`.
-- `MoneyTransactionCreateLineItemInput` (the category side): `accountId: ID!`, `amount`, `balance: INCREASE | DECREASE`.
+- `MoneyTransactionCreateLineItemInput` (a journal line): `accountId: ID!`, `amount`, `balance: BalanceType!`
+  where `BalanceType = CREDIT | DEBIT | DECREASE | INCREASE`.
 
-Hub double-entry mapping: anchor = the silo's Wave Cash & Bank account (money-in → `DEPOSIT`,
-money-out → `WITHDRAWAL`); single line item = the assigned Wave category account, `balance: INCREASE`.
+Hub double-entry mapping (CORRECTED in §0 / v55.83-MA): anchor = the silo's Wave Cash & Bank account
+(money-in → `DEPOSIT`, money-out → `WITHDRAWAL`). `lineItems` is the COMPLETE balanced journal — Wave
+requires ≥1 DEBIT and ≥1 CREDIT line (the single-`INCREASE`-line shape was rejected live). So:
+money-in → `[{bank, DEBIT}, {category, CREDIT}]`; money-out → `[{category, DEBIT}, {bank, CREDIT}]`.
 `externalId = 'hub-bt-' + bank_transactions.id` → Wave itself rejects a duplicate push (idempotency).
 
 ## 2. READ is NOT supported — there is no way to query/list money transactions
@@ -72,7 +116,10 @@ The intended read query fails validation:
 
 ## 4. Where this is enforced in code
 
-- Push: `src/app/api/wave/push-transaction/route.js` (gated, dry-run, idempotent, single-anchor safety).
+- Push: `src/app/api/wave/push-transaction/route.js` (gated, dry-run, idempotent, balanced debit/credit lines).
 - Edit-after-push block: `src/app/api/accounting/bank-write/route.js` (`classify` / `set_wave_category`).
-- Multi-account anchor safety: push-transaction blocks a silo with >1 bank account until per-account
-  Wave-bank mapping exists (so a ··6338 txn can't post to the ··6353 Wave account).
+- Per-account anchor resolution (v55.83-LZ, replaces the old multi-account hard-block): push-transaction
+  matches THIS txn's bank account to its Wave Cash&Bank account by mask (suffix-tolerant, "(338)" vs "6338"),
+  then single-Wave-bank-account, then the silo default — so a ··6338 txn posts to its own Wave account, not
+  the ··6353 one. Codex still wants this centralized into `src/lib/wave-bank-account-resolver.js` (shared by
+  push-payment/prefill/readback) — OPEN.

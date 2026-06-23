@@ -49,7 +49,7 @@ export async function POST(req) {
     var waveBusinessId = body.wave_business_id || null;
     var isDry = body.dry_run !== false; // DEFAULT dry-run; must pass dry_run:false to write
     var windowDays = Number(body.date_window_days); if (!(windowDays >= 0)) { windowDays = 0; }
-    var maxPages = Math.min(Number(body.max_pages) || 40, 200);
+    var maxPages = Math.min(Number(body.max_pages) || 80, 200); // v55.83-MA: 80 pages x 25 = 2000 invoices (Max has ~1285); was 40 (=1000, missed the tail)
     var token = process.env.WAVE_ACCESS_TOKEN;
 
     var gate = await assertPermission(db, by, 'wave.import.run', req);
@@ -95,10 +95,14 @@ export async function POST(req) {
     function waveAcctOkForDeposit(payAcctName, dep) {
       if (!multiAccount) { return { ok: true }; } // single-account silo: account is unambiguous
       var nm = String(payAcctName || '');
-      var toks = nm.match(/\d{4}/g) || [];
+      // v55.83-MA (Codex) — Wave account names often show only 3 digits ("PLAT BUS CHECKING (338)") while
+      // the Plaid mask is 4 ("6338"). The old /\d{4}/ token-match silently failed on those, so multi-account
+      // silos linked NOTHING. Match any 2+ digit token suffix-tolerantly in either direction.
+      var toks = nm.match(/\d{2,}/g) || [];
       if (toks.length === 0) { return { ok: false, reason: 'account_undetermined' }; } // can't attribute safely
       var dm = acctMaskById[dep.account_id] ? String(acctMaskById[dep.account_id]) : '';
-      if (dm && toks.indexOf(dm) >= 0) { return { ok: true }; }
+      if (!dm) { return { ok: false, reason: 'account_undetermined' }; }
+      var i; for (i = 0; i < toks.length; i++) { var t = toks[i]; if (t === dm || dm.indexOf(t) >= 0 || t.indexOf(dm) >= 0 || (t.length >= 3 && dm.slice(-t.length) === t) || (dm.length >= 3 && t.slice(-dm.length) === dm)) { return { ok: true }; } }
       return { ok: false, reason: 'account_mismatch' };
     }
 

@@ -15,12 +15,27 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LZ-push-transaction';
+var API_BUILD_MARKER = 'v55.83-MA-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// v55.83-MA (Codex P0: live error "Transaction must have at least one debit and credit line item.
+// [input,lineItems]"). LIVE-SCHEMA introspection (2026-06-23) confirms MoneyTransactionCreateLineItemInput
+// .balance is a BalanceType! enum (CREDIT, DEBIT, DECREASE, INCREASE) and lineItems is a required NON-EMPTY
+// list. The error path [input,lineItems] proves Wave validates the LINE ITEMS as a complete double-entry —
+// the anchor only NAMES the bank account; the line items must carry BOTH sides. So a single INCREASE line
+// (the old KZ shape) is invalid. buildMoneyTxnLineItems returns the explicit debit + credit pair:
+//   DEPOSIT (money in):  bank asset DEBIT, category (income/source) CREDIT.
+//   WITHDRAWAL (money out): category (expense/use) DEBIT, bank asset CREDIT.
+// Debits == Credits == amount, so the journal balances. (Bank-side resolution is separate; see below.)
+function buildMoneyTxnLineItems(direction, bankAcctId, categoryAcctId, amtStr) {
+  if (direction === 'DEPOSIT') {
+    return [{ accountId: bankAcctId, amount: amtStr, balance: 'DEBIT' }, { accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' }];
+  }
+  return [{ accountId: categoryAcctId, amount: amtStr, balance: 'DEBIT' }, { accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' }];
+}
 function bankTxnLogContext(bt) {
   if (!bt) { return null; }
   var amt = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
@@ -143,13 +158,19 @@ export async function POST(req) {
     var desc = String(bt.name || bt.merchant_name || 'Bank transaction').slice(0, 140);
     var externalId = 'hub-bt-' + String(hubId);
 
+    var amtStr = String(amount);
+    var lineItems = buildMoneyTxnLineItems(dir, anchorAcct, categoryAcct, amtStr);
     var input = {
       businessId: waveBusinessId, externalId: externalId, date: date, description: desc,
-      anchor: { accountId: anchorAcct, amount: String(amount), direction: dir },
-      lineItems: [{ accountId: categoryAcct, amount: String(amount), balance: 'INCREASE' }]
+      anchor: { accountId: anchorAcct, amount: amtStr, direction: dir },
+      lineItems: lineItems
     };
 
-    if (isDry) { return NextResponse.json({ ok: true, dry_run: true, anchor_account: anchorName || anchorAcct, direction: dir, amount: amount, category_account_id: categoryAcct, category_name: bt.wave_account_name || null, would_send: input, api_build_marker: API_BUILD_MARKER }); }
+    if (isDry) {
+      var debitLine = lineItems[0].balance === 'DEBIT' ? lineItems[0] : lineItems[1];
+      var creditLine = lineItems[0].balance === 'CREDIT' ? lineItems[0] : lineItems[1];
+      return NextResponse.json({ ok: true, dry_run: true, anchor_account: anchorName || anchorAcct, anchor_via: anchorVia, direction: dir, amount: amount, category_account_id: categoryAcct, category_name: bt.wave_account_name || null, debit: debitLine, credit: creditLine, would_send: input, api_build_marker: API_BUILD_MARKER });
+    }
 
     // Idempotency claim: mark 'syncing' only if not already synced.
     var claim = await db.from('bank_transactions').update({ category_status: 'syncing' }).eq('id', hubId).neq('category_status', 'synced').select();

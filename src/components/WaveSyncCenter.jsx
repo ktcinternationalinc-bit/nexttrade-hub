@@ -589,9 +589,19 @@ export default function WaveSyncCenter(props) {
     // (truthful), not silently vanish because they aren't a customer/invoice/payment. There is no
     // generic Wave transaction push route yet, so they are shown BLOCKED ("Hub-only — not
     // implemented yet") — visible and never pushed. category_status is the bank-txn sync flag.
+    // v55.83-MA (Codex P0 #2) — a Wave-rejected push sets category_status='sync_failed', which used to drop
+    // the row out of Pending entirely (the user saw "nothing", only a Sync Log line). Keep failed rows here,
+    // RETRYABLE, with their exact last error inline. Build a hub_record_id -> last failed error_message map.
+    var lastFailErr = {};
+    (syncLog || []).forEach(function (l) {
+      if (!l || l.success !== false || l.entity_type !== 'bank_transaction' || !l.hub_record_id) { return; }
+      if (!(l.hub_record_id in lastFailErr)) { lastFailErr[l.hub_record_id] = l.error_message || 'failed'; } // syncLog is newest-first
+    });
     bankTxns.forEach(function (bt) {
       if (!bt || bt.wave_business_id !== active) { return; }
-      if (bt.category_status !== 'pending_wave_sync') { return; }
+      var btStatus = String(bt.category_status || '');
+      if (btStatus !== 'pending_wave_sync' && btStatus !== 'sync_failed' && btStatus !== 'failed') { return; }
+      var btFailed = (btStatus === 'sync_failed' || btStatus === 'failed');
       // v55.83-IN (core fix) — if this transaction has been MATCHED to an invoice, it already
       // produced a payment row (the actual Wave-bound item, shown in the payments section above).
       // Do NOT also list it here as a "Hub-only" categorization — that made a matched deposit look
@@ -608,13 +618,15 @@ export default function WaveSyncCenter(props) {
       if (bt.posted_date || bt.date) { bb.push(String(bt.posted_date || bt.date).substring(0, 10)); }
       if (bt.classification) { bb.push('class: ' + bt.classification); }
       if (bt.wave_account_name) { bb.push('→ ' + bt.wave_account_name); }
-      if (hasCat) { bb.push('posts to Wave as a money transaction (bank side auto-resolved — Dry Run shows which Wave account)'); }
+      if (btFailed) { bb.push('⚠ last push FAILED — fix & retry: ' + (lastFailErr[bt.id] || 'see Sync Log')); }
+      else if (hasCat) { bb.push('posts to Wave as a money transaction (bank side auto-resolved — Dry Run shows which Wave account)'); }
       else { bb.push('ℹ Pick a Wave Category for this transaction in Bank Review, then it can post to Wave.'); }
       rows.push({
         key: 'banktxn:' + bt.id, action: 'transaction', id: bt.id,
-        label: 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
+        label: (btFailed ? '↻ ' : '') + 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
         amount: Number(bt.amount_abs) || 0,
         sub: bb.join(' · '),
+        retry: btFailed,
         blocked: hasCat ? null : 'Pick a Wave category first (Bank Review).',
         hubOnly: !hasCat,
         record: bt
@@ -640,7 +652,7 @@ export default function WaveSyncCenter(props) {
       });
     });
     return rows;
-  }, [customers, invoices, payments, bankTxns, splitTxns, active, prodSetup]);
+  }, [customers, invoices, payments, bankTxns, splitTxns, active, prodSetup, syncLog]);
 
   // v55.83-IN (Codex) — separate actionable Wave pushes (customers/invoices/payments) from
   // Hub-only bank categorizations that Wave's API cannot accept. They must NOT inflate the main

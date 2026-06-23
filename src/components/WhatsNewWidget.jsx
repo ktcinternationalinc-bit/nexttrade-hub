@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MA',
+    date: '2026-06-23',
+    label: 'The actual reason transaction pushes failed — and failed ones no longer vanish',
+    items: [
+      '**🩺 Found the real bug.** Wave was rejecting every transaction push with "must have at least one debit and credit line item." We were only sending one side of the entry. Now we send a proper balanced debit + credit, matching exactly what Wave requires. (Verified against Wave\'s live setup; the final green light is your next real push.)',
+      '**👀 A failed push no longer disappears.** Before, when Wave rejected a transaction it dropped out of the pending list and you saw "nothing happened." Now it stays, marked **↻ last push FAILED — fix & retry**, shows the exact Wave error right on the row, and you can retry it.',
+      '**🔗 Better matching of existing Wave payments.** When linking deposits to invoices across several bank accounts, it now understands Wave\'s short "(338)" labels vs your "6338" — so it stops missing obvious matches — and it now looks through your whole invoice history, not just the first chunk.',
+      { superAdminOnly: true, text: 'v55.83-MA (Codex P0 deep-wiring review). P0#1 PAYLOAD FIX: live Sync Log error "Transaction must have at least one debit and credit line item [input,lineItems]". Re-introspected live (scripts/introspect-money-txn.mjs): MoneyTransactionCreateLineItemInput.balance=BalanceType!(CREDIT/DEBIT/DECREASE/INCREASE), lineItems=[..]! required. Error path proves lineItems must be a complete balanced journal. New buildMoneyTxnLineItems(): DEPOSIT=[{bank,DEBIT},{cat,CREDIT}], WITHDRAWAL=[{cat,DEBIT},{bank,CREDIT}]; anchor names the bank acct. Status confirmed-pending-live-accept (local .env.local token EXPIRED — only a Vercel push proves accept; that valid token is what produced the original lineItems error, not an auth error). Dry-run now returns debit/credit/would_send + anchor_via. WAVE_API_TRANSACTION_EVIDENCE.md §0 updated; kz(2)+lc(1b) rewritten to FAIL on the old INCREASE line. P0#2 FAILED-ROWS-VISIBLE: queue keeps category_status in (pending_wave_sync,sync_failed,failed) RETRYABLE with the last wave_sync_log error inline (↻ marker, retry flag); syncLog added to memo deps. PREFILL: waveAcctOkForDeposit \\d{4}→\\d{2,} suffix-tolerant (338 vs 6338); maxPages 40→80. new ma(5); runner 77/77. STILL OPEN (Codex): centralize into src/lib/wave-bank-account-resolver.js (push-payment still requires global default_payment_account_id); payment-readback maxPages + scanned-all flag; Settings single-checklist; CSV-vs-readback scope copy. Do NOT claim transaction push production-done until Max confirms one live accept.' },
+    ],
+  },
+  {
     version: 'v55.83-LZ',
     date: '2026-06-23',
     label: 'Multi-bank push: each transaction posts to its OWN bank account in Wave',

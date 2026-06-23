@@ -25,7 +25,12 @@ ok('1: Dry Run previews transaction rows via the SERVER and shows the Wave ancho
   /if \(q\.action !== 'transaction'\) \{/.test(sync) &&
   /dry_run: true, user_id: userProfile && userProfile\.id/.test(sync) &&
   /Bank side \(anchor\): ' \+ \(d\.anchor_account \|\| '\?'\)/.test(sync) &&
-  /anchor_account: anchorName \|\| anchorAcct, direction: dir/.test(route));
+  /anchor_account: anchorName \|\| anchorAcct, anchor_via: anchorVia, direction: dir/.test(route));
+ok('1b: the journal is a BALANCED double-entry (v55.83-MA money-safety) — equal DEBIT and CREDIT lines for the same amount, never a single-sided line Wave rejects',
+  /function buildMoneyTxnLineItems\(direction, bankAcctId, categoryAcctId, amtStr\)/.test(route) &&
+  /balance: 'DEBIT' \}, \{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
+  /balance: 'DEBIT' \}, \{ accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
+  !/balance: 'INCREASE' \}\]/.test(route));
 ok('2: multi-account anchor safety — PER-ACCOUNT resolution (LZ): the txn anchors to its own bank\'s Wave account by mask, with single-account + silo-default fallbacks; no blanket multi-account block',
   /function maskMatches\(waveName, mask\)/.test(route) &&
   /anchorVia = 'matched-by-mask:'/.test(route) &&

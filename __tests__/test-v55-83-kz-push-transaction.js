@@ -22,10 +22,15 @@ ok('1: route calls Wave moneyTransactionCreate (the live-verified mutation), gat
   /assertPermission\(db, by, 'wave\.payments\.push', req\)/.test(route) &&
   /if \(!_isApprovedTest && !_prodUnlocked\)/.test(route) &&
   /isPlaceholderWaveBusiness\(waveBusinessId\)/.test(route) &&
-  /if \(isDry\) \{ return NextResponse\.json\(\{ ok: true, dry_run: true, anchor_account:[\s\S]{0,160}would_send: input/.test(route));
-ok('2: correct double-entry — anchor = deposit account (DEPOSIT in / WITHDRAWAL out), line = category, balance INCREASE',
-  /anchor: \{ accountId: anchorAcct, amount: String\(amount\), direction: dir \}/.test(route) &&
-  /lineItems: \[\{ accountId: categoryAcct, amount: String\(amount\), balance: 'INCREASE' \}\]/.test(route) &&
+  /if \(isDry\) \{[\s\S]{0,400}return NextResponse\.json\(\{ ok: true, dry_run: true, anchor_account:[\s\S]{0,200}would_send: input/.test(route));
+ok('2: VALID double-entry payload (v55.83-MA) — lineItems carry BOTH a DEBIT and a CREDIT line (Wave rejected the old single-INCREASE line); anchor names the bank account',
+  /anchor: \{ accountId: anchorAcct, amount: amtStr, direction: dir \}/.test(route) &&
+  /lineItems: lineItems/.test(route) &&
+  /function buildMoneyTxnLineItems\(direction, bankAcctId, categoryAcctId, amtStr\)/.test(route) &&
+  /\{ accountId: bankAcctId, amount: amtStr, balance: 'DEBIT' \}, \{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
+  /\{ accountId: categoryAcctId, amount: amtStr, balance: 'DEBIT' \}, \{ accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
+  // the broken single-line INCREASE shape that Wave rejected must be GONE
+  !/lineItems: \[\{ accountId: categoryAcct, amount: String\(amount\), balance: 'INCREASE' \}\]/.test(route) &&
   /var dir = \(bt\.direction === 'in'[\s\S]{0,80}\? 'DEPOSIT' : 'WITHDRAWAL'/.test(route));
 ok('3: requires a category + a resolved Wave bank anchor (per-account); blocks matched deposits (push as payments)',
   /No Wave category assigned/.test(route) &&
