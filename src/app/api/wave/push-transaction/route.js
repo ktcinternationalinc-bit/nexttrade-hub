@@ -1,21 +1,27 @@
-// /api/wave/push-transaction — v55.83-KZ. Push a CATEGORIZED bank transaction to Wave as a money
-// transaction via Wave's public `moneyTransactionCreate` mutation. This overturns the project's prior
-// belief that "Wave's API can't accept raw transaction/category pushes" — that mutation IS on the public
-// endpoint (verified by live schema introspection 2026-06-21). Gated EXACTLY like push-payment (approved
-// test business OR a super-admin-unlocked production business). dry_run previews without sending.
-// SWC-safe: var + string concat only.
+// /api/wave/push-transaction — v55.83-MA. Push a CATEGORIZED bank transaction to Wave as a money
+// transaction via Wave's public `moneyTransactionCreate` mutation (on the public endpoint; verified by live
+// schema introspection 2026-06-21/22/23). Gated EXACTLY like push-payment (approved test business OR a
+// super-admin-unlocked production business). dry_run previews without sending. SWC-safe: var + concat only.
 //
-// Double-entry: the bank account (Wave Cash & Bank, the silo's default payment account) is the ANCHOR;
-// the assigned Wave category account is the LINE ITEM. Money-out => WITHDRAWAL anchor; money-in => DEPOSIT.
-// The category line is balance:INCREASE (expense up for an out-flow, income up for an in-flow). externalId
-// = a stable Hub key so Wave itself rejects a duplicate push (idempotency even if Hub state is lost).
-// NOT for bank-to-bank transfers (Wave API doesn't support those) — those stay in the Hub.
+// CURRENT MODEL (v55.83-LZ + MA — supersedes the old KZ comments):
+//  - Bank side (ANCHOR) is resolved PER TRANSACTION (see resolver block below): match THIS txn's bank
+//    account to its Wave Cash&Bank account by mask; else single-Wave-bank-account; else silo default. A silo
+//    can have MANY bank accounts, so there is NO single global anchor.
+//  - lineItems is a COMPLETE BALANCED double-entry (Wave rejects a single line — live error
+//    "Transaction must have at least one debit and credit line item"). buildMoneyTxnLineItems():
+//    DEPOSIT (money in)  => [{bank, DEBIT}, {category, CREDIT}]; WITHDRAWAL (money out) => [{category, DEBIT}, {bank, CREDIT}].
+//  - externalId = 'hub-bt-' + bank_transactions.id => Wave itself rejects a duplicate (idempotency).
+//  - NOT for bank-to-bank transfers (Wave API doesn't support those) — those stay in the Hub.
+// OPEN (Codex): factor the anchor resolver into a shared src/lib/wave-bank-account-resolver.js; add a
+// category-type safety classifier (block bank/cash, A/R, A/P, system categories) before live rollout.
+// SCOPE NOTE: this CREATES a Wave money transaction. If a silo's bank also feeds Wave directly, the raw txn
+// may already exist in Wave — see WAVE_API_TRANSACTION_EVIDENCE.md for the read/categorize-existing question.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-MA-push-transaction';
+var API_BUILD_MARKER = 'v55.83-MB-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 

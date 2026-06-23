@@ -26,7 +26,9 @@ ok('2: the failed row shows the exact last error inline (from wave_sync_log) + a
   /var lastFailErr = \{\};/.test(sync) &&
   /l\.entity_type !== 'bank_transaction'/.test(sync) &&
   /⚠ last push FAILED — fix & retry: ' \+ \(lastFailErr\[bt\.id\] \|\| 'see Sync Log'\)/.test(sync) &&
-  /retry: btFailed/.test(sync));
+  // the row must set the SAME property the renderer reads (q.retryable), or the status falls through to "not synced"
+  /retryable: btFailed/.test(sync) &&
+  /q\.retryable \? 'failed · retry' : 'not synced'/.test(sync));
 ok('3: the queue recomputes when the sync log changes (syncLog is a dependency)',
   /\}, \[customers, invoices, payments, bankTxns, splitTxns, active, prodSetup, syncLog\]\);/.test(sync));
 ok('4: prefill account match is suffix-tolerant (\\d{2,}, not \\d{4}) — Wave "(338)" maps to Plaid "6338"',

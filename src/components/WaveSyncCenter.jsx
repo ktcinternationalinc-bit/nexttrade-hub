@@ -626,7 +626,7 @@ export default function WaveSyncCenter(props) {
         label: (btFailed ? '↻ ' : '') + 'Bank txn · ' + (bt.name || ('#' + String(bt.id).substring(0, 8))) + (bt.wave_account_name ? (' · ' + bt.wave_account_name) : ''),
         amount: Number(bt.amount_abs) || 0,
         sub: bb.join(' · '),
-        retry: btFailed,
+        retryable: btFailed,
         blocked: hasCat ? null : 'Pick a Wave category first (Bank Review).',
         hubOnly: !hasCat,
         record: bt
@@ -714,7 +714,11 @@ export default function WaveSyncCenter(props) {
         return fetch('/api/wave/push-transaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) {
-            if (d && d.ok && d.dry_run) { results.push({ label: q.label, verdict: 'WOULD POST', message: 'Bank side (anchor): ' + (d.anchor_account || '?') + ' · ' + d.direction + ' ' + d.amount + ' → category: ' + (d.category_name || d.category_account_id), wouldDo: d.would_send }); }
+            if (d && d.ok && d.dry_run) {
+              var jrn = '';
+              if (d.debit && d.credit) { jrn = '  ·  DEBIT ' + (d.debit.accountId === d.category_account_id ? (d.category_name || 'category') : (d.anchor_account || 'bank')) + ' / CREDIT ' + (d.credit.accountId === d.category_account_id ? (d.category_name || 'category') : (d.anchor_account || 'bank')) + ' = ' + d.amount; }
+              results.push({ label: q.label, verdict: 'WOULD POST', message: 'Bank side (anchor): ' + (d.anchor_account || '?') + (d.anchor_via ? (' [' + d.anchor_via + ']') : '') + ' · ' + d.direction + ' ' + d.amount + ' → category: ' + (d.category_name || d.category_account_id) + jrn, wouldDo: d.would_send });
+            }
             else { results.push({ label: q.label, verdict: 'BLOCKED', message: (d && d.error) || 'blocked', wouldDo: null }); }
           })
           .catch(function (e) { results.push({ label: q.label, verdict: 'ERROR', message: (e && e.message) || 'error', wouldDo: null }); });
@@ -977,7 +981,7 @@ export default function WaveSyncCenter(props) {
                 <div className="font-bold">{r.label}</div>
                 <div className={'text-xs ' + color}>{r.verdict} — {r.message}</div>
                 {r.targetBusinessId && <div className="text-[10px] text-cyan-300 font-mono mt-0.5">Target: {r.targetBusinessName || ''} · {r.targetBusinessId}</div>}
-                {r.wouldDo && <div className="text-[11px] text-slate-400">Would: {r.wouldDo}</div>}
+                {r.wouldDo && <div className="text-[11px] text-slate-400 font-mono whitespace-pre-wrap break-all">Would: {typeof r.wouldDo === 'string' ? r.wouldDo : JSON.stringify(r.wouldDo, null, 2)}</div>}
               </div>
             );
           })}

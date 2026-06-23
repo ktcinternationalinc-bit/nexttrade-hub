@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MB',
+    date: '2026-06-23',
+    label: 'Fixed: Dry Run was crashing the page; failed pushes now clearly show "failed · retry"',
+    items: [
+      '**🛑 Dry Run no longer crashes the Accounting page.** Running a dry run on a transaction was throwing an error screen. Fixed — it now shows a readable preview of exactly what would post (which bank account, and the debit/credit).',
+      '**🏷️ Failed pushes now read "failed · retry."** A rejected transaction was staying in the list but still showing "not synced" on the right. It now clearly says **failed · retry** with the Wave error, so you know it needs another go.',
+      { superAdminOnly: true, text: 'v55.83-MB. P0 CRASH: Dry Run on a transaction → React #31 (objects-not-valid-as-child). dryResults stored wouldDo=d.would_send (object) and the renderer did {r.wouldDo}; now `typeof r.wouldDo === string ? r.wouldDo : JSON.stringify(...)`. Dry-run message now also surfaces anchor_via + the debit/credit journal. STATUS BUG (Codex FAIL): the failed bank-txn row set q.retry but the renderer reads q.retryable → fell through to "not synced"; row now sets retryable: btFailed. Header comments in push-transaction rewritten to the LZ+MA reality (per-txn resolver + balanced debit/credit; stale INCREASE/global-anchor comments removed, Codex CAUTION). new mb(3); ma test updated to assert retryable; runner 78/78. NOTE: Max on LY when he hit the crash — MB also carries the MA payload fix forward. Per Max (premise realignment): his banks feed Wave directly, so the raw txn may ALREADY exist in Wave; he wants find-existing-and-categorize, NOT create+pick-account — under deep investigation (Wave read/update capability re-check) for the next architecture build.' },
+    ],
+  },
+  {
     version: 'v55.83-MA',
     date: '2026-06-23',
     label: 'The actual reason transaction pushes failed — and failed ones no longer vanish',
