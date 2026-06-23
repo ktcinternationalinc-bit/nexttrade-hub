@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LZ',
+    date: '2026-06-23',
+    label: 'Multi-bank push: each transaction posts to its OWN bank account in Wave',
+    items: [
+      '**🏦 You have several bank accounts, and the push now handles that.** Before, the system forced one global "deposit account" and blocked multi-bank silos entirely. Now each transaction is posted to the Wave bank account that matches *its own* bank account (matched by the last digits — it understands Wave\'s "(338)" vs your "6338"). If there\'s only one Wave bank account it just uses it; if it truly can\'t tell, it says exactly why instead of failing blind. So your transactions push to the right account without you mapping anything by hand.',
+      { superAdminOnly: true, text: 'v55.83-LZ (Codex architecture FAIL: global-deposit model + multi-account hard-block were wrong for a multi-bank silo). push-transaction now resolves the bank-side anchor PER TRANSACTION: (1) read bt.account_id → plaid mask; (2) build the silo\'s Wave Cash&Bank accounts from wave_categories (excl A/R, A/P); (3) maskMatches(waveName, mask) suffix-tolerant (Wave "(338)" vs Plaid "6338", both directions); pick the matching Wave bank account as anchor (anchorVia=matched-by-mask). Fallbacks: single Wave bank account → use it (only-wave-bank-account); else the silo default_payment_account_id (silo-default). REMOVED the blanket "distinctAccts>1 → block" guard. If nothing resolves, precise diagnosis (no mask match among N accounts / no Cash&Bank in chart / column missing). Updated kz/lb/lc/le/lw tests to the new model; new lz(6); ly relaxed (categorized txn pushable, server resolves). marker LW→LZ. STILL OPEN (Codex): payment-readback maxPages (scans only ~125 invoices) + prefill mask tolerance + one payment-mirror phase + the Settings/tab consolidation (Build 2).' },
+    ],
+  },
+  {
     version: 'v55.83-LY',
     date: '2026-06-23',
     label: 'Fixed: push errors showing in the wrong box + clicking push into a guaranteed failure',

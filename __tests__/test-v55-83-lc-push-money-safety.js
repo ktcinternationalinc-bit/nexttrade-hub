@@ -26,10 +26,10 @@ ok('1: Dry Run previews transaction rows via the SERVER and shows the Wave ancho
   /dry_run: true, user_id: userProfile && userProfile\.id/.test(sync) &&
   /Bank side \(anchor\): ' \+ \(d\.anchor_account \|\| '\?'\)/.test(sync) &&
   /anchor_account: anchorName \|\| anchorAcct, direction: dir/.test(route));
-ok('2: multi-account silo anchor safety — block push only when >1 DISTINCT CANONICAL account (LE-refined)',
-  /select\('plaid_account_id, mask, connection_id'\)\.eq\('wave_business_id', waveBusinessId\)/.test(route) &&
-  /var distinctAccts = Object\.keys\(canonKeys\)\.length;/.test(route) &&
-  /if \(distinctAccts > 1\) \{ return blocked\(/.test(route));
+ok('2: multi-account anchor safety — PER-ACCOUNT resolution (LZ): the txn anchors to its own bank\'s Wave account by mask, with single-account + silo-default fallbacks; no blanket multi-account block',
+  /function maskMatches\(waveName, mask\)/.test(route) &&
+  /anchorVia = 'matched-by-mask:'/.test(route) &&
+  !/if \(distinctAccts > 1\) \{ return blocked\(/.test(route));
 ok('3: logFail is async + AWAITED at both Wave-rejection call sites (reliable sync_failed + log)',
   /async function logFail\(msg, extra\) \{/.test(route) &&
   /try \{ await db\.from\('bank_transactions'\)\.update\(\{ category_status: 'sync_failed' \}\)/.test(route) &&

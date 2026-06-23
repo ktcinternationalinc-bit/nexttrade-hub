@@ -35,13 +35,9 @@ ok('2: the picker shows the true usable count + a refresh affordance when popula
 ok('3: categories route hides ONLY Wave system rows, keeps real Payable/Receivable accounts, dedupes by id only',
   /return nm\.indexOf\('\(SYSTEM'\) >= 0 \|\| sub\.indexOf\('SYSTEM'\) >= 0;/.test(catRoute) &&
   !/seenName/.test(catRoute));
-ok('4: push counts DISTINCT CANONICAL accounts (institution+mask), drops null-mask aliases, excludes archived links',
-  /select\('plaid_account_id, mask, connection_id'\)/.test(push) &&
-  /select\('id, institution_id, institution_name, status'\)/.test(push) &&
-  /if \(!a\.mask\) \{ return; \}/.test(push) &&
-  /if \(c\.status === 'archived'\) \{ return; \}/.test(push) &&
-  /var distinctAccts = Object\.keys\(canonKeys\)\.length;/.test(push) &&
-  /if \(distinctAccts > 1\) \{ return blocked\(/.test(push) &&
+ok('4: push no longer BLANKET-blocks a multi-bank silo — LZ resolves the anchor per-account (the LE canonical-count block was superseded)',
+  /anchorVia = 'matched-by-mask:'/.test(push) &&
+  !/if \(distinctAccts > 1\) \{ return blocked\(/.test(push) &&
   !/var m = a\.mask \|\| a\.plaid_account_id;/.test(push));
 ok('5: a crash after claiming "syncing" resets the row to pending_wave_sync (retryable) + logs the failure',
   /update\(\{ category_status: 'pending_wave_sync' \}\)\.eq\('id', hubId\)\.eq\('category_status', 'syncing'\)/.test(push));

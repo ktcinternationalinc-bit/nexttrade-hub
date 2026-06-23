@@ -27,9 +27,9 @@ ok('2: correct double-entry — anchor = deposit account (DEPOSIT in / WITHDRAWA
   /anchor: \{ accountId: anchorAcct, amount: String\(amount\), direction: dir \}/.test(route) &&
   /lineItems: \[\{ accountId: categoryAcct, amount: String\(amount\), balance: 'INCREASE' \}\]/.test(route) &&
   /var dir = \(bt\.direction === 'in'[\s\S]{0,80}\? 'DEPOSIT' : 'WITHDRAWAL'/.test(route));
-ok('3: requires a category + a Wave bank/deposit account; blocks matched deposits (those push as payments)',
+ok('3: requires a category + a resolved Wave bank anchor (per-account); blocks matched deposits (push as payments)',
   /No Wave category assigned/.test(route) &&
-  /No Wave bank account configured for this silo/.test(route) &&
+  /Could not resolve the Wave bank account for this transaction/.test(route) &&
   /it reaches Wave as an invoice PAYMENT/.test(route));
 ok('4: idempotent — externalId per Hub txn, claim category_status, duplicate-externalId => already-in-wave, success => synced',
   /var externalId = 'hub-bt-' \+ String\(hubId\)/.test(route) &&

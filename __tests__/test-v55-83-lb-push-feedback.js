@@ -21,7 +21,7 @@ ok('1: push-transaction has a blocked() helper that writes a wave_sync_log row A
   /from\('wave_sync_log'\)\.insert\(\{[\s\S]{0,200}success: false, error_message: reason/.test(route) &&
   /return NextResponse\.json\(\{ ok: false, error: reason/.test(route));
 ok('2: the no-deposit-account / no-category / locked / matched failures all go through blocked() (so they log)',
-  /if \(!anchorAcct\) \{/.test(route) && /return blocked\('No Wave bank account configured for this silo/.test(route) &&
+  /if \(!anchorAcct\) \{/.test(route) && /return blocked\('Could not resolve the Wave bank account for this transaction/.test(route) &&
   /if \(!categoryAcct\) \{ return blocked\('No Wave category assigned/.test(route) &&
   /if \(!_isApprovedTest && !_prodUnlocked\) \{ return blocked\(/.test(route) &&
   /if \(bt\.matched_invoice_id\) \{ return blocked\(/.test(route));

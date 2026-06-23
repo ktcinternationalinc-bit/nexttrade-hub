@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LW-push-transaction';
+var API_BUILD_MARKER = 'v55.83-LZ-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
@@ -91,48 +91,49 @@ export async function POST(req) {
     var categoryAcct = bt.wave_account_id || null;
     if (!categoryAcct) { return blocked('No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', 400); }
 
-    // The bank side (anchor) = the silo's configured Wave bank/deposit account.
+    // v55.83-LZ (Codex architecture) — PER-ACCOUNT anchor resolution. A silo can have several bank accounts
+    // (e.g. ··6338, ··6353), so we anchor a transaction to the Wave bank account that matches ITS OWN bank
+    // account, not one global account. Order: (1) match this txn's bank mask to a Wave Cash&Bank account by
+    // name (suffix-tolerant — Wave shows "(338)" while Plaid is "6338"); (2) if the silo has exactly ONE
+    // Wave bank account, use it; (3) fall back to the silo default deposit account (single-account/legacy).
+    // This REPLACES the old "one global account + hard-block multi-account silos" model.
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
-    var anchorAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
-    var anchorName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
-    if (!anchorAcct) {
-      // v55.83-LW — STOP failing blind. Diagnose WHY the anchor is missing so the Sync Log states the exact
-      // cause: (a) the settings READ errored (the default_payment_account_id column likely doesn't exist →
-      // run the ALTER TABLE), (b) NO settings row for this silo (never saved), or (c) a row exists but the
-      // deposit account is empty (picked but didn't save, or never picked).
-      var why;
-      if (setRes && setRes.error) { why = 'the settings table could not be read (' + (setRes.error.message || setRes.error.code || 'db error') + '). The default_payment_account_id column is probably missing — a super admin must run: ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text, ADD COLUMN IF NOT EXISTS default_payment_account_name text;'; }
-      else if (!(setRes && setRes.data && setRes.data.length)) { why = 'no settings were ever saved for this silo. Go to Wave Sync Center -> Settings -> Payment Deposit Account, click "List bank/cash accounts", pick your bank account ("Use this"), and confirm it shows the green "Saved" message.'; }
-      else { why = 'a settings row exists but the deposit account is empty (it was never picked, or the save failed). Go to Settings -> Payment Deposit Account, pick your bank account, and watch for the green "Saved" — if you see a red "Database save FAILED" instead, the column is missing (run the ALTER TABLE above).'; }
-      return blocked('No Wave bank account configured for this silo (the bank side of the transaction): ' + why, 400);
-    }
+    var globalAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
+    var globalName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
 
-    // v55.83-LC/LE (Codex money-safety, then workflow fix) — the anchor is ONE silo-level Wave bank
-    // account, so a genuinely MULTI-account silo must be blocked (else a ··6353 txn lands in the ··6338
-    // Wave account). BUT the LC raw count wrongly blocked a single-bank silo: a bank reconnect leaves
-    // stale ALIAS rows in plaid_accounts, and the old `mask || plaid_account_id` fallback let a null-mask
-    // alias count as a 2nd account. Count DISTINCT CANONICAL accounts the way BankTab does: key =
-    // institution+mask; DROP null-mask alias/pending rows; EXCLUDE archived reconnect links; reconnect
-    // aliases of the same (institution+mask) collapse. Only >=2 distinct canonical accounts blocks.
-    var paRes = await db.from('plaid_accounts').select('plaid_account_id, mask, connection_id').eq('wave_business_id', waveBusinessId);
-    var paRows = (paRes && paRes.data) || [];
-    var _connIds = {}; paRows.forEach(function (a) { if (a.connection_id) { _connIds[a.connection_id] = true; } });
-    var _connList = Object.keys(_connIds);
-    var _connById = {};
-    if (_connList.length) {
-      var bcRes = await db.from('bank_connections').select('id, institution_id, institution_name, status').in('id', _connList);
-      ((bcRes && bcRes.data) || []).forEach(function (c) { _connById[c.id] = c; });
+    var txnMask = null;
+    if (bt.account_id) {
+      var paOne = await db.from('plaid_accounts').select('mask').eq('plaid_account_id', bt.account_id).limit(1);
+      txnMask = (paOne && paOne.data && paOne.data.length && paOne.data[0].mask) ? String(paOne.data[0].mask) : null;
     }
-    var canonKeys = {};
-    paRows.forEach(function (a) {
-      if (!a.mask) { return; } // null-mask = alias/pending row, not a distinct account
-      var c = _connById[a.connection_id] || {};
-      if (c.status === 'archived') { return; } // superseded reconnect link
-      var inst = c.institution_id || c.institution_name || a.connection_id || '?';
-      canonKeys[inst + '|' + a.mask] = true;
+    var waveBankAccts = [];
+    var wcRes = await db.from('wave_categories').select('wave_account_id, wave_account_name, subtype, type').eq('wave_business_id', waveBusinessId);
+    ((wcRes && wcRes.data) || []).forEach(function (c) {
+      var stU = String(c.subtype || '').toUpperCase(); var nmU = String(c.wave_account_name || '').toUpperCase(); var tyU = String(c.type || '').toUpperCase();
+      var arap = stU.indexOf('RECEIVABLE') >= 0 || stU.indexOf('PAYABLE') >= 0 || nmU.indexOf('RECEIVABLE') >= 0 || nmU.indexOf('PAYABLE') >= 0;
+      var isBank = stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0 || (tyU.indexOf('ASSET') >= 0 && (nmU.indexOf('CASH') >= 0 || nmU.indexOf('BANK') >= 0 || nmU.indexOf('CHECKING') >= 0 || nmU.indexOf('CHEQUING') >= 0 || nmU.indexOf('SAVINGS') >= 0));
+      if (isBank && !arap && c.wave_account_id) { waveBankAccts.push(c); }
     });
-    var distinctAccts = Object.keys(canonKeys).length;
-    if (distinctAccts > 1) { return blocked('This silo has ' + distinctAccts + ' distinct bank accounts, but a transaction can only safely anchor to ONE Wave bank account. Map each account to its Wave bank account before pushing transactions for a multi-account silo (so a ··6338 transaction never posts to the ··6353 Wave account). Single-account silos push fine.', 409); }
+    function maskMatches(waveName, mask) {
+      if (!mask) { return false; }
+      var toks = String(waveName || '').match(/\d{2,}/g) || [];
+      var i; for (i = 0; i < toks.length; i++) { var t = toks[i]; if (t === mask || mask.indexOf(t) >= 0 || t.indexOf(mask) >= 0 || (t.length >= 3 && mask.slice(-t.length) === t) || (mask.length >= 3 && t.slice(-mask.length) === mask)) { return true; } }
+      return false;
+    }
+    var anchorAcct = null; var anchorName = null; var anchorVia = null;
+    if (txnMask) {
+      var hc; for (hc = 0; hc < waveBankAccts.length; hc++) { if (maskMatches(waveBankAccts[hc].wave_account_name, txnMask)) { anchorAcct = waveBankAccts[hc].wave_account_id; anchorName = waveBankAccts[hc].wave_account_name; anchorVia = 'matched-by-mask:' + txnMask; break; } }
+    }
+    if (!anchorAcct && waveBankAccts.length === 1) { anchorAcct = waveBankAccts[0].wave_account_id; anchorName = waveBankAccts[0].wave_account_name; anchorVia = 'only-wave-bank-account'; }
+    if (!anchorAcct && globalAcct) { anchorAcct = globalAcct; anchorName = globalName; anchorVia = 'silo-default'; }
+    if (!anchorAcct) {
+      var why;
+      if (setRes && setRes.error) { why = 'the settings table could not be read (' + (setRes.error.message || 'db error') + '); the default_payment_account_id column may be missing — run: ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text, ADD COLUMN IF NOT EXISTS default_payment_account_name text;'; }
+      else if (txnMask && waveBankAccts.length > 1) { why = 'this transaction is from bank ··' + txnMask + ', and none of the ' + waveBankAccts.length + ' Wave bank accounts has a name matching it (so there is no safe single default). Rename the matching Wave bank account to include "' + txnMask + '", or set a silo default in Settings -> Wave Deposit Account.'; }
+      else if (waveBankAccts.length === 0) { why = 'no Wave Cash & Bank account exists in this business\x27s chart of accounts. Create one in Wave (Accounting -> Chart of Accounts -> Add -> Cash & Bank), pull categories, then retry.'; }
+      else { why = 'set a silo default in Settings -> Wave Deposit Account (pick your bank account, confirm the green "Saved").'; }
+      return blocked('Could not resolve the Wave bank account for this transaction: ' + why, 400);
+    }
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
     if (!(amount > 0)) { return blocked('Transaction amount must be positive.', 400); }
