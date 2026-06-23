@@ -22,6 +22,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
+import { maskMatches } from '../../../../lib/wave-bank-account-resolver';
 
 var API_BUILD_MARKER = 'v55.83-LT-prefill-payment-links';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
@@ -95,14 +96,12 @@ export async function POST(req) {
     function waveAcctOkForDeposit(payAcctName, dep) {
       if (!multiAccount) { return { ok: true }; } // single-account silo: account is unambiguous
       var nm = String(payAcctName || '');
-      // v55.83-MA (Codex) — Wave account names often show only 3 digits ("PLAT BUS CHECKING (338)") while
-      // the Plaid mask is 4 ("6338"). The old /\d{4}/ token-match silently failed on those, so multi-account
-      // silos linked NOTHING. Match any 2+ digit token suffix-tolerantly in either direction.
-      var toks = nm.match(/\d{2,}/g) || [];
-      if (toks.length === 0) { return { ok: false, reason: 'account_undetermined' }; } // can't attribute safely
+      // v55.83-MC (Codex) — use the SHARED suffix-tolerant matcher (Wave "(338)" vs Plaid "6338"), so prefill
+      // and push-transaction can never drift apart again. Empty mask / no name digits = can't attribute safely.
+      if (!nm.match(/\d{2,}/)) { return { ok: false, reason: 'account_undetermined' }; }
       var dm = acctMaskById[dep.account_id] ? String(acctMaskById[dep.account_id]) : '';
       if (!dm) { return { ok: false, reason: 'account_undetermined' }; }
-      var i; for (i = 0; i < toks.length; i++) { var t = toks[i]; if (t === dm || dm.indexOf(t) >= 0 || t.indexOf(dm) >= 0 || (t.length >= 3 && dm.slice(-t.length) === t) || (dm.length >= 3 && t.slice(-dm.length) === dm)) { return { ok: true }; } }
+      if (maskMatches(nm, dm)) { return { ok: true }; }
       return { ok: false, reason: 'account_mismatch' };
     }
 

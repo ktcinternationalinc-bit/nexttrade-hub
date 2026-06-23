@@ -62,12 +62,11 @@ ok('9: (Codex LN) deposits already carrying an ACTIVE match or payment row are e
   /from\('accounting_invoice_payments'\)\.select\('bank_transaction_id, voided, sync_status'\)/.test(route) &&
   /!isPaymentVoid\(p\)/.test(route) &&
   /!t\.matched_invoice_id && !t\.wave_transaction_id && !claimedDep\[t\.id\]/.test(route));
-ok('10: (Codex LO + MA) ACCOUNT-AWARE & suffix-tolerant — multi-account silo links only when the Wave account mask matches the deposit\'s bank account, and Wave "(338)" matches Plaid "6338" by suffix',
+ok('10: (Codex LO + MA/MC) ACCOUNT-AWARE & suffix-tolerant via the SHARED resolver — multi-account silo links only when the Wave account mask matches the deposit\'s bank, using maskMatches (Wave "(338)" = Plaid "6338")',
   /var multiAccount = Object\.keys\(distinctMask\)\.length > 1;/.test(route) &&
   /function waveAcctOkForDeposit\(payAcctName, dep\)/.test(route) &&
-  /var toks = nm\.match\(\/\\d\{2,\}\/g\) \|\| \[\];/.test(route) &&
-  /dm\.slice\(-t\.length\) === t/.test(route) &&
-  !/var toks = nm\.match\(\/\\d\{4\}\/g\)/.test(route) &&
+  /maskMatches\(nm, dm\)/.test(route) &&
+  !/nm\.match\(\/\\d\{4\}\/g\)/.test(route) &&
   /if \(multiAccount\) \{[\s\S]{0,400}if \(accHits\.length === 0\) \{ counts\.account_mismatch\+\+;/.test(route) &&
   /account_id/.test(route));
 

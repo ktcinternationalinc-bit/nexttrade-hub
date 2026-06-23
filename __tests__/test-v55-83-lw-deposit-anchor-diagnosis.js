@@ -15,13 +15,15 @@ function ok(label, cond, hint) {
 function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); }
 function exists(p) { try { fs.accessSync(path.join(__dirname, '..', p)); return true; } catch (e) { return false; } }
 var route = rd('src/app/api/wave/push-transaction/route.js');
+var lib = rd('src/lib/wave-bank-account-resolver.js');
 
-ok('1: unresolved-anchor case branches on the precise cause (column-missing read error vs no-mask-match in a multi-account silo vs no Wave bank account in the chart)',
-  /if \(setRes && setRes\.error\) \{ why =/.test(route) &&
-  /else if \(txnMask && waveBankAccts\.length > 1\) \{ why =/.test(route) &&
-  /else if \(waveBankAccts\.length === 0\) \{ why =/.test(route));
-ok('2: the column-missing branch tells the admin the exact ALTER TABLE to run',
-  /ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text/.test(route));
+ok('1: the precise unresolved-anchor reasons live in the shared resolver (no-mask-match in a multi-account silo vs no Wave bank account in the chart)',
+  /if \(txnMask && waveBankAccts\.length > 1\) \{ why =/.test(lib) &&
+  /else if \(waveBankAccts\.length === 0\) \{ why =/.test(lib) &&
+  /if \(setRes && setRes\.error\) \{ why =/.test(route));
+ok('2: the column-missing branch points the admin at the canonical migration to run',
+  /the default_payment_account_id column may be missing — run the migration sql\/v55-83-LW-payment-account-columns\.sql/.test(route) &&
+  /ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text/.test(rd('sql/v55-83-LW-payment-account-columns.sql')));
 ok('3: the diagnosis is surfaced via blocked() so it lands in the Sync Log (not a silent generic message)',
   /return blocked\('Could not resolve the Wave bank account for this transaction: ' \+ why, 400\);/.test(route));
 ok('4: the bank transaction details are logged on a blocked push (txCtx) for easy review — Max\'s "list the exact transaction" ask',

@@ -5,6 +5,52 @@
 
 ---
 
+## 0-PREMISE. v55.83-MB RE-CONFIRMATION (2026-06-23) — Wave CANNOT read or categorize an EXISTING transaction
+
+Max's stated premise: "I have multiple accounts in one Wave silo. I don't want to pick an account. Whatever
+transaction is there, find it in Wave, identify the same transaction, and categorize it based on what the Hub
+says." **This is NOT possible through Wave's public API.** Re-introspected live today
+(`scripts/introspect-wave-read-update.mjs`, HTTP 200) — three independent confirmations:
+
+- **Root `Query` fields:** `_, oAuthApplication, currencies, currency, countries, country, province,
+  businesses, business, user, accountTypes, accountSubtypes` → NO money-transaction query.
+- **`Business` connections:** customers, accounts, invoices, vendors, products, estimates, salesTaxes,
+  invoicePayment — **NO `transactions`, NO `moneyTransactions`.** Wave-feed transactions are unreadable.
+- **`Transaction` OBJECT type:** exactly one field — `id`. No amount/date/account/category to read or match on.
+- **Root mutation fields:** the only money-transaction ROOT mutations are `moneyTransactionCreate` /
+  `moneyTransactionsCreate` (**CREATE only**). There is NO `moneyTransactionUpdate/Patch`, no categorize/anchor
+  mutation. (`MoneyDepositTransactionCreateInput/Output` exist as schema TYPES but are NOT root mutation fields
+  — the committed script prints the exact root mutation list so this proof stays precise. Editable via API:
+  customers, accounts, salesTaxes, invoices, invoicePayments, products, estimates — NOT raw money txns.)
+
+**EXHAUSTIVE scan (2026-06-23, all 224 schema types, `wave-full-transaction-scan.mjs`)** — every field/type in
+the public schema that touches "transaction", to settle "of course it can":
+- Mutations (CREATE only): `moneyTransactionCreate`→Transaction, `moneyTransactionsCreate`→Transaction,
+  `MoneyDepositTransactionCreate`. NO update/patch/categorize/delete mutation exists.
+- `Transaction` OBJECT: fields = **[id]** only. `InvoicePayment.transactionId / accountingTransactionId /
+  transactionType` and `EstimatePayment.transactionId` are the ONLY readable "transactionId"s — they belong to
+  invoice/estimate PAYMENTS, not to categorizable money transactions.
+- `Account` fields = business, id, name, description, displayId, currency, type, subtype, normalBalanceType,
+  isArchived, sequence, balance — **NO `transactions` connection.** So transactions are not readable under an
+  account either. NO field anywhere in the schema RETURNS a Transaction except the two create-mutation outputs.
+
+Wave's UI can of course categorize transactions — but the public GraphQL API cannot read or change them (Wave
+restricted general API access; the public endpoint is what this token reaches). If a FULL/partner API tier or a
+different endpoint is available, this conclusion could change — but the standard public endpoint is create-only.
+
+**Consequences (the architecture MUST be built around this):**
+1. The Hub can only **CREATE** money transactions in Wave; it can never read back, find, update, or categorize
+   one Wave already has.
+2. **Duplication risk:** if a bank account is ALSO connected to Wave directly (Wave's own bank feed), Wave
+   already holds the raw txn — a Hub `moneyTransactionCreate` makes a SECOND one. To use the Hub as the
+   categorizer, that account's transactions must come into Wave from the Hub ONLY (turn off Wave's direct
+   bank feed for it), OR categorization stays manual in Wave. There is no API middle ground.
+3. The bank-account ANCHOR is unavoidable when CREATING (double-entry needs the bank side) — but it is
+   AUTO-RESOLVED per-transaction by mask (v55.83-LZ), so the operator does NOT pick one per transaction.
+4. Invoices + invoice payments DO have full read+write API — that mirror works both directions (separate path).
+
+---
+
 ## 0. v55.83-MA CORRECTION — the lineItems payload was WRONG (live error caught it)
 
 **Live evidence (2026-06-23 Sync Log):** a real `bank_transaction` push was REJECTED by Wave with:

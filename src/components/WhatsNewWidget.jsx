@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MC',
+    date: '2026-06-23',
+    label: 'The real Wave plan: one source per bank account, so nothing ever doubles',
+    items: [
+      '**🏦 New in Wave Sync Center → Settings: "Who feeds each bank account?"** For each bank account you tell the Hub one thing: does the **Hub** feed Wave (the Hub posts every transaction already categorized), or does **Wave** pull that account directly? You only pick this once per account. Until you pick, pushing is held back on purpose so nothing gets entered twice.',
+      '**✅ Why this is the real fix.** Wave has no way for an outside app to reach in and re-categorize a transaction it already has — so the clean answer is: for the accounts the Hub manages, turn Wave\'s own auto-import OFF and let the Hub be the single source. Then Wave shows exactly the categories you set here. The Settings panel gives you the exact, real Wave steps to do that (Banking → Connected Accounts → turn off auto-import for that account).',
+      '**🔗 Invoice links keep working through Wave.** Matching a deposit to an invoice records the payment on the SAME Wave invoice — no duplicate. And every push now lands on the correct bank account automatically (matched by the last digits — you never pick one per transaction).',
+      { superAdminOnly: true, text: 'v55.83-MC (the verified architecture; research workflow wf_23206eeb + wf_bf1ad3ea, Codex two-lane spec). PER-ACCOUNT SINGLE-WRITER: new wave_categories.wave_feed_owner (HUB | WAVE_FEED | null=block). NEW src/lib/wave-bank-account-resolver.js (shared by push-transaction, push-payment, prefill) — resolveWaveBankAnchor (suffix-tolerant mask), classifyWaveAccount/categoryPushSafety (blocks bank/cash, A/R, A/P, system as a money-txn category), feedOwnerVerdict firewall (UNSET+WAVE_FEED blocked; sandbox test business exempt). NEW /api/wave/account-feed-owner setter (list/set). NEW Settings UI: per-account Hub/Wave toggle + real Wave step + migration warning (dark theme). push-transaction + push-payment now import the shared resolver + firewall + resilient select(*) (so a missing wave_feed_owner column does not crash the push). Fixed 2 verdict bugs: resolver silo-default now carries the account feed owner (was hardcoded null); push-payment firewall reconciled with push-transaction (both block UNSET for production — no cash-doubling asymmetry). Migration sql/v55-83-MC-wave-feed-owner.sql (MUST be run live). Docs: WAVE_MIRROR_ARCHITECTURE.md + WAVE_API_TRANSACTION_EVIDENCE.md §0-PREMISE + committed proof scripts/introspect-wave-read-update.mjs. tests mc-category-classifier/shared-bank-resolver/wave-read-update-proof/feed-owner-ui (behavior, not just grep). HONEST LIMIT: historical Wave-imported rows are a forward cut-over (categorize once in Wave UI: Accounting→Transactions→Category→Save); editing existing Wave txns via API is impossible (proven). NEXT: one guided Wave flow UI (MD); Wave-state ingestion + confirmation loop (ME).' },
+    ],
+  },
+  {
     version: 'v55.83-MB',
     date: '2026-06-23',
     label: 'Fixed: Dry Run was crashing the page; failed pushes now clearly show "failed · retry"',

@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
+import { resolveWaveBankAnchor, waveBankCashCandidates, feedOwnerVerdict } from '../../../../lib/wave-bank-account-resolver';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -97,18 +98,38 @@ export async function POST(req) {
     if (!invWaveId) { return NextResponse.json({ ok: false, error: 'Invoice is not in Wave yet (no wave_invoice_id). Push the invoice first.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
     // Verify the bank transaction still exists (orphan guard) unless it was a manual payment.
+    var payBtAccountId = null;
     if (pay.bank_transaction_id) {
-      var btRes = await db.from('bank_transactions').select('id').eq('id', pay.bank_transaction_id);
+      var btRes = await db.from('bank_transactions').select('id, account_id').eq('id', pay.bank_transaction_id);
       if (!(btRes && btRes.data && btRes.data.length)) {
         return NextResponse.json({ ok: false, error: 'Bank deposit for this payment no longer exists (orphaned). Void it instead of pushing.', api_build_marker: API_BUILD_MARKER }, { status: 400 });
       }
+      payBtAccountId = btRes.data[0].account_id || null;
     }
 
-    // paymentAccountId from per-business settings.
+    // v55.83-MC — deposit account via the SHARED resolver: match the payment's OWN bank account to its Wave
+    // bank account (so a multi-account silo lands the payment on the account that actually received the
+    // money), falling back to the silo default. Removes the forced single global "Wave Payment Account" pick.
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
     var settings = (setRes && setRes.data && setRes.data.length) ? setRes.data[0] : null;
-    var paymentAccountId = settings ? settings.default_payment_account_id : null;
-    if (!paymentAccountId) { return NextResponse.json({ ok: false, error: 'No Wave payment account configured for this business. Set one in Wave Sync > Settings > Wave Payment Account.', api_build_marker: API_BUILD_MARKER, needs_payment_account: true }, { status: 400 }); }
+    var globalPayAcct = settings ? settings.default_payment_account_id : null;
+    var globalPayName = settings ? settings.default_payment_account_name : null;
+    var payMask = null;
+    if (payBtAccountId) {
+      var pmRes = await db.from('plaid_accounts').select('mask').eq('plaid_account_id', payBtAccountId).limit(1);
+      payMask = (pmRes && pmRes.data && pmRes.data.length && pmRes.data[0].mask) ? String(pmRes.data[0].mask) : null;
+    }
+    var payCatsRes = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId);
+    var payResolved = resolveWaveBankAnchor({ waveBankAccts: waveBankCashCandidates((payCatsRes && payCatsRes.data) || []), txnMask: payMask, globalAcct: globalPayAcct, globalName: globalPayName });
+    var paymentAccountId = payResolved.acct;
+    if (!paymentAccountId) { return NextResponse.json({ ok: false, error: 'No Wave bank/deposit account could be resolved for this payment. Set a default in Wave Sync > Settings, or add a Wave Cash/Bank account matching this deposit\x27s bank.', api_build_marker: API_BUILD_MARKER, needs_payment_account: true }, { status: 400 }); }
+    // Anti-duplicate FIREWALL (v55.83-MC) — SAME per-account single-writer rule as push-transaction (no
+    // asymmetry): an invoice payment's deposit must not double a deposit Wave's own feed already pulled. The
+    // sandbox test business is exempt; production silos require the deposit's account marked HUB-owned.
+    if (!_isApprovedTest) {
+      var payFw = feedOwnerVerdict(payResolved.feedOwner);
+      if (!payFw.ok) { return NextResponse.json({ ok: false, error: payFw.reason, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+    }
 
     var amount = Number(pay.amount) || 0;
     if (!(amount > 0)) { return NextResponse.json({ ok: false, error: 'Payment amount must be positive.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

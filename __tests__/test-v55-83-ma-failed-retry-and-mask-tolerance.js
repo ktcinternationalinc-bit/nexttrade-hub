@@ -31,10 +31,10 @@ ok('2: the failed row shows the exact last error inline (from wave_sync_log) + a
   /q\.retryable \? 'failed · retry' : 'not synced'/.test(sync));
 ok('3: the queue recomputes when the sync log changes (syncLog is a dependency)',
   /\}, \[customers, invoices, payments, bankTxns, splitTxns, active, prodSetup, syncLog\]\);/.test(sync));
-ok('4: prefill account match is suffix-tolerant (\\d{2,}, not \\d{4}) — Wave "(338)" maps to Plaid "6338"',
-  /var toks = nm\.match\(\/\\d\{2,\}\/g\) \|\| \[\];/.test(prefill) &&
-  /dm\.slice\(-t\.length\) === t/.test(prefill) &&
-  !/var toks = nm\.match\(\/\\d\{4\}\/g\)/.test(prefill));
+ok('4: prefill account match is suffix-tolerant via the SHARED resolver (maskMatches), not a private \\d{4} copy',
+  /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(prefill) &&
+  /maskMatches\(nm, dm\)/.test(prefill) &&
+  !/nm\.match\(\/\\d\{4\}\/g\)/.test(prefill));
 ok('5: prefill scans enough invoice pages for a large book (default 80 pages = 2000 invoices)',
   /var maxPages = Math\.min\(Number\(body\.max_pages\) \|\| 80, 200\);/.test(prefill));
 

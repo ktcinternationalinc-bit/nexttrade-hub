@@ -132,6 +132,11 @@ export default function WaveSyncCenter(props) {
   var [bankTxns, setBankTxns] = useState([]);
   var [splitTxns, setSplitTxns] = useState([]);   // v55.83-HE — split lines with a pending Wave category
   var [syncLog, setSyncLog] = useState([]);
+  // v55.83-MC — per-account feed owner (Hub vs Wave's own bank feed) — the anti-duplicate control.
+  var [feedOwners, setFeedOwners] = useState(null);
+  var [feedOwnerMig, setFeedOwnerMig] = useState(true);
+  var [feedOwnerBusy, setFeedOwnerBusy] = useState(false);
+  var [feedOwnerMsg, setFeedOwnerMsg] = useState('');
   var lo = useState(null); var openLog = lo[0]; var setOpenLog = lo[1];
   var ps0 = useState(null); var prodSetup = ps0[0]; var setProdSetup = ps0[1];
   var ps1 = useState(false); var prodBusy = ps1[0]; var setProdBusy = ps1[1];
@@ -312,6 +317,27 @@ export default function WaveSyncCenter(props) {
       .catch(function () { setCatCount(0); });
   }
   useEffect(function () { loadCatCount(); }, [active]);
+  // v55.83-MC — load/set the per-account feed owner (Hub vs Wave feed).
+  function loadFeedOwners() {
+    if (!active || isPlaceholderWaveBusiness(active)) { setFeedOwners(null); return; }
+    fetch('/api/wave/account-feed-owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'list', wave_business_id: active, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.ok) { setFeedOwners(d.accounts || []); setFeedOwnerMig(d.migration_applied !== false); } else { setFeedOwners([]); } })
+      .catch(function () { setFeedOwners([]); });
+  }
+  useEffect(function () { loadFeedOwners(); }, [active]);
+  function setFeedOwner(acctId, owner) {
+    setFeedOwnerBusy(true); setFeedOwnerMsg('');
+    fetch('/api/wave/account-feed-owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set', wave_business_id: active, wave_account_id: acctId, wave_feed_owner: owner, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.saved) { setFeedOwnerMsg('Saved.'); loadFeedOwners(); toast.success('Account feed owner updated'); }
+        else if (d && d.db_error) { setFeedOwnerMsg('Save failed: ' + d.db_error); toast.error('Save failed — see message'); }
+        else { setFeedOwnerMsg((d && d.error) || 'Save failed.'); }
+      })
+      .catch(function (e) { setFeedOwnerMsg('Request failed: ' + ((e && e.message) || String(e))); })
+      .then(function () { setFeedOwnerBusy(false); });
+  }
 
   // v55.83-KT — ONE-CLICK CONNECT. Stop telling the user to go hunt the bind tool. This: (1) asks the
   // server what Wave businesses the configured token can actually access, (2) finds the one that matches
@@ -1197,6 +1223,26 @@ export default function WaveSyncCenter(props) {
       )}
       {tab === 'settings' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
+          {/* v55.83-MC — THE anti-duplicate control: who feeds Wave for each bank account. Dark, plain
+              language, with the verified one-time Wave step inline. This is what unblocks pushing. */}
+          <div className="mb-4 rounded-lg p-3 bg-slate-900 border border-slate-700 text-slate-100">
+            <div className="font-extrabold text-sm mb-1">🏦 Who feeds each bank account? <span className="font-normal text-slate-400 text-[11px]">— required before the Hub can push, so nothing is doubled</span></div>
+            <div className="text-[11px] text-slate-300 mb-2">Pick ONE source per account. <b className="text-emerald-300">Hub feeds it</b> = Wave's own auto-import is OFF for that account, and the Hub posts each transaction to Wave already categorized. <b className="text-sky-300">Wave feeds it</b> = Wave pulls it directly, so the Hub won't create transactions for it (that would double them). Until you choose, pushing stays blocked on purpose.</div>
+            {!feedOwnerMig && <div className="text-[11px] bg-amber-950/60 border border-amber-700/60 text-amber-100 rounded px-2 py-1 mb-2">⚠ One-time database step needed first: a super admin must run <span className="font-mono">sql/v55-83-MC-wave-feed-owner.sql</span>. Saving is disabled until then.</div>}
+            {feedOwners === null ? <div className="text-[11px] text-slate-400 italic">Loading accounts…</div>
+              : feedOwners.length === 0 ? <div className="text-[11px] text-slate-400 italic">No Wave Cash/Bank accounts found for this silo yet. Pull Wave categories first (below).</div>
+              : feedOwners.map(function (a) {
+                return <div key={a.wave_account_id} className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-800 last:border-0">
+                  <span className="text-xs font-semibold flex-1">{a.wave_account_name}{!a.wave_feed_owner ? <span className="ml-2 text-[10px] text-rose-400 font-bold">not set — push blocked</span> : null}</span>
+                  <span className="flex gap-1">
+                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'HUB'); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'HUB' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Hub feeds it</button>
+                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'WAVE_FEED'); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'WAVE_FEED' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Wave feeds it</button>
+                  </span>
+                </div>;
+              })}
+            <div className="text-[10px] text-slate-400 mt-2">To set an account to <b>Hub feeds it</b>: in Wave open <b>Banking → Connected Accounts</b>, find that account, and turn OFF <b>"Automatically import transactions into account"</b> — do NOT click the trashcan (that deletes every account under the bank). Then choose "Hub feeds it" here. <span className="text-slate-500">(Steps from Wave's official help docs — confirm the exact toggle wording on your screen.)</span></div>
+            {feedOwnerMsg ? <div className="text-[11px] mt-1 text-slate-200 whitespace-pre-wrap">{feedOwnerMsg}</div> : null}
+          </div>
           {/* v55.83-KP (Codex) — ONE-GLANCE status summary so the user never has to infer readiness from
               five scattered checkboxes/red lines. Each red item names the exact next action. */}
           {(function () {

@@ -31,9 +31,9 @@ ok('1b: the journal is a BALANCED double-entry (v55.83-MA money-safety) — equa
   /balance: 'DEBIT' \}, \{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
   /balance: 'DEBIT' \}, \{ accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
   !/balance: 'INCREASE' \}\]/.test(route));
-ok('2: multi-account anchor safety — PER-ACCOUNT resolution (LZ): the txn anchors to its own bank\'s Wave account by mask, with single-account + silo-default fallbacks; no blanket multi-account block',
-  /function maskMatches\(waveName, mask\)/.test(route) &&
-  /anchorVia = 'matched-by-mask:'/.test(route) &&
+ok('2: multi-account anchor safety — PER-ACCOUNT resolution via the SHARED resolver (LZ/MC): route delegates to resolveWaveBankAnchor; no blanket multi-account block',
+  /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(route) &&
+  /resolveWaveBankAnchor\(\{/.test(route) &&
   !/if \(distinctAccts > 1\) \{ return blocked\(/.test(route));
 ok('3: logFail is async + AWAITED at both Wave-rejection call sites (reliable sync_failed + log)',
   /async function logFail\(msg, extra\) \{/.test(route) &&

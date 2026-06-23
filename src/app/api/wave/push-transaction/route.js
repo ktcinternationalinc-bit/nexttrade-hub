@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
+import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety, feedOwnerVerdict } from '../../../../lib/wave-bank-account-resolver';
 
 var API_BUILD_MARKER = 'v55.83-MB-push-transaction';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
@@ -112,48 +113,47 @@ export async function POST(req) {
     var categoryAcct = bt.wave_account_id || null;
     if (!categoryAcct) { return blocked('No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', 400); }
 
-    // v55.83-LZ (Codex architecture) — PER-ACCOUNT anchor resolution. A silo can have several bank accounts
-    // (e.g. ··6338, ··6353), so we anchor a transaction to the Wave bank account that matches ITS OWN bank
-    // account, not one global account. Order: (1) match this txn's bank mask to a Wave Cash&Bank account by
-    // name (suffix-tolerant — Wave shows "(338)" while Plaid is "6338"); (2) if the silo has exactly ONE
-    // Wave bank account, use it; (3) fall back to the silo default deposit account (single-account/legacy).
-    // This REPLACES the old "one global account + hard-block multi-account silos" model.
+    // v55.83-MC — shared resolver + category safety + the per-account single-writer FIREWALL.
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
     var globalAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
     var globalName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
 
+    // Load the silo's Wave chart-of-accounts once. select('*') is RESILIENT — if the wave_feed_owner
+    // migration (sql/v55-83-MC-wave-feed-owner.sql) is not applied yet, '*' still returns the rows (the
+    // column is just absent → treated as UNSET → firewall blocks with the "assign owner" message) instead
+    // of erroring the whole select and breaking the push.
+    var wcRes = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId);
+    var allCats = (wcRes && wcRes.data) || [];
+
+    // CATEGORY SAFETY — block categories that would misstate the books (bank/cash = the anchor, not a
+    // category; A/R + A/P belong to the invoice/bill lanes; Wave system accounts are Wave-managed).
+    var chosenCat = null; var ci; for (ci = 0; ci < allCats.length; ci++) { if (allCats[ci].wave_account_id === categoryAcct) { chosenCat = allCats[ci]; break; } }
+    var catSafety = categoryPushSafety(chosenCat || { wave_account_name: bt.wave_account_name });
+    if (catSafety.block) { return blocked('The Wave category "' + (bt.wave_account_name || categoryAcct) + '" cannot be used for a money transaction — it is ' + catSafety.reason, 400); }
+
+    // BANK-SIDE ANCHOR — match THIS txn's bank account to its Wave bank account (shared resolver; suffix-
+    // tolerant mask, single-bank, then silo default). A silo can have many accounts; nobody picks one per txn.
     var txnMask = null;
     if (bt.account_id) {
       var paOne = await db.from('plaid_accounts').select('mask').eq('plaid_account_id', bt.account_id).limit(1);
       txnMask = (paOne && paOne.data && paOne.data.length && paOne.data[0].mask) ? String(paOne.data[0].mask) : null;
     }
-    var waveBankAccts = [];
-    var wcRes = await db.from('wave_categories').select('wave_account_id, wave_account_name, subtype, type').eq('wave_business_id', waveBusinessId);
-    ((wcRes && wcRes.data) || []).forEach(function (c) {
-      var stU = String(c.subtype || '').toUpperCase(); var nmU = String(c.wave_account_name || '').toUpperCase(); var tyU = String(c.type || '').toUpperCase();
-      var arap = stU.indexOf('RECEIVABLE') >= 0 || stU.indexOf('PAYABLE') >= 0 || nmU.indexOf('RECEIVABLE') >= 0 || nmU.indexOf('PAYABLE') >= 0;
-      var isBank = stU.indexOf('CASH_AND_BANK') >= 0 || stU.indexOf('CASH') >= 0 || stU.indexOf('BANK') >= 0 || stU.indexOf('MONEY') >= 0 || (tyU.indexOf('ASSET') >= 0 && (nmU.indexOf('CASH') >= 0 || nmU.indexOf('BANK') >= 0 || nmU.indexOf('CHECKING') >= 0 || nmU.indexOf('CHEQUING') >= 0 || nmU.indexOf('SAVINGS') >= 0));
-      if (isBank && !arap && c.wave_account_id) { waveBankAccts.push(c); }
-    });
-    function maskMatches(waveName, mask) {
-      if (!mask) { return false; }
-      var toks = String(waveName || '').match(/\d{2,}/g) || [];
-      var i; for (i = 0; i < toks.length; i++) { var t = toks[i]; if (t === mask || mask.indexOf(t) >= 0 || t.indexOf(mask) >= 0 || (t.length >= 3 && mask.slice(-t.length) === t) || (mask.length >= 3 && t.slice(-mask.length) === mask)) { return true; } }
-      return false;
-    }
-    var anchorAcct = null; var anchorName = null; var anchorVia = null;
-    if (txnMask) {
-      var hc; for (hc = 0; hc < waveBankAccts.length; hc++) { if (maskMatches(waveBankAccts[hc].wave_account_name, txnMask)) { anchorAcct = waveBankAccts[hc].wave_account_id; anchorName = waveBankAccts[hc].wave_account_name; anchorVia = 'matched-by-mask:' + txnMask; break; } }
-    }
-    if (!anchorAcct && waveBankAccts.length === 1) { anchorAcct = waveBankAccts[0].wave_account_id; anchorName = waveBankAccts[0].wave_account_name; anchorVia = 'only-wave-bank-account'; }
-    if (!anchorAcct && globalAcct) { anchorAcct = globalAcct; anchorName = globalName; anchorVia = 'silo-default'; }
+    var bankCandidates = waveBankCashCandidates(allCats);
+    var resolved = resolveWaveBankAnchor({ waveBankAccts: bankCandidates, txnMask: txnMask, globalAcct: globalAcct, globalName: globalName });
+    var anchorAcct = resolved.acct; var anchorName = resolved.name; var anchorVia = resolved.via;
     if (!anchorAcct) {
-      var why;
-      if (setRes && setRes.error) { why = 'the settings table could not be read (' + (setRes.error.message || 'db error') + '); the default_payment_account_id column may be missing — run: ALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS default_payment_account_id text, ADD COLUMN IF NOT EXISTS default_payment_account_name text;'; }
-      else if (txnMask && waveBankAccts.length > 1) { why = 'this transaction is from bank ··' + txnMask + ', and none of the ' + waveBankAccts.length + ' Wave bank accounts has a name matching it (so there is no safe single default). Rename the matching Wave bank account to include "' + txnMask + '", or set a silo default in Settings -> Wave Deposit Account.'; }
-      else if (waveBankAccts.length === 0) { why = 'no Wave Cash & Bank account exists in this business\x27s chart of accounts. Create one in Wave (Accounting -> Chart of Accounts -> Add -> Cash & Bank), pull categories, then retry.'; }
-      else { why = 'set a silo default in Settings -> Wave Deposit Account (pick your bank account, confirm the green "Saved").'; }
+      var why = resolved.reason;
+      if (setRes && setRes.error) { why = 'the settings table could not be read (' + (setRes.error.message || 'db error') + '); the default_payment_account_id column may be missing — run the migration sql/v55-83-LW-payment-account-columns.sql.'; }
       return blocked('Could not resolve the Wave bank account for this transaction: ' + why, 400);
+    }
+
+    // THE FIREWALL (v55.83-MC, per-account single-writer) — refuse to CREATE when Wave's own bank feed owns
+    // this account (would duplicate every transaction) or ownership is unset. This is the structural guard
+    // that makes double-counting impossible: one writer per account, never both. See WAVE_MIRROR_ARCHITECTURE.md.
+    // The approved SANDBOX test business is exempt (it has no real bank feed); production silos are enforced.
+    if (!_isApprovedTest) {
+      var fw = feedOwnerVerdict(resolved.feedOwner);
+      if (!fw.ok) { return blocked(fw.reason, 409); }
     }
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));

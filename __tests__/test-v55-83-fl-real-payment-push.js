@@ -14,7 +14,7 @@ ok(/409/.test(rt),'returns 409 if already claimed/syncing');
 ok(/pay\.voided === true/.test(rt),'refuses voided payment');
 ok(/amount > 0/.test(rt),'refuses amount <= 0');
 // required setup
-ok(/Invoice is not in Wave yet/.test(rt) && /No Wave payment account configured/.test(rt),'blocks missing invoice/account');
+ok(/Invoice is not in Wave yet/.test(rt) && /No Wave bank\/deposit account could be resolved/.test(rt),'blocks missing invoice/account');
 ok(/Bank deposit for this payment no longer exists/.test(rt),'orphan guard in route');
 // success
 ok(/wave_payment_id: wavePaymentId, sync_status: 'synced', last_synced_at/.test(rt),'saves real id + synced + last_synced');
