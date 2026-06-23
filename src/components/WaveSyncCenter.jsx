@@ -1244,8 +1244,8 @@ export default function WaveSyncCenter(props) {
             )}
           </div>
           <div className="mb-4 border border-teal-200 bg-teal-50 rounded-lg p-3">
-            <div className="font-bold text-slate-900 mb-1">Payment Deposit Account (Wave)</div>
-            <div className="text-xs text-slate-700 mb-2">Pick the Wave bank/cash account where received invoice payments should land — usually <b>Cash on Hand</b> to start, or your real bank account. This is <b>not</b> Accounts Receivable. Only valid bank/cash accounts can be selected.</div>
+            <div className="font-bold text-slate-900 mb-1">🟢 Wave Deposit Account — REQUIRED for pushing to Wave</div>
+            <div className="text-xs text-slate-700 mb-2">The <b>Wave</b> bank/cash account where Wave records the money side of a pushed payment or transaction. <b>This is the one the transaction/payment push needs</b> — until it's set, pushes are blocked. Pick a Wave bank/cash account (e.g. <b>Cash on Hand</b> or your real bank). Not Accounts Receivable.</div>
             {prodSetup && prodSetup.default_payment_account_id ? (
               <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured payment account: {prodSetup.default_payment_account_name || prodSetup.default_payment_account_id}</div>
             ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No payment account configured yet — payment push will be blocked until you set one.</div>}
@@ -1282,8 +1282,8 @@ export default function WaveSyncCenter(props) {
             })()}
           </div>
           <div className="mb-4 border border-sky-200 bg-sky-50 rounded-lg p-3">
-            <div className="font-bold text-slate-900 mb-1">Default Bank Account for This Silo</div>
-            <div className="text-xs text-slate-700 mb-2">Bank Review auto-loads this account when this Wave business is selected (you can still switch accounts manually). This is the local Plaid/bank account whose transactions you review — separate from the Wave payment deposit account above.</div>
+            <div className="font-bold text-slate-900 mb-1">⚪ Bank Review default account — display only (NOT sent to Wave)</div>
+            <div className="text-xs text-slate-700 mb-2">A convenience setting that only controls which <b>local bank account</b> auto-loads on the <b>Bank Review</b> screen. It is <b>NOT</b> the Wave Deposit Account above and is <b>never sent to Wave</b> — it has nothing to do with pushing. You do not need to set this to push.</div>
             {prodSetup && prodSetup.default_plaid_account_id
               ? <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Default bank account: {prodSetup.default_plaid_account_name || prodSetup.default_plaid_account_id}</div>
               : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default bank account set for this silo — Bank Review shows all of this silo&#39;s accounts.</div>}

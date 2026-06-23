@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-LX',
+    date: '2026-06-23',
+    label: 'Settings: the two look-alike "account" settings are now unmistakable',
+    items: [
+      '**🟢 / ⚪ The two account boxes that confused everyone are relabeled.** "🟢 Wave Deposit Account — REQUIRED for pushing to Wave" (the one the push needs) vs "⚪ Bank Review default account — display only, NOT sent to Wave" (just which account loads on the Bank Review screen). You no longer have to guess which is which. This is step 1 of a bigger cleanup that collapses the scattered Wave tabs into one guided flow.',
+      { superAdminOnly: true, text: 'v55.83-LX (Build 1 of the Wave-UI consolidation, mapped by wf_17f7627b). Renamed WaveSyncCenter Settings boxes: default_payment_account_id box → "🟢 Wave Deposit Account — REQUIRED for pushing" (states it is what the push needs + why pushes block without it); default_plaid_account_id box → "⚪ Bank Review default account — display only (NOT sent to Wave)". Pure label/copy change, zero logic/route change. test lx(3). NEXT (Build 2): merge the 3 Wave tabs (Connection / Import / Sync Center) into ONE "🌊 Wave" tab via a WaveHub wrapper with a single top setup-checklist + 4 ordered sections (Connect → Setup → Import → Sync); delete duplicate controls (import button + connect stub in WaveSyncCenter, 2nd silo selector in WaveImportTab, category-pull in BankReview); reorder Import-from-Wave steps; collapse readiness into one useMemo. All re-parenting of existing tested components — NO money/route changes. Full plan in handoff.' },
+    ],
+  },
+  {
     version: 'v55.83-LW',
     date: '2026-06-23',
     label: 'The push now tells you the EXACT reason the deposit account is missing',
