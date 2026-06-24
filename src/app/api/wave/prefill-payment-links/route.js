@@ -24,7 +24,7 @@ import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared'
 import { roundMoney, isPaymentVoid } from '../../../../lib/payment-matching';
 import { maskMatches } from '../../../../lib/wave-bank-account-resolver';
 
-var API_BUILD_MARKER = 'v55.83-LT-prefill-payment-links';
+var API_BUILD_MARKER = 'v55.83-ML-prefill-payment-links';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
@@ -81,7 +81,11 @@ export async function POST(req) {
     ((pr && pr.data) || []).forEach(function (p) { if (p.wave_payment_id) { paidWaveIds[p.wave_payment_id] = true; } });
 
     // candidate deposits in this silo (money-in, not yet linked, not Wave-pushed).
-    var depRes = await db.from('bank_transactions').select('id, name, amount, amount_abs, posted_date, date, direction, matched_invoice_id, wave_transaction_id, accounting_customer_id, business_id, classification, account_id').eq('wave_business_id', waveBusinessId).eq('direction', 'in');
+    // v55.83-ML — select('*') is RESILIENT: bank_transactions.wave_transaction_id only exists if sql/v55-83-LF
+    // was run. Selecting it explicitly made the WHOLE deposit read error out ("column ... does not exist")
+    // and broke prefill on any DB without that migration. With '*', a missing column just reads as undefined
+    // (treated as not-yet-synced in the filter below) instead of failing the request.
+    var depRes = await db.from('bank_transactions').select('*').eq('wave_business_id', waveBusinessId).eq('direction', 'in');
     if (depRes && depRes.error) { return NextResponse.json({ ok: false, error: 'Deposit read failed: ' + depRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
     // v55.83-LO (Codex) — ACCOUNT-AWARE matching. Map each Hub deposit's plaid account -> its mask, and
