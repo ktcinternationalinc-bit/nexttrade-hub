@@ -15,10 +15,10 @@ function gqlEstimates(token, bid, page) {
   // GraphQL error (captured below), never a money mutation.
   var query = 'query($bid: ID!, $page: Int!) { business(id:$bid){ id estimates(page:$page,pageSize:25){'
     + ' pageInfo{ currentPage totalPages totalCount } edges{ node{'
-    + ' id estimateNumber status estimateDate expiryDate memo'
+    + ' id estimateNumber status estimateDate dueDate memo'
     + ' total{ value currency{ code } }'
     + ' customer{ id name }'
-    + ' items{ product{ name } description quantity price total{ value } } } } } } }';
+    + ' items{ product{ name } description quantity unitPrice total{ value } } } } } } }';
   return fetch('https://gql.waveapps.com/graphql/public', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -112,12 +112,12 @@ export async function POST(request) {
           for (pli = 0; pli < rawItems.length; pli++) {
             var pit = rawItems[pli];
             var lt = num(pit.total);
-            if (!lt) { lt = (Number(pit.quantity) || 1) * (Number(pit.price) || 0); }
+            if (!lt) { lt = (Number(pit.quantity) || 1) * (Number(pit.unitPrice) || 0); }
             lt = r2(lt); lineSum += lt;
             preparedItems.push({
               business_id: internalBusinessId, // accounting_proforma_items has no creator/audit column to set
               description: (pit.product && pit.product.name ? (pit.product.name + (pit.description ? (' — ' + pit.description) : '')) : (pit.description || 'Item')),
-              quantity: Number(pit.quantity) || 1, unit_price: Number(pit.price) || 0, line_total: lt, sort_order: pli
+              quantity: Number(pit.quantity) || 1, unit_price: Number(pit.unitPrice) || 0, line_total: lt, sort_order: pli
             });
           }
           lineSum = r2(lineSum);
@@ -128,7 +128,7 @@ export async function POST(request) {
             proforma_number: n.estimateNumber || n.id,
             accounting_customer_id: acctCustomerId,
             proforma_date: n.estimateDate || null,
-            valid_until: n.expiryDate || null,
+            valid_until: n.dueDate || null,
             notes: n.memo || null,
             total_amount: total,
             currency: curOf(n),
