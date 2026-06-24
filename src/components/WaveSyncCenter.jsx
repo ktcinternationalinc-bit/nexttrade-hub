@@ -105,6 +105,45 @@ function syncLogParts(l) {
   return { primary: primary, detail: detail.join(' · ') };
 }
 
+function sortSyncLogRows(rows) {
+  return (rows || []).slice().sort(function (a, b) {
+    var at = Date.parse((a && a.attempted_at) || '') || 0;
+    var bt = Date.parse((b && b.attempted_at) || '') || 0;
+    if (bt !== at) { return bt - at; }
+    return (Number((b && b.id) || 0) || 0) - (Number((a && a.id) || 0) || 0);
+  });
+}
+
+function orderedSyncLogQuery(q, limit) {
+  return q.order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(limit);
+}
+
+function loadSyncLogRows(activeBiz) {
+  if (!activeBiz) {
+    return orderedSyncLogQuery(supabase.from('wave_sync_log').select('*'), 300);
+  }
+  // v55.83-MK - load the active silo first. A global latest-100 slice can hide
+  // the exact payment-push failure when other silos/admin jobs have newer logs.
+  return Promise.all([
+    orderedSyncLogQuery(supabase.from('wave_sync_log').select('*').eq('wave_business_id', activeBiz), 250),
+    orderedSyncLogQuery(supabase.from('wave_sync_log').select('*').eq('wave_record_id', activeBiz), 100),
+    orderedSyncLogQuery(supabase.from('wave_sync_log').select('*').is('wave_business_id', null), 100)
+  ]).then(function (parts) {
+    var seen = {};
+    var rows = [];
+    parts.forEach(function (part) {
+      if (part && part.error) { throw part.error; }
+      ((part && part.data) || []).forEach(function (row) {
+        var key = row && row.id != null ? ('id:' + row.id) : JSON.stringify(row || {});
+        if (!seen[key]) { seen[key] = true; rows.push(row); }
+      });
+    });
+    return { data: sortSyncLogRows(rows).slice(0, 300) };
+  }).catch(function () {
+    return orderedSyncLogQuery(supabase.from('wave_sync_log').select('*'), 500);
+  });
+}
+
 export default function WaveSyncCenter(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var userProfile = props.userProfile || null;
@@ -178,11 +217,12 @@ export default function WaveSyncCenter(props) {
 
   function load() {
     setLoading(true);
+    var activeNow = getActiveWaveBusiness();
     Promise.all([
       fetchAllRows('wave_business_registry', '*'),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
-      supabase.from('wave_sync_log').select('*').order('attempted_at', { ascending: false }).order('id', { ascending: false }).limit(100),
+      loadSyncLogRows(activeNow),
       fetchAllRows('accounting_invoice_payments', '*', 'payment_date', false),
       fetchAllRows('bank_transactions', 'id, amount_abs, name, merchant_name, posted_date, date, direction, classification, wave_business_id, wave_account_id, wave_account_name, category_status'),
       // v55.83-HE — split lines categorized to a Wave account. Resilient: if the table is missing
@@ -209,7 +249,7 @@ export default function WaveSyncCenter(props) {
       // old `=== active` filter matched undefined and HID every audit row (push rows AND import rows,
       // which scope via wave_record_id/business_id). Show rows for the active silo PLUS any row not
       // tagged with a wave_business_id, so the audit trail is visible instead of silently blank.
-      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !active || l.wave_business_id === active || l.wave_record_id === active || l.wave_business_id == null; }).map(function (l) {
+      setSyncLog(((res[3] && res[3].data) || []).filter(function (l) { return !activeNow || l.wave_business_id === activeNow || l.wave_record_id === activeNow || l.wave_business_id == null; }).map(function (l) {
         if (!l || l.entity_type !== 'bank_transaction' || !l.hub_record_id || !btMap[l.hub_record_id]) { return l; }
         var bt = btMap[l.hub_record_id];
         var bankCtx = {
@@ -730,18 +770,27 @@ export default function WaveSyncCenter(props) {
     // v55.83-LC (Codex) — transaction rows dry-run against the SERVER so the preview shows the exact Wave
     // anchor (bank-side) account + direction, and surfaces a block reason (e.g. multi-account silo, no
     // deposit account). Other entity types keep the client-side dryRunRecord preview.
+    // v55.83-MK also sends payment dry-runs through /api/wave/push-payment, so
+    // the preview and the real push share the same account/firewall blockers.
     var seq = Promise.resolve(); var results = [];
     selectedRows.forEach(function (q) {
       seq = seq.then(function () {
-        if (q.action !== 'transaction') {
+        if (q.action !== 'transaction' && q.action !== 'payment') {
           var v = dryRunRecord({ action: q.action, record: q.record, waveBusinessId: active, registry: registry });
           results.push({ label: q.label, verdict: v.verdict, message: v.message, wouldDo: v.wouldDo });
           return null;
         }
-        return fetch('/api/wave/push-transaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
+        var route = q.action === 'payment' ? '/api/wave/push-payment' : '/api/wave/push-transaction';
+        return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if (d && d.ok && d.dry_run) {
+              if (q.action === 'payment') {
+                var ps = d.would_send || {};
+                var pmsg = 'Wave invoice: ' + (ps.invoiceId || '?') + ' · Payment account: ' + (ps.paymentAccountId || '?') + ' · Amount: ' + (ps.amount || '?') + ' · Date: ' + (ps.paymentDate || '?');
+                results.push({ label: q.label, verdict: 'WOULD POST', message: pmsg, wouldDo: d.would_send });
+                return;
+              }
               var jrn = '';
               if (d.debit && d.credit) { jrn = '  ·  DEBIT ' + (d.debit.accountId === d.category_account_id ? (d.category_name || 'category') : (d.anchor_account || 'bank')) + ' / CREDIT ' + (d.credit.accountId === d.category_account_id ? (d.category_name || 'category') : (d.anchor_account || 'bank')) + ' = ' + d.amount; }
               results.push({ label: q.label, verdict: 'WOULD POST', message: 'Bank side (anchor): ' + (d.anchor_account || '?') + (d.anchor_via ? (' [' + d.anchor_via + ']') : '') + ' · ' + d.direction + ' ' + d.amount + ' → category: ' + (d.category_name || d.category_account_id) + jrn, wouldDo: d.would_send });

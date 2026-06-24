@@ -21,8 +21,9 @@ var route = rd('src/app/api/wave/push-transaction/route.js');
 var sync = rd('src/components/WaveSyncCenter.jsx');
 var bw = rd('src/app/api/accounting/bank-write/route.js');
 
-ok('1: Dry Run previews transaction rows via the SERVER and shows the Wave anchor (bank-side) account',
-  /if \(q\.action !== 'transaction'\) \{/.test(sync) &&
+ok('1: Dry Run previews money rows via the SERVER and shows the Wave anchor (bank-side) account',
+  /if \(q\.action !== 'transaction' && q\.action !== 'payment'\) \{/.test(sync) &&
+  /var route = q\.action === 'payment' \? '\/api\/wave\/push-payment' : '\/api\/wave\/push-transaction';/.test(sync) &&
   /dry_run: true, user_id: userProfile && userProfile\.id/.test(sync) &&
   /Bank side \(anchor\): ' \+ \(d\.anchor_account \|\| '\?'\)/.test(sync) &&
   /anchor_account: anchorName \|\| anchorAcct, anchor_via: anchorVia, direction: dir/.test(route));

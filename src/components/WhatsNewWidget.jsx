@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MK',
+    date: '2026-06-24',
+    label: 'Payment sync preflight fixed',
+    items: [
+      '**Payment Dry Run now checks the real payment push path.** It uses the same server rules as Push, so missing bank/deposit account, feed-owner, draft invoice, permission, and cross-silo blockers show before anything writes to Wave.',
+      '**Sync Log now loads the selected Wave business first.** A failed payment push cannot disappear just because other businesses or admin jobs wrote newer log rows.',
+      { superAdminOnly: true, text: 'v55.83-MK. WaveSyncCenter payment dry-run now routes through /api/wave/push-payment with dry_run:true, while transactions still route through /api/wave/push-transaction and customer/invoice previews stay client-side. Sync Log loads active-silo rows by wave_business_id/wave_record_id before a broad fallback, preventing global latest-100 truncation from hiding payment push failures.' },
+    ],
+  },
+  {
     version: 'v55.83-MJ',
     date: '2026-06-24',
     label: 'Estimate import message clarified',
