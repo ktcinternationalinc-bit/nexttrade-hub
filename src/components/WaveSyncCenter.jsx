@@ -142,6 +142,7 @@ export default function WaveSyncCenter(props) {
   var ps1 = useState(false); var prodBusy = ps1[0]; var setProdBusy = ps1[1];
   var ps2 = useState(''); var prodMsg = ps2[0]; var setProdMsg = ps2[1];
   var ps3 = useState(null); var prodList = ps3[0]; var setProdList = ps3[1];
+  var ps4 = useState(null); var prodDetails = ps4[0]; var setProdDetails = ps4[1];
   // v55.83-LY (Codex #1) — push results get their OWN message state, rendered in Pending Sync. Previously
   // pushSelected wrote into prodMsg, so a bank-transaction push failure showed inside "Default Invoice
   // Product" — wrong box, very confusing.
@@ -275,18 +276,18 @@ export default function WaveSyncCenter(props) {
   }
 
   function runProductSetup(mode, productId, productName) {
-    setProdBusy(true); setProdMsg(''); if (mode !== 'select') { setProdList(null); }
+    setProdBusy(true); setProdMsg(''); setProdDetails(null); if (mode !== 'select') { setProdList(null); }
     var payload = { wave_business_id: active, mode: mode, user_id: (userProfile && userProfile.id) || null };
     if (productId) { payload.product_id = productId; payload.product_name = productName; }
     if (mode === 'select') { payload.mode = 'select'; }
     fetch('/api/wave/product-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d && d.products) { setProdList(d.products); setProdMsg('Found ' + d.products.length + ' products. Pick one to use as the default invoice product.'); }
-        else if (d && d.saved) { setProdMsg('Saved. Default invoice product set to ' + (d.default_invoice_product_name || d.default_invoice_product_id) + '. (source: ' + (d.source || '') + ')'); loadProdSetup(); setProdList(null); toast.success('Default invoice product configured'); }
+        if (d && d.products) { setProdList(d.products); setProdMsg('Found ' + d.products.length + ' products. Pick one to use as the default invoice product.'); setProdDetails(null); }
+        else if (d && d.saved) { setProdMsg('Saved. Default invoice product set to ' + (d.default_invoice_product_name || d.default_invoice_product_id) + '. (source: ' + (d.source || '') + ')'); setProdDetails(null); loadProdSetup(); setProdList(null); toast.success('Default invoice product configured'); }
         else if (d && d.db_error) { setProdMsg('Database save FAILED: ' + d.db_error + '\n\nIf this mentions a missing column (e.g. "source"), run:\nALTER TABLE wave_business_settings ADD COLUMN IF NOT EXISTS source text;'); toast.error('Save failed — see message'); }
-        else if (d && d.error) { setProdMsg('Error: ' + d.error + (d.response ? ('\n\nWave response:\n' + JSON.stringify(d.response, null, 2)) : '')); }
-        else { setProdMsg(JSON.stringify(d, null, 2)); }
+        else if (d && d.error) { setProdMsg('Error: ' + d.error + (d.wave_error_summary ? ('\n' + d.wave_error_summary) : '')); setProdDetails(d.response || d); toast.error('Product setup failed'); }
+        else { setProdMsg('Product setup returned an unexpected response. Open details below.'); setProdDetails(d); }
       })
       .catch(function (e) { setProdMsg('Request failed: ' + ((e && e.message) || String(e))); })
       .finally(function () { setProdBusy(false); });
@@ -1309,6 +1310,10 @@ export default function WaveSyncCenter(props) {
               <button onClick={function () { runProductSetup('list'); }} disabled={prodBusy} className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-900 rounded px-2 py-1 font-bold disabled:opacity-50">List products</button>
             </div>
             {prodMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{prodMsg}</div>}
+            {prodDetails && <details className="mt-2 text-xs border border-slate-300 rounded bg-slate-100 text-slate-900">
+              <summary className="cursor-pointer px-2 py-1 font-bold">Technical details</summary>
+              <pre className="p-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px]">{JSON.stringify(prodDetails, null, 2)}</pre>
+            </details>}
             {prodList && prodList.length > 0 && (
               <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
                 {prodList.map(function (pr) {

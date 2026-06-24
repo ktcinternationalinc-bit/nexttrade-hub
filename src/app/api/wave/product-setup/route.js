@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-EU-product-setup';
+var API_BUILD_MARKER = 'v55.83-MH-product-setup-current-wave-schema';
 var API_ROUTE = '/api/wave/product-setup';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -23,6 +23,23 @@ function saveDefault(db, bid, pid, pname, source) {
     if (r && r.error) { return { ok: false, error: r.error.message || String(r.error) }; }
     return { ok: true, row: (r && r.data && r.data.length) ? r.data[0] : row };
   }).catch(function (e) { return { ok: false, error: (e && e.message) || String(e) }; });
+}
+
+function waveMessages(payload) {
+  var out = [];
+  try {
+    if (payload && payload.errors && payload.errors.length) {
+      var i; for (i = 0; i < payload.errors.length; i++) { if (payload.errors[i] && payload.errors[i].message) { out.push(payload.errors[i].message); } }
+    }
+    var pc = payload && payload.data && payload.data.productCreate;
+    if (pc && pc.inputErrors && pc.inputErrors.length) {
+      var j; for (j = 0; j < pc.inputErrors.length; j++) {
+        var ie = pc.inputErrors[j] || {};
+        out.push((ie.message || 'Wave input error') + (ie.path ? (' [' + (Array.isArray(ie.path) ? ie.path.join('.') : ie.path) + ']') : ''));
+      }
+    }
+  } catch (e) {}
+  return out;
 }
 
 export async function GET() {
@@ -106,10 +123,8 @@ export async function POST(req) {
       var incomeAccountId = body.income_account_id || ((acEdges && acEdges.length && acEdges[0].node) ? acEdges[0].node.id : null);
       if (!incomeAccountId) { return NextResponse.json({ error: 'No Wave income account available. Pick or create an income account in Wave first.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, accounts: acData }, { status: 502 }); }
       var pcMut = 'mutation($input: ProductCreateInput!){ productCreate(input:$input){ didSucceed inputErrors{ message path code } product{ id name } } }';
-      // v55.83-IN — Wave's ProductCreateInput REQUIRES the sold/bought indicator ("indicate whether
-      // you will be buying or selling this product"). Omitting it caused the productCreate rejection
-      // you saw. This is a sellable invoice line item → isSold:true, isBought:false.
-      var pcVars = { input: { businessId: bid, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId, isSold: true, isBought: false } };
+      // v55.83-MH - current live Wave rejects ProductCreateInput.isSold/isBought, so do not send them.
+      var pcVars = { input: { businessId: bid, name: 'NextTrade Hub Item', unitPrice: '0', description: 'Reusable Hub invoice line item', incomeAccountId: incomeAccountId } };
       var pcResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: pcMut, variables: pcVars }) });
       var pcData = await pcResp.json();
       var pc = pcData && pcData.data && pcData.data.productCreate;
@@ -118,7 +133,8 @@ export async function POST(req) {
         if (!savedC.ok) { return NextResponse.json({ error: 'Product created in Wave but could not save default to database: ' + savedC.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: false, db_error: savedC.error, default_invoice_product_id: pc.product.id }, { status: 500 }); }
         return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: pc.product.id, source: 'created', saved_row: savedC.row });
       }
-      return NextResponse.json({ error: 'Wave rejected product creation. See response for the exact reason and accepted fields.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE, request: { query: pcMut, variables: pcVars }, response: pcData, accounts: acData }, { status: 502 });
+      var reasons = waveMessages(pcData);
+      return NextResponse.json({ error: 'Wave rejected product creation' + (reasons.length ? (': ' + reasons.join(' | ')) : '.'), wave_error_summary: reasons.join('\n'), api_build_marker: API_BUILD_MARKER, route: API_ROUTE, request: { query: pcMut, variables: pcVars }, response: pcData, accounts: acData }, { status: 502 });
     }
 
     return NextResponse.json({ error: 'Unknown mode. Use list, find, select, or create.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 });

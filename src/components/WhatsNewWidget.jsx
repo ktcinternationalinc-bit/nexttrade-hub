@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MH',
+    date: '2026-06-24',
+    label: 'Wave Settings product setup cleaned up',
+    items: [
+      '**The Wave Settings page stops dumping raw error walls.** If Default Invoice Product setup fails, the Hub now shows the short reason and keeps technical details collapsed, instead of filling the page with Wave JSON.',
+      '**Create product was sending fields Wave rejects.** The Hub no longer sends `isSold` / `isBought` in the product-create request because the live Wave response says those fields are not accepted.',
+      { superAdminOnly: true, text: 'v55.83-MH (Max screenshot: Wave Settings default product panel was a raw JSON wall; live Wave rejected ProductCreateInput.isSold/isBought). /api/wave/product-setup marker bumped and productCreate now sends only businessId/name/unitPrice/description/incomeAccountId. Failure responses include a compact wave_error_summary while retaining raw response for a collapsed Technical details drawer. WaveSyncCenter product setup now stores prodDetails separately and never appends JSON.stringify(response) to the operator-facing prodMsg.' },
+    ],
+  },
+  {
+    version: 'v55.83-MG',
+    date: '2026-06-24',
+    label: 'Payment pushes no longer fail silently',
+    items: [
+      '**Payment pushes now leave a clear trail.** If a payment cannot be pushed to Wave because setup is missing, production is locked, the payment is already syncing, the invoice is not ready, the deposit is orphaned, or Wave rejects it, the Hub now records the exact reason in the Sync Log instead of making it look like nothing happened.',
+      { superAdminOnly: true, text: 'v55.83-MG (Max live no-op: payment push/move appeared to do nothing and the Sync Log did not mention it). /api/wave/push-payment now mirrors the transaction-push blocked() audit pattern: setup/permission/production-lock/placeholder/orphan/account/firewall/cross-silo/draft-approval/claim failures write a failed payment row to wave_sync_log with the specific reason, and the catch path resets a claimed syncing payment to sync_failed before logging the crash. Added MG regression and made it part of the accounting-bank launch gate. Runner now 86/86.' },
+    ],
+  },
+  {
     version: 'v55.83-MF',
     date: '2026-06-24',
     label: 'Wave Settings decluttered — the admin/danger stuff is now tucked away',

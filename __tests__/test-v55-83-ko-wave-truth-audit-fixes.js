@@ -44,7 +44,7 @@ ok('5 (P1): sync-products guards a placeholder silo + no longer reports business
   /j\.data\.business === null/.test(prod));
 ok('6 (P2): push-payment names the placeholder root cause (not the production-lock message)',
   /import \{ isPlaceholderWaveBusiness \}/.test(pp) &&
-  /isPlaceholderWaveBusiness\(waveBusinessId\)\) \{ return NextResponse\.json\(\{ ok: false, placeholder: true/.test(pp));
+  /isPlaceholderWaveBusiness\(waveBusinessId\)\) \{ return blocked\('This silo is not connected to a real Wave business yet \(placeholder id\)\. Go to Accounting -> Wave Connection and BIND this silo before pushing payments\.', 400, \{ placeholder: true \}\); \}/.test(pp));
 ok('7 (P2): push-invoice-v2 + push-customer guard the placeholder in canPush',
   /isPlaceholderWaveBusiness\(waveBusinessId\)\) \{ return \{ ok: false, message: 'This silo is not connected to a real Wave business yet \(placeholder id\)\. Bind it under Accounting -> Wave Connection before pushing invoices/.test(pi) &&
   /before pushing customers/.test(pc));
