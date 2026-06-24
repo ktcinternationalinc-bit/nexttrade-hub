@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-LL-import-transaction-csv';
+var API_BUILD_MARKER = 'v55.83-MM-import-transaction-csv';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -124,12 +124,21 @@ export async function POST(req) {
       // readable invoice-payment path's job). Such rows are routed to needs_manual_invoice_link.
       invoice: findCol(headers, ['invoice'], ['date']),
       customer: findCol(headers, ['customer', 'contact', 'client']),
-      // category column — prefer "category", then "account", but AVOID the bank-account column name
-      category: findCol(headers, ['category'], null)
+      // v55.83-MM — Wave's real Account-Transactions CSV export uses TWO rows per transaction (the bank side
+      // + the category side) and puts the offsetting CATEGORY in the "Other Accounts for this Transaction"
+      // column on the bank-side row. Detect that first; the bank-side row is identified by Account Type
+      // "Cash and Bank". (Older/simpler CSVs may have a plain "category" column — still supported.)
+      accountName: findCol(headers, ['account name'], null),
+      accountType: findCol(headers, ['account type'], null),
+      accountGroup: findCol(headers, ['account group'], null),
+      // category column — prefer Wave's "Other Accounts for this Transaction", then a plain "category".
+      category: findCol(headers, ['other account', 'category'], null)
     };
-    if (ci.category < 0) { ci.category = findCol(headers, ['account'], ['bank', 'asset', 'checking']); }
+    // fallback only for non-Wave CSVs: a generic "account" column that is NOT the bank/name/type/group/id one.
+    if (ci.category < 0) { ci.category = findCol(headers, ['account'], ['bank', 'asset', 'checking', 'name', 'type', 'group', ' id', 'account id']); }
+    var isWaveAccountingExport = ci.accountName >= 0 && ci.accountType >= 0 && ci.category >= 0 && findCol(headers, ['transaction id']) >= 0;
     var hasAmount = (ci.amount >= 0) || (ci.debit >= 0) || (ci.credit >= 0);
-    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, debit: ci.debit >= 0 ? headers[ci.debit] : null, credit: ci.credit >= 0 ? headers[ci.credit] : null, category: ci.category >= 0 ? headers[ci.category] : null, invoice: ci.invoice >= 0 ? headers[ci.invoice] : null, customer: ci.customer >= 0 ? headers[ci.customer] : null };
+    var detected = { date: ci.date >= 0 ? headers[ci.date] : null, description: ci.desc >= 0 ? headers[ci.desc] : null, amount: ci.amount >= 0 ? headers[ci.amount] : null, debit: ci.debit >= 0 ? headers[ci.debit] : null, credit: ci.credit >= 0 ? headers[ci.credit] : null, category: ci.category >= 0 ? headers[ci.category] : null, invoice: ci.invoice >= 0 ? headers[ci.invoice] : null, customer: ci.customer >= 0 ? headers[ci.customer] : null, wave_accounting_export: isWaveAccountingExport, account_name: ci.accountName >= 0 ? headers[ci.accountName] : null, account_type: ci.accountType >= 0 ? headers[ci.accountType] : null };
     if (ci.date < 0 || !hasAmount || ci.category < 0) {
       return NextResponse.json({ ok: false, error: 'Could not detect the required columns. Need a Date column, an Amount (or Debit/Credit) column, and a Category/Account column. Detected headers: ' + JSON.stringify(headers), detected_columns: detected, api_build_marker: API_BUILD_MARKER }, { status: 400 });
     }
@@ -137,6 +146,11 @@ export async function POST(req) {
     // credit=in); a lone signed Amount uses its sign (Wave: negative = withdrawal). Direction is then
     // a HARD match filter so an IN and an OUT of the same amount can never be cross-matched.
     function rowSigned(rowArr) {
+      // v55.83-MM — Wave's GL export (Account Type column present) carries a correctly-SIGNED "Amount (One
+      // column)" where negative = money OUT, AND Debit/Credit in ACCOUNTING convention (on the bank/asset row
+      // debit=IN, credit=OUT — the INVERSE of a bank statement). Trusting Debit/Credit there would flip the
+      // direction of every transaction. So for a Wave GL export, use the signed amount column.
+      if (isWaveAccountingExport && ci.amount >= 0) { var aw = parseAmount(rowArr[ci.amount]); if (aw != null) { return aw; } }
       if (ci.debit >= 0 || ci.credit >= 0) {
         var dv = ci.debit >= 0 ? Math.abs(parseAmount(rowArr[ci.debit]) || 0) : 0;
         var cv = ci.credit >= 0 ? Math.abs(parseAmount(rowArr[ci.credit]) || 0) : 0;
@@ -160,8 +174,13 @@ export async function POST(req) {
     function rowHash(rowArr) { var s = rowArr.join(''); var h = 0; var i; for (i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h); }
     var allowOverride = body.override_conflicts === true; // Codex #4 — explicit opt-in to replace an existing category
     var used = {}; var matched = []; var ambiguous = []; var conflicts = []; var unmatched = []; var needsInvoiceLink = []; var r;
+    var skippedNonBank = 0; var skippedUncategorized = 0;
     for (r = 1; r < grid.length; r++) {
       var rowArr = grid[r];
+      // v55.83-MM — Wave's GL export prints each transaction TWICE (the bank side + the category side). Only
+      // the BANK side carries the real category in "Other Accounts for this Transaction"; the category side's
+      // "Other Accounts" is the bank account (the wrong direction). When an Account Type column exists, process
+      // ONLY the bank-side rows so we never double-count or read the inverse side.
       var cDate = parseDate(rowArr[ci.date]);
       var cSigned = rowSigned(rowArr);
       var cDesc = ci.desc >= 0 ? rowArr[ci.desc] : '';
@@ -171,7 +190,20 @@ export async function POST(req) {
       // invoice relationship is known from a category import (that linkage is the payment path's job).
       var cInv = ci.invoice >= 0 ? String(rowArr[ci.invoice] || '').trim() : '';
       var cCust = ci.customer >= 0 ? String(rowArr[ci.customer] || '').trim() : '';
+      if (isWaveAccountingExport) {
+        var rAcctType = norm(rowArr[ci.accountType]);
+        var rAcctName = norm(rowArr[ci.accountName]);
+        var cCatN = norm(cCat);
+        var arPaymentRow = cInv && rAcctName.indexOf('accounts receivable') >= 0 && cSigned != null && cSigned < 0;
+        if (arPaymentRow) { needsInvoiceLink.push({ row: r, date: cDate, amount: roundMoney(Math.abs(cSigned)), invoice: cInv, customer: cCust, category: cCat, reason: 'CSV row references invoice ' + cInv + ' — this is a PAYMENT; reconcile via invoice-payment sync, not category import' }); continue; }
+        if (cInv) { skippedNonBank++; continue; }
+        if (!(rAcctType.indexOf('cash') >= 0 || rAcctType.indexOf('bank') >= 0)) { skippedNonBank++; continue; }
+        if (cCatN.indexOf('accounts receivable') >= 0 || cCatN.indexOf('accounts payable') >= 0) { skippedNonBank++; continue; }
+      }
       if (cInv) { needsInvoiceLink.push({ row: r, date: cDate, amount: cSigned == null ? null : roundMoney(Math.abs(cSigned)), invoice: cInv, customer: cCust, category: cCat, reason: 'CSV row references invoice ' + cInv + ' — this is a PAYMENT; reconcile via invoice-payment sync, not category import' }); continue; }
+      // v55.83-MM — Wave "Uncategorized Income/Expense" is Wave's UN-categorized state, not a real category.
+      // There is nothing to import for those rows (the Hub will categorize them going forward).
+      if (/^uncategor/.test(norm(cCat))) { skippedUncategorized++; continue; }
       if (cSigned == null || !cDate || !String(cCat || '').trim()) { unmatched.push({ row: r, date: cDate, amount: cSigned, category: cCat, reason: 'missing date/amount/category in CSV row' }); continue; }
       var target = roundMoney(Math.abs(cSigned));
       var csvDir = cSigned < 0 ? 'out' : 'in';
@@ -207,7 +239,7 @@ export async function POST(req) {
     }
 
     if (isDry) {
-      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, ambiguous: ambiguous, conflicts: conflicts, unmatched: unmatched, needs_manual_invoice_link: needsInvoiceLink, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, dry_run: true, detected_columns: detected, matched_count: matched.length, ambiguous_count: ambiguous.length, conflict_count: conflicts.length, unmatched_count: unmatched.length, needs_manual_invoice_link_count: needsInvoiceLink.length, skipped_uncategorized_count: skippedUncategorized, skipped_non_bank_row_count: skippedNonBank, hub_candidate_count: cands.length, category_unresolved_count: matched.filter(function (m) { return !m.category_resolved; }).length, matched: matched, ambiguous: ambiguous, conflicts: conflicts, unmatched: unmatched, needs_manual_invoice_link: needsInvoiceLink, api_build_marker: API_BUILD_MARKER });
     }
 
     // APPLY. Codex #6 — a RESOLVED category name (maps to this silo's Wave chart) is marked 'synced' (it is
