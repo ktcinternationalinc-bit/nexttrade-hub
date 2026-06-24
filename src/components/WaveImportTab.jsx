@@ -9,6 +9,20 @@ import { getActiveWaveBusiness, setActiveWaveBusiness, canWriteToWaveBusiness } 
 
 function money(m) { return m && m.value != null ? m.value : ''; }
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function estimateErrorHelp(errors) {
+  var text = (errors || []).join(' | ');
+  if (!text) { return ''; }
+  if (/Cannot query field.*estimates|Cannot query field.*estimate|Field .*estimate/i.test(text)) {
+    return 'Wave did not expose Estimates to this API token/response. This only affects optional Estimate -> Proforma import. It does not block categories, bank transactions, invoice payments, or pushes.';
+  }
+  if (/schema cache|column|accounting_proformas|accounting_proforma_items|wave_estimate_id|wave_business_id/i.test(text)) {
+    return 'The Hub proforma/estimate database columns are missing or stale. Run the proforma estimate migration, then retry this optional import.';
+  }
+  if (/No estimates|business id|token|access|not found|cannot access|permission/i.test(text)) {
+    return 'Wave returned no estimate list for the selected business/token. Confirm the selected Wave business, or skip this optional importer if you do not use Wave Estimates.';
+  }
+  return 'This only affects optional Wave Estimates -> Hub Proformas. It does not block the main Wave import path: categories, bank transactions, invoice payment linking, or push.';
+}
 
 export default function WaveImportTab(props) {
   var userProfile = props.userProfile || null;
@@ -471,9 +485,9 @@ export default function WaveImportTab(props) {
             )}
           </div>
 
-          <div className="mt-4 border-t border-slate-700 pt-3">
-            <div className="text-sm font-bold text-slate-200 mb-1">Optional - Import estimates → Proformas (per silo)</div>
-            <div className="text-[11px] text-slate-400 mb-2">Pulls Wave estimates for this business into the Hub as Proformas (with line items). Safe and re-runnable: matches on Wave estimate ID. They appear under Accounting → Proformas for this silo.</div>
+          <details className="mt-4 border-t border-slate-700 pt-3" open={!!estReport}>
+            <summary className="cursor-pointer text-sm font-bold text-slate-200 mb-1 select-none">{'Optional - Wave Estimates -> Hub Proformas (skip unless you use Wave Estimates)'}</summary>
+            <div className="text-[11px] text-slate-400 mb-2">This is separate from categories, bank matching, invoice-payment links, and Wave push. It only pulls Wave Estimates into Hub Proformas.</div>
             <button onClick={runImportEstimates} disabled={importingEst} className="px-4 py-2 bg-fuchsia-700 hover:bg-fuchsia-600 text-white rounded text-sm font-bold disabled:opacity-50">
               {importingEst ? 'Importing estimates…' : 'Import estimates into Hub'}
             </button>
@@ -491,13 +505,20 @@ export default function WaveImportTab(props) {
                   <div className="mt-2 bg-amber-50 text-amber-950 rounded p-2"><b>{estReport.placeholders.length} placeholder customer(s) created</b> — flagged for review: {estReport.placeholders.slice(0, 10).join(', ')}{estReport.placeholders.length > 10 ? '…' : ''}</div>
                 )}
                 {(estReport.errors && estReport.errors.length > 0) ? (
-                  <div className="mt-2"><div className="font-bold text-rose-700">Errors ({estReport.errors.length}):</div>
-                    <ul className="list-disc ml-4 text-rose-700">{estReport.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
+                  <div className="mt-2">
+                    <div className="rounded bg-rose-50 border border-rose-200 text-rose-950 p-2 mb-2">
+                      <div className="font-extrabold">What this means</div>
+                      <div>{estimateErrorHelp(estReport.errors)}</div>
+                    </div>
+                    <details>
+                      <summary className="cursor-pointer font-bold text-rose-700">Technical error details ({estReport.errors.length})</summary>
+                      <ul className="list-disc ml-4 text-rose-700 mt-1">{estReport.errors.slice(0, 20).map(function (er, i) { return <li key={i}>{er}</li>; })}</ul>
+                    </details>
                   </div>
                 ) : <div className="text-emerald-700 font-bold mt-1">✓ No errors.</div>}
               </div>
             )}
-          </div>
+          </details>
 
           <div className="mt-4 border-t border-slate-700 pt-3">
             <div className="text-sm font-bold text-slate-200 mb-1">Step 7 - Reconcile Wave vs Hub (read-only audit)</div>

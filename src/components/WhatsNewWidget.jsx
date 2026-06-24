@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MJ',
+    date: '2026-06-24',
+    label: 'Estimate import message clarified',
+    items: [
+      '**Wave Estimates are now clearly optional.** The Estimates -> Proformas block is collapsed away from the main Wave import flow unless you open it or run it.',
+      '**Estimate errors now explain what they mean.** The page says whether the issue is Wave API access, missing Hub proforma columns, or simply that this optional importer can be skipped. Raw technical details are still available, but collapsed.',
+      { superAdminOnly: true, text: 'v55.83-MJ. WaveImportTab adds estimateErrorHelp(), marks the Estimates -> Proformas importer as optional/separate from categories, bank matching, invoice-payment links, and push, and hides raw estimate errors under Technical error details.' },
+    ],
+  },
+  {
     version: 'v55.83-MI',
     date: '2026-06-24',
     label: 'Wave import path made explicit',
