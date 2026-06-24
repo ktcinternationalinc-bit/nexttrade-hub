@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MI',
+    date: '2026-06-24',
+    label: 'Wave import path made explicit',
+    items: [
+      '**Wave Import now says exactly where prior Wave categories come from.** Use Wave Import -> Step 3, paste the Wave Transactions CSV, preview matches, then apply. That stamps old Wave transaction categorizations onto Hub bank transactions without writing back to Wave.',
+      '**The confusing duplicate Import tab is removed from Review & Push.** Wave-to-Hub work now lives in the Wave Import step; Review & Push is for pending sync, dry run, logs, and setup.',
+      '**Repeated bank/cash accounts in Settings are grouped.** If Wave returns duplicate Cash/Bank rows with the same name, Settings shows one row and one click sets the owner across all underlying Wave account ids.',
+      { superAdminOnly: true, text: 'v55.83-MI. WaveHub labels now show Connect -> Import Wave Truth -> Review, Push & Setup. WaveImportTab is the single Wave-to-Hub page: Chart of Accounts pull, historical transaction category CSV import, customers/invoices import, Wave invoice payment readback/prefill, estimates, reconcile. WaveSyncCenter no longer exposes a second Import from Wave tab. /api/wave/account-feed-owner groups duplicate bank/cash account names and accepts wave_account_ids[] so one owner click updates every duplicate id in that group.' },
+    ],
+  },
+  {
     version: 'v55.83-MH',
     date: '2026-06-24',
     label: 'Wave Settings product setup cleaned up',

@@ -327,9 +327,9 @@ export default function WaveSyncCenter(props) {
       .catch(function () { setFeedOwners([]); });
   }
   useEffect(function () { loadFeedOwners(); }, [active]);
-  function setFeedOwner(acctId, owner) {
+  function setFeedOwner(acctId, owner, acctIds) {
     setFeedOwnerBusy(true); setFeedOwnerMsg('');
-    fetch('/api/wave/account-feed-owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set', wave_business_id: active, wave_account_id: acctId, wave_feed_owner: owner, user_id: userProfile && userProfile.id }) })
+    fetch('/api/wave/account-feed-owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set', wave_business_id: active, wave_account_id: acctId, wave_account_ids: acctIds || null, wave_feed_owner: owner, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.saved) { setFeedOwnerMsg('Saved.'); loadFeedOwners(); toast.success('Account feed owner updated'); }
@@ -892,10 +892,9 @@ export default function WaveSyncCenter(props) {
 
   if (loading) { return <div className="p-4 text-slate-400 italic">Loading Wave Sync Center…</div>; }
 
-  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['import', 'Import from Wave'], ['settings', 'Settings']].filter(function (t) {
+  var tabs = [['pending', 'Pending Sync'], ['dryrun', 'Dry Run'], ['synced', 'Synced'], ['failed', 'Failed'], ['log', 'Sync Log'], ['settings', 'Settings']].filter(function (t) {
     if (t[0] === 'log') { return canViewLog; }
     if (t[0] === 'settings') { return canManageSettings; }
-    if (t[0] === 'import') { return canManageSettings && !isPlaceholderWaveBusiness(active); }
     return true;
   });
 
@@ -1233,11 +1232,13 @@ export default function WaveSyncCenter(props) {
             {feedOwners === null ? <div className="text-[11px] text-slate-400 italic">Loading accounts…</div>
               : feedOwners.length === 0 ? <div className="text-[11px] text-slate-400 italic">No Wave Cash/Bank accounts found for this silo yet. Pull Wave categories first (below).</div>
               : feedOwners.map(function (a) {
+                var acctIds = a.wave_account_ids && a.wave_account_ids.length ? a.wave_account_ids : [a.wave_account_id];
+                var mixedOwner = a.wave_feed_owner === 'MIXED';
                 return <div key={a.wave_account_id} className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-800 last:border-0">
-                  <span className="text-xs font-semibold flex-1">{a.wave_account_name}{!a.wave_feed_owner ? <span className="ml-2 text-[10px] text-rose-400 font-bold">not set — push blocked</span> : null}</span>
+                  <span className="text-xs font-semibold flex-1">{a.wave_account_name}{a.duplicate_count > 1 ? <span className="ml-2 text-[10px] text-slate-400 font-normal">grouped {a.duplicate_count} duplicate Wave accounts</span> : null}{(!a.wave_feed_owner || mixedOwner) ? <span className="ml-2 text-[10px] text-rose-400 font-bold">{mixedOwner ? 'mixed owner - choose one' : 'not set - push blocked'}</span> : null}</span>
                   <span className="flex gap-1">
-                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'HUB'); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'HUB' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Hub feeds it</button>
-                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'WAVE_FEED'); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'WAVE_FEED' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Wave feeds it</button>
+                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'HUB', acctIds); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'HUB' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Hub feeds it</button>
+                    <button onClick={function () { setFeedOwner(a.wave_account_id, 'WAVE_FEED', acctIds); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'WAVE_FEED' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Wave feeds it</button>
                   </span>
                 </div>;
               })}

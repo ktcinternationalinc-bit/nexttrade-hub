@@ -13,10 +13,10 @@ export default function WaveHub(props) {
   var waveKey = props.waveKey || '';
 
   var steps = [
-    ['connect', '1 · Connect', 'Bind your Wave business'],
-    ['mirror', '2 · Import / Mirror', 'Pull customers, invoices & categories from Wave'],
+    ['connect', '1 - Connect', 'Bind your Wave business'],
+    ['mirror', '2 - Import Wave Truth', 'Categories, invoices, payments, old transaction CSV'],
   ];
-  if (canWaveSync) { steps.push(['sync', '3 · Review & Push', 'Categorize, link, push to Wave + settings']); }
+  if (canWaveSync) { steps.push(['sync', '3 - Review, Push & Setup', 'Pending sync, logs, and write settings']); }
 
   // v55.83-ME — honor a deep-link's intended Wave sub-section so a "go to settings/import" jump doesn't
   // strand the user on Connect. initialWaveStep is 'connect' | 'mirror' | 'sync'.

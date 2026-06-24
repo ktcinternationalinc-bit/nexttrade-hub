@@ -15,7 +15,8 @@ export default function WaveImportTab(props) {
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
 
   var [businesses, setBusinesses] = useState([]);
-  var [bizId, setBizId] = useState('');
+  var initialWaveBusiness = getActiveWaveBusiness();
+  var [bizId, setBizId] = useState(initialWaveBusiness || '');
   var [loadingBiz, setLoadingBiz] = useState(true);
   var [type, setType] = useState('customers');
   var [page, setPage] = useState(1);
@@ -35,6 +36,16 @@ export default function WaveImportTab(props) {
   var [registry, setRegistry] = useState([]);
   var [registering, setRegistering] = useState(false);
   var [legacyNulls, setLegacyNulls] = useState(0);
+  var [catBusy, setCatBusy] = useState(false);
+  var [catMsg, setCatMsg] = useState('');
+  var [csvText, setCsvText] = useState('');
+  var [csvBusy, setCsvBusy] = useState(false);
+  var [csvResult, setCsvResult] = useState(null);
+  var [csvOverride, setCsvOverride] = useState(false);
+  var [probeBusy, setProbeBusy] = useState(false);
+  var [probeResult, setProbeResult] = useState(null);
+  var [prefillBusy, setPrefillBusy] = useState(false);
+  var [prefillResult, setPrefillResult] = useState(null);
 
   function loadBusinesses() {
     setLoadingBiz(true);
@@ -137,6 +148,58 @@ export default function WaveImportTab(props) {
       .finally(function () { setImporting(false); });
   }
 
+  function runCategoryPull() {
+    if (!bizId) { window.alert('Choose a Wave business first.'); return; }
+    if (!selReg()) { window.alert('Register this Wave business first so the pulled accounts stay in the right silo.'); return; }
+    setCatBusy(true); setCatMsg('Pulling Wave Chart of Accounts...');
+    fetch('/api/wave/sync-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, includeProduction: true, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.text().then(function (t) { var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || ''; if (!r.ok || ct.indexOf('application/json') < 0) { throw new Error('Got HTTP ' + r.status + ': ' + t.slice(0, 200)); } return JSON.parse(t); }); })
+      .then(function (d) {
+        if (d && d.results && d.results.length) {
+          var res0 = d.results[0];
+          var sum = res0.summary || res0;
+          if (res0.ok === false) { setCatMsg('Blocked: ' + (res0.error || (res0.errors && res0.errors.join('; ')) || 'Wave returned an error.')); return; }
+          var totalAcc = (res0.total != null) ? res0.total : ((sum.created || 0) + (sum.updated || 0) + (sum.skipped || 0));
+          setCatMsg('Done: ' + totalAcc + ' Wave accounts loaded (' + (sum.created || 0) + ' new, ' + (sum.updated || 0) + ' updated, ' + (sum.skipped || 0) + ' unchanged).');
+        } else if (d && d.message) { setCatMsg('No accounts pulled: ' + d.message); }
+        else if (d && d.error) { setCatMsg('Error: ' + d.error); }
+        else { setCatMsg(JSON.stringify(d).slice(0, 300)); }
+      })
+      .catch(function (e) { setCatMsg('Request failed: ' + ((e && e.message) || String(e))); })
+      .finally(function () { setCatBusy(false); });
+  }
+
+  function runCsvImport(apply) {
+    if (!bizId) { window.alert('Choose a Wave business first.'); return; }
+    if (!String(csvText || '').trim()) { window.alert('Paste the Wave Transactions CSV first. In Wave: Accounting > Transactions > Export.'); return; }
+    setCsvBusy(true); setCsvResult(null);
+    fetch('/api/wave/import-transaction-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, csv: csvText, dry_run: !apply, override_conflicts: csvOverride, user_id: userProfile && userProfile.id, filename: 'wave-transactions-export.csv' }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setCsvResult(d); if (!d || !d.ok) { return; } if (!d.dry_run) { setCsvText(''); } })
+      .catch(function (e) { setCsvResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
+      .finally(function () { setCsvBusy(false); });
+  }
+
+  function runPaymentReadback() {
+    if (!bizId) { window.alert('Choose a Wave business first.'); return; }
+    setProbeBusy(true); setProbeResult(null);
+    fetch('/api/wave/payment-readback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setProbeResult(d); })
+      .catch(function (e) { setProbeResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
+      .finally(function () { setProbeBusy(false); });
+  }
+
+  function runPrefillLinks(apply) {
+    if (!bizId) { window.alert('Choose a Wave business first.'); return; }
+    setPrefillBusy(true); setPrefillResult(null);
+    fetch('/api/wave/prefill-payment-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: bizId, dry_run: !apply, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setPrefillResult(d); })
+      .catch(function (e) { setPrefillResult({ ok: false, error: 'Request failed: ' + ((e && e.message) || 'unknown') }); })
+      .finally(function () { setPrefillBusy(false); });
+  }
+
   if (!isSuperAdmin) {
     return <div className="p-6"><RestrictedNotice title="Owner only" message="Only the account owner can use Wave Import." /></div>;
   }
@@ -163,10 +226,10 @@ export default function WaveImportTab(props) {
   }
 
   return (
-    <div className="p-4 text-slate-100 max-w-3xl">
-      <div className="text-lg font-extrabold mb-1">⬇️ Wave Import — Preview</div>
+    <div className="p-4 text-slate-100 max-w-5xl">
+      <div className="text-lg font-extrabold mb-1">Wave Import - pull Wave truth into the Hub</div>
       <div className="bg-white text-slate-900 rounded p-3 text-xs font-medium mb-3">
-        Pick the exact business, then preview its real customers and invoices. <b>This is preview only — nothing is saved into the Hub yet.</b> The next step adds importing with duplicate detection. Wave gives each invoice\u2019s Paid / Due / Status (your AR balance); detailed cash transactions come from Plaid, not Wave.
+        Pick the exact business once, then run the Wave-to-Hub imports below. Customers, invoices, payments, and the Chart of Accounts come from Wave APIs. Prior transaction categorizations require Wave's Transactions CSV export because Wave does not expose historical categorized bank transactions through the public API.
       </div>
 
       <div className="rounded p-2 mb-3 text-xs font-semibold flex items-center justify-between gap-2 flex-wrap"
@@ -259,8 +322,58 @@ export default function WaveImportTab(props) {
 
       {bizId && (
         <div className="mt-5 border-t border-slate-700 pt-4">
-          <div className="text-sm font-bold text-slate-200 mb-1">Step 2 — Import customers into the Hub</div>
-          <div className="text-[11px] text-slate-400 mb-2">Safe and re-runnable: matches on Wave customer ID, so running it again updates instead of duplicating. (Invoices are a separate, later import.)</div>
+          <div className="rounded-lg border border-indigo-700/60 bg-indigo-950/40 p-3 mb-4">
+            <div className="text-base font-extrabold text-indigo-100 mb-1">{'Wave -> Hub import map'}</div>
+            <div className="grid gap-2 text-[11px]" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))' }}>
+              <div className="rounded border border-slate-700 bg-slate-900/70 p-2"><b className="text-slate-100">Chart of Accounts</b><div className="text-slate-400">Pulls real Wave category names into the Bank Review dropdown.</div></div>
+              <div className="rounded border border-slate-700 bg-slate-900/70 p-2"><b className="text-slate-100">Old transaction categories</b><div className="text-slate-400">Paste Wave's Transactions CSV here. This is where prior Wave categorizations get stamped onto Hub bank rows.</div></div>
+              <div className="rounded border border-slate-700 bg-slate-900/70 p-2"><b className="text-slate-100">Invoice payments</b><div className="text-slate-400">Reads Wave invoice payments and links matching Hub deposits to invoices.</div></div>
+              <div className="rounded border border-slate-700 bg-slate-900/70 p-2"><b className="text-slate-100">Customers / invoices</b><div className="text-slate-400">Imports Wave customers, invoices, line items, paid/due/status.</div></div>
+            </div>
+          </div>
+
+          <div className="mb-4 rounded-lg border border-violet-700/60 bg-violet-950/30 p-3">
+            <div className="text-sm font-bold text-slate-100 mb-1">Step 2 - Pull Wave Chart of Accounts</div>
+            <div className="text-[11px] text-slate-400 mb-2">Do this before importing transaction CSV categories, so the Hub can resolve each Wave category name to the real Wave account id.</div>
+            <button onClick={runCategoryPull} disabled={catBusy} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded text-sm font-bold disabled:opacity-50">{catBusy ? 'Pulling...' : 'Pull Wave Chart of Accounts'}</button>
+            {catMsg && <div className="mt-2 rounded border border-slate-700 bg-slate-900 p-2 text-xs text-slate-200 whitespace-pre-wrap">{catMsg}</div>}
+          </div>
+
+          <div className="mb-4 rounded-lg border border-emerald-700/60 bg-emerald-950/25 p-3">
+            <div className="text-sm font-bold text-slate-100 mb-1">Step 3 - Import old Wave transaction categories</div>
+            <div className="text-[11px] text-slate-400 mb-2">In Wave go to <b>Accounting &gt; Transactions &gt; Export</b>, paste that CSV here, then Preview. Apply only after the preview looks right. This writes only to Hub bank transactions; it does not write to Wave.</div>
+            <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the Wave Transactions CSV here, including the header row..." rows={7} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-xs font-mono text-slate-100 placeholder-slate-500 mb-2" />
+            <div className="flex gap-2 items-center flex-wrap">
+              <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm font-bold disabled:opacity-50">{csvBusy ? 'Working...' : 'Preview CSV match'}</button>
+              <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold disabled:opacity-40">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
+              <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
+            </div>
+            {csvResult && (
+              <div className={'mt-3 rounded border p-3 text-xs ' + (csvResult.ok ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-rose-700 bg-rose-950/40 text-rose-200')}>
+                {!csvResult.ok ? <div>{csvResult.error || 'CSV import failed.'}</div> : (
+                  <div className="space-y-2">
+                    <div className="flex gap-3 flex-wrap font-bold">
+                      <span className="text-emerald-300">{csvResult.dry_run ? (csvResult.matched_count + ' would apply') : (csvResult.applied + ' applied')}</span>
+                      {csvResult.ambiguous_count ? <span className="text-orange-300">{csvResult.ambiguous_count} ambiguous</span> : null}
+                      {csvResult.conflict_count ? <span className="text-rose-300">{csvResult.conflict_count} conflicts</span> : null}
+                      {csvResult.needs_manual_invoice_link_count ? <span className="text-indigo-300">{csvResult.needs_manual_invoice_link_count} invoice/payment rows deferred</span> : null}
+                      <span className="text-amber-300">{csvResult.unmatched_count || 0} unmatched</span>
+                      {csvResult.category_unresolved_count ? <span className="text-sky-300">{csvResult.category_unresolved_count} unresolved category names</span> : null}
+                    </div>
+                    {csvResult.detected_columns && <div className="text-[11px] text-slate-400">Detected columns: date <b>{String(csvResult.detected_columns.date)}</b>, amount <b>{String(csvResult.detected_columns.amount || csvResult.detected_columns.debit || csvResult.detected_columns.credit)}</b>, category <b>{String(csvResult.detected_columns.category)}</b>, description <b>{String(csvResult.detected_columns.description)}</b></div>}
+                    {csvResult.matched && csvResult.matched.length > 0 && <details><summary className="cursor-pointer text-slate-300">Matched rows</summary><div className="mt-1 max-h-44 overflow-auto">{csvResult.matched.map(function (m) { return <div key={m.row} className="border-t border-slate-800 py-0.5">{m.hub_date} - {m.amount} - {m.hub_name} -&gt; <b>{m.csv_category}</b>{m.category_resolved ? '' : ' (label only - not in pulled chart)'}</div>; })}</div></details>}
+                    {csvResult.ambiguous && csvResult.ambiguous.length > 0 && <details><summary className="cursor-pointer text-orange-300">Ambiguous rows</summary><div className="mt-1 max-h-44 overflow-auto">{csvResult.ambiguous.map(function (a, i) { return <div key={i} className="border-t border-slate-800 py-0.5">{a.date} - {a.amount} - {a.category || ''} - {a.reason}</div>; })}</div></details>}
+                    {csvResult.conflicts && csvResult.conflicts.length > 0 && <details><summary className="cursor-pointer text-rose-300">Conflicts</summary><div className="mt-1 max-h-44 overflow-auto">{csvResult.conflicts.map(function (c, i) { return <div key={i} className="border-t border-slate-800 py-0.5">{c.hub_name} - existing <b>{c.existing_category}</b> vs CSV <b>{c.csv_category}</b></div>; })}</div></details>}
+                    {csvResult.needs_manual_invoice_link && csvResult.needs_manual_invoice_link.length > 0 && <details><summary className="cursor-pointer text-indigo-300">Invoice/payment rows deferred</summary><div className="mt-1 max-h-44 overflow-auto">{csvResult.needs_manual_invoice_link.map(function (n, i) { return <div key={i} className="border-t border-slate-800 py-0.5">{n.date} - {n.amount} - INV <b>{n.invoice}</b> - use payment link prefill below</div>; })}</div></details>}
+                    {csvResult.unmatched && csvResult.unmatched.length > 0 && <details><summary className="cursor-pointer text-amber-300">Unmatched CSV rows</summary><div className="mt-1 max-h-44 overflow-auto">{csvResult.unmatched.map(function (u, i) { return <div key={i} className="border-t border-slate-800 py-0.5">{u.date} - {u.amount} - {u.category || ''} - {u.reason}</div>; })}</div></details>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="text-sm font-bold text-slate-200 mb-1">Step 4 - Import customers into the Hub</div>
+          <div className="text-[11px] text-slate-400 mb-2">Safe and re-runnable: matches on Wave customer ID, so running it again updates instead of duplicating. Import customers before invoices.</div>
           <button onClick={runImportCustomers} disabled={importing} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold disabled:opacity-50">
             {importing ? 'Importing…' : 'Import customers into Hub'}
           </button>
@@ -284,7 +397,7 @@ export default function WaveImportTab(props) {
           )}
 
           <div className="mt-4 border-t border-slate-700 pt-3">
-            <div className="text-sm font-bold text-slate-200 mb-1">Step 3 — Import invoices (+ line items) into the Hub</div>
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 5 - Import invoices (+ line items) into the Hub</div>
             <div className="text-[11px] text-slate-400 mb-2">Import customers first. Safe and re-runnable: matches on Wave invoice ID. Wave's paid amount is kept as a baseline (wave_imported_paid) — no payment records are created here; bank-matched payments stay separate.</div>
             <button onClick={runImportInvoices} disabled={importingInv} className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-white rounded text-sm font-bold disabled:opacity-50">
               {importingInv ? 'Importing invoices…' : 'Import invoices into Hub'}
@@ -329,7 +442,37 @@ export default function WaveImportTab(props) {
           </div>
 
           <div className="mt-4 border-t border-slate-700 pt-3">
-            <div className="text-sm font-bold text-slate-200 mb-1">Step 3b — Import estimates → Proformas (per silo)</div>
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 6 - Pull Wave invoice payments and link deposits</div>
+            <div className="text-[11px] text-slate-400 mb-2">Wave invoice payments are API-readable. Preview first, then apply only the exact one-to-one deposit links. This does not change invoice balances.</div>
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={runPaymentReadback} disabled={probeBusy} className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-sm font-bold disabled:opacity-50">{probeBusy ? 'Checking...' : 'Check Wave payments'}</button>
+              <button onClick={function () { runPrefillLinks(false); }} disabled={prefillBusy} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm font-bold disabled:opacity-50">{prefillBusy ? 'Working...' : 'Preview deposit links'}</button>
+              <button onClick={function () { runPrefillLinks(true); }} disabled={prefillBusy || !prefillResult || !prefillResult.dry_run || !(prefillResult.counts && prefillResult.counts.would_link)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-bold disabled:opacity-40">Apply links {prefillResult && prefillResult.dry_run && prefillResult.counts ? '(' + (prefillResult.counts.would_link || 0) + ')' : ''}</button>
+            </div>
+            {probeResult && (
+              <div className="mt-3 rounded border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200">
+                {probeResult.error && !probeResult.payments_found ? <div className="text-rose-300">{probeResult.error}</div> : <div><b className="text-emerald-300">{probeResult.payments_found || 0}</b> Wave payment(s) across <b>{probeResult.invoices_scanned || 0}</b> invoice(s). Bank account present on <b>{probeResult.payments_with_bank_account || 0}</b>.</div>}
+              </div>
+            )}
+            {prefillResult && (
+              <div className={'mt-3 rounded border p-3 text-xs ' + (prefillResult.ok || (prefillResult.counts && prefillResult.counts.payments_found) ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-rose-700 bg-rose-950/40 text-rose-200')}>
+                {prefillResult.error && !(prefillResult.counts && prefillResult.counts.payments_found) ? <div>{prefillResult.error}</div> : (
+                  <div className="space-y-2">
+                    <div className="flex gap-3 flex-wrap font-bold">
+                      <span className="text-indigo-300">{prefillResult.dry_run ? ((prefillResult.counts && prefillResult.counts.would_link) || 0) + ' would link' : ((prefillResult.counts && prefillResult.counts.applied) || 0) + ' linked'}</span>
+                      {prefillResult.counts && prefillResult.counts.ambiguous ? <span className="text-orange-300">{prefillResult.counts.ambiguous} ambiguous</span> : null}
+                      {prefillResult.counts && prefillResult.counts.no_candidate ? <span className="text-amber-300">{prefillResult.counts.no_candidate} no matching deposit</span> : null}
+                      {prefillResult.counts && prefillResult.counts.invoice_not_imported ? <span className="text-rose-300">{prefillResult.counts.invoice_not_imported} invoice not imported</span> : null}
+                    </div>
+                    {prefillResult.plan && prefillResult.plan.length > 0 && <details><summary className="cursor-pointer text-slate-300">Link plan</summary><div className="mt-1 max-h-44 overflow-auto">{prefillResult.plan.map(function (p, i) { return <div key={i} className="border-t border-slate-800 py-0.5">{p.date || ''} - {p.amount} - INV {p.invoice} - <b>{p.action}</b>{p.deposit_name ? (' -> ' + p.deposit_name) : ''}</div>; })}</div></details>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 border-t border-slate-700 pt-3">
+            <div className="text-sm font-bold text-slate-200 mb-1">Optional - Import estimates → Proformas (per silo)</div>
             <div className="text-[11px] text-slate-400 mb-2">Pulls Wave estimates for this business into the Hub as Proformas (with line items). Safe and re-runnable: matches on Wave estimate ID. They appear under Accounting → Proformas for this silo.</div>
             <button onClick={runImportEstimates} disabled={importingEst} className="px-4 py-2 bg-fuchsia-700 hover:bg-fuchsia-600 text-white rounded text-sm font-bold disabled:opacity-50">
               {importingEst ? 'Importing estimates…' : 'Import estimates into Hub'}
@@ -357,7 +500,7 @@ export default function WaveImportTab(props) {
           </div>
 
           <div className="mt-4 border-t border-slate-700 pt-3">
-            <div className="text-sm font-bold text-slate-200 mb-1">Step 4 — Reconcile Wave vs Hub (read-only audit)</div>
+            <div className="text-sm font-bold text-slate-200 mb-1">Step 7 - Reconcile Wave vs Hub (read-only audit)</div>
             <div className="text-[11px] text-slate-400 mb-2">Pulls every invoice from Wave and from the Hub, matches them on Wave invoice ID, and shows exactly where totals, paid, or balance disagree. It writes nothing.</div>
             <button onClick={runReconcile} disabled={reconBusy} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-bold disabled:opacity-50">
               {reconBusy ? 'Reconciling… (can take a minute)' : '⚖️ Reconcile Wave vs Hub'}

@@ -15,6 +15,7 @@ function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); 
 function exists(p) { try { fs.accessSync(path.join(__dirname, '..', p)); return true; } catch (e) { return false; } }
 var route = rd('src/app/api/wave/import-transaction-csv/route.js');
 var sync = rd('src/components/WaveSyncCenter.jsx');
+var imp = rd('src/components/WaveImportTab.jsx');
 
 ok('1: the import route exists, is gated (bank.classify), and does NOT call Wave (no gql/fetch to Wave)',
   exists('src/app/api/wave/import-transaction-csv/route.js') &&
@@ -38,11 +39,15 @@ ok('5: apply reflects the Wave category (resolves name->wave_account_id), source
   /category_source: 'wave_csv'/.test(route) &&
   /\.neq\('category_status', 'synced'\)/.test(route) &&
   /action: 'import_csv'/.test(route));
-ok('6: Sync Center has an "Import from Wave" tab (admin, non-placeholder) wired to the route with preview+apply',
-  /\['import', 'Import from Wave'\]/.test(sync) &&
-  /if \(t\[0\] === 'import'\) \{ return canManageSettings && !isPlaceholderWaveBusiness\(active\); \}/.test(sync) &&
-  /fetch\('\/api\/wave\/import-transaction-csv'/.test(sync) &&
-  /function runCsvImport\(apply\)/.test(sync));
+ok('6: Wave Import has the old Wave transaction category CSV flow wired with preview+apply',
+  /Wave -> Hub import map/.test(imp) &&
+  /Step 3 - Import old Wave transaction categories/.test(imp) &&
+  /fetch\('\/api\/wave\/import-transaction-csv'/.test(imp) &&
+  /function runCsvImport\(apply\)/.test(imp) &&
+  /Preview CSV match/.test(imp) &&
+  /Apply \{csvResult && csvResult\.dry_run/.test(imp));
+ok('7: Sync Center no longer exposes a second Import from Wave tab',
+  !/\['import', 'Import from Wave'\]/.test(sync));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LD import-wave-csv tests passed'); process.exit(0); }

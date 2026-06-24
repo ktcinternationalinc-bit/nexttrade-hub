@@ -12,7 +12,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { waveBankCashCandidates, classifyWaveAccount } from '../../../../lib/wave-bank-account-resolver';
 
-var API_BUILD_MARKER = 'v55.83-MC-account-feed-owner';
+var API_BUILD_MARKER = 'v55.83-MI-account-feed-owner-grouped';
 var API_ROUTE = '/api/wave/account-feed-owner';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
@@ -39,26 +39,43 @@ export async function POST(req) {
     var bankAccts = waveBankCashCandidates(allCats);
 
     if (action === 'list') {
-      var list = bankAccts.map(function (c) { return { wave_account_id: c.wave_account_id, wave_account_name: c.wave_account_name, kind: classifyWaveAccount(c), wave_feed_owner: c.wave_feed_owner || null }; });
+      // v55.83-MI - Wave charts can contain repeated Cash/Bank rows with the same display name.
+      // Showing every duplicate made Settings unreadable. Group exact-name duplicates and let one click
+      // set the owner on every underlying Wave account id in that group.
+      var groups = {};
+      bankAccts.forEach(function (c) {
+        var key = String(c.wave_account_name || c.wave_account_id || '').trim() || c.wave_account_id;
+        if (!groups[key]) {
+          groups[key] = { wave_account_id: c.wave_account_id, wave_account_ids: [], wave_account_name: c.wave_account_name, kind: classifyWaveAccount(c), wave_feed_owner: c.wave_feed_owner || null, duplicate_count: 0 };
+        }
+        groups[key].wave_account_ids.push(c.wave_account_id);
+        groups[key].duplicate_count = groups[key].wave_account_ids.length;
+        var owner = c.wave_feed_owner || null;
+        if (groups[key].wave_feed_owner !== owner) { groups[key].wave_feed_owner = 'MIXED'; }
+      });
+      var list = Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); }).map(function (k) { return groups[k]; });
       var hasColumn = allCats.length === 0 || (allCats[0] && Object.prototype.hasOwnProperty.call(allCats[0], 'wave_feed_owner'));
       return NextResponse.json({ ok: true, accounts: list, migration_applied: hasColumn, api_build_marker: API_BUILD_MARKER, route: API_ROUTE });
     }
 
     if (action === 'set') {
       var acctId = body.wave_account_id;
+      var acctIds = Array.isArray(body.wave_account_ids) && body.wave_account_ids.length ? body.wave_account_ids : (acctId ? [acctId] : []);
       var owner = body.wave_feed_owner; // 'HUB' | 'WAVE_FEED' | null
-      if (!acctId) { return NextResponse.json({ error: 'wave_account_id is required.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+      if (!acctIds.length) { return NextResponse.json({ error: 'wave_account_id is required.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
       if (owner !== 'HUB' && owner !== 'WAVE_FEED' && owner !== null) { return NextResponse.json({ error: 'wave_feed_owner must be HUB, WAVE_FEED, or null.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
       // confirm the account is a real bank/cash account in this silo (never let a non-bank account be marked)
-      var match = null; var i; for (i = 0; i < bankAccts.length; i++) { if (bankAccts[i].wave_account_id === acctId) { match = bankAccts[i]; break; } }
-      if (!match) { return NextResponse.json({ error: 'That account is not a Wave Cash/Bank account in this silo.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
-      var upd = await db.from('wave_categories').update({ wave_feed_owner: owner }).eq('wave_business_id', bid).eq('wave_account_id', acctId).select();
+      var valid = {}; var i; for (i = 0; i < bankAccts.length; i++) { valid[bankAccts[i].wave_account_id] = true; }
+      for (i = 0; i < acctIds.length; i++) {
+        if (!valid[acctIds[i]]) { return NextResponse.json({ error: 'That account is not a Wave Cash/Bank account in this silo.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+      }
+      var upd = await db.from('wave_categories').update({ wave_feed_owner: owner }).eq('wave_business_id', bid).in('wave_account_id', acctIds).select();
       if (upd && upd.error) {
         var em = upd.error.message || String(upd.error);
         var hint = /wave_feed_owner/.test(em) || /column/.test(em) ? ' — the wave_feed_owner column is missing; a super admin must run sql/v55-83-MC-wave-feed-owner.sql.' : '';
         return NextResponse.json({ db_error: em + hint, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 });
       }
-      return NextResponse.json({ saved: true, wave_account_id: acctId, wave_feed_owner: owner, api_build_marker: API_BUILD_MARKER, route: API_ROUTE });
+      return NextResponse.json({ saved: true, wave_account_id: acctIds[0], wave_account_ids: acctIds, wave_feed_owner: owner, api_build_marker: API_BUILD_MARKER, route: API_ROUTE });
     }
 
     return NextResponse.json({ error: 'Unknown action: ' + action, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 });
