@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MF',
+    date: '2026-06-24',
+    label: 'Wave Settings decluttered — the admin/danger stuff is now tucked away',
+    items: [
+      '**The Wave Settings screen is less cluttered.** The two things you actually touch — *Who feeds each bank account* and the *setup status* — stay right at the top. The super-admin/diagnostic stuff (push-permission checklists, production write toggles, the database check) is now folded into **⚙ Advanced** sections you click to open only when you need them. Nothing was removed; it\'s just out of your way.',
+      { superAdminOnly: true, text: 'v55.83-MF (Codex open blocker: inner Wave settings too confusing). Wrapped the densest admin clutter in WaveSyncCenter Settings in collapsed <details>: (1) "⚙ Advanced — push permissions & production write controls" (the two readiness checklists + the production-unlock + the 5 push-flag toggles), (2) "⚙ Database setup check (super-admin diagnostic)". Kept VISIBLE up top: the per-account feed-owner control (MC) + the Wave-setup-status summary. JSX-only (no logic change); verified nesting compiles. test mf(3); runner 85/85; clean build (98 pages). NEXT toward Codex full-mirror: section the remaining setup cards (Invoice Product / Wave Deposit Account / Categories) into a "Setup" group + dark-reskin the last white panels; then show prior Wave categories/links + the readback confirm loop (the real ME product layer). Still gated on Max live: run sql/v55-83-MC-wave-feed-owner.sql + set each account owner + push.' },
+    ],
+  },
+  {
     version: 'v55.83-ME',
     date: '2026-06-23',
     label: 'Wave tab polish: links land where you meant, and your account choices stick',

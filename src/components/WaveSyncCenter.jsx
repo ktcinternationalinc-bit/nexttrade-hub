@@ -1275,8 +1275,9 @@ export default function WaveSyncCenter(props) {
               {Row('Category dropdown', catReady, catNext(), catCount + ' loaded')}
             </div>;
           })()}
-          <div className="mb-4 border border-slate-300 bg-slate-50 rounded-lg p-3">
-            <div className="font-bold text-slate-900 mb-1">Database setup check</div>
+          <details className="mb-4 border border-slate-300 bg-slate-50 rounded-lg text-slate-900">
+            <summary className="cursor-pointer px-3 py-2 font-bold text-slate-800 text-sm select-none">⚙ Database setup check (super-admin diagnostic)</summary>
+            <div className="px-3 pb-3">
             <div className="text-xs text-slate-700 mb-2">Confirms the database has every column the Wave payment, settings, and category features need. Run this first if anything fails to save with a "column not found" error.</div>
             <button onClick={runSchemaCheck} disabled={schemaBusy} className="text-xs bg-slate-700 hover:bg-slate-800 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{schemaBusy ? 'Checking…' : 'Check database setup'}</button>
             {schemaResult && schemaResult.results && (
@@ -1294,7 +1295,8 @@ export default function WaveSyncCenter(props) {
               </div>
             )}
             {schemaResult && schemaResult.error && <div className="text-xs mt-2 bg-rose-100 text-rose-950 rounded px-2 py-1 font-medium">{schemaResult.error}</div>}
-          </div>
+            </div>
+          </details>
           <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Default Invoice Product (Wave)</div>
             <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to be tied to a product. Set one reusable product once and all invoice pushes will use it. We recommend creating a product named exactly <b>NextTrade Hub Item</b> in Wave (marked as sold, with an income account), then click Find.</div>
@@ -1378,6 +1380,11 @@ export default function WaveSyncCenter(props) {
             </div>
             {catMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{catMsg}</div>}
           </div>
+          {/* v55.83-MF — the densest admin block (push-permission checklists + production write toggles) is
+              collapsed by default so the Settings tab reads clean for a normal operator; one click reveals it. */}
+          <details className="mb-3 border border-slate-300 rounded-lg bg-slate-50 text-slate-900">
+            <summary className="cursor-pointer px-3 py-2 font-bold text-slate-800 text-sm select-none">⚙ Advanced — push permissions &amp; production write controls (super-admin; you usually don&apos;t need this)</summary>
+            <div className="px-3 pb-3">
           <div className="font-bold mb-2">Push permissions for: {reg ? (reg.label || active) : 'No business selected'}</div>
           {reg && (!isProd || productionUnlocked) && (function () {
             // v55.83-KO (audit) — PAYMENT push and INVOICE push have DIFFERENT requirements; conflating
@@ -1459,6 +1466,8 @@ export default function WaveSyncCenter(props) {
               }) : <div className="text-xs text-rose-700 font-semibold">Other push flags unlock once you enable real production push above.</div>}
             </div>
           )}
+            </div>
+          </details>
         </div>
       )}
     </div>
