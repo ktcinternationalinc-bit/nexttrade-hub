@@ -21,7 +21,7 @@ var runner = rd('scripts/run-accounting-bank-regression.js');
 
 ok('1: prefill route marker is ML and visible build is MM or newer',
   /v55\.83-ML-prefill-payment-links/.test(route) &&
-  /v55\.83-MM/.test(page) &&
+  /v55\.83-M[A-Z]/.test(page) &&
   /version: 'v55\.83-MM'/.test(wn));
 
 ok('2: deposit read no longer names optional bank_transactions.wave_transaction_id in the select list',

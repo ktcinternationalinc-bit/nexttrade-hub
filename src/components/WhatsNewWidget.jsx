@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MQ',
+    date: '2026-06-28',
+    label: 'Wave categories now push without the "feed owner" wall — and the import reads your real Wave export',
+    items: [
+      '**🚀 Categorizing in the Hub now pushes to Wave — no more "feed owner not assigned" block.** Set a category in Bank Review and push; the Hub posts it to Wave as a categorized transaction. Change it later and it re-pushes. (To keep each transaction showing once, turn off Wave\'s own auto-import for that account so the Hub is the only source.)',
+      '**📥 Importing your Wave history works with the real export.** The importer now reads Wave\'s actual Account Transactions CSV — it finds the category in the "Other Accounts" column, uses the correct row, and skips Wave\'s "Uncategorized" entries.',
+      '**🏷️ More fixes:** all your Wave categories now load in the dropdown (not just 33); deposit→invoice links no longer crash on Step 6; the estimate import works again; and the old "Wave can\'t accept this" labels are gone (they can now).',
+      { superAdminOnly: true, text: 'v55.83-MQ — consolidated Lane B build (agreed Claude=dev/Codex=QA in WAVE_REQUIREMENTS_AND_DESIGN.md; live proof: Wave API create-only, no update mutation). Removed the feed-owner firewall from push-transaction (MN) + push-payment (MP); push creates a categorized money txn with a fresh externalId per push (re-pushable on category change), logs the Wave id/exact failure. import-transaction-csv (MM/MN): reads Wave Account-Transactions export (Other Accounts column, bank-side rows, signed amount, Uncategorized skipped, Wave-wins overwrite). categories route paginated (MO) — fixes "only 33 showing" (1000-row cap on a 1877-row silo). prefill deposit read select(*) — fixes Step 6 missing-column crash. import-estimates dueDate/unitPrice schema fix. WaveSyncCenter Hub-only copy corrected to "Needs category"/"Split not built yet" (MN, Codex Lane B FAIL closed). badge MM→MQ; badge tests made marker-churn-tolerant. runner 97/97; clean build. REMAINING: one LIVE end-to-end push proof (Hub category → push → Wave id in log → verified in Wave).' },
+    ],
+  },
+  {
     version: 'v55.83-MM',
     date: '2026-06-24',
     label: 'Wave accounting CSV and payment-link path clarified',

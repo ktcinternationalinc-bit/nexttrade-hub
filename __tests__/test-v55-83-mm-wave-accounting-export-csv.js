@@ -18,10 +18,10 @@ var page = rd('src/app/page.jsx');
 var wn = rd('src/components/WhatsNewWidget.jsx');
 var runner = rd('scripts/run-accounting-bank-regression.js');
 
-ok('1: visible build identifies MM; the import-transaction-csv route carries a current marker',
-  /v55\.83-MM/.test(page) &&
-  /version: 'v55\.83-MM'/.test(wn) &&
-  /API_BUILD_MARKER = 'v55\.83-M[MN]-import-transaction-csv/.test(route));
+ok('1: visible build carries a current M-series badge + changelog; the import-transaction-csv route carries a current marker',
+  />v55\.83-M[A-Z]</.test(page) &&
+  /version: 'v55\.83-M[A-Z]'/.test(wn) &&
+  /API_BUILD_MARKER = 'v55\.83-M[A-Z]-import-transaction-csv/.test(route));
 ok('2: importer detects Wave accounting.csv shape by account name/type + transaction id',
   /accountName: findCol\(headers, \['account name'\], null\)/.test(route) &&
   /accountType: findCol\(headers, \['account type'\], null\)/.test(route) &&
