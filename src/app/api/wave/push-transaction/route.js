@@ -7,9 +7,9 @@
 //  - Bank side (ANCHOR) is resolved PER TRANSACTION (see resolver block below): match THIS txn's bank
 //    account to its Wave Cash&Bank account by mask; else single-Wave-bank-account; else silo default. A silo
 //    can have MANY bank accounts, so there is NO single global anchor.
-//  - lineItems is a COMPLETE BALANCED double-entry (Wave rejects a single line — live error
-//    "Transaction must have at least one debit and credit line item"). buildMoneyTxnLineItems():
-//    DEPOSIT (money in)  => [{bank, DEBIT}, {category, CREDIT}]; WITHDRAWAL (money out) => [{category, DEBIT}, {bank, CREDIT}].
+//  - anchor = the bank account (direction WITHDRAWAL/DEPOSIT carries the bank side); lineItems = ONLY the
+//    category (DEBIT on a withdrawal, CREDIT on a deposit). The bank must NOT also appear in lineItems or
+//    Wave rejects with MULTIPLE_POSSIBLE_ANCHORS. See buildMoneyTxnLineItems for the live-error history.
 //  - externalId = 'hub-bt-' + bank_transactions.id + timestamp => each Hub push is sent fresh by design.
 //  - NOT for bank-to-bank transfers (Wave API doesn't support those) — those stay in the Hub.
 // OPEN (Codex): factor the anchor resolver into a shared src/lib/wave-bank-account-resolver.js; add a
@@ -22,27 +22,30 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety } from '../../../../lib/wave-bank-account-resolver';
 
-var API_BUILD_MARKER = 'v55.83-MN-push-transaction-hub-category-wins';
+var API_BUILD_MARKER = 'v55.83-MR-push-transaction-single-anchor';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function pushExternalId(hubId) { return 'hub-bt-' + String(hubId) + '-' + String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000)); }
-// v55.83-MA (Codex P0: live error "Transaction must have at least one debit and credit line item.
-// [input,lineItems]"). LIVE-SCHEMA introspection (2026-06-23) confirms MoneyTransactionCreateLineItemInput
-// .balance is a BalanceType! enum (CREDIT, DEBIT, DECREASE, INCREASE) and lineItems is a required NON-EMPTY
-// list. The error path [input,lineItems] proves Wave validates the LINE ITEMS as a complete double-entry —
-// the anchor only NAMES the bank account; the line items must carry BOTH sides. So a single INCREASE line
-// (the old KZ shape) is invalid. buildMoneyTxnLineItems returns the explicit debit + credit pair:
-//   DEPOSIT (money in):  bank asset DEBIT, category (income/source) CREDIT.
-//   WITHDRAWAL (money out): category (expense/use) DEBIT, bank asset CREDIT.
-// Debits == Credits == amount, so the journal balances. (Bank-side resolution is separate; see below.)
+// PAYLOAD HISTORY (each step driven by a live Wave error):
+//   v1 (KZ): lineItems = [{category, INCREASE}]            -> "Transaction must have at least one debit and credit line item."
+//   v2 (MA): lineItems = [{category, DEBIT}, {bank, CREDIT}] (bank in anchor AND lineItems) -> "MULTIPLE_POSSIBLE_ANCHORS."
+//   v3 (MR, current): anchor = bank (its direction carries the bank side); lineItems = [{category, DEBIT|CREDIT}] ONLY.
+// BalanceType enum (live): CREDIT, DEBIT, DECREASE, INCREASE. The category line is DEBIT on a withdrawal
+// (expense up) and CREDIT on a deposit (income up); the anchor's direction supplies the opposite side.
 function buildMoneyTxnLineItems(direction, bankAcctId, categoryAcctId, amtStr) {
+  // v55.83-MR — live error "MULTIPLE_POSSIBLE_ANCHORS": the ANCHOR (bank account) already represents the bank
+  // side via its direction, so the bank account must NOT also appear in lineItems — when it does, Wave sees
+  // two candidate anchors (the explicit anchor + the bank lineItem) and rejects. lineItems carry ONLY the
+  // CATEGORY side; the anchor's direction supplies the matching opposite side so the journal still balances:
+  //   WITHDRAWAL (money out) => category DEBIT (expense up); anchor bank is the implicit CREDIT.
+  //   DEPOSIT   (money in)   => category CREDIT (income up);  anchor bank is the implicit DEBIT.
   if (direction === 'DEPOSIT') {
-    return [{ accountId: bankAcctId, amount: amtStr, balance: 'DEBIT' }, { accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' }];
+    return [{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' }];
   }
-  return [{ accountId: categoryAcctId, amount: amtStr, balance: 'DEBIT' }, { accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' }];
+  return [{ accountId: categoryAcctId, amount: amtStr, balance: 'DEBIT' }];
 }
 function bankTxnLogContext(bt) {
   if (!bt) { return null; }
@@ -169,8 +172,10 @@ export async function POST(req) {
     };
 
     if (isDry) {
-      var debitLine = lineItems[0].balance === 'DEBIT' ? lineItems[0] : lineItems[1];
-      var creditLine = lineItems[0].balance === 'CREDIT' ? lineItems[0] : lineItems[1];
+      // lineItems now holds ONLY the category line; the bank side is the anchor (via direction). Show both.
+      var catLine = lineItems[0];
+      var debitLine = dir === 'DEPOSIT' ? { accountId: anchorAcct, amount: amtStr, balance: 'DEBIT', side: 'bank (anchor)' } : catLine;
+      var creditLine = dir === 'DEPOSIT' ? catLine : { accountId: anchorAcct, amount: amtStr, balance: 'CREDIT', side: 'bank (anchor)' };
       return NextResponse.json({ ok: true, dry_run: true, anchor_account: anchorName || anchorAcct, anchor_via: anchorVia, direction: dir, amount: amount, category_account_id: categoryAcct, category_name: bt.wave_account_name || null, debit: debitLine, credit: creditLine, would_send: input, api_build_marker: API_BUILD_MARKER });
     }
 

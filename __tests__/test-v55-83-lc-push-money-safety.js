@@ -27,10 +27,11 @@ ok('1: Dry Run previews money rows via the SERVER and shows the Wave anchor (ban
   /dry_run: true, user_id: userProfile && userProfile\.id/.test(sync) &&
   /Bank side \(anchor\): ' \+ \(d\.anchor_account \|\| '\?'\)/.test(sync) &&
   /anchor_account: anchorName \|\| anchorAcct, anchor_via: anchorVia, direction: dir/.test(route));
-ok('1b: the journal is a BALANCED double-entry (v55.83-MA money-safety) — equal DEBIT and CREDIT lines for the same amount, never a single-sided line Wave rejects',
+ok('1b: balanced journal, single anchor (v55.83-MR money-safety) — anchor=bank carries one side via direction; lineItems carry ONLY the category (bank not duplicated → no MULTIPLE_POSSIBLE_ANCHORS)',
   /function buildMoneyTxnLineItems\(direction, bankAcctId, categoryAcctId, amtStr\)/.test(route) &&
-  /balance: 'DEBIT' \}, \{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
-  /balance: 'DEBIT' \}, \{ accountId: bankAcctId, amount: amtStr, balance: 'CREDIT' \}/.test(route) &&
+  /return \[\{ accountId: categoryAcctId, amount: amtStr, balance: 'CREDIT' \}\]/.test(route) &&
+  /return \[\{ accountId: categoryAcctId, amount: amtStr, balance: 'DEBIT' \}\]/.test(route) &&
+  !/accountId: bankAcctId, amount: amtStr, balance:/.test(route) &&
   !/balance: 'INCREASE' \}\]/.test(route));
 ok('2: multi-account anchor safety — PER-ACCOUNT resolution via the SHARED resolver (LZ/MC): route delegates to resolveWaveBankAnchor; no blanket multi-account block',
   /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(route) &&
