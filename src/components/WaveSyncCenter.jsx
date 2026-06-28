@@ -1471,9 +1471,9 @@ export default function WaveSyncCenter(props) {
           </details>
           {/* v55.83-MS (Codex Round-3) — catalog-first Default Invoice Product picker: Refresh from Wave +
               pick an EXISTING product from the dropdown (auto-links). No find/create-one-at-a-time. */}
-          <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
-            <div className="font-bold text-slate-900 mb-1">Default Invoice Product (Wave)</div>
-            <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to point at a product (an accounting carrier) — your Hub line descriptions and amounts still push exactly as entered. Pick one of your existing Wave products as the fallback; any line that picks its own product on the invoice overrides it.</div>
+          <div className="mb-4 border border-slate-700 bg-slate-900/40 rounded-lg p-3 text-slate-100">
+            <div className="font-bold text-slate-100 mb-1">Default Invoice Product (Wave)</div>
+            <div className="text-xs text-slate-300 mb-2">Wave requires every invoice line to point at a product (an accounting carrier) — your Hub line descriptions and amounts still push exactly as entered. Pick one of your existing Wave products as the fallback; any line that picks its own product on the invoice overrides it.</div>
             {prodSetup && prodSetup.default_invoice_product_id ? (
               <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured product: {prodSetup.default_invoice_product_name || prodSetup.default_invoice_product_id} ({String(prodSetup.default_invoice_product_id).substring(0, 18)}…)</div>
             ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default product set — invoice push is blocked only for lines that do not pick their own product.</div>}
@@ -1489,11 +1489,11 @@ export default function WaveSyncCenter(props) {
                 {prodOptions.filter(function (p) { return p.isArchived !== true; }).map(function (p) { return <option key={p.id} value={p.id} disabled={p.isSold === false}>{p.name}{p.isSold === false ? ' (not sold — not selectable)' : ''}</option>; })}
               </select>
             </div>
-            <details className="mt-2 text-[11px] text-slate-600">
+            <details className="mt-2 text-[11px] text-slate-300">
               <summary className="cursor-pointer">No products in Wave yet?</summary>
-              <button onClick={function () { runProductSetup('create'); }} disabled={prodBusy} className="mt-1 text-xs bg-slate-200 hover:bg-slate-300 text-slate-900 rounded px-2 py-1 font-bold disabled:opacity-50">Create a generic &quot;NextTrade Hub Item&quot; in Wave</button>
+              <button onClick={function () { runProductSetup('create'); }} disabled={prodBusy} className="mt-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-100 rounded px-2 py-1 font-bold disabled:opacity-50">Create a generic &quot;NextTrade Hub Item&quot; in Wave</button>
             </details>
-            {prodMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{prodMsg}</div>}
+            {prodMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-100 bg-slate-800 border border-slate-600 rounded p-2 font-mono">{prodMsg}</div>}
             {prodDetails && <details className="mt-2 text-xs border border-slate-300 rounded bg-slate-100 text-slate-900">
               <summary className="cursor-pointer px-2 py-1 font-bold">Technical details</summary>
               <pre className="p-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px]">{JSON.stringify(prodDetails, null, 2)}</pre>
