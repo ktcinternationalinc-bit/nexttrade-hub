@@ -22,7 +22,7 @@ ok('1: visible build marker is current, and the MK changelog entry is still pres
   /version: 'v55\.83-MK'/.test(wn));
 ok('2: payment dry-run is routed to the real server payment push preflight',
   /q\.action !== 'transaction' && q\.action !== 'payment'/.test(sync) &&
-  /var route = q\.action === 'payment' \? '\/api\/wave\/push-payment' : '\/api\/wave\/push-transaction';/.test(sync) &&
+  /var route = q\.action === 'payment' \? '\/api\/wave\/push-payment' : \(q\.action === 'invoice' \? '\/api\/wave\/push-invoice-v2' : '\/api\/wave\/push-transaction'\);/.test(sync) &&
   /dry_run: true/.test(sync));
 ok('3: payment dry-run renders the Wave invoice/account/amount/date returned by the server',
   /if \(q\.action === 'payment'\)/.test(sync) &&

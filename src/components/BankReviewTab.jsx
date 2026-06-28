@@ -139,7 +139,7 @@ export default function BankReviewTab(props) {
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('wave_business_registry', '*'),
       supabase.from('plaid_accounts').select('*'),
-      supabase.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('is_active', true),
+      Promise.resolve({ data: [] }), // v55.83-MS (gap-finder #9) — res[6] retired: the paginated, silo-scoped /api/wave/categories route (reloadCats) is the ONLY category source; this slot stays to preserve res[] indices.
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
       supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
       supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount, linked_type'),
@@ -203,7 +203,11 @@ export default function BankReviewTab(props) {
         if (sub.indexOf('RECEIVABLE') >= 0 || nm.indexOf('RECEIVABLE') >= 0) { return false; }
         return true;
       });
-      setWaveCategories(cats); // fallback (client query); the service-role route below is authoritative
+      // v55.83-MS (Codex Round-2) — do NOT seed waveCategories from the client query above (res[6]): it is
+      // un-paginated (Supabase 1000-row cap) and not silo-scoped at the query level, so on a >1000-row silo it
+      // can render a capped / cross-silo dropdown. The service-role route (reloadCats, below) is the ONLY
+      // source — it paginates and scopes to the active silo, and clears the list on failure.
+      void cats;
       setRegistry(reg);
       setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy); setAllocByTxn(allocBy);
       // v55.83-JA — load categories via the SERVICE-ROLE route too (bypasses RLS). The client query
@@ -317,14 +321,16 @@ export default function BankReviewTab(props) {
   // v55.83-KF — load the silo's usable Wave categories via the service-role route (RLS-proof).
   function reloadCats() {
     var abiz = getActiveWaveBusiness();
-    if (!abiz || abiz === 'all') { setCatDiag(null); return; }
+    if (!abiz || abiz === 'all') { setWaveCategories([]); setCatDiag(null); return; }
     fetch('/api/wave/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: abiz, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
+        // v55.83-MS (Codex Round-2) — on failure CLEAR the dropdown (don't leave a stale/capped list visible)
+        // and surface the error, so the user never silently sees a wrong/partial category set.
         if (j && j.ok) { setWaveCategories(j.categories || []); setCatDiag({ total: j.total, usable: j.usable_count, hidden_receivable: j.hidden_receivable_count, error: null }); }
-        else { setCatDiag({ error: (j && j.error) || 'category load failed' }); }
+        else { setWaveCategories([]); setCatDiag({ error: (j && j.error) || 'category load failed' }); }
       })
-      .catch(function (e) { setCatDiag({ error: (e && e.message) || 'network error' }); });
+      .catch(function (e) { setWaveCategories([]); setCatDiag({ error: (e && e.message) || 'network error' }); });
   }
 
   // v55.83-KF (Max — "for the 100th time, categories aren't flowing"): pull THIS silo's Wave Chart of

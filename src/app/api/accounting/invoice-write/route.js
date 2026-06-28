@@ -62,6 +62,21 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, row: rres.data[0], api_build_marker: API_BUILD_MARKER });
     }
 
+    // ── set_line_product: map a Wave product onto ONE invoice line as sync METADATA ONLY (no financial edit).
+    // v55.83-MS (Codex QA #1) — lets an approved/pending invoice get a per-line Wave product mapping without
+    // reopening it; this NEVER touches description, quantity, unit price, totals, approval, or payment state.
+    if (action === 'set_line_product') {
+      var lgate = await assertPermission(db, by, 'invoices.edit', req);
+      if (!lgate.ok) { return NextResponse.json({ ok: false, error: lgate.error, api_build_marker: API_BUILD_MARKER }, { status: lgate.status }); }
+      var itemId = body.item_id || null;
+      if (!itemId) { return NextResponse.json({ ok: false, error: 'item_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var lpatch = { wave_product_id: body.wave_product_id || null, wave_product_name: body.wave_product_name || null };
+      var lres = await db.from('accounting_invoice_items').update(lpatch).eq('id', itemId).eq('invoice_id', invoiceId).select('id, wave_product_id, wave_product_name');
+      if (lres && lres.error) { return NextResponse.json({ ok: false, error: 'Product mapping write failed: ' + lres.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!(lres && lres.data && lres.data.length)) { return NextResponse.json({ ok: false, error: 'No invoice line updated (not found, or it belongs to a different invoice).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      return NextResponse.json({ ok: true, item: lres.data[0], api_build_marker: API_BUILD_MARKER });
+    }
+
     return NextResponse.json({ ok: false, error: 'Unknown action "' + action + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });

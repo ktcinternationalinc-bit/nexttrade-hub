@@ -30,8 +30,9 @@ ok('2: processes ONLY the bank-side rows of a Wave accounting export (cash/bank 
   /rAcctType\.indexOf\('cash'\) >= 0 \|\| rAcctType\.indexOf\('bank'\) >= 0\)\) \{ skippedNonBank\+\+; continue; \}/.test(route));
 ok('3: skips Wave "Uncategorized Income/Expense" (nothing to import)',
   /if \(\/\^uncategor\/\.test\(norm\(cCat\)\)\) \{ skippedUncategorized\+\+; continue; \}/.test(route));
-ok('4: for a Wave GL export, direction comes from the SIGNED amount column (not the inverted Debit/Credit)',
-  /(isWaveAccountingExport|ci\.accountType >= 0) && ci\.amount >= 0\) \{ var aw = parseAmount\(rowArr\[ci\.amount\]\); if \(aw != null\) \{ return aw; \} \}/.test(route));
+ok('4: v55.83-MS — direction comes from the SIGNED amount column whenever present (detectAmountCol excludes debit/credit), not gated on Transaction-ID, never the inverted Debit/Credit',
+  /if \(ci\.amount >= 0\) \{ var aw = parseAmount\(rowArr\[ci\.amount\]\); if \(aw != null\) \{ return aw; \} \}/.test(route) &&
+  /var amountCol = detectAmountCol\(headers\)/.test(route));
 ok('5: the preview reports how many rows were skipped (non-bank duplicate + uncategorized)',
   /skipped_uncategorized_count: skippedUncategorized, skipped_non_bank_row_count: skippedNonBank/.test(route));
 

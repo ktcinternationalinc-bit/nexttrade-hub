@@ -270,24 +270,33 @@ export default function AccountingInvoicesTab(props) {
   }
   function uh(k, v) { var c = Object.assign({}, hdr); c[k] = v; setHdr(c); }
   function ui(i, k, v) { var c = items.slice(); c[i] = Object.assign({}, c[i]); c[i][k] = v; setItems(c); }
-  // v55.83-IY — select a Wave product for a line: stores id+name and prefills the description if blank.
+  // v55.83-MS (Codex delta 5) — selecting a Wave product is SYNC METADATA ONLY: it sets the line's
+  // wave_product_id (the required Wave accounting carrier) + name, and NEVER touches the user's description,
+  // quantity, or unit price. The Hub line description pushes to Wave verbatim (per-line override), so the
+  // carrier product's name/description must not clobber what the user deliberately typed.
   function setLineWaveProduct(i, productId) {
     var prod = null; waveProducts.forEach(function (p) { if (p.wave_product_id === productId) { prod = p; } });
-    var c = items.slice(); var prev = c[i] || {}; c[i] = Object.assign({}, prev);
+    var c = items.slice(); c[i] = Object.assign({}, c[i] || {});
     c[i].wave_product_id = productId || '';
     c[i].wave_product_name = prod ? (prod.name || '') : '';
-    // v55.83-JS (Codex) — picking a Wave product brings its Wave-recognized DESCRIPTION onto the line
-    // (this IS what pushes to Wave). Prefer the Wave product description, fall back to its name. Only
-    // overwrite when the line description is blank OR still equals the previously-selected product's
-    // text (so we never clobber a description the user deliberately typed).
-    if (prod) {
-      var waveDesc = (prod.description && prod.description.trim()) ? prod.description : (prod.name || '');
-      var prevProd = null; waveProducts.forEach(function (p) { if (p.wave_product_id === prev.wave_product_id) { prevProd = p; } });
-      var prevText = prevProd ? ((prevProd.description && prevProd.description.trim()) ? prevProd.description : (prevProd.name || '')) : '';
-      var cur = (c[i].description || '').trim();
-      if (!cur || cur === (prevText || '').trim() || cur === (prevProd && prevProd.name ? prevProd.name : '')) { c[i].description = waveDesc; }
-    }
     setItems(c);
+  }
+  // v55.83-MS (Codex QA #1) — change a line's Wave product. Always update local state; if the invoice is LOCKED
+  // (approved/pending) and the line already exists (has an id), persist the mapping immediately via the
+  // metadata-only server action so the per-line product can be set WITHOUT reopening the invoice's financials.
+  function onLineProductChange(i, productId) {
+    var existing = items[i];
+    var prevProductId = existing ? (existing.wave_product_id || '') : '';
+    setLineWaveProduct(i, productId);
+    if (locked(editing) && existing && existing.id && editing && editing.id) {
+      var prod = null; waveProducts.forEach(function (p) { if (p.wave_product_id === productId) { prod = p; } });
+      fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_line_product', invoice_id: editing.id, item_id: existing.id, wave_product_id: productId || null, wave_product_name: prod ? (prod.name || '') : null, user_id: (userProfile && userProfile.id) || null }) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { if (d && d.ok) { toast.success('Wave product mapped to this line (no financial change).'); } else { toast.error('Mapping failed: ' + ((d && d.error) || 'unknown') + ' — reverted.'); setLineWaveProduct(i, prevProductId); } })
+        // v55.83-MS (Codex caution) — the dropdown is optimistic; on a failed/blocked server write, REVERT the
+        // local selection so a failed mapping is never mistaken for persisted Hub state.
+        .catch(function (e) { toast.error('Mapping failed: ' + ((e && e.message) || 'network error') + ' — reverted.'); setLineWaveProduct(i, prevProductId); });
+    }
   }
   function addItem() { setItems(items.concat([blankItem()])); }
   function rmItem(i) { var c = items.slice(); c.splice(i, 1); setItems(c.length ? c : [blankItem()]); }
@@ -640,14 +649,15 @@ export default function AccountingInvoicesTab(props) {
             return (
               <div key={i} className="flex gap-1 mb-1 items-center flex-wrap">
                 {/* v55.83-IY — per-line Wave product selector (the product Wave receives on push) */}
-                {/* v55.83-IY/JS — per-line Wave product selector. Options show the Wave name + its
-                    recognized description so staff pick the exact Wave item; selecting it fills the
-                    line description (below) with the Wave description, which is what pushes to Wave. */}
-                <select value={it.wave_product_id || ''} disabled={locked(editing)} onChange={function (e) { setLineWaveProduct(i, e.target.value); }} className="w-44 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product + description for this line (pushed to Wave). Selecting one fills the line description with the Wave-recognized text. Pull the silo's products in Wave Sync Center if empty.">
-                  <option value="">{siloProducts.length ? '— Wave product (default) —' : '— no products pulled —'}</option>
+                {/* v55.83-MS — per-line Wave product selector = the required Wave accounting CARRIER for this
+                    line. Options show the Wave name + description to help pick; selecting it is metadata only and
+                    does NOT change your line description, which pushes to Wave exactly as typed. Optional — a
+                    line with no product uses the Settings default product as the fallback carrier. */}
+                <select value={it.wave_product_id || ''} disabled={locked(editing) && !it.id} onChange={function (e) { onLineProductChange(i, e.target.value); }} className="w-44 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" title="Wave product carrier for this line (optional — falls back to the Settings default). You can set/change this even on an approved invoice: it's saved as sync metadata only and does NOT change the description, amount, or approval. Your line description pushes to Wave exactly as typed. Pull the silo's products in Wave Sync Center if empty.">
+                  <option value="">{siloProducts.length ? '— Wave product (uses default) —' : '— no products pulled —'}</option>
                   {siloProducts.map(function (p) { var d = (p.description && p.description.trim()) ? (' — ' + p.description.substring(0, 40)) : ''; return <option key={p.wave_product_id} value={p.wave_product_id}>{(p.name || p.wave_product_id) + d}</option>; })}
                 </select>
-                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Line description (sent to Wave)" title="This text is the Wave line description on push. Picking a Wave product above fills it with the Wave-recognized description; you can still edit it." className={inp + ' flex-1'} />
+                <input value={it.description} disabled={locked(editing)} onChange={function (e) { ui(i, 'description', e.target.value); }} placeholder="Line description (sent to Wave)" title="This text is the Wave line description on push — it pushes exactly as typed. Picking a Wave product above is just the accounting carrier and does NOT change this text." className={inp + ' flex-1'} />
                 <input value={it.quantity} disabled={locked(editing)} onChange={function (e) { ui(i, 'quantity', e.target.value); }} placeholder="Qty" className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <input value={it.unit_price} disabled={locked(editing)} onChange={function (e) { ui(i, 'unit_price', e.target.value); }} placeholder="Unit" className="w-20 bg-slate-800 border border-slate-600 rounded px-1 py-1 text-slate-100 text-xs" />
                 <div className="w-24 text-right text-xs font-mono text-slate-200">{fmt(itemTotal(it))}</div>

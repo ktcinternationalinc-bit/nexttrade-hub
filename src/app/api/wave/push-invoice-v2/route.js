@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-EP-push-invoice-v2-productid';
+var API_BUILD_MARKER = 'v55.83-MS-push-invoice-v2-perline-or-default';
 var API_ROUTE = '/api/wave/push-invoice-v2';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
@@ -96,70 +96,74 @@ export async function POST(req) {
     var items = (itemsRes && itemsRes.data) || [];
 
     if (dryRun) {
+      // v55.83-MS (Codex QA #2) — the dry-run shares the REAL product preflight so it returns the SAME blocker
+      // a real push would (not a client-only would_create). Customer-in-Wave + cross-silo are already checked
+      // above; here resolve the default + check each line for a product (per-line OR fallback default).
+      var dryCfgRes = await db.from('wave_business_settings').select('default_invoice_product_id').eq('wave_business_id', waveBusinessId);
+      var dryDefault = (dryCfgRes && dryCfgRes.data && dryCfgRes.data.length) ? dryCfgRes.data[0].default_invoice_product_id : null;
+      var dryUnmapped = 0; var dk;
+      for (dk = 0; dk < items.length; dk++) { if (!items[dk].wave_product_id && !dryDefault) { dryUnmapped++; } }
+      if (dryUnmapped > 0) {
+        var dMsg = dryUnmapped + ' invoice line(s) have no Wave product and no default is set. In Wave Sync Center → Settings → Default Invoice Product, click "Refresh from Wave" and Choose a Wave product, or pick a Wave product per line on the invoice.';
+        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: false, error_message: dMsg, attempted_by: by });
+        return NextResponse.json({ dry_run: true, blocked: true, reason: dryDefault ? 'LOCAL_PRECHECK_MISSING_PRODUCT_ID' : 'NO_DEFAULT_PRODUCT_CONFIGURED', error: dMsg, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 });
+      }
       await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, request_payload: { api_build_marker: API_BUILD_MARKER }, attempted_by: by });
-      return NextResponse.json({ dry_run: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name, note: 'On real push, each line will be attached to the reusable Wave product "NextTrade Hub Item" (used if it exists, created once if not). No product is created during a dry run.' } });
+      return NextResponse.json({ dry_run: true, ok: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name, default_product: dryDefault || null, note: 'Preflight OK. Each line uses its own selected Wave product, or the configured default as a fallback. Hub line descriptions and amounts push exactly as entered (hideName hides the carrier name). No product is created.' } });
     }
 
     var token = process.env.WAVE_ACCESS_TOKEN;
     if (!token) { return NextResponse.json({ error: 'No Wave token configured (WAVE_ACCESS_TOKEN).' }, { status: 400 }); }
 
-    // Wave invoiceCreate. Field shape per public schema — MUST be validated against the
-    // Wave sandbox before relying on it (line-item product mapping in particular).
-    // v55.83-EU — Invoice push NEVER creates a Wave product. It uses a productId that was
-    // configured/linked once (in Wave Sync Settings), or finds the exact "NextTrade Hub Item"
-    // product already in Wave. If neither exists, it BLOCKS locally and tells the user to set
-    // it up once. Product creation is handled separately on the settings screen, not here.
+    // Wave invoiceCreate. Field shape validated live (scripts/introspect-invoice-item.mjs +
+    // docs/wave-invoice-item-schema-proof.txt): InvoiceCreateItemInput.productId is REQUIRED;
+    // description/quantity/unitPrice are per-line OVERRIDES; InvoiceCreateInput.hideName hides the carrier name.
+    // v55.83-MS (Codex Round-3 deltas 1 & 3) — PER-LINE Wave product wins; the configured default is only a
+    // FALLBACK for lines with no wave_product_id. The old find-by-name "NextTrade Hub Item" lookup is RETIRED:
+    // the default comes solely from wave_business_settings.default_invoice_product_id (set via the catalog
+    // picker — pull existing Wave products, pick one, auto-link). A default is REQUIRED only when at least one
+    // line is unmapped; if every line already carries its own product, NO default is needed and push proceeds.
     var productId = null;
     var productMode = 'none';
-    // 1) configured default product for this business
+    // configured default product for this business — the ONLY default source (no find-or-create by name)
     var cfgRes = await db.from('wave_business_settings').select('default_invoice_product_id, default_invoice_product_name, source').eq('wave_business_id', waveBusinessId);
     var cfgErr = cfgRes && cfgRes.error ? (cfgRes.error.message || String(cfgRes.error)) : null;
     var cfgRows = (cfgRes && cfgRes.data) || [];
     var cfg = cfgRows.length ? cfgRows[0] : null;
     if (cfg && cfg.default_invoice_product_id) { productId = cfg.default_invoice_product_id; productMode = 'configured_default'; }
-    // 2) else find an existing Wave product named exactly "NextTrade Hub Item"
-    if (!productId) {
-      var listProdQ = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:50){ edges{ node{ id name isSold } } } } }';
-      var lpResp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: listProdQ, variables: { bid: waveBusinessId } }) });
-      var lpData = await lpResp.json();
-      var edges = lpData && lpData.data && lpData.data.business && lpData.data.business.products && lpData.data.business.products.edges;
-      if (edges && edges.length) {
-        var pi2;
-        for (pi2 = 0; pi2 < edges.length; pi2++) {
-          if (edges[pi2].node && edges[pi2].node.name === 'NextTrade Hub Item') { productId = edges[pi2].node.id; productMode = 'found_by_name'; }
-        }
-      }
-    }
-    // 3) no product -> BLOCK locally, do not call Wave, do not create
-    if (!productId) {
-      var setupMsg = 'Invoice push blocked: no default Wave invoice product configured for this business. Open Wave Sync Center -> Settings -> Default Invoice Product, click Find or Create "NextTrade Hub Item", then retry. (You can also create a product named exactly "NextTrade Hub Item" in Wave, marked as sold with an income account.)';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', wave_business_id: waveBusinessId, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr, default_invoice_product_id: cfg ? cfg.default_invoice_product_id : null, default_invoice_product_name: cfg ? cfg.default_invoice_product_name : null, source: cfg ? cfg.source : null } }, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, attempted_by: by });
-      return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'NO_DEFAULT_PRODUCT_CONFIGURED', settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr } }, { status: 409 });
-    }
 
-    // v55.83-IY — PER-LINE Wave product: each line uses its own selected wave_product_id; the Settings
-    // default product is only a FALLBACK for lines with no selection (surfaced in the dry-run/log).
+    // PER-LINE Wave product: each line uses its own selected wave_product_id; the Settings default is only a
+    // FALLBACK for lines with no selection. Wave requires productId per line, but the Hub
+    // description/quantity/unitPrice still push exactly (overrides), so line descriptions are preserved.
     var lineItems = [];
     var usedFallback = 0;
     var k;
     for (k = 0; k < items.length; k++) {
-      var lineProd = items[k].wave_product_id || productId;
-      if (!items[k].wave_product_id) { usedFallback++; }
+      var lineProd = items[k].wave_product_id || productId || null;
+      if (!items[k].wave_product_id && productId) { usedFallback++; }
       lineItems.push({ productId: lineProd, description: items[k].description || 'Hub invoice line', quantity: Number(items[k].quantity) || 1, unitPrice: Number(items[k].unit_price) || 0 });
     }
 
-    // v55.83-EO — LOCAL PREFLIGHT: never call Wave unless every final line item has a productId.
-    var missingProduct = !productId;
+    // v55.83-MS (Codex delta 1) — LOCAL PREFLIGHT: block ONLY when a final line item still has no productId
+    // (an unmapped line AND no default to fall back to). If EVERY line is mapped, no default is required and
+    // NO_DEFAULT_PRODUCT_CONFIGURED must NOT fire. Catalog-first message — pull products / pick per line,
+    // never "Create NextTrade Hub Item".
+    var missingProduct = false;
     var ii;
     for (ii = 0; ii < lineItems.length; ii++) { if (!lineItems[ii].productId) { missingProduct = true; } }
     if (missingProduct) {
-      var preBlock = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: 'LOCAL_PRECHECK_MISSING_PRODUCT_ID', resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, message: 'Invoice push blocked locally before Wave because finalItems are missing productId.' };
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: 'Blocked locally before Wave: line items missing productId (see response_payload).', response_payload: preBlock, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems }, attempted_by: by });
-      return NextResponse.json({ error: preBlock.message, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, response: preBlock }, { status: 409 });
+      var noDefault = (productMode === 'none');
+      var blockReason = noDefault ? 'NO_DEFAULT_PRODUCT_CONFIGURED' : 'LOCAL_PRECHECK_MISSING_PRODUCT_ID';
+      var setupMsg = 'Some invoice lines have no Wave product. In Wave Sync Center -> Settings -> Default Invoice Product, click "Refresh from Wave" and Choose a Wave product (auto-links as the fallback), or choose a Wave product per line on the invoice. Wave requires a product on every line as an accounting carrier; your line descriptions and amounts still push exactly as entered.';
+      var preBlock = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: blockReason, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr, default_invoice_product_id: cfg ? cfg.default_invoice_product_id : null, default_invoice_product_name: cfg ? cfg.default_invoice_product_name : null, source: cfg ? cfg.source : null }, message: setupMsg };
+      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: preBlock, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems }, attempted_by: by });
+      return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: blockReason, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr }, response: preBlock }, { status: 409 });
     }
 
     var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber status total{ value currency{ code } } } } }';
-    var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, items: lineItems } };
+    // v55.83-MS (Codex delta 2) — hideName:true so Wave shows the Hub line DESCRIPTIONS, not the carrier
+    // product's name (the productId is only the required accounting anchor).
+    var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, hideName: true, items: lineItems } };
     var reqPayload = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, query: mutation, variables: waveMutationVariables };
 
     var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: mutation, variables: waveMutationVariables }) });

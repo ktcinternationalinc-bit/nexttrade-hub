@@ -124,7 +124,12 @@ export async function POST(req) {
     // migration (sql/v55-83-MC-wave-feed-owner.sql) is not applied yet, '*' still returns the rows (the
     // column is just absent → treated as UNSET → firewall blocks with the "assign owner" message) instead
     // of erroring the whole select and breaking the push.
-    var wcRes = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId);
+    // v55.83-MS (Codex Round-2) — PAGINATE: Supabase caps a single select at 1000 rows; a silo can have ~1877
+    // categories, so an un-paged read would drop the chosen category if it sits beyond row 1000 (push would
+    // then fail to resolve a valid category). select('*') stays RESILIENT to the wave_feed_owner migration.
+    var wcAll = []; var wcFrom = 0; var wcGuard = 0;
+    while (wcGuard < 60) { wcGuard++; var wcPg = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId).range(wcFrom, wcFrom + 999); var wcPgRows = (wcPg && wcPg.data) || []; wcAll = wcAll.concat(wcPgRows); if (wcPgRows.length < 1000) { break; } wcFrom += 1000; }
+    var wcRes = { data: wcAll };
     var allCats = (wcRes && wcRes.data) || [];
 
     // CATEGORY SAFETY — block categories that would misstate the books (bank/cash = the anchor, not a

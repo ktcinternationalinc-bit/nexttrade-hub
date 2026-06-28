@@ -26,8 +26,9 @@ ok('2: importer detects Wave accounting.csv shape by account name/type + transac
   /accountName: findCol\(headers, \['account name'\], null\)/.test(route) &&
   /accountType: findCol\(headers, \['account type'\], null\)/.test(route) &&
   /var isWaveAccountingExport = ci\.accountName >= 0 && ci\.accountType >= 0 && ci\.category >= 0 && findCol\(headers, \['transaction id'\]\) >= 0;/.test(route));
-ok('3: accounting.csv uses signed Amount \(One column\), not journal debit-credit polarity',
-  /if \(isWaveAccountingExport && ci\.amount >= 0\) \{ var aw = parseAmount\(rowArr\[ci\.amount\]\); if \(aw != null\) \{ return aw; \} \}/.test(route));
+ok('3: v55.83-MS — rowSigned TRUSTS the signed amount column whenever present (detectAmountCol excludes debit/credit), not gated on a Transaction-ID column',
+  /if \(ci\.amount >= 0\) \{ var aw = parseAmount\(rowArr\[ci\.amount\]\); if \(aw != null\) \{ return aw; \} \}/.test(route) &&
+  !/if \(isWaveAccountingExport && ci\.amount >= 0\)/.test(route));
 ok('4: category import only uses Cash/Bank rows and skips A/R-A/P bank rows',
   /if \(!\(rAcctType\.indexOf\('cash'\) >= 0 \|\| rAcctType\.indexOf\('bank'\) >= 0\)\) \{ skippedNonBank\+\+; continue; \}/.test(route) &&
   /cCatN\.indexOf\('accounts receivable'\) >= 0 \|\| cCatN\.indexOf\('accounts payable'\) >= 0/.test(route));

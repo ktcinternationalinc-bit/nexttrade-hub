@@ -155,7 +155,11 @@ export async function POST(req) {
       var pmRes = await db.from('plaid_accounts').select('mask').eq('plaid_account_id', payBtAccountId).limit(1);
       payMask = (pmRes && pmRes.data && pmRes.data.length && pmRes.data[0].mask) ? String(pmRes.data[0].mask) : null;
     }
-    var payCatsRes = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId);
+    // v55.83-MS (Codex Round-2) — PAGINATE: Supabase caps a single select at 1000 rows; a silo can have ~1877
+    // categories, so an un-paged read could drop the Wave bank/cash account used to resolve the deposit anchor.
+    var payCatsAll = []; var pcFrom = 0; var pcGuard = 0;
+    while (pcGuard < 60) { pcGuard++; var pcPg = await db.from('wave_categories').select('*').eq('wave_business_id', waveBusinessId).range(pcFrom, pcFrom + 999); var pcPgRows = (pcPg && pcPg.data) || []; payCatsAll = payCatsAll.concat(pcPgRows); if (pcPgRows.length < 1000) { break; } pcFrom += 1000; }
+    var payCatsRes = { data: payCatsAll };
     var payResolved = resolveWaveBankAnchor({ waveBankAccts: waveBankCashCandidates((payCatsRes && payCatsRes.data) || []), txnMask: payMask, globalAcct: globalPayAcct, globalName: globalPayName });
     var paymentAccountId = payResolved.acct;
     if (!paymentAccountId) { return blocked('No Wave bank/deposit account could be resolved for this payment. Set a default in Wave Sync > Settings, or add a Wave Cash/Bank account matching this deposit\x27s bank.', 400, { needs_payment_account: true }); }

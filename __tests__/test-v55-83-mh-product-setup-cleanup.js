@@ -19,7 +19,7 @@ var page = rd('src/app/page.jsx');
 var wn = rd('src/components/WhatsNewWidget.jsx');
 var pcv = (route.match(/var pcVars = .*/) || [''])[0];
 
-ok('1: product-setup marker is MH', /API_BUILD_MARKER = 'v55\.83-MH-product-setup-current-wave-schema'/.test(route));
+ok('1: product-setup carries a current M-series marker (not pinned to one letter)', /API_BUILD_MARKER = 'v55\.83-M[A-Z]-product-setup/.test(route));
 ok('2: productCreate omits Wave-rejected isSold/isBought and keeps incomeAccountId',
   !/isSold: true/.test(pcv) && !/isBought: false/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv));
 ok('3: route returns a compact Wave error summary while retaining raw response for details',

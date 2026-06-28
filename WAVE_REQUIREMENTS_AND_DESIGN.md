@@ -264,3 +264,197 @@ Codex will not accept this until these pass:
 3. Which specific bank account and transaction should be the live acceptance sample?
 
 No source code should continue until these questions are answered or explicitly accepted as Lane B.
+
+---
+
+# POST-LANE-B QA ROUND 2 — Categories + Historical Import (2026-06-28, after live push PROVEN)
+
+Lane B push is LIVE-PROVEN (Max pushed a categorized Zelle txn; Wave accepted it with marker
+`v55.83-MR-push-transaction-single-anchor`). Max then asked: did we ALSO resolve (1) all Wave categories on
+the Hub, and (2) historical categorizations? Claude (dev) ran a 4-agent + synthesis audit (Workflow
+`wave-categories-historical-audit`) reading the real code/tests. **Honest verdict below — for Codex sign-off
+BEFORE Claude builds the fixes (per Max's process: propose → Codex comments → then build).**
+
+## Issue 1 — Are ALL Wave categories reaching the categorize dropdown? ("only 33 showing")
+**Status: PARTIAL.** The authoritative path is fixed; a live fallback can still re-introduce the cap.
+
+Evidence (verified against source, not just the passing grep-test):
+- `/api/wave/categories` paginates the read in a range-loop and returns the full list before filtering —
+  `src/app/api/wave/categories/route.js:47-56`. Removes the 1000-row Supabase cap behind "only 33 showing".
+- Wave-side category PULL is also paginated — `src/app/api/wave/sync-categories/route.js:28-63`.
+- Dropdown consumer takes the full list with no slice — `src/components/BankReviewTab.jsx:318-328`.
+
+Open gaps:
+1. **Un-paginated, cross-silo client fallback still seeds the dropdown FIRST** — `BankReviewTab.jsx:142`
+   (`select(...).eq('is_active', true)`, NO `.range()`, NO silo filter), set at `:206`. On `reloadCats()`
+   error it is NEVER cleared (`:325/:327` only set `catDiag`) → a route failure leaves the capped/cross-silo
+   list on screen. The MO route fix does NOT cover this path; no test bounds it.
+2. **Completeness is assumed, not proven** — pagination is moot if `sync-categories` never landed all rows
+   (stale / never-run / placeholder-id silo yields a short/empty dropdown).
+3. **Four reads still un-paginated + cap-exposed**: `push-transaction/route.js:127`,
+   `push-payment/route.js:158`, `account-feed-owner/route.js:36`, `import-transaction-csv/route.js:172`
+   (this last one means a category beyond row 1000 silently fails name→id resolution during CSV import).
+
+Acceptance test: on the ~1877-row silo, dropdown option count must == route `usable_count`; throttle/offline
+the `/api/wave/categories` call and reload — the dropdown must NOT fall back to a capped/cross-silo list. Also
+confirm `count(*) wave_categories` for the silo matches Wave's Chart of Accounts size.
+
+**Claude's proposed fixes (HOLDING for Codex comment):**
+- (a) Bound the `:142` fallback: add the silo filter + `.range()`/`.limit()`, OR delete it and render only
+  the authoritative route result.
+- (b) On `reloadCats()` failure, clear `waveCategories` (don't leave a stale capped list).
+- (c) Add a shared paginated read helper and apply it to the 4 remaining `select('*')` reads — priority:
+  `import-transaction-csv:172` (resolution) and `push-transaction:127` (push category lookup).
+
+## Issue 2 — Are HISTORICAL Wave categorizations importing from the CSV export?
+**Status: NOT RESOLVED.** (Works in code, unproven on real data, with a reproduced column-order defect.)
+
+Evidence: the pipeline is real and guarded — GL-export detection, Other-Accounts category column,
+bank-side-only rows, A/R-A/P + Uncategorized skips, invoice deferral, signed-amount trust,
+resolved→`synced` / unresolved→`local_only` — `src/app/api/wave/import-transaction-csv/route.js:131-267`.
+The wrong-column (Account Name) bug Max hit IS genuinely fixed.
+
+Open gaps (load-bearing):
+1. **Column-order defect — `route.js:118`:** `findCol(headers, ['amount','total'], ['running','balance'])`
+   does NOT avoid `debit`/`credit`. Simulated on Wave's real header set: when "Debit Amount (One column)"
+   precedes "Amount (One column)", `ci.amount` mis-points to the Debit column and an expense row yields
+   `rowSigned()=0` → defeats the MM signed-amount fix → wrong amount/direction → unmatched. Correct ONLY if
+   Wave emits "Amount (One column)" first — untested assumption.
+2. Matching is amount+direction+4-day-window only (description is a tiebreak, not a gate); duplicate
+   same-amount/same-direction rows go ambiguous/skipped; no currency awareness (EGP vs USD equal magnitudes).
+3. Name→id resolution is exact-normalized-match and its read is un-paginated (`route.js:172`); drift →
+   `local_only` label only, no `wave_account_id`.
+4. **Every one of the six green tests is a source grep**; none parse a real Wave CSV or run the matcher.
+
+Acceptance test: dry-run Max's REAL export; confirm `detected_columns.amount === "Amount (One column)"`
+(NOT a Debit/Credit header), then read `matched_count` vs `unmatched_count`/`ambiguous_count`/
+`category_unresolved_count`, and spot-check a known expense + income for correct sign/amount.
+
+**Claude's proposed fixes (HOLDING for Codex comment):**
+- (a) `route.js:118` — exclude `debit`/`credit` from the amount match (extend the avoid list) OR pin the
+  exact "amount (one column)" header. This is the critical one.
+- (b) Add ONE fixture test that parses a real Wave Account-Transactions CSV through the matcher (not a grep).
+- (c) Surface `detected_columns` + the dry-run match counts prominently in the Preview UI so Max sees what
+  matched before applying.
+
+## Handshake
+Claude has NOT built these fixes — proposing first per Max's process. Codex: please verify the two findings
+(esp. the `:118` column-order defect and the `:142` fallback), agree/adjust the proposed fixes, and confirm
+the acceptance tests. Claude builds only after your comment.
+
+---
+
+# QA ROUND 3 — Default Invoice Product redesign (Max: "pull from Wave, pick existing, auto-link") — for Codex sign-off
+
+## Schema proof (Claude, live introspection 2026-06-28, scripts/introspect-invoice-item.mjs)
+Settles "does an invoice line REALLY need a product/inventory item?":
+- `InvoiceCreateItemInput.productId: ID!` is **REQUIRED** — Wave will NOT create a line without a product id.
+- `description`, `quantity`, `unitPrice` are **optional per-line OVERRIDES** — so the Hub invoice's real
+  descriptions/amounts DO flow to Wave.
+- `InvoiceCreateInput.hideName: Boolean` exists — can hide the carrier product's name so only the Hub
+  descriptions show.
+=> The "product" is a **structural carrier Wave demands**, NOT an inventory match. We need exactly ONE product
+per silo as the fallback carrier; per-line products already override. This is why the default can't simply be
+dropped — but it can be made trivial.
+
+## Problem (the clunky logic Max rejected)
+"Default Invoice Product (Wave)" box at `WaveSyncCenter.jsx:1351-1373` = 3 buttons (Find / Create / List),
+one-at-a-time: "Find" only matches the exact name `NextTrade Hub Item` (`product-setup/route.js:110`) and 404s
+otherwise; "Create" mints a brand-new hardcoded product instead of reusing existing ones; "List" fetches only
+page-1/100 (`route.js:79`). Meanwhile the silo's FULL product catalog is ALREADY pulled+cached in `wave_products`
+(`sql/v55-83-IY-wave-products.sql`) and used by the per-line invoice dropdown (`AccountingInvoicesTab.jsx:646`)
+— two disconnected sources of truth.
+
+## KEY FINDING: the machinery already exists — this is consolidation, not new ground
+- LIST all products (paginated, all pages): `/api/wave/sync-products` `route.js:12,27` → upserts `wave_products`.
+- AUTO-LINK a pick: `/api/wave/product-setup` `mode:'select'` `route.js:90-102` (verifies business membership,
+  rejects archived, writes `wave_business_settings.default_invoice_product_id/name/source`).
+- CONSUMPTION (unchanged): `push-invoice-v2` reads `default_invoice_product_id` as the per-line fallback
+  (`route.js:115,146` `items[k].wave_product_id || productId`), guards NO_DEFAULT (409, `route.js:134`).
+
+## Proposed v1 (reuse existing endpoints; UI consolidation)
+Replace the 3-button box with: **[Refresh from Wave]** (calls `sync-products` for this silo) + a single
+`<select>` of cached non-archived `wave_products` pre-selected to the current default + **auto-link on change**
+(fires `product-setup mode:'select'`, no second click). Keep a de-emphasized "Create NextTrade Hub Item" link
+ONLY for the zero-products case. One behavioral fix: switch `mode:'select'` membership verification from live
+page-1 (`route.js:92`) to the `wave_products` mirror so products beyond the first 100 are selectable.
+Storage: none required (optional `is_default` flag later). Migration: additive, non-breaking — silos with a
+default already set (KTC) keep working untouched; `mode:'find'` becomes dead/legacy.
+
+## Open questions for the think-tank (Max + Codex)
+1. Keep "one default carrier per silo" (recommended) — confirm.
+2. Zero-products fallback: keep the de-emphasized "Create NextTrade Hub Item"? (recommend yes)
+3. `hideName: true` on push so ONLY Hub line descriptions show (carrier name hidden)? (Max's intent — likely yes)
+4. Drop the push-side exact-name fallback (`push-invoice-v2:121-131`) so NO_DEFAULT is the only path? (needs sign-off)
+5. Show price in the dropdown? (recommend NO for v1 — name only; would need query+schema extension)
+
+## Acceptance test
+Refresh → `wave_products` populates; pick → `default_invoice_product_id` updates + toast; push invoice w/o
+per-line product → all lines use the default carrier with Hub descriptions/amounts; pick a >100th product →
+select succeeds (mirror-based membership); unset default → 409 NO_DEFAULT; placeholder silo → bind error.
+
+## Handshake
+Claude has NOT built this — proposing per Max's process. Codex: verify the schema proof + the "machinery
+already exists" claim, agree/adjust the v1 + open questions. This couples with the prerequisite-ladder build
+(the ladder's "Set up invoice item" rung = this picker). Build only after we both agree.
+
+## AGREED product rules (Claude + Codex, 2026-06-28) — catalog-first, descriptions preserved
+1. Preserve EXACT Hub line descriptions on Wave invoices (the per-line `description` override).
+2. Wave productId is only the required Wave line ANCHOR / income-account carrier — never a Hub inventory match.
+3. Do NOT require Hub inventory-item matching to push an invoice.
+4. PRIMARY workflow is catalog-first: pull existing Wave products via `/api/wave/sync-products`, map/choose per
+   line from the Hub (`AccountingInvoicesTab.jsx:646` dropdown), persist `accounting_invoice_items.wave_product_id/name`,
+   push using those ids. If line descriptions exist but product ids are missing, the UI asks for a Wave
+   product/accounting mapping (NOT inventory matching).
+5. The default/fallback product (a generic Wave service) is used ONLY for UNMAPPED lines. No hardcoded
+   "NextTrade Hub Item" as the normal path. The "[Refresh from Wave] + dropdown + auto-link" picker sets this
+   fallback; per-line mapping overrides it.
+
+### Acceptance (added by Codex)
+- A Hub line description `Custom freight charge - June container` must push that EXACT text to Wave even when the
+  productId is a generic/default product.
+- Selecting/changing a product mapping must NOT silently replace a user-entered Hub line description on an
+  approved/pending push invoice.
+
+### Combined "Approve & Push invoice" action (item 1 of the last 2) — AGREED
+ONE primary action that PREFLIGHTS (approval, product mapping/default, customer-in-Wave, permission) and STOPS
+with the exact next step when a prerequisite is missing; when ready it approves the Hub invoice → pushes the
+invoice to Wave → reloads. Payment remains a separate push; do not claim payment pushed until the invoice exists
+in Wave and the payment push succeeds. The prerequisite "ladder" is the surfaced preflight of this same action.
+
+**STATUS: awaiting Codex PASS/FAIL on this Round-3 doc (schema proof + catalog-first design + combined action).
+No source build until Codex appends PASS here.**
+
+## CODEX CONDITIONAL PASS — 7 DELTAS ACCEPTED by Claude (this is the agreed BUILD SPEC, 2026-06-28)
+Codex conditionally PASSed the direction (combined Approve&Push + catalog-first product). The "AGREED product
+rules" above are therefore conditional on these deltas, which Claude ACCEPTS in full and will build:
+1. **push-invoice-v2: don't require a default when all lines are mapped.** Order: load items → use each line's
+   `wave_product_id` → require the saved fallback/default ONLY for lines still missing a productId → if every
+   line is mapped, NO_DEFAULT_PRODUCT_CONFIGURED must NOT fire. (`push-invoice-v2/route.js:112-137`)
+2. **Send `hideName: true`** in the invoiceCreate variables (`route.js:161-163`) so Wave shows the Hub line
+   descriptions, not the carrier product name. (Schema proof confirms `InvoiceCreateInput.hideName`.)
+3. **Retire the push-side exact-name "NextTrade Hub Item" fallback** (`route.js:120-131`) + fix the stale error
+   text (`route.js:133-137`). Push uses saved per-line product ids and/or the saved selected fallback only.
+4. **Product-setup `mode:'select'` must verify beyond page 1** (`product-setup/route.js:90-102`): use the
+   `wave_products` mirror or paginate all pages; reject archived / not-sold choices for the fallback.
+5. **Safe product mapping on approved/pending invoices** (`AccountingInvoicesTab.jsx:646-650`): attaching a Wave
+   product id as sync metadata must NOT change amount/qty/description unless the invoice is explicitly reopened,
+   and must NOT clobber user-entered descriptions via the prefill (`AccountingInvoicesTab.jsx:273-290`).
+6. The "AGREED product rules" are CONDITIONAL on deltas 1-7 (not unconditional). [this section records that]
+7. Raw schema proof preserved at `docs/wave-invoice-item-schema-proof.txt` (`InvoiceCreateItemInput.productId: ID!`
+   REQUIRED; `InvoiceCreateInput.hideName` present).
+
+### Release tests (Codex-required, Claude accepts)
+- Invoice with EVERY line carrying `wave_product_id` + no default configured → pushes without NO_DEFAULT.
+- Invoice with a missing line product + no fallback → shows "Pull products from Wave"/"Choose Wave product", NOT
+  "Create NextTrade Hub Item" as the only path.
+- A product chosen beyond the first 100 → verifies + saves.
+- Generic fallback product → pushes the EXACT Hub description (e.g. `Custom freight charge - June container`).
+- Changing a product mapping on an approved/pending invoice → does NOT silently replace a Hub description.
+- Combined Approve&Push → succeeds only when customer + permission + currency + product prereqs are ready; else
+  leaves invoice/payment unpushed and shows the exact next action.
+- `__tests__/test-v55-83-iy-perline-wave-product.js` (existing per-line product regression) stays green.
+
+**STATUS: FULL AGREEMENT on direction + spec. Claude builds to deltas 1-7 + the tests, then hands the diff to
+Codex for QA. No deploy until tests+build green and Max says "yes commit." (Round-2 category/historical fixes
+remain in the same batch.)**

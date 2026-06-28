@@ -14,8 +14,9 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
+import { detectAmountCol } from '../../../../lib/wave-csv-columns';
 
-var API_BUILD_MARKER = 'v55.83-MN-import-transaction-csv-always-refresh';
+var API_BUILD_MARKER = 'v55.83-MS-import-transaction-csv-signed-amount-paged';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -112,10 +113,14 @@ export async function POST(req) {
     var grid = parseCsv(csv);
     if (grid.length < 2) { return NextResponse.json({ ok: false, error: 'CSV has no data rows (need a header row + at least one transaction).', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
     var headers = grid[0];
+    // v55.83-MS (Codex Round-2) — detect the signed amount column via the shared, unit-tested helper
+    // (src/lib/wave-csv-columns.js) so the Debit/Credit one-column variants are never mis-detected as the
+    // signed "Amount (One column)" (the bug that made expense rows read as 0 and never match).
+    var amountCol = detectAmountCol(headers);
     var ci = {
       date: findCol(headers, ['date']),
       desc: findCol(headers, ['description', 'memo', 'notes', 'payee']),
-      amount: findCol(headers, ['amount', 'total'], ['running', 'balance']),
+      amount: amountCol,
       // v55.83-LI (Codex #3) — support SEPARATE Debit/Credit columns (debit = money out, credit = in).
       debit: findCol(headers, ['debit', 'withdrawal'], ['balance']),
       credit: findCol(headers, ['credit', 'deposit'], ['balance']),
@@ -146,17 +151,17 @@ export async function POST(req) {
     // credit=in); a lone signed Amount uses its sign (Wave: negative = withdrawal). Direction is then
     // a HARD match filter so an IN and an OUT of the same amount can never be cross-matched.
     function rowSigned(rowArr) {
-      // v55.83-MM — Wave's GL export (Account Type column present) carries a correctly-SIGNED "Amount (One
-      // column)" where negative = money OUT, AND Debit/Credit in ACCOUNTING convention (on the bank/asset row
-      // debit=IN, credit=OUT — the INVERSE of a bank statement). Trusting Debit/Credit there would flip the
-      // direction of every transaction. So for a Wave GL export, use the signed amount column.
-      if (isWaveAccountingExport && ci.amount >= 0) { var aw = parseAmount(rowArr[ci.amount]); if (aw != null) { return aw; } }
+      // v55.83-MS (gap-finder MEDIUM) — the signed "Amount (One column)" is now reliably detected by
+      // detectAmountCol (it EXCLUDES debit/credit), so TRUST it whenever present — not only when a Transaction
+      // ID column made isWaveAccountingExport true (a Wave export with Debit/Credit but no Transaction ID would
+      // otherwise fall to the accounting-convention Debit/Credit and FLIP every direction). Wave's Debit/Credit
+      // are the INVERSE of a bank statement, so they are a last resort, used only when there is no amount column.
+      if (ci.amount >= 0) { var aw = parseAmount(rowArr[ci.amount]); if (aw != null) { return aw; } }
       if (ci.debit >= 0 || ci.credit >= 0) {
         var dv = ci.debit >= 0 ? Math.abs(parseAmount(rowArr[ci.debit]) || 0) : 0;
         var cv = ci.credit >= 0 ? Math.abs(parseAmount(rowArr[ci.credit]) || 0) : 0;
         if (dv > 0 && cv === 0) { return -dv; }
         if (cv > 0 && dv === 0) { return cv; }
-        if (ci.amount >= 0) { var a = parseAmount(rowArr[ci.amount]); return a == null ? null : a; }
         return cv - dv;
       }
       return parseAmount(rowArr[ci.amount]);
@@ -168,9 +173,20 @@ export async function POST(req) {
     var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_source, category_status, matched_invoice_id, wave_transaction_id, wave_business_id').eq('wave_business_id', waveBusinessId);
     var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id; });
 
-    // Wave categories for name->id resolution.
-    var catRes = await db.from('wave_categories').select('wave_account_id, wave_account_name').eq('wave_business_id', waveBusinessId);
-    var catByName = {}; ((catRes && catRes.data) || []).forEach(function (c) { var k = norm(c.wave_account_name); if (k && !catByName[k]) { catByName[k] = c; } });
+    // Wave categories for name->id resolution. v55.83-MS (Codex Round-2) — PAGINATE: Supabase caps a single
+    // select at 1000 rows and a silo can have ~1877 categories; without paging, a category beyond row 1000
+    // silently fails name->id resolution and the import marks it local_only instead of synced.
+    var catRows = [];
+    var catFrom = 0; var catSz = 1000; var catGuard = 0;
+    while (catGuard < 60) {
+      catGuard++;
+      var catPg = await db.from('wave_categories').select('wave_account_id, wave_account_name').eq('wave_business_id', waveBusinessId).range(catFrom, catFrom + catSz - 1);
+      var catPgRows = (catPg && catPg.data) || [];
+      catRows = catRows.concat(catPgRows);
+      if (catPgRows.length < catSz) { break; }
+      catFrom += catSz;
+    }
+    var catByName = {}; catRows.forEach(function (c) { var k = norm(c.wave_account_name); if (k && !catByName[k]) { catByName[k] = c; } });
 
     function rowHash(rowArr) { var s = rowArr.join(''); var h = 0; var i; for (i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h); }
     var allowOverride = body.override_conflicts !== false; // v55.83-MN — default to Wave export refreshing Hub category state

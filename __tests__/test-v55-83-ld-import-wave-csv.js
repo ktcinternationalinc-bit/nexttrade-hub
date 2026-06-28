@@ -26,7 +26,7 @@ ok('2: safety-first — defaults to DRY RUN (must explicitly pass dry_run:false 
   /isPlaceholderWaveBusiness\(waveBusinessId\)/.test(route));
 ok('3: auto-detects date/amount(+debit/credit)/category columns and reports them (so the user can verify)',
   /date: findCol\(headers, \['date'\]\)/.test(route) &&
-  /amount: findCol\(headers, \['amount', 'total'\]/.test(route) &&
+  /var amountCol = detectAmountCol\(headers\)/.test(route) && /amount: amountCol/.test(route) &&
   /detected_columns: detected/.test(route) &&
   /if \(ci\.date < 0 \|\| !hasAmount \|\| ci\.category < 0\)/.test(route));
 ok('4: matches Hub txns by EQUAL abs(amount) + date window + description similarity, excludes invoice-matched rows only',

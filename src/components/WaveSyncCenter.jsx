@@ -182,6 +182,10 @@ export default function WaveSyncCenter(props) {
   var ps2 = useState(''); var prodMsg = ps2[0]; var setProdMsg = ps2[1];
   var ps3 = useState(null); var prodList = ps3[0]; var setProdList = ps3[1];
   var ps4 = useState(null); var prodDetails = ps4[0]; var setProdDetails = ps4[1];
+  // v55.83-MS (Codex Round-3) — catalog-first Default Invoice Product picker: the cached Wave product list
+  // (from the wave_products mirror) + a Refresh-from-Wave busy flag.
+  var ps5 = useState([]); var prodOptions = ps5[0]; var setProdOptions = ps5[1];
+  var ps6 = useState(false); var prodRefreshing = ps6[0]; var setProdRefreshing = ps6[1];
   // v55.83-LY (Codex #1) — push results get their OWN message state, rendered in Pending Sync. Previously
   // pushSelected wrote into prodMsg, so a bank-transaction push failure showed inside "Default Invoice
   // Product" — wrong box, very confusing.
@@ -277,6 +281,8 @@ export default function WaveSyncCenter(props) {
     }).catch(function () { setProdSetup(null); });
   }
   useEffect(function () { loadProdSetup(); }, [active]);
+  // v55.83-MS (Codex Round-3) — load the cached Wave product list for the Default Invoice Product picker.
+  useEffect(function () { loadProdOptions(); }, [active]);
 
   // v55.83-GD — per-silo default bank account. The account list is sourced from THIS silo's bank
   // transactions (the same account_id Bank Review filters on), labelled via plaid_accounts.
@@ -331,6 +337,35 @@ export default function WaveSyncCenter(props) {
       })
       .catch(function (e) { setProdMsg('Request failed: ' + ((e && e.message) || String(e))); })
       .finally(function () { setProdBusy(false); });
+  }
+
+  // v55.83-MS (Codex Round-3) — load the silo's cached Wave products (picker dropdown source) from the
+  // wave_products mirror via product-setup mode:'cached' (RLS-proof, all pages — not a live page-1 query).
+  function loadProdOptions() {
+    if (!active) { setProdOptions([]); return; }
+    fetch('/api/wave/product-setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, mode: 'cached', user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setProdOptions((d && d.products) || []); })
+      .catch(function () { setProdOptions([]); });
+  }
+
+  // Pull the latest products FROM Wave into the mirror, then reload the dropdown. ONE button replaces Find/List.
+  function refreshProductsFromWave() {
+    if (!active) { return; }
+    setProdRefreshing(true); setProdMsg('');
+    fetch('/api/wave/sync-products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var res0 = d && d.results && d.results.length ? d.results[0] : null;
+        // v55.83-MS (gap-finder #6) — distinguish a genuine empty pull from an unbound/placeholder silo.
+        if (d && d.ok) {
+          var pulled = (res0 && res0.pulled) || 0;
+          setProdMsg('Pulled ' + pulled + ' products from Wave.' + (pulled === 0 ? ' (If you expected products, confirm this silo is bound to its real Wave business in Accounting → Wave Connection.)' : ''));
+          loadProdOptions();
+        } else { setProdMsg('Refresh failed: ' + ((res0 && res0.error) || (d && d.error) || (d && d.placeholder ? 'this silo is a placeholder — bind it to a real Wave business first' : 'unknown error'))); }
+      })
+      .catch(function (e) { setProdMsg('Refresh failed: ' + ((e && e.message) || String(e))); })
+      .finally(function () { setProdRefreshing(false); });
   }
 
   function runPaymentAccountSetup(mode, accountId, accountName, allowAny) {
@@ -541,19 +576,43 @@ export default function WaveSyncCenter(props) {
         rows.push({ key: 'customer:' + c.id, action: 'customer', id: c.id, label: c.company_name || c.name, amount: null, record: c });
       }
     });
+    // v55.83-MS — build customer lookup + the pending-payment set BEFORE the invoice loop so invoice rows can
+    // show the customer name (Feature A) and an UNAPPROVED invoice that has a pending payment can be surfaced as
+    // a "Needs approval" prerequisite row (Feature B) instead of being invisible while its payment is blocked.
+    var custById = {};
+    customers.forEach(function (c) { custById[c.id] = c; });
+    var ACTIONABLE = { 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1, 'syncing': 1 };
+    var invoiceIdsWithPendingPayment = {};
+    payments.forEach(function (p) {
+      if (!p || p.wave_business_id !== active || bad[p.wave_business_id]) { return; }
+      if (isPaymentVoid(p) || p.wave_payment_id) { return; }
+      if (!ACTIONABLE[p.sync_status]) { return; }
+      if (p.accounting_invoice_id) { invoiceIdsWithPendingPayment[p.accounting_invoice_id] = true; }
+    });
+    function invCustName(inv) {
+      var c = custById[inv.accounting_customer_id] || custById[inv.customer_id];
+      return c ? (c.company_name || c.contact_name || c.name || '') : (inv.customer_name || inv.customer_company_name || '');
+    }
     invoices.forEach(function (inv) {
       if (inv.wave_business_id !== active) { return; }
       if (bad[inv.wave_business_id]) { return; }
-      // STRICT (v55.83-FY): only an exactly-approved invoice is pushable. Blank/null/'draft'/
-      // 'review' never appears as pushable.
+      var invCust = invCustName(inv);
+      // Feature A — label shows customer + invoice number, matching payment rows.
+      var invLabel = 'Invoice · ' + (invCust ? (invCust + ' · ') : '') + inv.invoice_number;
+      // STRICT (v55.83-FY): only an exactly-approved invoice is pushable. Blank/null/'draft'/'review' is not.
       if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status === 'approved') {
-        rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number, amount: inv.total_amount, record: inv });
+        rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: invLabel, amount: inv.total_amount, record: inv });
       }
-      // DRAFT REPAIR (v55.83-FY): an approved invoice already in Wave but stuck as DRAFT must be
-      // surfaced (not hidden just because it has a wave_invoice_id). Shown as a blocked item with a
-      // clear reason — payments to it are refused until the Wave invoice is saved/approved.
+      // Feature B — an UNAPPROVED Hub-native invoice that has a pending payment blocked on it is surfaced as a
+      // "Needs approval" prerequisite row with a one-click Approve & Push, so the user sees the next step
+      // instead of a blocked payment with no path.
+      else if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status !== 'approved' && invoiceIdsWithPendingPayment[inv.id]) {
+        rows.push({ key: 'invneedsapproval:' + inv.id, action: 'invoice', id: inv.id, label: invLabel, amount: inv.total_amount, sub: '⛔ Needs approval before Wave push — Approve & Push it, then push the payment.', blocked: 'Needs approval before Wave push', needsApproval: true, record: inv });
+      }
+      // DRAFT REPAIR (v55.83-FY): an approved invoice already in Wave but stuck as DRAFT must be surfaced
+      // (not hidden just because it has a wave_invoice_id) — payments to it are refused until it is saved/approved.
       if (inv.wave_invoice_id && inv.approval_status === 'approved' && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) {
-        rows.push({ key: 'invrepair:' + inv.id, action: 'invoice', id: inv.id, label: 'Invoice ' + inv.invoice_number + ' · needs Wave status repair', amount: inv.total_amount, sub: '⛔ Wave invoice is DRAFT — open/save (approve) it in Wave, then run Wave Import/Reconcile so the Hub records it as SAVED.', blocked: 'Wave invoice is DRAFT — save/approve it in Wave first.', record: inv });
+        rows.push({ key: 'invrepair:' + inv.id, action: 'invoice', id: inv.id, label: invLabel + ' · needs Wave status repair', amount: inv.total_amount, sub: '⛔ Wave invoice is DRAFT — open/save (approve) it in Wave, then run Wave Import/Reconcile so the Hub records it as SAVED.', blocked: 'Wave invoice is DRAFT — save/approve it in Wave first.', record: inv });
       }
     });
     // Pending PAYMENT rows: a matched payment is its own Wave action (invoicePaymentCreateManual),
@@ -561,11 +620,9 @@ export default function WaveSyncCenter(props) {
     // already-synced invoice (e.g. Adel Saeed / invoice 6) would never appear here.
     var invById = {};
     invoices.forEach(function (i) { invById[i.id] = i; });
-    var custById = {};
-    customers.forEach(function (c) { custById[c.id] = c; });
+    // custById + ACTIONABLE already built above (before the invoice loop, for Feature A/B).
     // Pre-pass: group actionable payments by bank_transaction_id to detect a single bank
     // deposit allocated to multiple invoices (split) vs the SAME deposit duplicated (error).
-    var ACTIONABLE = { 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1, 'syncing': 1 };
     var byBankTxn = {};
     payments.forEach(function (p) {
       if (!p || p.wave_business_id !== active || bad[p.wave_business_id]) { return; }
@@ -613,13 +670,23 @@ export default function WaveSyncCenter(props) {
           shareNote = 'Split: same bank deposit on ' + grp.count + ' invoices (total ' + grp.total + (bankAmt != null ? ' / deposit ' + bankAmt : '') + ')';
         }
       }
+      // v55.83-MS (Codex) — classify the invoice prerequisite for the dependency-chain wording + Approve&Push.
+      var prereqInvoiceId = inv ? inv.id : null;
+      var prereqNeedsApproval = !!(inv && !inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status !== 'approved');
+      var prereqNeedsPush = !!(inv && !inv.wave_invoice_id && inv.approval_status === 'approved' && inv.source !== 'wave_import' && inv.is_historical !== true);
       var blocked = null;
       // Orphaned payment guard: the row references a bank transaction that no longer exists
       // (deleted or replaced by a Plaid re-sync). Never push these to Wave.
       var orphanBank = p._orphan_bank === true;
       if (orphanBank) { blocked = 'Bank deposit not found (stale/deleted match) — review or void'; }
       else if (contaminatedCust[p.accounting_customer_id]) { blocked = 'Invoice/customer belongs to a wrong or unregistered Wave silo — do not push'; }
-      else if (!invWaveId) { blocked = 'Invoice not yet in Wave'; }
+      else if (!invWaveId) {
+        // Full dependency chain so the user knows the exact next step (not just "Invoice not yet in Wave").
+        if (!inv) { blocked = 'Linked invoice not found in this silo'; }
+        else if (inv.source === 'wave_import' || inv.is_historical === true) { blocked = 'Invoice ' + invNo + ' is historical/imported — reconcile its Wave id (not pushable)'; }
+        else if (prereqNeedsApproval) { blocked = 'Approve invoice ' + invNo + ' first → push invoice to Wave → then push payment'; }
+        else { blocked = 'Push invoice ' + invNo + ' to Wave first → then push payment'; }
+      }
       else if (!custWaveId) { blocked = 'Customer not yet in Wave'; }
       else if (inv && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) { blocked = 'Wave invoice is DRAFT — approve/repair it (use "Approve in Wave") before pushing this payment. Retrying the payment will hit the same Wave error.'; }
       else if (dupBlock) { blocked = dupBlock; }
@@ -649,6 +716,11 @@ export default function WaveSyncCenter(props) {
         blocked: blocked,
         retryable: !!retryFail,
         draftBlockedInvoiceId: (inv && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) ? inv.id : null,
+        // v55.83-MS — when the payment is blocked because its invoice isn't in Wave, expose the invoice + what
+        // it needs so the row can show a one-click "Approve & Push invoice" / "Push invoice" action.
+        prereqInvoiceId: (!invWaveId && (prereqNeedsApproval || prereqNeedsPush)) ? prereqInvoiceId : null,
+        prereqNeedsApproval: prereqNeedsApproval,
+        prereqNeedsPush: prereqNeedsPush,
         record: Object.assign({}, p, { wave_invoice_id: invWaveId, wave_customer_id: custWaveId, _invoice_number: invNo, _customer_name: custName })
       });
     });
@@ -762,6 +834,42 @@ export default function WaveSyncCenter(props) {
       .catch(function (e) { toast.error('Approve failed: ' + ((e && e.message) || 'network error')); })
       .finally(function () { setBusy(false); });
   }
+
+  // v55.83-MS (Codex Round-3) — combined "Approve & Push invoice" with PREFLIGHT. One action: approve the Hub
+  // invoice (service-role, RLS-proof), then push it to Wave. Each step's result is surfaced — if the push is
+  // stopped by a prerequisite (no product mapping/default, customer not in Wave, production locked), the EXACT
+  // next action is shown (not a silent fail). Idempotent: re-approving an already-approved invoice is harmless,
+  // so the same handler serves both "needs approval" and "approved-but-not-pushed" rows. The payment stays a
+  // separate push — we never claim it posted until its invoice exists in Wave.
+  function approveAndPushInvoice(invoiceId) {
+    if (!invoiceId) { return; }
+    if (isProd && !productionUnlocked) { toast.error('Production push is locked. A super admin must enable real production push in Settings first.'); return; }
+    if (!canPushInvoice) { toast.error('You do not have the Wave: Invoice push permission.'); return; }
+    setBusy(true);
+    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: invoiceId, status: 'approved', user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json(); })
+      .then(function (aj) {
+        if (!aj || !aj.ok) { throw new Error('Could not approve the invoice: ' + ((aj && aj.error) || 'unknown error')); }
+        toast.success('Invoice approved — pushing to Wave…');
+        return fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: invoiceId, dry_run: false, user_id: (userProfile && userProfile.id) || null }) }).then(function (r) { return r.json(); });
+      })
+      .then(function (pj) {
+        // v55.83-MS (gap-finder HIGH) — honor the server's explicit failure shapes. A DRAFT-stuck push returns
+        // success:true + needs_approval:true (NOT payment-ready); a currency mismatch returns success:false with
+        // a wave_invoice_id present. Never treat a bare wave_invoice_id as success.
+        var draftStuck = !!(pj && (pj.needs_approval === true || pj.wave_status === 'DRAFT' || pj.wave_sync_status === 'pushed_draft'));
+        var currencyBad = !!(pj && pj.currency_mismatch === true);
+        var pushed = !!(pj && (pj.success === true || pj.ok === true) && !draftStuck && !currencyBad);
+        if (pushed) { toast.success('Invoice pushed to Wave. The payment can now post — push it next.'); }
+        else if (draftStuck) { toast.error('Invoice created in Wave but is still DRAFT — use "Approve in Wave" before pushing the payment. ' + ((pj && pj.warning) || '')); }
+        else if (currencyBad) { toast.error('Invoice created but its currency does not match Wave: ' + ((pj && pj.error) || 'fix the customer currency in Wave')); }
+        else if (pj && pj.blocked) { toast.error('Invoice approved, but the push needs one more step: ' + ((pj && pj.error) || 'see Sync Log')); }
+        else { toast.error('Invoice approved, but the Wave push failed: ' + ((pj && pj.error) || 'see Sync Log for the exact reason')); }
+        load();
+      })
+      .catch(function (e) { toast.error((e && e.message) || 'Approve & push failed'); load(); })
+      .finally(function () { setBusy(false); });
+  }
   var selectedRows = queue.filter(function (q) { return sel[q.key] && !q.blocked; });
 
   function runDryRun() {
@@ -775,12 +883,14 @@ export default function WaveSyncCenter(props) {
     var seq = Promise.resolve(); var results = [];
     selectedRows.forEach(function (q) {
       seq = seq.then(function () {
-        if (q.action !== 'transaction' && q.action !== 'payment') {
+        // v55.83-MS (Codex QA #2) — invoice dry-run goes through the SERVER push route too, so it shares the
+        // real product/customer preflight (not a client-only dryRunRecord that can say OK when push would block).
+        if (q.action !== 'transaction' && q.action !== 'payment' && q.action !== 'invoice') {
           var v = dryRunRecord({ action: q.action, record: q.record, waveBusinessId: active, registry: registry });
           results.push({ label: q.label, verdict: v.verdict, message: v.message, wouldDo: v.wouldDo });
           return null;
         }
-        var route = q.action === 'payment' ? '/api/wave/push-payment' : '/api/wave/push-transaction';
+        var route = q.action === 'payment' ? '/api/wave/push-payment' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : '/api/wave/push-transaction');
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: true, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json(); })
           .then(function (d) {
@@ -789,6 +899,11 @@ export default function WaveSyncCenter(props) {
                 var ps = d.would_send || {};
                 var pmsg = 'Wave invoice: ' + (ps.invoiceId || '?') + ' · Payment account: ' + (ps.paymentAccountId || '?') + ' · Amount: ' + (ps.amount || '?') + ' · Date: ' + (ps.paymentDate || '?');
                 results.push({ label: q.label, verdict: 'WOULD POST', message: pmsg, wouldDo: d.would_send });
+                return;
+              }
+              if (q.action === 'invoice') {
+                var wc = d.would_create || {};
+                results.push({ label: q.label, verdict: 'WOULD POST', message: 'Invoice ' + (wc.invoice_number || '?') + ' · ' + (wc.line_items || 0) + ' line(s) · total ' + (wc.total || '?') + (wc.default_product ? ' · default product set' : ' · per-line products') + (wc.note ? (' · ' + wc.note) : ''), wouldDo: wc });
                 return;
               }
               var jrn = '';
@@ -1021,6 +1136,8 @@ export default function WaveSyncCenter(props) {
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
                     {q.action === 'payment' && q.draftBlockedInvoiceId && canPushInvoice && <button onClick={function () { approveInWave(q.draftBlockedInvoiceId); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment's invoice is DRAFT in Wave. Approve it (DRAFT → SAVED) so the payment can post — then push the payment.">{busy ? '…' : '✅ Approve invoice in Wave'}</button>}
+                    {q.action === 'invoice' && q.needsApproval && canPushInvoice && <button onClick={function () { approveAndPushInvoice(q.id); }} disabled={busy} className="text-[10px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice and push it to Wave in one step. If a prerequisite is missing (Wave product, customer in Wave), it stops and tells you the exact next step.">{busy ? '…' : '✅ Approve & Push invoice'}</button>}
+                    {q.action === 'payment' && q.prereqInvoiceId && canPushInvoice && <button onClick={function () { approveAndPushInvoice(q.prereqInvoiceId); }} disabled={busy} className="text-[10px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment is blocked until its invoice is in Wave. Approve and push the invoice in one step (it stops with the exact next step if a prerequisite is missing), then push the payment.">{busy ? '…' : (q.prereqNeedsApproval ? '✅ Approve & Push invoice' : '⬆ Push invoice')}</button>}
                     <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Pick a Wave Category in Bank Review, then this can post to Wave.' : ''}>{q.hubOnly ? 'ℹ Needs category' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
                   </div>
                 );
@@ -1303,10 +1420,14 @@ export default function WaveSyncCenter(props) {
             var hasPayAcct = !!(prodSetup && prodSetup.default_payment_account_id);
             var hasInvProd = !!(prodSetup && prodSetup.default_invoice_product_id);
             var payReady = !ph && canOperate && canWrite && !!(reg && reg.allow_payment_push === true) && hasPayAcct;
-            var invReady = !ph && canOperate && canWrite && !!(reg && reg.allow_invoice_push === true) && hasInvProd;
+            // v55.83-MS (Codex QA #3) — invoice readiness no longer hard-requires a Default Invoice Product:
+            // a line satisfies Wave's product requirement with its OWN per-line product OR the fallback default,
+            // so the default is only needed for UNMAPPED lines. The real per-line product check is enforced by
+            // the push/dry-run preflight per invoice; the silo-level gates here are bind/unlock/writes/allow.
+            var invReady = !ph && canOperate && canWrite && !!(reg && reg.allow_invoice_push === true);
             var catReady = !ph && catCount > 0;
             function payNext() { if (ph) return 'Bind this silo (Wave Connection)'; if (!canOperate) return 'Unlock production push (below)'; if (!canWrite) return 'Enable writes (below)'; if (!(reg && reg.allow_payment_push === true)) return 'Enable payment push (below)'; if (!hasPayAcct) return 'Set the payment deposit account (below)'; return ''; }
-            function invNext() { if (ph) return 'Bind this silo (Wave Connection)'; if (!canOperate) return 'Unlock production push (below)'; if (!canWrite) return 'Enable writes (below)'; if (!(reg && reg.allow_invoice_push === true)) return 'Enable invoice push (below)'; if (!hasInvProd) return 'Set the Default Invoice Product (below)'; return ''; }
+            function invNext() { if (ph) return 'Bind this silo (Wave Connection)'; if (!canOperate) return 'Unlock production push (below)'; if (!canWrite) return 'Enable writes (below)'; if (!(reg && reg.allow_invoice_push === true)) return 'Enable invoice push (below)'; return ''; }
             function catNext() { if (ph) return 'Bind this silo (Wave Connection)'; return 'Pull Wave categories (below) / check token access'; }
             function Row(label, ready, nextAction, okText) {
               return <div className="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">
@@ -1348,29 +1469,35 @@ export default function WaveSyncCenter(props) {
             {schemaResult && schemaResult.error && <div className="text-xs mt-2 bg-rose-100 text-rose-950 rounded px-2 py-1 font-medium">{schemaResult.error}</div>}
             </div>
           </details>
+          {/* v55.83-MS (Codex Round-3) — catalog-first Default Invoice Product picker: Refresh from Wave +
+              pick an EXISTING product from the dropdown (auto-links). No find/create-one-at-a-time. */}
           <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">Default Invoice Product (Wave)</div>
-            <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to be tied to a product. Set one reusable product once and all invoice pushes will use it. We recommend creating a product named exactly <b>NextTrade Hub Item</b> in Wave (marked as sold, with an income account), then click Find.</div>
+            <div className="text-xs text-slate-700 mb-2">Wave requires every invoice line to point at a product (an accounting carrier) — your Hub line descriptions and amounts still push exactly as entered. Pick one of your existing Wave products as the fallback; any line that picks its own product on the invoice overrides it.</div>
             {prodSetup && prodSetup.default_invoice_product_id ? (
-              <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured product: {prodSetup.default_invoice_product_name || 'NextTrade Hub Item'} ({String(prodSetup.default_invoice_product_id).substring(0, 18)}…)</div>
-            ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default product configured yet — invoice push will be blocked until you set one.</div>}
-            <div className="flex gap-2 flex-wrap">
-              <button onClick={function () { runProductSetup('find'); }} disabled={prodBusy} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">Find "NextTrade Hub Item"</button>
-              <button onClick={function () { runProductSetup('create'); }} disabled={prodBusy} className="text-xs bg-slate-700 hover:bg-slate-800 text-white rounded px-2 py-1 font-bold disabled:opacity-50">Create it in Wave</button>
-              <button onClick={function () { runProductSetup('list'); }} disabled={prodBusy} className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-900 rounded px-2 py-1 font-bold disabled:opacity-50">List products</button>
+              <div className="text-xs bg-emerald-100 text-emerald-950 rounded px-2 py-1 mb-2 font-medium">Configured product: {prodSetup.default_invoice_product_name || prodSetup.default_invoice_product_id} ({String(prodSetup.default_invoice_product_id).substring(0, 18)}…)</div>
+            ) : <div className="text-xs bg-amber-100 text-amber-950 rounded px-2 py-1 mb-2 font-medium">No default product set — invoice push is blocked only for lines that do not pick their own product.</div>}
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={refreshProductsFromWave} disabled={prodRefreshing || prodBusy} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-bold disabled:opacity-50">{prodRefreshing ? 'Refreshing…' : 'Refresh from Wave'}</button>
+              <select value={(prodSetup && prodSetup.default_invoice_product_id) || ''} disabled={prodBusy || prodRefreshing} onChange={function (e) { var pid = e.target.value; if (!pid) { return; } var opt = null; var oi; for (oi = 0; oi < prodOptions.length; oi++) { if (prodOptions[oi].id === pid) { opt = prodOptions[oi]; } } runProductSetup('select', pid, opt ? opt.name : ''); }} className="text-xs border border-slate-300 rounded px-2 py-1 bg-white text-slate-900 max-w-xs">
+                <option value="">{prodOptions.length ? 'Choose a Wave product…' : 'No products cached — click Refresh from Wave'}</option>
+                {/* v55.83-MS (gap-finder #5) — if the configured default isn't in the cached options (e.g. before
+                    a Refresh), keep a matching option so the controlled <select> doesn't warn / blank out. */}
+                {prodSetup && prodSetup.default_invoice_product_id && !prodOptions.some(function (p) { return p.id === prodSetup.default_invoice_product_id && p.isArchived !== true; }) && <option value={prodSetup.default_invoice_product_id}>{(prodSetup.default_invoice_product_name || prodSetup.default_invoice_product_id) + ' (current — click Refresh from Wave to verify)'}</option>}
+                {/* (gap-finder #1) — not-sold options are disabled so the user can't pick one and hit the
+                    select-mode rejection; the push itself never needs a sold product (hideName carrier). */}
+                {prodOptions.filter(function (p) { return p.isArchived !== true; }).map(function (p) { return <option key={p.id} value={p.id} disabled={p.isSold === false}>{p.name}{p.isSold === false ? ' (not sold — not selectable)' : ''}</option>; })}
+              </select>
             </div>
+            <details className="mt-2 text-[11px] text-slate-600">
+              <summary className="cursor-pointer">No products in Wave yet?</summary>
+              <button onClick={function () { runProductSetup('create'); }} disabled={prodBusy} className="mt-1 text-xs bg-slate-200 hover:bg-slate-300 text-slate-900 rounded px-2 py-1 font-bold disabled:opacity-50">Create a generic &quot;NextTrade Hub Item&quot; in Wave</button>
+            </details>
             {prodMsg && <div className="text-xs mt-2 whitespace-pre-wrap text-slate-800 bg-white border border-slate-200 rounded p-2 font-mono">{prodMsg}</div>}
             {prodDetails && <details className="mt-2 text-xs border border-slate-300 rounded bg-slate-100 text-slate-900">
               <summary className="cursor-pointer px-2 py-1 font-bold">Technical details</summary>
               <pre className="p-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px]">{JSON.stringify(prodDetails, null, 2)}</pre>
             </details>}
-            {prodList && prodList.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-auto border border-slate-200 rounded">
-                {prodList.map(function (pr) {
-                  return <div key={pr.id} className="flex items-center justify-between px-2 py-1 text-xs border-b border-slate-100"><span className="text-slate-900">{pr.name}{pr.isSold ? '' : ' (not sold)'}</span><button onClick={function () { runProductSetup('select', pr.id, pr.name); }} className="bg-indigo-600 text-white rounded px-2 py-0.5 font-bold">Use this</button></div>;
-                })}
-              </div>
-            )}
           </div>
           <div className="mb-4 border border-teal-200 bg-teal-50 rounded-lg p-3">
             <div className="font-bold text-slate-900 mb-1">🟢 Wave Deposit Account — REQUIRED for pushing to Wave</div>
@@ -1471,10 +1598,13 @@ export default function WaveSyncCenter(props) {
               ['Payment push enabled (super-admin toggle)', reg.allow_payment_push === true],
               ['Payment deposit account set (one-time setup below)', !!(prodSetup && prodSetup.default_payment_account_id)]
             ];
+            // v55.83-MS (Codex QA #3 follow-up) — the Default Invoice Product is OPTIONAL (per-line product OR
+            // fallback satisfies Wave), so it is NOT a blocking check here (Panel uses checks.every()). Its
+            // status is shown as non-blocking info in the note below; the real per-line requirement is enforced
+            // by the push/dry-run preflight per invoice.
             var invChecks = [
               ['Writes enabled (super-admin toggle)', reg.writes_enabled === true],
-              ['Invoice push enabled (super-admin toggle)', reg.allow_invoice_push === true],
-              ['Default Invoice Product set (one-time setup below)', !!(prodSetup && prodSetup.default_invoice_product_id)]
+              ['Invoice push enabled (super-admin toggle)', reg.allow_invoice_push === true]
             ];
             return <div>
               {Panel('Payment push readiness',
@@ -1485,8 +1615,8 @@ export default function WaveSyncCenter(props) {
               {Panel('Invoice push readiness',
                 invChecks,
                 'Setup complete — you can push Hub invoices to Wave.',
-                'Finish the red items before pushing invoices. (Set the Default Invoice Product in the box above.)',
-                <span>Each invoice’s <b>customer must be in Wave first</b> (push the customer). Invoice-imported-from-Wave records don’t need this — they’re already there.</span>)}
+                'Finish the red items (super-admin toggles) before pushing invoices.',
+                <span>Each invoice’s <b>customer must be in Wave first</b> (push the customer). A <b>Default Invoice Product is optional</b> — {prodSetup && prodSetup.default_invoice_product_id ? 'one is set' : 'none set'}; lines with no per-line product use it, and the push/dry-run tells you if a line still needs one. Invoice-imported-from-Wave records are already there.</span>)}
             </div>;
           })()}
           {!reg ? <div className="text-sm text-slate-500">Select a registered Wave business first.</div> : (

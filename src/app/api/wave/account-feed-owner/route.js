@@ -33,7 +33,11 @@ export async function POST(req) {
 
     // select('*') is resilient — if the wave_feed_owner migration is not applied yet, the rows still return
     // (owner just reads as null/undefined) instead of erroring.
-    var catRes = await db.from('wave_categories').select('*').eq('wave_business_id', bid);
+    // v55.83-MS (Codex Round-2) — PAGINATE: Supabase caps a single select at 1000 rows; a silo can have ~1877
+    // categories. Preserve the error shape so a real DB error still surfaces.
+    var afoAll = []; var afoFrom = 0; var afoGuard = 0; var afoErr = null;
+    while (afoGuard < 60) { afoGuard++; var afoPg = await db.from('wave_categories').select('*').eq('wave_business_id', bid).range(afoFrom, afoFrom + 999); if (afoPg && afoPg.error) { afoErr = afoPg.error; break; } var afoPgRows = (afoPg && afoPg.data) || []; afoAll = afoAll.concat(afoPgRows); if (afoPgRows.length < 1000) { break; } afoFrom += 1000; }
+    var catRes = { data: afoAll, error: afoErr };
     if (catRes && catRes.error) { return NextResponse.json({ db_error: catRes.error.message || String(catRes.error), api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 }); }
     var allCats = (catRes && catRes.data) || [];
     var bankAccts = waveBankCashCandidates(allCats);

@@ -45,8 +45,8 @@ ok('A12: dedup index is per-silo (wave_business_id, wave_estimate_id)',
   /uq_acct_proformas_wave_estimate_silo[\s\S]{0,120}\(wave_business_id, wave_estimate_id\)/.test(fs.readFileSync(path.join(__dirname, '..', 'sql', 'v55-83-IU-proforma-estimate-fixes.sql'), 'utf8')));
 
 // ---- B. Wave categories feed the categorize dropdown, scoped per silo ----
-ok('B1: Bank Review loads wave_categories and filters to the active silo',
-  /from\('wave_categories'\)\.select/.test(br) && /c\.wave_business_id !== activeBiz/.test(br));
+ok('B1: Bank Review loads wave categories via the authoritative /api/wave/categories route (paginated + silo-scoped server-side)',
+  /\/api\/wave\/categories/.test(br) && /reloadCats/.test(br) && /setWaveCategories/.test(br));
 ok('B2: categorize dropdown renders the Wave chart-of-accounts grouped by type',
   /orderedCatGroups\(sel\.direction\)/.test(br));
 ok('B3: clear empty-state tells the user to pull Wave categories for the silo',

@@ -11,7 +11,7 @@ var pcv = (ps.match(/var pcVars = .*/)||[''])[0];
 // v55.83-MH: current live Wave rejects ProductCreateInput.isSold/isBought.
 ok(!/isSold: true/.test(pcv) && !/isBought: false/.test(pcv) && /incomeAccountId: incomeAccountId/.test(pcv),'productCreate omits Wave-rejected isSold/isBought and keeps incomeAccountId');
 // safety/diagnostics retained
-ok(/var API_BUILD_MARKER = 'v55\.83-EP-push-invoice-v2-productid';/.test(v2),'v2 marker retained');
+ok(/var API_BUILD_MARKER = 'v55\.83-[A-Z]{2}-push-invoice-v2/.test(v2),'v2 marker present (current build)');
 ok(/var API_ROUTE = '\/api\/wave\/push-invoice-v2';/.test(v2),'v2 route retained');
 ok(/LOCAL_PRECHECK_MISSING_PRODUCT_ID/.test(v2),'local preflight retained');
 // v55.83-IY: per-line product — each line uses its own wave_product_id, default only as fallback.

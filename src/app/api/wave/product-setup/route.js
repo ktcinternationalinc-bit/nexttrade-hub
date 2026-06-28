@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-MH-product-setup-current-wave-schema';
+var API_BUILD_MARKER = 'v55.83-MS-product-setup-mirror-select';
 var API_ROUTE = '/api/wave/product-setup';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
@@ -85,21 +85,32 @@ export async function POST(req) {
       return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, products: products, wave: ld });
     }
 
+    // v55.83-MS (Codex Round-3) — CACHED: the picker's source. Return the silo's Wave products from the
+    // wave_products MIRROR (populated by /api/wave/sync-products across ALL pages), RLS-proof via service-role.
+    // This is catalog-first — no live page-1 query, so products beyond the first 100 appear in the dropdown.
+    if (mode === 'cached') {
+      var cres = await db.from('wave_products').select('wave_product_id, name, description, is_sold, is_archived').eq('wave_business_id', bid).order('name', { ascending: true });
+      var crows = (cres && cres.data) || [];
+      var cprods = []; var cci;
+      for (cci = 0; cci < crows.length; cci++) { cprods.push({ id: crows[cci].wave_product_id, name: crows[cci].name, isSold: crows[cci].is_sold, isArchived: crows[cci].is_archived }); }
+      return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, products: cprods, source: 'mirror', count: cprods.length });
+    }
+
     // FIND: locate exact "NextTrade Hub Item" (or a provided product id) and save it
     if (mode === 'find' || mode === 'select') {
       if (mode === 'select' && body.product_id) {
-        // Verify the chosen product actually belongs to THIS Wave business before saving.
-        var vq = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:100){ edges{ node{ id name isSold isArchived } } } } }';
-        var vr = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: vq, variables: { bid: bid } }) });
-        var vd = await vr.json();
-        var vedges = vd && vd.data && vd.data.business && vd.data.business.products && vd.data.business.products.edges;
-        var match = null;
-        if (vedges) { var vi; for (vi = 0; vi < vedges.length; vi++) { if (vedges[vi].node && vedges[vi].node.id === body.product_id) { match = vedges[vi].node; } } }
-        if (!match) { return NextResponse.json({ error: 'That product does not belong to the selected Wave business. Refresh the product list and try again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
-        if (match.isArchived === true) { return NextResponse.json({ error: 'That product is archived in Wave. Pick an active, sold product.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
-        var savedSel = await saveDefault(db, bid, match.id, match.name, 'manual_selected');
+        // v55.83-MS (Codex delta 4) — verify the chosen product via the wave_products MIRROR (sync-products
+        // pulls ALL pages), not a live page-1/100 query, so products beyond the first 100 are selectable.
+        // Reject archived / not-sold choices for the default fallback.
+        var mres = await db.from('wave_products').select('wave_product_id, name, is_sold, is_archived').eq('wave_business_id', bid).eq('wave_product_id', body.product_id);
+        var mrows = (mres && mres.data) || [];
+        var match = mrows.length ? mrows[0] : null;
+        if (!match) { return NextResponse.json({ error: 'That product was not found in the cached Wave product list for this business. Click "Refresh from Wave" to pull the latest products, then pick again.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+        if (match.is_archived === true) { return NextResponse.json({ error: 'That product is archived in Wave. Pick an active, sold product.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+        if (match.is_sold === false) { return NextResponse.json({ error: 'That product is not marked as sold (income) in Wave. Pick a sold product for invoices.', api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 400 }); }
+        var savedSel = await saveDefault(db, bid, match.wave_product_id, match.name, 'manual_selected');
         if (!savedSel.ok) { return NextResponse.json({ error: 'Could not save the default product to the database: ' + savedSel.error, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: false, db_error: savedSel.error }, { status: 500 }); }
-        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: match.id, default_invoice_product_name: match.name, source: 'manual_selected', saved_row: savedSel.row });
+        return NextResponse.json({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE, saved: true, default_invoice_product_id: match.wave_product_id, default_invoice_product_name: match.name, source: 'manual_selected', saved_row: savedSel.row });
       }
       var fq = 'query($bid:ID!){ business(id:$bid){ products(page:1,pageSize:100){ edges{ node{ id name isSold isArchived } } } } }';
       var fr = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: fq, variables: { bid: bid } }) });

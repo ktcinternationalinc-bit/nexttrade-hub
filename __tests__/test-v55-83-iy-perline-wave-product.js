@@ -32,7 +32,7 @@ ok('3a: push-invoice-v2 uses each line wave_product_id, falls back to default',
 
 // 4. invoice editor: per-line selector + persistence
 ok('4a: line model carries wave_product_id/name', /wave_product_id: '', wave_product_name: ''/.test(ui));
-ok('4b: per-line Wave product selector wired to setLineWaveProduct', /function setLineWaveProduct\(i, productId\)/.test(ui) && /onChange=\{function \(e\) \{ setLineWaveProduct\(i, e\.target\.value\); \}\}/.test(ui));
+ok('4b: per-line Wave product selector wired to the change handler (onLineProductChange -> setLineWaveProduct + locked persist)', /function setLineWaveProduct\(i, productId\)/.test(ui) && /onChange=\{function \(e\) \{ onLineProductChange\(i, e\.target\.value\); \}\}/.test(ui));
 ok('4c: save persists wave_product_id/name on the item', /payload\.wave_product_id = it\.wave_product_id; payload\.wave_product_name = it\.wave_product_name/.test(ui));
 ok('4d: editor loads the silo Wave product catalog', /from\('wave_products'\)\.select/.test(ui) && /setWaveProducts/.test(ui));
 ok('4e: product list is scoped to the active silo + excludes archived', /p\.wave_business_id === waveBiz\) && p\.is_archived !== true/.test(ui));
@@ -43,9 +43,10 @@ ok('5a: editor loads wave_products.description with the catalog',
   /from\('wave_products'\)\.select\('wave_business_id, wave_product_id, name, description, is_archived'\)/.test(ui));
 ok('5b: the line selector shows the Wave description next to the name',
   /var d = \(p\.description && p\.description\.trim\(\)\) \? \(' — ' \+ p\.description\.substring\(0, 40\)\) : ''/.test(ui));
-ok('5c: selecting a Wave product fills the line description from prod.description (falls back to name)',
-  /var waveDesc = \(prod\.description && prod\.description\.trim\(\)\) \? prod\.description : \(prod\.name \|\| ''\)/.test(ui) &&
-  /c\[i\]\.description = waveDesc/.test(ui));
+ok('5c: v55.83-MS (Codex delta 5) — selecting a Wave product is metadata-only and does NOT overwrite the line description (no clobber)',
+  !/c\[i\]\.description = waveDesc/.test(ui) &&
+  /function setLineWaveProduct\(i, productId\)/.test(ui) &&
+  /c\[i\]\.wave_product_id = productId \|\| ''/.test(ui));
 ok('5d: push-invoice-v2 sends the (Wave-derived) line description to Wave',
   /description: items\[k\]\.description \|\| 'Hub invoice line'/.test(push));
 

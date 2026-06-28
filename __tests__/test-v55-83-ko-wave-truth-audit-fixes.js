@@ -26,11 +26,12 @@ var dba = rd('src/app/api/wave/default-bank-account/route.js');
 
 ok('1 (P0): bind route re-stamps wave_products AND bank_transaction_splits (no orphaned rows after rebind)',
   /'wave_products', 'bank_transaction_splits'/.test(bind));
-ok('2 (P1): payment readiness and invoice readiness are SEPARATE panels with the correct gates',
+var invChecksBlock = (sync.match(/var invChecks = \[[\s\S]{0,300}?\];/) || [''])[0];
+ok('2 (P1): payment + invoice readiness are SEPARATE panels; the OPTIONAL Default Invoice Product is NOT a blocking invoice check (v55.83-MS)',
   /var payChecks = \[/.test(sync) && /var invChecks = \[/.test(sync) &&
   /'Payment push enabled \(super-admin toggle\)', reg\.allow_payment_push === true/.test(sync) &&
-  /'Invoice push enabled \(super-admin toggle\)', reg\.allow_invoice_push === true/.test(sync) &&
-  /'Default Invoice Product set \(one-time setup below\)', !!\(prodSetup && prodSetup\.default_invoice_product_id\)/.test(sync));
+  /'Invoice push enabled \(super-admin toggle\)', reg\.allow_invoice_push === true/.test(invChecksBlock) &&
+  !/default_invoice_product_id/.test(invChecksBlock));
 ok('3 (P1): payment panel does NOT gate on invoice product; notes the invoice must already be in Wave',
   !/payChecks[\s\S]{0,200}default_invoice_product_id/.test(sync) &&
   /invoice to already be in Wave/.test(sync));

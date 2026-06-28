@@ -17,7 +17,7 @@ ok(/loadCatCount/.test(wsc) && /count: 'exact'/.test(wsc),'shows loaded count');
 ok(/user_id: \(userProfile && userProfile\.id\)/.test(wsc),'sends user_id for auth');
 ok(/Push permissions for:/.test(wsc),'push permissions intact');
 // bank review dropdown
-ok(/setWaveCategories/.test(br) && /from\('wave_categories'\)/.test(br),'bank review loads wave categories');
+ok(/setWaveCategories/.test(br) && /\/api\/wave\/categories/.test(br),'bank review loads wave categories (via the authoritative paginated /api/wave/categories route)');
 ok(/c\.wave_business_id !== activeBiz/.test(br),'categories scoped to active silo');
 ok(/optgroup label="Wave categories"/.test(br),'wave categories optgroup in dropdown');
 ok(/optgroup label="General"/.test(br),'general fallback preserved');
