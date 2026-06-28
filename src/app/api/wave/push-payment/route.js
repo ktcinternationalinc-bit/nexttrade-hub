@@ -12,11 +12,11 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
-import { resolveWaveBankAnchor, waveBankCashCandidates, feedOwnerVerdict } from '../../../../lib/wave-bank-account-resolver';
+import { resolveWaveBankAnchor, waveBankCashCandidates } from '../../../../lib/wave-bank-account-resolver';
 
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4';
-var API_BUILD_MARKER = 'v55.83-MG-push-payment-feedback';
+var API_BUILD_MARKER = 'v55.83-MP-push-payment-no-feed-owner-block';
 var API_ROUTE = '/api/wave/push-payment';
 
 function admin() {
@@ -159,13 +159,9 @@ export async function POST(req) {
     var payResolved = resolveWaveBankAnchor({ waveBankAccts: waveBankCashCandidates((payCatsRes && payCatsRes.data) || []), txnMask: payMask, globalAcct: globalPayAcct, globalName: globalPayName });
     var paymentAccountId = payResolved.acct;
     if (!paymentAccountId) { return blocked('No Wave bank/deposit account could be resolved for this payment. Set a default in Wave Sync > Settings, or add a Wave Cash/Bank account matching this deposit\x27s bank.', 400, { needs_payment_account: true }); }
-    // Anti-duplicate FIREWALL (v55.83-MC) — SAME per-account single-writer rule as push-transaction (no
-    // asymmetry): an invoice payment's deposit must not double a deposit Wave's own feed already pulled. The
-    // sandbox test business is exempt; production silos require the deposit's account marked HUB-owned.
-    if (!_isApprovedTest) {
-      var payFw = feedOwnerVerdict(payResolved.feedOwner);
-      if (!payFw.ok) { return blocked(payFw.reason, 409); }
-    }
+    // v55.83-MP — Max directive: do NOT block on the per-account "feed owner" firewall. The owner explicitly
+    // accepts that a payment may double a Wave-fed deposit; the priority is that pushes ALWAYS go through.
+    // The feed-owner setting still exists (informational) but no longer blocks. (Was the MC firewall here.)
 
     var amount = Number(pay.amount) || 0;
     if (!(amount > 0)) { return blocked('Payment amount must be positive.', 400); }

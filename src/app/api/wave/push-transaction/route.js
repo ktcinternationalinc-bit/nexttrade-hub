@@ -20,9 +20,9 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
-import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety, feedOwnerVerdict } from '../../../../lib/wave-bank-account-resolver';
+import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety } from '../../../../lib/wave-bank-account-resolver';
 
-var API_BUILD_MARKER = 'v55.83-MB-push-transaction';
+var API_BUILD_MARKER = 'v55.83-MN-push-transaction-no-feed-owner-block';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
@@ -147,14 +147,11 @@ export async function POST(req) {
       return blocked('Could not resolve the Wave bank account for this transaction: ' + why, 400);
     }
 
-    // THE FIREWALL (v55.83-MC, per-account single-writer) — refuse to CREATE when Wave's own bank feed owns
-    // this account (would duplicate every transaction) or ownership is unset. This is the structural guard
-    // that makes double-counting impossible: one writer per account, never both. See WAVE_MIRROR_ARCHITECTURE.md.
-    // The approved SANDBOX test business is exempt (it has no real bank feed); production silos are enforced.
-    if (!_isApprovedTest) {
-      var fw = feedOwnerVerdict(resolved.feedOwner);
-      if (!fw.ok) { return blocked(fw.reason, 409); }
-    }
+    // v55.83-MN — Max directive: do not block category pushes on the per-account "feed owner"
+    // setting. The Hub's Wave public API path creates a categorized money transaction; Wave does
+    // not expose a public mutation to edit an existing bank-feed transaction's category. If Wave's
+    // bank feed also imports the same raw transaction, duplicate cleanup is an operator concern,
+    // not a server-side blocker for getting the Hub category into Wave.
 
     var amount = roundMoney(bt.amount_abs != null ? bt.amount_abs : Math.abs(Number(bt.amount) || 0));
     if (!(amount > 0)) { return blocked('Transaction amount must be positive.', 400); }

@@ -20,10 +20,10 @@ function rd(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); 
   var pf = rd('src/app/api/wave/prefill-payment-links/route.js');
   ok('1: push-transaction uses the shared resolver + firewall',
     /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(pt) &&
-    /resolveWaveBankAnchor\(\{/.test(pt) && /feedOwnerVerdict\(resolved\.feedOwner\)/.test(pt));
-  ok('2: push-payment uses the shared resolver + firewall (no asymmetry)',
+    /resolveWaveBankAnchor\(\{/.test(pt) && !/feedOwnerVerdict/.test(pt));
+  ok('2: push-payment uses the shared resolver (feed-owner firewall REMOVED per owner directive — always push, duplicates accepted)',
     /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(pp) &&
-    /resolveWaveBankAnchor\(\{/.test(pp) && /feedOwnerVerdict\(payResolved\.feedOwner\)/.test(pp));
+    /resolveWaveBankAnchor\(\{/.test(pp) && !/feedOwnerVerdict/.test(pp));
   ok('3: prefill-payment-links uses the shared maskMatches (no private 4-digit copy)',
     /from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/wave-bank-account-resolver'/.test(pf) &&
     /maskMatches\(nm, dm\)/.test(pf) && !/nm\.match\(\/\\d\{4\}\/g\)/.test(pf));
