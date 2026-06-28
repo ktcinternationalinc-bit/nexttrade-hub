@@ -36,10 +36,10 @@ ok('3: requires a category + a resolved Wave bank anchor (per-account); blocks m
   /No Wave category assigned/.test(route) &&
   /Could not resolve the Wave bank account for this transaction/.test(route) &&
   /it reaches Wave as an invoice PAYMENT/.test(route));
-ok('4: idempotent — externalId per Hub txn, claim category_status, duplicate-externalId => already-in-wave, success => synced',
-  /var externalId = 'hub-bt-' \+ String\(hubId\)/.test(route) &&
-  /update\(\{ category_status: 'syncing' \}\)\.eq\('id', hubId\)\.neq\('category_status', 'synced'\)/.test(route) &&
-  /\/external\.\?id\/i\.test\(ieJoined\) && \/\(exist\|duplicate\|already\)\/i\.test\(ieJoined\)/.test(route) &&
+ok('4: Lane B push model — FRESH externalId per push (re-pushable when Max changes the category), claim syncing without blocking already-synced, duplicate-externalId => already-in-wave, success => synced',
+  /var externalId = pushExternalId\(hubId\)/.test(route) &&
+  /update\(\{ category_status: 'syncing' \}\)\.eq\('id', hubId\)/.test(route) &&
+  /already_in_wave: true/.test(route) &&
   /category_status: 'synced'/.test(route));
 ok('5: Sync Center makes a CATEGORIZED bank txn pushable (action transaction, not hubOnly); uncategorized stays Hub-only',
   /var hasCat = !!bt\.wave_account_id;/.test(sync) &&

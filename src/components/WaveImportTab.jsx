@@ -55,7 +55,7 @@ export default function WaveImportTab(props) {
   var [csvText, setCsvText] = useState('');
   var [csvBusy, setCsvBusy] = useState(false);
   var [csvResult, setCsvResult] = useState(null);
-  var [csvOverride, setCsvOverride] = useState(false);
+  var [csvOverride, setCsvOverride] = useState(true);
   var [probeBusy, setProbeBusy] = useState(false);
   var [probeResult, setProbeResult] = useState(null);
   var [prefillBusy, setPrefillBusy] = useState(false);
@@ -355,12 +355,12 @@ export default function WaveImportTab(props) {
 
           <div className="mb-4 rounded-lg border border-emerald-700/60 bg-emerald-950/25 p-3">
             <div className="text-sm font-bold text-slate-100 mb-1">Step 3 - Import old Wave transaction categories</div>
-            <div className="text-[11px] text-slate-400 mb-2">In Wave go to <b>Accounting &gt; Transactions &gt; Export</b>, paste that CSV here, then Preview. Apply only after the preview looks right. This writes only to Hub bank transactions; it does not write to Wave.</div>
+            <div className="text-[11px] text-slate-400 mb-2">In Wave go to <b>Accounting &gt; Transactions &gt; Export</b>, paste that CSV here, then Preview. Apply only after the preview looks right. This refreshes Hub bank transaction categories from Wave; it does not write to Wave.</div>
             <textarea value={csvText} onChange={function (e) { setCsvText(e.target.value); }} placeholder="Paste the Wave Transactions CSV here, including the header row..." rows={7} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-xs font-mono text-slate-100 placeholder-slate-500 mb-2" />
             <div className="flex gap-2 items-center flex-wrap">
               <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm font-bold disabled:opacity-50">{csvBusy ? 'Working...' : 'Preview CSV match'}</button>
               <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold disabled:opacity-40">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
-              <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
+              <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> replace Hub category with Wave export when different</label>
             </div>
             {csvResult && (
               <div className={'mt-3 rounded border p-3 text-xs ' + (csvResult.ok ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-rose-700 bg-rose-950/40 text-rose-200')}>

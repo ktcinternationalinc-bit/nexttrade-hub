@@ -10,7 +10,7 @@
 //  - lineItems is a COMPLETE BALANCED double-entry (Wave rejects a single line — live error
 //    "Transaction must have at least one debit and credit line item"). buildMoneyTxnLineItems():
 //    DEPOSIT (money in)  => [{bank, DEBIT}, {category, CREDIT}]; WITHDRAWAL (money out) => [{category, DEBIT}, {bank, CREDIT}].
-//  - externalId = 'hub-bt-' + bank_transactions.id => Wave itself rejects a duplicate (idempotency).
+//  - externalId = 'hub-bt-' + bank_transactions.id + timestamp => each Hub push is sent fresh by design.
 //  - NOT for bank-to-bank transfers (Wave API doesn't support those) — those stay in the Hub.
 // OPEN (Codex): factor the anchor resolver into a shared src/lib/wave-bank-account-resolver.js; add a
 // category-type safety classifier (block bank/cash, A/R, A/P, system categories) before live rollout.
@@ -22,12 +22,13 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 import { resolveWaveBankAnchor, waveBankCashCandidates, categoryPushSafety } from '../../../../lib/wave-bank-account-resolver';
 
-var API_BUILD_MARKER = 'v55.83-MN-push-transaction-no-feed-owner-block';
+var API_BUILD_MARKER = 'v55.83-MN-push-transaction-hub-category-wins';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 var APPROVED_PUSH_BUSINESS_ID = 'QnVzaW5lc3M6YjYyMzNmMjItMjRkZS00MzYyLWE4MWYtZGQ4ZWQxNGUzNzg4'; // KANDIL EGYPT test
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+function pushExternalId(hubId) { return 'hub-bt-' + String(hubId) + '-' + String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000)); }
 // v55.83-MA (Codex P0: live error "Transaction must have at least one debit and credit line item.
 // [input,lineItems]"). LIVE-SCHEMA introspection (2026-06-23) confirms MoneyTransactionCreateLineItemInput
 // .balance is a BalanceType! enum (CREDIT, DEBIT, DECREASE, INCREASE) and lineItems is a required NON-EMPTY
@@ -108,12 +109,10 @@ export async function POST(req) {
     txCtx = bankTxnLogContext(bt);
     if (bt.wave_business_id && bt.wave_business_id !== waveBusinessId) { return blocked('This transaction belongs to a different silo.', 409); }
     if (bt.matched_invoice_id) { return blocked('This deposit is matched to an invoice — it reaches Wave as an invoice PAYMENT (Bank Review), not as a categorized transaction.', 400); }
-    if (bt.category_status === 'synced' || bt.wave_transaction_id) { return blocked('Already pushed to Wave.', 400); }
-
     var categoryAcct = bt.wave_account_id || null;
     if (!categoryAcct) { return blocked('No Wave category assigned — pick a Wave Category (Chart of Accounts) for this transaction first.', 400); }
 
-    // v55.83-MC — shared resolver + category safety + the per-account single-writer FIREWALL.
+    // v55.83-MC/MN — shared resolver + category safety. Feed-owner no longer blocks transaction pushes.
     var setRes = await db.from('wave_business_settings').select('default_payment_account_id, default_payment_account_name').eq('wave_business_id', waveBusinessId);
     var globalAcct = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_id : null;
     var globalName = (setRes && setRes.data && setRes.data.length) ? setRes.data[0].default_payment_account_name : null;
@@ -159,7 +158,7 @@ export async function POST(req) {
     var date = String(bt.posted_date || bt.date || '').slice(0, 10);
     if (!date) { return blocked('Transaction date is required.', 400); }
     var desc = String(bt.name || bt.merchant_name || 'Bank transaction').slice(0, 140);
-    var externalId = 'hub-bt-' + String(hubId);
+    var externalId = pushExternalId(hubId);
 
     var amtStr = String(amount);
     var lineItems = buildMoneyTxnLineItems(dir, anchorAcct, categoryAcct, amtStr);
@@ -175,9 +174,10 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, dry_run: true, anchor_account: anchorName || anchorAcct, anchor_via: anchorVia, direction: dir, amount: amount, category_account_id: categoryAcct, category_name: bt.wave_account_name || null, debit: debitLine, credit: creditLine, would_send: input, api_build_marker: API_BUILD_MARKER });
     }
 
-    // Idempotency claim: mark 'syncing' only if not already synced.
-    var claim = await db.from('bank_transactions').update({ category_status: 'syncing' }).eq('id', hubId).neq('category_status', 'synced').select();
-    if (!(claim && claim.data && claim.data.length)) { return NextResponse.json({ ok: false, error: 'This transaction is already syncing or pushed. Refresh and check.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+    // v55.83-MN — claim for visibility only. Already-synced rows are allowed to push again with a new
+    // externalId because the Hub category is the source of truth for the next Wave categorization.
+    var claim = await db.from('bank_transactions').update({ category_status: 'syncing' }).eq('id', hubId).select();
+    if (claim && claim.error) { return blocked('Could not mark transaction syncing: ' + claim.error.message, 400); }
 
     var mutation = 'mutation($input: MoneyTransactionCreateInput!){ moneyTransactionCreate(input:$input){ didSucceed inputErrors{ message code path } transaction{ id } } }';
     var resp = await gql(token, mutation, { input: input });

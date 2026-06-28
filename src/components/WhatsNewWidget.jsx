@@ -33,6 +33,27 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MM',
+    date: '2026-06-24',
+    label: 'Wave accounting CSV and payment-link path clarified',
+    items: [
+      '**Your Wave accounting.csv export now has a real purpose in the Hub.** It is used for old non-invoice bank categorizations: the Hub reads only the Cash/Bank side of each double-entry row and takes the category from "Other Accounts for this Transaction."',
+      '**It does not auto-pay invoices from the CSV.** Invoice payments stay on the safer Step 6 path: read Wave invoice payments, preview exact deposit links, then apply only one-to-one matches.',
+      '**Step 6 also no longer crashes when the older Wave transaction-id database column is missing.** The deposit lookup reads safely and keeps the same exact-match protections.',
+      { superAdminOnly: true, text: 'v55.83-MM. import-transaction-csv detects Wave accounting.csv double-entry export via Transaction ID + Account Name/Type, uses signed Amount (One column), filters to Cash/Bank rows, category = Other Accounts for this Transaction, skips A/R-A/P bank rows, and routes negative A/R invoice rows to needs_manual_invoice_link. Keeps ML prefill fix: prefill-payment-links deposit read uses select(*) so missing bank_transactions.wave_transaction_id no longer crashes Step 6. Added MM + ML regressions to accounting-bank gate.' },
+    ],
+  },
+  {
+    version: 'v55.83-ML',
+    date: '2026-06-24',
+    label: 'Wave payment import no longer crashes on missing setup column',
+    items: [
+      '**Step 6 can read Wave invoice payments even if the database is missing the older Wave transaction-id column.** The deposit lookup now reads the bank rows safely instead of stopping with "column bank_transactions.wave_transaction_id does not exist."',
+      '**This does not write to Wave or change invoice balances.** It only lets Preview/Apply deposit links continue using the same exact-match safety rules.',
+      { superAdminOnly: true, text: 'v55.83-ML. /api/wave/prefill-payment-links marker bumped and deposit candidate read changed to select(*) so a production database missing optional bank_transactions.wave_transaction_id does not make Step 6 fail at Deposit read. Existing !t.wave_transaction_id candidacy remains safe when the column exists and harmless undefined when it does not. Added ML regression and accounting-bank gate entry.' },
+    ],
+  },
+  {
     version: 'v55.83-MK',
     date: '2026-06-24',
     label: 'Payment sync preflight fixed',

@@ -171,7 +171,7 @@ export default function WaveSyncCenter(props) {
   var [bankTxns, setBankTxns] = useState([]);
   var [splitTxns, setSplitTxns] = useState([]);   // v55.83-HE — split lines with a pending Wave category
   var [syncLog, setSyncLog] = useState([]);
-  // v55.83-MC — per-account feed owner (Hub vs Wave's own bank feed) — the anti-duplicate control.
+  // v55.83-MC/MN — per-account feed owner (Hub vs Wave's own bank feed), now informational for txn pushes.
   var [feedOwners, setFeedOwners] = useState(null);
   var [feedOwnerMig, setFeedOwnerMig] = useState(true);
   var [feedOwnerBusy, setFeedOwnerBusy] = useState(false);
@@ -358,7 +358,7 @@ export default function WaveSyncCenter(props) {
       .catch(function () { setCatCount(0); });
   }
   useEffect(function () { loadCatCount(); }, [active]);
-  // v55.83-MC — load/set the per-account feed owner (Hub vs Wave feed).
+  // v55.83-MC/MN — load/set the per-account feed owner (Hub vs Wave feed).
   function loadFeedOwners() {
     if (!active || isPlaceholderWaveBusiness(active)) { setFeedOwners(null); return; }
     fetch('/api/wave/account-feed-owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'list', wave_business_id: active, user_id: userProfile && userProfile.id }) })
@@ -807,7 +807,7 @@ export default function WaveSyncCenter(props) {
   var [csvText, setCsvText] = useState('');
   var [csvBusy, setCsvBusy] = useState(false);
   var [csvResult, setCsvResult] = useState(null);
-  var [csvOverride, setCsvOverride] = useState(false); // v55.83-LI — opt-in to replace an existing Hub category
+  var [csvOverride, setCsvOverride] = useState(true); // v55.83-MN — Wave export refreshes Hub category state by default
   function runCsvImport(apply) {
     if (!csvText.trim()) { toast.error('Paste the CSV you exported from Wave first.'); return; }
     setCsvBusy(true); setCsvResult(null);
@@ -1145,7 +1145,7 @@ export default function WaveSyncCenter(props) {
           </div>
           <div>
             <div className="text-sm font-bold text-slate-100">Step 2 — Import existing categorizations from Wave (CSV)</div>
-            <div className="text-xs text-slate-300 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and marks it as already-in-Wave (so it won't be pushed again). Nothing is written to Wave.</div>
+            <div className="text-xs text-slate-300 mt-1">Wave's API can't read transactions back, so to reflect categories you set <b>directly in Wave</b>, export them: in Wave go to <b>Accounting → Transactions → Export</b>, then paste the CSV here. The Hub matches each row to a bank transaction by date + amount + description and refreshes the Hub category from Wave. Nothing is written to Wave.</div>
           </div>
           {/* v55.83-LG — invoice PAYMENTS are API-readable (unlike money transactions). This probe shows
               what Wave reports so payments recorded directly in Wave can be mirrored + linked to deposits. */}
@@ -1204,7 +1204,7 @@ export default function WaveSyncCenter(props) {
           <div className="flex gap-2 items-center flex-wrap">
             <button onClick={function () { runCsvImport(false); }} disabled={csvBusy} className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-bold">{csvBusy ? 'Working…' : 'Preview match (dry run)'}</button>
             <button onClick={function () { runCsvImport(true); }} disabled={csvBusy || !csvResult || !csvResult.dry_run || !csvResult.matched_count} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded px-3 py-1.5 text-xs font-bold">Apply {csvResult && csvResult.dry_run ? '(' + csvResult.matched_count + ')' : ''}</button>
-            <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> override existing Hub categories</label>
+            <label className="text-[11px] text-slate-300 inline-flex items-center gap-1"><input type="checkbox" checked={csvOverride} onChange={function (e) { setCsvOverride(e.target.checked); }} /> replace Hub category with Wave export when different</label>
           </div>
           {csvResult && csvResult.ok && (
             <div className="border border-slate-700 rounded p-3 text-xs text-slate-200 space-y-2">
@@ -1272,11 +1272,11 @@ export default function WaveSyncCenter(props) {
       )}
       {tab === 'settings' && canManageSettings && !isPlaceholderWaveBusiness(active) && (
         <div className="bg-white rounded-lg p-4 text-slate-900">
-          {/* v55.83-MC — THE anti-duplicate control: who feeds Wave for each bank account. Dark, plain
-              language, with the verified one-time Wave step inline. This is what unblocks pushing. */}
+          {/* v55.83-MN — feed-owner remains an operator duplicate-risk note, but transaction category pushes
+              no longer block on it. */}
           <div className="mb-4 rounded-lg p-3 bg-slate-900 border border-slate-700 text-slate-100">
-            <div className="font-extrabold text-sm mb-1">🏦 Who feeds each bank account? <span className="font-normal text-slate-400 text-[11px]">— required before the Hub can push, so nothing is doubled</span></div>
-            <div className="text-[11px] text-slate-300 mb-2">Pick ONE source per account. <b className="text-emerald-300">Hub feeds it</b> = Wave's own auto-import is OFF for that account, and the Hub posts each transaction to Wave already categorized. <b className="text-sky-300">Wave feeds it</b> = Wave pulls it directly, so the Hub won't create transactions for it (that would double them). Until you choose, pushing stays blocked on purpose.</div>
+            <div className="font-extrabold text-sm mb-1">🏦 Who feeds each bank account? <span className="font-normal text-slate-400 text-[11px]">— duplicate-risk note, not a transaction category push blocker</span></div>
+            <div className="text-[11px] text-slate-300 mb-2">Pick ONE source per account when you want the duplicate-risk note recorded. <b className="text-emerald-300">Hub feeds it</b> = Wave's own auto-import is OFF for that account, and the Hub posts each transaction to Wave already categorized. <b className="text-sky-300">Wave feeds it</b> = Wave pulls it directly; Hub category pushes are still allowed when you choose to send them.</div>
             {!feedOwnerMig && <div className="text-[11px] bg-amber-950/60 border border-amber-700/60 text-amber-100 rounded px-2 py-1 mb-2">⚠ One-time database step needed first: a super admin must run <span className="font-mono">sql/v55-83-MC-wave-feed-owner.sql</span>. Saving is disabled until then.</div>}
             {feedOwners === null ? <div className="text-[11px] text-slate-400 italic">Loading accounts…</div>
               : feedOwners.length === 0 ? <div className="text-[11px] text-slate-400 italic">No Wave Cash/Bank accounts found for this silo yet. Pull Wave categories first (below).</div>
@@ -1284,7 +1284,7 @@ export default function WaveSyncCenter(props) {
                 var acctIds = a.wave_account_ids && a.wave_account_ids.length ? a.wave_account_ids : [a.wave_account_id];
                 var mixedOwner = a.wave_feed_owner === 'MIXED';
                 return <div key={a.wave_account_id} className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-800 last:border-0">
-                  <span className="text-xs font-semibold flex-1">{a.wave_account_name}{a.duplicate_count > 1 ? <span className="ml-2 text-[10px] text-slate-400 font-normal">grouped {a.duplicate_count} duplicate Wave accounts</span> : null}{(!a.wave_feed_owner || mixedOwner) ? <span className="ml-2 text-[10px] text-rose-400 font-bold">{mixedOwner ? 'mixed owner - choose one' : 'not set - push blocked'}</span> : null}</span>
+                  <span className="text-xs font-semibold flex-1">{a.wave_account_name}{a.duplicate_count > 1 ? <span className="ml-2 text-[10px] text-slate-400 font-normal">grouped {a.duplicate_count} duplicate Wave accounts</span> : null}{(!a.wave_feed_owner || mixedOwner) ? <span className="ml-2 text-[10px] text-amber-300 font-bold">{mixedOwner ? 'mixed owner - choose one' : 'owner not set'}</span> : null}</span>
                   <span className="flex gap-1">
                     <button onClick={function () { setFeedOwner(a.wave_account_id, 'HUB', acctIds); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'HUB' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Hub feeds it</button>
                     <button onClick={function () { setFeedOwner(a.wave_account_id, 'WAVE_FEED', acctIds); }} disabled={feedOwnerBusy} className={'text-[10px] rounded px-2 py-1 font-bold disabled:opacity-50 ' + (a.wave_feed_owner === 'WAVE_FEED' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>Wave feeds it</button>

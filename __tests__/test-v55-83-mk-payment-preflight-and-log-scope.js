@@ -17,8 +17,10 @@ var sync = rd('src/components/WaveSyncCenter.jsx');
 var page = rd('src/app/page.jsx');
 var wn = rd('src/components/WhatsNewWidget.jsx');
 
-ok('1: visible build marker and changelog are MK',
-  /v55\.83-MK/.test(page) && /version: 'v55\.83-MK'/.test(wn));
+ok('1: visible build marker is current, and the MK changelog entry is still present',
+  /v55\.83-MM/.test(page) &&
+  /version: 'v55\.83-MM'/.test(wn) &&
+  /version: 'v55\.83-MK'/.test(wn));
 ok('2: payment dry-run is routed to the real server payment push preflight',
   /q\.action !== 'transaction' && q\.action !== 'payment'/.test(sync) &&
   /var route = q\.action === 'payment' \? '\/api\/wave\/push-payment' : '\/api\/wave\/push-transaction';/.test(sync) &&

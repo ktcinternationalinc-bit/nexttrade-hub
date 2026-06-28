@@ -2,7 +2,7 @@
 // v55.83-MC — ONE shared bank-account resolver (Codex). push-transaction, push-payment, and
 // prefill-payment-links must all use src/lib/wave-bank-account-resolver.js (no drifting copies). Behavior:
 // Plaid mask 6338 resolves to Wave "PLAT BUS CHECKING (338)" by suffix; the silo-default branch carries the
-// account's wave_feed_owner (the bug the verdict caught); the firewall blocks UNSET + WAVE_FEED.
+// account's wave_feed_owner. Payment still uses the firewall; bank transaction category pushes do not.
 // ============================================================
 var fs = require('fs');
 var path = require('path');

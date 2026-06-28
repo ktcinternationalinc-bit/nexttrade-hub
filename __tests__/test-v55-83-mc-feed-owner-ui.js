@@ -19,9 +19,10 @@ ok('1: the feed-owner control loads + sets via /api/wave/account-feed-owner',
   /function loadFeedOwners\(\)/.test(sync) &&
   /function setFeedOwner\(acctId, owner, acctIds\)/.test(sync) &&
   /\/api\/wave\/account-feed-owner/.test(sync));
-ok('2: each Wave bank account gets a Hub / Wave-feed choice + a blocked state',
+ok('2: each Wave bank account gets a Hub / Wave-feed choice + an informational unset state',
   /Hub feeds it/.test(sync) && /Wave feeds it/.test(sync) &&
-  /not set - push blocked/.test(sync) &&
+  /owner not set/.test(sync) &&
+  /not a transaction category push blocker/.test(sync) &&
   /setFeedOwner\(a\.wave_account_id, 'HUB', acctIds\)/.test(sync) &&
   /setFeedOwner\(a\.wave_account_id, 'WAVE_FEED', acctIds\)/.test(sync));
 ok('3: MI groups duplicate account names and sends wave_account_ids for one-click updates',

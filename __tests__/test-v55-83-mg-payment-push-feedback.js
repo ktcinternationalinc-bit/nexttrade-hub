@@ -19,8 +19,8 @@ function ok(label, cond, hint) {
 var route = rd('src/app/api/wave/push-payment/route.js');
 var sync = rd('src/components/WaveSyncCenter.jsx');
 
-ok('1: push-payment build marker documents the no-silent-payment-push fix',
-  /API_BUILD_MARKER = 'v55\.83-MG-push-payment-feedback'/.test(route));
+ok('1: push-payment build marker documents the no-silent-payment-push fix (Lane B: no feed-owner block)',
+  /API_BUILD_MARKER = 'v55\.83-MP-push-payment-no-feed-owner-block'/.test(route));
 
 ok('2: push-payment has a blocked() helper that writes a failed payment sync-log row',
   /async function blocked\(reason, status, clientFields, extraPayload\) \{/.test(route) &&
@@ -41,10 +41,10 @@ ok('4: payment-row blockers use blocked() for not-found, voided, already-pushed,
   /if \(!invWaveId\) \{ return blocked\('Invoice is not in Wave yet/.test(route) &&
   /return blocked\('Bank deposit for this payment no longer exists/.test(route));
 
-ok('5: account/firewall/input blockers use blocked() and keep the needs-payment-account hint',
+ok('5: account/input blockers use blocked() + keep the needs-payment-account hint (Lane B: feed-owner firewall removed — no payFw block)',
   /if \(!paymentAccountId\) \{ return blocked\('No Wave bank\/deposit account could be resolved/.test(route) &&
   /needs_payment_account: true/.test(route) &&
-  /if \(!payFw\.ok\) \{ return blocked\(payFw\.reason, 409\); \}/.test(route) &&
+  !/feedOwnerVerdict/.test(route) &&
   /if \(!\(amount > 0\)\) \{ return blocked\('Payment amount must be positive\.', 400\); \}/.test(route) &&
   /if \(!paymentDate\) \{ return blocked\('Payment date is required\.', 400\); \}/.test(route) &&
   /return blocked\('Invalid exchange_rate: must be a positive number\.', 400\)/.test(route));

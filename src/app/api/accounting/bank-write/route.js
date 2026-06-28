@@ -233,14 +233,12 @@ export async function POST(req) {
 
     // ── classify / set_wave_category: categorization on a bank transaction ──
     if (action === 'classify' || action === 'set_wave_category') {
-      // v55.83-LC (Codex money-safety) — edit-after-push guard. Once a transaction is pushed to Wave, its
-      // category CANNOT be changed from the Hub: Wave's public API has no money-transaction update/delete.
-      // So block a category change on an already-synced txn with a clear reversal path; other edits pass.
+      // v55.83-MN — Max directive: Hub category changes are allowed even after a prior Wave push. Wave's
+      // public API still cannot update/delete the old money transaction, so the next Hub->Wave sync creates
+      // a fresh categorized money transaction; duplicate cleanup is an operator concern, not a Hub blocker.
       var preRes = await db.from('bank_transactions').select('category_status, wave_transaction_id, wave_account_id').eq('id', body.bank_transaction_id);
       var preRow = (preRes && preRes.data && preRes.data.length) ? preRes.data[0] : null;
-      var alreadyPushed = !!(preRow && (preRow.category_status === 'synced' || preRow.wave_transaction_id));
       var changingCat = !!(body.patch && Object.prototype.hasOwnProperty.call(body.patch, 'wave_account_id') && body.patch.wave_account_id !== (preRow ? preRow.wave_account_id : null));
-      if (alreadyPushed && changingCat) { return NextResponse.json({ ok: false, already_pushed: true, error: 'This transaction was already pushed to Wave — its category can\'t be changed here. Wave\'s API can\'t update or delete a posted transaction; reverse/delete it in Wave first, then re-categorize and re-push.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       // v55.83-JH (Codex P0) — NEVER trust the raw client patch. Whitelist only categorization fields,
       // so a direct POST can't set arbitrary columns (e.g. approved_by) on bank_transactions. And the
       // categorize actions (bank.classify permission) may ONLY ever auto-advance to 'reviewed', never
@@ -251,6 +249,7 @@ export async function POST(req) {
       var fk;
       for (fk in rawPatch) { if (Object.prototype.hasOwnProperty.call(rawPatch, fk) && CLASSIFY_FIELDS[fk]) { cPatch[fk] = rawPatch[fk]; } }
       if (cPatch.review_status === 'approved') { delete cPatch.review_status; } // approval never comes through categorize
+      if (changingCat) { cPatch.category_status = 'pending_wave_sync'; }
       cPatch.updated_by = by;
       // v55.83-JG (Codex P0) — classify/set_wave_category patches carry review_status:'reviewed' to
       // auto-advance an unreviewed txn. That bypassed the set_status money-conservation gate: a partly

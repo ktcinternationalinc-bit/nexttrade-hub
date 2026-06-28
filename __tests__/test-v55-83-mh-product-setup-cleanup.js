@@ -29,8 +29,8 @@ ok('4: Settings UI keeps raw product details collapsed instead of appending JSON
   /setProdDetails\(d\.response \|\| d\)/.test(sync) &&
   !/JSON\.stringify\(d\.response/.test(sync) &&
   /Technical details/.test(sync));
-ok('5: visible app build and changelog are at the current build (MK supersedes MH)',
-  />v55\.83-MK</.test(page) && /version: 'v55\.83-MK'/.test(wn));
+ok('5: visible app build and changelog are at the current build (MM supersedes MH)',
+  />v55\.83-MM</.test(page) && /version: 'v55\.83-MM'/.test(wn));
 
 console.log('');
 if (failures.length === 0) { console.log('All v55.83-MH product setup cleanup tests passed'); process.exit(0); }

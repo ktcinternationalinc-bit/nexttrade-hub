@@ -5,7 +5,7 @@
 //  (2) Anchor risk: a single silo-level deposit account can post a ··6338 txn to the wrong Wave bank
 //      account — block multi-account silos until a per-account mapping exists.
 //  (3) logFail must be AWAITED so a Wave rejection reliably persists as sync_failed + a log row.
-//  (4) Edit-after-push: block changing the category of an already-synced transaction (Wave has no update).
+//  (4) Hub category wins: changing category after a prior push reopens the row for another Wave push.
 //  (5) Save the raw Wave read-back introspection evidence (not assertion-only).
 // ============================================================
 var fs = require('fs');
@@ -41,10 +41,10 @@ ok('3: logFail is async + AWAITED at both Wave-rejection call sites (reliable sy
   /try \{ await db\.from\('bank_transactions'\)\.update\(\{ category_status: 'sync_failed' \}\)/.test(route) &&
   /await logFail\(joined, \{ wave_errors: data\.errors \}\);/.test(route) &&
   /await logFail\(ieJoined, \{ input_errors: inputErrors \}\);/.test(route));
-ok('4: edit-after-push guard — changing the category of an already-synced transaction is blocked',
-  /var alreadyPushed = !!\(preRow && \(preRow\.category_status === 'synced' \|\| preRow\.wave_transaction_id\)\);/.test(bw) &&
+ok('4: Hub category wins — changing the category after a prior push marks the bank txn pending for another Wave push',
   /var changingCat = !!\(body\.patch && Object\.prototype\.hasOwnProperty\.call\(body\.patch, 'wave_account_id'\)/.test(bw) &&
-  /if \(alreadyPushed && changingCat\) \{ return NextResponse\.json\(\{ ok: false, already_pushed: true/.test(bw));
+  /if \(changingCat\) \{ cPatch\.category_status = 'pending_wave_sync'; \}/.test(bw) &&
+  !/already_pushed: true/.test(bw));
 ok('5: raw Wave read-back introspection evidence is saved (not assertion-only)',
   exists('WAVE_API_TRANSACTION_EVIDENCE.md') &&
   /Cannot query field .*moneyTransactions.* on type .*Business/.test(rd('WAVE_API_TRANSACTION_EVIDENCE.md')) &&

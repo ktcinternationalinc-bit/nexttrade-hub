@@ -16,7 +16,7 @@ var page = rd('src/app/page.jsx');
 var wn = rd('src/components/WhatsNewWidget.jsx');
 
 ok('1: visible app build and changelog are MJ or newer',
-  /v55\.83-M[JK]/.test(page) && /version: 'v55\.83-M[JK]'/.test(wn));
+  /v55\.83-M[J-M]/.test(page) && /version: 'v55\.83-M[J-M]'/.test(wn));
 ok('2: estimate importer is explicitly optional and separate from the main Wave import path',
   /Optional - Wave Estimates -> Hub Proformas \(skip unless you use Wave Estimates\)/.test(imp) &&
   /separate from categories, bank matching, invoice-payment links, and Wave push/.test(imp));

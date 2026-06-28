@@ -19,7 +19,7 @@ var page = rd('src/app/page.jsx');
 var whats = rd('src/components/WhatsNewWidget.jsx');
 
 ok('1: visible build marker is MI or newer',
-  /v55\.83-M[IJK]/.test(page) && /version: 'v55\.83-M[IJK]'/.test(whats));
+  /v55\.83-M[I-M]/.test(page) && /version: 'v55\.83-M[I-M]'/.test(whats));
 ok('2: WaveHub names the middle step Import Wave Truth',
   /2 - Import Wave Truth/.test(hub) &&
   /old transaction CSV/.test(hub) &&

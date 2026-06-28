@@ -5,7 +5,7 @@
 // API way to discover how a transaction was categorized directly in Wave's UI. The only out-of-band source
 // is Wave's CSV export (Wave → Accounting → Transactions → Export). This route ingests that CSV, matches
 // each row to a Hub bank transaction (date + abs(amount) + description), and reflects Wave's category onto
-// the Hub row so the Hub knows it is already categorized & posted in Wave (won't be re-pushed).
+// the Hub row so the Hub display follows whatever was historically categorized in Wave.
 //
 // Read-only intent: it does NOT call Wave. It only WRITES the reflected category onto matched Hub rows
 // (and only on apply, not dry_run). dry_run returns a full preview so the user verifies before applying.
@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-MM-import-transaction-csv';
+var API_BUILD_MARKER = 'v55.83-MN-import-transaction-csv-always-refresh';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -162,17 +162,18 @@ export async function POST(req) {
       return parseAmount(rowArr[ci.amount]);
     }
 
-    // Hub candidates: this silo's transactions that are not invoice-matched and not already pushed. (Codex
-    // #5) "pushed" is widened to also exclude any row carrying a Wave transaction id, not just status.
+    // Hub candidates: this silo's non-invoice bank transactions. v55.83-MN intentionally includes
+    // rows already marked synced or carrying a Wave transaction id, because a Wave export is the
+    // source of truth for historical Wave-side categorizations and should refresh the Hub display.
     var btRes = await db.from('bank_transactions').select('id, name, merchant_name, amount, amount_abs, posted_date, date, direction, wave_account_id, wave_account_name, category_source, category_status, matched_invoice_id, wave_transaction_id, wave_business_id').eq('wave_business_id', waveBusinessId);
-    var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id && t.category_status !== 'synced' && !t.wave_transaction_id; });
+    var cands = ((btRes && btRes.data) || []).filter(function (t) { return !t.matched_invoice_id; });
 
     // Wave categories for name->id resolution.
     var catRes = await db.from('wave_categories').select('wave_account_id, wave_account_name').eq('wave_business_id', waveBusinessId);
     var catByName = {}; ((catRes && catRes.data) || []).forEach(function (c) { var k = norm(c.wave_account_name); if (k && !catByName[k]) { catByName[k] = c; } });
 
     function rowHash(rowArr) { var s = rowArr.join(''); var h = 0; var i; for (i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h); }
-    var allowOverride = body.override_conflicts === true; // Codex #4 — explicit opt-in to replace an existing category
+    var allowOverride = body.override_conflicts !== false; // v55.83-MN — default to Wave export refreshing Hub category state
     var used = {}; var matched = []; var ambiguous = []; var conflicts = []; var unmatched = []; var needsInvoiceLink = []; var r;
     var skippedNonBank = 0; var skippedUncategorized = 0;
     for (r = 1; r < grid.length; r++) {
@@ -226,12 +227,12 @@ export async function POST(req) {
       if (hits.length > 1) { ambiguous.push({ row: r, date: cDate, amount: target, direction: csvDir, category: cCat, description: cDesc, candidate_count: hits.length, hub_ids: hits.map(function (h) { return h.t.id; }), reason: hits.length + ' Hub transactions match amount+direction+date — resolve manually (NOT auto-applied)' }); continue; }
       var best = hits[0].t;
       var resolved = catByName[norm(cCat)] || null;
-      // Codex #4 — an existing DIFFERENT Hub category is a conflict; do not silently overwrite. Widened
-      // (LJ) to ANY existing category (a label-only wave_account_name counts, not just a resolved id).
+      // Codex #4 — if the caller explicitly disables override, an existing DIFFERENT Hub category remains a
+      // conflict. Default v55.83-MN behavior is Wave export wins and refreshes the Hub category display.
       var hasExistingCat = !!(best.wave_account_id || best.wave_account_name);
       var wouldChange = resolved ? (best.wave_account_id !== resolved.wave_account_id) : (norm(best.wave_account_name) !== norm(cCat));
       if (hasExistingCat && wouldChange && !allowOverride) {
-        conflicts.push({ row: r, hub_id: best.id, hub_name: best.name, amount: target, direction: csvDir, existing_category: best.wave_account_name, existing_account_id: best.wave_account_id || null, existing_source: best.category_source, existing_status: best.category_status, csv_category: cCat, reason: 'Hub already has a different category — re-run with “override existing Hub categories” to replace' });
+        conflicts.push({ row: r, hub_id: best.id, hub_name: best.name, amount: target, direction: csvDir, existing_category: best.wave_account_name, existing_account_id: best.wave_account_id || null, existing_source: best.category_source, existing_status: best.category_status, csv_category: cCat, reason: 'Hub already has a different category and Wave-export refresh was unchecked — enable replace-from-Wave to update it' });
         continue;
       }
       used[best.id] = true;
@@ -253,8 +254,10 @@ export async function POST(req) {
       var patch = { category_source: 'wave_csv', updated_by: by };
       if (mm.resolved_wave_account_id) { patch.wave_account_id = mm.resolved_wave_account_id; patch.wave_account_name = mm.resolved_wave_account_name; patch.category_status = 'synced'; }
       else { patch.wave_account_name = mm.csv_category; patch.category_status = 'local_only'; }
-      // Codex #5 — never overwrite an already-pushed row (status synced OR a Wave txn id present).
-      var upd = await db.from('bank_transactions').update(patch).eq('id', mm.hub_id).neq('category_status', 'synced').is('wave_transaction_id', null).select('id');
+      // v55.83-MN — always let the Wave export refresh Hub category display, including rows
+      // previously marked synced or carrying a Wave transaction id. Invoice-linked rows are
+      // excluded earlier; this import path is strictly for non-invoice bank categorization.
+      var upd = await db.from('bank_transactions').update(patch).eq('id', mm.hub_id).select('id');
       if (upd && upd.error) { applyErrors.push({ hub_id: mm.hub_id, error: upd.error.message }); }
       else if (upd && upd.data && upd.data.length) {
         applied++; if (!mm.resolved_wave_account_id) { appliedUnresolved++; }
