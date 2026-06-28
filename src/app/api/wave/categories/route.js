@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 
-var API_BUILD_MARKER = 'v55.83-LE-categories';
+var API_BUILD_MARKER = 'v55.83-MO-categories-paginated';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -40,9 +40,20 @@ export async function POST(req) {
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
     if (!waveBusinessId) { return NextResponse.json({ ok: false, error: 'wave_business_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 
-    var res = await db.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('wave_business_id', waveBusinessId);
-    if (res && res.error) { return NextResponse.json({ ok: false, error: 'Category read failed: ' + res.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-    var all = (res && res.data) || [];
+    // v55.83-MO — PAGINATE the read. Supabase caps a select at 1000 rows; a silo with 1285 invoices has
+    // ~1877 wave_categories rows (Wave auto-creates a SYSTEM A/R sub-account per invoice), so a single select
+    // silently dropped 877 rows — and real categories beyond row 1000 vanished from the dropdown ("only 33
+    // showing"). Read ALL pages so every real category is present before filtering.
+    var all = []; var pgFrom = 0; var pgSz = 1000; var pgGuard = 0;
+    while (pgGuard < 60) {
+      pgGuard++;
+      var res = await db.from('wave_categories').select('wave_business_id, wave_account_id, wave_account_name, type, subtype, is_active').eq('wave_business_id', waveBusinessId).range(pgFrom, pgFrom + pgSz - 1);
+      if (res && res.error) { return NextResponse.json({ ok: false, error: 'Category read failed: ' + res.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var pgRows = (res && res.data) || [];
+      all = all.concat(pgRows);
+      if (pgRows.length < pgSz) { break; }
+      pgFrom += pgSz;
+    }
     var total = all.length;
     var active = all.filter(function (c) { return c.is_active !== false; });
     var hiddenSystem = 0; var hiddenDupName = 0;
