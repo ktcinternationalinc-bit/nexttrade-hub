@@ -1021,7 +1021,7 @@ export default function WaveSyncCenter(props) {
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
                     {q.action === 'payment' && q.draftBlockedInvoiceId && canPushInvoice && <button onClick={function () { approveInWave(q.draftBlockedInvoiceId); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment's invoice is DRAFT in Wave. Approve it (DRAFT → SAVED) so the payment can post — then push the payment.">{busy ? '…' : '✅ Approve invoice in Wave'}</button>}
-                    <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Wave\'s API does not accept raw bank-transaction/category pushes — this stays in the Hub' : ''}>{q.hubOnly ? 'ℹ Hub-only' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
+                    <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Pick a Wave Category in Bank Review, then this can post to Wave.' : ''}>{q.hubOnly ? 'ℹ Needs category' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
                   </div>
                 );
               })}
@@ -1030,7 +1030,7 @@ export default function WaveSyncCenter(props) {
           {hubOnlyQueue.length > 0 && (
             <div className="border-t border-slate-700">
               <div className="bg-slate-900/60 px-3 py-2 text-[11px] font-bold text-slate-300">
-                Hub-only — not pushed to Wave ({hubOnlyQueue.length}) <span className="font-normal text-slate-500">· Wave's API can't accept these; customer payments reach Wave via invoice matching in Bank Review.</span>
+                Not ready to push ({hubOnlyQueue.length}) <span className="font-normal text-slate-500">· these need a Wave Category first (pick one in Bank Review) — categorized transactions DO post to Wave; split lines aren't supported yet. Customer payments reach Wave by matching the deposit to its invoice.</span>
               </div>
               {hubOnlyQueue.map(function (q) {
                 return (
@@ -1038,7 +1038,7 @@ export default function WaveSyncCenter(props) {
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-700 text-slate-200">{q.action === 'bank_transaction_split' ? 'split' : 'bank txn'}</span>
                     <span className="flex-1">{q.label}{q.sub ? <span className="block text-[10px] text-slate-400">{q.sub}</span> : null}</span>
                     {q.amount != null && <span className="font-mono text-slate-400">{Number(q.amount).toLocaleString()}</span>}
-                    <span className="text-[10px] text-slate-400 font-semibold" title="Wave's API does not accept raw bank-transaction/category pushes — this stays in the Hub">ℹ Hub-only</span>
+                    <span className="text-[10px] text-slate-400 font-semibold" title={q.action === 'bank_transaction_split' ? 'Split-line push is not built yet — this stays in the Hub for now.' : 'Pick a Wave Category in Bank Review, then this can post to Wave.'}>{q.action === 'bank_transaction_split' ? 'ℹ Split — not built yet' : 'ℹ Needs category'}</span>
                   </div>
                 );
               })}
