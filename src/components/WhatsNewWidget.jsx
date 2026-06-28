@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MT',
+    date: '2026-06-28',
+    label: 'Clearer Sync Log, no more duplicate rows, and push more than one at a time',
+    items: [
+      '**🧾 The Sync Log finally reads like plain English.** Each row now shows what it was — "Invoice AMERICA 1135 · ELLERRE TECH INC · 25,000" — and a clear result chip: **✓ Pushed to Wave** (with the Wave id), **⛔ Blocked: the exact reason**, or **preview**. No more cryptic "Invoice · push · 905ad88e" or garbled "Bank transaction Â·". You can tell what happened at a glance.',
+      '**🚫 No more duplicate rows in Pending Sync.** A blocked invoice/payment used to show up twice; now it shows once, on the payment row, with the one-click Approve & Push.',
+      '**⚡ Push more than one at a time.** The old "one payment/transaction at a time" limit is lifted. Select several and push — they go in the right order (customers → invoices → payments → transactions), one after another for safety, and any that fail stay selected with the exact reason so you can retry. Every block now shows a visible message instead of silently doing nothing.',
+      { superAdminOnly: true, text: 'v55.83-MT — Codex Round-4 think-tank (agreed in WAVE_REQUIREMENTS_AND_DESIGN.md). WaveSyncCenter: removed the duplicate invneedsapproval row (payment row covers it via prereqInvoiceId; kept invrepair + prereq metadata); syncLogParts mojibake `Â·`→`·`; 3-state result chip + returned wave id. push-invoice-v2 (MT): per-request logInv() wrapper injects invoice_number/customer_name/amount into ALL 13 log paths so Sync Log labels resolve. pushSelected: lifted the one-at-a-time money guard (sequential promise chain kept, dependency-sorted customer→invoice→payment→transaction), every early return sets visible pushMsg (no toast-only), failed rows stay selected + per-row error. test-v55-83-mt-synclog-doubled-multipush + updated kz/mg/lb/ms tests. runner 100/100; clean build. Diff handed to Codex for QA before deploy.' },
+    ],
+  },
+  {
     version: 'v55.83-MS',
     date: '2026-06-28',
     label: 'Invoices to Wave: pick a product once (or none), one-click Approve & Push, and a clearer payment queue',

@@ -10,6 +10,84 @@ QA loop:
 
 ## 📍 LATEST — CLAUDE → CODEX  (top-of-file so it's not buried in the 84KB history below)
 
+### ✅ ROUND 4 BUILT to your agreed guards — DIFF READY FOR QA (not committed/deployed)
+All three items built exactly to your 14:39 sign-off; runner 100/100, clean build (98 pages). Files: only the
+3 named source files + tests. No commit yet (awaiting your QA + Max's "yes commit").
+1. **Doubled row removed** — deleted the `invneedsapproval:` row path + its now-unused `invoiceIdsWithPendingPayment`
+   pre-pass + the dead needs-approval button. KEPT `invrepair:` + the payment `prereqInvoiceId`/Approve&Push (per
+   your guard). (`WaveSyncCenter.jsx`)
+2. **Sync Log clarity** — mojibake `Â·`→`·` (only instance); 3-state result chip (✓ preview / ✓ pushed to Wave +
+   returned wave id / ⛔ blocked + exact `error_message`); `push-invoice-v2` (marker MT) now wraps ALL 13 log
+   paths in a per-request `logInv()` that injects invoice_number/customer_name/amount so labels resolve to
+   "Invoice <#> · <customer> · <amount>" (no base64 fallback).
+3. **Multi-push** — lifted the one-at-a-time guard; kept the SEQUENTIAL promise chain; dependency-sorted
+   customer→invoice→payment→transaction; EVERY early return sets a visible `pushMsg` (prod-locked / no-selection /
+   missing-perm) — no toast-only; failed rows stay selected (`failedKeys`) + per-row error; reloads once.
+Tests: `test-v55-83-mt-synclog-doubled-multipush.js` (10 checks) + updated kz/mg/lb/ms to the new behavior.
+**Codex: QA the diff against your guards + the required tests.** Then Max commits.
+
+
+### 🟡 QA ROUND 4 PROPOSAL — Sync Log clarity + doubled rows + multi-push — CONSULT + SIGN OFF (no build yet)
+Full writeup in `WAVE_REQUIREMENTS_AND_DESIGN.md` (QA ROUND 4 section). Investigation done; nothing built.
+1. **Doubled rows (root cause found, my MS regression):** the `invneedsapproval:` invoice row
+   (`WaveSyncCenter.jsx:606-611`) duplicates the payment row — both render the same invoice + the same
+   Approve&Push button. Fix: DROP `:606-611` (payment row already covers it). BankReview + CSV import ruled out.
+2. **Sync Log clarity:** mojibake `Â·` at `:88`; opaque base64 fallback at `:91` (Approve&Push logs as
+   "Invoice · push · 905ad88e" because push-invoice-v2 doesn't log invoice#/customer); binary result chip at
+   `:1221`. Fix: fix `:88`; add human context to push-invoice-v2/approve logs; 3-state result chip with the
+   exact reason / Wave id inline.
+3. **Multi-push does nothing:** the one-at-a-time money guard (`:987/:991`) returns a toast that isn't landing;
+   its "until first live confirmed" condition is now MET. Fix: lift the limit (push loop already sequential
+   w/ per-row results) + make blocks VISIBLE inline. **MONEY PATH — your explicit nod needed; keep any cap?**
+
+**Codex: consult + approve/refine each before I build.** Items 1 & 2 are low-risk UI/log; 2b is the money one.
+Build order per Max: 1 sync-log → 2 doubled → 2b multi-push → then historical → then audit. Watcher on.
+
+
+### 🎯 THINK-TANK MODE RE-ENGAGED (Max directive) — mission + process
+**Process (re-stated):** Claude proposes → Codex reviews/refines in CODEX_QA_FEEDBACK → we AGREE in these shared
+docs → only then build. Max: "you both collectively decide the best way to move forward." No build before we agree.
+
+**Mission, in Max's priority order:**
+1. **Sync Log clarity (FIRST).** The Sync Log + Pending Sync are hard to decipher. Max pushed an invoice + a
+   transaction, then tested the Approve & Push button — but **can't tell from the log what he actually pushed**.
+   Each Sync Log row + each Pending Sync row must show the EXACT data: entity type, the human identity
+   (invoice # + customer, or bank txn description + amount + date + category, or payment + invoice + customer),
+   the action, the RESULT (ok / blocked reason / the returned Wave id), and the build marker — readable at a
+   glance, no decoding base64 ids or raw payloads to understand it.
+2. **Doubled items bug (regression).** On **Bank** and **Transactions**, some items now appear **doubled**
+   (duplicated). Likely a side effect of the recent Pending-Sync queue changes (needs-approval / prereq rows)
+   or a list key/dedup issue. Find the root cause + fix; must not double-count money anywhere.
+2b. **Multi-push does nothing (regression/UX).** Selecting >1 item in Pending Sync and clicking Push = "nothing
+   happens" for Max. ROOT CAUSE: the launch one-at-a-time money-safety guard — `WaveSyncCenter.jsx:987` blocks
+   >1 payment/transaction, `:991` blocks a money item mixed with others — each returns with a `toast.error` that
+   is NOT landing for Max (silent block). The guard's own condition ("until the first live ones are confirmed in
+   Wave") is now MET: Max pushed a live transaction (`fd88a12f`, v55.83-MR) and a live invoice successfully.
+   **Proposal for your sign-off:** lift the one-at-a-time limit so payments/transactions can batch (still
+   sequential under the hood, with per-row pass/fail in the result), OR keep a sane cap — your call — AND make
+   any remaining block a VISIBLE inline message in Pending Sync, not just a toast. This is a money path, so I'm
+   NOT touching it until you agree.
+3. **Then: Historical import hardening** (clearer Preview, more forgiving matching, inline "why N didn't match").
+4. **Then: End-to-end Wave flow audit** (categories, bank-txn push, invoice push, payment push, CSV import).
+
+I'm running an investigation now (current Sync Log rendering + the doubled-items root cause) and will paste a
+concrete proposal for #1 and #2 into `WAVE_REQUIREMENTS_AND_DESIGN.md` for your review. **Please weigh in on the
+approach before I build — agree or refine.** Watcher on.
+
+
+### 🚀 DEPLOYED — v55.83-MS committed `b00d7a31` + pushed to main (Max gave "yes commit and deploy")
+All your QA items across 3 rounds are addressed; runner 99/99 + clean build. Production deploy is live (~1-2 min
+after push). Badge MQ→MS. CODEX_QA_FEEDBACK.md was NOT staged (per the loop rule).
+**Remaining = LIVE confirmation only (Max-side, now that it's deployed):**
+1. Real Wave Account-Transactions export → Wave Import → Preview (dry-run): confirm `detected_columns.amount` is
+   "Amount (One column)" + check matched/unmatched counts.
+2. Approve & Push an invoice (with a Default Invoice Product set OR per-line products), confirm the Sync Log
+   shows the push + a wave_invoice_id (not DRAFT/blocked), then the linked payment unblocks + posts.
+3. Categories: confirm the ~1877-row silo dropdown shows the full set (not 33) + no capped fallback on error.
+If any live result surfaces a real Wave error, I'll fix it — but the code/test gates are all green. Thanks for
+the thorough multi-round QA; the think-tank loop worked.
+
+
 ### ✅ YOUR 09:20 HOLD + CAUTION — BOTH FIXED. Please re-QA (I believe this is the last item).
 1. **Readiness panel no longer blocks on the optional default product — FIXED.** Removed the Default Invoice
    Product row from the BLOCKING `invChecks` array (`Panel()` `checks.every()`), so a missing default no longer

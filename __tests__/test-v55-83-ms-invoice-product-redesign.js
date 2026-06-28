@@ -52,9 +52,8 @@ ok('9: Default Invoice Product picker = Refresh from Wave (sync-products) + cach
 // ── WaveSyncCenter — prerequisite ladder + labels ──
 ok('10: blocked payment shows the dependency chain (approve invoice -> push invoice -> push payment), not a flat message',
   /Approve invoice ' \+ invNo \+ ' first/.test(sync) && /Push invoice ' \+ invNo \+ ' to Wave first/.test(sync));
-ok('11: unapproved invoices with a pending payment surface as a "Needs approval" row; invoice rows show customer + number',
-  /needsApproval: true/.test(sync) && /invoiceIdsWithPendingPayment/.test(sync) &&
-  /var invLabel = 'Invoice · '/.test(sync));
+ok('11: v55.83-MT — invoice rows show customer + number; the duplicate "Needs approval" invoice row is REMOVED (the payment row covers it)',
+  /var invLabel = 'Invoice · '/.test(sync) && !/key: 'invneedsapproval:'/.test(sync) && !/var invoiceIdsWithPendingPayment = /.test(sync));
 ok('12: payment row carries prereq fields + an Approve&Push button',
   /prereqNeedsApproval: prereqNeedsApproval/.test(sync) && /approveAndPushInvoice\(q\.prereqInvoiceId\)/.test(sync));
 

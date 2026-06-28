@@ -31,7 +31,7 @@ ok('3: the transaction gate uses MASTER switches (writes + production unlock), N
 ok('4: pushSelected captures each push\'s specific error and surfaces it (not a silent "nothing happened")',
   /var done = 0, failed = 0; var errs = \[\];/.test(sync) &&
   /errs\.push\(\(q\.label \|\| q\.action\) \+ ': ' \+ \(d\.error \|\| \('HTTP ' \+ x\.http\)\)\)/.test(sync) &&
-  /if \(failed > 0\) \{ setPushMsg\('Push: ' \+ done \+ ' ok, ' \+ failed \+ ' failed.[\s\S]{0,80}toast\.error\('Push: '/.test(sync));
+  /if \(failed > 0\) \{ setPushMsg\('Push: ' \+ done \+ ' pushed, ' \+ failed \+ ' failed[\s\S]{0,140}toast\.error\('Push: '/.test(sync));
 
 console.log('');
 if (failures.length === 0) { console.log('✅ All v55.83-LB push-feedback tests passed'); process.exit(0); }

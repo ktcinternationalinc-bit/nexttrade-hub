@@ -85,7 +85,7 @@ function syncLogParts(l) {
     if (bankDesc) { bb.push(bankDesc); }
     if (bankAmount != null) { bb.push(Number(bankAmount).toLocaleString()); }
     if (bankDate) { bb.push(bankDate); }
-    primary = bb.join(' Â· ');
+    primary = bb.join(' · ');
   } else {
     // Old row / no context — fall back so it is never just "payment · push · error".
     primary = (et.charAt(0).toUpperCase() + et.slice(1)) + ' · ' + ((l && l.action) || '') + ((l && l.hub_record_id) ? (' · ' + String(l.hub_record_id).substring(0, 8)) : '');
@@ -582,13 +582,6 @@ export default function WaveSyncCenter(props) {
     var custById = {};
     customers.forEach(function (c) { custById[c.id] = c; });
     var ACTIONABLE = { 'pending_wave_sync': 1, 'manual_wave_action_required': 1, 'payment_schema_pending': 1, 'sync_failed': 1, 'failed': 1, 'syncing': 1 };
-    var invoiceIdsWithPendingPayment = {};
-    payments.forEach(function (p) {
-      if (!p || p.wave_business_id !== active || bad[p.wave_business_id]) { return; }
-      if (isPaymentVoid(p) || p.wave_payment_id) { return; }
-      if (!ACTIONABLE[p.sync_status]) { return; }
-      if (p.accounting_invoice_id) { invoiceIdsWithPendingPayment[p.accounting_invoice_id] = true; }
-    });
     function invCustName(inv) {
       var c = custById[inv.accounting_customer_id] || custById[inv.customer_id];
       return c ? (c.company_name || c.contact_name || c.name || '') : (inv.customer_name || inv.customer_company_name || '');
@@ -603,12 +596,11 @@ export default function WaveSyncCenter(props) {
       if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status === 'approved') {
         rows.push({ key: 'invoice:' + inv.id, action: 'invoice', id: inv.id, label: invLabel, amount: inv.total_amount, record: inv });
       }
-      // Feature B — an UNAPPROVED Hub-native invoice that has a pending payment blocked on it is surfaced as a
-      // "Needs approval" prerequisite row with a one-click Approve & Push, so the user sees the next step
-      // instead of a blocked payment with no path.
-      else if (!inv.wave_invoice_id && inv.source !== 'wave_import' && inv.is_historical !== true && inv.approval_status !== 'approved' && invoiceIdsWithPendingPayment[inv.id]) {
-        rows.push({ key: 'invneedsapproval:' + inv.id, action: 'invoice', id: inv.id, label: invLabel, amount: inv.total_amount, sub: '⛔ Needs approval before Wave push — Approve & Push it, then push the payment.', blocked: 'Needs approval before Wave push', needsApproval: true, record: inv });
-      }
+      // v55.83-MT (Codex Round 4) — the old Feature-B "invneedsapproval:" row was REMOVED: it duplicated the
+      // payment row for the SAME invoice/payment pair (both rendered the invoice + the same "Approve & Push
+      // invoice" button via prereqInvoiceId), so a blocked pair showed TWO rows. The payment row already
+      // surfaces the invoice identity + the one-click Approve & Push + the dependency-chain reason, so it is the
+      // single actionable row. (invoiceIdsWithPendingPayment is no longer needed here.)
       // DRAFT REPAIR (v55.83-FY): an approved invoice already in Wave but stuck as DRAFT must be surfaced
       // (not hidden just because it has a wave_invoice_id) — payments to it are refused until it is saved/approved.
       if (inv.wave_invoice_id && inv.approval_status === 'approved' && (inv.wave_status === 'DRAFT' || inv.wave_sync_status === 'pushed_draft')) {
@@ -967,8 +959,10 @@ export default function WaveSyncCenter(props) {
   }
 
   function pushSelected() {
-    if (isProd && !productionUnlocked) { toast.error('Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
-    if (selectedRows.length === 0) { toast.error('Select records and Dry Run first.'); return; }
+    // v55.83-MT (Codex Round 4) — EVERY early return surfaces a VISIBLE inline pushMsg, never a toast-only
+    // "nothing happened".
+    if (isProd && !productionUnlocked) { setPushMsg('⛔ Production writes are locked. A super admin must enable real production push in Settings first.'); return; }
+    if (selectedRows.length === 0) { setPushMsg('⛔ Select at least one record first (only rows that are not blocked can be pushed).'); return; }
     // v55.83-GC — per-action permission gate (defense alongside the server route checks).
     var lacksPerm = selectedRows.some(function (q) {
       if (q.action === 'customer') { return !canPushCustomer; }
@@ -977,39 +971,32 @@ export default function WaveSyncCenter(props) {
       if (q.action === 'transaction') { return !canPushPayment; } // v55.83-KZ — same write-to-books permission
       return false;
     });
-    if (lacksPerm) { toast.error('You do not have permission to push one or more of the selected record types.'); return; }
-    // PAYMENT-PUSH SAFETY (launch): payments go one at a time until Wave's behavior (incl. the
-    // paymentMethod enum) is fully confirmed on live data. Customer/invoice pushes are proven
-    // and may still go in a batch.
-    // v55.83-KZ — anything that posts to real Wave books (payments + categorized transactions) goes ONE
-    // at a time until the first live ones are confirmed, and never mixed with other record types.
-    var selectedBooks = selectedRows.filter(function (q) { return q.action === 'payment' || q.action === 'transaction'; });
-    if (selectedBooks.length > 1) {
-      toast.error('Push payments/transactions ONE at a time for now. Select a single one, Dry Run, then Push. (This limit lifts once the first live ones are confirmed in Wave.)');
-      return;
-    }
-    if (selectedBooks.length === 1 && selectedRows.length > 1) {
-      toast.error('Push a payment/transaction by itself (do not mix it with other records). Select just the one.');
-      return;
-    }
-    setBusy(true);
+    if (lacksPerm) { setPushMsg('⛔ You do not have permission to push one or more of the selected record types.'); return; }
+    // v55.83-MT (Codex Round 4) — the launch one-at-a-time money limit is LIFTED (the first live pushes are
+    // confirmed). Money still pushes SEQUENTIALLY (never in parallel — the promise chain below) and in
+    // DEPENDENCY-SAFE order (customer -> invoice -> payment -> transaction) so a payment never races ahead of
+    // the invoice/customer it needs. Each row reports its own pass/fail; failed rows stay selected to retry.
+    var ORDER = { customer: 0, invoice: 1, payment: 2, transaction: 3 };
+    var ordered = selectedRows.slice().sort(function (a, b) { return (ORDER[a.action] == null ? 9 : ORDER[a.action]) - (ORDER[b.action] == null ? 9 : ORDER[b.action]); });
+    setBusy(true); setPushMsg('Pushing ' + ordered.length + ' record(s) to Wave…');
     var seq = Promise.resolve();
-    var done = 0, failed = 0; var errs = []; // v55.83-LB — capture the SPECIFIC reason so a failed push
-    // isn't a silent "nothing happened" (e.g. "no Wave deposit account set" after a fresh connect).
-    selectedRows.forEach(function (q) {
+    var done = 0, failed = 0; var errs = []; var failedKeys = {};
+    ordered.forEach(function (q) {
       seq = seq.then(function () {
         var route = q.action === 'customer' ? '/api/wave/push-customer' : (q.action === 'invoice' ? '/api/wave/push-invoice-v2' : (q.action === 'transaction' ? '/api/wave/push-transaction' : '/api/wave/push-payment'));
         return fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: active, hub_record_id: q.id, dry_run: false, user_id: userProfile && userProfile.id }) })
           .then(function (r) { return r.json().then(function (d) { return { http: r.status, d: d }; }); })
-          .then(function (x) { var d = x.d || {}; if (d.success || d.ok) { done++; } else { failed++; errs.push((q.label || q.action) + ': ' + (d.error || ('HTTP ' + x.http))); } })
-          .catch(function (e) { failed++; errs.push((q.label || q.action) + ': ' + ((e && e.message) || 'network error')); });
+          .then(function (x) { var d = x.d || {}; if (d.success || d.ok) { done++; } else { failed++; failedKeys[q.key] = true; errs.push((q.label || q.action) + ': ' + (d.error || ('HTTP ' + x.http))); } })
+          .catch(function (e) { failed++; failedKeys[q.key] = true; errs.push((q.label || q.action) + ': ' + ((e && e.message) || 'network error')); });
       });
     });
     seq.then(function () {
       setBusy(false);
-      if (failed > 0) { setPushMsg('Push: ' + done + ' ok, ' + failed + ' failed.\n' + errs.join('\n')); toast.error('Push: ' + done + ' ok, ' + failed + ' failed — ' + (errs[0] || '')); }
+      if (failed > 0) { setPushMsg('Push: ' + done + ' pushed, ' + failed + ' failed (the failed rows stay selected so you can retry):\n' + errs.join('\n')); toast.error('Push: ' + done + ' pushed, ' + failed + ' failed — see the message above.'); }
       else { setPushMsg('✓ Push finished — ' + done + ' pushed to Wave.'); toast.success('Push finished — ' + done + ' pushed to Wave.'); }
-      setSel({}); load();
+      // Keep ONLY the failed rows selected so they are immediately retryable; clear the succeeded ones.
+      setSel(failed > 0 ? failedKeys : {});
+      load();
     });
   }
 
@@ -1136,7 +1123,6 @@ export default function WaveSyncCenter(props) {
                     {q.action === 'payment' && (isSuperAdmin || canMarkManualDone) && <button onClick={function () { markManualDone(q.id); }} className="text-[10px] bg-slate-600 hover:bg-slate-500 text-white rounded px-1.5 py-0.5 font-bold" title="I entered this payment in Wave by hand">Mark manual done</button>}
                     {String(q.key).indexOf('invrepair:') === 0 && canPushInvoice && <button onClick={function () { approveInWave(q.id); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice in Wave (DRAFT → SAVED) so it accepts payments — no need to open Wave">{busy ? '…' : '✅ Approve in Wave'}</button>}
                     {q.action === 'payment' && q.draftBlockedInvoiceId && canPushInvoice && <button onClick={function () { approveInWave(q.draftBlockedInvoiceId); }} disabled={busy} className="text-[10px] bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment's invoice is DRAFT in Wave. Approve it (DRAFT → SAVED) so the payment can post — then push the payment.">{busy ? '…' : '✅ Approve invoice in Wave'}</button>}
-                    {q.action === 'invoice' && q.needsApproval && canPushInvoice && <button onClick={function () { approveAndPushInvoice(q.id); }} disabled={busy} className="text-[10px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="Approve this invoice and push it to Wave in one step. If a prerequisite is missing (Wave product, customer in Wave), it stops and tells you the exact next step.">{busy ? '…' : '✅ Approve & Push invoice'}</button>}
                     {q.action === 'payment' && q.prereqInvoiceId && canPushInvoice && <button onClick={function () { approveAndPushInvoice(q.prereqInvoiceId); }} disabled={busy} className="text-[10px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-1.5 py-0.5 font-bold" title="This payment is blocked until its invoice is in Wave. Approve and push the invoice in one step (it stops with the exact next step if a prerequisite is missing), then push the payment.">{busy ? '…' : (q.prereqNeedsApproval ? '✅ Approve & Push invoice' : '⬆ Push invoice')}</button>}
                     <span className={'text-[10px] ' + (q.hubOnly ? 'text-slate-400 font-semibold' : (q.blocked ? 'text-amber-400 font-bold' : (q.retryable ? 'text-rose-400 font-bold' : 'text-slate-500')))} title={q.hubOnly ? 'Pick a Wave Category in Bank Review, then this can post to Wave.' : ''}>{q.hubOnly ? 'ℹ Needs category' : (q.blocked ? 'blocked' : (q.retryable ? 'failed · retry' : 'not synced'))}</span>
                   </div>
@@ -1209,6 +1195,10 @@ export default function WaveSyncCenter(props) {
               var mk = (l.response_payload && l.response_payload.api_build_marker) || (l.request_payload && l.request_payload.api_build_marker) || null;
               var rt = (l.request_payload && l.request_payload.route) || (l.response_payload && l.response_payload.route) || null;
               var parts = syncLogParts(l);
+              // v55.83-MT (Codex Round 4) — surface the returned Wave id on success (prefer wave_record_id, then
+              // the response payload's invoice/payment/transaction id) so the chip says what landed in Wave.
+              var _rp = l.response_payload || {};
+              var waveId = l.wave_record_id || _rp.wave_invoice_id || _rp.wave_payment_id || (_rp.transaction && _rp.transaction.id) || (_rp.data && _rp.data.invoiceCreate && _rp.data.invoiceCreate.invoice && _rp.data.invoiceCreate.invoice.id) || null;
               return (
                 <div key={l.id} className="px-3 py-2 border-t border-slate-800 text-xs">
                   <div className="font-bold text-slate-100">{parts.primary}</div>
@@ -1218,10 +1208,12 @@ export default function WaveSyncCenter(props) {
                     <span className="text-[10px] text-slate-500 font-mono">#{syncLog.length - idx}</span>
                     <span className="text-[10px] text-slate-400 font-mono">{l.attempted_at ? String(l.attempted_at).replace('T', ' ').substring(0, 19) : ''}</span>
                     <span className="text-[10px] text-slate-500">{l.entity_type} · {l.action}{l.dry_run ? ' (dry run)' : ''}</span>
-                    <span className={l.success ? 'text-emerald-300' : 'text-red-300'}>{l.success ? 'ok' : 'blocked/failed'}</span>
+                    {l.success
+                      ? <span className="text-[10px] rounded px-1.5 py-0.5 font-bold bg-emerald-700 text-white">{l.dry_run ? '✓ preview ok' : ('✓ pushed to Wave' + (waveId ? ' · ' + String(waveId).substring(0, 16) : ''))}</span>
+                      : <span className="text-[10px] rounded px-1.5 py-0.5 font-bold bg-rose-700 text-white">⛔ blocked / failed</span>}
                     {mk && <span className="text-[9px] text-cyan-300 font-mono">{mk}</span>}
                     {rt && <span className="text-[9px] text-violet-300 font-mono">{rt}</span>}
-                    {l.error_message && <span className="text-slate-400">{l.error_message}</span>}
+                    {!l.success && l.error_message && <span className="text-rose-300 font-medium">{l.error_message}</span>}
                     {(l.response_payload || l.request_payload) && <button onClick={function () { setOpenLog(openLog === l.id ? null : l.id); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{openLog === l.id ? 'Hide details' : 'View details'}</button>}
                   </div>
                   {openLog === l.id && (

@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
-var API_BUILD_MARKER = 'v55.83-MS-push-invoice-v2-perline-or-default';
+var API_BUILD_MARKER = 'v55.83-MT-push-invoice-v2-log-context';
 var API_ROUTE = '/api/wave/push-invoice-v2';
 var WAVE_URL = 'https://gql.waveapps.com/graphql/public';
 
@@ -57,10 +57,14 @@ export async function POST(req) {
     var invRes = await db.from('accounting_invoices').select('*').eq('id', hubId).single();
     var inv = invRes && invRes.data;
     if (!inv) { return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 }); }
+    // v55.83-MT (Codex Round 4) — inject human Sync Log context into EVERY invoice log path so rows read
+    // "Invoice <number> · <customer> · <amount>" instead of a base64 id. customer_name fills in once loaded.
+    var invLogCtx = { invoice_number: inv.invoice_number, customer_name: null, amount: inv.total_amount };
+    function logInv(row) { try { row.request_payload = Object.assign({ api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, invLogCtx, row.request_payload || {}); } catch (e) {} return logSync(db, row); }
 
     var verdict = canPush(reg, inv, waveBusinessId, body.unlock_phrase || '', dryRun);
     if (!verdict.ok) {
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: verdict.message, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: verdict.message, attempted_by: by });
       return NextResponse.json({ error: verdict.message, blocked: true }, { status: 409 });
     }
 
@@ -68,7 +72,7 @@ export async function POST(req) {
     var custLinkId = inv.accounting_customer_id || null;
     if (!custLinkId) {
       var msgNoLink = 'This invoice has no customer linked (accounting_customer_id is empty). Open the invoice, re-select the customer, and Save before pushing.';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgNoLink, response_payload: { invoice_number: inv.invoice_number, accounting_customer_id: null, reason: 'no_customer_link' }, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgNoLink, response_payload: { invoice_number: inv.invoice_number, accounting_customer_id: null, reason: 'no_customer_link' }, attempted_by: by });
       return NextResponse.json({ error: msgNoLink, blocked: true }, { status: 409 });
     }
     var custRes = await db.from('accounting_customers').select('id, company_name, contact_name, wave_customer_id, wave_business_id').eq('id', custLinkId);
@@ -77,18 +81,19 @@ export async function POST(req) {
     var cust = custList.length > 0 ? custList[0] : null;
     if (custErr || !cust) {
       var msgQ = custErr ? ('Could not read the invoice customer (db error: ' + custErr + ').') : ('The invoice is linked to customer id ' + custLinkId + ' but no such customer row exists. Re-select the customer on the invoice and Save.');
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgQ, response_payload: { invoice_number: inv.invoice_number, accounting_customer_id: custLinkId, db_error: custErr, reason: custErr ? 'customer_query_error' : 'customer_row_missing' }, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgQ, response_payload: { invoice_number: inv.invoice_number, accounting_customer_id: custLinkId, db_error: custErr, reason: custErr ? 'customer_query_error' : 'customer_row_missing' }, attempted_by: by });
       return NextResponse.json({ error: msgQ, blocked: true }, { status: 409 });
     }
+    invLogCtx.customer_name = cust.company_name || cust.contact_name || null;
     if (!cust.wave_customer_id) {
       var cn = cust.company_name || cust.contact_name || cust.id;
       var msg = 'Push this customer first: "' + cn + '" (Hub id ' + cust.id + ') has no Wave customer id yet for this business. Go to Pending Sync, push that customer, then retry the invoice.';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msg, response_payload: { invoice_number: inv.invoice_number, hub_customer_name: cn, hub_customer_id: cust.id, accounting_customer_id: custLinkId, wave_customer_id: null, wave_business_id: waveBusinessId, reason: 'customer_no_wave_id' }, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msg, response_payload: { invoice_number: inv.invoice_number, hub_customer_name: cn, hub_customer_id: cust.id, accounting_customer_id: custLinkId, wave_customer_id: null, wave_business_id: waveBusinessId, reason: 'customer_no_wave_id' }, attempted_by: by });
       return NextResponse.json({ error: msg, blocked: true, needs_customer: { name: cn, hub_id: cust.id } }, { status: 409 });
     }
     if (cust.wave_business_id && cust.wave_business_id !== waveBusinessId) {
       var msgS = 'The invoice customer belongs to a different business than the one selected. Cannot push across silos.';
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgS, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: dryRun, success: false, error_message: msgS, attempted_by: by });
       return NextResponse.json({ error: msgS, blocked: true }, { status: 409 });
     }
 
@@ -105,10 +110,10 @@ export async function POST(req) {
       for (dk = 0; dk < items.length; dk++) { if (!items[dk].wave_product_id && !dryDefault) { dryUnmapped++; } }
       if (dryUnmapped > 0) {
         var dMsg = dryUnmapped + ' invoice line(s) have no Wave product and no default is set. In Wave Sync Center → Settings → Default Invoice Product, click "Refresh from Wave" and Choose a Wave product, or pick a Wave product per line on the invoice.';
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: false, error_message: dMsg, attempted_by: by });
+        await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: false, error_message: dMsg, attempted_by: by });
         return NextResponse.json({ dry_run: true, blocked: true, reason: dryDefault ? 'LOCAL_PRECHECK_MISSING_PRODUCT_ID' : 'NO_DEFAULT_PRODUCT_CONFIGURED', error: dMsg, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 });
       }
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, request_payload: { api_build_marker: API_BUILD_MARKER }, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'dry_run', dry_run: true, success: true, request_payload: { api_build_marker: API_BUILD_MARKER }, attempted_by: by });
       return NextResponse.json({ dry_run: true, ok: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, would_create: { invoice_number: inv.invoice_number, total: inv.total_amount, line_items: items.length, customer: cust.company_name || cust.contact_name, default_product: dryDefault || null, note: 'Preflight OK. Each line uses its own selected Wave product, or the configured default as a fallback. Hub line descriptions and amounts push exactly as entered (hideName hides the carrier name). No product is created.' } });
     }
 
@@ -156,7 +161,7 @@ export async function POST(req) {
       var blockReason = noDefault ? 'NO_DEFAULT_PRODUCT_CONFIGURED' : 'LOCAL_PRECHECK_MISSING_PRODUCT_ID';
       var setupMsg = 'Some invoice lines have no Wave product. In Wave Sync Center -> Settings -> Default Invoice Product, click "Refresh from Wave" and Choose a Wave product (auto-links as the fallback), or choose a Wave product per line on the invoice. Wave requires a product on every line as an accounting carrier; your line descriptions and amounts still push exactly as entered.';
       var preBlock = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: blockReason, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr, default_invoice_product_id: cfg ? cfg.default_invoice_product_id : null, default_invoice_product_name: cfg ? cfg.default_invoice_product_name : null, source: cfg ? cfg.source : null }, message: setupMsg };
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: preBlock, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems }, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, action: 'push', dry_run: false, success: false, error_message: setupMsg, response_payload: preBlock, request_payload: { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems }, attempted_by: by });
       return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: blockReason, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr }, response: preBlock }, { status: 409 });
     }
 
@@ -179,7 +184,7 @@ export async function POST(req) {
     if (ic && ic.inputErrors && ic.inputErrors.length) { for (_ip = 0; _ip < ic.inputErrors.length; _ip++) { var _ie = ic.inputErrors[_ip]; if (_ie && _ie.message) { _ipParts.push(_ie.message + (_ie.path ? (' [' + (Array.isArray(_ie.path) ? _ie.path.join('.') : _ie.path) + ']') : '')); } } }
     var _icReason = _ipParts.length ? _ipParts.join(' | ') : (resp.ok ? 'Wave reported didSucceed=false with no error detail.' : ('HTTP ' + resp.status));
 
-    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ok ? ic.invoice.id : null, action: 'push', dry_run: false, request_payload: reqPayload, response_payload: data, success: !!ok, error_message: ok ? null : _icReason, attempted_by: by });
+    await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ok ? ic.invoice.id : null, action: 'push', dry_run: false, request_payload: reqPayload, response_payload: data, success: !!ok, error_message: ok ? null : _icReason, attempted_by: by });
 
     if (!ok) { return NextResponse.json({ error: 'Wave rejected the invoice: ' + _icReason, response: data, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 502 }); }
 
@@ -192,7 +197,7 @@ export async function POST(req) {
     if (waveCurrency && waveCurrency !== hubCurrency) {
       var curMsg = 'CURRENCY MISMATCH: Hub invoice ' + inv.invoice_number + ' is ' + hubCurrency + ' but Wave created it as ' + waveCurrency + '. Wave takes the currency from the customer — set customer "' + (cust.company_name || cust.contact_name || cust.id) + '" to ' + hubCurrency + ' in Wave, delete this Wave invoice, and re-push. The amounts are otherwise wrong-currency.';
       await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: (ic.invoice.status || null), wave_sync_status: 'currency_mismatch' }).eq('id', hubId);
-      await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'push', dry_run: false, response_payload: data, success: false, error_message: curMsg, attempted_by: by });
+      await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'push', dry_run: false, response_payload: data, success: false, error_message: curMsg, attempted_by: by });
       return NextResponse.json({ ok: false, success: false, currency_mismatch: true, hub_currency: hubCurrency, wave_currency: waveCurrency, wave_invoice_id: ic.invoice.id, error: curMsg, api_build_marker: API_BUILD_MARKER, route: API_ROUTE }, { status: 200 });
     }
 
@@ -213,14 +218,14 @@ export async function POST(req) {
         if (ia && ia.didSucceed && ia.invoice && ia.invoice.id) {
           waveStatus = (ia.invoice.status) ? ia.invoice.status : 'SAVED';
         }
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, response_payload: apprData, success: !!(ia && ia.didSucceed), error_message: (ia && ia.didSucceed) ? null : 'Auto-approve after create did not succeed — invoice may need manual approval in Wave', attempted_by: by });
+        await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, response_payload: apprData, success: !!(ia && ia.didSucceed), error_message: (ia && ia.didSucceed) ? null : 'Auto-approve after create did not succeed — invoice may need manual approval in Wave', attempted_by: by });
       } catch (eAppr) {
-        await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, success: false, error_message: 'Auto-approve threw: ' + ((eAppr && eAppr.message) || String(eAppr)), attempted_by: by });
+        await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'approve', dry_run: false, success: false, error_message: 'Auto-approve threw: ' + ((eAppr && eAppr.message) || String(eAppr)), attempted_by: by });
       }
     }
     var newSyncStatus = (waveStatus === 'DRAFT') ? 'pushed_draft' : (verified ? 'synced' : 'pushed_unverified');
     await db.from('accounting_invoices').update({ wave_invoice_id: ic.invoice.id, wave_status: waveStatus, wave_sync_status: newSyncStatus }).eq('id', hubId);
-    await logSync(db, { wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'read_back', dry_run: false, response_payload: data, success: !!verified, error_message: verified ? null : 'Read-back number mismatch (invoice still linked)', attempted_by: by });
+    await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: ic.invoice.id, action: 'read_back', dry_run: false, response_payload: data, success: !!verified, error_message: verified ? null : 'Read-back number mismatch (invoice still linked)', attempted_by: by });
 
     // v55.83-IN (Codex) — do NOT report a clean success when the invoice is still DRAFT (auto-approve
     // failed). The invoice exists in Wave but can't take payments yet, so surface needs_approval so

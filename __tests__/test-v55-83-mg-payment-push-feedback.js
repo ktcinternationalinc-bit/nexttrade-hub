@@ -70,7 +70,7 @@ ok('8: catch path resets a claimed syncing payment to sync_failed and logs the c
 ok('9: Wave Sync Center already routes payment pushes to the payment route and surfaces the returned reason',
   /q\.action === 'transaction' \? '\/api\/wave\/push-transaction' : '\/api\/wave\/push-payment'/.test(sync) &&
   /errs\.push\(\(q\.label \|\| q\.action\) \+ ': ' \+ \(d\.error \|\| \('HTTP ' \+ x\.http\)\)\)/.test(sync) &&
-  /setPushMsg\('Push: ' \+ done \+ ' ok, ' \+ failed \+ ' failed/.test(sync));
+  /setPushMsg\('Push: ' \+ done \+ ' pushed, ' \+ failed \+ ' failed/.test(sync));
 
 console.log('');
 if (failures.length === 0) {

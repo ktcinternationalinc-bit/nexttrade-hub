@@ -458,3 +458,55 @@ rules" above are therefore conditional on these deltas, which Claude ACCEPTS in 
 **STATUS: FULL AGREEMENT on direction + spec. Claude builds to deltas 1-7 + the tests, then hands the diff to
 Codex for QA. No deploy until tests+build green and Max says "yes commit." (Round-2 category/historical fixes
 remain in the same batch.)**
+
+---
+
+# QA ROUND 4 — Sync Log clarity + doubled rows + multi-push (Max think-tank, 2026-06-28)
+Findings from a 2-investigator pass (HIGH confidence; the synthesis agent stalled only on emitting an
+oversized structured output — the analysis is complete). For Codex consultation + sign-off BEFORE any build.
+
+## Item 1 (Max #2) — Doubled rows in Pending Sync — ROOT CAUSE FOUND (Claude's v55.83-MS regression)
+**Root cause:** Feature B added an `invneedsapproval:` invoice row at `WaveSyncCenter.jsx:606-611` for any
+unapproved invoice that has a pending payment (`invoiceIdsWithPendingPayment[inv.id]`). But the PAYMENT row for
+that same payment ALSO renders, already carrying its own "Approve & Push invoice" button (via `prereqInvoiceId`)
+AND the dependency-chain blocked text. So one blocked invoice/payment pair shows **TWO rows with the same
+action**. BankReviewTab + the CSV import route were RULED OUT (category-only / UPDATE-only — not the cause).
+**Proposed fix:** DROP the `invneedsapproval:` row (remove `:606-611`). The payment row already surfaces the
+invoice identity + the one-click Approve & Push, so the extra invoice row is redundant. Result: exactly one row
+per blocked invoice/payment.
+**Note for Max to confirm:** this fix is the PENDING SYNC queue. If you are also seeing duplicates in the actual
+**Bank / Transactions LISTS** (not Pending Sync), that is almost certainly duplicate `bank_transactions` rows
+from a Plaid re-sync (a DATA issue) — a separate fix (dedupe by account+date+amount+external id). Tell us which.
+**Acceptance:** a blocked invoice with a pending payment shows ONE row (the payment, with Approve & Push), not two.
+
+## Item 2 (Max #1) — Sync Log + Pending Sync clarity
+**Root causes (WaveSyncCenter.jsx):** (a) line 88 mojibake separator `Â·` → bank rows render "Bank transaction
+Â·"; (b) the fallback label at `:91` is opaque (entity + action + base64 id) — an Approve&Push logs as
+"Invoice · push · 905ad88e" because `push-invoice-v2` does NOT log the human invoice#/customer; (c) the result
+is a tiny binary "ok / blocked" at `:1221`, with the real reason / Wave id hidden behind "View details".
+**Proposed fix:**
+- Fix the mojibake at `:88` (`Â·` → `·`).
+- Make `push-invoice-v2` (and approve-invoice) log the human context (`invoice_number`, `customer_name`,
+  `amount`) in request_payload so `syncLogParts` shows "Invoice AMERICA 1135 · ELLERRE TECH INC · 25,000"
+  instead of a base64 id. (push-transaction/push-payment already log rich context.)
+- Replace the binary result with a prominent 3-state chip: "✓ Pushed to Wave (+ the returned Wave id)" /
+  "⛔ Blocked: the exact reason" / "✓ preview" — inline, no payload-opening needed.
+- Same human identity + result on each PENDING SYNC row (mostly already there).
+**Acceptance:** every Sync Log row reads "{what} · {who/amount} · {clear result / Wave id}" at a glance; Max can
+tell exactly what each Approve & Push did without opening details.
+
+## Item 2b (Max) — Multi-push does NOTHING
+**Root cause:** the launch one-at-a-time money-safety guard returns with a toast that is not landing for Max:
+`WaveSyncCenter.jsx:987` blocks >1 payment/transaction; `:991` blocks a money item mixed with others. Its own
+condition ("until the first live ones are confirmed in Wave") is now MET — Max pushed a live transaction
+(`fd88a12f`, v55.83-MR) and a live invoice.
+**Proposed fix:** lift the limit so payments/transactions can batch (the push loop at `:999-1012` is already
+sequential with per-row pass/fail), keep customer/invoice batch as-is, AND replace the silent toast-only block
+with a VISIBLE inline message in Pending Sync so a refused push is never "nothing happened". **Codex — money
+path: your call on whether to keep ANY cap (e.g. a confirm step for >N money rows) before we lift it.**
+**Acceptance:** selecting multiple items + Push processes them all and shows a per-row result; nothing silently dropped.
+
+## Process / priority
+Build order (Max): #1 Sync Log clarity, #2 doubled rows, #2b multi-push, then #3 historical-import hardening,
+then #4 end-to-end audit. Items 1 & 2 are pure UI/display + a log-context add (low money risk); 2b lifts a
+money-path guard and needs Codex's explicit nod. **No source built until Codex consults + we agree here.**

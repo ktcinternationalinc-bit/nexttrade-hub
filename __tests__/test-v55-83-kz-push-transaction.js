@@ -46,9 +46,10 @@ ok('5: Sync Center makes a CATEGORIZED bank txn pushable (action transaction, no
   /var hasCat = !!bt\.wave_account_id;/.test(sync) &&
   /key: 'banktxn:' \+ bt\.id, action: 'transaction'/.test(sync) &&
   /hubOnly: !hasCat/.test(sync));
-ok('6: push dispatch routes transaction -> /api/wave/push-transaction + one-at-a-time books safety',
+ok('6: push dispatch routes transaction -> /api/wave/push-transaction; money pushes are SEQUENTIAL + dependency-ordered (v55.83-MT lifted the one-at-a-time limit)',
   /q\.action === 'transaction' \? '\/api\/wave\/push-transaction'/.test(sync) &&
-  /var selectedBooks = selectedRows\.filter\(function \(q\) \{ return q\.action === 'payment' \|\| q\.action === 'transaction'; \}\)/.test(sync));
+  /var ORDER = \{ customer: 0, invoice: 1, payment: 2, transaction: 3 \}/.test(sync) &&
+  /seq = seq\.then/.test(sync) && !/var selectedBooks =/.test(sync));
 ok('7: the misleading "Wave\'s API can\'t accept transaction pushes" message is GONE',
   !/Wave's API does not accept transaction pushes/.test(sync) &&
   !/Wave's API can't accept raw transaction\/category pushes/.test(sync));
