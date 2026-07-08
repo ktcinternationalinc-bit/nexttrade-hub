@@ -24,6 +24,8 @@ function invoiceTotal(inv) {
 }
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function labelize(s) { return String(s || '').replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }); }
+function normDuplicateText(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80); }
+function txnAmountCents(t) { return Math.round(Number(t && t.amount_abs != null ? t.amount_abs : Math.abs(Number(t && t.amount) || 0)) * 100); }
 
 function Typeahead(props) {
   var items = props.items || [];
@@ -274,9 +276,96 @@ export default function BankReviewTab(props) {
     return order.map(function (k) { return { id: k, label: s[k] }; });
   }, [txns, plaidAccts]);
 
+  function duplicateKeyOf(t) {
+    if (!t) { return null; }
+    var d = String(t.posted_date || t.date || '').substring(0, 10);
+    if (!d || t.pending === true || !t.account_id) { return null; }
+    var accountKey = maskKeyOf(t.account_id);
+    var bankKey = normDuplicateText(t.bank_source || '');
+    var desc = t.check_number ? ('check' + normDuplicateText(t.check_number)) : normDuplicateText(t.name || t.merchant_name || '');
+    if (!desc || txnAmountCents(t) <= 0) { return null; }
+    return String(t.wave_business_id || getActiveWaveBusiness() || 'no-silo') + '|' + bankKey + '|' + accountKey + '|' + d + '|' + String(t.direction || '') + '|' + String(t.iso_currency || '') + '|' + txnAmountCents(t) + '|' + String(t.channel || '') + '|' + desc;
+  }
+
+  function hasAccountingActivity(t) {
+    if (!t || !t.id) { return false; }
+    if (t.matched_invoice_id || t.linked_id || t.accounting_customer_id || t.wave_account_id || t.classification || t.notes) { return true; }
+    var st = t.review_status || 'unreviewed';
+    if (st === 'reviewed' || st === 'approved' || st === 'ignored' || st === 'needs_clarification') { return true; }
+    if (matchesByTxn[t.id] && matchesByTxn[t.id].length) { return true; }
+    if (paysByTxn[t.id] && paysByTxn[t.id].length) { return true; }
+    var a = allocByTxn[t.id];
+    if (a && ((Number(a.paid) || 0) > 0 || (Number(a.split) || 0) > 0 || (Number(a.unapplied) || 0) > 0)) { return true; }
+    return false;
+  }
+
+  function keeperScore(t) {
+    var st = (t && t.review_status) || 'unreviewed';
+    var score = 0;
+    if (hasAccountingActivity(t)) { score += 1000; }
+    if (st === 'approved') { score += 500; }
+    if (st === 'reviewed') { score += 350; }
+    if (st === 'duplicate') { score -= 800; }
+    if (t && t.matched_invoice_id) { score += 250; }
+    if (matchesByTxn[t.id] && matchesByTxn[t.id].length) { score += 250; }
+    if (paysByTxn[t.id] && paysByTxn[t.id].length) { score += 250; }
+    if (t && t.wave_account_id) { score += 100; }
+    if (t && t.classification) { score += 50; }
+    if (t && t.updated_at) { score += Math.min(20, String(t.updated_at).length); }
+    return score;
+  }
+
+  var duplicateReview = useMemo(function () {
+    var groups = {}; var keys = [];
+    txns.forEach(function (t) {
+      var k = duplicateKeyOf(t);
+      if (!k) { return; }
+      if (!groups[k]) { groups[k] = []; keys.push(k); }
+      groups[k].push(t);
+    });
+    var hidden = {}; var keeperByDup = {}; var reviewGroups = []; var alreadyMarked = 0; var conflicted = 0;
+    keys.forEach(function (k) {
+      var g = groups[k];
+      if (!g || g.length < 2) { return; }
+      var acctIds = {};
+      g.forEach(function (t) { if (t && t.account_id) { acctIds[t.account_id] = true; } });
+      var highConfidenceRelink = Object.keys(acctIds).length > 1;
+      if (!highConfidenceRelink) { return; }
+      var sorted = g.slice().sort(function (a, b) {
+        var ds = keeperScore(b) - keeperScore(a);
+        if (ds !== 0) { return ds; }
+        return String(a.created_at || a.updated_at || '').localeCompare(String(b.created_at || b.updated_at || ''));
+      });
+      var keeper = sorted[0];
+      var extras = [];
+      sorted.slice(1).forEach(function (t) {
+        if ((t.review_status || 'unreviewed') === 'duplicate') { alreadyMarked++; extras.push(t); return; }
+        if (hasAccountingActivity(t)) { conflicted++; return; }
+        hidden[t.id] = true; keeperByDup[t.id] = keeper.id; extras.push(t);
+      });
+      if (extras.length) { reviewGroups.push({ key: k, keeper: keeper, extras: extras }); }
+    });
+    return { hidden: hidden, keeperByDup: keeperByDup, groups: reviewGroups, hiddenCount: Object.keys(hidden).length, alreadyMarked: alreadyMarked, conflicted: conflicted };
+  }, [txns, plaidAccts, matchesByTxn, paysByTxn, allocByTxn]);
+
+  function isReviewDuplicate(t) {
+    return !!(t && (duplicateReview.hidden[t.id] || (t.review_status || 'unreviewed') === 'duplicate'));
+  }
+
   var filtered = useMemo(function () {
     var list = txns.slice();
-    if (fStatus !== 'all') list = list.filter(function (t) { return (t.review_status || 'unreviewed') === fStatus; });
+    // v55.83-MU — Accounting Bank Review duplicate guard. Relinked Plaid rows can have new
+    // transaction/account ids for the same real-world bank event. Keep normal review lists clean by
+    // hiding inferred duplicate extras and already-marked duplicates unless the operator deliberately
+    // chooses the Duplicate audit filter.
+    if (fStatus === 'duplicate') {
+      list = list.filter(function (t) { return (t.review_status || 'unreviewed') === 'duplicate' || duplicateReview.hidden[t.id]; });
+    } else if (fStatus === 'all') {
+      list = list.filter(function (t) { return !duplicateReview.hidden[t.id]; });
+    } else {
+      list = list.filter(function (t) { return (t.review_status || 'unreviewed') !== 'duplicate' && !duplicateReview.hidden[t.id]; });
+      list = list.filter(function (t) { return (t.review_status || 'unreviewed') === fStatus; });
+    }
     if (fDirection !== 'all') list = list.filter(function (t) { return t.direction === fDirection; });
     if (fAccount !== 'all') list = list.filter(function (t) { return maskKeyOf(t.account_id) === fAccount; });
     if (fUnsupported) list = list.filter(function (t) { return t.unsupported_account === true; });
@@ -292,7 +381,7 @@ export default function BankReviewTab(props) {
       });
     }
     return list;
-  }, [txns, fStatus, fDirection, fAccount, fUnsupported, fFrom, fTo, search]);
+  }, [txns, fStatus, fDirection, fAccount, fUnsupported, fFrom, fTo, search, duplicateReview]);
 
   function openTxn(t) {
     setSel(t); setMCustomerId(t.accounting_customer_id || ''); setMInvoiceId(''); setMAmount(String(t.amount_abs || Math.abs(Number(t.amount)) || ''));
@@ -309,6 +398,18 @@ export default function BankReviewTab(props) {
     return fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'Server rejected the write.'); } return j; });
+  }
+
+  function markHiddenDuplicates() {
+    if (!mayMatch) { toast.error('You do not have permission to mark duplicate bank transactions.'); return; }
+    var ids = Object.keys(duplicateReview.hidden || {});
+    if (!ids.length) { toast.success('No duplicate extras to mark.'); return; }
+    if (!window.confirm('Mark ' + ids.length + ' hidden duplicate bank transaction' + (ids.length === 1 ? '' : 's') + ' as Duplicate?\n\nThis does not delete anything. Rows with matches/payments/splits are preserved and skipped.')) { return; }
+    setBusy(true);
+    bankWrite('mark_review_duplicates', { duplicate_transaction_ids: ids })
+      .then(function (j) { toast.success('Marked ' + (j.marked || 0) + ' duplicate row' + ((j.marked || 0) === 1 ? '' : 's') + ((j.skipped || 0) ? (' · skipped ' + j.skipped + ' protected row(s)') : '')); load(); })
+      .catch(function (e) { toast.error('Could not mark duplicates: ' + ((e && e.message) || 'unknown error')); })
+      .finally(function () { setBusy(false); });
   }
 
   function patchTxn(t, patch, activity) {
@@ -356,6 +457,7 @@ export default function BankReviewTab(props) {
   function setClassification(t, cls) {
     if (!mayClassify) { toast.error('You do not have Bank: Classify permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first to edit.'); return; }
+    if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Keep the original row; duplicates cannot be classified or matched.'); return; }
     setBusy(true);
     // v55.83-GS — a classification change is Wave-impacting, so mark the txn pending Wave sync
     // (category_status doubles as the bank-txn Wave-sync flag). This is what makes it appear in
@@ -374,6 +476,7 @@ export default function BankReviewTab(props) {
   function setWaveCategory(t, accountId) {
     if (!mayClassify) { toast.error('You do not have Bank: Classify permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first to edit.'); return; }
+    if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Keep the original row; duplicates cannot be categorized.'); return; }
     var patch;
     if (!accountId) {
       patch = { wave_account_id: null, wave_account_name: null, wave_account_type: null, wave_account_subtype: null, category_source: null, category_status: 'local_only' };
@@ -419,6 +522,7 @@ export default function BankReviewTab(props) {
 
   function setStatus(t, status, reasonRequired) {
     if (isLocked(t) && status !== 'approved') { toast.error('Approved — reopen first.'); return; }
+    if (isReviewDuplicate(t) && status !== 'duplicate') { toast.error('Duplicate rows cannot be marked ' + labelize(status) + '. Work from the original transaction row.'); return; }
     // v55.83-JC — ACCOUNTING INTEGRITY: never let a partially-allocated transaction become reviewed/
     // approved. Money must be fully accounted for first (invoice payment + splits + unapplied =
     // transaction total), or explicitly carried as needs_clarification.
@@ -445,6 +549,7 @@ export default function BankReviewTab(props) {
 
   function approve(t) {
     if (!mayMatch && !isSuperAdmin) { toast.error('Approval requires Payments: Match (or admin).'); return; }
+    if (isReviewDuplicate(t)) { toast.error('Duplicate rows cannot be approved. Work from the original transaction row.'); return; }
     // v55.83-JC — same money-conservation gate as setStatus: a partially-allocated transaction can
     // never be approved/locked. Approve is the point of no return for Wave, so this is the hard stop.
     var allocA = txnAllocation(t);
@@ -595,6 +700,7 @@ export default function BankReviewTab(props) {
   function saveSplits() {
     var t = sel; if (!t || !mayMatch) return;
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Work from the original transaction row.'); return; }
     // Money-in only for invoice-linked splits: an outgoing transfer cannot pay a customer invoice.
     if (t.direction === 'out') {
       var hasInvoiceLine = splitRows.some(function (r) { return r.invoice_id; });
@@ -644,6 +750,7 @@ export default function BankReviewTab(props) {
     var t = sel; if (!t) return;
     if (!mayMatch) { toast.error('You do not have Payments: Match permission.'); return; }
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Work from the original transaction row.'); return; }
     // Money-in only: a customer invoice payment must come from an INCOMING deposit. Outgoing
     // transfers (direction 'out') are money leaving and must never be matched to a customer
     // invoice — that is what produced the bogus duplicate $250 rows.
@@ -701,6 +808,7 @@ export default function BankReviewTab(props) {
   function createUnapplied() {
     var t = sel; if (!t || !mayMatch) return;
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
+    if (isReviewDuplicate(t)) { toast.error('This row is a duplicate in Bank Review. Work from the original transaction row.'); return; }
     var amt = roundMoney(Number(mAmount));
     if (!(amt > 0)) { toast.error('Enter an amount.'); return; }
     // v55.83-JC — money conservation: parking part of a deposit only finishes the transaction if the
@@ -811,6 +919,9 @@ export default function BankReviewTab(props) {
             <span>Newest loaded: <b className="text-white">{newestLoaded || '—'}</b></span>
             <span title="How far back history is shown. A super admin can change this in Settings → Accounting visibility.">Visibility: <b className={visFloor ? 'text-sky-300' : 'text-white'}>{winLabel}</b>{visFloor ? <span className="text-slate-400"> (from {visFloor})</span> : null}</span>
             {hidden > 0 && <span className="text-amber-300">Hidden by filters: <b>{hidden}</b>{fAccount !== 'all' ? ' (mostly other accounts — pick All accounts to see them)' : ''}</span>}
+            {duplicateReview.hiddenCount > 0 && <span className="text-rose-200 font-bold">Duplicate extras hidden: <b>{duplicateReview.hiddenCount}</b>{mayMatch ? <button onClick={markHiddenDuplicates} disabled={busy} className="ml-2 px-2 py-0.5 bg-rose-700 hover:bg-rose-600 text-white rounded text-[10px] disabled:opacity-50">Mark duplicate extras</button> : null}</span>}
+            {duplicateReview.alreadyMarked > 0 && <span className="text-slate-400">Already marked duplicate: <b>{duplicateReview.alreadyMarked}</b></span>}
+            {duplicateReview.conflicted > 0 && <span className="text-amber-300 font-bold" title="These duplicate-looking rows have matches, payments, splits, notes, categories, or reviewed status, so Bank Review keeps them visible for manual accounting review.">Protected duplicate conflicts: <b>{duplicateReview.conflicted}</b></span>}
             {accounts.length > 1 && fAccount === 'all' && <span className="text-slate-400">{accounts.length} accounts in this silo</span>}
             {unassignedNote && <span className="text-amber-300 font-bold">⚠ Some bank transactions are unassigned — assign them on the Bank tab before matching.</span>}
           </div>
@@ -828,13 +939,14 @@ export default function BankReviewTab(props) {
             {filtered.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No transactions match these filters.</div> :
               filtered.map(function (t) {
                 var matched = matchesByTxn[t.id] && matchesByTxn[t.id].length > 0;
+                var inferredDup = duplicateReview.hidden[t.id] && (t.review_status || 'unreviewed') !== 'duplicate';
                 return (
                   <div key={t.id} onClick={function () { openTxn(t); }}
                        className={'grid items-center border-t border-slate-800 cursor-pointer hover:bg-slate-800/50 ' + (sel && sel.id === t.id ? 'bg-slate-800/70 ' : '') + (t.review_status === 'approved' ? 'opacity-80' : '')}
                        style={{ gridTemplateColumns: '90px 70px 1fr 110px 120px 110px' }}>
                     <div className="px-2 py-1.5 text-[11px] font-mono text-slate-300">{(t.posted_date || t.date || '').toString().substring(0, 10) || <span className="text-orange-300">pending</span>}</div>
                     <div className="px-2 py-1.5 text-[11px] font-bold">{t.direction === 'in' ? <span className="text-emerald-300">IN</span> : <span className="text-rose-300">OUT</span>}</div>
-                    <div className="px-2 py-1.5 text-xs text-slate-100 truncate">{t.name}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}</div>
+                    <div className="px-2 py-2 text-xs text-slate-100 whitespace-normal break-words leading-snug" title={t.name || ''}>{t.name}{t.unsupported_account ? <span className="ml-1 text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 rounded px-1">⚠ credit/loan</span> : null}{!t.posted_date ? <span className="ml-1 text-[10px] bg-orange-500/20 text-orange-200 rounded px-1">pending</span> : null}{matched ? <span className="ml-1 text-[10px] bg-indigo-500/20 text-indigo-200 rounded px-1">matched</span> : null}{inferredDup ? <span className="ml-1 text-[10px] bg-rose-500/20 text-rose-100 border border-rose-500/40 rounded px-1">inferred duplicate</span> : null}</div>
                     <div className="px-2 py-1.5 text-right text-xs font-mono font-bold text-slate-100">{seeAmounts ? fmt(t.amount_abs || Math.abs(Number(t.amount))) : maskAmount(null, false)}</div>
                     <div className="px-2 py-1.5 text-[11px] text-slate-300">{
                       /* v55.83-LF mirror — show the WAVE category + where it came from (Wave vs Hub), falling
@@ -887,6 +999,7 @@ export default function BankReviewTab(props) {
               <div className="font-extrabold text-slate-100 truncate">{sel.name}</div>
               <button onClick={function () { setSel(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
             </div>
+            {isReviewDuplicate(sel) && <div className="bg-rose-100 text-rose-950 rounded p-2 text-xs font-semibold mb-2">Duplicate bank row. Use the original transaction row for matching, categorizing, review, and approval. This duplicate is kept only for audit.</div>}
             {sel.unsupported_account && <div className="bg-amber-100 text-amber-950 rounded p-2 text-xs font-semibold mb-2">⚠ Credit/loan account — money-in/out direction is NOT auto-verified for these. Review manually before approving.</div>}
             {isLocked(sel) && <div className="bg-blue-100 text-blue-950 rounded p-2 text-xs font-semibold mb-2 flex items-center justify-between"><span>🔒 Approved &amp; locked.</span>{mayReopen ? <button onClick={function () { reopen(sel); }} className="px-2 py-0.5 bg-blue-700 text-white rounded text-[11px] font-bold">Reopen to edit</button> : <span className="text-[11px]">Owner/Accounting only</span>}</div>}
 

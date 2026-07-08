@@ -68,6 +68,49 @@ async function recompute(db, invId) {
   return { amount_paid: paid, balance_due: bal, payment_status: st };
 }
 
+function normDuplicateText(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80); }
+function txnAmountCents(t) { return Math.round(Number(t && t.amount_abs != null ? t.amount_abs : Math.abs(Number(t && t.amount) || 0)) * 100); }
+function duplicateKeyForRow(t, acctMap, activeBiz) {
+  if (!t) { return null; }
+  var d = String(t.posted_date || t.date || '').substring(0, 10);
+  if (!d || t.pending === true || !t.account_id) { return null; }
+  var pa = acctMap && acctMap[t.account_id] ? acctMap[t.account_id] : null;
+  var accountKey = pa && pa.mask ? ('mask:' + pa.mask) : ('acct:' + t.account_id);
+  var bankKey = normDuplicateText(t.bank_source || '');
+  var desc = t.check_number ? ('check' + normDuplicateText(t.check_number)) : normDuplicateText(t.name || t.merchant_name || '');
+  if (!desc || txnAmountCents(t) <= 0) { return null; }
+  return String(t.wave_business_id || activeBiz || 'no-silo') + '|' + bankKey + '|' + accountKey + '|' + d + '|' + String(t.direction || '') + '|' + String(t.iso_currency || '') + '|' + txnAmountCents(t) + '|' + String(t.channel || '') + '|' + desc;
+}
+
+async function protectedBankTxnIds(db, rowsOrIds) {
+  var ids = [];
+  (rowsOrIds || []).forEach(function (x) { var id = typeof x === 'string' ? x : (x && x.id); if (id && ids.indexOf(id) < 0) { ids.push(id); } });
+  var protectedIds = {};
+  function mark(id) { if (id) { protectedIds[id] = true; } }
+  (rowsOrIds || []).forEach(function (x) {
+    if (!x || typeof x === 'string') { return; }
+    if (x.review_status === 'approved' || x.review_status === 'reviewed' || x.review_status === 'ignored' || x.review_status === 'needs_clarification') { mark(x.id); }
+    if (x.matched_invoice_id || x.linked_id || x.linked_type) { mark(x.id); }
+  });
+  if (!ids.length) { return protectedIds; }
+  var mR = await db.from('payment_matches').select('bank_transaction_id, voided').in('bank_transaction_id', ids);
+  if (mR && mR.error) { throw mR.error; }
+  ((mR && mR.data) || []).forEach(function (m) { if (m && m.voided !== true) { mark(m.bank_transaction_id); } });
+  var pR = await db.from('accounting_invoice_payments').select('bank_transaction_id, voided, sync_status').in('bank_transaction_id', ids);
+  if (pR && pR.error) { throw pR.error; }
+  ((pR && pR.data) || []).forEach(function (p) { if (p && !isPaymentVoid(p)) { mark(p.bank_transaction_id); } });
+  var sR = await db.from('bank_transaction_splits').select('bank_transaction_id').in('bank_transaction_id', ids);
+  if (sR && sR.error) { throw sR.error; }
+  ((sR && sR.data) || []).forEach(function (s) { mark(s && s.bank_transaction_id); });
+  var uR = await db.from('unapplied_deposits').select('bank_transaction_id, status').in('bank_transaction_id', ids);
+  if (uR && uR.error) { throw uR.error; }
+  ((uR && uR.data) || []).forEach(function (u) { if (!u.status || u.status === 'open') { mark(u.bank_transaction_id); } });
+  var cR = await db.from('customer_credits').select('source_transaction_id, status').in('source_transaction_id', ids);
+  if (cR && cR.error) { throw cR.error; }
+  ((cR && cR.data) || []).forEach(function (c) { if (!c.status || c.status === 'open') { mark(c.source_transaction_id); } });
+  return protectedIds;
+}
+
 export async function POST(req) {
   var db = admin();
   try {
@@ -77,7 +120,7 @@ export async function POST(req) {
 
     // Permission per action. v55.83-JJ — split-save and park-unapplied allocate money, so they need
     // payments.match (same as match/unmatch/status), per Codex's launch-safe rule.
-    var permKey = (action === 'match_invoice' || action === 'unmatch' || action === 'save_splits' || action === 'create_unapplied' || action === 'update_match') ? 'payments.match'
+    var permKey = (action === 'match_invoice' || action === 'unmatch' || action === 'save_splits' || action === 'create_unapplied' || action === 'update_match' || action === 'mark_review_duplicates') ? 'payments.match'
       : (action === 'set_status' ? 'payments.match' : 'bank.classify');
     var gate = await assertPermission(db, by, permKey, req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
@@ -93,6 +136,14 @@ export async function POST(req) {
         if (alloc && alloc.overAllocated) { return NextResponse.json({ ok: false, error: 'Over-allocated by ' + Math.abs(alloc.remaining) + ' — fix the lines before marking ' + body.status + '.', allocation: alloc, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
         if (alloc && !alloc.complete) { return NextResponse.json({ ok: false, error: alloc.remaining + ' of this ' + alloc.total + ' transaction is unallocated. Every dollar must be allocated (invoice payment / split / unapplied / explicit Uncategorized) before it can be ' + body.status + '.', allocation: alloc, api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       }
+      if (body.status === 'duplicate') {
+        var dRows = await db.from('bank_transactions').select('id, review_status, matched_invoice_id, linked_id, linked_type').eq('id', body.bank_transaction_id).limit(1);
+        if (dRows && dRows.error) { return NextResponse.json({ ok: false, error: dRows.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        var dRow = (dRows && dRows.data && dRows.data.length) ? dRows.data[0] : null;
+        if (!dRow) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+        var dProt = await protectedBankTxnIds(db, [dRow]);
+        if (dProt[dRow.id]) { return NextResponse.json({ ok: false, error: 'This transaction has accounting activity or protected status, so it cannot be marked duplicate from Bank Review. Reverse/unmatch or review it manually first.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      }
       var sPatch = { review_status: body.status, updated_by: by };
       if (body.status === 'reviewed' || body.status === 'approved') { sPatch.reviewed_by = by; sPatch.reviewed_at = new Date().toISOString(); }
       if (body.notes != null) { sPatch.notes = body.notes; }
@@ -100,6 +151,83 @@ export async function POST(req) {
       if (sRes && sRes.error) { return NextResponse.json({ ok: false, error: sRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!(sRes && sRes.data && sRes.data.length)) { return NextResponse.json({ ok: false, error: 'No row updated (transaction not found).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       return NextResponse.json({ ok: true, row: sRes.data[0], api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── mark_review_duplicates: Accounting Bank Review scoped duplicate cleanup ──
+    // Marks only high-confidence relink extras duplicate. No deletes, no voids, no payment/match/split edits.
+    if (action === 'mark_review_duplicates') {
+      var rawIds = body.duplicate_transaction_ids || [];
+      var ids = [];
+      rawIds.forEach(function (id) { if (id && ids.indexOf(id) < 0) { ids.push(id); } });
+      if (!ids.length) { return NextResponse.json({ ok: true, marked: 0, skipped: 0, api_build_marker: API_BUILD_MARKER }); }
+      var candR = await db.from('bank_transactions').select('id, wave_business_id, bank_source, account_id, posted_date, date, direction, amount, amount_abs, iso_currency, name, merchant_name, check_number, channel, pending, review_status, matched_invoice_id, linked_id, linked_type, updated_at, created_at').in('id', ids);
+      if (candR && candR.error) { return NextResponse.json({ ok: false, error: candR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var candidates = (candR && candR.data) || [];
+      if (!candidates.length) { return NextResponse.json({ ok: true, marked: 0, skipped: ids.length, api_build_marker: API_BUILD_MARKER }); }
+      var dates = []; var bizs = [];
+      candidates.forEach(function (t) {
+        var d = String(t.posted_date || t.date || '').substring(0, 10);
+        if (d && dates.indexOf(d) < 0) { dates.push(d); }
+        if (t.wave_business_id && bizs.indexOf(t.wave_business_id) < 0) { bizs.push(t.wave_business_id); }
+      });
+      var allQ = db.from('bank_transactions').select('id, wave_business_id, bank_source, account_id, posted_date, date, direction, amount, amount_abs, iso_currency, name, merchant_name, check_number, channel, pending, review_status, matched_invoice_id, linked_id, linked_type, updated_at, created_at');
+      if (dates.length) { allQ = allQ.in('date', dates); }
+      if (bizs.length) { allQ = allQ.in('wave_business_id', bizs); }
+      var allR = await allQ.limit(2000);
+      if (allR && allR.error) { return NextResponse.json({ ok: false, error: allR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var allRows = (allR && allR.data) || [];
+      var acctIds = [];
+      allRows.forEach(function (t) { if (t.account_id && acctIds.indexOf(t.account_id) < 0) { acctIds.push(t.account_id); } });
+      var acctMap = {};
+      if (acctIds.length) {
+        var paR = await db.from('plaid_accounts').select('plaid_account_id, mask').in('plaid_account_id', acctIds);
+        if (paR && paR.error) { return NextResponse.json({ ok: false, error: paR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        ((paR && paR.data) || []).forEach(function (a) { if (a && a.plaid_account_id) { acctMap[a.plaid_account_id] = a; } });
+      }
+      var prot = await protectedBankTxnIds(db, allRows);
+      function score(t) {
+        var s = 0;
+        if (prot[t.id]) { s += 1000; }
+        if (t.review_status === 'approved') { s += 500; }
+        if (t.review_status === 'reviewed') { s += 350; }
+        if (t.review_status === 'duplicate') { s -= 800; }
+        if (t.matched_invoice_id || t.linked_id || t.linked_type) { s += 250; }
+        if (t.updated_at) { s += Math.min(20, String(t.updated_at).length); }
+        return s;
+      }
+      var groups = {};
+      allRows.forEach(function (t) {
+        var k = duplicateKeyForRow(t, acctMap, t.wave_business_id || null);
+        if (!k) { return; }
+        if (!groups[k]) { groups[k] = []; }
+        groups[k].push(t);
+      });
+      var markMap = {}; var candidateMap = {};
+      candidates.forEach(function (t) { candidateMap[t.id] = t; });
+      Object.keys(groups).forEach(function (k) {
+        var g = groups[k];
+        if (!g || g.length < 2) { return; }
+        var seenAcct = {};
+        g.forEach(function (t) { if (t.account_id) { seenAcct[t.account_id] = true; } });
+        if (Object.keys(seenAcct).length < 2) { return; }
+        var sorted = g.slice().sort(function (a, b) {
+          var ds = score(b) - score(a);
+          if (ds !== 0) { return ds; }
+          return String(a.created_at || a.updated_at || '').localeCompare(String(b.created_at || b.updated_at || ''));
+        });
+        var keeper = sorted[0];
+        sorted.slice(1).forEach(function (t) {
+          if (!candidateMap[t.id]) { return; }
+          if (prot[t.id]) { return; }
+          if ((t.review_status || 'unreviewed') === 'duplicate') { return; }
+          if (keeper && keeper.id !== t.id) { markMap[t.id] = true; }
+        });
+      });
+      var markIds = Object.keys(markMap);
+      if (!markIds.length) { return NextResponse.json({ ok: true, marked: 0, skipped: candidates.length, api_build_marker: API_BUILD_MARKER }); }
+      var md = await db.from('bank_transactions').update({ review_status: 'duplicate', updated_by: by }).in('id', markIds).select('id');
+      if (md && md.error) { return NextResponse.json({ ok: false, error: md.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      return NextResponse.json({ ok: true, marked: (md && md.data ? md.data.length : markIds.length), skipped: candidates.length - markIds.length, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── create_unapplied: park part/all of a deposit as an open unapplied deposit (service-role) ──

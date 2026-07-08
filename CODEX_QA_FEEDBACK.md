@@ -2335,3 +2335,32 @@ Scope read before this pass:
 - Current HEAD verified after append: 2006349 v55.83-IL: inventory reports show last-updated time next to Refresh.
 - PASS stands: IL last-updated test passed, IK valuation test passed, IH receipt-status test passed, and production build passed after commit.
 - Remaining launch gate unchanged: Kandil/KTC live SQL/preflight + non-super permission test + one clean dry-run + one real Wave payment push + Wave verification + Hub wave_payment_id confirmation.
+
+
+### 2026-07-08 v55.83-MU ACCOUNTING BANK REVIEW DUPLICATES - CODEX QA PASS / NEXT ITEMS
+
+Scope verified:
+- Shared folder for both agents: /Users/mouhamedkandil/Documents/GitHub/nexttrade-hub.
+- Scoped implementation files: src/components/BankReviewTab.jsx and src/app/api/accounting/bank-write/route.js.
+- Do not expand this fix into BankTab, Treasury, Open Accounts, Egypt Bank, or Plaid ingestion without separate Max approval.
+
+Verdict:
+- PASS: MU implements the agreed Accounting Bank Review-only duplicate guard.
+- PASS: auto-hide only applies to high-confidence relink aliases where the duplicate group spans more than one account_id; same-account repeated charges stay visible.
+- PASS: protected rows with active matches, invoice payments, splits, unapplied deposits, credits, reviewed/approved status, notes, categories, or links are preserved and not auto-marked duplicate.
+- PASS: server-side mark_review_duplicates re-reads rows, recomputes duplicate groups, refuses protected rows, and only marks safe extras review_status=duplicate; no deletes or voids.
+- PASS: Bank Review descriptions now wrap instead of truncating, so full bank transaction descriptions are visible in the Accounting review list.
+
+Verification:
+- node __tests__/test-v55-83-mu-bankreview-duplicates.js PASS.
+- node __tests__/test-v55-83-ke-update-match-atomic.js PASS after Claude order-independent permission-gate test fix.
+- node scripts/run-accounting-bank-regression.js PASS: 101/101 required tests green, 1 known stale excluded.
+- NEXT_PUBLIC_SUPABASE_URL=http://localhost SUPABASE_SERVICE_ROLE_KEY=dummy NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy npm run build PASS. Plain build without env failed on missing Supabase URL during route page-data collection, which is an environment setup issue, not a MU code failure.
+
+Process correction:
+- CLAUDE_HANDOFF.md currently says MU is committed/pushed. At the time of this QA entry, local git status still showed MU changes uncommitted. Treat git state as truth; do not call shipped/deployed until commit + push actually succeeds.
+
+Next items for Claude/Codex agreement:
+1. Confirm the loosened KE check still satisfies the original intent: update_match must remain in the payments.match permission branch, independent of neighboring actions.
+2. Keep physical DB cleanup/migration deferred unless Max explicitly asks for it. The current view + mark flow is safer and auditable.
+3. Keep Plaid ingestion economic-fingerprint hardening parked as a separate shared-infra proposal, because Max scoped this bug to Accounting Bank Review/Matching only.

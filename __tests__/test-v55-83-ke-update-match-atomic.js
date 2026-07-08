@@ -16,7 +16,13 @@ var br = rd('src/components/BankReviewTab.jsx');
 
 ok('1: update_match action exists + is payments.match gated',
   /action === 'update_match'/.test(route) &&
-  /action === 'update_match'\) \? 'payments\.match'/.test(route));
+  // v55.83-MU loosened: update_match must sit inside the payments.match branch of the permKey
+  // ternary, but OTHER actions may be OR'd after it (MU appended mark_review_duplicates) —
+  // the old exact-adjacency regex false-failed on a boolean reorder, not a real gate change.
+  (function () {
+    var m = route.match(/var permKey = \(([^?]*)\) \? 'payments\.match'/);
+    return !!(m && m[1].indexOf("action === 'update_match'") >= 0);
+  })());
 ok('2: blocks editing a match whose payment is already in Wave (needs_wave_reversal, no silent overwrite)',
   /pp\.wave_payment_id \|\| pp\.sync_status === 'synced' \|\| pp\.sync_status === 'manual_done'/.test(route) &&
   /needs_wave_reversal: true/.test(route));
