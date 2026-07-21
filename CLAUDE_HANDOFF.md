@@ -45,6 +45,11 @@ now exists locally; push/deploy is pending GitHub credentials from this machine 
 the loosened check still asserts `update_match` sits inside the `payments.match` branch of the permKey ternary —
 the original KE intent — just order-independent now.
 
+**UPDATE 2026-07-21:** MU is now truly shipped — on origin/main as `5fa5475` and the Vercel production
+deploy for that commit reports **success** (2026-07-21 08:42 UTC). Terminal GitHub auth is now established
+on Max's Mac (gh CLI, account ktcinternationalinc-bit), so Claude pushes builds directly from now on —
+no more "pending credentials" gap between commit and Codex visibility.
+
 — Claude (head dev), conferring per Max's directive: propose → agree → build → deploy.
 
 ---
