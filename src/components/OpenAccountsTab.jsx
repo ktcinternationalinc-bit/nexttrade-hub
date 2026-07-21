@@ -1876,9 +1876,13 @@ export default function OpenAccountsTab(props) {
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-700 border-b-2 border-slate-300 whitespace-nowrap" title="Sales invoices billed to them + payments they sent us">{ledgerLabel('they_owe_us', lang, persp)}</th>
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-red-700 border-b-2 border-slate-300 whitespace-nowrap" title="Vendor bills they billed us + payments we sent them">{ledgerLabel('we_owe_them', lang, persp)}</th>
                             <th className="px-3 py-2 text-right text-xs font-extrabold text-amber-700 border-b-2 border-slate-300 whitespace-nowrap" title="Open balance — the unpaid portion of an invoice or bill">{ledgerLabel('open_balance', lang)}</th>
-                            {s.currencies.map(function (cur) {
-                              return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 whitespace-nowrap" title="Cumulative running balance in this currency after this row">{ledgerLabel('running_bal', lang)} {cur}</th>;
-                            })}
+                            {/* v55.83-MV (Max Jul 21) — ONE running column, in the ROW'S OWN currency.
+                                The old per-currency running columns pushed EGP off-screen on narrow
+                                windows: the only visible "running" next to EGP rows was the USD
+                                column's unchanged constant, which read as a frozen/wrong balance.
+                                Each cell now carries its currency code so mixed-currency accounts
+                                stay unambiguous; cross-currency nets live in the Summary blocks. */}
+                            <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 whitespace-nowrap" title="Cumulative running balance after this row, in this row's own currency">{ledgerLabel('running_bal', lang)}</th>
                             {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                           </tr>
                         );
@@ -2058,26 +2062,19 @@ export default function OpenAccountsTab(props) {
                                 );
                               })()}
                             </td>
-                            {/* Net per currency — running net balance from the simulation */}
-                            {s.currencies.map(function (cur) {
-                              var rbForCur = (entry._running_by_currency && entry._running_by_currency[cur]) || 0;
-                              var isThisEntryCur = (cur === entryCur);
-                              // v55.83-H — Removed the light bg-slate-100 box fill on the active
-                              // cell and the opacity-60 wash on inactive cells (HOTFIX 30's
-                              // "staircase dimming"). Those light fills stacked into the overlay
-                              // banding Max flagged. Now: the ACTIVE running balance pops via bold
-                              // colored text; inactive columns sit quietly in muted slate with
-                              // NO background fill and NO opacity wash — clean and high-contrast.
-                              var cls = isThisEntryCur
-                                ? ('font-extrabold ' + (rbForCur > 0 ? 'text-emerald-300' : rbForCur < 0 ? 'text-red-300' : 'text-slate-200'))
-                                : 'text-slate-500 font-medium';
-                              var styleObj = undefined;
+                            {/* v55.83-MV — running net in the ROW'S OWN currency (single column).
+                                Replaces the v55.83-H per-currency columns: on narrow windows the
+                                later currency columns clipped off-screen, so EGP rows appeared to
+                                carry the USD running constant. Currency code is stamped in the cell. */}
+                            {(function () {
+                              var rbForCur = (entry._running_by_currency && entry._running_by_currency[entryCur]) || 0;
+                              var cls = 'font-extrabold ' + (rbForCur > 0 ? 'text-emerald-300' : rbForCur < 0 ? 'text-red-300' : 'text-slate-200');
                               return (
-                                <td key={cur} className={'px-3 py-1.5 text-right font-mono whitespace-nowrap ' + cls} style={styleObj}>
-                                  {fmtSigned(rbForCur)}
+                                <td className={'px-3 py-1.5 text-right font-mono whitespace-nowrap ' + cls}>
+                                  <span className="text-[9px] font-bold text-slate-400 mr-1">{entryCur}</span>{fmtSigned(rbForCur)}
                                 </td>
                               );
-                            })}
+                            })()}
                             {canEdit && (
                               <td className="px-3 py-1.5 text-right">
                                 {entry.linked_open_invoice_id ? (
@@ -2135,8 +2132,8 @@ export default function OpenAccountsTab(props) {
                         var net = (totalAR - theirPrepaid) - (totalAP - ourPrepaid);
                         var hasOverpayment = (theirPrepaid > 0.005) || (ourPrepaid > 0.005);
                         var netCls = net > 0.005 ? 'text-emerald-300' : net < -0.005 ? 'text-red-300' : 'text-slate-200';
-                        // colSpan calculation: 4 left text cols + 3 money cols + N currency cols + actions
-                        var totalCols = 4 + 3 + s.currencies.length + (canEdit ? 1 : 0);
+                        // colSpan calculation: 4 left text cols + 3 money cols + 1 running col (v55.83-MV) + actions
+                        var totalCols = 4 + 3 + 1 + (canEdit ? 1 : 0);
                         // First currency block has a heavier top border; subsequent blocks have a subtle one
                         var headerBorder = sumIdx === 0 ? 'border-t-4 border-amber-400' : 'border-t-2 border-slate-700';
                         // v55.83-GP — summary footer labels follow the same perspective toggle as the
@@ -2164,7 +2161,7 @@ export default function OpenAccountsTab(props) {
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-emerald-900/40 text-emerald-100">
                               {totalAR > 0.005 ? fmtNum(totalAR) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
-                            <td colSpan={2 + s.currencies.length + (canEdit ? 1 : 0)}></td>
+                            <td colSpan={2 + 1 + (canEdit ? 1 : 0)}></td>
                           </tr>,
                           // Total AP row — value sits in AP Side column for visual alignment
                           <tr key={cur + '-ap'} className="bg-slate-800 text-white">
@@ -2173,7 +2170,7 @@ export default function OpenAccountsTab(props) {
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold bg-red-900/40 text-red-100">
                               {totalAP > 0.005 ? fmtNum(totalAP) + ' ' + cur : <span className="text-slate-400">0.00 {cur}</span>}
                             </td>
-                            <td colSpan={1 + s.currencies.length + (canEdit ? 1 : 0)}></td>
+                            <td colSpan={1 + 1 + (canEdit ? 1 : 0)}></td>
                           </tr>,
                           // Net Position row — the spelled-out arithmetic with clear sub-label
                           <tr key={cur + '-net'} className="bg-slate-950 text-white">
@@ -2204,14 +2201,10 @@ export default function OpenAccountsTab(props) {
                                 )}
                               </div>
                             </td>
-                            {s.currencies.map(function (col, colI) {
-                              if (col !== cur) return <td key={col + '-nf-' + colI}></td>;
-                              return (
-                                <td key={col + '-nf-' + colI} className={'px-3 py-2.5 text-right font-mono font-extrabold ' + netCls}>
-                                  {fmtSigned(cs.balance)}
-                                </td>
-                              );
-                            })}
+                            {/* v55.83-MV — single running column now; stamp the currency code */}
+                            <td className={'px-3 py-2.5 text-right font-mono font-extrabold ' + netCls}>
+                              <span className="text-[9px] font-bold text-slate-400 mr-1">{cur}</span>{fmtSigned(cs.balance)}
+                            </td>
                             {canEdit && <td></td>}
                           </tr>,
                         ].filter(Boolean);

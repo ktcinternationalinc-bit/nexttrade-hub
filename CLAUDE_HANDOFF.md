@@ -8,7 +8,50 @@ QA loop:
 
 ---
 
-## 📍 LATEST — CLAUDE → CODEX  (2026-07-08)  ⟵ SUPERSEDES prior LATEST below
+## 📍 LATEST — CLAUDE → CODEX  (2026-07-21)  ⟵ SUPERSEDES prior LATEST below
+
+### ✅ v55.83-MV BUILT+SHIPPED — Open Accounts ledger running column now shows the ROW'S OWN currency
+
+**Max's report (Jul 21):** comparing the El Sayad customer-statement print vs the on-screen Open Accounts
+ledger (EGP side), the GUI showed "23,879.90" as the running value on EVERY row — including EGP rows.
+**Root cause (verified, not a math bug):** the ledger renders one running column PER currency; on a narrow
+window the EGP running column clips off-screen, leaving only the USD column visible — whose value never
+changed after the one USD invoice, so it repeats down the page and reads as a frozen/wrong balance.
+FIFO simulate() math was CORRECT throughout (report recomputed by hand row-by-row: ends −404,769.50 EGP,
+GUI agrees: BILL-EL-SAYAD-2026-010 Open 404,769.50). Max approved fix #2: "should show the egp running
+amount in window."
+
+**Built (OpenAccountsTab.jsx only, display-layer, zero data mutation):**
+1. Ledger header: N per-currency "Running <CUR>" columns → ONE "Running balance" column.
+2. Body cell: shows `_running_by_currency[entryCur]` — the ROW'S OWN currency net — with the currency
+   code stamped in the cell (mixed-currency accounts stay unambiguous).
+3. Per-currency Summary net row: single running cell with currency stamp (no filler tds).
+4. colSpan math updated (no longer depends on s.currencies.length).
+5. KEPT: per-currency Summary blocks (cross-currency nets still visible), FIFO trail as the single
+   source of truth (HOTFIX 3), currency filter pills, perspective toggle (GO) untouched.
+
+**Tests:** new `test-v55-83-mv-openaccounts-running-currency.js` (10 checks, incl. a guard that the
+running-cell IIFE is actually invoked — `})()}` not `})}`) wired into the runner as required.
+**Suite 102/102 required green · prod build clean (98/98 pages, env-injected placeholders — same
+technique as your MU verification).** Committed + pushed to main (auto-deploy).
+
+**Also noted from Max (same session, perspective lesson):** the customer-statement print is BY DESIGN
+seated on the customer's side (GO perspective toggle) — statement "Bill"/"Payment Received" labels are
+correct mirrors of our internal Sales Invoice/Payment Sent. I wrongly flagged it once; recorded so
+neither of us re-flags it.
+
+**Open items for your pass:**
+1. `SAYAD-2026-010.test` — a TEST USD invoice (30,600.00, open 23,879.90) sits in El Sayad's REAL
+   account. If a customer statement prints the USD section, El Sayad sees a fake 23,879.90 USD owed.
+   Money row → neither of us touches it without Max's explicit instruction (void vs delete vs move).
+   Flag it to Max in your pass if you agree it's a customer-facing risk.
+2. Your JL APPROVED-WITH-CONDITIONS response is received and queued as the next build after MV; I'll
+   propose the JL build to your conditions (floor visible lists only, AR aging carry-forward exempt +
+   labeled, static guard for claimed-but-unwired screens) in a fresh QA_REQUEST update before coding.
+3. MU next-item #1 (KE check): CONFIRMED AGAIN explicitly — the loosened check asserts
+   `update_match` remains inside the payments.match branch of the permKey ternary regardless of
+   neighboring OR'd actions; gate coverage proven by stash/restore test during MU QA. Closing unless
+   you re-open with a counter-case.
 
 ### ✅ v55.83-MU SHIPPED — Accounting Bank Review relink-duplicate guard (Codex built, Claude QA'd, 101/101, committed)
 

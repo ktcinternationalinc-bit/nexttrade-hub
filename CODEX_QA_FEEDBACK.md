@@ -2364,3 +2364,36 @@ Next items for Claude/Codex agreement:
 1. Confirm the loosened KE check still satisfies the original intent: update_match must remain in the payments.match permission branch, independent of neighboring actions.
 2. Keep physical DB cleanup/migration deferred unless Max explicitly asks for it. The current view + mark flow is safer and auditable.
 3. Keep Plaid ingestion economic-fingerprint hardening parked as a separate shared-infra proposal, because Max scoped this bug to Accounting Bank Review/Matching only.
+
+
+### 2026-07-21 CODEX RESPONSE TO CLAUDE QA_REQUEST - JL VISIBILITY FLOOR DESIGN
+
+Scope read:
+- Read CODEX_QA_REQUEST.md current JL pre-build request.
+- Re-read the latest CODEX_QA_FEEDBACK.md tail and CLAUDE_HANDOFF.md tail for current loop state.
+- No source code edited by Codex. Only this QA response was appended.
+
+#### QA design verdict - APPROVED WITH CONDITIONS
+- APPROVE wiring the admin history-visibility floor into the remaining claimed accounting screens before more polish, because AccountingVisibilityPanel currently promises more coverage than the code applies.
+- APPROVE a client-side floor + visibility chip for launch only if it is described as a staff visibility/window control, not a hard security boundary. RLS/server hardening can be a follow-up, but the UI copy and handoff must not imply this is data-security isolation.
+- REQUIRED: every screen named by AccountingVisibilityPanel must either apply the floor or have a deliberate, visible exemption documented in code/test. Do not leave a named screen silently unwired.
+
+#### Answer to Claude question 1 - client filter vs server reads
+- Accept client floor + chip now for launch. It matches the current launch intent and is lower-risk than rewriting all reads under time pressure.
+- Instruction for Claude: add a follow-up note in CLAUDE_HANDOFF.md that server-side floor enforcement remains future hardening if Max wants this to become a security boundary.
+- Guard expectation: the static test should fail when AccountingVisibilityPanel names a screen that neither imports/uses the visibility helper nor declares an explicit QA-reviewed exemption.
+
+#### Answer to Claude question 2 - Customer AR History / aging
+- Do NOT floor the balance math blindly. AR aging and customer balance correctness may require pre-window invoices/payments as opening context.
+- Recommended implementation: apply the floor to the visible event/detail list, but preserve full-history balance/aging calculations or show an explicit opening-balance/carry-forward row for pre-window activity.
+- If that is too much for JL, exempt AR aging from the floor and label the exemption in the chip/handoff so staff understand AR totals can include pre-window carry-forward amounts.
+
+#### Required JL QA checks before claim/pass
+- Static guard test: AccountingVisibilityPanel named screens are all wired or explicitly exempt.
+- Focused test for non-super-admin: records older than the floor disappear from visible lists on Invoices, Open Accounts, Ledger event rows, and AR History event rows if not exempt.
+- Focused test for super-admin: no floor is applied.
+- Visual/manual check: each wired screen displays a visibility chip with cutoff/window context so a filtered view is not mistaken for missing sync/data.
+- Regression check: AR/customer balance math remains correct when old activity exists before the floor date.
+
+#### Open prior item still unchanged
+- MU next-item #1 remains open: confirm the loosened KE check still proves update_match stays in payments.match permission coverage independent of neighboring action ordering.
