@@ -865,6 +865,15 @@ export default function App() {
   const [fxRate, setFxRate] = useState(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  // v55.83-MW — Header NET amount is HIDDEN BY DEFAULT.
+  // The top toolbar is on screen during screen-shares, customer visits and
+  // anyone walking past the desk, and it was showing the company's entire
+  // cash position in bright green. Now it shows dots until the eye button
+  // is clicked. Deliberately NOT persisted: every page load / refresh /
+  // login starts hidden again, so revealing it once can never leave it
+  // exposed on a machine later. (If Max wants it remembered per user, this
+  // becomes a localStorage pair like ktc.lastPersona — one-line change.)
+  const [netVisible, setNetVisible] = useState(false);
   const [showNotifBell, setShowNotifBell] = useState(false);
   // v55.40 — Unread voicemail count for the header badge. Polled every
   // 30 seconds via the same endpoint the dashboard widget uses, so the
@@ -5387,7 +5396,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MV</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MW</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5401,22 +5410,60 @@ export default function App() {
           <div className="flex items-center gap-2">
             {/* Treasury Net — terminal-style status block.
                 Permission gate unchanged from original. */}
+            {/* v55.83-MW — Amount is masked until the eye is clicked. The two
+                actions are separate buttons inside one bordered shell (never a
+                button inside a button — invalid HTML and it breaks keyboard
+                focus): left = go to Treasury, right = show/hide. When masked we
+                also drop the coloured status dot, because a green-vs-red dot
+                would still leak whether the company is up or down. */}
             {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
-              <button onClick={() => { setTab('treasury'); setMode('all'); }}
-                className="group flex items-center gap-2 px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
-                style={{ background: '#0a0a0a' }}
-                aria-label="View Treasury">
-                <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
-                <span className="text-sm font-bold tabular-nums"
-                  style={{
-                    fontFamily: '"JetBrains Mono", monospace',
-                    color: allTimeNet >= 0 ? '#34d399' : '#f87171',
-                  }}>
-                  {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
-              </button>
+              <div className="flex items-center border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                style={{ background: '#0a0a0a' }}>
+                <button onClick={() => { setTab('treasury'); setMode('all'); }}
+                  className="group flex items-center gap-2 pl-3 pr-2 py-1.5"
+                  aria-label="View Treasury">
+                  <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
+                  {netVisible ? (
+                    <>
+                      <span className="text-sm font-bold tabular-nums"
+                        style={{
+                          fontFamily: '"JetBrains Mono", monospace',
+                          color: allTimeNet >= 0 ? '#34d399' : '#f87171',
+                        }}>
+                        {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
+                      </span>
+                      <span className="w-1.5 h-1.5 rounded-full"
+                        style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
+                    </>
+                  ) : (
+                    <span className="text-sm font-bold tracking-[0.2em] select-none"
+                      style={{ fontFamily: '"JetBrains Mono", monospace', color: '#52525b' }}
+                      aria-label="Treasury net hidden">••••••</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetVisible(!netVisible)}
+                  className="px-2 py-1.5 border-l border-zinc-800 text-zinc-500 hover:text-emerald-400 transition-colors"
+                  title={netVisible ? 'Hide the net amount' : 'Show the net amount'}
+                  aria-pressed={netVisible}
+                  aria-label={netVisible ? 'Hide the treasury net amount' : 'Show the treasury net amount'}>
+                  {netVisible ? (
+                    /* eye-off */
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <path d="M6.61 6.61A18.15 18.15 0 0 0 2 12s3 8 10 8a9.74 9.74 0 0 0 5.39-1.61" />
+                      <line x1="2" y1="2" x2="22" y2="22" />
+                    </svg>
+                  ) : (
+                    /* eye */
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             )}
 
             {/* Global search — terminal command convention */}

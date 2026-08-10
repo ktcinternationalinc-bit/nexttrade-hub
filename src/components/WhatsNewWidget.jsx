@@ -33,6 +33,38 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-MW',
+    date: '2026-08-10',
+    label: 'The cash total at the top of the screen is now hidden until you ask to see it',
+    items: [
+      '**🙈 The NET amount in the top bar starts hidden.** It used to sit there in green all day showing the company\'s whole cash position — visible to anyone looking at your screen, standing behind you, or watching a screen-share. Now it shows dots instead.',
+      '**👁 Click the eye to reveal it.** The eye button sits right next to it. Click once to show the number, click again to hide it.',
+      '**🔒 It re-hides itself every time.** Refresh the page, log out and back in, or open the Hub on another device and it starts hidden again — so it can never be left showing by accident.',
+      '**↔️ Nothing else changed.** Clicking the NET box still takes you straight to Treasury, and the number itself is exactly the same.',
+      { superAdminOnly: true, text: 'v55.83-MW — page.jsx header only. New `netVisible` state (useState(false), deliberately NOT persisted — session-scoped so every mount re-hides). Old single <button> split into a bordered <div> shell containing two sibling buttons (nav + toggle) to avoid nested-button invalid HTML / focus breakage. Masked state also suppresses the coloured status dot (green-vs-red would leak the sign). Eye/eye-off inline SVG, aria-pressed + aria-label on the toggle. Permission gate (isSuperAdmin || modulePerms.Treasury) unchanged. Also backfilled the missing MU + MV release notes below — the badge shipped MV while this widget still read MT, so the team never saw either build.' },
+    ],
+  },
+  {
+    version: 'v55.83-MV',
+    date: '2026-07-21',
+    label: 'Open Accounts: the running balance now shows in the account\'s own currency',
+    items: [
+      '**💱 One running balance column instead of one per currency.** On a narrow window the EGP column used to slide off the edge of the screen, leaving the USD column showing — so the same number repeated down the page and looked like a frozen or wrong balance.',
+      '**🏷 Each row now shows its own currency, stamped in the cell.** An EGP row shows the EGP running total, a USD row shows the USD one, and mixed-currency accounts stay clear.',
+      '**✅ The maths was never wrong.** This was only about what fit on screen — the totals were correct the whole time, and the per-currency summary blocks are still there.',
+    ],
+  },
+  {
+    version: 'v55.83-MU',
+    date: '2026-07-20',
+    label: 'Bank Review no longer shows the same transaction twice',
+    items: [
+      '**🧹 Re-linked bank accounts stopped creating duplicate rows.** When an account was re-connected, the same transaction could come in again under a new account and appear twice in Bank Review. Those repeats are now hidden automatically.',
+      '**🛡 Only the safe ones get hidden.** A real repeated charge on the same account is left alone, and anything already tied to a payment, match, split or deposit is never touched — those show up under "Protected duplicate conflicts" for you to look at yourself.',
+      '**🗑 Nothing is deleted.** Duplicates are marked, not removed, and you can see them any time using the Duplicate filter.',
+    ],
+  },
+  {
     version: 'v55.83-MT',
     date: '2026-06-28',
     label: 'Clearer Sync Log, no more duplicate rows, and push more than one at a time',
