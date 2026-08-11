@@ -3063,7 +3063,20 @@ export default function InventoryReceiving(props) {
               var expSource = header.nexpac_breakdown || nexpacPreview ? 'Nexpac report' : (sExp ? 'Manual' : '—');
               var Card = function (title, children) { return <div className="bg-white border border-slate-200 rounded-lg p-3"><div className="text-[11px] font-extrabold text-slate-500 uppercase mb-1.5">{title}</div>{children}</div>; };
               var Row = function (k, v) { return <div className="flex justify-between gap-3 text-xs py-0.5"><span className="text-slate-500">{k}</span><span className="text-slate-900 font-semibold text-right">{v == null || v === '' ? '—' : v}</span></div>; };
-              var vCardCls = !rec.has_any_expected ? 'bg-slate-100 text-slate-700' : (rec.is_balanced ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-100 text-amber-950');
+              // v55.83-MX — CONTRAST FIX (Max: "we need more contrast between
+              // background and font so it is much more clearer"). These were
+              // Tailwind bg-amber-100/text-amber-950 etc. On screen the panel
+              // rendered as dark orange text on a murky brown block — the same
+              // purge-prone amber pattern HU already had to strip out of the
+              // Inventory access panels. Tailwind can drop these utilities from
+              // the built stylesheet, leaving the text to inherit the dark
+              // surrounding panel. Inline styles cannot be purged, so the
+              // contrast is guaranteed: near-black text on a solid pale card.
+              var vCardStyle = !rec.has_any_expected
+                ? { background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' }
+                : (rec.is_balanced
+                    ? { background: '#dcfce7', color: '#052e16', border: '1px solid #4ade80' }
+                    : { background: '#fef3c7', color: '#1c1917', border: '1px solid #f59e0b' });
               var checklist = [
                 { ok: s1, label: 'Shipment shell complete', step: 1, fix: 'Add supplier / reference / warehouse — go to Step 1' },
                 { ok: sExp, label: 'Expected totals entered', step: 1, fix: 'Enter expected rolls / weight / UOM — go to Step 1' },
@@ -3084,10 +3097,10 @@ export default function InventoryReceiving(props) {
                     {Card('Actual received', <div>{Row('Product lines', realLines.length)}{Row('Rolls', fmtN(act.rolls))}{Row('Quantity (UOM)', fmtN(act.uom))}{Row('Gross kg', fmtN(act.gross))}</div>)}
                     {Card('Variance', !rec.has_any_expected
                       ? <div className="text-xs text-slate-500 italic">No expected totals entered — nothing to reconcile.</div>
-                      : <div className={'text-xs rounded p-2 ' + vCardCls}>
-                          <div className="flex justify-between"><span>Rolls (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_rolls)} / {fmtN(act.rolls)}{rec.variance.rolls ? ' (' + (rec.variance.rolls > 0 ? '-' : '+') + fmtN(Math.abs(rec.variance.rolls)) + ')' : ''}</span></div>
-                          <div className="flex justify-between"><span>Gross (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_gross_kg)} / {fmtN(act.gross)}</span></div>
-                          <div className="flex justify-between"><span>UOM (exp/act)</span><span className="font-bold">{fmtN(header.expected_total_uom)} / {fmtN(act.uom)}</span></div>
+                      : <div className="text-xs rounded p-2" style={vCardStyle}>
+                          <div className="flex justify-between"><span className="font-semibold">Rolls (exp/act)</span><span className="font-extrabold">{fmtN(header.expected_total_rolls)} / {fmtN(act.rolls)}{rec.variance.rolls ? ' (' + (rec.variance.rolls > 0 ? '-' : '+') + fmtN(Math.abs(rec.variance.rolls)) + ')' : ''}</span></div>
+                          <div className="flex justify-between"><span className="font-semibold">Gross (exp/act)</span><span className="font-extrabold">{fmtN(header.expected_total_gross_kg)} / {fmtN(act.gross)}</span></div>
+                          <div className="flex justify-between"><span className="font-semibold">UOM (exp/act)</span><span className="font-extrabold">{fmtN(header.expected_total_uom)} / {fmtN(act.uom)}</span></div>
                           <div className="mt-1 font-extrabold">{rec.is_balanced ? '✅ Balanced' : (needNotes ? '⚠️ Variance — notes required' : '⚠️ Variance (noted)')}</div>
                         </div>)}
                   </div>

@@ -53,10 +53,6 @@ export default function InventoryOverview(props) {
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
   var [showZeroStock, setShowZeroStock] = useState(true);    // Max Jun 1 2026: show zero-stock items by default
-  // Max Aug 2026 — the total Inventory Value (money) is HIDDEN by default so it isn't
-  // exposed on screen at a glance; click the card to reveal it, click again to hide.
-  var [showValue, setShowValue] = useState(false);
-  var [exporting, setExporting] = useState(false);
   // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
   // physical stock (they exist only to spawn variants), so including them in
   // "what's in stock" pollutes the totals + accordion. Off by default; toggle
@@ -201,7 +197,7 @@ export default function InventoryOverview(props) {
           supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
           safe(supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)),
           safe(supabase.from('inventory_stock_receipts').select('product_id, quantity, quantity_kg, roll_count, uom, status')),
-          safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, rolls_sold').eq('inventory_status', 'consumed')),
+          safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, rolls_sold').eq('uses_inventory', true)),
         ]);
         if (cancelled) return;
 
@@ -307,17 +303,32 @@ export default function InventoryOverview(props) {
       if (r.status === 'finalized') {
         s.has_finalized = true;
       } else {
-        // received but NOT finalized → counts as pending (yellow) on-hand
+        // v55.83-MX — pending = arrived but landed cost not entered yet.
+        //
+        // This used to ALSO do `s.current_qty += q`, to "show stock
+        // immediately". That was the root of Max's missing-deduction bug: a
+        // sale deducts from cost layers, layers only existed after finalize,
+        // so pending stock was displayed as on-hand but could never be
+        // deducted — sell 210 kg and the screen still showed the full amount.
+        //
+        // MX creates a layer the moment stock arrives, so the layer loop above
+        // ALREADY counts this receipt, and it counts it net of everything sold.
+        // Adding q again here would double the stock and re-hide every sale.
+        // Pending is now a COST state, not a stock state.
         s.pending_qty += q;
         s.has_pending = true;
-        // show stock immediately: include pending in current_qty so it appears right away
-        s.current_qty += q;
       }
     });
     // Sum sales (sold_qty + revenue + cogs + gross_profit) — by variant_id
     salesItems.forEach(function (it) {
       var s = stats[it.variant_id];
       if (!s) return;
+      // v55.83-MX — the query now pulls EVERY inventory-linked line, not just
+      // ones the FIFO engine managed to consume. Reason: roll counts and sold
+      // quantity were invisible whenever consumption failed (which, before MX,
+      // was every sale of not-yet-costed stock). A reversed line is a deleted
+      // line, so it's the only status excluded here.
+      if (it.inventory_status === 'reversed') return;
       var qty = Number(it.sale_quantity || 0);
       s.sold_qty += qty;
       s.sold_rolls += Number(it.rolls_sold || 0) || 0;
@@ -589,53 +600,6 @@ export default function InventoryOverview(props) {
   function collapseAll() { var c = {}; grouped.forEach(function (g) { c[g.family_id] = true; }); setCollapsedGroups(c); }
   function expandAll() { setCollapsedGroups({}); }
 
-  // Export the current (filtered) inventory to an Excel .xlsx file. One row per product,
-  // grouped by family, matching what's on screen. Financial columns only if seeCosts.
-  function exportExcel() {
-    if (exporting) { return; }
-    setExporting(true);
-    import('xlsx').then(function (XLSX) {
-      var header = ['Family Code', 'Family', 'Product Code', 'Design SKU', 'Name (EN)', 'Name (AR)', 'UOM', 'Current Qty', 'Original Qty', 'Sold Qty'];
-      if (seeCosts) { header.push('Inventory Value (EGP)'); }
-      var aoa = [header];
-      grouped.forEach(function (g) {
-        g.products.forEach(function (p) {
-          var s = productStats[p.id] || {};
-          var row = [
-            g.code || '',
-            g.label_en || '',
-            p.quick_code || '',
-            p.design_sku || '',
-            p.name_en || '',
-            p.name_ar || '',
-            effUom(p) || '',
-            Number(s.current_qty || 0),
-            Number(s.original_qty || 0),
-            Number(s.sold_qty || 0)
-          ];
-          if (seeCosts) { row.push(Number(s.current_weighted_cost || 0)); }
-          aoa.push(row);
-        });
-      });
-      // Grand total row — qty left blank because mixed units (kg/sqm/rolls) can't be summed;
-      // the value total sums cleanly (one currency) and only shows if seeCosts.
-      var totalRow = ['', 'TOTAL', '', '', '', '', '(mixed units)', '', '', ''];
-      if (seeCosts) { totalRow.push(Number(grandTotals.inventory_value || 0)); }
-      aoa.push([]);
-      aoa.push(totalRow);
-
-      var wb = XLSX.utils.book_new();
-      var sheet = XLSX.utils.aoa_to_sheet(aoa);
-      XLSX.utils.book_append_sheet(wb, sheet, 'Inventory');
-      var d = new Date();
-      var stamp = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-      XLSX.writeFile(wb, 'KTC-Inventory-' + stamp + '.xlsx');
-      if (toast && toast.success) { toast.success('Inventory exported to Excel'); }
-    }).catch(function (e) {
-      if (toast && toast.error) { toast.error('Export failed: ' + ((e && e.message) || 'error')); }
-    }).finally(function () { setExporting(false); });
-  }
-
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
@@ -655,7 +619,6 @@ export default function InventoryOverview(props) {
           <div className="text-[11px] font-semibold text-slate-500 mt-0.5" style={{ direction: 'rtl' }}>المخزون الحالي حسب فئة المنتج</div>
         </div>
         <div className="flex gap-2 shrink-0">
-          <button onClick={exportExcel} disabled={exporting} className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-extrabold rounded-lg border border-emerald-500 transition">{exporting ? 'Exporting…' : '⬇ Export to Excel'}</button>
           <button onClick={expandAll} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-extrabold rounded-lg border border-slate-700 transition">Expand All</button>
           <button onClick={collapseAll} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-extrabold rounded-lg border border-slate-700 transition">Collapse All</button>
         </div>
@@ -669,7 +632,7 @@ export default function InventoryOverview(props) {
         {(function () {
           var cards = [];
           if (seeCosts) {
-            cards.push({ k: 'val', label: 'Inventory Value', value: showValue ? (fmtNum(grandTotals.inventory_value, 2) + ' EGP') : '•••••••', tone: 'slate', sub: showValue ? 'finalized stock · click to hide' : 'hidden · click to show', clickable: true });
+            cards.push({ k: 'val', label: 'Inventory Value', value: fmtNum(grandTotals.inventory_value, 2) + ' EGP', tone: 'slate', sub: 'finalized stock' });
           }
           cards.push({ k: 'prod', label: 'Products', value: fmtNum(grandTotals.product_count, 0), tone: 'slate', sub: (grouped.length) + ' famil' + (grouped.length === 1 ? 'y' : 'ies') });
           cards.push({ k: 'await', label: 'Awaiting Cost', value: fmtNum(grandTotals.awaiting_cost, 0), tone: grandTotals.awaiting_cost > 0 ? 'amber' : 'slate', sub: 'received, not finalized' });
@@ -681,13 +644,8 @@ export default function InventoryOverview(props) {
           var numTone = { slate: 'text-slate-100', amber: 'text-amber-400', emerald: 'text-emerald-400', red: 'text-red-400' };
           return cards.map(function (c) {
             return (
-              <div
-                key={c.k}
-                onClick={c.clickable ? function () { setShowValue(function (v) { return !v; }); } : undefined}
-                title={c.clickable ? (showValue ? 'Click to hide the inventory value' : 'Click to show the inventory value') : undefined}
-                className={'bg-slate-900/70 border border-slate-700/60 rounded-xl px-4 py-3.5 ' + (c.clickable ? 'cursor-pointer hover:border-indigo-500/70 select-none' : '')}
-              >
-                <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{c.label}{c.clickable ? (showValue ? ' 👁' : ' 🙈') : ''}</div>
+              <div key={c.k} className="bg-slate-900/70 border border-slate-700/60 rounded-xl px-4 py-3.5">
+                <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{c.label}</div>
                 <div className={'text-xl font-extrabold tabular-nums leading-tight mt-1 ' + (numTone[c.tone] || numTone.slate)}>{c.value}</div>
                 <div className="text-[10px] font-medium text-slate-500 mt-1">{c.sub}</div>
               </div>

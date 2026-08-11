@@ -464,6 +464,8 @@ export default function App() {
   // inventoryCutoffDate: loaded from app_settings.inventory_cutoff_date.
   //   When set, invoices on/after this date force inventory mode (enforced in 44c). Today it's just a guide.
   const [inventoryProducts, setInventoryProducts] = useState([]);
+  // v55.83-MX — { productId: { qty, uom, provisional } } from open FIFO layers.
+  const [stockAvailable, setStockAvailable] = useState({});
   // v55.83-GE — ids of virtual Stock Mix products. They are excluded from the invoice picker and
   // blocked from FIFO consumption until Phase 2 (component drawdown) is built.
   const [virtualMixIds, setVirtualMixIds] = useState(function () { return {}; });
@@ -1574,6 +1576,25 @@ export default function App() {
         setVirtualMixIds(vmix);
         setInventoryProducts(allActiveProducts.filter(function (p) { return p.is_virtual_mix !== true; }));
       } catch (e) { setInventoryProducts([]); }
+      // v55.83-MX — real on-hand stock per product, so the "From Inventory"
+      // picker can show what's actually available BEFORE the line is added.
+      // Previously the picker listed every product with no quantity at all, so
+      // there was no moment where the system could tell Max he was about to
+      // sell stock it couldn't deduct. Sums open FIFO layers (post-MX these
+      // exist from the moment goods arrive, costed or not).
+      try {
+        const { data: layerRows } = await supabase.from('inventory_layers')
+          .select('product_id, qty_remaining, uom, is_provisional')
+          .eq('status', 'open').gt('qty_remaining', 0);
+        const avail = {};
+        (layerRows || []).forEach(function (l) {
+          if (!l || !l.product_id) return;
+          if (!avail[l.product_id]) avail[l.product_id] = { qty: 0, uom: l.uom || '', provisional: false };
+          avail[l.product_id].qty += Number(l.qty_remaining || 0) || 0;
+          if (l.is_provisional === true) avail[l.product_id].provisional = true;
+        });
+        setStockAvailable(avail);
+      } catch (e) { setStockAvailable({}); }
       // v55.83-A.6.27.44b — load cutoff date setting.
       // When null/missing, both modes always available. When set, future-dated invoices force inventory mode (in 44c).
       try {
@@ -5396,7 +5417,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MW</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MX</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -6002,10 +6023,33 @@ export default function App() {
                       <div className="flex gap-2">
                         <button onClick={async () => {
                           try {
-                            // v55.83-A.6.27 — Stage D: before deleting items,
-                            // reverse FIFO consumption on any sale movements
-                            // linked to those items so the layers get their
-                            // qty back. Otherwise stock would stay drained.
+                            // v55.83-MX — give the stock back BEFORE deleting the
+                            // lines. Previously this only reversed the retired
+                            // System B engine (inv_movements), which no current
+                            // sale ever writes to — so deleting an invoice left
+                            // the goods deducted forever with no way to recover
+                            // them except a manual adjustment.
+                            var reversalFailures = [];
+                            try {
+                              const { data: liveItems } = await supabase.from('invoice_items')
+                                .select('id, description, inventory_status')
+                                .eq('invoice_id', selectedInvoice.id)
+                                .eq('inventory_status', 'consumed');
+                              for (const li of (liveItems || [])) {
+                                const rv = await supabase.rpc('reverse_invoice_item_inventory', { p_item_id: li.id });
+                                if (rv.error) reversalFailures.push((li.description || li.id).substring(0, 40));
+                              }
+                            } catch (revErr) {
+                              console.warn('[invoice-delete] stock reversal failed:', revErr && revErr.message);
+                              reversalFailures.push('all lines');
+                            }
+                            if (reversalFailures.length > 0) {
+                              if (!confirm('Could not return stock to inventory for: ' + reversalFailures.join(', ') +
+                                '\n\nDelete the invoice anyway? Inventory will stay short and will need a manual adjustment. / حذف الفاتورة على أي حال؟')) {
+                                return;
+                              }
+                            }
+                            // Legacy System B reversal — historical rows only.
                             try {
                               const { data: salesMovs } = await supabase.from('inv_movements')
                                 .select('id, consumed_layers, linked_invoice_item_id')
@@ -6015,12 +6059,10 @@ export default function App() {
                                 if (m.consumed_layers && Array.isArray(m.consumed_layers)) {
                                   await reverseFifoConsumption(m.consumed_layers);
                                 }
-                                // Mark movement as reversed (delete it; the
-                                // layer qtys are already restored)
                                 await supabase.from('inv_movements').delete().eq('id', m.id);
                               }
                             } catch (revErr) {
-                              console.warn('[invoice-delete] reverse failed:', revErr && revErr.message);
+                              console.warn('[invoice-delete] legacy reverse failed:', revErr && revErr.message);
                             }
                             await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
                             await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
@@ -6500,9 +6542,20 @@ export default function App() {
                 if (!lineItem || !lineItem.id) return;
                 if (!confirm('Delete this line item from the invoice? / حذف هذا البند من الفاتورة؟\n\n' + (lineItem.description || '').substring(0, 80))) return;
                 try {
-                  // v55.83-A.6.27 — Stage D: reverse FIFO consumption first
-                  // so the cost layers get their qty back, then delete the
-                  // sale movement, then delete the invoice item.
+                  // v55.83-MX — return this line's stock to inventory first.
+                  // The old code only reversed the retired System B engine via
+                  // cogs_movement_id, which current sales never populate, so
+                  // deleting a line silently kept the goods deducted.
+                  if (lineItem.inventory_status === 'consumed') {
+                    const rv = await supabase.rpc('reverse_invoice_item_inventory', { p_item_id: lineItem.id });
+                    if (rv.error) {
+                      if (!confirm('Could not return this line\'s stock to inventory (' + (rv.error.message || 'unknown') +
+                        ').\n\nDelete the line anyway? Inventory will stay short. / حذف البند على أي حال؟')) return;
+                    } else {
+                      toast.success('Stock returned to inventory / تمت إعادة المخزون');
+                    }
+                  }
+                  // Legacy System B reversal — historical rows only.
                   if (lineItem.cogs_movement_id) {
                     try {
                       const { data: mov } = await supabase.from('inv_movements')
@@ -6678,6 +6731,20 @@ export default function App() {
                               </div>
                             </div>
                           )}
+                          {/* v55.83-MX — HONEST WARNING. This panel inserts plain
+                              lines with no inventory linkage and never calls the
+                              consume engine, so goods added here leave the
+                              warehouse with no record. Wiring the full inventory
+                              picker into this panel is a separate build; until
+                              then, say so plainly instead of losing stock quietly. */}
+                          <div className="mb-2 p-2 rounded bg-amber-100 border border-amber-400 text-amber-950 text-[11px] font-bold">
+                            ⚠ Lines added here do NOT deduct from inventory.
+                            <div className="font-medium mt-0.5">
+                              Use this for freight, fees, or non-stock items. To sell goods from the
+                              warehouse, add the line on a new invoice using 📦 From Inventory so the
+                              stock and roll count come off correctly.
+                            </div>
+                          </div>
                           {/* Save / Cancel */}
                           <div className="flex gap-2">
                             <button onClick={async () => {
@@ -8799,6 +8866,27 @@ export default function App() {
                                           <div className="text-slate-700 hover:text-white mt-0.5">{p.name_en}</div>
                                           <div className="text-slate-700 hover:text-white" style={{ direction: 'rtl' }}>{p.name_ar}</div>
                                           <div className="text-[10px] text-slate-500 hover:text-white font-mono mt-0.5">{p.classification_slug}</div>
+                                          {/* v55.83-MX — real on-hand stock. The picker used to show
+                                              nothing, so a product with zero stock looked identical to
+                                              one with 10 tons and the shortfall only surfaced later as a
+                                              silent backorder row. */}
+                                          {(function () {
+                                            var av = stockAvailable[p.id];
+                                            var onHand = av ? Number(av.qty || 0) : 0;
+                                            if (onHand > 0) {
+                                              return (
+                                                <div className="mt-1 text-[10px] font-extrabold text-emerald-800 hover:text-white">
+                                                  ✓ {onHand.toLocaleString(undefined, { maximumFractionDigits: 2 })} {(av.uom || '').toUpperCase()} on hand
+                                                  {av.provisional && <span className="ml-1 font-bold text-amber-700 hover:text-amber-200">· cost not final yet</span>}
+                                                </div>
+                                              );
+                                            }
+                                            return (
+                                              <div className="mt-1 text-[10px] font-extrabold text-red-700 hover:text-white">
+                                                ⚠ No stock on hand — selling this creates a shortage
+                                              </div>
+                                            );
+                                          })()}
                                         </div>
                                       );
                                     });
@@ -9239,6 +9327,26 @@ export default function App() {
                         itemPayload.inventory_status = 'draft';
                       }
                       const insertedItem = await dbInsert('invoice_items', itemPayload, user?.id);
+                      // v55.83-MX — DO NOT let a missing migration hide again.
+                      //
+                      // dbInsert self-heals by stripping unknown columns and
+                      // retrying (up to 8). An inventory line sets 7 of them.
+                      // Before MX, invoice_items had NONE of those columns in
+                      // production, so all 7 were stripped one by one and the
+                      // line saved as an ordinary manual line. The invoice
+                      // looked perfect and the link to the product was thrown
+                      // away every single time — silently, for months. That is
+                      // the real reason stock never moved.
+                      //
+                      // If it ever happens again, say so immediately and loudly
+                      // instead of pretending the sale was recorded.
+                      if (item.uses_inventory === true && insertedItem && insertedItem.__strippedColumns
+                          && insertedItem.__strippedColumns.length > 0) {
+                        console.error('[invoice-save] INVENTORY LINK DROPPED — missing columns:', insertedItem.__strippedColumns);
+                        toast.error('⚠ STOCK NOT LINKED for "' + (item.inv_desc || '?').substring(0, 40) +
+                          '". The database is missing: ' + insertedItem.__strippedColumns.join(', ') +
+                          '. Run the v55.83-MX migration — until then this sale will NOT reduce inventory. / لم يتم ربط المخزون');
+                      }
                       // v55.83-A.6.27.44c — Auto-FIFO-consume for inventory-linked items.
                       // Fires on submit (insert). Reads from inventory_layers oldest-first,
                       // stamps cogs_total + gross_profit + consumed_layers on the item,

@@ -100,11 +100,17 @@ ok('D6: the dashboard TREASURY NET tile was left alone (out of scope — toolbar
 // PART E — Release notes (PERMANENT RULE 1) + the MU/MV backfill
 // ══════════════════════════════════════════════════════════════════
 
-ok('E1: header build badge bumped to MW',
-  /v55\.83-MW<\/span>/.test(page));
+// E1 was originally pinned to "MW" and broke the moment MX shipped — the exact
+// brittleness that made the older header-contrast test go stale. The durable
+// invariant isn't "the badge says MW", it's "the badge matches the newest
+// release note", which is what actually went wrong when MU/MV shipped unlogged.
+var newestNote = (whatsNew.match(/version: '(v55\.83-[A-Z.0-9]+)'/) || [])[1];
+var badgeVersion = (page.match(/(v55\.83-[A-Z.0-9]+)<\/span>/) || [])[1];
+ok('E1: header build badge matches the newest release note (no stale badge, no unlogged build)',
+  !!newestNote && badgeVersion === newestNote);
 ok('E2: MW has a What\'s New entry',
   /version: 'v55\.83-MW'/.test(whatsNew));
-ok('E3: MW entry is first in BUILD_HISTORY (newest at top)',
+ok('E3: release notes are newest-first',
   whatsNew.indexOf("version: 'v55.83-MW'") < whatsNew.indexOf("version: 'v55.83-MT'"));
 ok('E4: MU release note backfilled (shipped with no note)',
   /version: 'v55\.83-MU'/.test(whatsNew));
