@@ -496,6 +496,11 @@ export default function App() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedDebtor, setSelectedDebtor] = useState(null);
   const [treasuryDrill, setTreasuryDrill] = useState(null);
+  // v55.83-MZ — which currency the Treasury cards, table and balance show.
+  // Defaults to EGP (Max: "Default is showing EGP"). Session-only on purpose:
+  // every visit to Treasury starts on EGP so nobody reads a USD figure thinking
+  // it's pounds because the toggle was left flipped yesterday.
+  const [treasuryCurrency, setTreasuryCurrency] = useState('EGP');
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [checkView, setCheckView] = useState('pending');
   const [checkSort, setCheckSort] = useState('date'); // date | customer | order
@@ -2087,6 +2092,96 @@ export default function App() {
     });
     return map;
   }, [treasury]);
+
+  // ==========================================
+  // v55.83-MZ — CURRENCY VIEW (Max Aug 11 2026)
+  // "there should be a toggle that shows the OTHER CURRENCIES THE IN AND OUT
+  //  AND NET ON DEMAND ... AND ALSO SHOW THE SPECIFIC TRANSACTIONS THAT MAKE UP
+  //  THOSE VALUES ... AND ... see the balance of the other currencies"
+  //
+  // Money in this table lives in three different shapes:
+  //   EGP   -> cash_in / cash_out
+  //   USD   -> usd_in / usd_out          (its own dedicated columns)
+  //   other -> foreign_amount + foreign_currency + foreign_direction ('in'/'out')
+  //
+  // These are DELIBERATELY never summed together. Adding dollars to pounds is
+  // meaningless, and no FX conversion happens here — each currency is its own
+  // sealed bucket with its own in, out, net and running balance.
+  // ==========================================
+  const treasuryCurrencies = useMemo(() => {
+    const found = { EGP: true };
+    treasury.forEach(t => {
+      if (Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0) found.USD = true;
+      if (Number(t.foreign_amount || 0) > 0 && t.foreign_currency) found[t.foreign_currency] = true;
+    });
+    // EGP always first, the rest alphabetical.
+    return ['EGP'].concat(Object.keys(found).filter(c => c !== 'EGP').sort());
+  }, [treasury]);
+
+  // Pull the in/out pair for one row in the selected currency. Returns zeros
+  // when the row holds nothing in that currency, which is how filtering works.
+  const currencyAmounts = useCallback((t, cur) => {
+    if (cur === 'EGP') {
+      return { in: Number(t.cash_in || 0), out: Number(t.cash_out || 0) };
+    }
+    if (cur === 'USD') {
+      return { in: Number(t.usd_in || 0), out: Number(t.usd_out || 0) };
+    }
+    if (t.foreign_currency === cur && Number(t.foreign_amount || 0) > 0) {
+      const amt = Number(t.foreign_amount || 0);
+      return t.foreign_direction === 'out' ? { in: 0, out: amt } : { in: amt, out: 0 };
+    }
+    return { in: 0, out: 0 };
+  }, []);
+
+  const currencyTotals = useMemo(() => {
+    let cin = 0, cout = 0, count = 0;
+    filteredTreasury.forEach(t => {
+      const a = currencyAmounts(t, treasuryCurrency);
+      if (a.in === 0 && a.out === 0) return;
+      cin += a.in; cout += a.out; count += 1;
+    });
+    return { in: cin, out: cout, net: cin - cout, count };
+  }, [filteredTreasury, treasuryCurrency, currencyAmounts]);
+
+  // Rows that actually carry money in the selected currency — this is the
+  // "show me the specific transactions that make up those values" list.
+  const currencyTxns = useMemo(() => {
+    if (treasuryCurrency === 'EGP') return filteredTreasury;
+    return filteredTreasury.filter(t => {
+      const a = currencyAmounts(t, treasuryCurrency);
+      return a.in > 0 || a.out > 0;
+    });
+  }, [filteredTreasury, treasuryCurrency, currencyAmounts]);
+
+  // Running balance in the selected currency. Built from the FULL treasury set
+  // (not the filtered one) so a date filter narrows what you SEE without
+  // rewriting history — the balance on a row still reflects everything before it.
+  const currencyBalanceMap = useMemo(() => {
+    if (treasuryCurrency === 'EGP') return treasuryBalanceMap;
+    const sorted = [...treasury].sort((a, b) => {
+      const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
+      if (d !== 0) return d;
+      return (a.created_at || '').localeCompare(b.created_at || '');
+    });
+    const map = {};
+    let running = 0;
+    sorted.forEach(t => {
+      const a = currencyAmounts(t, treasuryCurrency);
+      if (a.in === 0 && a.out === 0) return; // untouched rows don't carry the balance forward
+      running += a.in - a.out;
+      map[t.id] = running;
+    });
+    return map;
+  }, [treasury, treasuryCurrency, treasuryBalanceMap, currencyAmounts]);
+
+  // Formatter for the active currency. fE() is EGP-specific.
+  const fCur = useCallback((n, cur) => {
+    const c = cur || treasuryCurrency;
+    if (c === 'EGP') return fE(n);
+    const sym = c === 'USD' ? '$' : (c === 'EUR' ? '€' : (c === 'GBP' ? '£' : ''));
+    return sym + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + (sym ? '' : ' ' + c);
+  }, [treasuryCurrency]);
 
   // ==========================================
   // AUTO-MATCH BANK PLACEHOLDERS to imported bank transactions
@@ -5417,7 +5512,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MX</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MZ</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -12900,10 +12995,39 @@ export default function App() {
                 );
               })()}
             </div>
+            {/* v55.83-MZ — Currency switcher. Only rendered when there IS other
+                currency money in the safe; a pure-EGP business never sees it. */}
+            {treasuryCurrencies.length > 1 && (
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Currency / العملة</span>
+                {treasuryCurrencies.map(function (cur) {
+                  var active = treasuryCurrency === cur;
+                  return (
+                    <button key={cur} onClick={() => { setTreasuryCurrency(cur); setTreasuryDrill(null); }}
+                      className="px-3 py-1 rounded-md text-xs font-extrabold transition-all"
+                      style={active
+                        ? { background: '#f8fafc', color: '#0f172a', border: '2px solid #38bdf8', boxShadow: '0 0 12px rgba(56,189,248,0.35)' }
+                        : { background: '#1e293b', color: '#cbd5e1', border: '2px solid #334155' }}
+                      aria-pressed={active}>
+                      {cur}
+                    </button>
+                  );
+                })}
+                {treasuryCurrency !== 'EGP' && (
+                  <span className="text-[10px] font-bold px-2 py-1 rounded"
+                    style={{ background: '#fef3c7', color: '#1c1917', border: '1px solid #f59e0b' }}>
+                    Showing {treasuryCurrency} only — not converted to EGP
+                  </span>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-3 mb-3">
               {/* S17 — Treasury summary cards redesigned for high contrast.
                   Dark solid backgrounds with bright neon-colored numbers.
-                  All content centered inside each bucket. */}
+                  All content centered inside each bucket.
+                  v55.83-MZ — now driven by currencyTotals, so the same three
+                  buckets answer "in / out / net" for whichever currency is
+                  selected. Each currency is sealed: no FX conversion, no mixing. */}
               <div onClick={() => setTreasuryDrill('in')}
                 className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
                 style={{
@@ -12913,10 +13037,10 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-emerald-400 text-base">💰</span>
-                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Cash In / وارد</div>
+                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">{treasuryCurrency} In / وارد</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}>
-                  {fE(totalCashIn)}
+                  {fCur(currencyTotals.in)}
                 </div>
               </div>
               <div onClick={() => setTreasuryDrill('out')}
@@ -12928,34 +13052,34 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-red-400 text-base">💸</span>
-                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Cash Out / منصرف</div>
+                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">{treasuryCurrency} Out / منصرف</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-red-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(239,68,68,0.3)' }}>
-                  {fE(totalCashOut)}
+                  {fCur(currencyTotals.out)}
                 </div>
               </div>
               <div onClick={() => setTreasuryDrill('net')}
                 className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
                 style={{
-                  background: totalCashIn >= totalCashOut
+                  background: currencyTotals.net >= 0
                     ? 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)'
                     : 'linear-gradient(135deg, #78350f 0%, #92400e 100%)',
-                  border: '2px solid ' + (totalCashIn >= totalCashOut ? '#3b82f6' : '#f59e0b'),
-                  boxShadow: '0 0 0 1px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)') + ' inset',
+                  border: '2px solid ' + (currencyTotals.net >= 0 ? '#3b82f6' : '#f59e0b'),
+                  boxShadow: '0 0 0 1px ' + (currencyTotals.net >= 0 ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)') + ' inset',
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
-                  <span className="text-base">{totalCashIn >= totalCashOut ? '📈' : '📉'}</span>
-                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (totalCashIn >= totalCashOut ? 'text-blue-200' : 'text-amber-200')}>Net / صافي</div>
+                  <span className="text-base">{currencyTotals.net >= 0 ? '📈' : '📉'}</span>
+                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (currencyTotals.net >= 0 ? 'text-blue-200' : 'text-amber-200')}>{treasuryCurrency} Net / صافي</div>
                 </div>
-                <div className={'text-xl sm:text-2xl font-black tracking-tight ' + (totalCashIn >= totalCashOut ? 'text-blue-300' : 'text-amber-300')}
-                  style={{ textShadow: '0 0 20px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.3)' : 'rgba(245,158,11,0.3)') }}>
-                  {fE(totalCashIn - totalCashOut)}
+                <div className={'text-xl sm:text-2xl font-black tracking-tight ' + (currencyTotals.net >= 0 ? 'text-blue-300' : 'text-amber-300')}
+                  style={{ textShadow: '0 0 20px ' + (currencyTotals.net >= 0 ? 'rgba(59,130,246,0.3)' : 'rgba(245,158,11,0.3)') }}>
+                  {fCur(currencyTotals.net)}
                 </div>
-                {totalCashIn > 0 && (
+                {currencyTotals.in > 0 && (
                   <div className="mt-2 h-1 w-4/5 rounded-full bg-black/30 overflow-hidden">
                     <div style={{
-                      width: Math.min(100, Math.max(0, (totalCashIn - totalCashOut) / totalCashIn * 100)) + '%',
-                      background: totalCashIn >= totalCashOut ? '#60a5fa' : '#fbbf24',
+                      width: Math.min(100, Math.max(0, currencyTotals.net / currencyTotals.in * 100)) + '%',
+                      background: currencyTotals.net >= 0 ? '#60a5fa' : '#fbbf24',
                       height: '100%',
                       transition: 'width 0.3s'
                     }} />
@@ -12963,6 +13087,84 @@ export default function App() {
                 )}
               </div>
             </div>
+            {/* v55.83-MZ — the transactions behind the three buckets above.
+                Max asked to "SHOW THE SPECIFIC TRANSACTIONS THAT MAKE UP THOSE
+                VALUES". For EGP the main table below already does this; for any
+                other currency the main table shows EGP columns, so the backing
+                rows would otherwise be invisible. */}
+            {treasuryCurrency !== 'EGP' && (
+              <div className="rounded-xl p-3 mb-3" style={{ background: '#0f172a', border: '1px solid #334155' }}>
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                  <div className="text-xs font-extrabold text-slate-100">
+                    💵 {treasuryCurrency} transactions ({currencyTxns.length})
+                    {treasuryDrill === 'in' && <span className="ml-2 text-emerald-300">— showing money in</span>}
+                    {treasuryDrill === 'out' && <span className="ml-2 text-red-300">— showing money out</span>}
+                  </div>
+                  {treasuryDrill && (
+                    <button onClick={() => setTreasuryDrill(null)}
+                      className="text-[10px] font-bold px-2 py-1 rounded bg-slate-700 text-slate-100 hover:bg-slate-600">
+                      Show all {treasuryCurrency}
+                    </button>
+                  )}
+                </div>
+                {currencyTxns.length === 0 ? (
+                  <div className="text-xs p-3 rounded" style={{ background: '#fef3c7', color: '#1c1917' }}>
+                    No {treasuryCurrency} transactions in the current filter.
+                  </div>
+                ) : (
+                  <div className="overflow-auto max-h-[340px] rounded border border-slate-700">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0" style={{ background: '#1e293b' }}>
+                        <tr>
+                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
+                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Order</th>
+                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Description</th>
+                          <th className="px-2 py-1.5 text-right font-extrabold text-emerald-200">In</th>
+                          <th className="px-2 py-1.5 text-right font-extrabold text-red-200">Out</th>
+                          <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currencyTxns
+                          .filter(t => {
+                            if (!treasuryDrill || treasuryDrill === 'net') return true;
+                            const a = currencyAmounts(t, treasuryCurrency);
+                            return treasuryDrill === 'in' ? a.in > 0 : a.out > 0;
+                          })
+                          .slice()
+                          .sort((a, b) => (b.transaction_date || '').localeCompare(a.transaction_date || ''))
+                          .map(t => {
+                            const a = currencyAmounts(t, treasuryCurrency);
+                            const bal = currencyBalanceMap[t.id];
+                            return (
+                              <tr key={t.id} className="border-b border-slate-800">
+                                <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">{t.transaction_date || '—'}</td>
+                                <td className="px-2 py-1.5 font-mono font-bold text-indigo-300">{t.order_number || '—'}</td>
+                                <td className="px-2 py-1.5 text-slate-200">{t.description || '—'}</td>
+                                <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">{a.in > 0 ? fCur(a.in) : ''}</td>
+                                <td className="px-2 py-1.5 text-right font-mono font-bold text-red-300">{a.out > 0 ? fCur(a.out) : ''}</td>
+                                <td className="px-2 py-1.5 text-right font-mono font-bold whitespace-nowrap"
+                                  style={{ color: (bal || 0) >= 0 ? '#6ee7b7' : '#fca5a5' }}>
+                                  {bal == null ? '—' : fCur(bal)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: '#1e293b' }}>
+                          <td className="px-2 py-1.5 font-extrabold text-slate-100" colSpan={3}>Total {treasuryCurrency}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-extrabold text-emerald-200">{fCur(currencyTotals.in)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-extrabold text-red-200">{fCur(currencyTotals.out)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-extrabold"
+                            style={{ color: currencyTotals.net >= 0 ? '#93c5fd' : '#fcd34d' }}>{fCur(currencyTotals.net)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
             {query && (() => {
               const searchResults = filteredTreasury.filter(t => {
                 const words = query.split(/\s+/).filter(w => w.length > 0);
@@ -13082,7 +13284,7 @@ export default function App() {
                     <th className="px-2 py-2 text-xs" style={{direction:'rtl'}}>Description</th>
                     <th className="px-2 py-2 text-xs text-right">In</th>
                     <th className="px-2 py-2 text-xs text-right">Out</th>
-                    <th className="px-2 py-2 text-xs text-right">Balance</th>
+                    <th className="px-2 py-2 text-xs text-right">Balance{treasuryCurrency !== 'EGP' ? ' (' + treasuryCurrency + ')' : ''}</th>
                     <th className="px-2 py-2 text-xs"></th>
                   </tr></thead>
                   <tbody>
@@ -13322,9 +13524,18 @@ export default function App() {
                           {Number(txn.usd_out) > 0 && <div className="text-red-500 text-[11px]">${Number(txn.usd_out).toLocaleString()} <span className="text-[9px] text-amber-600">USD</span></div>}
                           {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500 text-[11px]">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[9px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (treasuryBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
+                        {/* v55.83-MZ — balance follows the currency toggle. In a
+                            non-EGP view, rows that hold no money in that currency
+                            have no balance of their own, so they show a dash
+                            rather than repeating the previous row's figure (which
+                            would read like a frozen or wrong balance). */}
+                        <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (currencyBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
                           {/* Bank rows don't contribute to safe running balance — show dash */}
-                          {isBankRow ? <span className="text-indigo-400" title="Bank row — not part of safe balance">—</span> : fE(treasuryBalanceMap[txn.id] || 0)}
+                          {isBankRow
+                            ? <span className="text-indigo-400" title="Bank row — not part of safe balance">—</span>
+                            : (currencyBalanceMap[txn.id] == null
+                                ? <span className="text-slate-300" title={'No ' + treasuryCurrency + ' movement on this row'}>—</span>
+                                : fCur(currencyBalanceMap[txn.id]))}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">

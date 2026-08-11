@@ -66,6 +66,8 @@ export default function InventoryOverview(props) {
   var [historyLayers, setHistoryLayers] = useState([]);     // inventory_layers rows (finalized cost layers)
   var [historyReceipts, setHistoryReceipts] = useState([]); // v55.83-S — inventory_stock_receipts (real inbound orders, finalized OR pending)
   var [historyMovements, setHistoryMovements] = useState([]); // inventory_movements rows for outbound history
+  // v55.83-MY — invoice lines that took stock from this product (order #, customer, qty, rolls).
+  var [historySaleLines, setHistorySaleLines] = useState([]);
   var [historyLoading, setHistoryLoading] = useState(false);
   var [historyError, setHistoryError] = useState(null);
   var [historyTab, setHistoryTab] = useState('summary'); // v55.83-R drill-down tabs: summary | inbound | sales
@@ -109,6 +111,7 @@ export default function InventoryOverview(props) {
     setHistoryTab('summary');
     setHistoryLayers([]);
     setHistoryMovements([]);
+    setHistorySaleLines([]);
     setHistoryReceipts([]);
     setHistoryLoading(true);
     setHistoryError(null);
@@ -117,7 +120,7 @@ export default function InventoryOverview(props) {
         .from('inventory_layers')
         .select('*')
         .eq('product_id', product.id)
-        .order('received_at', { ascending: false });
+        .order('receipt_date', { ascending: false }); // v55.83-MY — was 'received_at', which does not exist on this table. Postgres rejects the ORDER BY, the whole query errors, and the tab renders empty even when layers exist.
       if (!layersRes.error) setHistoryLayers(layersRes.data || []);
       else console.warn('[history] layers query failed:', layersRes.error.message);
     } catch (e) { console.warn('[history] layers threw:', e); }
@@ -139,10 +142,73 @@ export default function InventoryOverview(props) {
         .from('inventory_movements')
         .select('*')
         .eq('product_id', product.id)
-        .order('moved_at', { ascending: false });
+        .order('movement_date', { ascending: false }); // v55.83-MY — was 'moved_at' (nonexistent column) so this query always errored and Sales showed 0 even when movements existed.
       if (!movRes.error) setHistoryMovements(movRes.data || []);
       else console.warn('[history] movements query failed:', movRes.error.message);
     } catch (e) { console.warn('[history] movements threw:', e); }
+    // v55.83-MY (Max Aug 11 2026) — "I should also be able to see the sales that
+    // caused any deductions from that product... 2365 was an order that deducted
+    // from LUX-BK".
+    //
+    // The Sales tab only ever listed inventory_movements rows, which carry no
+    // customer and no clickable invoice. Load the actual invoice lines for this
+    // product and join up the invoice number + customer, so the tab answers the
+    // real question: WHICH ORDER took my stock.
+    //
+    // Read straight from invoice_items rather than through movements, so a sale
+    // still shows here even if its ledger row is missing (everything invoiced
+    // before the MX migration is in exactly that state).
+    try {
+      var siRes = await supabase
+        .from('invoice_items')
+        .select('id, invoice_id, description, sale_quantity, uom, rolls_sold, quantity, cogs_total, gross_profit, inventory_status, inventory_consumed_at, backorder_qty')
+        .eq('variant_id', product.id)
+        .order('inventory_consumed_at', { ascending: false });
+      var lines = (siRes && !siRes.error) ? (siRes.data || []) : [];
+      if (siRes && siRes.error) console.warn('[history] sale lines query failed:', siRes.error.message);
+      if (lines.length > 0) {
+        var invIds = [];
+        lines.forEach(function (l) { if (l.invoice_id && invIds.indexOf(l.invoice_id) === -1) invIds.push(l.invoice_id); });
+        var invMap = {};
+        if (invIds.length > 0) {
+          var invRes = await supabase
+            .from('invoices')
+            .select('id, order_number, customer, invoice_date, currency, status')
+            .in('id', invIds);
+          if (invRes && !invRes.error) {
+            (invRes.data || []).forEach(function (iv) { invMap[iv.id] = iv; });
+          }
+        }
+        lines = lines.map(function (l) {
+          var iv = invMap[l.invoice_id] || {};
+          return {
+            id: l.id,
+            invoice_id: l.invoice_id,
+            order_number: iv.order_number || null,
+            customer: iv.customer || null,
+            invoice_date: iv.invoice_date || null,
+            invoice_status: iv.status || null,
+            description: l.description || '',
+            qty: Number(l.sale_quantity || l.quantity || 0) || 0,
+            uom: l.uom || '',
+            rolls: Number(l.rolls_sold || 0) || 0,
+            cogs: l.cogs_total == null ? null : Number(l.cogs_total),
+            profit: l.gross_profit == null ? null : Number(l.gross_profit),
+            status: l.inventory_status || null,
+            consumed_at: l.inventory_consumed_at || null,
+            backorder: Number(l.backorder_qty || 0) || 0,
+          };
+        });
+        // Newest first; lines never consumed (no timestamp) sort to the bottom.
+        lines.sort(function (a, b) {
+          var av = a.consumed_at || a.invoice_date || '';
+          var bv = b.consumed_at || b.invoice_date || '';
+          if (av === bv) return 0;
+          return av < bv ? 1 : -1;
+        });
+      }
+      setHistorySaleLines(lines);
+    } catch (e) { console.warn('[history] sale lines threw:', e); setHistorySaleLines([]); }
     // v55.83-A (Max Jun 1 2026) — Intake by country: how much of this product
     // was RECEIVED from each country (US vs Canada etc.). Sold-as-one, tracked-by-intake.
     try {
@@ -172,6 +238,7 @@ export default function InventoryOverview(props) {
     setHistoryProduct(null);
     setHistoryLayers([]);
     setHistoryMovements([]);
+    setHistorySaleLines([]);
     setHistoryReceipts([]);
     setHistoryIntakeByCountry([]);
     setHistoryError(null);
@@ -1083,7 +1150,7 @@ export default function InventoryOverview(props) {
               {[
                 { k: 'summary', label: 'Summary' },
                 { k: 'inbound', label: 'Inbound Orders (' + historyReceipts.length + ')' },
-                { k: 'sales', label: 'Sales (' + historyMovements.length + ')' },
+                { k: 'sales', label: 'Sales (' + historySaleLines.length + ')' },
               ].map(function (t) {
                 var on = historyTab === t.k;
                 return (
@@ -1205,40 +1272,127 @@ export default function InventoryOverview(props) {
                   </div>
                   )}
 
-                  {/* Outbound movements */}
+                  {/* v55.83-MY — Sales tab rebuilt. Max: "I should also be able to
+                      see the sales that caused any deductions from that product...
+                      2365 was an order that deducted from LUX-BK".
+                      It used to list only inventory_movements, which carry no
+                      customer and no order number, so the tab could never answer
+                      "which order took my stock". Now it lists the invoice lines
+                      themselves, with the order number and customer. */}
                   {historyTab === 'sales' && (
                   <div>
-                    <div className="text-sm font-extrabold text-slate-100 mb-2">📤 Outbound — Movements ({historyMovements.length})</div>
-                    {historyMovements.length === 0 ? (
-                      <div className="text-xs text-slate-400 italic p-3 bg-slate-800/40 rounded">No outbound history found for this product.</div>
+                    <div className="text-sm font-extrabold text-slate-100 mb-2">📤 Sales — orders that took stock from this product ({historySaleLines.length})</div>
+                    {historySaleLines.length === 0 ? (
+                      <div className="text-xs p-3 rounded" style={{ background: '#fef3c7', color: '#1c1917', border: '1px solid #f59e0b' }}>
+                        <div className="font-extrabold">No sales recorded against this product.</div>
+                        <div className="mt-1 font-medium">
+                          If you know this product has been sold, those invoices were created before the
+                          inventory link was repaired — they were saved without a connection to the
+                          warehouse, so they cannot be listed here. Sales made from now on will appear.
+                        </div>
+                      </div>
                     ) : (
                       <div className="overflow-auto border border-slate-700 rounded">
                         <table className="w-full text-xs">
                           <thead className="bg-slate-800/70">
                             <tr>
                               <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Type</th>
-                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Reference</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Order #</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Customer</th>
                               <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty</th>
-                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">Revenue</th>}
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Rolls</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Stock</th>
                               {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">COGS</th>}
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-amber-200 bg-amber-500/10">Profit</th>}
                             </tr>
                           </thead>
                           <tbody>
-                            {historyMovements.map(function (mov) {
+                            {historySaleLines.map(function (ln) {
+                              var deducted = ln.status === 'consumed';
+                              var reversed = ln.status === 'reversed';
                               return (
-                                <tr key={mov.id} className="border-b border-slate-700">
-                                  <td className="px-2 py-1.5 font-mono text-slate-300">{mov.moved_at ? String(mov.moved_at).substring(0, 10) : '—'}</td>
-                                  <td className="px-2 py-1.5 text-slate-200 font-semibold">{mov.movement_type || mov.type || '—'}</td>
-                                  <td className="px-2 py-1.5 font-mono text-slate-300">{mov.invoice_number || mov.reference || mov.notes || '—'}</td>
-                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">{fmtNum(mov.quantity || mov.qty || 0, 2)}</td>
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(mov.revenue || 0, 2)}</td>}
-                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{fmtNum(mov.cogs || 0, 2)}</td>}
+                                <tr key={ln.id} className="border-b border-slate-700"
+                                  style={reversed ? { opacity: 0.55 } : null}>
+                                  <td className="px-2 py-1.5 font-mono text-slate-300">
+                                    {(ln.consumed_at || ln.invoice_date) ? String(ln.consumed_at || ln.invoice_date).substring(0, 10) : '—'}
+                                  </td>
+                                  <td className="px-2 py-1.5 font-mono font-extrabold text-indigo-300">{ln.order_number || '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-200 font-semibold">{ln.customer || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">
+                                    {fmtNum(ln.qty, 2)} <span className="text-slate-400 font-normal">{(ln.uom || '').toUpperCase()}</span>
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">{ln.rolls ? fmtNum(ln.rolls, 0) : '—'}</td>
+                                  <td className="px-2 py-1.5">
+                                    {deducted ? (
+                                      <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: '#dcfce7', color: '#052e16' }}>✓ deducted</span>
+                                    ) : reversed ? (
+                                      <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: '#e2e8f0', color: '#0f172a' }}>↩ returned</span>
+                                    ) : (
+                                      <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: '#fef3c7', color: '#1c1917' }}>⚠ not deducted</span>
+                                    )}
+                                    {ln.backorder > 0 && (
+                                      <span className="ml-1 text-[10px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: '#fee2e2', color: '#450a0a' }}>
+                                        short {fmtNum(ln.backorder, 2)}
+                                      </span>
+                                    )}
+                                  </td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{ln.cogs == null ? '—' : fmtNum(ln.cogs, 2)}</td>}
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-amber-100 bg-amber-500/10">{ln.profit == null ? '—' : fmtNum(ln.profit, 2)}</td>}
                                 </tr>
                               );
                             })}
                           </tbody>
+                          <tfoot>
+                            <tr className="bg-slate-800/70 border-t-2 border-slate-600">
+                              <td className="px-2 py-1.5 font-extrabold text-slate-100" colSpan={3}>Total sold</td>
+                              <td className="px-2 py-1.5 text-right font-mono font-extrabold text-emerald-200">
+                                {fmtNum(historySaleLines.reduce(function (a, l) { return a + (l.status === 'reversed' ? 0 : l.qty); }, 0), 2)}
+                              </td>
+                              <td className="px-2 py-1.5 text-right font-mono font-extrabold text-emerald-200">
+                                {fmtNum(historySaleLines.reduce(function (a, l) { return a + (l.status === 'reversed' ? 0 : l.rolls); }, 0), 0)}
+                              </td>
+                              <td />
+                              {seeCosts && <td className="px-2 py-1.5 text-right font-mono font-extrabold text-amber-100 bg-amber-500/10">
+                                {fmtNum(historySaleLines.reduce(function (a, l) { return a + (l.status === 'reversed' ? 0 : (l.cogs || 0)); }, 0), 2)}
+                              </td>}
+                              {seeCosts && <td className="px-2 py-1.5 text-right font-mono font-extrabold text-amber-100 bg-amber-500/10">
+                                {fmtNum(historySaleLines.reduce(function (a, l) { return a + (l.status === 'reversed' ? 0 : (l.profit || 0)); }, 0), 2)}
+                              </td>}
+                            </tr>
+                          </tfoot>
                         </table>
+                      </div>
+                    )}
+
+                    {/* Raw stock ledger, kept below the orders as supporting detail. */}
+                    {historyMovements.length > 0 && (
+                      <div className="mt-4">
+                        <div className="text-xs font-extrabold text-slate-300 mb-1">📋 Stock movement ledger ({historyMovements.length})</div>
+                        <div className="overflow-auto border border-slate-700 rounded">
+                          <table className="w-full text-xs">
+                            <thead className="bg-slate-800/70">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
+                                <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Type</th>
+                                <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Reference</th>
+                                <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Qty</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {historyMovements.map(function (mov) {
+                                var q = Number(mov.quantity || 0);
+                                return (
+                                  <tr key={mov.id} className="border-b border-slate-700">
+                                    <td className="px-2 py-1.5 font-mono text-slate-300">{mov.movement_date ? String(mov.movement_date).substring(0, 10) : '—'}</td>
+                                    <td className="px-2 py-1.5 text-slate-200 font-semibold">{mov.movement_type || '—'}</td>
+                                    <td className="px-2 py-1.5 font-mono text-slate-300">{mov.reference_number || mov.notes || '—'}</td>
+                                    <td className={'px-2 py-1.5 text-right font-mono font-bold ' + (q < 0 ? 'text-red-300' : 'text-emerald-300')}>{fmtNum(q, 2)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     )}
                   </div>
