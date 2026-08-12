@@ -46,6 +46,7 @@ export default function InventoryOverview(props) {
   var [layers, setLayers] = useState([]);          // inventory_layers (current stock)
   var [receipts, setReceipts] = useState([]);      // inventory_stock_receipts (original received)
   var [salesItems, setSalesItems] = useState([]);  // invoice_items where uses_inventory + variant_id
+  var [countAdjs, setCountAdjs] = useState([]);    // v55.83-NE — physical-count roll deltas
   var [loading, setLoading] = useState(true);
   var [error, setError] = useState(null);
 
@@ -259,12 +260,14 @@ export default function InventoryOverview(props) {
           });
         };
 
-        var [prodRes, lstRes, layRes, recRes, soldRes] = await Promise.all([
+        var [prodRes, lstRes, layRes, recRes, soldRes, adjRes] = await Promise.all([
           supabase.from('inventory_products').select('*').eq('active', true).order('updated_at', { ascending: false }),
           supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
           safe(supabase.from('inventory_layers').select('product_id, qty_remaining, cost_per_uom').gt('qty_remaining', 0)),
           safe(supabase.from('inventory_stock_receipts').select('product_id, quantity, quantity_kg, roll_count, uom, status')),
           safe(supabase.from('invoice_items').select('variant_id, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, rolls_sold').eq('uses_inventory', true)),
+        // v55.83-NE — physical-count roll deltas (table may not exist until the NE SQL runs; safe() tolerates that)
+        safe(supabase.from('inventory_adjustments').select('product_id, rolls_delta, adjustment_type').eq('adjustment_type', 'count')),
         ]);
         if (cancelled) return;
 
@@ -289,6 +292,7 @@ export default function InventoryOverview(props) {
         setLayers((layRes && layRes.data) || []);
         setReceipts((recRes && recRes.data) || []);
         setSalesItems((soldRes && soldRes.data) || []);
+        setCountAdjs((adjRes && adjRes.data) || []);
       } catch (e) {
         if (!cancelled) {
           console.error('[inventory-overview] load failed:', e);
@@ -330,6 +334,7 @@ export default function InventoryOverview(props) {
         recv_kg: 0,               // summed Quantity in Kilos across receipts
         recv_rolls: 0,            // summed Roll Count across receipts (rolls received)
         sold_rolls: 0,            // v55.83-H — summed rolls_sold across consumed sales
+        adj_rolls: 0,             // v55.83-NE — physical-count roll corrections (+/-)
         has_pending: false,       // any receipt not yet finalized
         has_finalized: false,     // any receipt finalized
       };
@@ -412,7 +417,7 @@ export default function InventoryOverview(props) {
       s2.recv_uom_primary = best; // '' when there are no (non-cancelled) receipts
     });
     return stats;
-  }, [products, layers, receipts, salesItems]);
+  }, [products, layers, receipts, salesItems, countAdjs]);
 
   // UOM source of truth: received-line UOM first, product-master default only as fallback.
   function effUom(p) {
@@ -512,6 +517,15 @@ export default function InventoryOverview(props) {
   var grouped = useMemo(function () {
     var groups = {};  // { family_list_id: { label_en, label_ar, code, products: [], totals } }
     var ungroupedKey = '__ungrouped__';
+    // v55.83-NE — fold physical-count roll corrections into each product's stats.
+    // Rolls are general counts (received - sold + count deltas); without this,
+    // a counted roll figure would never show up anywhere.
+    countAdjs.forEach(function (a) {
+      var s2 = stats[a.product_id];
+      if (!s2) return;
+      s2.adj_rolls += Number(a.rolls_delta || 0) || 0;
+    });
+
     filteredProducts.forEach(function (p) {
       var familyId = p.family_list_id || ungroupedKey;
       if (!groups[familyId]) {
@@ -550,9 +564,10 @@ export default function InventoryOverview(props) {
       if (gUom !== 'roll' && gUom !== 'rolls') {
         var gOrig = s.recv_rolls || 0;
         var gSold = s.sold_rolls || 0;
+        var gAdj = s.adj_rolls || 0; // v55.83-NE — count corrections
         groups[familyId].totals.rolls_original += gOrig;
         groups[familyId].totals.rolls_sold += gSold;
-        groups[familyId].totals.rolls_current += Math.max(0, gOrig - gSold);
+        groups[familyId].totals.rolls_current += Math.max(0, gOrig - gSold + gAdj);
       }
     });
     // Convert to sorted array (alphabetic by label_en, "Unclassified" last)
@@ -619,9 +634,10 @@ export default function InventoryOverview(props) {
       if (uomN !== 'roll' && uomN !== 'rolls') {
         var oRolls = s.recv_rolls || 0;
         var sRolls = s.sold_rolls || 0;
+        var aRolls = s.adj_rolls || 0; // v55.83-NE — count corrections
         t.rolls_original += oRolls;
         t.rolls_sold += sRolls;
-        t.rolls_current += Math.max(0, oRolls - sRolls);
+        t.rolls_current += Math.max(0, oRolls - sRolls + aRolls);
       }
       t.sold_revenue += s.sold_revenue || 0;
       t.cogs_total += s.cogs_total || 0;
@@ -1033,8 +1049,9 @@ export default function InventoryOverview(props) {
                       var isRollUnit = uomNorm === 'roll' || uomNorm === 'rolls';
                       var origRolls = s.recv_rolls || 0;
                       var soldRolls = s.sold_rolls || 0;
-                      var currRolls = Math.max(0, origRolls - soldRolls);
-                      var showRolls = !isRollUnit && (origRolls > 0 || soldRolls > 0);
+                      var adjRolls = s.adj_rolls || 0; // v55.83-NE — count corrections
+                      var currRolls = Math.max(0, origRolls - soldRolls + adjRolls);
+                      var showRolls = !isRollUnit && (origRolls > 0 || soldRolls > 0 || adjRolls !== 0);
                       return (
                         <tr key={p.id} className={zebra + ' border-b-2 border-slate-700 hover:bg-slate-700/50 align-top'}>
                           <td onClick={function () { openHistory(p); }} title="Open drill-down — inbound orders + sales for this product" className="px-3 py-3 font-mono text-slate-100 font-bold cursor-pointer hover:text-indigo-200 transition-colors">

@@ -24,6 +24,7 @@ import InventoryStockImport from './InventoryStockImport';
 import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
 import InventoryAdjustments from './InventoryAdjustments';
+import InventoryStockCount from './InventoryStockCount';
 import InventoryOverview from './InventoryOverview';
 import InventoryMixComposition from './InventoryMixComposition';
 // v55.83-A.6.27.62 — new reports + warehouse advances subtabs
@@ -54,6 +55,7 @@ var SUBTABS = [
   { id: 'warehouses',      group: 'core',      name: 'Warehouses',        label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
   { id: 'movementsledger', group: 'core',      name: 'Movements',         label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
   { id: 'adjustments',     group: 'core',      name: 'Adjustments',       label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
+  { id: 'stockcount',      group: 'core',      name: 'Stock Count',       label: '🔢 Stock Count', stage: 'Engine', desc: 'Physical count: type what is actually on the racks, the system adjusts itself to match — fully audited.' },
 
   { id: 'receivestock',    group: 'import',    name: 'Inbound Shipments', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Import a NEXPAC report inside a shipment to set its expected rolls/weights, then compare against actual.' },
   { id: 'importstock',     group: 'import',    name: 'Import Shipment',   label: '📦 Import Shipment', stage: 'Receiving', desc: 'One-time bulk import of existing inventory + shipment metadata from Excel.' },
@@ -339,6 +341,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
             if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) return { hidden: true };
             if ((st.id === 'movementsledger' || st.id === 'costlayers') && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) return { hidden: true };
             if (st.id === 'adjustments' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) return { hidden: true };
+            if (st.id === 'stockcount' && !(isSuperAdmin || (modulePerms && (modulePerms['Edit Inventory'] === true || modulePerms['Adjust Inventory'] === true)))) return { hidden: true };
             return { hidden: false, available: available };
           }
           return SUBTAB_GROUPS.map(function (grp) {
@@ -447,6 +450,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.36 — Phase 1 Build 4.5: Adjustments */}
       {subtab === 'adjustments' && (
         <InventoryAdjustments userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+
+      {subtab === 'stockcount' && (
+        <InventoryStockCount userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* v55.83-FW — Bilingual Inventory Report Center (snapshot + virtual mix) */}

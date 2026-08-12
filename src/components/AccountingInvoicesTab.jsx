@@ -155,6 +155,41 @@ export default function AccountingInvoicesTab(props) {
       .then(function () { toast.success('Deleted'); lcRefresh(); })
       .catch(function (e) { console.error('[lifecycle] delete', e); toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
   }
+  // v55.83-NC (Max Aug 11) — "Can we actually delete an invoice from the
+  // accounting side that will then delete from wave". A Wave-linked invoice is
+  // (rightly) blocked from the plain lifecycle Delete; this path deletes the
+  // Wave copy FIRST via /api/wave/delete-invoice, then the Hub record. Wave
+  // refusal stops everything with nothing changed. Wave-pushed payments block
+  // server-side; Hub-only payments need a second acknowledgement.
+  function deleteWithWave(row, ackHubPayments) {
+    if (!(mayApprove || isSuperAdmin)) { toast.error('Only an Owner/Admin or Accounting Manager can delete a Wave-linked invoice.'); return; }
+    var sure = window.confirm(
+      'PERMANENTLY delete invoice ' + (row.invoice_number || row.id) + '?\n\n' +
+      (row.wave_invoice_id ? 'Its Wave copy will be deleted FIRST — if Wave refuses, nothing is deleted anywhere.\n' : '') +
+      'This CANNOT be undone.');
+    if (!sure) { return; }
+    setBusy(true);
+    fetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_delete: true, acknowledge_hub_payments: ackHubPayments === true, user_id: (userProfile && userProfile.id) || null }) })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
+      .then(function (res) {
+        var j = res.j || {};
+        if (j.ok === true) {
+          toast.success('Invoice ' + (j.invoice_number || '') + ' deleted' + (j.deleted_in_wave ? ' from Wave and the Hub' : ' from the Hub') + (j.hub_payments_deleted ? ' (' + j.hub_payments_deleted + ' Hub payment record(s) removed with it)' : ''));
+          logActivity(userProfile && userProfile.id, 'Deleted invoice ' + (row.invoice_number || row.id) + (j.deleted_in_wave ? ' (Wave copy deleted too)' : ''), 'accounting_invoices');
+          setEditing(null); setViewing(null); load();
+          return;
+        }
+        if (j.reason === 'hub_payments_need_ack') {
+          var ack = window.confirm((j.error || 'This invoice has Hub payment records.') + '\n\nDelete them together with the invoice?');
+          if (ack) { setBusy(false); deleteWithWave(row, true); return; }
+          toast.error('Delete cancelled — payments kept.');
+          return;
+        }
+        toast.error('Delete stopped: ' + (j.error || ('HTTP ' + res.status)));
+      })
+      .catch(function (e) { toast.error('Delete failed: ' + ((e && e.message) || 'network error')); })
+      .finally(function () { setBusy(false); });
+  }
   function doLcArchive(row) {
     if (!window.confirm('Archive this ' + lcKind() + '? It stays in the records (Wave link preserved) but is hidden from the active list.')) return;
     dbUpdate(lcTbl(), row.id, archivePatch(userProfile && userProfile.id), userProfile && userProfile.id)
@@ -188,7 +223,16 @@ export default function AccountingInvoicesTab(props) {
       canSubmit: isInv && mayEdit && st === 'draft',
       canApprove: isInv && (mayApprove || isSuperAdmin) && st === 'internal_review',
       canReopen: isInv && (mayApprove || isSuperAdmin) && st === 'approved',
-      canEditInvoice: isInv && mayEdit && st !== 'approved'
+      canEditInvoice: isInv && mayEdit && st !== 'approved',
+      // v55.83-NA — "Update in Wave" appears when this Hub-authored invoice has a
+      // Wave copy AND was reopened+edited after syncing (pending_sync). Only
+      // approvers see it: the flow re-approves and then deletes+recreates in
+      // Wave, both privileged actions. Wave-imported invoices are excluded —
+      // the Hub never deletes a Wave-authored invoice (server enforces too).
+      canUpdateWave: isInv && (mayApprove || isSuperAdmin)
+        && !!row.wave_invoice_id
+        && row.source !== 'wave_import'
+        && row.wave_sync_status === 'pending_sync'
     };
   }
   var rows = scopeIfRegistered((isInvoice() ? invoices : proformas), waveBiz, waveReg, true);
@@ -388,6 +432,56 @@ export default function AccountingInvoicesTab(props) {
       .catch(function (e) { console.error('[save] Failed: ', e); toast.error('Could not ' + (status === 'approved' ? 'approve' : 'update') + ' invoice: ' + ((e && e.message) || 'unknown error') + ' (screenshot for Claude)'); })
       .finally(function () { setBusy(false); });
   }
+  // v55.83-NA — the amend-and-re-push flow, in the order that keeps Wave safe:
+  //   1. approve the amended Hub invoice (invoice-write set_approval — an
+  //      approved amend is what gets pushed, never a half-edited draft)
+  //   2. replace-invoice: server deletes the OLD Wave copy and unlinks it
+  //      (refuses outright if any payment is already recorded in Wave)
+  //   3. push-invoice-v2: the existing, battle-tested push recreates it from
+  //      the current Hub data (product mapping, currency guarantee, DRAFT
+  //      auto-approve and read-back all still apply)
+  // If step 3 fails, the invoice sits honestly in pending_sync with no Wave
+  // copy — visible in the Sync Center, recoverable with a normal push. At no
+  // point can two copies exist in Wave.
+  function updateInWave(row) {
+    if (!(mayApprove || isSuperAdmin)) { toast.error('Only an Owner/Admin or Accounting Manager can update Wave.'); return; }
+    if (!row || !row.wave_invoice_id) { toast.error('This invoice has no Wave copy — use the normal push.'); return; }
+    var sure = window.confirm(
+      'Update invoice ' + (row.invoice_number || row.id) + ' in Wave?\n\n' +
+      'Wave has no edit — the old Wave copy will be DELETED and a new one created from the amended Hub invoice.\n' +
+      'The Wave invoice id will change. Payments already recorded in Wave will block this (by design).\n\n' +
+      'Continue?');
+    if (!sure) { return; }
+    setBusy(true);
+    var uid = (userProfile && userProfile.id) || null;
+    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_approval', invoice_id: row.id, status: 'approved', user_id: uid }) })
+      .then(function (r) { return r.json(); })
+      .then(function (aj) {
+        if (!aj || !aj.ok) { throw new Error('Could not approve the amended invoice: ' + ((aj && aj.error) || 'unknown error')); }
+        toast.success('Amended invoice approved — replacing the Wave copy…');
+        return fetch('/api/wave/replace-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_replace: true, user_id: uid }) }).then(function (r) { return r.json(); });
+      })
+      .then(function (rj) {
+        if (!rj || rj.ok !== true) { throw new Error((rj && rj.error) || 'Wave did not delete the old copy — nothing was changed.'); }
+        toast.success('Old Wave copy removed — pushing the amended invoice…');
+        return fetch('/api/wave/push-invoice-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, dry_run: false, user_id: uid }) }).then(function (r) { return r.json(); });
+      })
+      .then(function (pj) {
+        // Same result reading as approveAndPushInvoice in the Sync Center: never
+        // treat a bare wave_invoice_id as success.
+        var draftStuck = !!(pj && (pj.needs_approval === true || pj.wave_status === 'DRAFT' || pj.wave_sync_status === 'pushed_draft'));
+        var currencyBad = !!(pj && pj.currency_mismatch === true);
+        var pushed = !!(pj && (pj.success === true || pj.ok === true) && !draftStuck && !currencyBad);
+        if (pushed) { toast.success('Wave now shows the amended invoice.'); }
+        else if (draftStuck) { toast.error('Amended invoice created in Wave but is still DRAFT — use "Approve in Wave" in the Sync Center. ' + ((pj && pj.warning) || '')); }
+        else if (currencyBad) { toast.error('Amended invoice created but its currency does not match: ' + ((pj && pj.error) || 'fix the customer currency in Wave')); }
+        else { toast.error('Old copy was removed but the re-push failed: ' + ((pj && pj.error) || 'see Sync Log') + ' — the invoice is in Pending Sync; push it from the Sync Center once fixed.'); }
+        logActivity(uid, 'Updated invoice ' + (row.invoice_number || row.id) + ' in Wave (delete + recreate)', 'accounting_invoices');
+        setViewing(null); load();
+      })
+      .catch(function (e) { toast.error((e && e.message) || 'Update in Wave failed'); load(); })
+      .finally(function () { setBusy(false); });
+  }
   function reopenInvoice(row) {
     if (!mayApprove) { toast.error('Only an Owner/Admin or Accounting Manager can reopen.'); return; }
     var reason = window.prompt('Reopen approved invoice for editing. Reason:') || '';
@@ -551,7 +645,7 @@ export default function AccountingInvoicesTab(props) {
                     {isInvoice() && invActions(row).canSubmit && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
                     {isInvoice() && invActions(row).canApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
                     {isInvoice() && invActions(row).canReopen && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
-                    {null}
+                    {isInvoice() && invActions(row).canUpdateWave && <button onClick={function () { updateInWave(row); }} disabled={busy} className="text-[10px] bg-violet-700 hover:bg-violet-600 text-white rounded px-1.5 py-0.5 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
                     {!isInvoice() && mayEdit && row.status !== 'converted' && <button onClick={function () { convertProforma(row); }} disabled={busy} className="text-[10px] bg-emerald-700 text-white rounded px-1.5 py-0.5 font-bold">Convert</button>}
                   </div>
                 </div>
@@ -575,6 +669,7 @@ export default function AccountingInvoicesTab(props) {
                   {isInvoice() && mayEdit && (viewing.approval_status || 'draft') === 'draft' && <button onClick={function () { var row = viewing; setApproval(row, 'internal_review'); setViewing(null); }} disabled={busy} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Submit for Review</button>}
                   {isInvoice() && mayApprove && viewing.approval_status === 'internal_review' && <button onClick={function () { var row = viewing; setApproval(row, 'approved'); setViewing(null); }} disabled={busy} className="text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded px-2 py-1 font-bold">Approve</button>}
                   {isInvoice() && mayApprove && viewing.approval_status === 'approved' && <button onClick={function () { var row = viewing; reopenInvoice(row); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
+                  {isInvoice() && invActions(viewing).canUpdateWave && <button onClick={function () { var row = viewing; updateInWave(row); }} disabled={busy} className="text-[11px] bg-violet-700 hover:bg-violet-600 text-white rounded px-2 py-1 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
                   {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
                   <button onClick={function () { setViewing(null); }} className="text-slate-300 hover:text-white text-sm px-2">✕</button>
                 </div>
@@ -692,6 +787,12 @@ export default function AccountingInvoicesTab(props) {
                 {lc.canCancel && <button onClick={function () { doLcVoid(editing, 'cancelled'); }} className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-bold">Mark cancelled</button>}
                 {lc.canArchive && <button onClick={function () { doLcArchive(editing); }} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Archive</button>}
                 {lc.canRestore && <button onClick={function () { doLcRestore(editing); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold">Restore</button>}
+                {/* v55.83-NC — a Wave-linked Hub invoice can now be deleted THROUGH
+                    Wave. The plain lifecycle Delete stays blocked (its blocker is
+                    correct: a Hub-only delete would orphan the Wave copy); this
+                    button takes the safe route instead. */}
+                {!lc.canHardDelete && isInvoice() && !!editing.wave_invoice_id && editing.source !== 'wave_import' && (mayApprove || isSuperAdmin) &&
+                  <button onClick={function () { deleteWithWave(editing); }} disabled={busy} className="px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded text-xs font-bold" title="Deletes the Wave copy first, then the Hub invoice">🗑 Delete (incl. Wave)</button>}
                 {!lc.canHardDelete && lc.blockReason && <span className="text-[11px] text-amber-300 font-semibold">{lc.blockReason}</span>}
               </div>
             );

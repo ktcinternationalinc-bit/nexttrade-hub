@@ -5512,7 +5512,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-MZ</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-NE</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -7868,6 +7868,12 @@ export default function App() {
                         <div style={{direction:'rtl'}}><span className="font-semibold">Description:</span> {txn.description}</div>
                         {Number(txn.cash_in) > 0 && <div><span className="font-semibold text-emerald-600">Cash In:</span> {fE(txn.cash_in)}</div>}
                         {Number(txn.cash_out) > 0 && <div><span className="font-semibold text-red-500">Cash Out:</span> {fE(txn.cash_out)}</div>}
+                        {/* v55.83-NB — a delete must show ALL the money on the line,
+                            not just the EGP side; deleting a "0 EGP" row that holds
+                            $27,450 should never look like deleting nothing. */}
+                        {Number(txn.usd_in) > 0 && <div><span className="font-semibold text-emerald-600">USD In:</span> ${Number(txn.usd_in).toLocaleString()}</div>}
+                        {Number(txn.usd_out) > 0 && <div><span className="font-semibold text-red-500">USD Out:</span> ${Number(txn.usd_out).toLocaleString()}</div>}
+                        {Number(txn.foreign_amount) > 0 && txn.foreign_currency && <div><span className={'font-semibold ' + (txn.foreign_direction === 'out' ? 'text-red-500' : 'text-emerald-600')}>{txn.foreign_currency} {txn.foreign_direction === 'out' ? 'Out' : 'In'}:</span> {Number(txn.foreign_amount).toLocaleString()} {txn.foreign_currency}</div>}
                       </div>
                       {txn.linked_invoice_id && (
                         <div className="text-[10px] text-amber-600 mt-2 font-semibold">⚠️ This is linked to an invoice — unlinking will also adjust the collected amount.</div>
@@ -8033,6 +8039,65 @@ export default function App() {
                         </div>
                       </div>
                     )}
+                    {/* v55.83-NB (Max Aug 11) — "accountant needs to be able to edit each
+                        line and fix it manually if necessary in the other currencies
+                        besides EGP". This modal edited only the EGP (cash) and bank
+                        sides; a wrong USD or EUR figure was uncorrectable from the UI.
+                        The section appears whenever the row carries non-EGP money OR
+                        the accountant is currently in a non-EGP Treasury view (so a
+                        missing dollar amount can be ADDED to a row, not just fixed).
+                        USD lives in its own usd_in/usd_out pair; all other currencies
+                        share foreign_amount + foreign_currency + foreign_direction —
+                        the same sealed-bucket shapes the MZ toggle reads. */}
+                    {(!isBankRow && (Number(txn.usd_in || 0) > 0 || Number(txn.usd_out || 0) > 0
+                      || Number(txn.foreign_amount || 0) > 0 || treasuryCurrency !== 'EGP')) && (
+                      <div className="rounded-lg p-3 border-2 border-amber-300" style={{ background: '#fffbeb' }}>
+                        <div className="text-[10px] font-extrabold uppercase tracking-wide mb-2" style={{ color: '#78350f' }}>
+                          💵 Other currency on this line / عملة أخرى
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mb-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-emerald-700">USD In / وارد دولار</label>
+                            <input type="number" value={txn.usd_in || 0}
+                              onChange={e => setEditTreasuryModal({...txn, usd_in: Number(e.target.value) || 0})}
+                              className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-700 font-semibold" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-red-600">USD Out / صادر دولار</label>
+                            <input type="number" value={txn.usd_out || 0}
+                              onChange={e => setEditTreasuryModal({...txn, usd_out: Number(e.target.value) || 0})}
+                              className="w-full px-3 py-2 rounded-lg border text-sm text-red-600 font-semibold" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Currency / العملة</label>
+                            <input value={txn.foreign_currency || ''} placeholder="EUR"
+                              onChange={e => setEditTreasuryModal({...txn, foreign_currency: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3)})}
+                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold uppercase" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Amount / المبلغ</label>
+                            <input type="number" value={txn.foreign_amount || 0}
+                              onChange={e => setEditTreasuryModal({...txn, foreign_amount: Number(e.target.value) || 0})}
+                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Direction / اتجاه</label>
+                            <select value={txn.foreign_direction || 'in'}
+                              onChange={e => setEditTreasuryModal({...txn, foreign_direction: e.target.value})}
+                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold bg-white">
+                              <option value="in">In / وارد</option>
+                              <option value="out">Out / صادر</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="text-[10px] mt-2 font-medium" style={{ color: '#78350f' }}>
+                          These amounts stay in their own currency — they are never added to the EGP totals.
+                          Set an amount to 0 to remove it from that currency's ledger.
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Category / التصنيف</label>
                       <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
@@ -8077,6 +8142,22 @@ export default function App() {
                         } else {
                           payload.cash_in  = Number(txn.cash_in)  || 0;
                           payload.cash_out = Number(txn.cash_out) || 0;
+                          // v55.83-NB — persist the other-currency side. Only for
+                          // cash rows: the currency section is never shown on bank
+                          // rows, so bank edits can't accidentally zero these out.
+                          payload.usd_in  = Number(txn.usd_in)  || 0;
+                          payload.usd_out = Number(txn.usd_out) || 0;
+                          var fcur = String(txn.foreign_currency || '').trim().toUpperCase();
+                          var famt = Number(txn.foreign_amount) || 0;
+                          // An amount with no currency code is meaningless and would
+                          // vanish from every ledger — refuse the ambiguity here.
+                          if (famt > 0 && !fcur) {
+                            toast.error('Enter a currency code (e.g. EUR) for the foreign amount, or set the amount to 0. / أدخل رمز العملة');
+                            return;
+                          }
+                          payload.foreign_currency  = famt > 0 ? fcur : null;
+                          payload.foreign_amount    = famt;
+                          payload.foreign_direction = famt > 0 ? (txn.foreign_direction === 'out' ? 'out' : 'in') : null;
                         }
                         handleSaveTreasuryEdit(txn.id, payload);
                       }} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
@@ -13122,6 +13203,7 @@ export default function App() {
                           <th className="px-2 py-1.5 text-right font-extrabold text-emerald-200">In</th>
                           <th className="px-2 py-1.5 text-right font-extrabold text-red-200">Out</th>
                           <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Balance</th>
+                          <th className="px-2 py-1.5 text-right font-extrabold text-slate-100"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -13147,6 +13229,23 @@ export default function App() {
                                   style={{ color: (bal || 0) >= 0 ? '#6ee7b7' : '#fca5a5' }}>
                                   {bal == null ? '—' : fCur(bal)}
                                 </td>
+                                {/* v55.83-NB — edit + delete straight from the currency
+                                    ledger (Max: "accountant needs to be able to edit
+                                    each line and fix it manually ... also the ability
+                                    to delete a line"). Both open the SAME treasury
+                                    modal as the EGP table, so every existing guard
+                                    applies unchanged: the delete confirmation, the
+                                    super-admin / creator-within-24h delete rule,
+                                    invoice-collected recalc, and the linked-check
+                                    revert all come for free. */}
+                                <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                                  <button onClick={() => setEditTreasuryModal({ ...t })}
+                                    className="text-slate-300 hover:text-white px-1"
+                                    title="Edit this line / تعديل">✏️</button>
+                                  <button onClick={() => setEditTreasuryModal({ ...t, confirmDelete: true })}
+                                    className="text-slate-300 hover:text-red-300 px-1"
+                                    title="Delete this line / حذف">🗑</button>
+                                </td>
                               </tr>
                             );
                           })}
@@ -13158,6 +13257,7 @@ export default function App() {
                           <td className="px-2 py-1.5 text-right font-mono font-extrabold text-red-200">{fCur(currencyTotals.out)}</td>
                           <td className="px-2 py-1.5 text-right font-mono font-extrabold"
                             style={{ color: currencyTotals.net >= 0 ? '#93c5fd' : '#fcd34d' }}>{fCur(currencyTotals.net)}</td>
+                          <td />
                         </tr>
                       </tfoot>
                     </table>

@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import WaveConnectionTab from './WaveConnectionTab';
 import WaveImportTab from './WaveImportTab';
 import WaveSyncCenter from './WaveSyncCenter';
+import WaveReconciliationCenter from './WaveReconciliationCenter';
 
 export default function WaveHub(props) {
   var canWaveSync = props.canWaveSync === true;
@@ -17,12 +18,14 @@ export default function WaveHub(props) {
     ['mirror', '2 - Import Wave Truth', 'Categories, invoices, payments, old transaction CSV'],
   ];
   if (canWaveSync) { steps.push(['sync', '3 - Review, Push & Setup', 'Pending sync, logs, and write settings']); }
+  // v55.83-ND — Max's monthly reconciliation: compare, choose per line, submit the queue.
+  if (canWaveSync) { steps.push(['reconcile', '4 - Reconcile', 'Compare Wave vs Hub, fix differences']); }
 
   // v55.83-ME — honor a deep-link's intended Wave sub-section so a "go to settings/import" jump doesn't
   // strand the user on Connect. initialWaveStep is 'connect' | 'mirror' | 'sync'.
   var s0 = useState(props.initialWaveStep || 'connect'); var step = s0[0]; var setStep = s0[1];
   // if the user loses sync access, never strand them on a hidden step
-  if (step === 'sync' && !canWaveSync) { step = 'connect'; }
+  if ((step === 'sync' || step === 'reconcile') && !canWaveSync) { step = 'connect'; }
 
   function StepBtn(st) {
     var active = step === st[0];
@@ -41,6 +44,7 @@ export default function WaveHub(props) {
       {step === 'connect' && <WaveConnectionTab {...props} onGoToImport={function () { setStep('mirror'); }} />}
       {step === 'mirror' && <WaveImportTab {...props} onGoToSync={function () { if (canWaveSync) { setStep('sync'); } }} />}
       {step === 'sync' && canWaveSync && <WaveSyncCenter key={'acct-sync|' + waveKey} {...props} onGoToWaveConnection={function () { setStep('connect'); }} />}
+      {step === 'reconcile' && canWaveSync && <WaveReconciliationCenter key={'acct-recon|' + waveKey} {...props} />}
     </div>
   );
 }
