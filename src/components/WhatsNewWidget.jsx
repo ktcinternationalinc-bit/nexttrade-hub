@@ -33,6 +33,29 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NH',
+    date: '2026-08-12',
+    label: 'Inventory reports now read left-to-right: Inbound \u2192 Sold \u2192 On Hand',
+    items: [
+      '**\u27a1\ufe0f Three pairs, in the order goods move.** Inbound Qty / Inbound Rolls (everything that ever arrived), then Sold Qty / Sold Rolls (everything that ever left), then \ud83d\udfe9 On Hand Qty / \ud83d\udfe6 On Hand Rolls (what is on the shelf now, shaded). Every row reads as a sentence: this much came in, this much went out, this is left.',
+      '**\u2796 Inbound minus Sold equals On Hand \u2014 on every single row.** If a number ever looks wrong, you can see WHICH of the three is wrong instead of staring at one figure.',
+      '**\u2753 \u201cCumulative\u201d / \u201chistoric\u201d is the same thing as Inbound.** It is everything that ever arrived. There is no fourth number, so there is no fourth column \u2014 the Inbound headers say (all-time) to make that plain.',
+      '**\ud83d\udd22 Physical-count corrections are folded into Inbound**, so the arithmetic stays true after a stock count too.',
+      { superAdminOnly: true, text: 'v55.83-NH \u2014 NO SQL. defs: the six quantity columns in FULL_PNL + CONSOLIDATED (customer copies inherit) relabelled Inbound Qty/Rolls (all-time), Sold Qty/Rolls, On Hand Qty/Rolls; order Inbound\u2192Sold\u2192On Hand; ONLY On Hand shaded (NG); no cumulative column (documented as a duplicate of Inbound). ReportCenter: Inbound now satisfies Inbound \u2212 Sold = On Hand per row under NE counts \u2014 found stock already arrives via COUNT-ADJ receipt so it is in origByProduct, therefore only NEGATIVE count qty deltas fold into original_qty (Math.min(0, delta)); roll deltas (either sign) fold into recv_rolls; on_hand_rolls re-expressed as (recv + countDelta) \u2212 sold to make the identity literal; adjustments probe now also selects signed quantity. NH assertions appended to test-v55-83-nf (10 more; NG8 re-aligned); runner 112/112.' },
+    ],
+  },
+  {
+    version: 'v55.83-NG',
+    date: '2026-08-12',
+    label: 'Inventory reports: On Hand Qty and On Hand Rolls, each shaded its own colour',
+    items: [
+      '**\ud83d\udfe9 On Hand Qty is shaded green, \ud83d\udfe6 On Hand Rolls is shaded blue** \u2014 in every one of the new inventory reports, including the customer copies. Header, every row, and the totals line, so the two \u201cwhat is actually on the shelf\u201d figures jump out at a glance.',
+      '**\ud83e\uddfe On Hand Rolls is new.** Rolls received minus rolls sold, plus any physical-count corrections \u2014 the general roll count, per product and per family.',
+      '**\ud83d\udda8 The colours print.** They are built to survive the printer, not just the screen.',
+      { superAdminOnly: true, text: 'v55.83-NG \u2014 NO SQL. defs: qty_remaining relabelled On Hand Qty + shade:qty; NEW on_hand_rolls col (shade:rolls) in FULL_PNL and CONSOLIDATED (customer copies inherit via the derived filter). ReportTable: SHADE map {qty: green #dcfce7/#86efac/#4ade80 text #052e16; rolls: blue #dbeafe/#93c5fd/#60a5fa text #0c2a5e}, shadeStyle(c, head|body|foot) applied inline with print-color-adjust:exact so Tailwind purge / print CSS cannot drop it; dark-on-light per contrast rule. ReportCenter: on_hand_rolls = max(0, recv_rolls \u2212 sold_rolls + count rolls_delta) using a new tolerant inventory_adjustments probe (excluded from the load-error banner for pre-NE installs); consolidated sums it; print path mirrors the shades via PSHADE/shadeCss on th/td/tfoot. NG assertions appended to test-v55-83-nf (10 more); runner 112/112.' },
+    ],
+  },
+  {
     version: 'v55.83-NF',
     date: '2026-08-12',
     label: 'Inventory Reports: Stock & P&L, a Customer Copy, and Consolidated by Family',

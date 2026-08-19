@@ -75,11 +75,19 @@ var FULL_PNL_COLUMNS = [
   { key: 'family', label_en: 'Family', label_ar: 'العائلة', align: 'left', format: 'text' },
   { key: 'color', label_en: 'Color', label_ar: 'اللون', align: 'left', format: 'text' },
   { key: 'uom', label_en: 'UOM', label_ar: 'الوحدة', align: 'center', format: 'text' },
-  { key: 'original_qty', label_en: 'Original Qty', label_ar: 'الكمية الأصلية', align: 'right', format: 'number', total: 'sum' },
-  { key: 'recv_rolls', label_en: 'Rolls Rcvd', label_ar: 'لفات مستلمة', align: 'right', format: 'number', total: 'sum' },
+  // v55.83-NH (Max Aug 12) — three pairs in the order goods move, so every row reads as a sentence:
+  //   INBOUND (all-time, incl. count corrections)  −  SOLD (all-time)  =  ON HAND (now, shaded)
+  // "Cumulative/historic" IS Inbound — there is no fourth number; a duplicate column would only
+  // teach people to ignore columns, so it is a label (all-time) not a column.
+  { key: 'original_qty', label_en: 'Inbound Qty (all-time)', label_ar: 'الوارد (إجمالي)', align: 'right', format: 'number', total: 'sum' },
+  { key: 'recv_rolls', label_en: 'Inbound Rolls (all-time)', label_ar: 'لفات واردة (إجمالي)', align: 'right', format: 'number', total: 'sum' },
   { key: 'sold_qty', label_en: 'Sold Qty', label_ar: 'الكمية المباعة', align: 'right', format: 'number', total: 'sum' },
-  { key: 'sold_rolls', label_en: 'Rolls Sold', label_ar: 'لفات مباعة', align: 'right', format: 'number', total: 'sum' },
-  { key: 'qty_remaining', label_en: 'On Hand', label_ar: 'المتبقي', align: 'right', format: 'number', total: 'sum' },
+  { key: 'sold_rolls', label_en: 'Sold Rolls', label_ar: 'لفات مباعة', align: 'right', format: 'number', total: 'sum' },
+  // v55.83-NG (Max Aug 12): ON HAND QTY and ON HAND ROLLS, each shaded its own colour so the
+  // two "what is actually on the shelf" figures jump out of every report. shade is a
+  // presentation hint ReportTable reads; the print/CSV paths carry the same columns.
+  { key: 'qty_remaining', label_en: 'On Hand Qty', label_ar: 'الكمية المتبقية', align: 'right', format: 'number', total: 'sum', shade: 'qty' },
+  { key: 'on_hand_rolls', label_en: 'On Hand Rolls', label_ar: 'اللفات المتبقية', align: 'right', format: 'number', total: 'sum', shade: 'rolls' },
   { key: 'avg_sale_price', label_en: 'Avg Sale Price', label_ar: 'متوسط سعر البيع', align: 'right', format: 'money', pnl: true },
   { key: 'revenue', label_en: 'Revenue', label_ar: 'الإيراد', align: 'right', format: 'money', total: 'sum', pnl: true },
   { key: 'avg_cost', label_en: 'Avg Cost', label_ar: 'متوسط التكلفة', align: 'right', format: 'money', valuation: true, pnl: true },
@@ -98,11 +106,16 @@ var CONSOLIDATED_COLUMNS = [
   { key: 'family', label_en: 'Family', label_ar: 'العائلة', align: 'left', format: 'text' },
   { key: 'products', label_en: 'Products', label_ar: 'عدد المنتجات', align: 'right', format: 'number', total: 'sum' },
   { key: 'uom', label_en: 'UOM', label_ar: 'الوحدة', align: 'center', format: 'text' },
-  { key: 'original_qty', label_en: 'Original Qty', label_ar: 'الكمية الأصلية', align: 'right', format: 'number', total: 'sum' },
-  { key: 'recv_rolls', label_en: 'Rolls Rcvd', label_ar: 'لفات مستلمة', align: 'right', format: 'number', total: 'sum' },
+  // v55.83-NH (Max Aug 12) — three pairs in the order goods move, so every row reads as a sentence:
+  //   INBOUND (all-time, incl. count corrections)  −  SOLD (all-time)  =  ON HAND (now, shaded)
+  // "Cumulative/historic" IS Inbound — there is no fourth number; a duplicate column would only
+  // teach people to ignore columns, so it is a label (all-time) not a column.
+  { key: 'original_qty', label_en: 'Inbound Qty (all-time)', label_ar: 'الوارد (إجمالي)', align: 'right', format: 'number', total: 'sum' },
+  { key: 'recv_rolls', label_en: 'Inbound Rolls (all-time)', label_ar: 'لفات واردة (إجمالي)', align: 'right', format: 'number', total: 'sum' },
   { key: 'sold_qty', label_en: 'Sold Qty', label_ar: 'الكمية المباعة', align: 'right', format: 'number', total: 'sum' },
-  { key: 'sold_rolls', label_en: 'Rolls Sold', label_ar: 'لفات مباعة', align: 'right', format: 'number', total: 'sum' },
-  { key: 'qty_remaining', label_en: 'On Hand', label_ar: 'المتبقي', align: 'right', format: 'number', total: 'sum' },
+  { key: 'sold_rolls', label_en: 'Sold Rolls', label_ar: 'لفات مباعة', align: 'right', format: 'number', total: 'sum' },
+  { key: 'qty_remaining', label_en: 'On Hand Qty', label_ar: 'الكمية المتبقية', align: 'right', format: 'number', total: 'sum', shade: 'qty' },
+  { key: 'on_hand_rolls', label_en: 'On Hand Rolls', label_ar: 'اللفات المتبقية', align: 'right', format: 'number', total: 'sum', shade: 'rolls' },
   { key: 'avg_sale_price', label_en: 'Avg Sale Price', label_ar: 'متوسط سعر البيع', align: 'right', format: 'money', pnl: true },
   { key: 'revenue', label_en: 'Revenue', label_ar: 'الإيراد', align: 'right', format: 'money', total: 'sum', pnl: true },
   { key: 'avg_cost', label_en: 'Avg Cost', label_ar: 'متوسط التكلفة', align: 'right', format: 'money', valuation: true, pnl: true },

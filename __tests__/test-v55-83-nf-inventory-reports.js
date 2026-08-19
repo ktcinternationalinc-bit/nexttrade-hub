@@ -152,3 +152,87 @@ if (failures.length) {
 } else {
   console.log('ALL CHECKS PASSED — v55.83-NF inventory report suite');
 }
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NG ADDENDUM — On Hand Qty + On Hand Rolls, shaded (Max Aug 12:
+// "I NEED TO HAVE ON HAND ROLLS AND QTY AND SHOULD BE SHADED IN DIFFERENT
+//  COLORS THOSE 2 COLORS IN THE REPORTS")
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var rt = read('src/components/ReportTable.jsx');
+  var failures2 = [];
+  function ok2(label, cond) { if (cond) console.log('✓ ' + label); else { failures2.push(label); console.log('✗ ' + label); } }
+
+  ok2('NG1: On Hand Rolls is a column in the product report and the consolidated report',
+    (defs.match(/key: 'on_hand_rolls'/g) || []).length === 2);
+  ok2('NG2: On Hand Qty and On Hand Rolls carry DIFFERENT shade hints',
+    /key: 'qty_remaining'[^\n]*shade: 'qty'/.test(defs) && /key: 'on_hand_rolls'[^\n]*shade: 'rolls'/.test(defs));
+  ok2('NG3: the shade hint is on the customer copies too (derived lists keep it)',
+    /var CUSTOMER_COLUMNS = FULL_PNL_COLUMNS\.filter/.test(defs)); // derived => shade survives
+  ok2('NG4: ReportTable shades header, body AND totals for shaded columns',
+    (rt.match(/style=\{shadeStyle\(c, 'head'\)\}/g) || []).length === 1 &&
+    (rt.match(/style=\{shadeStyle\(c, 'body'\)\}/g) || []).length === 1 &&
+    (rt.match(/style=\{shadeStyle\(c, 'foot'\)\}/g) || []).length === 2);
+  ok2('NG5: two distinct colours (green for qty, blue for rolls), dark text on light (contrast rule)',
+    /qty:\s*\{ body: '#dcfce7'[^}]*text: '#052e16' \}/.test(rt) &&
+    /rolls: \{ body: '#dbeafe'[^}]*text: '#0c2a5e' \}/.test(rt));
+  ok2('NG6: shading uses inline styles + print-color-adjust so it survives print',
+    /WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'/.test(rt));
+  ok2('NG7: the printed report carries the same two shades',
+    /PSHADE = \{ qty: \{ body: '#dcfce7'/.test(rc) && /print-color-adjust:exact/.test(rc) &&
+    /shadeCss\(c, 'head'\)/.test(rc) && /shadeCss\(c, 'body'\)/.test(rc) && /shadeCss\(c, 'foot'\)/.test(rc));
+  ok2('NG8: on-hand rolls = received + physical-count corrections − sold (general count rule; NH re-ordered the terms)',
+    /on_hand_rolls: Math\.max\(0, \(Number\(raw\.recvRollsByProduct\[p\.id\]\) \|\| 0\) \+ \(Number\(raw\.countRollsByProduct && raw\.countRollsByProduct\[p\.id\]\) \|\| 0\) - sa\.rolls\)/.test(rc));
+  ok2('NG9: consolidated sums on-hand rolls per family',
+    /f\.on_hand_rolls \+= r\.on_hand_rolls;/.test(rc) && /on_hand_rolls: f\.on_hand_rolls,/.test(rc));
+  ok2('NG10: the adjustments probe is optional (no error banner on pre-NE installs)',
+    /r\.source !== 'inventory_adjustments'/.test(rc));
+
+  if (failures2.length) { console.log('NG FAILED: ' + failures2.join(' | ')); process.exit(1); }
+  else { console.log('ALL NG ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NH ADDENDUM — Inbound / Sold / On Hand: the row reads as a sentence
+// (Max Aug 12: "CURRENT ... SOLD ... INBOUND ... CUMULATIVE ... MAKE IT MAKE
+// SENSE"). Decision: Cumulative IS Inbound — no duplicate column; Inbound is
+// all-time AND includes physical-count corrections (Max: "yes"), so
+// Inbound − Sold = On Hand holds on every row.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var defs2 = read('src/lib/inventory-report-defs.js');
+  var rc2 = read('src/components/InventoryReportCenter.jsx');
+  var f = [];
+  function ok3(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+
+  ok3('NH1: columns are labelled as the three pairs — Inbound, Sold, On Hand',
+    /label_en: 'Inbound Qty \(all-time\)'/.test(defs2) && /label_en: 'Inbound Rolls \(all-time\)'/.test(defs2) &&
+    /label_en: 'Sold Qty'/.test(defs2) && /label_en: 'Sold Rolls'/.test(defs2) &&
+    /label_en: 'On Hand Qty'/.test(defs2) && /label_en: 'On Hand Rolls'/.test(defs2));
+  ok3('NH2: order in the column list is Inbound → Sold → On Hand (goods-flow order)',
+    (function () {
+      var blk = defs2.slice(defs2.indexOf('var FULL_PNL_COLUMNS'), defs2.indexOf('var CUSTOMER_COLUMNS'));
+      return blk.indexOf("'original_qty'") < blk.indexOf("'sold_qty'") && blk.indexOf("'sold_qty'") < blk.indexOf("'qty_remaining'");
+    })());
+  ok3('NH3: there is NO separate Cumulative/Historic column (it would duplicate Inbound)',
+    !/cumulative|historic/i.test(defs2.slice(defs2.indexOf('var FULL_PNL_COLUMNS'))) ||
+    /Cumulative\/historic\" IS Inbound/.test(defs2) || /is a label \(all-time\) not a column/.test(defs2));
+  ok3('NH4: the reasoning is written where the columns are defined',
+    /Cumulative\/historic" IS Inbound/.test(defs2) && /INBOUND \(all-time, incl\. count corrections\)/.test(defs2));
+  ok3('NH5: Inbound qty folds count SHORTFALLS so Inbound − Sold = On Hand holds',
+    /original_qty: \(Number\(raw\.origByProduct\[p\.id\]\) \|\| 0\) \+ Math\.min\(0, Number\(raw\.countQtyByProduct && raw\.countQtyByProduct\[p\.id\]\) \|\| 0\)/.test(rc2));
+  ok3('NH6: found stock is not double-counted (it already arrives as a COUNT-ADJ receipt; only negatives fold)',
+    /Math\.min\(0, Number\(raw\.countQtyByProduct/.test(rc2) && /Found stock already enters as a COUNT-ADJ receipt/.test(rc2));
+  ok3('NH7: Inbound rolls fold count roll deltas (either sign)',
+    /recv_rolls: \(Number\(raw\.recvRollsByProduct\[p\.id\]\) \|\| 0\) \+ \(Number\(raw\.countRollsByProduct && raw\.countRollsByProduct\[p\.id\]\) \|\| 0\)/.test(rc2));
+  ok3('NH8: On Hand rolls = Inbound rolls − Sold rolls (same inputs, same order)',
+    /on_hand_rolls: Math\.max\(0, \(Number\(raw\.recvRollsByProduct\[p\.id\]\) \|\| 0\) \+ \(Number\(raw\.countRollsByProduct && raw\.countRollsByProduct\[p\.id\]\) \|\| 0\) - sa\.rolls\)/.test(rc2));
+  ok3('NH9: count qty deltas are loaded (signed quantity on the adjustment row)',
+    /select\('product_id,rolls_delta,quantity,adjustment_type'\)/.test(rc2) && /countQtyByProduct\[a\.product_id\]/.test(rc2));
+  ok3('NH10: On Hand stays the only shaded pair (Inbound/Sold are plain)',
+    !/key: 'original_qty'[^\n]*shade:/.test(defs2) && !/key: 'sold_qty'[^\n]*shade:/.test(defs2) &&
+    /key: 'qty_remaining'[^\n]*shade: 'qty'/.test(defs2));
+
+  if (f.length) { console.log('NH FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NH ADDENDUM CHECKS PASSED'); }
+})();

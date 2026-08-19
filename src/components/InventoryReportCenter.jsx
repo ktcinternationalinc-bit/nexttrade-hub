@@ -75,7 +75,9 @@ export default function InventoryReportCenter(props) {
       // v55.83-NF — sales for the P&L reports (post-MX invoice lines). Reversed lines excluded in the aggregator.
       q('invoice_items', supabase.from('invoice_items').select('variant_id,sale_quantity,line_total,cogs_total,gross_profit,rolls_sold,inventory_status,consumed_layers').eq('uses_inventory', true)),
       // v55.83-NF — which products still have stock awaiting landed cost (drives Cost Status)
-      q('inventory_layers_prov', supabase.from('inventory_layers').select('product_id,is_provisional').eq('is_provisional', true).gt('qty_remaining', 0))
+      q('inventory_layers_prov', supabase.from('inventory_layers').select('product_id,is_provisional').eq('is_provisional', true).gt('qty_remaining', 0)),
+      // v55.83-NG — physical-count roll corrections (NE); tolerated if absent
+      q('inventory_adjustments', supabase.from('inventory_adjustments').select('product_id,rolls_delta,quantity,adjustment_type').eq('adjustment_type', 'count'))
     ]).then(function (res) {
       var products = res[0].data;
       var layers = res[1].data;
@@ -86,10 +88,11 @@ export default function InventoryReportCenter(props) {
       var movements = res[6].data;
       var saleLines = res[7].data;
       var provLayers = res[8].data;
+      var countAdjs = res[9].data;
 
       // Collect any per-table errors so the UI can show exactly what failed.
       var errs = [];
-      res.forEach(function (r) { if (r.error) { errs.push({ source: r.source, message: r.error }); } });
+      res.forEach(function (r) { if (r.error && r.source !== 'inventory_adjustments') { errs.push({ source: r.source, message: r.error }); } }); // NG: adjustments table is optional (pre-NE installs)
       setLoadErrors(errs);
 
       var listMap = {}; lists.forEach(function (l) { listMap[l.id] = { en: l.label_en || '', ar: l.label_ar || '' }; });
@@ -181,9 +184,15 @@ export default function InventoryReportCenter(props) {
       });
       var provSet = {};
       provLayers.forEach(function (l) { if (l.product_id) { provSet[l.product_id] = true; } });
+      var countRollsByProduct = {}; var countQtyByProduct = {};
+      countAdjs.forEach(function (a) {
+        if (!a.product_id) { return; }
+        countRollsByProduct[a.product_id] = (countRollsByProduct[a.product_id] || 0) + (Number(a.rolls_delta) || 0);
+        countQtyByProduct[a.product_id] = (countQtyByProduct[a.product_id] || 0) + (Number(a.quantity) || 0); // quantity = counted − system (signed)
+      });
 
       setRaw({
-        salesAgg: salesAgg, recvRollsByProduct: recvRollsByProduct, provSet: provSet,
+        salesAgg: salesAgg, recvRollsByProduct: recvRollsByProduct, provSet: provSet, countRollsByProduct: countRollsByProduct, countQtyByProduct: countQtyByProduct,
         pendingByProduct: pendingByProduct,
         // Snapshot excludes virtual mixes AND family templates (no physical stock) —
         // same exclusions Inventory Overview applies.
@@ -268,11 +277,18 @@ export default function InventoryReportCenter(props) {
         family: listLabel(p.family_list_id),
         color: listLabel(p.color_list_id),
         uom: ((raw.recvUomPrimary && raw.recvUomPrimary[p.id]) || p.default_uom || 'unit').toUpperCase(),
-        original_qty: Number(raw.origByProduct[p.id]) || 0,
-        recv_rolls: Number(raw.recvRollsByProduct[p.id]) || 0,
+        // v55.83-NH — Inbound (all-time) INCLUDES physical-count corrections (Max: yes).
+        // Found stock already enters as a COUNT-ADJ receipt (so origByProduct has it);
+        // a count SHORTFALL reduces layers only, so to keep  Inbound − Sold = On Hand
+        // true on every row we fold the negative qty delta into Inbound here. Rolls:
+        // count deltas (either sign) fold into inbound rolls the same way.
+        original_qty: (Number(raw.origByProduct[p.id]) || 0) + Math.min(0, Number(raw.countQtyByProduct && raw.countQtyByProduct[p.id]) || 0),
+        recv_rolls: (Number(raw.recvRollsByProduct[p.id]) || 0) + (Number(raw.countRollsByProduct && raw.countRollsByProduct[p.id]) || 0),
         sold_qty: sa.qty,
         sold_rolls: sa.rolls,
         qty_remaining: onHand,
+        // v55.83-NG — rolls on hand = received − sold + physical-count corrections (general count)
+        on_hand_rolls: Math.max(0, (Number(raw.recvRollsByProduct[p.id]) || 0) + (Number(raw.countRollsByProduct && raw.countRollsByProduct[p.id]) || 0) - sa.rolls),
         avg_sale_price: avgSale,
         revenue: sa.revenue,
         avg_cost: avgCost,
@@ -296,12 +312,12 @@ export default function InventoryReportCenter(props) {
     var fams = {};
     prod.forEach(function (r) {
       var k = r.family || (isRtl ? 'غير مصنّف' : 'Unclassified');
-      if (!fams[k]) { fams[k] = { family: k, products: 0, uoms: {}, original_qty: 0, recv_rolls: 0, sold_qty: 0, sold_rolls: 0, qty_remaining: 0, revenue: 0, cogs: 0, gross_profit: 0, stock_value: 0 }; }
+      if (!fams[k]) { fams[k] = { family: k, products: 0, uoms: {}, original_qty: 0, recv_rolls: 0, sold_qty: 0, sold_rolls: 0, qty_remaining: 0, on_hand_rolls: 0, revenue: 0, cogs: 0, gross_profit: 0, stock_value: 0 }; }
       var f = fams[k];
       f.products += 1;
       f.uoms[r.uom] = (f.uoms[r.uom] || 0) + r.original_qty;
       f.original_qty += r.original_qty; f.recv_rolls += r.recv_rolls;
-      f.sold_qty += r.sold_qty; f.sold_rolls += r.sold_rolls; f.qty_remaining += r.qty_remaining;
+      f.sold_qty += r.sold_qty; f.sold_rolls += r.sold_rolls; f.qty_remaining += r.qty_remaining; f.on_hand_rolls += r.on_hand_rolls;
       f.revenue += r.revenue; f.cogs += r.cogs; f.gross_profit += r.gross_profit; f.stock_value += r.stock_value;
     });
     var rows = Object.keys(fams).map(function (k) {
@@ -313,7 +329,7 @@ export default function InventoryReportCenter(props) {
         family: f.family, products: f.products,
         uom: mixed ? (best + (isRtl ? ' (مختلط)' : ' (mixed)')) : best,
         original_qty: f.original_qty, recv_rolls: f.recv_rolls,
-        sold_qty: f.sold_qty, sold_rolls: f.sold_rolls, qty_remaining: f.qty_remaining,
+        sold_qty: f.sold_qty, sold_rolls: f.sold_rolls, qty_remaining: f.qty_remaining, on_hand_rolls: f.on_hand_rolls,
         avg_sale_price: f.sold_qty > 0 ? f.revenue / f.sold_qty : 0,
         revenue: f.revenue,
         avg_cost: f.sold_qty > 0 && f.cogs > 0 ? f.cogs / f.sold_qty : 0,
@@ -482,15 +498,19 @@ export default function InventoryReportCenter(props) {
   // ---- Print (own window, keeps Arabic/RTL clean) ----
   function printReport() {
     var title = isRtl ? report.title_ar : report.title_en;
-    function th(cols) { return cols.map(function (c) { return '<th style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-bottom:2px solid #333">' + colHeader(c) + '</th>'; }).join(''); }
-    function tr(r, cols) { return '<tr>' + cols.map(function (c) { return '<td style="text-align:' + (c.align || 'left') + ';padding:3px 8px;border-bottom:1px solid #ccc">' + formatCell(r[c.key], c, lang, showValuation) + '</td>'; }).join('') + '</tr>'; }
+    // v55.83-NG — the same two on-hand shades as ReportTable, inline so the
+    // printed page keeps them (print-color-adjust forces browsers to paint them).
+    var PSHADE = { qty: { body: '#dcfce7', head: '#86efac', foot: '#4ade80', text: '#052e16' }, rolls: { body: '#dbeafe', head: '#93c5fd', foot: '#60a5fa', text: '#0c2a5e' } };
+    function shadeCss(c, where) { var sh = c && c.shade && PSHADE[c.shade]; return sh ? ('background:' + sh[where] + ';color:' + sh.text + ';font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact;') : ''; }
+    function th(cols) { return cols.map(function (c) { return '<th style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-bottom:2px solid #333;' + shadeCss(c, 'head') + '">' + colHeader(c) + '</th>'; }).join(''); }
+    function tr(r, cols) { return '<tr>' + cols.map(function (c) { return '<td style="text-align:' + (c.align || 'left') + ';padding:3px 8px;border-bottom:1px solid #ccc;' + shadeCss(c, 'body') + '">' + formatCell(r[c.key], c, lang, showValuation) + '</td>'; }).join('') + '</tr>'; }
     // v55.83-HC — totals row for print, matching the on-screen and CSV totals.
     function tfoot(rows, cols) {
       var totals = flatTotals(rows, cols);
       if (!Object.keys(totals).length) { return ''; }
       return '<tfoot><tr style="font-weight:bold;background:#e2e8f0">' + cols.map(function (c, ci) {
         var cell = totals[c.key] !== undefined ? (Number(totals[c.key]) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : '');
-        return '<td style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-top:2px solid #333">' + cell + '</td>';
+        return '<td style="text-align:' + (c.align || 'left') + ';padding:4px 8px;border-top:2px solid #333;' + shadeCss(c, 'foot') + '">' + cell + '</td>';
       }).join('') + '</tr></tfoot>';
     }
     var body = '';

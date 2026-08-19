@@ -42,13 +42,31 @@ export default function ReportTable(props) {
 
   function alignClass(a) { return a === 'right' ? 'text-right' : (a === 'center' ? 'text-center' : 'text-left'); }
 
+  // v55.83-NG (Max Aug 12): "ON HAND ROLLS AND QTY ... SHOULD BE SHADED IN
+  // DIFFERENT COLORS". Column-level shading driven by col.shade so every report
+  // that declares it gets the same two colours, in header + body + totals, and
+  // the colours survive print (inline styles + print-color-adjust; Tailwind
+  // utility classes can be purged or dropped by print CSS).
+  //   qty   -> soft green (what is on the shelf by weight/length)
+  //   rolls -> soft blue  (what is on the shelf by roll count)
+  // Always dark text on a light tint (PERMANENT contrast rule).
+  var SHADE = {
+    qty:   { body: '#dcfce7', head: '#86efac', foot: '#4ade80', text: '#052e16' },
+    rolls: { body: '#dbeafe', head: '#93c5fd', foot: '#60a5fa', text: '#0c2a5e' }
+  };
+  function shadeStyle(c, where) {
+    var sh = c && c.shade && SHADE[c.shade];
+    if (!sh) { return undefined; }
+    return { background: sh[where], color: sh.text, WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact', fontWeight: where === 'body' ? 700 : 800 };
+  }
+
   return (
     <div dir={isRtl ? 'rtl' : 'ltr'} className="overflow-x-auto border border-slate-200 rounded">
       <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
         <thead>
           <tr className="bg-slate-100 text-slate-700">
             {columns.map(function (c) {
-              return <th key={c.key} className={'px-2 py-1.5 font-bold border-b border-slate-300 ' + alignClass(c.align)}>{isRtl ? c.label_ar : c.label_en}</th>;
+              return <th key={c.key} className={'px-2 py-1.5 font-bold border-b border-slate-300 ' + alignClass(c.align)} style={shadeStyle(c, 'head')}>{isRtl ? c.label_ar : c.label_en}</th>;
             })}
           </tr>
         </thead>
@@ -59,7 +77,7 @@ export default function ReportTable(props) {
             return (
               <tr key={ri} className={ri % 2 ? 'bg-white' : 'bg-slate-50'}>
                 {columns.map(function (c) {
-                  return <td key={c.key} className={'px-2 py-1 border-b border-slate-100 ' + alignClass(c.align)}>{formatCell(r[c.key], c, lang, showValuation)}</td>;
+                  return <td key={c.key} className={'px-2 py-1 border-b border-slate-100 ' + alignClass(c.align)} style={shadeStyle(c, 'body')}>{formatCell(r[c.key], c, lang, showValuation)}</td>;
                 })}
               </tr>
             );
@@ -69,8 +87,8 @@ export default function ReportTable(props) {
           <tfoot>
             <tr className="bg-slate-200 font-bold text-slate-900">
               {columns.map(function (c, ci) {
-                if (totals[c.key] !== undefined) { return <td key={c.key} className={'px-2 py-1.5 ' + alignClass(c.align)}>{fmtNumber(totals[c.key], 2)}</td>; }
-                return <td key={c.key} className={'px-2 py-1.5 ' + alignClass(c.align)}>{ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : ''}</td>;
+                if (totals[c.key] !== undefined) { return <td key={c.key} className={'px-2 py-1.5 ' + alignClass(c.align)} style={shadeStyle(c, 'foot')}>{fmtNumber(totals[c.key], 2)}</td>; }
+                return <td key={c.key} className={'px-2 py-1.5 ' + alignClass(c.align)} style={shadeStyle(c, 'foot')}>{ci === 0 ? (isRtl ? 'الإجمالي' : 'Total') : ''}</td>;
               })}
             </tr>
           </tfoot>
