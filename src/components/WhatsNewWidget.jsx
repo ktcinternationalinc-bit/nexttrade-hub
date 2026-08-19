@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NF',
+    date: '2026-08-12',
+    label: 'Inventory Reports: Stock & P&L, a Customer Copy, and Consolidated by Family',
+    items: [
+      '**\ud83d\udcca Stock & P&L is now the main inventory report.** For every product: original quantity, rolls received, quantity and rolls sold, what is on hand, average sale price, revenue, average cost, cost of sales, gross profit and margin \u2014 plus a Cost Status that tells you whether the profit figure is final or still waiting on landed cost.',
+      '**0\ufe0f\u20e3 Where a number is not available yet, you see 0 \u2014 never a blank.** A product with no sales shows zeros across its P&L columns; stock still awaiting its landed cost is marked \u201cAwaiting cost\u201d so you know the profit on it will change once you price the shipment.',
+      '**\ud83d\udc64 Customer Copy \u2014 same report, nothing about money.** Every price, cost and profit column is removed outright, not hidden, so the export you send a customer physically cannot contain a margin.',
+      '**\ud83c\udff7 Consolidated by Family \u2014 one row per family.** All LUX as one number, all Textile as one number, with a grand total, and the same P&L rolled up. Also available as a customer copy with quantities only.',
+      '**\ud83d\udc1b A double-count in the old report is gone.** It was adding not-yet-costed stock on top of figures that already included it \u2014 the same bug fixed on the Overview in MX \u2014 so sales were being hidden there too.',
+      '**\ud83c\udf10 All four in English and Arabic, exportable and printable like the existing reports.**',
+      { superAdminOnly: true, text: 'v55.83-NF \u2014 NO SQL. inventory-report-defs.js + InventoryReportCenter.jsx. Four new REPORTS: full_pnl (FULL_PNL_COLUMNS, 19 cols), customer_copy (CUSTOMER_COLUMNS = FULL filtered on pnl!==true \u2014 DERIVED, cannot drift), consolidated (CONSOLIDATED_COLUMNS per family_list_id), consolidated_customer (filtered likewise). P&L cols carry pnl:true; cost cols additionally keep valuation:true so the existing inventory.valuation.view gate still applies on the internal reports. Data: added invoice_items (uses_inventory=true; reversed excluded) + provisional-layer probe to the parallel load; salesAgg per variant {qty, rolls, revenue=line_total, cogs, profit, lines, costed_lines}; recvRollsByProduct from countable receipts. Shared pnlProductRows(): avg_sale=revenue/qty, avg_cost=cogs/qty with on-hand-average fallback, margin=profit/revenue; all default 0 (Max: otherwise keep 0); cost_status = No sales / Final / Awaiting cost / Partly costed from costed_lines + provSet. consolidatedRows(): family roll-up with averages RE-DERIVED from sums (never mean-of-means), product count, mixed-UOM flag, sorted by on-hand. Dispatcher routes the four ids; customer copies ALSO strip pnl keys from row objects (defense in depth, IK pattern) so props/exports never carry them. DOUBLE-COUNT FIX: currentByProduct was layers + pending receipts \u2014 correct pre-MX, doubled post-MX because arrival layers already include pending; now layers only (pendingByProduct retained for status only). Default report switched to full_pnl. Test test-v55-83-nf-inventory-reports.js, 33 assertions; runner 112/112. NOT DONE: date-range filtering of sales (currently all-time); per-warehouse breakdown in consolidated; PDF export (CSV + print exist).' },
+    ],
+  },
+  {
     version: 'v55.83-NE',
     date: '2026-08-12',
     label: 'Physical Stock Count \u2014 correct the shelves in one screen',

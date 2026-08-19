@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import ReportTable, { formatCell } from './ReportTable';
-import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS } from '../lib/inventory-report-defs';
+import { REPORTS, getReport, SNAPSHOT_COLUMNS, MIX_COLUMNS, MOVEMENT_COLUMNS, FULL_PNL_COLUMNS, CUSTOMER_COLUMNS, CONSOLIDATED_COLUMNS, CONSOLIDATED_CUSTOMER_COLUMNS } from '../lib/inventory-report-defs';
 import { isCountableReceipt } from '../lib/inventory-receipts';
 
 // Bilingual labels for inventory_movements.movement_type (data-driven, not inferred from text).
@@ -32,7 +32,7 @@ export default function InventoryReportCenter(props) {
   var mayExport = canExportInventoryReports(userProfile, modulePerms);
   var showValuation = canSeeValuationInReports(userProfile, modulePerms);
 
-  var [reportId, setReportId] = useState('snapshot');
+  var [reportId, setReportId] = useState('full_pnl'); // v55.83-NF — Max's Stock & P&L is now the primary report
   var [lang, setLang] = useState('en');
   var [search, setSearch] = useState('');
   var [raw, setRaw] = useState(null);
@@ -71,7 +71,11 @@ export default function InventoryReportCenter(props) {
       q('inv_warehouses', supabase.from('inv_warehouses').select('id,name,code')),
       q('inventory_stock_receipts', supabase.from('inventory_stock_receipts').select('product_id,receipt_date,quantity,quantity_kg,roll_count,uom,status')),
       q('inventory_mix_components', supabase.from('inventory_mix_components').select('mix_product_id,component_product_id,component_color,sort_order,is_active').eq('is_active', true)),
-      q('inventory_movements', supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000))
+      q('inventory_movements', supabase.from('inventory_movements').select('product_id,movement_type,movement_date,warehouse_id,quantity,reference_number,created_at').order('movement_date', { ascending: true }).limit(5000)),
+      // v55.83-NF — sales for the P&L reports (post-MX invoice lines). Reversed lines excluded in the aggregator.
+      q('invoice_items', supabase.from('invoice_items').select('variant_id,sale_quantity,line_total,cogs_total,gross_profit,rolls_sold,inventory_status,consumed_layers').eq('uses_inventory', true)),
+      // v55.83-NF — which products still have stock awaiting landed cost (drives Cost Status)
+      q('inventory_layers_prov', supabase.from('inventory_layers').select('product_id,is_provisional').eq('is_provisional', true).gt('qty_remaining', 0))
     ]).then(function (res) {
       var products = res[0].data;
       var layers = res[1].data;
@@ -80,6 +84,8 @@ export default function InventoryReportCenter(props) {
       var receipts = res[4].data;
       var comps = res[5].data;
       var movements = res[6].data;
+      var saleLines = res[7].data;
+      var provLayers = res[8].data;
 
       // Collect any per-table errors so the UI can show exactly what failed.
       var errs = [];
@@ -123,14 +129,15 @@ export default function InventoryReportCenter(props) {
         if (r.receipt_date && (!lastRecv[pid] || r.receipt_date > lastRecv[pid])) { lastRecv[pid] = r.receipt_date; }
       });
 
-      // Current on-hand = finalized layer qty + pending (received-but-not-finalized) qty.
-      // This matches Overview's current_qty. availByProduct (used by mix composition) uses
-      // the same on-hand figure so component availability agrees with the rest of the app.
+      // Current on-hand = open layer qty. v55.83-NF — this used to ADD pending
+      // (not-yet-costed) receipts on top, which was correct before MX because such
+      // receipts had no layer. MX creates a layer the moment stock arrives, so the
+      // layer sum ALREADY includes them (net of sales). Adding pend again doubled
+      // the stock and hid every sale — the same bug MX removed from the Overview.
+      // pendingByProduct is kept for the Cost Status column only.
       var currentByProduct = {};
       products.forEach(function (p) {
-        var fin = (layerAgg[p.id] && layerAgg[p.id].qty) || 0;
-        var pend = pendingByProduct[p.id] || 0;
-        currentByProduct[p.id] = fin + pend;
+        currentByProduct[p.id] = (layerAgg[p.id] && layerAgg[p.id].qty) || 0;
       });
       var availByProduct = currentByProduct;
 
@@ -151,7 +158,33 @@ export default function InventoryReportCenter(props) {
       var compsByMix = {};
       comps.forEach(function (c) { if (!compsByMix[c.mix_product_id]) { compsByMix[c.mix_product_id] = []; } compsByMix[c.mix_product_id].push(c); });
 
+      // v55.83-NF — sales aggregation per product (reversed lines are deleted lines)
+      var salesAgg = {};
+      saleLines.forEach(function (it) {
+        var pid = it.variant_id; if (!pid) { return; }
+        if (it.inventory_status === 'reversed') { return; }
+        if (!salesAgg[pid]) { salesAgg[pid] = { qty: 0, rolls: 0, revenue: 0, cogs: 0, profit: 0, lines: 0, costed_lines: 0 }; }
+        var a = salesAgg[pid];
+        a.qty += Number(it.sale_quantity) || 0;
+        a.rolls += Number(it.rolls_sold) || 0;
+        a.revenue += Number(it.line_total) || 0;
+        a.cogs += Number(it.cogs_total) || 0;
+        a.profit += Number(it.gross_profit) || 0;
+        a.lines += 1;
+        if (it.cogs_total != null && Number(it.cogs_total) > 0) { a.costed_lines += 1; }
+      });
+      // Rolls received per product (general count, Max's rule)
+      var recvRollsByProduct = {};
+      receipts.forEach(function (r) {
+        if (!r.product_id || !isCountableReceipt(r)) { return; }
+        recvRollsByProduct[r.product_id] = (recvRollsByProduct[r.product_id] || 0) + (Number(r.roll_count) || 0);
+      });
+      var provSet = {};
+      provLayers.forEach(function (l) { if (l.product_id) { provSet[l.product_id] = true; } });
+
       setRaw({
+        salesAgg: salesAgg, recvRollsByProduct: recvRollsByProduct, provSet: provSet,
+        pendingByProduct: pendingByProduct,
         // Snapshot excludes virtual mixes AND family templates (no physical stock) —
         // same exclusions Inventory Overview applies.
         nonVirtual: products.filter(function (p) { return p.is_virtual_mix !== true && p.is_family_template !== true; }),
@@ -199,6 +232,97 @@ export default function InventoryReportCenter(props) {
     // v55.83-GY — hide zero-stock rows by default (current 0 AND received 0), matching Overview.
     if (!showZero) { rows = rows.filter(function (r) { return (Number(r.qty_remaining) || 0) !== 0 || (Number(r.original_qty) || 0) !== 0; }); }
     rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    return rows;
+  }
+
+  // v55.83-NF — one row builder feeds Stock & P&L, the Customer Copy and both
+  // Consolidated reports. P&L columns are NOT computed for the customer copy —
+  // they are dropped by the column list itself, so customer exports never carry
+  // the numbers at all (not masked; absent).
+  //
+  // "Show when numbers are available, otherwise keep 0" (Max): every money
+  // figure defaults to 0 — never blank, never NaN — and Cost Status says WHY a
+  // profit figure may still be provisional.
+  function pnlProductRows() {
+    if (!raw) { return []; }
+    var q = (search || '').trim().toLowerCase();
+    var rows = raw.nonVirtual.map(function (p) {
+      var agg = raw.layerAgg[p.id] || { qty: 0, value: 0, whs: {} };
+      var sa = raw.salesAgg[p.id] || { qty: 0, rolls: 0, revenue: 0, cogs: 0, profit: 0, lines: 0, costed_lines: 0 };
+      var onHand = Number(raw.currentByProduct[p.id]) || 0;
+      var avgSale = sa.qty > 0 ? (sa.revenue / sa.qty) : 0;
+      var avgCost = sa.qty > 0 && sa.cogs > 0 ? (sa.cogs / sa.qty) : (agg.qty > 0 ? (agg.value / agg.qty) : 0);
+      var margin = sa.revenue > 0 ? (sa.profit / sa.revenue * 100) : 0;
+      var hasProv = !!raw.provSet[p.id];
+      var status;
+      if (sa.lines === 0) { status = isRtl ? 'لا مبيعات' : 'No sales'; }
+      else if (sa.costed_lines === sa.lines && !hasProv) { status = isRtl ? 'نهائي' : 'Final'; }
+      else if (sa.costed_lines === 0) { status = isRtl ? 'بانتظار التكلفة' : 'Awaiting cost'; }
+      else { status = isRtl ? 'جزئي' : 'Partly costed'; }
+      return {
+        _pid: p.id, _family_id: p.family_list_id,
+        code: p.quick_code || p.design_sku || '',
+        name: pname(p),
+        name_en: p.name_en || '',
+        name_ar: p.name_ar || '',
+        family: listLabel(p.family_list_id),
+        color: listLabel(p.color_list_id),
+        uom: ((raw.recvUomPrimary && raw.recvUomPrimary[p.id]) || p.default_uom || 'unit').toUpperCase(),
+        original_qty: Number(raw.origByProduct[p.id]) || 0,
+        recv_rolls: Number(raw.recvRollsByProduct[p.id]) || 0,
+        sold_qty: sa.qty,
+        sold_rolls: sa.rolls,
+        qty_remaining: onHand,
+        avg_sale_price: avgSale,
+        revenue: sa.revenue,
+        avg_cost: avgCost,
+        cogs: sa.cogs,
+        gross_profit: sa.profit,
+        margin_pct: margin,
+        stock_value: agg.value,
+        cost_status: status
+      };
+    });
+    if (q) { rows = rows.filter(function (r) { return (String(r.code).toLowerCase().indexOf(q) >= 0) || (String(r.name_en).toLowerCase().indexOf(q) >= 0) || (String(r.name_ar).toLowerCase().indexOf(q) >= 0) || (String(r.family).toLowerCase().indexOf(q) >= 0); }); }
+    if (!showZero) { rows = rows.filter(function (r) { return r.qty_remaining !== 0 || r.original_qty !== 0 || r.sold_qty !== 0; }); }
+    rows.sort(function (a, b) { var f = String(a.family).localeCompare(String(b.family)); return f !== 0 ? f : String(a.code).localeCompare(String(b.code)); });
+    return rows;
+  }
+
+  // Consolidated: one row per family, everything summed. Averages are
+  // RE-DERIVED from the sums (revenue/qty, cogs/qty), never averaged-of-averages.
+  function consolidatedRows() {
+    var prod = pnlProductRows();
+    var fams = {};
+    prod.forEach(function (r) {
+      var k = r.family || (isRtl ? 'غير مصنّف' : 'Unclassified');
+      if (!fams[k]) { fams[k] = { family: k, products: 0, uoms: {}, original_qty: 0, recv_rolls: 0, sold_qty: 0, sold_rolls: 0, qty_remaining: 0, revenue: 0, cogs: 0, gross_profit: 0, stock_value: 0 }; }
+      var f = fams[k];
+      f.products += 1;
+      f.uoms[r.uom] = (f.uoms[r.uom] || 0) + r.original_qty;
+      f.original_qty += r.original_qty; f.recv_rolls += r.recv_rolls;
+      f.sold_qty += r.sold_qty; f.sold_rolls += r.sold_rolls; f.qty_remaining += r.qty_remaining;
+      f.revenue += r.revenue; f.cogs += r.cogs; f.gross_profit += r.gross_profit; f.stock_value += r.stock_value;
+    });
+    var rows = Object.keys(fams).map(function (k) {
+      var f = fams[k];
+      var best = ''; var bestQ = -1;
+      Object.keys(f.uoms).forEach(function (u) { if (f.uoms[u] > bestQ) { bestQ = f.uoms[u]; best = u; } });
+      var mixed = Object.keys(f.uoms).length > 1;
+      return {
+        family: f.family, products: f.products,
+        uom: mixed ? (best + (isRtl ? ' (مختلط)' : ' (mixed)')) : best,
+        original_qty: f.original_qty, recv_rolls: f.recv_rolls,
+        sold_qty: f.sold_qty, sold_rolls: f.sold_rolls, qty_remaining: f.qty_remaining,
+        avg_sale_price: f.sold_qty > 0 ? f.revenue / f.sold_qty : 0,
+        revenue: f.revenue,
+        avg_cost: f.sold_qty > 0 && f.cogs > 0 ? f.cogs / f.sold_qty : 0,
+        cogs: f.cogs, gross_profit: f.gross_profit,
+        margin_pct: f.revenue > 0 ? f.gross_profit / f.revenue * 100 : 0,
+        stock_value: f.stock_value
+      };
+    });
+    rows.sort(function (a, b) { return b.qty_remaining - a.qty_remaining; });
     return rows;
   }
 
@@ -276,7 +400,19 @@ export default function InventoryReportCenter(props) {
 
   // Flat (non-grouped) reports share one row dispatcher.
   function flatRows() {
-    var rows = (reportId === 'movement') ? movementRows() : snapshotRows();
+    var rows;
+    if (reportId === 'movement') { rows = movementRows(); }
+    else if (reportId === 'full_pnl' || reportId === 'customer_copy') { rows = pnlProductRows(); }
+    else if (reportId === 'consolidated' || reportId === 'consolidated_customer') { rows = consolidatedRows(); }
+    else { rows = snapshotRows(); }
+    // v55.83-NF — customer copies: strip every pnl key from the row objects too
+    // (defense in depth, same reasoning as the IK valuation strip) so the numbers
+    // never sit in props/exports even though the column list already omits them.
+    if (reportId === 'customer_copy' || reportId === 'consolidated_customer') {
+      var pnlKeys = {};
+      (reportId === 'customer_copy' ? FULL_PNL_COLUMNS : CONSOLIDATED_COLUMNS).forEach(function (c) { if (c.pnl) { pnlKeys[c.key] = true; } });
+      rows = (rows || []).map(function (r) { var c = {}; Object.keys(r).forEach(function (k) { if (!pnlKeys[k]) { c[k] = r[k]; } }); return c; });
+    }
     return stripValuation(rows, report && report.columns);
   }
 
