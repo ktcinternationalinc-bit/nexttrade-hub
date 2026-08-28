@@ -5,7 +5,10 @@ var b=p('src/components/BankReviewTab.jsx');
 // v55.83-IS: unmatch/reverse moved to the service-role route (RLS-proof). The UI delegates; the
 // route does the soft-void + recompute + unlink. Tests assert the new contract, not old client code.
 var route=p('src/app/api/accounting/bank-write/route.js');
-var um=route.substring(route.indexOf("if (action === 'unmatch')"), route.indexOf("if (action === 'unmatch')")+3200);
+// v55.83-NI — was a fixed +3200 window; the NI split-teardown fix pushed the tail
+// past it and failed assertions that were still TRUE of the code. Slice to the
+// next action boundary so the window grows with the block.
+var um=route.substring(route.indexOf("if (action === 'unmatch')"), route.indexOf("if (action === 'update_match')"));
 
 ok(/function unmatch\(t\)/.test(b),'unmatch() exists in BankReviewTab');
 ok(/bankWrite\('unmatch', \{ bank_transaction_id: t\.id/.test(b),'UI delegates unmatch to the service route');

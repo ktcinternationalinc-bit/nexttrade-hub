@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NI',
+    date: '2026-08-25',
+    label: 'Bank fix: Unmatch now fully clears a split deposit',
+    items: [
+      '**\ud83d\udc1b The bug behind the \u201callocated but not applied\u201d $10,000 deposit.** If a deposit had been SPLIT across invoices and Unmatch was then pressed, the system cancelled the payments behind the split \u2014 but left the split lines and the green Reviewed badge on screen. The deposit looked fully allocated to its invoices while none of the money was actually applied.',
+      '**\u2705 Unmatch now tears the whole allocation down.** The split lines are removed, any parked amounts are cancelled, and the deposit drops back to \u201cunreviewed\u201d \u2014 so what you see always matches what the invoices received. Re-splitting afterwards works normally.',
+      '**\ud83d\udee1 The existing protections stand.** A payment already pushed to Wave still blocks Unmatch entirely, and every affected invoice still has its paid figures recalculated.',
+      { superAdminOnly: true, text: 'v55.83-NI \u2014 NO SQL for the fix (a one-time data repair for deposit 271758 was provided in chat). ROOT CAUSE (proven by diagnostic on Max\'s data): bank-write unmatch voids accounting_invoice_payments + payment_matches by bank_transaction_id but never touched bank_transaction_splits, unapplied_deposits, or review_status \u2014 after split\u2192unmatch the deposit kept its split rows + reviewed badge with all payments voided (allocationForTxn would even re-read as incomplete, but nothing flipped the status back). FIX in the unmatch action: delete bank_transaction_splits for the txn (their money rows are already voided; a split row without its payment is pure display), void open unapplied_deposits, and reset review_status=unreviewed + reviewed_by/at=null; response now reports splits_removed. Wave-synced hard-block and per-invoice recompute unchanged (asserted). Tests: new test-v55-83-ni-unmatch-splits.js (7 assertions); test-v55-83-cj-unmatch.js slice widened from a fixed +3200 chars to the next-action boundary (the fixed window failed on code growth while the assertions were still true). Runner 113/113. NOTE: Max\'s deposit itself needs the one-time repair SQL (restore the two split payments; the 1714 line is capped at today\'s remaining balance with the excess parked as customer credit because a later 2,301.86 payment landed on 1714 after the split).' },
+    ],
+  },
+  {
     version: 'v55.83-NH',
     date: '2026-08-12',
     label: 'Inventory reports now read left-to-right: Inbound \u2192 Sold \u2192 On Hand',

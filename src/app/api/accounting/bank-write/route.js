@@ -507,10 +507,24 @@ export async function POST(req) {
       await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', bid);
       await db.from('payment_matches').update({ voided: true }).eq('bank_transaction_id', bid);
       try { await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', bid).eq('status', 'open'); } catch (eC) {}
+      // v55.83-NI (Max's $10,000 deposit 271758, Aug 25) — unmatch must also tear
+      // down SPLIT allocations, or it leaves a lie on screen. It voided the split's
+      // payments and matches (above) but left bank_transaction_splits rows and the
+      // 'reviewed' status intact, so the deposit kept displaying as fully allocated
+      // to its invoices while every payment behind it was dead. Delete the split
+      // lines (their money rows are already voided — a split row without its
+      // payment is pure display), void any unapplied parks, and drop the
+      // transaction back to 'unreviewed' so it visibly needs re-allocation.
+      var unSplits = 0;
+      try {
+        var delSp = await db.from('bank_transaction_splits').delete().eq('bank_transaction_id', bid).select('id');
+        unSplits = ((delSp && delSp.data) || []).length;
+      } catch (eS) {}
+      try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', bid).eq('status', 'open'); } catch (eU) {}
       var ik = Object.keys(invIds); var w;
       for (w = 0; w < ik.length; w++) { await recompute(db, ik[w]); }
-      await db.from('bank_transactions').update({ linked_type: null, linked_id: null, matched_invoice_id: null, updated_by: by }).eq('id', bid);
-      return NextResponse.json({ ok: true, unmatched_invoices: ik.length, api_build_marker: API_BUILD_MARKER });
+      await db.from('bank_transactions').update({ linked_type: null, linked_id: null, matched_invoice_id: null, review_status: 'unreviewed', reviewed_by: null, reviewed_at: null, updated_by: by }).eq('id', bid);
+      return NextResponse.json({ ok: true, unmatched_invoices: ik.length, splits_removed: unSplits, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── update_match: change an existing match's invoice and/or amount safely (Codex P0 money-safety).
