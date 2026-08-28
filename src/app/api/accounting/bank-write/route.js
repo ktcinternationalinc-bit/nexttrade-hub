@@ -304,6 +304,29 @@ export async function POST(req) {
           if (biz && ivchk.business_id && biz !== ivchk.business_id) { return NextResponse.json({ ok: false, error: 'A split line links an invoice from another business.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
         }
       }
+      // v55.83-NJ (deposit 271758 follow-up) — two guards before the write phase:
+      // (1) LIVE payments on this txn block a new split outright. Without this, a
+      //     re-split on an already-allocated deposit would create a SECOND set of
+      //     payment rows — double-counted money. Unmatch first, then split.
+      // (2) Any EXISTING split rows are stale by definition here (their payments
+      //     are voided, or they were saved without payments) — a re-save REPLACES
+      //     them. They are deleted now, and the txn drops to 'unreviewed' first so
+      //     a mid-write failure can never leave a reviewed deposit with no
+      //     allocation behind it (the exact lie NI removed).
+      var livePayChk = await db.from('accounting_invoice_payments').select('id, voided, sync_status').eq('bank_transaction_id', t.id);
+      if (livePayChk && livePayChk.error) { return NextResponse.json({ ok: false, error: livePayChk.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var lpRows = (livePayChk && livePayChk.data) || []; var lp;
+      for (lp = 0; lp < lpRows.length; lp++) {
+        if (!isPaymentVoid(lpRows[lp])) {
+          return NextResponse.json({ ok: false, error: 'This deposit already has live payment(s) applied. Unmatch it first, then split — saving a split on top would count the money twice.', blocked: true, api_build_marker: API_BUILD_MARKER }, { status: 409 });
+        }
+      }
+      var staleDel = await db.from('bank_transaction_splits').delete().eq('bank_transaction_id', t.id).select('id');
+      var staleRemoved = ((staleDel && staleDel.data) || []).length;
+      if (staleRemoved > 0 && tRow.review_status === 'reviewed') {
+        await db.from('bank_transactions').update({ review_status: 'unreviewed', reviewed_by: null, reviewed_at: null }).eq('id', t.id);
+        tRow.review_status = 'unreviewed'; // so the completion stamp below can re-review it
+      }
       // Write phase. Track everything created so a mid-way DB failure can be rolled back.
       var createdSplitIds = []; var createdMatchIds = []; var createdPaymentIds = [];
       async function rollbackSplits() {
@@ -356,7 +379,7 @@ export async function POST(req) {
       if (body.accounting_customer_id) { spPatch.accounting_customer_id = body.accounting_customer_id; }
       if (tRow.review_status === 'unreviewed' && spAlloc && spAlloc.complete) { spPatch.review_status = 'reviewed'; spPatch.reviewed_by = by; spPatch.reviewed_at = new Date().toISOString(); }
       await db.from('bank_transactions').update(spPatch).eq('id', t.id);
-      return NextResponse.json({ ok: true, lines: rows.length, results: results, allocation: spAlloc, marked_reviewed: spPatch.review_status === 'reviewed', api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, lines: rows.length, results: results, allocation: spAlloc, marked_reviewed: spPatch.review_status === 'reviewed', stale_splits_replaced: staleRemoved, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── classify / set_wave_category: categorization on a bank transaction ──

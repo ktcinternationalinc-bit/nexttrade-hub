@@ -80,6 +80,7 @@ export default function BankReviewTab(props) {
   var [txns, setTxns] = useState([]);
   var [matchesByTxn, setMatchesByTxn] = useState({});
   var [paysByTxn, setPaysByTxn] = useState({});   // v55.83-ID — non-voided payment rows per bank txn (orphan detection)
+  var [splitCountByTxn, setSplitCountByTxn] = useState({}); // v55.83-NJ — raw split rows per txn (stale-split unmatch)
   var [allocByTxn, setAllocByTxn] = useState({}); // v55.83-JC — {paid,split,unapplied} per bank txn (money-conservation gate)
   var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE — admin history-visibility window
   // The active date floor: null for super-admin or "all history". Normal users are clamped to it.
@@ -167,8 +168,14 @@ export default function BankReviewTab(props) {
         (paysBy[p.bank_transaction_id] = paysBy[p.bank_transaction_id] || []).push(p);
         bucket(p.bank_transaction_id).paid += Number(p.amount) || 0;
       });
+      // v55.83-NJ — raw split-row presence per txn (NO invoice exclusion). The alloc
+      // bucket below rightly excludes invoice-linked splits (JK), but the unmatch
+      // guard needs to know whether ANY split display exists — Max's deposit 271758
+      // had only invoice-linked stale splits, which the alloc bucket reads as zero.
+      var splitCountBy = {};
       ((res[9] && res[9].data) || []).forEach(function (s) {
         if (!s || !s.bank_transaction_id) { return; }
+        splitCountBy[s.bank_transaction_id] = (splitCountBy[s.bank_transaction_id] || 0) + 1;
         // v55.83-JK — an invoice-linked split also has a payment row for the same dollars; counting
         // both double-counts. Exclude linked_type==='invoice' here, exactly like the server.
         if (String(s.linked_type || '') === 'invoice') { return; }
@@ -211,7 +218,7 @@ export default function BankReviewTab(props) {
       // source — it paginates and scopes to the active silo, and clears the list on failure.
       void cats;
       setRegistry(reg);
-      setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy); setAllocByTxn(allocBy);
+      setTxns(t); setMatchesByTxn(byTxn); setPaysByTxn(paysBy); setAllocByTxn(allocBy); setSplitCountByTxn(splitCountBy);
       // v55.83-JA — load categories via the SERVICE-ROLE route too (bypasses RLS). The client query
       // above can come back empty under RLS even when Sync Center shows "89 loaded". The route returns
       // the usable list + diagnostic counts so the dropdown is authoritative and the empty-state honest.
@@ -638,15 +645,22 @@ export default function BankReviewTab(props) {
     if (isLocked(t)) { toast.error('Approved — reopen first.'); return; }
     var ms = matchesByTxn[t.id] || [];
     var orphanPays = paysByTxn[t.id] || [];
+    // v55.83-NJ (deposit 271758) — a deposit can hold STALE split rows with every payment
+    // already voided (the pre-NI unmatch left them). There is nothing "live" to unmatch,
+    // but the display allocation must still be clearable — the server unmatch now tears
+    // split rows down, so let it through.
+    var staleSplits = (splitCountByTxn[t.id] || 0) > 0;
     // v55.83-ID — also allow reversing a recorded payment that has NO active match (orphan), so
     // such a payment isn't stuck. The void+recompute below keys on bank_transaction_id either way.
-    if (ms.length === 0 && orphanPays.length === 0) { toast.error('Nothing to unmatch on this transaction.'); return; }
+    if (ms.length === 0 && orphanPays.length === 0 && !staleSplits) { toast.error('Nothing to unmatch on this transaction.'); return; }
     // v55.83-IE (Codex FAIL) — do NOT locally void a payment that has already been pushed to Wave
     // (has a wave_payment_id, or sync_status synced/manual_done). Local-only reversal would leave
     // the Hub and Wave out of sync. Reverse it in Wave first, then re-import/reconcile.
     var syncedPay = (paysByTxn[t.id] || []).some(function (p) { return p && (p.wave_payment_id || p.sync_status === 'synced' || p.sync_status === 'manual_done'); });
     if (syncedPay) { toast.error('This payment was already pushed to Wave. Reverse/remove it in Wave first, then run Wave import/reconcile. Local reverse is blocked to keep the Hub and Wave in sync.'); return; }
-    var _confirmMsg = ms.length === 0
+    var _confirmMsg = (ms.length === 0 && orphanPays.length === 0 && staleSplits)
+      ? 'Clear the split allocation on this transaction?\n\nIts payments were already reversed — this removes the leftover split lines so the deposit can be re-allocated cleanly.'
+      : ms.length === 0
       ? 'Reverse the recorded payment on this transaction?\n\nThis voids the payment row(s) and restores the invoice balance(s). It is logged, not hard-deleted.'
       : 'Unmatch this payment?\n\nThe invoice balance will be restored. This REVERSES the match (it is voided + logged, not hard-deleted) and can be re-matched afterwards.';
     if (!window.confirm(_confirmMsg)) { return; }

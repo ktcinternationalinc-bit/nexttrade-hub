@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NJ',
+    date: '2026-08-28',
+    label: 'Bank: a mis-split deposit can now be redone start to finish',
+    items: [
+      '**\ud83d\udd01 Re-splitting a deposit now just works.** Open the deposit, press Unmatch (it now clears leftover split lines too, with clear wording), then split it again however you want \u2014 including across three invoices. Saving a new split automatically replaces any stale lines from before.',
+      '**\ud83d\udee1 Double-payment is now impossible from the split screen.** If a deposit already has live payments applied, saving a split is refused with a clear message to Unmatch first \u2014 the same money can never be counted twice.',
+      '**\ud83e\uddfe Order of operations is crash-safe.** When old split lines are replaced, the deposit drops out of \u201cReviewed\u201d before anything is written, so a mid-save failure can never leave a green badge with nothing behind it.',
+      { superAdminOnly: true, text: 'v55.83-NJ \u2014 NO SQL. Follow-up to NI for the deposit-271758 state (all payments voided, invoice-linked split rows live). CLIENT (BankReviewTab): loader builds raw splitCountByTxn (NO JK invoice exclusion \u2014 that exclusion is for allocation math, not presence; Max\'s stale rows were all invoice-linked so allocBy.split read 0); unmatch guard now passes when ms==0 && pays==0 but split rows exist, with a dedicated confirm (\u201cClear the split allocation\u2026\u201d). SERVER (bank-write save_splits): (1) live-payment hard block BEFORE the write phase \u2014 any non-void payment on the txn 409s (\u201ccount the money twice\u201d) closing a pre-existing double-payment hole; (2) existing bank_transaction_splits rows are DELETED (replace semantics) with review_status dropped to unreviewed FIRST (tRow updated in-memory so the completion stamp can re-review on success); response reports stale_splits_replaced. Tests: NJ addendum (8 assertions) in test-v55-83-ni-unmatch-splits.js; runner 113/113. With NJ deployed the accountant redoes 271758 herself: Unmatch (clears the 2 stale lines, deposit \u2192 unreviewed) \u2192 Split across 3 \u2192 save (payments + matches + recompute per line; over-allocation on 1714 auto-parks as customer credit given its later 2,301.86 payment).' },
+    ],
+  },
+  {
     version: 'v55.83-NI',
     date: '2026-08-25',
     label: 'Bank fix: Unmatch now fully clears a split deposit',
