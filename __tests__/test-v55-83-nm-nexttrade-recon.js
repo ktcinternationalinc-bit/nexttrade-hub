@@ -450,3 +450,27 @@ if (failures.length) {
   if (f.length) { console.log('OA FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OA ADDENDUM CHECKS PASSED'); }
 })();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OB ADDENDUM — two-way release flow within Wave's API limits:
+// new invoices push the release UP as P.O./S.O.; sync adopts Wave's
+// P.O./S.O. DOWN into empty release fields; manual entry always wins.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fb = require('fs'); var pb = require('path');
+  var pv = fb.readFileSync(pb.join(__dirname, '..', 'src/app/api/wave/push-invoice-v2/route.js'), 'utf8');
+  var wv2 = fb.readFileSync(pb.join(__dirname, '..', 'src/app/api/wave/import-invoices/route.js'), 'utf8');
+  var f = [];
+  function okB(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okB('OB1: pushing a NEW invoice sends the Hub release to Wave as poNumber',
+    /poNumber: \(inv\.release_number \|\| inv\.po_so_number \|\| null\)/.test(pv));
+  okB('OB2: sync ADOPTS a release-shaped Wave P.O./S.O. into EMPTY release fields only',
+    /is\('release_number', null\)/.test(wv2) && /\^\\d\{3,4\}-\\d\{2,5\}\$/.test(wv2) &&
+    /ADOPTION PASS/.test(wv2));
+  okB('OB3: the adoption update re-checks null at write time — manual entry can never be overwritten',
+    /update\(\{ release_number: poVal \}\)\.eq\('id', aRows\[ar\]\.id\)\.is\('release_number', null\)/.test(wv2));
+  okB('OB4: the sync report counts adoptions and surfaces adoption failures',
+    /report\.release_adopted = adopted/.test(wv2) && /Release adoption pass:/.test(wv2));
+  if (f.length) { console.log('OB FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OB ADDENDUM CHECKS PASSED'); }
+})();

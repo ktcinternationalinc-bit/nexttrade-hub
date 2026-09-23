@@ -267,6 +267,28 @@ export async function POST(request) {
     }
 
     try {
+      // v55.83-OB (Max: "get them all to sync to get the release number") —
+      // ADOPTION PASS: release_number is Hub-owned and manual entry always
+      // wins; but where it is EMPTY and Wave's P.O./S.O. carries a
+      // release-shaped value, adopt it so one sync fills the whole history.
+      try {
+        var adoptRows = await admin.from('accounting_invoices')
+          .select('id, po_so_number')
+          .eq('wave_business_id', businessId)
+          .is('release_number', null)
+          .not('po_so_number', 'is', null);
+        var adopted = 0; var ar;
+        var aRows = (adoptRows && adoptRows.data) || [];
+        for (ar = 0; ar < aRows.length; ar++) {
+          var poVal = String(aRows[ar].po_so_number || '').trim();
+          if (/^\d{3,4}-\d{2,5}$/.test(poVal)) {
+            var au = await admin.from('accounting_invoices').update({ release_number: poVal }).eq('id', aRows[ar].id).is('release_number', null);
+            if (!au.error) { adopted += 1; }
+          }
+        }
+        report.release_adopted = adopted;
+      } catch (eAd) { report.errors.push('Release adoption pass: ' + ((eAd && eAd.message) || 'unknown')); }
+
       await admin.from('wave_sync_log').insert({
         business_id: internalBusinessId, entity_type: 'invoice', wave_record_id: businessId, action: 'import',
         started_at: startedAt, completed_at: new Date().toISOString(),

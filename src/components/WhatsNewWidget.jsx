@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OB',
+    date: '2026-09-23',
+    label: 'Release numbers flow both ways with Wave (as far as Wave allows)',
+    items: [
+      '**\u2b06\ufe0f New invoices: the release rides UP to Wave automatically.** Push an invoice from the Hub and its Release # lands in Wave\'s P.O./S.O. field on creation \u2014 both systems agree from day one.',
+      '**\u2b07\ufe0f Old invoices: the sync now ADOPTS.** After each Wave sync, any Hub invoice with an EMPTY release whose Wave P.O./S.O. looks like a release (1002-1193 style) takes it on automatically. One sync = the whole history filled, wherever Wave has the number. The sync report shows how many were adopted.',
+      '**\u270d\ufe0f Manual entry always wins.** The adoption only ever fills EMPTY fields \u2014 double-checked at the moment of writing \u2014 so anything your team typed by hand (list column, invoice form, backfill screen) can never be overwritten. All three entry points keep working exactly as before.',
+      '**\u26d4 Why old Wave invoices can\'t be edited FROM the Hub:** Wave\'s public API has no edit-invoice operation \u2014 only create and delete. \u201cUpdating\u201d an old Wave invoice would mean delete-and-recreate, which is unsafe on invoices carrying payments, so we don\'t. If you want a P.O./S.O. on an old invoice on the WAVE side, type it in Wave and the next sync brings it over.',
+      { superAdminOnly: true, text: 'v55.83-OB \u2014 NO SQL (uses OA\'s column). push-invoice-v2: InvoiceCreateInput gains poNumber: inv.release_number || inv.po_so_number || null (comment moved off the single-line object after an inline-comment parse break, caught by acorn gate). import-invoices: post-import ADOPTION PASS per business \u2014 select id,po_so_number where release_number is null and po_so_number not null, regex ^\\d{3,4}-\\d{2,5}$, update ... .is(release_number,null) re-check at write time (race-safe, manual always wins), report.release_adopted count + errors surfaced. Tests: OB addendum 4 assertions; runner all green. NOT DONE: adopting non-release-shaped P.O./S.O. values (left visible in po_so column only, matched via po_so key regardless).' },
+    ],
+  },
+  {
     version: 'v55.83-OA',
     date: '2026-09-23',
     label: 'Wave now sends us the P.O./S.O. \u2014 your comparison number',

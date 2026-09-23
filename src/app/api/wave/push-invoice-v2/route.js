@@ -165,10 +165,11 @@ export async function POST(req) {
       return NextResponse.json({ error: setupMsg, blocked: true, api_build_marker: API_BUILD_MARKER, route: API_ROUTE, reason: blockReason, settings_lookup: { row_found: !!cfg, settings_table_error: cfgErr }, response: preBlock }, { status: 409 });
     }
 
+    // v55.83-OB — the Hub release rides up to Wave's P.O./S.O. on creation (poNumber in variables below)
     var mutation = 'mutation($input: InvoiceCreateInput!){ invoiceCreate(input:$input){ didSucceed inputErrors{ message path code } invoice{ id invoiceNumber status total{ value currency{ code } } } } }';
     // v55.83-MS (Codex delta 2) — hideName:true so Wave shows the Hub line DESCRIPTIONS, not the carrier
     // product's name (the productId is only the required accounting anchor).
-    var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, hideName: true, items: lineItems } };
+    var waveMutationVariables = { input: { businessId: waveBusinessId, customerId: cust.wave_customer_id, invoiceNumber: String(inv.invoice_number), poNumber: (inv.release_number || inv.po_so_number || null), invoiceDate: inv.invoice_date || null, dueDate: inv.due_date || null, hideName: true, items: lineItems } };
     var reqPayload = { api_build_marker: API_BUILD_MARKER, route: API_ROUTE, resolvedProductId: productId, productResolutionMode: productMode, finalItems: lineItems, query: mutation, variables: waveMutationVariables };
 
     var resp = await fetch(WAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ query: mutation, variables: waveMutationVariables }) });
