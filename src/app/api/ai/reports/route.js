@@ -126,7 +126,7 @@ async function execTool(db, name, input, userId, req) {
 
   if (name === 'list_invoices') {
     var rows = await fetchAll(function () {
-      var q = db.from('invoices').select('order_number, invoice_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false });
+      var q = db.from('invoices').select('order_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false }); // NW: invoices has no invoice_number
       if (df) { q = q.gte('invoice_date', df); }
       if (dt) { q = q.lte('invoice_date', dt); }
       if (input.customer_name) { q = q.or('customer_name.ilike.%' + input.customer_name + '%,customer_name_en.ilike.%' + input.customer_name + '%'); }
@@ -155,7 +155,7 @@ async function execTool(db, name, input, userId, req) {
   if (name === 'customer_statement') {
     var cn = input.customer_name;
     var inv = await fetchAll(function () {
-      return db.from('invoices').select('order_number, invoice_number, customer_name, invoice_date, total_amount, total_collected, outstanding').or('customer_name.ilike.%' + cn + '%,customer_name_en.ilike.%' + cn + '%').order('invoice_date', { ascending: true });
+      return db.from('invoices').select('order_number, customer_name, invoice_date, total_amount, total_collected, outstanding').or('customer_name.ilike.%' + cn + '%,customer_name_en.ilike.%' + cn + '%').order('invoice_date', { ascending: true });
     });
     var pays = await fetchAll(function () {
       return db.from('treasury').select('transaction_date, description, cash_in, order_number').gt('cash_in', 0).ilike('description', '%' + cn + '%').order('transaction_date', { ascending: true });
@@ -196,11 +196,11 @@ async function execTool(db, name, input, userId, req) {
       return q;
     });
     if (!ords.length) { return { count: 0, note: 'No NextTrade orders imported yet (or none in this period). Orders are imported in Admin > Order Reconciliation.', source: 'nexttrade_orders, 0 rows' }; }
-    var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, invoice_number, release_number'); });
+    var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, release_number'); });
     var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number'); });
     var keys = {};
     function nrm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
-    sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
+    sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } });
     aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
     var allKeys = Object.keys(keys);
     var miss = []; var okC = 0;

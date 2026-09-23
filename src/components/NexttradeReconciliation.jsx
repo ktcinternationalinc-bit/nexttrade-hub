@@ -288,6 +288,7 @@ export default function NexttradeReconciliation(props) {
               <div className="rounded-lg p-2" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Matched to an invoice</div><div className="text-lg font-black">{sm.matched}</div></div>
               <div className="rounded-lg p-2" style={{ background: sm.orders_without_invoice ? '#fee2e2' : '#dcfce7', color: sm.orders_without_invoice ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Orders WITHOUT invoice</div><div className="text-lg font-black">{sm.orders_without_invoice}</div></div>
               <div className="rounded-lg p-2" style={{ background: sm.invoices_without_order ? '#fef3c7' : '#dcfce7', color: sm.invoices_without_order ? '#451a03' : '#052e16' }}><div className="text-[10px] font-bold">Invoices without order</div><div className="text-lg font-black">{sm.invoices_without_order}</div></div>
+              <div className="rounded-lg p-2" style={{ background: sm.invoices_with_open_balance ? '#fee2e2' : '#dcfce7', color: sm.invoices_with_open_balance ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Open balances ({sm.overdue_open_balance || 0} overdue)</div><div className="text-lg font-black">{sm.invoices_with_open_balance}</div></div>
             </div>
             {Object.keys(sm.matched_by_field || {}).length > 0 && (
               <div className="text-[11px] font-semibold text-slate-600 mb-2">Matched via: {Object.keys(sm.matched_by_field).map(function (k) { return k + ' × ' + sm.matched_by_field[k]; }).join(' · ')}</div>
@@ -323,6 +324,12 @@ export default function NexttradeReconciliation(props) {
                 )}
               </div>
             )}
+
+            <div className="flex items-center justify-between mt-3 mb-1">
+              <div className="text-[11px] font-extrabold text-slate-700">💰 Invoices with open balances — stay flagged here until paid ({(report.invoices_with_open_balance || []).filter(function (u) { return u.overdue; }).length} overdue)</div>
+              <button onClick={function () { csv(report.invoices_with_open_balance, 'invoices-open-balance'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
+            </div>
+            {tbl(report.invoices_with_open_balance)}
 
             <div className="flex items-center justify-between mt-3 mb-1">
               <div className="text-[11px] font-extrabold text-slate-700">🧐 Hub invoices that look like releases but have no order</div>

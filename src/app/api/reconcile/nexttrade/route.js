@@ -84,11 +84,11 @@ export async function GET(req) {
     }
     var orders = await fetchAll(function () { return db.from('nexttrade_orders').select('release_number, customer_name, warehouse, order_date, container, status, country, qty_seconds, qty_thirds, qty_paper, flagged_at'); });
     if (!orders.length) { return NextResponse.json({ ok: true, checked: 0, note: 'no orders imported yet' }); }
-    var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, invoice_number, release_number'); });
+    var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, release_number'); });
     var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number'); });
     var keys = {};
     function nrm2(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
-    sInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.order_number) { keys[nrm2(v.order_number)] = true; } if (v.invoice_number) { keys[nrm2(v.invoice_number)] = true; } });
+    sInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.order_number) { keys[nrm2(v.order_number)] = true; } });
     aInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.invoice_number) { keys[nrm2(v.invoice_number)] = true; } });
     var allK = Object.keys(keys);
     var newMiss = []; var totalMiss = 0; var oi;
@@ -187,11 +187,22 @@ export async function POST(req) {
         return q;
       });
       var salesInv = await fetchAll(function () {
-        return db.from('invoices').select('order_number, invoice_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, outstanding');
+        // v55.83-NW — sales invoices have NO invoice_number column (order_number only); selecting it 42703'd the whole report
+        return db.from('invoices').select('order_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, outstanding');
       });
       var acctInv = await fetchAll(function () {
-        return db.from('accounting_invoices').select('invoice_number, release_number, invoice_date, total_amount, status');
+        return db.from('accounting_invoices').select('invoice_number, release_number, invoice_date, due_date, total_amount, balance_due, payment_status, status');
       });
+      // v55.83-NW (Max): invoices with no payment / open balance stay flagged
+      // until money lands — a STANDING list, recomputed live every run.
+      var unpaid = [];
+      acctInv.forEach(function (v) {
+        var bal = Number(v.balance_due) || 0;
+        if (bal > 0.009 && String(v.status || '') !== 'void') {
+          unpaid.push({ invoice: v.invoice_number, release: v.release_number || '', invoice_date: v.invoice_date, due_date: v.due_date, balance_due: bal, payment_status: v.payment_status || 'unpaid', overdue: !!(v.due_date && v.due_date < new Date().toISOString().substring(0, 10)) });
+        }
+      });
+      unpaid.sort(function (a, b) { return b.balance_due - a.balance_due; });
 
       // Index Hub invoices by normalized keys, remembering WHICH field.
       var idx = {}; // norm -> [{system, field, ref, row}]
@@ -202,9 +213,8 @@ export async function POST(req) {
       }
       // v55.83-NO — release_number first: it is the DEDICATED join key now.
       salesInv.forEach(function (v) {
-        put(v.release_number, 'sales', 'release_number', v.invoice_number || v.order_number, v);
-        put(v.order_number, 'sales', 'order_number', v.order_number || v.invoice_number, v);
-        put(v.invoice_number, 'sales', 'invoice_number', v.invoice_number || v.order_number, v);
+        put(v.release_number, 'sales', 'release_number', v.order_number, v);
+        put(v.order_number, 'sales', 'order_number', v.order_number, v);
       });
       acctInv.forEach(function (v) {
         put(v.release_number, 'accounting', 'release_number', v.invoice_number, v);
@@ -240,7 +250,7 @@ export async function POST(req) {
       var invNoOrder = [];
       function looksRelease(x) { return /^\d{3,4}-\d{2,5}$/.test(String(x || '').trim()); }
       salesInv.forEach(function (v) {
-        var cand = v.release_number || (looksRelease(v.order_number) ? v.order_number : (looksRelease(v.invoice_number) ? v.invoice_number : null));
+        var cand = v.release_number || (looksRelease(v.order_number) ? v.order_number : null);
         if (cand && !orderSet[norm(cand)]) { invNoOrder.push({ system: 'sales', ref: cand, customer: v.customer_name || v.customer_name_en, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
       });
       acctInv.forEach(function (v) {
@@ -255,11 +265,14 @@ export async function POST(req) {
           matched: matched.length,
           orders_without_invoice: noInvoice.length,
           invoices_without_order: invNoOrder.length,
+          invoices_with_open_balance: unpaid.length,
+          overdue_open_balance: unpaid.filter(function (u) { return u.overdue; }).length,
           matched_by_field: byField,
           period: { from: df || 'all', to: dt || 'all' }
         },
         orders_without_invoice: noInvoice,
         invoices_without_order: invNoOrder.slice(0, 300),
+        invoices_with_open_balance: unpaid.slice(0, 300),
         matched: matched.slice(0, 500),
         source: 'nexttrade_orders ' + orders.length + ' rows vs invoices ' + salesInv.length + ' + accounting ' + acctInv.length + ' rows, matched server-side',
         api_build_marker: API_BUILD_MARKER
@@ -334,13 +347,13 @@ export async function POST(req) {
       });
       var custById = {}; acc2.forEach(function (r) { custById[r.id] = custMap[r.accounting_customer_id] || ''; });
       var salRows = await fetchAll(function () {
-        var q = db.from('invoices').select('id, order_number, invoice_number, customer_name, invoice_date, total_amount').is('release_number', null).order('invoice_date', { ascending: false });
-        if (srch) { q = q.or('order_number.ilike.%' + srch + '%,invoice_number.ilike.%' + srch + '%,customer_name.ilike.%' + srch + '%'); }
+        var q = db.from('invoices').select('id, order_number, customer_name, invoice_date, total_amount').is('release_number', null).order('invoice_date', { ascending: false });
+        if (srch) { q = q.or('order_number.ilike.%' + srch + '%,customer_name.ilike.%' + srch + '%'); }
         return q;
       });
       var out = [];
       accRows.forEach(function (r) { out.push({ system: 'accounting', id: r.id, ref: r.invoice_number || '(no number)', customer: custById[r.id] || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
-      salRows.forEach(function (r) { out.push({ system: 'sales', id: r.id, ref: r.order_number || r.invoice_number || '(no number)', customer: r.customer_name || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
+      salRows.forEach(function (r) { out.push({ system: 'sales', id: r.id, ref: r.order_number || '(no number)', customer: r.customer_name || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
       out.sort(function (a, b) { return String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')); });
       return NextResponse.json({ ok: true, missing: out.slice(0, 300), total_missing: out.length, api_build_marker: API_BUILD_MARKER });
     }

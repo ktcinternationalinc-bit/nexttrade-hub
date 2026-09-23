@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NW',
+    date: '2026-09-23',
+    label: 'Report fixed + open balances stay flagged until paid',
+    items: [
+      '**\ud83d\udc1b The \u201ccolumn does not exist\u201d failure is fixed.** The sales-side invoice table never had an invoice-number column (it uses order numbers); the report was asking for it and dying. Run reconciliation now works.',
+      '**\ud83d\udcb0 New standing section: Invoices with open balances.** Every invoice with money still owed \u2014 no payment or a partial balance \u2014 appears in the report EVERY run, with the overdue ones counted, until the balance reaches zero. Unlike order gaps (flagged once), unpaid money keeps being flagged, exactly as ordered. Own CSV download.',
+      { superAdminOnly: true, text: 'v55.83-NW \u2014 NO SQL. 42703 root cause: sales invoices table has order_number only; removed invoice_number from every from(invoices) select (reconcile buildReport/list_missing/cron + AI list_invoices/customer_statement/reconcile keys) with matcher/ref/search fallbacks adjusted. Report: unpaid[] from accounting_invoices balance_due>0.009 && status!=void, sorted by balance, overdue = due_date < today; summary invoices_with_open_balance + overdue_open_balance; UI card + \ud83d\udcb0 section + CSV. Tests: C1/NO8 realigned to real schema, NW addendum (4 assertions incl. no-phantom-column regex on BOTH routes), D4 recounted to 4 CSVs; runner 116/116.' },
+    ],
+  },
+  {
     version: 'v55.83-NV',
     date: '2026-09-23',
     label: 'Order Reconciliation moved to Accounting',

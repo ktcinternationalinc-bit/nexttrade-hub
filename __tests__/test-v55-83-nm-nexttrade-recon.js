@@ -89,9 +89,10 @@ ok('B4: duplicate lines within one paste: first wins, reported back',
 // ══════════════════════════════════════════════════════════════════
 // PART C — Reconciliation rules
 // ══════════════════════════════════════════════════════════════════
-ok('C1: matcher tries BOTH invoice systems and attributes the field',
+ok('C1: matcher tries BOTH invoice systems and attributes the field (sales has NO invoice_number — NW)',
   /put\(v\.order_number, 'sales', 'order_number'/.test(route) &&
-  /put\(v\.invoice_number, 'sales', 'invoice_number'/.test(route) &&
+  !/'sales', 'invoice_number'/.test(route) &&
+  /sales invoices have NO invoice_number column/.test(route) &&
   /'accounting', 'invoice_number'/.test(route) && /matched_by_field/.test(route));
 ok('C2: contains fallback exists and is labelled as such',
   /field \+ ' \(contains\)'/.test(route));
@@ -126,8 +127,8 @@ ok('D2: the screen explains the copy steps from the admin site',
   /clear Row Limits \(blank = all\)/.test(comp));
 ok('D3: preview before import, with recognized/ignored counts',
   /orders recognized/.test(comp) && /lines not understood/.test(comp));
-ok('D4: every remaining table has its own CSV export (3 after zero-qty removal)',
-  (comp.match(/⬇ CSV/g) || []).length === 3);
+ok('D4: every table has its own CSV export (4: no-invoice, open-balance, no-order, matched)',
+  (comp.match(/⬇ CSV/g) || []).length === 4);
 ok('D5: orders-without-invoice is the loudest section',
   /every one of these left a warehouse with no invoice found in the Hub/.test(comp));
 // v55.83-NN — "flag it to someone": the missing-invoice list must reach a person.
@@ -195,8 +196,8 @@ if (failures.length) {
     /DEDICATED join key/.test(rt));
   okO('NO7: reverse check prefers the explicit release_number over pattern guessing',
     /var cand = v\.release_number \|\|/.test(rt) && /var cand2 = v\.release_number \|\|/.test(rt));
-  okO('NO8: the AI reconcile tool and invoice listing carry the column',
-    /select\('order_number, invoice_number, release_number'\)/.test(ai2) &&
+  okO('NO8: the AI reconcile tool and invoice listing carry the column (no phantom sales invoice_number — NW)',
+    /select\('order_number, release_number'\)/.test(ai2) &&
     /select\('invoice_number, release_number'\)/.test(ai2) &&
     /release_number, customer_name, customer_name_en/.test(ai2));
 
@@ -320,4 +321,30 @@ if (failures.length) {
     })());
   if (f.length) { console.log('NU FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NU ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NW ADDENDUM — 42703 fix + standing unpaid-invoice flags
+// (Max's screenshot: "column invoices.invoice_number does not exist";
+//  and: "if no payment or balance for an invoice to continue to be flagged").
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fsw = require('fs'); var pw = require('path');
+  var rw = fsw.readFileSync(pw.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var cw = fsw.readFileSync(pw.join(__dirname, '..', 'src/components/NexttradeReconciliation.jsx'), 'utf8');
+  var aw = fsw.readFileSync(pw.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
+  var f = [];
+  function okW(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okW('NW1: no code path selects invoice_number from the sales invoices table anymore',
+    !/from\('invoices'\)\.select\('[^']*invoice_number/.test(rw) &&
+    !/from\('invoices'\)\.select\('[^']*invoice_number/.test(aw));
+  okW('NW2: open-balance invoices are a STANDING list, recomputed live every run',
+    /invoices_with_open_balance/.test(rw) && /STANDING list, recomputed live every run/.test(rw) &&
+    /bal > 0\.009 && String\(v\.status \|\| ''\) !== 'void'/.test(rw));
+  okW('NW3: overdue is called out (due_date past today)',
+    /overdue: !!\(v\.due_date && v\.due_date </.test(rw) && /overdue_open_balance/.test(rw));
+  okW('NW4: the screen shows the open-balance section with its own CSV and says it stays until paid',
+    /stay flagged here until paid/.test(cw) && /invoices-open-balance/.test(cw));
+  if (f.length) { console.log('NW FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NW ADDENDUM CHECKS PASSED'); }
 })();
