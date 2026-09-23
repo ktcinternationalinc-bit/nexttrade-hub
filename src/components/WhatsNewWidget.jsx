@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NX',
+    date: '2026-09-23',
+    label: 'Report fixed for good \u2014 schema now verified, never guessed',
+    items: [
+      '**\ud83d\udc1b Second column error killed.** The report asked the accounting invoices table for a \u201cstatus\u201d column it never had. Removed \u2014 the open-balance list is simply: balance still owed. Run reconciliation works.',
+      '**\ud83d\udd12 And the class of error is dead, not just the instance.** A new permanent launch test now checks EVERY column the reconciliation, AI reports, and performance-review engines read against the columns proven to exist by the Hub\'s working code. A guessed column can never reach you again \u2014 the build refuses to ship.',
+      '**\u2705 Your practice is already supported:** since your invoice numbers ARE the release numbers, the matcher treats the accounting invoice number as a match key directly (exact and contained) \u2014 so matching works from day one, and the separate Release # field is there for any invoice where the two ever differ.',
+      { superAdminOnly: true, text: 'v55.83-NX \u2014 NO SQL. accounting_invoices select: status \u2192 removed (table has payment_status + approval_status only); unpaid filter = balance_due > 0.009, full stop. Notification inserts aligned to verified shape (user_id/type/title/body \u2014 created_by dropped, matches /api/notify bellRows). NEW REQUIRED TEST test-v55-83-nx-schema-truth.js: regex-extracts every from(table).select(cols) in the three new routes and validates each column against whitelists sourced from battle-tested code (ask-route selects, AccountingInvoicesTab payloads, TicketsTab, loadUserPermissions, SettingsTab); own-SQL tables trusted. NW2 realigned to balance-only filter. Runner 117 required, all green.' },
+    ],
+  },
+  {
     version: 'v55.83-NW',
     date: '2026-09-23',
     label: 'Report fixed + open balances stay flagged until paid',

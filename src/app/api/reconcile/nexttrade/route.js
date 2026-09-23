@@ -124,7 +124,7 @@ export async function GET(req) {
       + lines2.join('\n') + (newMiss.length > 120 ? '\n…and ' + (newMiss.length - 120) + ' more — Admin > Order Reconciliation.' : '');
     var tk2 = await db.from('tickets').insert({ ticket_number: tnum2, title: '🚨 AUTO: ' + newMiss.length + ' new orders missing invoices', description: desc2, priority: 'high', status: 'New', assigned_to: assignee2, created_by: assignee2, due_date: due2.toISOString().substring(0, 10) }).select('id').single();
     if (!tk2.error) {
-      try { await db.from('notifications').insert({ user_id: assignee2, type: 'ticket_assigned', title: 'Auto-reconciliation: ' + newMiss.length + ' new orders missing invoices', body: 'Ticket ' + tnum2 + ' — automated 6-hour check.', created_by: assignee2 }); } catch (eN2) {}
+      try { await db.from('notifications').insert({ user_id: assignee2, type: 'ticket_assigned', title: 'Auto-reconciliation: ' + newMiss.length + ' new orders missing invoices', body: 'Ticket ' + tnum2 + ' — automated 6-hour check.' }); } catch (eN2) {}
       try {
         var rels2 = newMiss.map(function (x) { return x.release_number; });
         await db.from('nexttrade_orders').update({ flagged_at: new Date().toISOString() }).in('release_number', rels2.slice(0, 500));
@@ -191,14 +191,15 @@ export async function POST(req) {
         return db.from('invoices').select('order_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, outstanding');
       });
       var acctInv = await fetchAll(function () {
-        return db.from('accounting_invoices').select('invoice_number, release_number, invoice_date, due_date, total_amount, balance_due, payment_status, status');
+        // v55.83-NX — accounting_invoices has payment_status + approval_status, NO 'status' (the NW guess 42703'd the report)
+        return db.from('accounting_invoices').select('invoice_number, release_number, invoice_date, due_date, total_amount, balance_due, payment_status');
       });
       // v55.83-NW (Max): invoices with no payment / open balance stay flagged
       // until money lands — a STANDING list, recomputed live every run.
       var unpaid = [];
       acctInv.forEach(function (v) {
         var bal = Number(v.balance_due) || 0;
-        if (bal > 0.009 && String(v.status || '') !== 'void') {
+        if (bal > 0.009) {
           unpaid.push({ invoice: v.invoice_number, release: v.release_number || '', invoice_date: v.invoice_date, due_date: v.due_date, balance_due: bal, payment_status: v.payment_status || 'unpaid', overdue: !!(v.due_date && v.due_date < new Date().toISOString().substring(0, 10)) });
         }
       });
@@ -316,7 +317,7 @@ export async function POST(req) {
       }).select('id, ticket_number').single();
       if (tIns.error) { return NextResponse.json({ error: 'Could not create the ticket: ' + tIns.error.message }, { status: 400 }); }
       try {
-        await db.from('notifications').insert({ user_id: assignee, type: 'ticket_assigned', title: 'Reconciliation: ' + missing.length + ' orders missing invoices', body: 'Ticket ' + tnum + ' assigned to you — ' + missing.length + ' warehouse orders have no invoice in the Hub.', created_by: userId });
+        await db.from('notifications').insert({ user_id: assignee, type: 'ticket_assigned', title: 'Reconciliation: ' + missing.length + ' orders missing invoices', body: 'Ticket ' + tnum + ' assigned to you — ' + missing.length + ' warehouse orders have no invoice in the Hub.' });
       } catch (eN) {}
       try {
         var relList = []; var rl;

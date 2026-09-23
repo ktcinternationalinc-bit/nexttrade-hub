@@ -338,9 +338,9 @@ if (failures.length) {
   okW('NW1: no code path selects invoice_number from the sales invoices table anymore',
     !/from\('invoices'\)\.select\('[^']*invoice_number/.test(rw) &&
     !/from\('invoices'\)\.select\('[^']*invoice_number/.test(aw));
-  okW('NW2: open-balance invoices are a STANDING list, recomputed live every run',
+  okW('NW2: open-balance invoices are a STANDING list, recomputed live every run (NX: filter is balance-only — accounting_invoices has NO status column)',
     /invoices_with_open_balance/.test(rw) && /STANDING list, recomputed live every run/.test(rw) &&
-    /bal > 0\.009 && String\(v\.status \|\| ''\) !== 'void'/.test(rw));
+    /if \(bal > 0\.009\) \{/.test(rw) && !/v\.status/.test(rw.split('STANDING list')[1].split('unpaid.sort')[0]));
   okW('NW3: overdue is called out (due_date past today)',
     /overdue: !!\(v\.due_date && v\.due_date </.test(rw) && /overdue_open_balance/.test(rw));
   okW('NW4: the screen shows the open-balance section with its own CSV and says it stays until paid',
