@@ -50,14 +50,16 @@ export async function POST(req) {
     if (!userId || !start || !end) { return NextResponse.json({ error: 'user_id, period_start and period_end are required.' }, { status: 400 }); }
 
     // Manager-level access only: the review reads a person's full activity record.
-    var reqRes = await db.from('profiles').select('id, role, name').eq('id', by).single();
-    var reqProf = reqRes && reqRes.data;
+    // v55.83-NS — 'profiles' -> 'users' (the Hub's real identity table); the
+    // old lookup rejected every requester including super admin.
+    var reqRes = await db.from('users').select('id, role, name').eq('id', by).limit(1);
+    var reqProf = reqRes && reqRes.data && reqRes.data[0];
     if (!reqProf || (reqProf.role !== 'super_admin' && reqProf.role !== 'admin')) {
       return NextResponse.json({ error: 'Performance reviews are manager-level (Owner/Admin) only.' }, { status: 403 });
     }
 
-    var empRes = await db.from('profiles').select('id, name, email, role, job_title').eq('id', userId).single();
-    var emp = empRes && empRes.data;
+    var empRes = await db.from('users').select('id, name, email, role, job_title').eq('id', userId).limit(1);
+    var emp = empRes && empRes.data && empRes.data[0];
     if (!emp) { return NextResponse.json({ error: 'Employee not found.' }, { status: 404 }); }
 
     // ── ATTENDANCE ────────────────────────────────────────────────

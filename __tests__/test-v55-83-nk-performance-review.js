@@ -65,8 +65,10 @@ ok('A12: the route never writes anything',
 // PART B — Access control
 // ══════════════════════════════════════════════════════════════════
 
-ok('B1: server verifies the REQUESTER is Owner/Admin before returning anyone\'s record',
+ok('B1: server verifies the REQUESTER is Owner/Admin — against the USERS table (the Hub\'s real identity table; the profiles lookup rejected everyone, NS fix)',
   /reqProf\.role !== 'super_admin' && reqProf\.role !== 'admin'/.test(route) &&
+  /from\('users'\)\.select\('id, role, name'\)/.test(route) &&
+  !/from\('profiles'\)/.test(route) &&
   /manager-level \(Owner\/Admin\) only/.test(route));
 ok('B2: the screen is behind the HR Report permission in Admin',
   /section === 'perf_review' && canSeeHR/.test(adm));

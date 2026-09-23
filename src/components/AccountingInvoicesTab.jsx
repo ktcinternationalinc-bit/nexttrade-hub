@@ -256,7 +256,8 @@ export default function AccountingInvoicesTab(props) {
       var db = (isInvoice() ? b.invoice_date : b.proforma_date) || '';
       if (da < db) return 1; if (da > db) return -1; return 0;
     });
-  var gcols = '92px minmax(140px,1fr) 82px 82px 92px 82px 90px 54px 98px 142px';
+  // v55.83-NT — Release # inline column (Max: enter it right from the invoice list)
+  var gcols = '92px 96px minmax(140px,1fr) 82px 82px 92px 82px 90px 54px 98px 142px';
 
   function startNew() {
     var today = new Date().toISOString().substring(0, 10);
@@ -622,7 +623,7 @@ export default function AccountingInvoicesTab(props) {
       <div className="border border-slate-700 rounded mb-4" style={{ overflowX: 'auto' }}>
         <div style={{ minWidth: '1010px' }}>
           <div className="bg-slate-800 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: gcols, position: 'sticky', top: 0, zIndex: 2 }}>
-            <div className="px-2 py-1.5">Number</div><div className="px-2 py-1.5">Customer</div><div className="px-2 py-1.5">Inv date</div><div className="px-2 py-1.5">{isInvoice() ? 'Due date' : 'Valid until'}</div><div className="px-2 py-1.5 text-right">Total</div><div className="px-2 py-1.5 text-right">Paid</div><div className="px-2 py-1.5 text-right">Balance</div><div className="px-2 py-1.5">Source</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Actions</div>
+            <div className="px-2 py-1.5">Number</div><div className="px-2 py-1.5">Release #</div><div className="px-2 py-1.5">Customer</div><div className="px-2 py-1.5">Inv date</div><div className="px-2 py-1.5">{isInvoice() ? 'Due date' : 'Valid until'}</div><div className="px-2 py-1.5 text-right">Total</div><div className="px-2 py-1.5 text-right">Paid</div><div className="px-2 py-1.5 text-right">Balance</div><div className="px-2 py-1.5">Source</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Actions</div>
           </div>
           <div style={{ maxHeight: '58vh', overflowY: 'auto' }}>
           {displayRows.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No {isInvoice() ? 'invoices' : 'proformas'}{search.trim() ? ' match your search' : ' yet'}.</div> :
@@ -631,6 +632,22 @@ export default function AccountingInvoicesTab(props) {
               return (
                 <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
                   <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
+                  <div className="px-1 py-1">{isInvoice() ? <input key={row.id + ':' + (row.release_number || '')} defaultValue={row.release_number || ''} placeholder="1002-1193"
+                    onKeyDown={function (e) { if (e.key === 'Enter') { e.target.blur(); } }}
+                    onBlur={function (e) {
+                      var v = e.target.value.trim();
+                      if (v === (row.release_number || '')) { return; }
+                      fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
+                        .then(function (r) { return r.json(); })
+                        .then(function (j) {
+                          if (!j || j.ok !== true) { toast.error((j && j.error) || 'Save failed'); e.target.value = row.release_number || ''; return; }
+                          row.release_number = j.saved; // local echo; list reload keeps it via DB
+                          toast.success('Release ' + (j.saved || 'cleared') + ' saved');
+                        })
+                        .catch(function (er) { toast.error('Save failed: ' + ((er && er.message) || 'network')); });
+                    }}
+                    className="w-full px-1 py-0.5 rounded border border-slate-600 bg-slate-900 text-[10px] font-mono text-slate-100" /> : <span className="text-[10px] text-slate-500">—</span>}</div>
                   <div className="px-2 py-1.5 text-xs text-slate-100 truncate cursor-pointer" onClick={function () { openView(row); }}>{custName(row.accounting_customer_id)}</div>
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.invoice_date : row.proforma_date) || '—'}</div>
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.due_date : row.valid_until) || '—'}</div>

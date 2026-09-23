@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NT',
+    date: '2026-09-23',
+    label: 'Release # editable right on the invoice list',
+    items: [
+      '**\u270f\ufe0f New Release # column on Accounting \u2192 Invoices.** Right after the invoice number: an open box on every row. Type the warehouse release (1002-1193 style), press Enter or click away \u2014 saved instantly, with the same format check as everywhere else. So now there are THREE ways to enter releases: on this list, inside the invoice, or on the bulk backfill screen \u2014 whichever fits the moment.',
+      { superAdminOnly: true, text: 'v55.83-NT \u2014 NO SQL. AccountingInvoicesTab list: gcols widened (+96px after Number), header cell, per-row uncontrolled input keyed on row.id+value (defaultValue) saving on Enter\u2192blur / blur via /api/reconcile/nexttrade set_release (system accounting \u2014 format regex + admin gate inherited); no-op when unchanged; failed save restores prior value; local row echo so no reload needed; proformas show a dash. Toast via props (AccountingTab spreads props incl. toast). NT addendum (4 assertions); runner 116/116.' },
+    ],
+  },
+  {
+    version: 'v55.83-NS',
+    date: '2026-09-23',
+    label: 'Fix: \u201cOwner/Admin only\u201d rejection of the owner himself',
+    items: [
+      '**\ud83d\udc1b The reconciliation report and Performance Reviews were rejecting everyone \u2014 including super admin.** Both new screens checked identity against the wrong table. They now use the same proven lookup as every other working part of the Hub. Run reconciliation again \u2014 it will answer.',
+      { superAdminOnly: true, text: 'v55.83-NS \u2014 NO SQL. Root cause: /api/reconcile/nexttrade requireAdmin + cron assignee lookup and /api/hr/performance-review requester+employee lookups read a \u2018profiles\u2019 table; the Hub\'s identity lives in \u2018users\u2019 (server-permissions.loadUserPermissions). profiles queries returned nothing \u2192 403 for every caller. All five lookups switched to users (.limit(1) not .single()). Tests: NK B1 + NM B3 now assert users-table lookup AND absence of profiles in both routes; runner 116/116.' },
+    ],
+  },
+  {
     version: 'v55.83-NR',
     date: '2026-09-23',
     label: 'Just ask \u2014 data questions find the Reports engine by themselves',

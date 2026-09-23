@@ -79,8 +79,10 @@ ok('B1: import upserts on release_number — re-pasting updates, never duplicate
   /release_number text NOT NULL UNIQUE/.test(sql));
 ok('B2: server re-validates release format and converts MM-DD-YYYY dates',
   /\^\\d\{3,4\}-\\d\{2,5\}\$/.test(route) && /m\[3\] \+ '-' \+ m\[1\] \+ '-' \+ m\[2\]/.test(route));
-ok('B3: import and report are Owner/Admin only, server-verified',
-  /requireAdmin\(db, userId\)/.test(route) && /Owner\/Admin only/.test(route));
+ok('B3: import and report are Owner/Admin only, verified against the USERS table (profiles lookup rejected everyone incl. super admin — NS fix)',
+  /requireAdmin\(db, userId\)/.test(route) && /Owner\/Admin only/.test(route) &&
+  /from\('users'\)\.select\('id, role'\)/.test(route) &&
+  !/from\('profiles'\)/.test(route));
 ok('B4: duplicate lines within one paste: first wins, reported back',
   /duplicates_in_paste/.test(route));
 
@@ -260,4 +262,29 @@ if (failures.length) {
 
   if (f.length) { console.log('NQ FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NQ ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NT ADDENDUM — Release # editable INLINE on the invoice list
+// (Max: "yes need to enter the release number right from invoice as well").
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fst = require('fs'); var pt = require('path');
+  var at = fst.readFileSync(pt.join(__dirname, '..', 'src/components/AccountingInvoicesTab.jsx'), 'utf8');
+  var f = [];
+  function okT(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+
+  okT('NT1: the list has a Release # column (grid widened, header added)',
+    /'92px 96px minmax\(140px,1fr\)/.test(at) && />Release #<\/div>/.test(at));
+  okT('NT2: inline input saves on Enter/blur via the format-checked server action',
+    /action: 'set_release'/.test(at) && /system: 'accounting', id: row\.id/.test(at) &&
+    /e\.key === 'Enter'/.test(at));
+  okT('NT3: unchanged values do not fire saves; failed saves restore the old value',
+    /if \(v === \(row\.release_number \|\| ''\)\) \{ return; \}/.test(at) &&
+    /e\.target\.value = row\.release_number \|\| '';/.test(at));
+  okT('NT4: proformas show a dash (release numbers are an invoice thing)',
+    /<span className="text-\[10px\] text-slate-500">—<\/span>/.test(at));
+
+  if (f.length) { console.log('NT FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NT ADDENDUM CHECKS PASSED'); }
 })();

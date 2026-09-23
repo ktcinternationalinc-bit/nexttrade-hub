@@ -60,10 +60,15 @@ function toIso(d) {
   return null;
 }
 
+// v55.83-NS — was reading a 'profiles' table; the Hub's identity lives in
+// 'users' (see server-permissions.loadUserPermissions). That mismatch rejected
+// EVERYONE, super admin included ("Report failed: Owner/Admin only" on Max's
+// own account). Same proven lookup as every working route now.
 async function requireAdmin(db, userId) {
-  var r = await db.from('profiles').select('id, role').eq('id', userId).single();
-  var p = r && r.data;
-  return p && (p.role === 'super_admin' || p.role === 'admin');
+  if (!userId) { return false; }
+  var r = await db.from('users').select('id, role').eq('id', userId).limit(1);
+  var p = r && r.data && r.data[0];
+  return !!(p && (p.role === 'super_admin' || p.role === 'admin'));
 }
 
 // v55.83-NQ — the 6-hour automated check (Vercel cron, CRON_SECRET-guarded).
@@ -99,11 +104,11 @@ export async function GET(req) {
     var assignee2 = null;
     var wantEmail = process.env.RECON_ASSIGNEE_EMAIL || '';
     if (wantEmail) {
-      var pr = await db.from('profiles').select('id').ilike('email', wantEmail).limit(1);
+      var pr = await db.from('users').select('id').ilike('email', wantEmail).limit(1);
       if (pr && pr.data && pr.data[0]) { assignee2 = pr.data[0].id; }
     }
     if (!assignee2) {
-      var sa = await db.from('profiles').select('id').eq('role', 'super_admin').limit(1);
+      var sa = await db.from('users').select('id').eq('role', 'super_admin').limit(1);
       if (sa && sa.data && sa.data[0]) { assignee2 = sa.data[0].id; }
     }
     if (!assignee2) { return NextResponse.json({ ok: false, error: 'no assignee resolvable' }, { status: 500 }); }
