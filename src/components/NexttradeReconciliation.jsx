@@ -7,11 +7,12 @@
 // when copied from the browser, whitespace-collapsed text otherwise, the
 // MM-DD-YYYY dates, '-' for missing dates, '0' containers for local runs, and
 // duplicate lines within one paste (dedup by RELEASE #, first wins).
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { ToastContext } from '../lib/toast-context';
+import { supabase } from '../lib/supabase';
 
 var WAREHOUSES = ['Non-Bonded USA', 'CANADA', 'USA', 'Other']; // longest first — 'Non-Bonded USA' contains 'USA'
-var STATUSES = ['Post Loading Documentation', 'End Stage', 'Shipped', 'Pending', 'Cancelled'];
+var STATUSES = ['Post Loading Documentation', 'End Stage', 'Shipped', 'Pending', 'Cancelled', 'Closed', 'Delivered', 'Completed'];
 
 // Parse one pasted blob into row objects. Returns { rows, ignored }.
 export function parseOrdersPaste(text) {
@@ -84,7 +85,15 @@ export function parseOrdersPaste(text) {
 
 export default function NexttradeReconciliation(props) {
   var userProfile = props.userProfile;
-  var users = props.users || [];
+  // v55.83-NV — mounted under Accounting now, whose props may not carry users;
+  // fetch the team ourselves when absent (the flag-to-person picker needs it).
+  var sU = useState(props.users || []); var users = sU[0]; var setUsers = sU[1];
+  useEffect(function () {
+    if (users.length) { return; }
+    supabase.from('users').select('id, name, email, is_ai').order('name')
+      .then(function (r) { if (r && r.data) { setUsers(r.data); } })
+      .catch(function () {});
+  }, []);
   var ctxToast = useContext(ToastContext);
   var toast = ctxToast || { success: function (m) { try { window.alert(m); } catch (e) {} }, error: function (m) { try { window.alert(m); } catch (e) {} } };
 
@@ -250,7 +259,22 @@ export default function NexttradeReconciliation(props) {
       <div className="bg-white rounded-xl border border-slate-200 p-3">
         <div className="flex gap-2 items-end flex-wrap mb-2">
           <div className="text-sm font-extrabold text-slate-900 mr-2">Reconciliation report</div>
-          <div><label className="text-[10px] font-bold text-slate-500 block">Orders from</label>
+          {/* v55.83-NU — blank = ALL history (default). The one-tap buttons set
+              periods without ever touching the browser's year picker, which
+              mangles typed years (Max hit 0024 trying to reach 2024). */}
+          <div className="flex gap-1 items-center flex-wrap">
+            {[['All history', '', ''],
+              ['Last 90d', (function () { var d = new Date(); d.setDate(d.getDate() - 90); return d.toISOString().substring(0, 10); })(), ''],
+              ['2026', '2026-01-01', '2026-12-31'],
+              ['2025', '2025-01-01', '2025-12-31'],
+              ['2024', '2024-01-01', '2024-12-31']].map(function (pset) {
+              var active = from === pset[1] && to === pset[2];
+              return <button key={pset[0]} onClick={function () { setFrom(pset[1]); setTo(pset[2]); }}
+                className="px-2 py-1 rounded-lg text-[10px] font-extrabold"
+                style={active ? { background: '#0f172a', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{pset[0]}</button>;
+            })}
+          </div>
+          <div><label className="text-[10px] font-bold text-slate-500 block">from (blank = all)</label>
             <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" /></div>
           <div><label className="text-[10px] font-bold text-slate-500 block">to</label>
             <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" /></div>

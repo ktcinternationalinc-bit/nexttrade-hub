@@ -33,6 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NV',
+    date: '2026-09-23',
+    label: 'Order Reconciliation moved to Accounting',
+    items: [
+      '**\ud83d\udd0e Order Reconciliation now lives where it belongs: Accounting \u2192 \ud83d\udd0e Order Reconciliation** \u2014 next to Invoices, in the same row as Bank Review and Wave. It is gone from Admin. Same screen, same everything: paste, import, backfill release numbers, run the report, flag to a person.',
+      { superAdminOnly: true, text: 'v55.83-NV \u2014 NO SQL. AccountingTab: sub \'recon\' + button after Invoices, {...props} mount; AdminTab: import/nav/section removed. NexttradeReconciliation: self-fetches users (id,name,email,is_ai) when props lack them \u2014 AccountingTab\'s prop set differs from AdminTab\'s and the flag-to-person picker needs the team list; Owner/Admin gate inside the component unchanged. Test D1 rewritten (asserts AccountingTab mount + absence from AdminTab) + D1b users fallback; runner 116/116.' },
+    ],
+  },
+  {
+    version: 'v55.83-NU',
+    date: '2026-09-23',
+    label: 'Reconciliation dates: blank = all history, one-tap years',
+    items: [
+      '**\ud83d\udcc5 Leave the dates BLANK and the reconciliation covers everything ever imported \u2014 that is now the default.** No more fighting the browser\'s year picker (the thing that turned 2024 into 0024).',
+      '**\u261d\ufe0f One-tap buttons: All history \u00b7 Last 90d \u00b7 2026 \u00b7 2025 \u00b7 2024.** Whole years without typing a single digit. The date boxes remain for fine-tuning only.',
+      '**\ud83d\udce6 Old orders keep their status.** The paste reader now understands Closed / Delivered / Completed \u2014 statuses that appear on your older orders \u2014 so country and status stay clean on historical imports.',
+      { superAdminOnly: true, text: 'v55.83-NU \u2014 NO SQL. NexttradeReconciliation: from/to stay \'\' by default (report route already treats null as unbounded); preset chips set ISO strings directly (All/90d/2026/2025/2024), active-state styled; labels say blank = all. STATUSES += Closed/Delivered/Completed (whitespace-branch status anchor + country/qty split were polluting country with the unknown status word \u2014 functional NU4 asserts a Closed 2025 row parses clean). Test harness constant mirrored; NU addendum 4 assertions (1 functional); runner 116/116.' },
+    ],
+  },
+  {
     version: 'v55.83-NT',
     date: '2026-09-23',
     label: 'Release # editable right on the invoice list',

@@ -31,7 +31,7 @@ function ok(label, cond) {
 var fnStart = comp.indexOf('export function parseOrdersPaste');
 var fnEnd = comp.indexOf('export default function');
 var parseSrc = "var WAREHOUSES = ['Non-Bonded USA', 'CANADA', 'USA', 'Other'];\n"
-  + "var STATUSES = ['Post Loading Documentation', 'End Stage', 'Shipped', 'Pending', 'Cancelled'];\n"
+  + "var STATUSES = ['Post Loading Documentation', 'End Stage', 'Shipped', 'Pending', 'Cancelled', 'Closed', 'Delivered', 'Completed'];\n"
   + comp.slice(fnStart, fnEnd).replace('export function', 'function')
   + "\nmodule.exports = { parseOrdersPaste: parseOrdersPaste };\n";
 var tmpFile = path.join(__dirname, '.nm-parser-under-test.js');
@@ -113,8 +113,15 @@ ok('C7: the report route computes matches server-side and says so',
 // ══════════════════════════════════════════════════════════════════
 // PART D — Screen + AI flagging
 // ══════════════════════════════════════════════════════════════════
-ok('D1: screen mounted in Admin, gated (super admin or Sales module)',
-  /nexttrade_recon/.test(adm) && /modulePerms\['Sales'\] === true/.test(adm));
+ok('D1: screen lives under ACCOUNTING (NV move — it is accounting work), not Admin',
+  (function () {
+    var acct2 = fs.readFileSync(path.join(__dirname, '..', 'src/components/AccountingTab.jsx'), 'utf8');
+    return /\['recon', '🔎 Order Reconciliation'\]/.test(acct2) &&
+      /sub === 'recon' && <NexttradeReconciliation/.test(acct2) &&
+      !/nexttrade_recon/.test(adm);
+  })());
+ok('D1b: the component fetches the team itself when props lack users (flag picker survives the move)',
+  /supabase\.from\('users'\)\.select\('id, name, email, is_ai'\)/.test(comp));
 ok('D2: the screen explains the copy steps from the admin site',
   /clear Row Limits \(blank = all\)/.test(comp));
 ok('D3: preview before import, with recognized/ignored counts',
@@ -287,4 +294,30 @@ if (failures.length) {
 
   if (f.length) { console.log('NT FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NT ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NU ADDENDUM — dates that don't fight you + old-order statuses
+// (Max: "not able to enter a date for the year... should be able to go
+//  back however far I want").
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fsu = require('fs'); var pu = require('path');
+  var cu = fsu.readFileSync(pu.join(__dirname, '..', 'src/components/NexttradeReconciliation.jsx'), 'utf8');
+  var f = [];
+  function okU(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okU('NU1: blank dates mean ALL history and the label says so',
+    /from \(blank = all\)/.test(cu) && /blank = ALL history \(default\)/.test(cu));
+  okU('NU2: one-tap presets exist incl. whole past years (no year-typing needed)',
+    /\['All history', '', ''\]/.test(cu) && /\['2024', '2024-01-01', '2024-12-31'\]/.test(cu) &&
+    /\['2025', '2025-01-01', '2025-12-31'\]/.test(cu) && /Last 90d/.test(cu));
+  okU('NU3: parser accepts old-order statuses (Closed/Delivered/Completed)',
+    /'Closed', 'Delivered', 'Completed'\]/.test(cu));
+  okU('NU4: functional — a Closed 2025 row parses with clean status and country',
+    (function () {
+      var r = parseOrdersPaste('500 1002-1067 Elite Paper USA MRKU6401391 10-29-2025 01-06-2026 03-05-2026\t\tClosed\t\tIndia 0 0 52541');
+      return r.rows.length === 1 && r.rows[0].status === 'Closed' && r.rows[0].country === 'India' && r.rows[0].qty_paper === 52541 && r.rows[0].order_date === '10-29-2025';
+    })());
+  if (f.length) { console.log('NU FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NU ADDENDUM CHECKS PASSED'); }
 })();
