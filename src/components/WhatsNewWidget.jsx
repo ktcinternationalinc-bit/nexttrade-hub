@@ -33,6 +33,43 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OF',
+    date: '2026-09-23',
+    label: 'Customer names appear on the reconciliation report',
+    items: [
+      '**\ud83d\udc64 The blank CUSTOMER column, root-caused and fixed.** The report was asking the customers table for a column it never had; the failure was silent and every name came back blank. It now reads the same real fields the invoice screen has used all along (company name, then contact name) \u2014 so the open-balance list and the backfill screen finally say WHO owes the money.',
+      { superAdminOnly: true, text: 'v55.83-OF \u2014 NO SQL. accounting_customers has company_name + contact_name, NO name (proof: custName + push-invoice-v2 selects). Both server lookups (buildReport custMapR, list_missing custMap) switched to select(id, company_name, contact_name) with company_name || contact_name mapping. Whitelist entry was itself contaminated by my earlier guess \u2014 corrected to the proven set + lesson recorded inline. OF addendum 3 assertions; runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OE',
+    date: '2026-09-23',
+    label: 'Serial matching learns the two-ledger truth: Wave side only',
+    items: [
+      '**\ud83c\udde6 The mystery of the Arabic names, solved.** The Hub carries TWO invoice ledgers: your Egypt sales ledger (invoices numbered 1640, 1639\u2026 for Egyptian customers) and the Wave/US accounting ledger (AMERICA xxxx) where NextTrade deals live. Egypt invoice #1640 for \u0627\u0644\u0645\u0644\u064a\u062c\u0649 collided with Canada release 1001-1640 for Nexpac by pure numbering coincidence \u2014 and the customer check correctly refused to match them.',
+      '**\ud83c\udfaf Serial matching now looks at the Wave/accounting side ONLY.** The Egypt-ledger noise is gone from the amber list \u2014 what remains there are real candidates (like AMERICA 1635 for the Rejo Sports order). Full release numbers typed anywhere still match everywhere.',
+      { superAdminOnly: true, text: 'v55.83-OE \u2014 NO SQL. Report suffix stage: h.system !== accounting \u2192 skip (before corroboration); cron: acctKeys2 array (accounting nrm2 values) replaces allK in the sRx suppression loop; AI reconcile tool: acctK likewise. Exact + contains + release_number/order_number keys unchanged on both systems (OE4 pins). Driven by Max\'s live amber list: 4/5 rows were Egypt-ledger serial collisions (sales invoice 1640/\u0627\u0644\u0645\u0644\u064a\u062c\u0649 etc.), 1/5 a real accounting candidate. OE addendum 4 assertions; runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OD',
+    date: '2026-09-23',
+    label: 'Release # entry that cannot fail to click',
+    items: [
+      '**\ud83d\udd18 The Release # cell on Accounting \u2192 Invoices is now a real button.** Click anywhere on it \u2014 amber \u201c+ Release #\u201d when empty, the value itself when filled \u2014 and an editor opens already focused. Type, press Enter (or click away) to save; Esc cancels. Built so nothing on the page can steal the click or the cursor mid-typing.',
+      { superAdminOnly: true, text: 'v55.83-OD \u2014 NO SQL. Root cause of \u201cunable to click into field\u201d unconfirmed remotely (row wrapper has no onClick; suspected focus loss from list re-render under an uncontrolled input). Replaced with deterministic state-driven click-to-edit: cell div stopPropagation; view = <button type=button> (filled: dark subtle; empty: amber bg-amber-50 border-2 + \u201c+ Release #\u201d); edit = controlled input autoFocus value=relDraft, Enter\u2192blur saves via set_release (unchanged no-op, Escape cancels), stopPropagation on click/keydown; save mutates row + relBump re-render; states relEditId/relDraft/relBump after the toast line. Tests: NT3/OA7/OC1-3 realigned to the button-cell markup (first realign attempt aborted on a wrong anchor BEFORE writing \u2014 caught by the gate, redone with exact texts); runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OC',
+    date: '2026-09-23',
+    label: 'Empty Release # fields now impossible to miss',
+    items: [
+      '**\ud83d\udfe1 On Accounting \u2192 Invoices, every invoice WITHOUT a release number now shows a bright amber box saying \u201c+ Release #\u201d.** Click it, type (1002-1193 style), press Enter \u2014 saved on the spot. Once filled, the box goes quiet and dark. The fields were always editable; now they LOOK it. Hover any box and it tells you what to do.',
+      { superAdminOnly: true, text: 'v55.83-OC \u2014 NO SQL. AccountingInvoicesTab NT inline input: conditional styling \u2014 empty \u2192 border-2 amber-400 + bg-amber-50 + bold dark text + placeholder \u201c+ Release #\u201d (action prompt, not sample data) + tooltip; filled \u2192 original dark subtle + edit tooltip. Style computed from row.release_number at render; after an inline save the row object mutates so the value persists, the amber may stay until next list refresh \u2014 cosmetic, accepted. OA7 realigned (bans the 1002-1193 VALUE placeholder specifically, allows the action prompt); OC addendum 3 assertions; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OB',
     date: '2026-09-23',
     label: 'Release numbers flow both ways with Wave (as far as Wave allows)',

@@ -21,7 +21,7 @@ var VERIFIED = {
   tickets: ['id', 'ticket_number', 'title', 'status', 'priority', 'due_date', 'created_at', 'created_by', 'assigned_to', 'additional_assignees'], // TicketsTab
   ticket_comments: ['ticket_id', 'created_by', 'created_at', 'is_system', 'comment_text'], // TicketsTab
   user_sessions: ['user_id', 'date', 'login_at', 'logout_at', 'last_seen'], // AdminTab/DailyLog/LoginHistoryV2
-  accounting_customers: ['id', 'name'] // AccountingInvoicesTab custName
+  accounting_customers: ['id', 'company_name', 'contact_name', 'wave_customer_id', 'wave_business_id'] // push-invoice-v2 L78 select + custName (company_name || contact_name) — 'name' was a GUESS that contaminated this list; never again
 };
 // Our own tables (created by our SQL) are trusted:
 var OURS = { nexttrade_orders: true, hr_performance_reviews: true, shipments: true, inventory_layers: true, invoice_items: true };

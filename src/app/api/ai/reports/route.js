@@ -201,7 +201,8 @@ async function execTool(db, name, input, userId, req) {
     var keys = {};
     function nrm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
     sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } });
-    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.po_so_number) { keys[nrm(v.po_so_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
+    var acctK = [];
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; acctK.push(nrm(v.release_number)); } if (v.po_so_number) { keys[nrm(v.po_so_number)] = true; acctK.push(nrm(v.po_so_number)); } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; acctK.push(nrm(v.invoice_number)); } });
     var allKeys = Object.keys(keys);
     var miss = []; var okC = 0;
     ords.forEach(function (o) {
@@ -210,7 +211,7 @@ async function execTool(db, name, input, userId, req) {
       if (!hit) { var kk; for (kk = 0; kk < allKeys.length; kk++) { if (allKeys[kk].length > rel.length && allKeys[kk].indexOf(rel) > -1) { hit = true; break; } } }
       if (!hit) { // NY: release serial IS the invoice number (1001-1640 -> "AMERICA 1640")
         var sfx = String(o.release_number || '').split('-')[1] || ''; sfx = sfx.replace(/^0+/, '');
-        if (sfx.length >= 3) { var sr = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])'); var kz; for (kz = 0; kz < allKeys.length; kz++) { if (sr.test(allKeys[kz])) { hit = true; break; } } }
+        if (sfx.length >= 3) { var sr = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])'); var kz; for (kz = 0; kz < acctK.length; kz++) { if (sr.test(acctK[kz])) { hit = true; break; } } } // OE: accounting keys only
       }
       if (hit) { okC += 1; } else { miss.push({ release_number: o.release_number, customer: o.customer_name, warehouse: o.warehouse, order_date: o.order_date, status: o.status, country: o.country }); }
     });

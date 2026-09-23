@@ -89,7 +89,8 @@ export async function GET(req) {
     var keys = {};
     function nrm2(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
     sInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.order_number) { keys[nrm2(v.order_number)] = true; } });
-    aInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.po_so_number) { keys[nrm2(v.po_so_number)] = true; } if (v.invoice_number) { keys[nrm2(v.invoice_number)] = true; } });
+    var acctKeys2 = [];
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; acctKeys2.push(nrm2(v.release_number)); } if (v.po_so_number) { keys[nrm2(v.po_so_number)] = true; acctKeys2.push(nrm2(v.po_so_number)); } if (v.invoice_number) { keys[nrm2(v.invoice_number)] = true; acctKeys2.push(nrm2(v.invoice_number)); } });
     var allK = Object.keys(keys);
     var newMiss = []; var totalMiss = 0; var oi;
     for (oi = 0; oi < orders.length; oi++) {
@@ -101,7 +102,8 @@ export async function GET(req) {
         var sfx2 = String(od.release_number || '').split('-')[1] || ''; sfx2 = sfx2.replace(/^0+/, '');
         if (sfx2.length >= 3) {
           var sRx = new RegExp('(^|[^0-9])' + sfx2 + '($|[^0-9])');
-          var kz; for (kz = 0; kz < allK.length; kz++) { if (sRx.test(allK[kz])) { hit2 = true; break; } }
+          // OE: serial suppression only against ACCOUNTING keys (Egypt serials collide)
+          var kz; for (kz = 0; kz < acctKeys2.length; kz++) { if (sRx.test(acctKeys2[kz])) { hit2 = true; break; } }
         }
       }
       if (!hit2) { totalMiss += 1; if (!od.flagged_at) { newMiss.push(od); } }
@@ -203,8 +205,11 @@ export async function POST(req) {
       });
       var custMapR = {}; var custLookupNote = '';
       try {
-        var custR = await fetchAll(function () { return db.from('accounting_customers').select('id, name'); });
-        custR.forEach(function (c) { custMapR[c.id] = c.name; });
+        // v55.83-OF — accounting_customers has company_name + contact_name, NO 'name'
+        // (custName in AccountingInvoicesTab is the proof). The old select 42703'd
+        // silently and blanked every customer on the report.
+        var custR = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
+        custR.forEach(function (c) { custMapR[c.id] = c.company_name || c.contact_name || ''; });
         custLookupNote = custR.length ? ('customer names: ' + custR.length + ' loaded') : 'customer names: accounting_customers came back EMPTY';
       } catch (eCM) { custLookupNote = 'customer names FAILED: ' + ((eCM && eCM.message) || 'unknown'); }
       // Serial -> orders map: an invoice can borrow customer/release from the
@@ -294,6 +299,11 @@ export async function POST(req) {
             for (k2 = 0; k2 < normKeys.length && (hits.length + possibleForOrder.length) < 6; k2++) {
               if (sfxRx.test(normKeys[k2])) {
                 idx[normKeys[k2]].forEach(function (h) {
+                  // v55.83-OE — serial matching is ACCOUNTING-ONLY. The Egypt
+                  // sales ledger numbers its own invoices with plain serials
+                  // (1640 = المليجى) that collide with release serials by pure
+                  // coincidence; NextTrade deals are invoiced on the Wave side.
+                  if (h.system !== 'accounting') { return; }
                   if (custClose(o.customer_name, h.customer)) {
                     hits.push({ system: h.system, field: h.field + ' (release serial ' + sfx + ' + customer)', ref: h.ref, invoice_date: h.invoice_date, total_amount: h.total_amount });
                   } else {
@@ -413,8 +423,8 @@ export async function POST(req) {
       });
       var custMap = {};
       try {
-        var cs = await fetchAll(function () { return db.from('accounting_customers').select('id, name'); });
-        cs.forEach(function (c) { custMap[c.id] = c.name; });
+        var cs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
+        cs.forEach(function (c) { custMap[c.id] = c.company_name || c.contact_name || ''; });
       } catch (eC2) {}
       var acc2 = await fetchAll(function () {
         var q = db.from('accounting_invoices').select('id, accounting_customer_id').is('release_number', null);

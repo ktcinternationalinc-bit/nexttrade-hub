@@ -287,9 +287,9 @@ if (failures.length) {
   okT('NT2: inline input saves on Enter/blur via the format-checked server action',
     /action: 'set_release'/.test(at) && /system: 'accounting', id: row\.id/.test(at) &&
     /e\.key === 'Enter'/.test(at));
-  okT('NT3: unchanged values do not fire saves; failed saves restore the old value',
-    /if \(v === \(row\.release_number \|\| ''\)\) \{ return; \}/.test(at) &&
-    /e\.target\.value = row\.release_number \|\| '';/.test(at));
+  okT('NT3: unchanged values do not fire saves; the editor closes on save/cancel (OD: state-driven)',
+    /var cur = row\.release_number \|\| '';/.test(at) && /if \(v === cur\) \{ return; \}/.test(at) &&
+    /e\.key === 'Escape'/.test(at));
   okT('NT4: proformas show a dash (release numbers are an invoice thing)',
     /<span className="text-\[10px\] text-slate-500">—<\/span>/.test(at));
 
@@ -445,8 +445,8 @@ if (failures.length) {
   okA('OA6: unpaid rows and the reverse check use P.O./S.O. as a release source',
     /var relShow = v\.release_number \|\| v\.po_so_number \|\| ''/.test(ro) &&
     /looksRelease\(v\.po_so_number\)/.test(ro));
-  okA('OA7: the misleading sample placeholder is gone from the invoice-list Release column',
-    !/defaultValue=\{row\.release_number \|\| ''\} placeholder/.test(ac));
+  okA('OA7: the always-on sample placeholder is gone; + Release # is the affordance (OD: button cell)',
+    !/defaultValue=\{row\.release_number/.test(ac) && /\+ Release #/.test(ac));
   if (f.length) { console.log('OA FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OA ADDENDUM CHECKS PASSED'); }
 })();
@@ -473,4 +473,72 @@ if (failures.length) {
     /report\.release_adopted = adopted/.test(wv2) && /Release adoption pass:/.test(wv2));
   if (f.length) { console.log('OB FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OB ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OC ADDENDUM — empty release fields must LOOK enterable
+// (Max: "please enable those fields" — they were enabled but invisible).
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fc = require('fs'); var pc = require('path');
+  var acx = fc.readFileSync(pc.join(__dirname, '..', 'src/components/AccountingInvoicesTab.jsx'), 'utf8');
+  var f = [];
+  function okC(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okC('OC1: an EMPTY release cell is a bright amber + Release # BUTTON (whole cell clickable — OD)',
+    /border-2 border-amber-400 bg-amber-50/.test(acx) && /\+ Release #/.test(acx) &&
+    /<button type="button" onClick=\{function \(e\) \{ e\.stopPropagation\(\); setRelDraft/.test(acx));
+  okC('OC2: a FILLED release cell stays quiet (dark, subtle) and is click-to-edit',
+    /row\.release_number \? 'w-full text-left px-1 py-0\.5 rounded border border-slate-600 bg-slate-900/.test(acx) &&
+    /Click to edit the release number/.test(acx));
+  okC('OC3: the editor opens FOCUSED, saves on Enter/blur, cancels on Escape, and clicks never leak to the row',
+    /autoFocus value=\{relDraft\}/.test(acx) && /e\.stopPropagation\(\); if \(e\.key === 'Escape'\)/.test(acx) &&
+    /onClick=\{function \(e\) \{ e\.stopPropagation\(\); \}\}>\{isInvoice\(\)/.test(acx));
+  if (f.length) { console.log('OC FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OC ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OE ADDENDUM — serial matching is ACCOUNTING-ONLY. Max's real
+// data proved the Egypt sales ledger uses plain serials for Egyptian
+// customers (1640 = المليجى) that collide with release serials by
+// coincidence; NextTrade deals are invoiced on the Wave side.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fe = require('fs'); var pe = require('path');
+  var re = fe.readFileSync(pe.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var ae = fe.readFileSync(pe.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
+  var f = [];
+  function okE(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okE('OE1: the report suffix stage rejects non-accounting candidates before corroboration',
+    /if \(h\.system !== 'accounting'\) \{ return; \}/.test(re) &&
+    /serial matching is ACCOUNTING-ONLY/.test(re));
+  okE('OE2: the cron suffix suppression scans accounting keys only',
+    /acctKeys2\.push/.test(re) && /kz < acctKeys2\.length/.test(re) && !/kz < allK\.length; kz\+\+\) \{ if \(sRx/.test(re));
+  okE('OE3: the AI tool suffix stage scans accounting keys only',
+    /acctK\.push/.test(ae) && /kz < acctK\.length/.test(ae) && /accounting keys only/.test(ae));
+  okE('OE4: exact and full-release matching still covers BOTH systems (a typed release on the sales side still counts)',
+    /put\(v\.release_number, 'sales', 'release_number'/.test(re) && /put\(v\.order_number, 'sales', 'order_number'/.test(re));
+  if (f.length) { console.log('OE FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OE ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OF ADDENDUM — the blank-customer root cause: accounting_customers
+// has company_name + contact_name, no 'name'. My whitelist carried the
+// same guess — both corrected from proven code.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var ff = require('fs'); var pf = require('path');
+  var rf = ff.readFileSync(pf.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var wf = ff.readFileSync(pf.join(__dirname, '..', '__tests__/test-v55-83-nx-schema-truth.js'), 'utf8');
+  var f = [];
+  function okF(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okF('OF1: no code selects a name column from accounting_customers anywhere in the route',
+    !/accounting_customers'\)\.select\('[^']*[^_]name[^_]/.test(rf.replace(/company_name|contact_name/g, 'X')));
+  okF('OF2: names derive exactly as the working list does (company_name || contact_name) in BOTH lookups',
+    (rf.match(/c\.company_name \|\| c\.contact_name \|\| ''/g) || []).length === 2);
+  okF('OF3: the whitelist entry is corrected and records the lesson',
+    /accounting_customers: \['id', 'company_name', 'contact_name'/.test(wf) && /was a GUESS/.test(wf));
+  if (f.length) { console.log('OF FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OF ADDENDUM CHECKS PASSED'); }
 })();

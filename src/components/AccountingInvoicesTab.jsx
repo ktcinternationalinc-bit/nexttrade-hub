@@ -49,6 +49,10 @@ var inp = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sl
 
 export default function AccountingInvoicesTab(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
+  // v55.83-OD — click-to-edit release editor (button cell, cannot lose the click)
+  var rs1 = useState(null); var relEditId = rs1[0]; var setRelEditId = rs1[1];
+  var rs2 = useState(''); var relDraft = rs2[0]; var setRelDraft = rs2[1];
+  var rs3 = useState(0); var relBump = rs3[0]; var setRelBump = rs3[1];
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
@@ -632,22 +636,37 @@ export default function AccountingInvoicesTab(props) {
               return (
                 <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
                   <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
-                  <div className="px-1 py-1">{isInvoice() ? <input key={row.id + ':' + (row.release_number || '')} defaultValue={row.release_number || ''}
-                    onKeyDown={function (e) { if (e.key === 'Enter') { e.target.blur(); } }}
-                    onBlur={function (e) {
-                      var v = e.target.value.trim();
-                      if (v === (row.release_number || '')) { return; }
-                      fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
-                        .then(function (r) { return r.json(); })
-                        .then(function (j) {
-                          if (!j || j.ok !== true) { toast.error((j && j.error) || 'Save failed'); e.target.value = row.release_number || ''; return; }
-                          row.release_number = j.saved; // local echo; list reload keeps it via DB
-                          toast.success('Release ' + (j.saved || 'cleared') + ' saved');
-                        })
-                        .catch(function (er) { toast.error('Save failed: ' + ((er && er.message) || 'network')); });
-                    }}
-                    className="w-full px-1 py-0.5 rounded border border-slate-600 bg-slate-900 text-[10px] font-mono text-slate-100" /> : <span className="text-[10px] text-slate-500">—</span>}</div>
+                  <div className="px-1 py-1" onClick={function (e) { e.stopPropagation(); }}>{isInvoice() ? (
+                    relEditId === row.id ? (
+                      <input autoFocus value={relDraft}
+                        onChange={function (e) { setRelDraft(e.target.value); }}
+                        onClick={function (e) { e.stopPropagation(); }}
+                        onKeyDown={function (e) { e.stopPropagation(); if (e.key === 'Escape') { setRelEditId(null); } if (e.key === 'Enter') { e.target.blur(); } }}
+                        onBlur={function () {
+                          var v = (relDraft || '').trim();
+                          var cur = row.release_number || '';
+                          setRelEditId(null);
+                          if (v === cur) { return; }
+                          fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
+                            .then(function (r) { return r.json(); })
+                            .then(function (j) {
+                              if (!j || j.ok !== true) { toast.error((j && j.error) || 'Save failed'); return; }
+                              row.release_number = j.saved;
+                              toast.success('Release ' + (j.saved || 'cleared') + ' saved');
+                              setRelBump(relBump + 1);
+                            })
+                            .catch(function (er) { toast.error('Save failed: ' + ((er && er.message) || 'network')); });
+                        }}
+                        className="w-full px-1 py-0.5 rounded border-2 border-amber-400 bg-white text-[10px] font-mono font-bold text-slate-900" placeholder="1002-1193" />
+                    ) : (
+                      <button type="button" onClick={function (e) { e.stopPropagation(); setRelDraft(row.release_number || ''); setRelEditId(row.id); }}
+                        title={row.release_number ? 'Click to edit the release number' : 'No release number — click to add'}
+                        className={row.release_number ? 'w-full text-left px-1 py-0.5 rounded border border-slate-600 bg-slate-900 text-[10px] font-mono text-slate-100' : 'w-full text-left px-1 py-0.5 rounded border-2 border-amber-400 bg-amber-50 text-[10px] font-extrabold text-amber-900'}>
+                        {row.release_number || '+ Release #'}
+                      </button>
+                    )
+                  ) : <span className="text-[10px] text-slate-500">—</span>}</div>
                   <div className="px-2 py-1.5 text-xs text-slate-100 truncate cursor-pointer" onClick={function () { openView(row); }}>{custName(row.accounting_customer_id)}</div>
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.invoice_date : row.proforma_date) || '—'}</div>
                   <div className="px-2 py-1.5 text-[11px] text-slate-300">{(isInvoice() ? row.due_date : row.valid_until) || '—'}</div>
