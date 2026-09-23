@@ -14,7 +14,7 @@ function read(rel) { return fs.readFileSync(path.join(__dirname, '..', rel), 'ut
 // Proven-by-working-code column lists (source noted per table).
 var VERIFIED = {
   invoices: ['id', 'order_number', 'customer_name', 'customer_name_en', 'customer_id', 'invoice_date', 'total_amount', 'total_collected', 'outstanding', 'sales_rep', 'release_number'], // /api/ask L1299 + page.jsx sales + NO SQL
-  accounting_invoices: ['id', 'invoice_number', 'release_number', 'accounting_customer_id', 'invoice_date', 'due_date', 'notes', 'terms', 'total_amount', 'amount_paid', 'balance_due', 'payment_status', 'approval_status', 'wave_imported_paid', 'wave_business_id', 'business_id', 'source', 'created_by', 'updated_by'], // AccountingInvoicesTab payload + recompute
+  accounting_invoices: ['id', 'invoice_number', 'release_number', 'accounting_customer_id', 'invoice_date', 'due_date', 'notes', 'terms', 'total_amount', 'amount_paid', 'balance_due', 'payment_status', 'approval_status', 'po_so_number', 'wave_imported_paid', 'wave_business_id', 'business_id', 'source', 'created_by', 'updated_by'], // AccountingInvoicesTab payload + recompute
   treasury: ['transaction_date', 'description', 'cash_in', 'cash_out', 'order_number', 'category', 'subcategory'], // /api/ask L1300
   checks: ['check_number', 'customer_name', 'amount', 'check_date', 'collection_date', 'status', 'bank_name', 'order_number'], // /api/ask L1312
   users: ['id', 'name', 'email', 'role', 'is_ai', 'job_title'], // loadUserPermissions + SettingsTab profile editor

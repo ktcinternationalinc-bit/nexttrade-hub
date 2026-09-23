@@ -197,11 +197,11 @@ async function execTool(db, name, input, userId, req) {
     });
     if (!ords.length) { return { count: 0, note: 'No NextTrade orders imported yet (or none in this period). Orders are imported in Admin > Order Reconciliation.', source: 'nexttrade_orders, 0 rows' }; }
     var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, release_number'); });
-    var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number'); });
+    var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number, po_so_number'); });
     var keys = {};
     function nrm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
     sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } });
-    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.po_so_number) { keys[nrm(v.po_so_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
     var allKeys = Object.keys(keys);
     var miss = []; var okC = 0;
     ords.forEach(function (o) {

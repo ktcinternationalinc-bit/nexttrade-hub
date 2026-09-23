@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OA',
+    date: '2026-09-23',
+    label: 'Wave now sends us the P.O./S.O. \u2014 your comparison number',
+    items: [
+      '**\ud83c\udf0a Root cause found and fixed: the Wave pull never asked for the P.O./S.O. field** \u2014 the number your team uses to tie invoices to NextTrade releases. It is now pulled into its own P.O./S.O. column on every invoice, and the reconciliation, the 6-hour automatic check, and the AI all match on it directly \u2014 exact and by serial.',
+      '**\ud83d\udd04 One re-sync backfills everything:** after running the small SQL and deploying, open Accounting \u2192 Wave and run a sync (or let the scheduled one run). Every historical invoice gets its P.O./S.O. filled automatically \u2014 no manual entry. Then Run reconciliation and watch Matched jump.',
+      '**\ud83d\udc7b The \u201crepeating values\u201d in the Release column:** that was sample text (1002-1193) showing grey on every empty row \u2014 my bad choice, it looked like real data. Removed; empty now means empty.',
+      { superAdminOnly: true, text: 'v55.83-OA \u2014 NEEDS SQL: sql/v55-83-OA-po-so.sql (po_so_number on accounting_invoices, indexed). import-invoices: GraphQL query += poNumber; fields.po_so_number = n.poNumber||null (update path runs on EVERY sync \u2014 no hash short-circuit on writes \u2014 so one sync backfills history); fingerprint += poNumber. Reconcile buildReport: select += po_so_number, put(...,\'po_so\',...) first-class key (suffix cascade + custClose corroboration apply automatically), relShow/cand2 fallbacks; cron + AI reconcile keys += po_so_number. AccountingInvoicesTab: sample placeholder removed from the NT inline input (read as repeating data). Schema-truth whitelist += po_so_number (justified by OA SQL). Tests: OA addendum 7 assertions, NO8 realigned; runner all green. NOT DONE: pushing po_so_number TO Wave on push-invoice-v2 (pull-only for now); showing the P.O./S.O. as a read-only hint beside the Release input.' },
+    ],
+  },
+  {
+    version: 'v55.83-NZ',
+    date: '2026-09-23',
+    label: 'No silent matches: serial hits must agree on the customer',
+    items: [
+      '**\ud83d\udea8 You caught it: 1001-1640 was silently \u201cmatched\u201d to an invoice that merely contained 1640.** Not anymore. A release serial only counts as a match when the CUSTOMER also agrees. Serial-only hits now land in a new \ud83d\udfe0 \u201cPossible matches \u2014 verify\u201d section showing which invoice carries that serial and whose it is, with the action spelled out: confirm same deal, then put the release # on that invoice. A real gap can never hide behind an unrelated invoice number again.',
+      '**\ud83d\udc64 The empty customer column:** the name lookup is no longer allowed to fail silently \u2014 the report\'s Source line now says whether customer names loaded, came back empty, or failed (so your next screenshot tells us exactly what\'s wrong if it persists). And every open-balance row can now borrow the customer and release from the warehouse order its invoice number points at, marked \u201c(from order)\u201d.',
+      '**\ud83d\udcca Six summary cards now:** orders in scope \u00b7 matched \u00b7 possible (verify) \u00b7 without invoice \u00b7 invoices without order \u00b7 open balances.',
+      { superAdminOnly: true, text: 'v55.83-NZ \u2014 NO SQL. buildReport: custMapR fetch surfaces custLookupNote (loaded N / EMPTY / FAILED: msg) appended to source; bySerial map (serial\u2192orders); custClose(a,b) = containment either way or first-6 equality on norm; idx entries carry customer (sales names or accounting map); suffix cascade splits corroborated (matched_via \u201c\u2026release serial N + customer\u201d) vs possibleForOrder \u2192 possible[] {release, customer, serial_found_in, that_invoice_customer, action_needed}; summary possible_matches_verify; unpaid rows: custShow/relShow borrow from unambiguous bySerial join, labelled (from order). Cron unchanged: uncorroborated serial still suppresses auto-flag (no false tickets); ambiguity surfaces in the report \u2014 documented tradeoff. UI: 6-card grid, amber section + CSV (D4\u21925). Tests: NY4 realigned, NZ addendum 6 assertions (NZ6 functional custClose harness); runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-NY',
     date: '2026-09-23',
     label: 'Matching works your way: the release serial IS the invoice number',

@@ -127,8 +127,8 @@ ok('D2: the screen explains the copy steps from the admin site',
   /clear Row Limits \(blank = all\)/.test(comp));
 ok('D3: preview before import, with recognized/ignored counts',
   /orders recognized/.test(comp) && /lines not understood/.test(comp));
-ok('D4: every table has its own CSV export (4: no-invoice, open-balance, no-order, matched)',
-  (comp.match(/⬇ CSV/g) || []).length === 4);
+ok('D4: every table has its own CSV export (5: possible-verify, no-invoice, open-balance, no-order, matched)',
+  (comp.match(/⬇ CSV/g) || []).length === 5);
 ok('D5: orders-without-invoice is the loudest section',
   /every one of these left a warehouse with no invoice found in the Hub/.test(comp));
 // v55.83-NN — "flag it to someone": the missing-invoice list must reach a person.
@@ -196,9 +196,9 @@ if (failures.length) {
     /DEDICATED join key/.test(rt));
   okO('NO7: reverse check prefers the explicit release_number over pattern guessing',
     /var cand = v\.release_number \|\|/.test(rt) && /var cand2 = v\.release_number \|\|/.test(rt));
-  okO('NO8: the AI reconcile tool and invoice listing carry the column (no phantom sales invoice_number — NW)',
+  okO('NO8: the AI reconcile tool and invoice listing carry the columns (sales: no invoice_number; accounting: + po_so — OA)',
     /select\('order_number, release_number'\)/.test(ai2) &&
-    /select\('invoice_number, release_number'\)/.test(ai2) &&
+    /select\('invoice_number, release_number, po_so_number'\)/.test(ai2) &&
     /release_number, customer_name, customer_name_en/.test(ai2));
 
   if (f.length) { console.log('NO FAILED: ' + f.join(' | ')); process.exit(1); }
@@ -370,12 +370,83 @@ if (failures.length) {
     /if \(dt && v\.invoice_date && v\.invoice_date > dt\) \{ return; \}/.test(ry));
   okY('NY3: invoices-without-order scoped to the period too',
     /inWin/.test(ry) && /inWin2/.test(ry));
-  okY('NY4: unpaid rows carry customer, total, paid, balance, days overdue (who owes what, in full)',
-    /customer: custMapR\[v\.accounting_customer_id\]/.test(ry) && /days_overdue: od/.test(ry) &&
-    /paid: v\.amount_paid/.test(ry));
+  okY('NY4: unpaid rows carry customer, total, paid, balance, days overdue — with serial-join fallback (NZ)',
+    /var custShow = custMapR\[v\.accounting_customer_id\]/.test(ry) && /days_overdue: od/.test(ry) &&
+    /paid: v\.amount_paid/.test(ry) && /\(from order\)/.test(ry));
   okY('NY5: the screen header counts overdue from the FULL summary, not the display slice (289-vs-543 bug)',
     /\{sm\.overdue_open_balance \|\| 0\} overdue/.test(cy) &&
     !/invoices_with_open_balance \|\| \[\]\)\.filter/.test(cy));
   if (f.length) { console.log('NY FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NY ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NZ ADDENDUM — Max caught 1001-1640 silently "matched" to an
+// unrelated invoice, and the customer column came back empty. Serial
+// matches now require customer corroboration (else amber "verify"),
+// lookups are never silent, and unpaid rows borrow customer/release
+// from the serial-joined order.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fz = require('fs'); var pz = require('path');
+  var rz = fz.readFileSync(pz.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var cz = fz.readFileSync(pz.join(__dirname, '..', 'src/components/NexttradeReconciliation.jsx'), 'utf8');
+  var f = [];
+  function okZ(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okZ('NZ1: a bare serial collision is NOT a match — corroboration required, else amber',
+    /custClose\(o\.customer_name, h\.customer\)/.test(rz) && /possibleForOrder\.push/.test(rz) &&
+    /release serial ' \+ sfx \+ ' \+ customer/.test(rz));
+  okZ('NZ2: possible matches are their own bucket — never matched, never silently dropped',
+    /possible_matches_verify/.test(rz) && /else if \(possibleForOrder\.length\)/.test(rz) &&
+    /confirm same deal/.test(rz));
+  okZ('NZ3: customer lookup is never silent — the report source line says loaded/empty/failed',
+    /custLookupNote/.test(rz) && /came back EMPTY/.test(rz) && /customer names FAILED/.test(rz) &&
+    /custLookupNote,/.test(rz));
+  okZ('NZ4: unpaid rows borrow customer AND release from the serial-joined order, marked honestly',
+    /bySerial\[d\]/.test(rz) && /os\.length === 1/.test(rz) && /' \(from order\)'/.test(rz));
+  okZ('NZ5: the screen shows the amber verify section with card and CSV',
+    /Possible matches — an invoice carries this release/.test(cz) && /possible-matches-verify/.test(cz) &&
+    /Possible — verify/.test(cz));
+  // Functional: corroboration keeps Nexpac↔Nexpac, ambers Nexpac↔Sterling.
+  function normF(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
+  function custCloseF(a, b) { var x = normF(a); var y = normF(b); if (!x || !y) { return false; } return x.indexOf(y) > -1 || y.indexOf(x) > -1 || x.substring(0, 6) === y.substring(0, 6); }
+  okZ('NZ6: functional — Nexpac corroborates Nexpac; Nexpac vs Sterling Paper does NOT; empty never corroborates',
+    custCloseF('Nexpac', 'NEXPAC') === true &&
+    custCloseF('Nexpac', 'Sterling Paper & Pulp Inc') === false &&
+    custCloseF('Nexpac', '') === false);
+  if (f.length) { console.log('NZ FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NZ ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OA ADDENDUM — Wave P.O./S.O. pull (Max: "the P.O./S.O. number...
+// was never pulled") + the placeholder that read as repeating values.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fo = require('fs'); var po = require('path');
+  var wv = fo.readFileSync(po.join(__dirname, '..', 'src/app/api/wave/import-invoices/route.js'), 'utf8');
+  var ro = fo.readFileSync(po.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var ao = fo.readFileSync(po.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
+  var ac = fo.readFileSync(po.join(__dirname, '..', 'src/components/AccountingInvoicesTab.jsx'), 'utf8');
+  var sq = fo.readFileSync(po.join(__dirname, '..', 'sql/v55-83-OA-po-so.sql'), 'utf8');
+  var f = [];
+  function okA(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okA('OA1: the Wave GraphQL query fetches poNumber and stores it as po_so_number',
+    / id invoiceNumber poNumber status /.test(wv) && /po_so_number: n\.poNumber \|\| null/.test(wv));
+  okA('OA2: poNumber is in the change fingerprint — a P.O./S.O. edit in Wave re-syncs the row',
+    /node\.poNumber \|\| ''/.test(wv));
+  okA('OA3: SQL adds the column, indexed, idempotent',
+    /ADD COLUMN IF NOT EXISTS po_so_number text;/.test(sq) && /CREATE INDEX IF NOT EXISTS idx_acct_inv_po_so/.test(sq));
+  okA('OA4: the report matcher indexes po_so as a first-class accounting key',
+    /put\(v\.po_so_number, 'accounting', 'po_so'/.test(ro));
+  okA('OA5: the 6-hour cron and the AI use the P.O./S.O. keys too',
+    (ro.match(/v\.po_so_number\) \{ keys\[nrm2/g) || []).length === 1 &&
+    (ao.match(/v\.po_so_number\) \{ keys\[nrm/g) || []).length === 1);
+  okA('OA6: unpaid rows and the reverse check use P.O./S.O. as a release source',
+    /var relShow = v\.release_number \|\| v\.po_so_number \|\| ''/.test(ro) &&
+    /looksRelease\(v\.po_so_number\)/.test(ro));
+  okA('OA7: the misleading sample placeholder is gone from the invoice-list Release column',
+    !/defaultValue=\{row\.release_number \|\| ''\} placeholder/.test(ac));
+  if (f.length) { console.log('OA FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OA ADDENDUM CHECKS PASSED'); }
 })();

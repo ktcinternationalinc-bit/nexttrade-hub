@@ -632,7 +632,7 @@ export default function AccountingInvoicesTab(props) {
               return (
                 <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
                   <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
-                  <div className="px-1 py-1">{isInvoice() ? <input key={row.id + ':' + (row.release_number || '')} defaultValue={row.release_number || ''} placeholder="1002-1193"
+                  <div className="px-1 py-1">{isInvoice() ? <input key={row.id + ':' + (row.release_number || '')} defaultValue={row.release_number || ''}
                     onKeyDown={function (e) { if (e.key === 'Enter') { e.target.blur(); } }}
                     onBlur={function (e) {
                       var v = e.target.value.trim();

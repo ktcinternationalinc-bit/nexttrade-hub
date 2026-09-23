@@ -20,13 +20,13 @@ function payStatus(total, due, paid) {
   return 'unpaid';
 }
 function fingerprint(node, total, paid) {
-  return [node.invoiceNumber || '', String(total), String(paid), node.status || ''].join('|');
+  return [node.invoiceNumber || '', node.poNumber || '', String(total), String(paid), node.status || ''].join('|');
 }
 
 function gqlInvoices(token, bid, page) {
   var query = 'query($bid: ID!, $page: Int!) { business(id:$bid){ id invoices(page:$page,pageSize:25){'
     + ' pageInfo{ currentPage totalPages totalCount } edges{ node{'
-    + ' id invoiceNumber status invoiceDate dueDate memo'
+    + ' id invoiceNumber poNumber status invoiceDate dueDate memo'
     + ' total{ value currency{ code } } amountPaid{ value } amountDue{ value }'
     + ' customer{ id name }'
     + ' items{ product{ name } description quantity price total{ value } } } } } } }';
@@ -212,6 +212,7 @@ export async function POST(request) {
 
           var fields = {
             invoice_number: n.invoiceNumber || null,
+            po_so_number: n.poNumber || null, // v55.83-OA — the P.O./S.O. field: the team's NextTrade comparison number
             invoice_date: n.invoiceDate || null,
             due_date: n.dueDate || null,
             notes: n.memo || null,

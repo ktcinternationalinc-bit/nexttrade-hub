@@ -283,11 +283,12 @@ export default function NexttradeReconciliation(props) {
 
         {sm && (
           <div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-2">
               <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Orders in scope</div><div className="text-lg font-black">{sm.orders_in_scope}</div></div>
               <div className="rounded-lg p-2" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Matched to an invoice</div><div className="text-lg font-black">{sm.matched}</div></div>
               <div className="rounded-lg p-2" style={{ background: sm.orders_without_invoice ? '#fee2e2' : '#dcfce7', color: sm.orders_without_invoice ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Orders WITHOUT invoice</div><div className="text-lg font-black">{sm.orders_without_invoice}</div></div>
               <div className="rounded-lg p-2" style={{ background: sm.invoices_without_order ? '#fef3c7' : '#dcfce7', color: sm.invoices_without_order ? '#451a03' : '#052e16' }}><div className="text-[10px] font-bold">Invoices without order</div><div className="text-lg font-black">{sm.invoices_without_order}</div></div>
+              <div className="rounded-lg p-2" style={{ background: sm.possible_matches_verify ? '#ffedd5' : '#dcfce7', color: sm.possible_matches_verify ? '#431407' : '#052e16' }}><div className="text-[10px] font-bold">Possible — verify</div><div className="text-lg font-black">{sm.possible_matches_verify || 0}</div></div>
               <div className="rounded-lg p-2" style={{ background: sm.invoices_with_open_balance ? '#fee2e2' : '#dcfce7', color: sm.invoices_with_open_balance ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Open balances ({sm.overdue_open_balance || 0} overdue)</div><div className="text-lg font-black">{sm.invoices_with_open_balance}</div></div>
             </div>
             {Object.keys(sm.matched_by_field || {}).length > 0 && (
@@ -299,6 +300,12 @@ export default function NexttradeReconciliation(props) {
               <button onClick={function () { csv(report.orders_without_invoice, 'orders-without-invoice'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
             </div>
             {tbl(report.orders_without_invoice, 'bad')}
+            <div className="flex items-center justify-between mt-3 mb-1">
+              <div className="text-[11px] font-extrabold text-slate-700">🟠 Possible matches — an invoice carries this release's serial but the customer differs. Confirm, then put the release # on that invoice</div>
+              <button onClick={function () { csv(report.possible_matches, 'possible-matches-verify'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
+            </div>
+            {tbl(report.possible_matches)}
+
             {report.orders_without_invoice && report.orders_without_invoice.length > 0 && (
               <div className="flex gap-2 items-center flex-wrap mt-1.5 p-2 rounded-lg" style={{ background: '#fef3c7' }}>
                 <span className="text-[11px] font-extrabold" style={{ color: '#451a03' }}>🚩 Flag these to:</span>
