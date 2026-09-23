@@ -4,6 +4,7 @@ import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmtET, todayET, yesterdayET, fmtETRange } from '../lib/et-time';
 import HRReport from './HRReport';
+import PerformanceReviewCenter from './PerformanceReviewCenter';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
 import BackupsPanel from './BackupsPanel';
@@ -580,6 +581,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       {[
         ['scorecards','📊 Scorecards'],
         ...(canSeeHR ? [['hr_report','📋 HR Report']] : []),
+        ...(canSeeHR ? [['perf_review','🧾 Performance Reviews']] : []),
         // v55.65 — HR Inbox: routine requests + sensitive complaints from team.
         // super_admin sees ALL; regular admins see admin-visible requests + non-anonymous complaints only.
         ['hr_inbox','📬 HR Inbox'],
@@ -608,6 +610,11 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     {/* ===== HR REPORT ===== */}
     {section === 'hr_report' && canSeeHR && (
       <HRReport user={user} userProfile={userProfile} users={users} customers={customers} />
+    )}
+
+    {/* ===== PERFORMANCE REVIEWS (v55.83-NK) ===== */}
+    {section === 'perf_review' && canSeeHR && (
+      <PerformanceReviewCenter userProfile={userProfile} users={users} />
     )}
     {section === 'hr_report' && !canSeeHR && (
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">

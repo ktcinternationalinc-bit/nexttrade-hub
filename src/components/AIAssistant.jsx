@@ -5,6 +5,9 @@ import { fmtET, todayET } from '../lib/et-time';
 export default function AIAssistant({ user, userProfile, users, customers }) {
   const myId = userProfile?.id || user?.id;
   const [messages, setMessages] = useState([]);
+  // v55.83-NL — Reports mode: questions go to /api/ai/reports (tool-based, real
+  // database numbers, permission-mirrored) instead of the context-dump /api/ask.
+  const [aiMode, setAiMode] = useState('chat'); // 'chat' | 'reports'
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
@@ -590,6 +593,24 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     setPendingAction(null);
 
     try {
+      if (aiMode === 'reports') {
+        // v55.83-NL — Reports mode. History passes only role+content text so the
+        // model keeps conversational context ("now only the unpaid ones").
+        const hist = [...messages, newMsg].slice(-8).map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text || '' }));
+        const res = await fetch('/api/ai/reports', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, history: hist.slice(0, -1), user_id: myId }),
+        });
+        const data = await res.json();
+        if (!data || data.ok !== true) {
+          setMessages(prev => [...prev, { role: 'ai', text: '❌ ' + ((data && data.error) || 'Reports engine error') }]);
+        } else {
+          setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'No response', tables: data.tables || [], sources: data.sources || [] }]);
+          speak(data.answer || '');
+        }
+        setLoading(false);
+        return;
+      }
       const res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -608,7 +629,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       setMessages(prev => [...prev, { role: 'ai', text: '❌ Connection error: ' + err.message }]);
     }
     setLoading(false);
-  }, [input, loading, messages, user, pendingAction]);
+  }, [input, loading, messages, user, pendingAction, aiMode]);
 
   const executeAction = async () => {
     if (!pendingAction) return;
@@ -832,6 +853,46 @@ ${today}`;
               {m.role === 'user' ? '🎤 You' : '🤖 AI Secretary'}
             </div>
             <div className="text-sm whitespace-pre-wrap" style={{lineHeight: 1.7}}>{m.text}</div>
+            {/* v55.83-NL — report tables: real database rows with totals + CSV.
+                Rendered from structured data, never re-typed by the model. */}
+            {m.tables && m.tables.length > 0 && m.tables.map(function (tb, ti) {
+              if (!tb.rows || !tb.rows.length) { return null; }
+              var cols = Object.keys(tb.rows[0]);
+              function toCsv() {
+                var lines = [cols.join(',')];
+                tb.rows.forEach(function (r) {
+                  lines.push(cols.map(function (c) { var v = r[c] == null ? '' : String(r[c]); return '"' + v.replace(/"/g, '""') + '"'; }).join(','));
+                });
+                var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+                var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                a.download = 'report-' + (tb.title || 'data') + '-' + new Date().toISOString().substring(0, 10) + '.csv';
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+              }
+              return (
+                <div key={ti} className="mt-2 rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <div className="flex items-center justify-between px-2 py-1" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                    <span className="text-[10px] font-extrabold uppercase tracking-wide" style={{ opacity: 0.7 }}>{tb.title} · {tb.rows.length} rows{tb.truncated ? ' (display capped — CSV holds the shown set; totals cover ALL rows)' : ''}</span>
+                    <button onClick={toCsv} className="text-[10px] font-bold px-2 py-0.5 rounded" style={{ background: '#0ea5e9', color: '#fff' }}>⬇ CSV</button>
+                  </div>
+                  <div className="overflow-auto" style={{ maxHeight: 260 }}>
+                    <table className="w-full text-[10px]">
+                      <thead><tr>{cols.map(function (c) { return <th key={c} className="px-1.5 py-1 text-left font-bold whitespace-nowrap" style={{ background: 'rgba(255,255,255,0.08)', position: 'sticky', top: 0 }}>{c}</th>; })}</tr></thead>
+                      <tbody>{tb.rows.slice(0, 200).map(function (r, ri) {
+                        return <tr key={ri} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>{cols.map(function (c) { return <td key={c} className="px-1.5 py-0.5 whitespace-nowrap" style={{ opacity: 0.9 }}>{r[c] == null ? '' : String(r[c])}</td>; })}</tr>;
+                      })}</tbody>
+                    </table>
+                  </div>
+                  {tb.totals && (
+                    <div className="px-2 py-1 text-[10px] font-extrabold" style={{ background: 'rgba(16,185,129,0.15)', color: '#6ee7b7' }}>
+                      Totals (database-computed, full set): {Object.keys(tb.totals).map(function (k) { return k + ' = ' + Number(tb.totals[k]).toLocaleString(); }).join(' · ')}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {m.sources && m.sources.length > 0 && (
+              <div className="text-[10px] mt-1.5" style={{ opacity: 0.55 }}>Source: {m.sources.join(' | ')}</div>
+            )}
           </div>
         ))}
 
@@ -976,6 +1037,22 @@ ${today}`;
               {recording ? '⏹' : '🎙️'}
             </button>
           )}
+          {/* v55.83-NL — mode toggle: Chat (the classic secretary) vs Reports & Data
+              (tool-based engine, real database numbers, permission-mirrored). */}
+          <div className="flex-shrink-0 flex rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.12)' }}>
+            {[['chat', '💬 Chat'], ['reports', '📊 Reports']].map(function (mo) {
+              return (
+                <button key={mo[0]} onClick={function () { setAiMode(mo[0]); }}
+                  className="px-2.5 text-[11px] font-extrabold"
+                  style={aiMode === mo[0]
+                    ? { background: mo[0] === 'reports' ? 'linear-gradient(135deg, #10b981, #059669)' : 'linear-gradient(135deg, #0ea5e9, #6366f1)', color: '#fff', height: 56 }
+                    : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-primary)', opacity: 0.65, height: 56 }}>
+                  {mo[1]}
+                </button>
+              );
+            })}
+          </div>
+
           {/* Stop Speaking button */}
           {speaking && (
             <button onClick={() => { stopSpeaking(); if (conversationModeRef.current) startListeningAgain(); }}
@@ -991,7 +1068,7 @@ ${today}`;
           )}
           <input value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !recording && askQuestion()}
-            placeholder={recording ? 'Recording... tap ⏹ when done' : speaking ? 'AI speaking... tap 🔇' : listening ? 'Listening...' : 'Ask anything or give a command...'}
+            placeholder={recording ? 'Recording... tap ⏹ when done' : speaking ? 'AI speaking... tap 🔇' : listening ? 'Listening...' : (aiMode === 'reports' ? 'Ask for data: "open invoices last 3 months", "balance for El Sayad"...' : 'Ask anything or give a command...')}
             className="flex-1 px-4 py-3 rounded-xl text-sm"
             style={{
               background: recording ? 'rgba(16,185,129,0.06)' : speaking ? 'rgba(245,158,11,0.06)' : listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
