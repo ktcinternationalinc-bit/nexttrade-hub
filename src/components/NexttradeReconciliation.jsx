@@ -326,7 +326,7 @@ export default function NexttradeReconciliation(props) {
             )}
 
             <div className="flex items-center justify-between mt-3 mb-1">
-              <div className="text-[11px] font-extrabold text-slate-700">💰 Invoices with open balances — stay flagged here until paid ({(report.invoices_with_open_balance || []).filter(function (u) { return u.overdue; }).length} overdue)</div>
+              <div className="text-[11px] font-extrabold text-slate-700">💰 Invoices with open balances in this period — stay flagged until paid ({sm.overdue_open_balance || 0} overdue · biggest first)</div>
               <button onClick={function () { csv(report.invoices_with_open_balance, 'invoices-open-balance'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
             </div>
             {tbl(report.invoices_with_open_balance)}

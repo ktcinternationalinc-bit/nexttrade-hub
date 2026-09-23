@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NY',
+    date: '2026-09-23',
+    label: 'Matching works your way: the release serial IS the invoice number',
+    items: [
+      '**\ud83c\udfaf The 0-matched disconnect is fixed.** Your invoices carry the release\'s serial \u2014 release 1001-1640 is invoiced as \u201cAMERICA 1640\u201d \u2014 and the matcher now understands that. It matches the digits after the dash against every invoice number, with strict boundaries so 164 can never match inside 1640. Same logic in the report, the 6-hour automatic check, and the AI. Run it again and watch the Matched card.',
+      '**\ud83d\udcc5 The period means the period.** Reconciling 90 days now scopes the open balances and the reverse checks to invoices dated in those 90 days \u2014 no more 2021 history flooding a September report. Blank dates still mean everything.',
+      '**\ud83d\udcb0 \u201cWho owes what\u201d in full:** each open-balance row now shows the customer, invoice total, what was PAID, what REMAINS, when it was due, and how many DAYS overdue \u2014 biggest balance first. And the overdue count is now one honest number everywhere (the 543-vs-289 mismatch is gone).',
+      { superAdminOnly: true, text: 'v55.83-NY \u2014 NO SQL. Matching cascade gains step 4: suffix = release.split(-)[1], leading zeros stripped, len>=3, RegExp (^|[^0-9])sfx($|[^0-9]) over normalized keys, labelled \u201crelease serial N\u201d in matched_via \u2014 in buildReport, cron GET, and AI reconcile tool (functional harness proved 1001-1640\u2192AMERICA 1640, boundary rejection, no false positives). buildReport: acct select += accounting_customer_id, amount_paid; accounting_customers name map; unpaid rows {invoice, customer, release, dates, total, paid, balance_due, days_overdue}; unpaid + invNoOrder period-scoped on invoice_date (both bounds). UI header uses sm.overdue_open_balance (slice-recount bug). Tests: NY addendum 5 assertions, NW2-4 realigned; runner all green. NOT DONE: ambiguity annotation when two orders share a serial across country prefixes (first match wins today).' },
+    ],
+  },
+  {
     version: 'v55.83-NX',
     date: '2026-09-23',
     label: 'Report fixed for good \u2014 schema now verified, never guessed',

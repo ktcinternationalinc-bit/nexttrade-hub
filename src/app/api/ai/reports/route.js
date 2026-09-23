@@ -208,6 +208,10 @@ async function execTool(db, name, input, userId, req) {
       var rel = nrm(o.release_number);
       var hit = keys[rel] === true;
       if (!hit) { var kk; for (kk = 0; kk < allKeys.length; kk++) { if (allKeys[kk].length > rel.length && allKeys[kk].indexOf(rel) > -1) { hit = true; break; } } }
+      if (!hit) { // NY: release serial IS the invoice number (1001-1640 -> "AMERICA 1640")
+        var sfx = String(o.release_number || '').split('-')[1] || ''; sfx = sfx.replace(/^0+/, '');
+        if (sfx.length >= 3) { var sr = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])'); var kz; for (kz = 0; kz < allKeys.length; kz++) { if (sr.test(allKeys[kz])) { hit = true; break; } } }
+      }
       if (hit) { okC += 1; } else { miss.push({ release_number: o.release_number, customer: o.customer_name, warehouse: o.warehouse, order_date: o.order_date, status: o.status, country: o.country }); }
     });
     return { count: ords.length, totals: { matched: okC, orders_without_invoice: miss.length }, rows: miss.slice(0, 400), note: 'rows = orders WITHOUT any matching invoice (release number checked against sales order/invoice numbers and accounting invoice numbers, exact + contains).', source: 'nexttrade_orders ' + ords.length + ' vs invoices ' + sInv.length + ' + accounting ' + aInv.length + ', matched server-side' };

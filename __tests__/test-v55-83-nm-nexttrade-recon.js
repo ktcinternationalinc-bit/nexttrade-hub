@@ -338,13 +338,44 @@ if (failures.length) {
   okW('NW1: no code path selects invoice_number from the sales invoices table anymore',
     !/from\('invoices'\)\.select\('[^']*invoice_number/.test(rw) &&
     !/from\('invoices'\)\.select\('[^']*invoice_number/.test(aw));
-  okW('NW2: open-balance invoices are a STANDING list, recomputed live every run (NX: filter is balance-only — accounting_invoices has NO status column)',
-    /invoices_with_open_balance/.test(rw) && /STANDING list, recomputed live every run/.test(rw) &&
-    /if \(bal > 0\.009\) \{/.test(rw) && !/v\.status/.test(rw.split('STANDING list')[1].split('unpaid.sort')[0]));
-  okW('NW3: overdue is called out (due_date past today)',
-    /overdue: !!\(v\.due_date && v\.due_date </.test(rw) && /overdue_open_balance/.test(rw));
+  okW('NW2: open-balance invoices are a STANDING list, recomputed live every run (NY: balance-only filter, period-scoped)',
+    /invoices_with_open_balance/.test(rw) && /STANDING/.test(rw) &&
+    /if \(bal <= 0\.009\) \{ return; \}/.test(rw) && !/v\.status/.test(rw.split('STANDING')[1].split('unpaid.sort')[0]));
+  okW('NW3: overdue is called out with the day count (due_date past today)',
+    /v\.due_date && v\.due_date < todayISO/.test(rw) && /overdue_open_balance/.test(rw));
   okW('NW4: the screen shows the open-balance section with its own CSV and says it stays until paid',
-    /stay flagged here until paid/.test(cw) && /invoices-open-balance/.test(cw));
+    /stay flagged until paid/.test(cw) && /invoices-open-balance/.test(cw));
   if (f.length) { console.log('NW FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NW ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NY ADDENDUM — "the release # IS the invoice number" (Max):
+// suffix matching, period-scoped balances, honest overdue counts.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fsy = require('fs'); var py = require('path');
+  var ry = fsy.readFileSync(py.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var cy = fsy.readFileSync(py.join(__dirname, '..', 'src/components/NexttradeReconciliation.jsx'), 'utf8');
+  var ay = fsy.readFileSync(py.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
+  var f = [];
+  function okY(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okY('NY1: suffix matching in report, cron AND AI tool (release serial with digit boundaries, len>=3, zeros stripped)',
+    ry.split("'(^|[^0-9])' + sfx").length - 1 >= 1 &&
+    ry.split("'(^|[^0-9])' + sfx2").length - 1 >= 1 &&
+    /release serial/.test(ry) &&
+    ay.indexOf("'(^|[^0-9])' + sfx") > -1 && /sfx\.length >= 3/.test(ry));
+  okY('NY2: open-balance list is SCOPED to the reconciliation period (both bounds)',
+    /if \(df && v\.invoice_date && v\.invoice_date < df\) \{ return; \}/.test(ry) &&
+    /if \(dt && v\.invoice_date && v\.invoice_date > dt\) \{ return; \}/.test(ry));
+  okY('NY3: invoices-without-order scoped to the period too',
+    /inWin/.test(ry) && /inWin2/.test(ry));
+  okY('NY4: unpaid rows carry customer, total, paid, balance, days overdue (who owes what, in full)',
+    /customer: custMapR\[v\.accounting_customer_id\]/.test(ry) && /days_overdue: od/.test(ry) &&
+    /paid: v\.amount_paid/.test(ry));
+  okY('NY5: the screen header counts overdue from the FULL summary, not the display slice (289-vs-543 bug)',
+    /\{sm\.overdue_open_balance \|\| 0\} overdue/.test(cy) &&
+    !/invoices_with_open_balance \|\| \[\]\)\.filter/.test(cy));
+  if (f.length) { console.log('NY FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NY ADDENDUM CHECKS PASSED'); }
 })();

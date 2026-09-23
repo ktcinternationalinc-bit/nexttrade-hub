@@ -97,6 +97,13 @@ export async function GET(req) {
       var rel2 = nrm2(od.release_number);
       var hit2 = keys[rel2] === true;
       if (!hit2) { var kx; for (kx = 0; kx < allK.length; kx++) { if (allK[kx].length > rel2.length && allK[kx].indexOf(rel2) > -1) { hit2 = true; break; } } }
+      if (!hit2) {
+        var sfx2 = String(od.release_number || '').split('-')[1] || ''; sfx2 = sfx2.replace(/^0+/, '');
+        if (sfx2.length >= 3) {
+          var sRx = new RegExp('(^|[^0-9])' + sfx2 + '($|[^0-9])');
+          var kz; for (kz = 0; kz < allK.length; kz++) { if (sRx.test(allK[kz])) { hit2 = true; break; } }
+        }
+      }
       if (!hit2) { totalMiss += 1; if (!od.flagged_at) { newMiss.push(od); } }
     }
     if (!newMiss.length) { return NextResponse.json({ ok: true, checked: orders.length, still_missing_total: totalMiss, newly_flagged: 0 }); }
@@ -192,16 +199,27 @@ export async function POST(req) {
       });
       var acctInv = await fetchAll(function () {
         // v55.83-NX — accounting_invoices has payment_status + approval_status, NO 'status' (the NW guess 42703'd the report)
-        return db.from('accounting_invoices').select('invoice_number, release_number, invoice_date, due_date, total_amount, balance_due, payment_status');
+        return db.from('accounting_invoices').select('invoice_number, release_number, accounting_customer_id, invoice_date, due_date, total_amount, amount_paid, balance_due, payment_status');
       });
-      // v55.83-NW (Max): invoices with no payment / open balance stay flagged
-      // until money lands — a STANDING list, recomputed live every run.
+      var custMapR = {};
+      try {
+        var custR = await fetchAll(function () { return db.from('accounting_customers').select('id, name'); });
+        custR.forEach(function (c) { custMapR[c.id] = c.name; });
+      } catch (eCM) {}
+      // v55.83-NW/NY (Max): invoices with no payment / open balance stay flagged
+      // until paid — a STANDING list, recomputed live every run, and SCOPED to
+      // the reconciliation period: reconciling 90 days means invoices dated in
+      // those 90 days, not 2021's history.
+      var todayISO = new Date().toISOString().substring(0, 10);
       var unpaid = [];
       acctInv.forEach(function (v) {
         var bal = Number(v.balance_due) || 0;
-        if (bal > 0.009) {
-          unpaid.push({ invoice: v.invoice_number, release: v.release_number || '', invoice_date: v.invoice_date, due_date: v.due_date, balance_due: bal, payment_status: v.payment_status || 'unpaid', overdue: !!(v.due_date && v.due_date < new Date().toISOString().substring(0, 10)) });
-        }
+        if (bal <= 0.009) { return; }
+        if (df && v.invoice_date && v.invoice_date < df) { return; }
+        if (dt && v.invoice_date && v.invoice_date > dt) { return; }
+        var od = 0;
+        if (v.due_date && v.due_date < todayISO) { od = Math.round((new Date(todayISO) - new Date(v.due_date)) / 86400000); }
+        unpaid.push({ invoice: v.invoice_number, customer: custMapR[v.accounting_customer_id] || '', release: v.release_number || '', invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: v.amount_paid != null ? Number(v.amount_paid) : 0, balance_due: bal, days_overdue: od, overdue: od > 0 });
       });
       unpaid.sort(function (a, b) { return b.balance_due - a.balance_due; });
 
@@ -236,6 +254,23 @@ export async function POST(req) {
             }
           }
         }
+        if (!hits.length) {
+          // v55.83-NY (Max: "the release # IS the invoice number") — SUFFIX match.
+          // Their invoices carry the release's serial: release 1001-1640 is
+          // invoiced as "AMERICA 1640". Match the digits after the dash as a
+          // standalone number inside any invoice identifier.
+          var sfx = String(o.release_number || '').split('-')[1] || '';
+          sfx = sfx.replace(/^0+/, '');
+          if (sfx.length >= 3) {
+            var sfxRx = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])');
+            var k2;
+            for (k2 = 0; k2 < normKeys.length && hits.length < 3; k2++) {
+              if (sfxRx.test(normKeys[k2])) {
+                idx[normKeys[k2]].forEach(function (h) { hits.push({ system: h.system, field: h.field + ' (release serial ' + sfx + ')', ref: h.ref, invoice_date: h.invoice_date, total_amount: h.total_amount }); });
+              }
+            }
+          }
+        }
         var totQ = (Number(o.qty_seconds) || 0) + (Number(o.qty_thirds) || 0) + (Number(o.qty_paper) || 0);
         if (hits.length) {
           var f = hits[0].system + '.' + hits[0].field;
@@ -252,11 +287,13 @@ export async function POST(req) {
       function looksRelease(x) { return /^\d{3,4}-\d{2,5}$/.test(String(x || '').trim()); }
       salesInv.forEach(function (v) {
         var cand = v.release_number || (looksRelease(v.order_number) ? v.order_number : null);
-        if (cand && !orderSet[norm(cand)]) { invNoOrder.push({ system: 'sales', ref: cand, customer: v.customer_name || v.customer_name_en, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
+        var inWin = (!df || !v.invoice_date || v.invoice_date >= df) && (!dt || !v.invoice_date || v.invoice_date <= dt);
+        if (inWin && cand && !orderSet[norm(cand)]) { invNoOrder.push({ system: 'sales', ref: cand, customer: v.customer_name || v.customer_name_en, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
       });
       acctInv.forEach(function (v) {
         var cand2 = v.release_number || (looksRelease(v.invoice_number) ? v.invoice_number : null);
-        if (cand2 && !orderSet[norm(cand2)]) { invNoOrder.push({ system: 'accounting', ref: cand2, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
+        var inWin2 = (!df || !v.invoice_date || v.invoice_date >= df) && (!dt || !v.invoice_date || v.invoice_date <= dt);
+        if (inWin2 && cand2 && !orderSet[norm(cand2)]) { invNoOrder.push({ system: 'accounting', ref: cand2, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
       });
 
       return {
