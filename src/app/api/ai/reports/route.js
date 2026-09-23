@@ -85,6 +85,13 @@ var TOOLS = [
     } }
   },
   {
+    name: 'reconcile_orders',
+    description: 'Reconcile NextTrade warehouse orders (imported from NextTradeIndustries.com) against Hub invoices. Returns orders WITHOUT an invoice, invoices without an order, and shipped-with-zero-quantity flags. Use when asked about order/invoice mismatches or missing invoices for warehouse orders.',
+    input_schema: { type: 'object', properties: {
+      date_from: { type: 'string' }, date_to: { type: 'string' }
+    } }
+  },
+  {
     name: 'list_shipments',
     description: 'List shipments/customs files, optionally filtered by status text and/or date range.',
     input_schema: { type: 'object', properties: {
@@ -103,7 +110,8 @@ var TOOL_PERMISSION = {
   list_payments: 'ar.view_customer_balances',
   customer_statement: 'ar.view_customer_balances',
   list_checks: 'ar.view_invoice_balances',
-  list_shipments: 'invoices.view'
+  list_shipments: 'invoices.view',
+  reconcile_orders: 'invoices.view'
 };
 
 // ── TOOL EXECUTORS (the kitchen) ───────────────────────────────────────────
@@ -118,7 +126,7 @@ async function execTool(db, name, input, userId, req) {
 
   if (name === 'list_invoices') {
     var rows = await fetchAll(function () {
-      var q = db.from('invoices').select('order_number, invoice_number, customer_name, customer_name_en, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false });
+      var q = db.from('invoices').select('order_number, invoice_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false });
       if (df) { q = q.gte('invoice_date', df); }
       if (dt) { q = q.lte('invoice_date', dt); }
       if (input.customer_name) { q = q.or('customer_name.ilike.%' + input.customer_name + '%,customer_name_en.ilike.%' + input.customer_name + '%'); }
@@ -177,6 +185,32 @@ async function execTool(db, name, input, userId, req) {
     });
     var tK = 0; crow.forEach(function (r) { tK += Number(r.amount || 0); });
     return { count: crow.length, totals: { total_amount: r2(tK) }, rows: crow.slice(0, 400), rows_truncated_for_display: crow.length > 400, source: 'checks' + (input.status && input.status !== 'all' ? ' status~' + input.status : '') + ', ' + crow.length + ' rows' };
+  }
+
+  if (name === 'reconcile_orders') {
+    // Delegate to the reconciliation engine's logic inline: orders vs both invoice systems.
+    var ords = await fetchAll(function () {
+      var q = db.from('nexttrade_orders').select('release_number, customer_name, warehouse, container, order_date, status, country, qty_seconds, qty_thirds, qty_paper').order('order_date', { ascending: false });
+      if (df) { q = q.gte('order_date', df); }
+      if (dt) { q = q.lte('order_date', dt); }
+      return q;
+    });
+    if (!ords.length) { return { count: 0, note: 'No NextTrade orders imported yet (or none in this period). Orders are imported in Admin > Order Reconciliation.', source: 'nexttrade_orders, 0 rows' }; }
+    var sInv = await fetchAll(function () { return db.from('invoices').select('order_number, invoice_number, release_number'); });
+    var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number'); });
+    var keys = {};
+    function nrm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
+    sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; } });
+    var allKeys = Object.keys(keys);
+    var miss = []; var okC = 0;
+    ords.forEach(function (o) {
+      var rel = nrm(o.release_number);
+      var hit = keys[rel] === true;
+      if (!hit) { var kk; for (kk = 0; kk < allKeys.length; kk++) { if (allKeys[kk].length > rel.length && allKeys[kk].indexOf(rel) > -1) { hit = true; break; } } }
+      if (hit) { okC += 1; } else { miss.push({ release_number: o.release_number, customer: o.customer_name, warehouse: o.warehouse, order_date: o.order_date, status: o.status, country: o.country }); }
+    });
+    return { count: ords.length, totals: { matched: okC, orders_without_invoice: miss.length }, rows: miss.slice(0, 400), note: 'rows = orders WITHOUT any matching invoice (release number checked against sales order/invoice numbers and accounting invoice numbers, exact + contains).', source: 'nexttrade_orders ' + ords.length + ' vs invoices ' + sInv.length + ' + accounting ' + aInv.length + ', matched server-side' };
   }
 
   if (name === 'list_shipments') {

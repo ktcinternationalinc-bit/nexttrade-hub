@@ -593,7 +593,14 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     setPendingAction(null);
 
     try {
-      if (aiMode === 'reports') {
+      // v55.83-NR (Max: "you shouldn't have to know any of this") — AUTO-ROUTE.
+      // A question that smells like business data goes to the Reports engine
+      // even in Chat mode, and the toggle flips so the user SEES where they
+      // are. Chat stays for personas, drafting, and commands.
+      var DATA_RX = /invoice|payment|balance|outstanding|receivable|check|cheque|shipment|shipping order|release number|customer statement|revenue|sold|collected|treasury|recon|mismatch|فاتورة|فواتير|مدفوع|دفعات|رصيد|أرصدة|مستحق|شيك|شيكات|شحنة|شحنات|تقرير|مبيعات|تحصيل/i;
+      var routeReports = aiMode === 'reports' || DATA_RX.test(question);
+      if (routeReports && aiMode !== 'reports') { setAiMode('reports'); }
+      if (routeReports) {
         // v55.83-NL — Reports mode. History passes only role+content text so the
         // model keeps conversational context ("now only the unpaid ones").
         const hist = [...messages, newMsg].slice(-8).map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text || '' }));

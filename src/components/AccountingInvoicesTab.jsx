@@ -244,7 +244,7 @@ export default function AccountingInvoicesTab(props) {
     .filter(function (r) {
       if (!search.trim()) return true;
       var qq = search.trim().toLowerCase();
-      var numv = (isInvoice() ? r.invoice_number : r.proforma_number) || '';
+      var numv = ((isInvoice() ? r.invoice_number : r.proforma_number) || '') + ' ' + (r.release_number || ''); // NO: release # searchable
       var cn = custName(r.accounting_customer_id) || '';
       var stat = (isInvoice() ? (r.approval_status || '') : (r.status || '')) + ' ' + (r.payment_status || '');
       var srcv = r.source === 'wave_import' ? 'wave' : 'hub';
@@ -260,7 +260,7 @@ export default function AccountingInvoicesTab(props) {
 
   function startNew() {
     var today = new Date().toISOString().substring(0, 10);
-    if (isInvoice()) setHdr({ invoice_number: '', accounting_customer_id: '', invoice_date: today, due_date: '', notes: '', terms: '' });
+    if (isInvoice()) setHdr({ invoice_number: '', release_number: '', accounting_customer_id: '', invoice_date: today, due_date: '', notes: '', terms: '' });
     else setHdr({ proforma_number: '', accounting_customer_id: '', proforma_date: today, valid_until: '', notes: '', terms: '' });
     setItems([blankItem()]); setEditing('new');
   }
@@ -372,7 +372,7 @@ export default function AccountingInvoicesTab(props) {
     var newBalance = roundMoney(Math.max(0, total - realPaid));
     var newStatus = realPaid <= 0.0001 ? 'unpaid' : (newBalance <= 0.0001 ? 'paid' : 'partial');
     var hpayload = isInvoice()
-      ? { invoice_number: hdr.invoice_number || null, accounting_customer_id: hdr.accounting_customer_id, invoice_date: hdr.invoice_date || null, due_date: hdr.due_date || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, amount_paid: roundMoney(realPaid), balance_due: newBalance, payment_status: newStatus, updated_by: userProfile && userProfile.id }
+      ? { invoice_number: hdr.invoice_number || null, release_number: (hdr.release_number || '').trim() || null, accounting_customer_id: hdr.accounting_customer_id, invoice_date: hdr.invoice_date || null, due_date: hdr.due_date || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, amount_paid: roundMoney(realPaid), balance_due: newBalance, payment_status: newStatus, updated_by: userProfile && userProfile.id }
       : { proforma_number: hdr.proforma_number || null, accounting_customer_id: hdr.accounting_customer_id, proforma_date: hdr.proforma_date || null, valid_until: hdr.valid_until || null, notes: hdr.notes || null, terms: hdr.terms || null, total_amount: total, updated_by: userProfile && userProfile.id };
 
     var getId;
@@ -733,6 +733,9 @@ export default function AccountingInvoicesTab(props) {
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Accounting customer *</span>
               <MiniTypeahead items={scopedCustomers} value={hdr.accounting_customer_id} disabled={locked(editing)} getLabel={function (c) { return c.company_name || c.contact_name || c.id; }} onPick={function (id) { uh('accounting_customer_id', id); }} placeholder="Search customer…" /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice #' : 'Proforma #'}</span><input value={(isInvoice() ? hdr.invoice_number : hdr.proforma_number) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_number' : 'proforma_number', e.target.value); }} className={inp} /></label>
+            {/* v55.83-NO — the SECOND reference. NextTrade orders only carry a
+                release number; joining the two systems needs it here too. */}
+            <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Release # <span className="text-slate-500">(warehouse order, e.g. 1002-1193)</span></span><input value={hdr.release_number || ''} disabled={locked(editing)} onChange={function (e) { uh('release_number', e.target.value); }} placeholder="optional" className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Invoice date' : 'Date'}</span><input type="date" value={(isInvoice() ? hdr.invoice_date : hdr.proforma_date) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'invoice_date' : 'proforma_date', e.target.value); }} className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Due date' : 'Valid until'}</span><input type="date" value={(isInvoice() ? hdr.due_date : hdr.valid_until) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'due_date' : 'valid_until', e.target.value); }} className={inp} /></label>
           </div>

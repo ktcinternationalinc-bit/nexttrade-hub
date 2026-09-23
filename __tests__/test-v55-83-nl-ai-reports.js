@@ -125,3 +125,28 @@ if (failures.length) {
 } else {
   console.log('ALL CHECKS PASSED — v55.83-NL AI reports engine');
 }
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-NR ADDENDUM — no-toggle auto-routing (Max: "waiting for this").
+// Data-sounding questions reach the Reports engine even in Chat mode; the
+// toggle flips visibly so the user always sees which engine answered.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fsr = require('fs'); var pr = require('path');
+  var ui2 = fsr.readFileSync(pr.join(__dirname, '..', 'src/components/AIAssistant.jsx'), 'utf8');
+  var f = [];
+  function okR(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+
+  okR('NR1: data-question detector covers English AND Arabic money terms',
+    /invoice\|payment\|balance/.test(ui2) && /فاتورة/.test(ui2) && /رصيد/.test(ui2) && /شيك/.test(ui2));
+  okR('NR2: detection routes to the Reports engine regardless of the active mode',
+    /var routeReports = aiMode === 'reports' \|\| DATA_RX\.test\(question\);/.test(ui2) &&
+    /if \(routeReports\) \{/.test(ui2));
+  okR('NR3: the toggle flips visibly when auto-routed (no silent engine switch)',
+    /if \(routeReports && aiMode !== 'reports'\) \{ setAiMode\('reports'\); \}/.test(ui2));
+  okR('NR4: Chat mode remains for everything else (the /api/ask path still exists)',
+    /fetch\('\/api\/ask'/.test(ui2));
+
+  if (f.length) { console.log('NR FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL NR ADDENDUM CHECKS PASSED'); }
+})();

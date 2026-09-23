@@ -33,6 +33,72 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-NR',
+    date: '2026-09-23',
+    label: 'Just ask \u2014 data questions find the Reports engine by themselves',
+    items: [
+      '**\ud83e\udded No more picking a mode.** Ask the AI Assistant about invoices, payments, balances, checks, shipments, or reconciliation \u2014 in English or Arabic \u2014 and the question goes to the Reports engine automatically, even if you were in Chat. The \ud83d\udcca button lights up so you always see which engine answered.',
+      '**\ud83d\udcac Chat stays Chat** for drafting, commands, and the secretary \u2014 it just can\'t improvise about money anymore, because money questions never reach it.',
+      { superAdminOnly: true, text: 'v55.83-NR \u2014 NO SQL. AIAssistant: DATA_RX (EN+AR money/data terms incl. release number, recon, فاتورة/رصيد/شيك/شحنة/تقرير) evaluated on every send; routeReports = mode OR regex; auto-flip setAiMode(reports) so routing is visible; /api/ask path untouched for non-data. Known tradeoff (accepted): a drafting request MENTIONING an invoice routes to Reports \u2014 it answers helpfully but without personas/actions; flip back to \ud83d\udcac Chat manually for that. NR addendum (4 assertions) in test-v55-83-nl; runner 116/116.' },
+    ],
+  },
+  {
+    version: 'v55.83-NQ',
+    date: '2026-09-23',
+    label: 'Reconciliation runs itself \u2014 every 6 hours',
+    items: [
+      '**\u23f0 The order\u2194invoice check is now automatic.** Every 6 hours the Hub re-runs the reconciliation on its own. Any order that has no invoice gets put on ONE High-priority ticket, assigned automatically \u2014 and each gap is flagged exactly once, ever, so nobody drowns in repeat tickets. When an invoice is later created, the next check simply counts it as matched.',
+      '**\ud83d\udc64 Who gets the auto tickets:** set RECON_ASSIGNEE_EMAIL in Vercel to your accountant\'s Hub email; without it, they go to the owner (first super admin).',
+      '**\u26a0\ufe0f Honest limit:** NEW orders still arrive by paste until the NextTrade site gives us an export feed \u2014 the automation covers the checking and the flagging, not the data entry. Paste fresh orders whenever they accumulate; the cron does the rest.',
+      { superAdminOnly: true, text: 'v55.83-NQ \u2014 NEEDS SQL: sql/v55-83-NQ-recon-cron.sql (flagged_at on nexttrade_orders). GET /api/reconcile/nexttrade = CRON_SECRET-guarded 6-hour job (vercel.json 0 */6 * * *): rebuilds match keys (release_number first) from both invoice tables, newMiss = missing AND flagged_at null \u2192 one ticket REC-YYYYMMDD-Annn priority high due +3d + notification, then stamps flagged_at (manual flag action now stamps too \u2014 NQ4 asserts both). Assignee: profile by RECON_ASSIGNEE_EMAIL ilike, fallback first super_admin, else honest 500. Response reports checked / still_missing_total / newly_flagged. NQ addendum (6 assertions); runner 116/116. NOT DONE: automated order PULL from the site (needs export endpoint \u2014 Alphinex spec on request); re-flag policy for tickets closed without an invoice (currently once-ever by design).' },
+    ],
+  },
+  {
+    version: 'v55.83-NP',
+    date: '2026-09-23',
+    label: 'Fast entry screen: put release numbers on all the OLD invoices',
+    items: [
+      '**\u270d\ufe0f Admin \u2192 Order Reconciliation now has \u201cEnter release numbers on old invoices\u201d.** One button loads every invoice that still has no release number \u2014 from BOTH systems, newest first, with a filter box. Each row is: invoice, customer, date, amount, an open Release # field, and Save. Type, press Enter, the row disappears, the counter drops. Built for burning through the backlog.',
+      '**\ud83d\udee1 Light protection while you type fast:** the format is checked (1002-1193 style) so a typo like a date or an amount can\'t be saved as a release number by accident.',
+      '**\ud83d\udd01 The loop closes:** enter releases \u2192 Run reconciliation \u2192 the red list shrinks \u2192 flag whatever truly has no invoice.',
+      { superAdminOnly: true, text: 'v55.83-NP \u2014 NO SQL (uses NO\'s columns). Route: action list_missing (both tables .is(release_number,null), accounting customer names via accounting_customers map, merged newest-first, cap 300 shown + true total, search filter) + action set_release (system+id, regex \\d{3,4}-\\d{2,5}, empty clears, 404 on unknown id) \u2014 both behind the existing Owner/Admin gate. UI: entry card above the report in NexttradeReconciliation \u2014 per-row draft state, Enter-to-save, optimistic row removal with counter decrement, empty-state celebration. NP addendum (6 assertions); runner 116/116. NOT DONE: auto-suggest the likely release per invoice from imported nexttrade_orders (customer+date proximity) \u2014 natural next step if the manual burn-down feels slow.' },
+    ],
+  },
+  {
+    version: 'v55.83-NO',
+    date: '2026-09-23',
+    label: 'Invoices now carry a Release # \u2014 the second reference',
+    items: [
+      '**\ud83d\udd17 New Release # field on accounting invoices.** Every order lives under two numbers \u2014 the Hub\'s own reference and the NextTrade warehouse release. The invoice form (create AND edit) now has a Release # box next to the invoice number, and invoice search finds by it.',
+      '**\ud83c\udfaf The reconciliation matches on it FIRST.** A release number typed on the invoice is the strongest possible join \u2014 no guessing, no pattern-matching. The \u201cmatched via\u201d line in the report will show release_number matches as their own count, so you can watch adoption grow as the team fills it in.',
+      '**\ud83d\udcdd Going forward:** have whoever creates invoices type the warehouse release (e.g. 1002-1193) into the new box \u2014 that one habit makes the order\u2194invoice check automatic forever.',
+      { superAdminOnly: true, text: 'v55.83-NO \u2014 NEEDS SQL: sql/v55-83-NO-release-number.sql (ADD COLUMN release_number to accounting_invoices AND invoices, both indexed, idempotent). AccountingInvoicesTab: Release # input in the header form (uh(\'release_number\')), single hpayload builder covers create+edit (trimmed, empty\u2192null), edit loads via full-row setHdr, list search extended. Reconcile route: release_number indexed FIRST on both systems with field attribution (matched_by_field will show sales.release_number / accounting.release_number), reverse check prefers explicit release_number over looksRelease pattern. AI reports: reconcile_orders keys + list_invoices select include the column. NO addendum (8 assertions) in test-v55-83-nm; runner 116/116. NOT DONE: Release # display column in the invoice LIST table (searchable already; form shows it), release field on the sales-side merchandiser import mapping, backfill of historical invoices (manual or from a mapping file if Max provides one).' },
+    ],
+  },
+  {
+    version: 'v55.83-NN',
+    date: '2026-09-23',
+    label: 'Reconciliation: flag missing invoices to a person; zero-qty is not an issue',
+    items: [
+      '**\ud83d\udea9 Missing invoices now get flagged TO SOMEONE.** Under the red \u201corders without invoice\u201d list there is now a picker: choose a team member and press the button \u2014 ONE High-priority ticket is created for the whole run, assigned to them, due in 3 days, listing every order that has no invoice, with instructions to create the invoice or record the explanation on the ticket. They also get a notification.',
+      '**\u2716\ufe0f \u201cShipped with zero quantity\u201d removed as an issue.** As you said: the Seconds/Thirds/Paper columns only track three product categories \u2014 an order can carry other goods, so zero across those three proves nothing. The report and the AI no longer treat it as a problem.',
+      '**\ud83c\udfaf The report now has one job: every order must have an invoice.** Matched, missing, and reverse-direction lists \u2014 nothing else muddying it.',
+      { superAdminOnly: true, text: 'v55.83-NN \u2014 NO SQL. Route /api/reconcile/nexttrade: report logic extracted to buildReport(df,dt); zero-qty flag REMOVED from report + AI reconcile_orders tool (reason documented at the site: three tracked grades \u2260 whole order); NEW action flag = re-runs buildReport, refuses without assignee_id, creates ONE tickets row (REC-YYYYMMDD-nnn, priority high, status New, assigned_to, due +3d, description lists up to 120 releases with customer/warehouse/date/container + pointer to CSV for the rest), best-effort notifications insert for the assignee, returns ticket_number; empty scope returns honest nothing-to-flag. UI: zero-qty card+section removed (grid 4), flag picker (users prop from AdminTab, is_ai excluded) + success chip with ticket number. Test file updated in place: C5 inverted (asserts zero-qty ABSENT + reason), D5b-g flag assertions, D4 recount to 3 CSVs; runner 116/116. NOT DONE: recurring auto-flag on a schedule (needs the automated pull first), quantity-level reconciliation.' },
+    ],
+  },
+  {
+    version: 'v55.83-NM',
+    date: '2026-09-23',
+    label: 'NextTrade orders \u2194 invoices reconciliation (with AI flagging)',
+    items: [
+      '**\ud83d\udd0e New Admin \u2192 \ud83d\udd0e Order Reconciliation.** Copy the Orders table from NextTradeIndustries.com/admin (clear Row Limits so it shows everything), paste it in, Preview, Import. Re-pasting later just updates \u2014 a release number can never be imported twice.',
+      '**\ud83d\udea8 Then press Run reconciliation.** Every order is matched against the Hub\'s invoices \u2014 both the sales side and the accounting side \u2014 and the report shows: orders that left a warehouse with NO invoice anywhere (the red list), Hub invoices that look like releases but have no order, and orders marked Shipped with ZERO quantity scanned in all three grades (a warehouse data problem \u2014 there are several in the data you pasted today). Each list has its own CSV download.',
+      '**\ud83e\udd16 The AI flags mismatches too.** In the AI Assistant\'s \ud83d\udcca Reports mode, ask \u201cwhich orders have no invoice?\u201d or \u201cany order/invoice mismatches this month?\u201d \u2014 the same matching runs and the AI reports the issues with real counts.',
+      '**\ud83e\udded The first run also teaches us.** The summary shows WHICH field the matches came through (order number vs invoice number, sales vs accounting), so we learn how your team actually records releases instead of guessing.',
+      { superAdminOnly: true, text: 'v55.83-NM \u2014 NEEDS SQL: sql/v55-83-NM-nexttrade-orders.sql (nexttrade_orders, UNIQUE release_number, 4-policy RLS). NEW /api/reconcile/nexttrade (SWC-safe): action import = server-validated upsert onConflict release_number (release regex, MM-DD-YYYY\u2192ISO, dedupe-in-paste first-wins, Owner/Admin server-gated); action report = fetchAll complete sets, matcher indexes sales invoices.order_number + invoices.invoice_number + accounting_invoices.invoice_number by normalized key with FIELD ATTRIBUTION (matched_by_field), contains-fallback labelled, outputs orders_without_invoice / invoices_without_order (release-pattern reverse check) / shipped_with_zero_qty (status Shipped AND seconds+thirds+paper==0) / matched. UI NexttradeReconciliation.jsx (AdminTab section nexttrade_recon, super_admin||Sales): paste\u2192parseOrdersPaste (exported; FUNCTIONALLY tested against Max\'s real paste \u2014 tab-copy AND whitespace-collapsed branches, Non-Bonded-USA-before-USA anchor ordering, multi-word customers/statuses, trailing qty triple, dup-block dedupe)\u2192preview\u2192import; report cards + 4 CSV exports; ToastContext. AI: reconcile_orders tool added to /api/ai/reports (perm invoices.view) returning mismatch rows + totals. Test test-v55-83-nm-nexttrade-recon.js (7 functional + 19 structural); runner 116/116. NOT DONE: automated login/pull from the site (Path B \u2014 needs the page source or an export endpoint; site is by Alphinex Solutions, a one-hour token-protected JSON export on their side is the permanent answer), quantity-level reconciliation vs invoice line items, container matching vs receiving.' },
+    ],
+  },
+  {
     version: 'v55.83-NL',
     date: '2026-09-07',
     label: 'AI Reports \u2014 ask data questions, get real numbers',
