@@ -89,13 +89,13 @@ ok('B4: duplicate lines within one paste: first wins, reported back',
 // ══════════════════════════════════════════════════════════════════
 // PART C — Reconciliation rules
 // ══════════════════════════════════════════════════════════════════
-ok('C1: matcher tries BOTH invoice systems and attributes the field (sales has NO invoice_number — NW)',
-  /put\(v\.order_number, 'sales', 'order_number'/.test(route) &&
-  !/'sales', 'invoice_number'/.test(route) &&
-  /sales invoices have NO invoice_number column/.test(route) &&
-  /'accounting', 'invoice_number'/.test(route) && /matched_by_field/.test(route));
-ok('C2: contains fallback exists and is labelled as such',
-  /field \+ ' \(contains\)'/.test(route));
+ok('C1 (OH): matching is RELEASE-FIELD-ONLY — release and invoice numbers are two different things',
+  /put\(v\.release_number, 'sales', 'release_number'/.test(route) &&
+  !/put\(v\.order_number, 'sales'/.test(route) &&
+  !/'accounting', 'invoice_number'/.test(route) &&
+  /TWO DIFFERENT/.test(route) && /matched_by_field/.test(route));
+ok('C2 (OH): no contains fallback, no serial heuristics — exact field comparison only',
+  !/\(contains\)/.test(route) && !/release serial/.test(route) && !/possibleForOrder/.test(route));
 ok('C3: unmatched orders are ISSUES, never dropped',
   /orders_without_invoice: noInvoice/.test(route));
 ok('C4: reverse direction — release-looking invoices with no order are reported',
@@ -127,8 +127,8 @@ ok('D2: the screen explains the copy steps from the admin site',
   /clear Row Limits \(blank = all\)/.test(comp));
 ok('D3: preview before import, with recognized/ignored counts',
   /orders recognized/.test(comp) && /lines not understood/.test(comp));
-ok('D4: every table has its own CSV export (5: possible-verify, no-invoice, open-balance, no-order, matched)',
-  (comp.match(/⬇ CSV/g) || []).length === 5);
+ok('D4 (OH): every table has its own CSV export (4 — amber retired with the heuristics)',
+  (comp.match(/⬇ CSV/g) || []).length === 4);
 ok('D5: orders-without-invoice is the loudest section',
   /every one of these left a warehouse with no invoice found in the Hub/.test(comp));
 // v55.83-NN — "flag it to someone": the missing-invoice list must reach a person.
@@ -194,8 +194,8 @@ if (failures.length) {
     /put\(v\.release_number, 'sales', 'release_number'/.test(rt) &&
     /put\(v\.release_number, 'accounting', 'release_number'/.test(rt) &&
     /DEDICATED join key/.test(rt));
-  okO('NO7: reverse check prefers the explicit release_number over pattern guessing',
-    /var cand = v\.release_number \|\|/.test(rt) && /var cand2 = v\.release_number \|\|/.test(rt));
+  okO('NO7 (OH): reverse check reads the release FIELDS only',
+    /var cand = v\.release_number \|\| null;/.test(rt) && /var cand2 = v\.release_number \|\|/.test(rt));
   okO('NO8: the AI reconcile tool and invoice listing carry the columns (sales: no invoice_number; accounting: + po_so — OA)',
     /select\('order_number, release_number'\)/.test(ai2) &&
     /select\('invoice_number, release_number, po_so_number'\)/.test(ai2) &&
@@ -360,19 +360,16 @@ if (failures.length) {
   var ay = fsy.readFileSync(py.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
   var f = [];
   function okY(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
-  okY('NY1: suffix matching in report, cron AND AI tool (release serial with digit boundaries, len>=3, zeros stripped)',
-    ry.split("'(^|[^0-9])' + sfx").length - 1 >= 1 &&
-    ry.split("'(^|[^0-9])' + sfx2").length - 1 >= 1 &&
-    /release serial/.test(ry) &&
-    ay.indexOf("'(^|[^0-9])' + sfx") > -1 && /sfx\.length >= 3/.test(ry));
+  okY('NY1 (OH): serial-suffix matching REMOVED everywhere — the release FIELD is the only key',
+    ry.indexOf(String.fromCharCode(39) + '(^|[^0-9])' + String.fromCharCode(39)) === -1 && ay.indexOf('[^0-9])') === -1);
   okY('NY2: open-balance list is SCOPED to the reconciliation period (both bounds)',
     /if \(df && v\.invoice_date && v\.invoice_date < df\) \{ return; \}/.test(ry) &&
     /if \(dt && v\.invoice_date && v\.invoice_date > dt\) \{ return; \}/.test(ry));
   okY('NY3: invoices-without-order scoped to the period too',
     /inWin/.test(ry) && /inWin2/.test(ry));
-  okY('NY4: unpaid rows carry customer, total, paid, balance, days overdue — with serial-join fallback (NZ)',
+  okY('NY4 (OH): unpaid rows carry customer, total, paid, balance, days overdue — from real fields only',
     /var custShow = custMapR\[v\.accounting_customer_id\]/.test(ry) && /days_overdue: od/.test(ry) &&
-    /paid: v\.amount_paid/.test(ry) && /\(from order\)/.test(ry));
+    /paid: v\.amount_paid/.test(ry) && !/\(from order\)/.test(ry));
   okY('NY5: the screen header counts overdue from the FULL summary, not the display slice (289-vs-543 bug)',
     /\{sm\.overdue_open_balance \|\| 0\} overdue/.test(cy) &&
     !/invoices_with_open_balance \|\| \[\]\)\.filter/.test(cy));
@@ -393,27 +390,17 @@ if (failures.length) {
   var cz = fz.readFileSync(pz.join(__dirname, '..', 'src/components/NexttradeReconciliation.jsx'), 'utf8');
   var f = [];
   function okZ(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
-  okZ('NZ1: a bare serial collision is NOT a match — corroboration required, else amber',
-    /custClose\(o\.customer_name, h\.customer\)/.test(rz) && /possibleForOrder\.push/.test(rz) &&
-    /release serial ' \+ sfx \+ ' \+ customer/.test(rz));
-  okZ('NZ2: possible matches are their own bucket — never matched, never silently dropped',
-    /possible_matches_verify/.test(rz) && /else if \(possibleForOrder\.length\)/.test(rz) &&
-    /confirm same deal/.test(rz));
+  okZ('NZ1/2 (OH): corroboration/amber machinery fully retired with the heuristics it guarded',
+    !/custClose/.test(rz) && !/possibleForOrder/.test(rz) && !/possible_matches_verify/.test(rz));
   okZ('NZ3: customer lookup is never silent — the report source line says loaded/empty/failed',
     /custLookupNote/.test(rz) && /came back EMPTY/.test(rz) && /customer names FAILED/.test(rz) &&
     /custLookupNote,/.test(rz));
-  okZ('NZ4: unpaid rows borrow customer AND release from the serial-joined order, marked honestly',
-    /bySerial\[d\]/.test(rz) && /os\.length === 1/.test(rz) && /' \(from order\)'/.test(rz));
-  okZ('NZ5: the screen shows the amber verify section with card and CSV',
-    /Possible matches — an invoice carries this release/.test(cz) && /possible-matches-verify/.test(cz) &&
-    /Possible — verify/.test(cz));
+  okZ('NZ4/5 (OH): serial-borrowing and the amber section are gone',
+    !/bySerial/.test(rz) && !/Possible — verify/.test(cz));
   // Functional: corroboration keeps Nexpac↔Nexpac, ambers Nexpac↔Sterling.
   function normF(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
   function custCloseF(a, b) { var x = normF(a); var y = normF(b); if (!x || !y) { return false; } return x.indexOf(y) > -1 || y.indexOf(x) > -1 || x.substring(0, 6) === y.substring(0, 6); }
-  okZ('NZ6: functional — Nexpac corroborates Nexpac; Nexpac vs Sterling Paper does NOT; empty never corroborates',
-    custCloseF('Nexpac', 'NEXPAC') === true &&
-    custCloseF('Nexpac', 'Sterling Paper & Pulp Inc') === false &&
-    custCloseF('Nexpac', '') === false);
+  okZ('NZ6 (OH): retired with the heuristic it tested', true);
   if (f.length) { console.log('NZ FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL NZ ADDENDUM CHECKS PASSED'); }
 })();
@@ -440,11 +427,10 @@ if (failures.length) {
   okA('OA4: the report matcher indexes po_so as a first-class accounting key',
     /put\(v\.po_so_number, 'accounting', 'po_so'/.test(ro));
   okA('OA5: the 6-hour cron and the AI use the P.O./S.O. keys too',
-    (ro.match(/v\.po_so_number\) \{ keys\[nrm2/g) || []).length === 1 &&
-    (ao.match(/v\.po_so_number\) \{ keys\[nrm/g) || []).length === 1);
-  okA('OA6: unpaid rows and the reverse check use P.O./S.O. as a release source',
+    /v\.po_so_number\) \{ keys\[nrm2/.test(ro) && /v\.po_so_number\) \{ keys\[nrm/.test(ao));
+  okA('OA6 (OH): reverse check and unpaid rows read release FIELDS only (never invoice numbers)',
     /var relShow = v\.release_number \|\| v\.po_so_number \|\| ''/.test(ro) &&
-    /looksRelease\(v\.po_so_number\)/.test(ro));
+    /looksRelease\(v\.po_so_number\)/.test(ro) && !/looksRelease\(v\.invoice_number\)/.test(ro));
   okA('OA7: the always-on sample placeholder is gone; + Release # is the affordance (OD: button cell)',
     !/defaultValue=\{row\.release_number/.test(ac) && /\+ Release #/.test(ac));
   if (f.length) { console.log('OA FAILED: ' + f.join(' | ')); process.exit(1); }
@@ -509,15 +495,10 @@ if (failures.length) {
   var ae = fe.readFileSync(pe.join(__dirname, '..', 'src/app/api/ai/reports/route.js'), 'utf8');
   var f = [];
   function okE(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
-  okE('OE1: the report suffix stage rejects non-accounting candidates before corroboration',
-    /if \(h\.system !== 'accounting'\) \{ return; \}/.test(re) &&
-    /serial matching is ACCOUNTING-ONLY/.test(re));
-  okE('OE2: the cron suffix suppression scans accounting keys only',
-    /acctKeys2\.push/.test(re) && /kz < acctKeys2\.length/.test(re) && !/kz < allK\.length; kz\+\+\) \{ if \(sRx/.test(re));
-  okE('OE3: the AI tool suffix stage scans accounting keys only',
-    /acctK\.push/.test(ae) && /kz < acctK\.length/.test(ae) && /accounting keys only/.test(ae));
-  okE('OE4: exact and full-release matching still covers BOTH systems (a typed release on the sales side still counts)',
-    /put\(v\.release_number, 'sales', 'release_number'/.test(re) && /put\(v\.order_number, 'sales', 'order_number'/.test(re));
+  okE('OE1-3 (OH): suffix machinery removed outright — nothing left to restrict',
+    !/sfxRx/.test(re) && !/acctKeys2/.test(re) && !/acctK\.push/.test(ae));
+  okE('OE4 (OH): a typed release on the sales side still counts (field key kept)',
+    /put\(v\.release_number, 'sales', 'release_number'/.test(re));
   if (f.length) { console.log('OE FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OE ADDENDUM CHECKS PASSED'); }
 })();
@@ -541,4 +522,31 @@ if (failures.length) {
     /accounting_customers: \['id', 'company_name', 'contact_name'/.test(wf) && /was a GUESS/.test(wf));
   if (f.length) { console.log('OF FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OF ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OG ADDENDUM — "it doesn't save and goes back": rejections were
+// invisible and the format wall rejected Max's bare serials. Serials now
+// expand against imported orders; every rejection reopens the editor
+// with the typed value and the reason in red, in the cell.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fg = require('fs'); var pg = require('path');
+  var rg = fg.readFileSync(pg.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var cg = fg.readFileSync(pg.join(__dirname, '..', 'src/components/AccountingInvoicesTab.jsx'), 'utf8');
+  var f = [];
+  function okG(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okG('OG1: a bare serial (1193) is accepted and expanded against imported orders',
+    /if \(rn && \/\^\\d\{3,5\}\$\/\.test\(rn\)\)/.test(rg) && /exact\.length === 1\) \{ rn = exact\[0\]\.release_number; \}/.test(rg));
+  okG('OG2: zero matches and ambiguous serials get HELPFUL errors, not a format lecture',
+    /No imported order ends with -/.test(rg) && /is ambiguous: /.test(rg) && /Type the full one\./.test(rg));
+  okG('OG3: full-format releases still validate; spaces are stripped',
+    /replace\(\/\\s\+\/g, ''\)/.test(rg) && /or just the serial, like 1193/.test(rg));
+  okG('OG4: a failed save REOPENS the editor with the typed value and shows the reason in red in the cell',
+    /setRelDraft\(v\); setRelErr\(msg\); setRelEditId\(row\.id\);/.test(cg) &&
+    /background: '#fee2e2', color: '#7f1d1d'/.test(cg));
+  okG('OG5: success toast says when the serial was expanded to the full release',
+    /expanded from ' \+ v \+ '/.test(cg));
+  if (f.length) { console.log('OG FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OG ADDENDUM CHECKS PASSED'); }
 })();

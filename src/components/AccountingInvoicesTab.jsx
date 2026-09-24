@@ -53,6 +53,7 @@ export default function AccountingInvoicesTab(props) {
   var rs1 = useState(null); var relEditId = rs1[0]; var setRelEditId = rs1[1];
   var rs2 = useState(''); var relDraft = rs2[0]; var setRelDraft = rs2[1];
   var rs3 = useState(0); var relBump = rs3[0]; var setRelBump = rs3[1];
+  var rs4 = useState(''); var relErr = rs4[0]; var setRelErr = rs4[1];
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
@@ -638,29 +639,39 @@ export default function AccountingInvoicesTab(props) {
                   <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
                   <div className="px-1 py-1" onClick={function (e) { e.stopPropagation(); }}>{isInvoice() ? (
                     relEditId === row.id ? (
-                      <input autoFocus value={relDraft}
-                        onChange={function (e) { setRelDraft(e.target.value); }}
-                        onClick={function (e) { e.stopPropagation(); }}
-                        onKeyDown={function (e) { e.stopPropagation(); if (e.key === 'Escape') { setRelEditId(null); } if (e.key === 'Enter') { e.target.blur(); } }}
-                        onBlur={function () {
-                          var v = (relDraft || '').trim();
-                          var cur = row.release_number || '';
-                          setRelEditId(null);
-                          if (v === cur) { return; }
-                          fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
-                            .then(function (r) { return r.json(); })
-                            .then(function (j) {
-                              if (!j || j.ok !== true) { toast.error((j && j.error) || 'Save failed'); return; }
-                              row.release_number = j.saved;
-                              toast.success('Release ' + (j.saved || 'cleared') + ' saved');
-                              setRelBump(relBump + 1);
-                            })
-                            .catch(function (er) { toast.error('Save failed: ' + ((er && er.message) || 'network')); });
-                        }}
-                        className="w-full px-1 py-0.5 rounded border-2 border-amber-400 bg-white text-[10px] font-mono font-bold text-slate-900" placeholder="1002-1193" />
+                      <div>
+                        <input autoFocus value={relDraft}
+                          onChange={function (e) { setRelDraft(e.target.value); }}
+                          onClick={function (e) { e.stopPropagation(); }}
+                          onKeyDown={function (e) { e.stopPropagation(); if (e.key === 'Escape') { setRelEditId(null); setRelErr(''); } if (e.key === 'Enter') { e.target.blur(); } }}
+                          onBlur={function () {
+                            var v = (relDraft || '').trim();
+                            var cur = row.release_number || '';
+                            setRelEditId(null); setRelErr('');
+                            if (v === cur) { return; }
+                            fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ action: 'set_release', user_id: userProfile && userProfile.id, system: 'accounting', id: row.id, release_number: v }) })
+                              .then(function (r) { return r.json(); })
+                              .then(function (j) {
+                                if (!j || j.ok !== true) {
+                                  // v55.83-OG — a rejection must be IMPOSSIBLE to miss:
+                                  // reopen the editor with the typed value and the reason in red.
+                                  var msg = (j && j.error) || 'Save failed';
+                                  toast.error(msg);
+                                  setRelDraft(v); setRelErr(msg); setRelEditId(row.id);
+                                  return;
+                                }
+                                row.release_number = j.saved;
+                                toast.success('Release ' + (j.saved || 'cleared') + ' saved' + (j.saved && j.saved !== v ? ' (expanded from ' + v + ')' : ''));
+                                setRelBump(relBump + 1);
+                              })
+                              .catch(function (er) { var m2 = 'Save failed: ' + ((er && er.message) || 'network'); toast.error(m2); setRelDraft(v); setRelErr(m2); setRelEditId(row.id); });
+                          }}
+                          className="w-full px-1 py-0.5 rounded border-2 border-amber-400 bg-white text-[10px] font-mono font-bold text-slate-900" placeholder="1193 or 1002-1193" />
+                        {relErr ? <div className="text-[9px] font-bold mt-0.5 px-1 py-0.5 rounded" style={{ background: '#fee2e2', color: '#7f1d1d' }}>{relErr}</div> : null}
+                      </div>
                     ) : (
-                      <button type="button" onClick={function (e) { e.stopPropagation(); setRelDraft(row.release_number || ''); setRelEditId(row.id); }}
+                      <button type="button" onClick={function (e) { e.stopPropagation(); setRelDraft(row.release_number || ''); setRelErr(''); setRelEditId(row.id); }}
                         title={row.release_number ? 'Click to edit the release number' : 'No release number — click to add'}
                         className={row.release_number ? 'w-full text-left px-1 py-0.5 rounded border border-slate-600 bg-slate-900 text-[10px] font-mono text-slate-100' : 'w-full text-left px-1 py-0.5 rounded border-2 border-amber-400 bg-amber-50 text-[10px] font-extrabold text-amber-900'}>
                         {row.release_number || '+ Release #'}

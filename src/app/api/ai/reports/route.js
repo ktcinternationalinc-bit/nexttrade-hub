@@ -200,19 +200,13 @@ async function execTool(db, name, input, userId, req) {
     var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number, po_so_number'); });
     var keys = {};
     function nrm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
-    sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.order_number) { keys[nrm(v.order_number)] = true; } });
-    var acctK = [];
-    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; acctK.push(nrm(v.release_number)); } if (v.po_so_number) { keys[nrm(v.po_so_number)] = true; acctK.push(nrm(v.po_so_number)); } if (v.invoice_number) { keys[nrm(v.invoice_number)] = true; acctK.push(nrm(v.invoice_number)); } });
+    sInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } }); // OH: release fields only
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm(v.release_number)] = true; } if (v.po_so_number) { keys[nrm(v.po_so_number)] = true; } });
     var allKeys = Object.keys(keys);
     var miss = []; var okC = 0;
     ords.forEach(function (o) {
       var rel = nrm(o.release_number);
       var hit = keys[rel] === true;
-      if (!hit) { var kk; for (kk = 0; kk < allKeys.length; kk++) { if (allKeys[kk].length > rel.length && allKeys[kk].indexOf(rel) > -1) { hit = true; break; } } }
-      if (!hit) { // NY: release serial IS the invoice number (1001-1640 -> "AMERICA 1640")
-        var sfx = String(o.release_number || '').split('-')[1] || ''; sfx = sfx.replace(/^0+/, '');
-        if (sfx.length >= 3) { var sr = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])'); var kz; for (kz = 0; kz < acctK.length; kz++) { if (sr.test(acctK[kz])) { hit = true; break; } } } // OE: accounting keys only
-      }
       if (hit) { okC += 1; } else { miss.push({ release_number: o.release_number, customer: o.customer_name, warehouse: o.warehouse, order_date: o.order_date, status: o.status, country: o.country }); }
     });
     return { count: ords.length, totals: { matched: okC, orders_without_invoice: miss.length }, rows: miss.slice(0, 400), note: 'rows = orders WITHOUT any matching invoice (release number checked against sales order/invoice numbers and accounting invoice numbers, exact + contains).', source: 'nexttrade_orders ' + ords.length + ' vs invoices ' + sInv.length + ' + accounting ' + aInv.length + ', matched server-side' };

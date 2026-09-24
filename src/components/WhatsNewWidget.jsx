@@ -33,6 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OH',
+    date: '2026-09-23',
+    label: 'One rule: Release field \u2194 Release number. Nothing else.',
+    items: [
+      '**\ud83c\udfaf As ordered: invoice numbers and release numbers are two different things, and the report now treats them that way.** Matching is field-to-field, exact: the NextTrade release number against the Hub invoice\'s Release # (typed, adopted, or Wave P.O./S.O.). No more guessing from invoice numbers, no serial tricks, no Egypt-ledger noise \u2014 and the confusing orange \u201cpossible matches\u201d section is gone entirely. Five clean cards: in scope \u00b7 matched \u00b7 without invoice \u00b7 without order \u00b7 open balances.',
+      '**\u2705 What this means day to day:** an order matches when \u2014 and only when \u2014 its release number is on an invoice. Put the release on the invoice (type the serial, it expands; or let the Wave sync adopt it) and it matches. Don\'t, and it\'s flagged red. Simple, no surprises.',
+      { superAdminOnly: true, text: 'v55.83-OH \u2014 NO SQL. Matcher keys reduced to release_number (both tables) + po_so_number (accounting); order_number/invoice_number keys, contains fallback, serial-suffix cascade, custClose corroboration, bySerial borrow, possible[]/amber section+card all REMOVED (report + cron + AI reconcile tool + UI, grid 5). Reverse check: release fields only. set_release serial-expansion (OG) retained \u2014 entry convenience, not matching. Test surgery: C1/C2/NY1/NY4/NZ1-6/OE1-4/OA6/NO7/D4 rewritten to the OH truth via line-based pass (two earlier string-anchor attempts aborted pre-write \u2014 caught by gate); STANDING comment restored after an over-wide splice. Runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OG',
+    date: '2026-09-23',
+    label: 'Release entry accepts your serials \u2014 and rejections can never hide',
+    items: [
+      '**\u2328\ufe0f Type it YOUR way.** The Release box now takes the bare serial \u2014 type 1193 and the Hub finds the imported order ending in -1193 and saves the full 1002-1193 for you (the toast tells you what it expanded to). Full format still works; stray spaces are cleaned. If no imported order carries that serial, or two do, it says exactly that \u2014 in plain words, with the candidates named.',
+      '**\ud83d\udd34 No more silent snap-back.** When a save is rejected, the editor REOPENS with what you typed still in it and the reason in red right under the box. What you saw \u2014 type, blur, back to \u201c+ Release #\u201d with nothing said \u2014 was a rejection with an invisible error. Impossible now.',
+      { superAdminOnly: true, text: 'v55.83-OG \u2014 NO SQL. set_release: rn trimmed + all-whitespace stripped; ^\\d{3,5}$ \u2192 nexttrade_orders ilike %-serial, exact-suffix filter: 1 \u2192 expand, 0 \u2192 helpful error naming the serial, >1 \u2192 ambiguity error listing candidates; full-format regex retained with friendlier message. Cell (rewritten whole after a bad ternary splice broke acorn \u2014 caught by the parse gate): failure path setRelDraft(v)+setRelErr(msg)+setRelEditId(row.id) reopen, red reason div under the input, Escape clears err, success toast notes expansion. Verified upstream: AccountingTab passes toast+userProfile (page.jsx L14633), so identity/toast were never the issue \u2014 the format wall + missable toast were. OG addendum 5 assertions; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OF',
     date: '2026-09-23',
     label: 'Customer names appear on the reconciliation report',

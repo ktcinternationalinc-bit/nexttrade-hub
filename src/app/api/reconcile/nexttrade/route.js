@@ -88,24 +88,14 @@ export async function GET(req) {
     var aInv = await fetchAll(function () { return db.from('accounting_invoices').select('invoice_number, release_number, po_so_number'); });
     var keys = {};
     function nrm2(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, ''); }
-    sInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.order_number) { keys[nrm2(v.order_number)] = true; } });
-    var acctKeys2 = [];
-    aInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; acctKeys2.push(nrm2(v.release_number)); } if (v.po_so_number) { keys[nrm2(v.po_so_number)] = true; acctKeys2.push(nrm2(v.po_so_number)); } if (v.invoice_number) { keys[nrm2(v.invoice_number)] = true; acctKeys2.push(nrm2(v.invoice_number)); } });
+    sInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } }); // OH: release fields only
+    aInv.forEach(function (v) { if (v.release_number) { keys[nrm2(v.release_number)] = true; } if (v.po_so_number) { keys[nrm2(v.po_so_number)] = true; } });
     var allK = Object.keys(keys);
     var newMiss = []; var totalMiss = 0; var oi;
     for (oi = 0; oi < orders.length; oi++) {
       var od = orders[oi];
       var rel2 = nrm2(od.release_number);
       var hit2 = keys[rel2] === true;
-      if (!hit2) { var kx; for (kx = 0; kx < allK.length; kx++) { if (allK[kx].length > rel2.length && allK[kx].indexOf(rel2) > -1) { hit2 = true; break; } } }
-      if (!hit2) {
-        var sfx2 = String(od.release_number || '').split('-')[1] || ''; sfx2 = sfx2.replace(/^0+/, '');
-        if (sfx2.length >= 3) {
-          var sRx = new RegExp('(^|[^0-9])' + sfx2 + '($|[^0-9])');
-          // OE: serial suppression only against ACCOUNTING keys (Egypt serials collide)
-          var kz; for (kz = 0; kz < acctKeys2.length; kz++) { if (sRx.test(acctKeys2[kz])) { hit2 = true; break; } }
-        }
-      }
       if (!hit2) { totalMiss += 1; if (!od.flagged_at) { newMiss.push(od); } }
     }
     if (!newMiss.length) { return NextResponse.json({ ok: true, checked: orders.length, still_missing_total: totalMiss, newly_flagged: 0 }); }
@@ -212,22 +202,9 @@ export async function POST(req) {
         custR.forEach(function (c) { custMapR[c.id] = c.company_name || c.contact_name || ''; });
         custLookupNote = custR.length ? ('customer names: ' + custR.length + ' loaded') : 'customer names: accounting_customers came back EMPTY';
       } catch (eCM) { custLookupNote = 'customer names FAILED: ' + ((eCM && eCM.message) || 'unknown'); }
-      // Serial -> orders map: an invoice can borrow customer/release from the
-      // warehouse order its number points at; also powers corroboration.
-      var bySerial = {};
-      orders.forEach(function (oS) {
-        var sxx = String(oS.release_number || '').split('-')[1] || ''; sxx = sxx.replace(/^0+/, '');
-        if (sxx.length >= 3) { if (!bySerial[sxx]) { bySerial[sxx] = []; } bySerial[sxx].push(oS); }
-      });
-      function custClose(a, b) {
-        var x = norm(a); var y = norm(b);
-        if (!x || !y) { return false; }
-        return x.indexOf(y) > -1 || y.indexOf(x) > -1 || x.substring(0, 6) === y.substring(0, 6);
-      }
       // v55.83-NW/NY (Max): invoices with no payment / open balance stay flagged
-      // until paid — a STANDING list, recomputed live every run, and SCOPED to
-      // the reconciliation period: reconciling 90 days means invoices dated in
-      // those 90 days, not 2021's history.
+      // until paid — a STANDING list, recomputed live every run, SCOPED to the
+      // reconciliation period.
       var todayISO = new Date().toISOString().substring(0, 10);
       var unpaid = [];
       acctInv.forEach(function (v) {
@@ -239,16 +216,6 @@ export async function POST(req) {
         if (v.due_date && v.due_date < todayISO) { od = Math.round((new Date(todayISO) - new Date(v.due_date)) / 86400000); }
         var custShow = custMapR[v.accounting_customer_id] || '';
         var relShow = v.release_number || v.po_so_number || '';
-        if (!custShow || !relShow) {
-          (String(v.invoice_number || '').match(/\d{3,}/g) || []).forEach(function (dRaw) {
-            var d = dRaw.replace(/^0+/, '');
-            var os = bySerial[d];
-            if (os && os.length === 1) {
-              if (!relShow) { relShow = os[0].release_number; }
-              if (!custShow && os[0].customer_name) { custShow = os[0].customer_name + ' (from order)'; }
-            }
-          });
-        }
         unpaid.push({ invoice: v.invoice_number, customer: custShow, release: relShow, invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: v.amount_paid != null ? Number(v.amount_paid) : 0, balance_due: bal, days_overdue: od, overdue: od > 0 });
       });
       unpaid.sort(function (a, b) { return b.balance_due - a.balance_due; });
@@ -261,66 +228,28 @@ export async function POST(req) {
         idx[k].push({ system: system, field: field, ref: ref, customer: row.customer_name || row.customer_name_en || custMapR[row.accounting_customer_id] || '', invoice_date: row.invoice_date || null, total_amount: row.total_amount != null ? Number(row.total_amount) : null });
       }
       // v55.83-NO — release_number first: it is the DEDICATED join key now.
+      // v55.83-OH (Max): invoice numbers and release numbers are TWO DIFFERENT
+      // THINGS. The report compares NextTrade release_number against the Hub
+      // invoices' RELEASE fields ONLY (release_number, and Wave's P.O./S.O.).
+      // No matching on invoice/order numbers, no serial heuristics.
       salesInv.forEach(function (v) {
         put(v.release_number, 'sales', 'release_number', v.order_number, v);
-        put(v.order_number, 'sales', 'order_number', v.order_number, v);
       });
       acctInv.forEach(function (v) {
         put(v.release_number, 'accounting', 'release_number', v.invoice_number, v);
-        put(v.po_so_number, 'accounting', 'po_so', v.invoice_number, v); // v55.83-OA — Wave's P.O./S.O.: the team's comparison number
-        put(v.invoice_number, 'accounting', 'invoice_number', v.invoice_number, v);
+        put(v.po_so_number, 'accounting', 'po_so', v.invoice_number, v);
       });
 
       var normKeys = Object.keys(idx);
-      var matched = []; var noInvoice = []; var possible = []; var byField = {};
+      var matched = []; var noInvoice = []; var byField = {};
       orders.forEach(function (o) {
         var rel = norm(o.release_number);
         var hits = idx[rel] || [];
-        if (!hits.length) {
-          // contains fallback: an invoice field that CONTAINS the release (e.g. "INV 1002-1193 Al Moustafa")
-          var k;
-          for (k = 0; k < normKeys.length && hits.length < 3; k++) {
-            if (normKeys[k].length > rel.length && normKeys[k].indexOf(rel) > -1) {
-              idx[normKeys[k]].forEach(function (h) { hits.push({ system: h.system, field: h.field + ' (contains)', ref: h.ref, invoice_date: h.invoice_date, total_amount: h.total_amount }); });
-            }
-          }
-        }
-        var possibleForOrder = [];
-        if (!hits.length) {
-          // v55.83-NY/NZ — SUFFIX match, hardened after Max caught 1001-1640:
-          // a bare serial collision is NOT a match. The serial must ALSO agree
-          // on the customer; serial-only hits go to the amber verify list so a
-          // real gap can never hide behind an unrelated invoice number.
-          var sfx = String(o.release_number || '').split('-')[1] || '';
-          sfx = sfx.replace(/^0+/, '');
-          if (sfx.length >= 3) {
-            var sfxRx = new RegExp('(^|[^0-9])' + sfx + '($|[^0-9])');
-            var k2;
-            for (k2 = 0; k2 < normKeys.length && (hits.length + possibleForOrder.length) < 6; k2++) {
-              if (sfxRx.test(normKeys[k2])) {
-                idx[normKeys[k2]].forEach(function (h) {
-                  // v55.83-OE — serial matching is ACCOUNTING-ONLY. The Egypt
-                  // sales ledger numbers its own invoices with plain serials
-                  // (1640 = المليجى) that collide with release serials by pure
-                  // coincidence; NextTrade deals are invoiced on the Wave side.
-                  if (h.system !== 'accounting') { return; }
-                  if (custClose(o.customer_name, h.customer)) {
-                    hits.push({ system: h.system, field: h.field + ' (release serial ' + sfx + ' + customer)', ref: h.ref, invoice_date: h.invoice_date, total_amount: h.total_amount });
-                  } else {
-                    possibleForOrder.push({ ref: h.ref, system: h.system, invoice_customer: h.customer || '(unknown)' });
-                  }
-                });
-              }
-            }
-          }
-        }
         var totQ = (Number(o.qty_seconds) || 0) + (Number(o.qty_thirds) || 0) + (Number(o.qty_paper) || 0);
         if (hits.length) {
           var f = hits[0].system + '.' + hits[0].field;
           byField[f] = (byField[f] || 0) + 1;
           matched.push({ release_number: o.release_number, customer: o.customer_name, order_date: o.order_date, matched_via: f, invoice_ref: hits[0].ref, invoice_amount: hits[0].total_amount, extra_matches: hits.length - 1 });
-        } else if (possibleForOrder.length) {
-          possible.push({ release_number: o.release_number, customer: o.customer_name, order_date: o.order_date, serial_found_in: possibleForOrder[0].system + ' invoice ' + possibleForOrder[0].ref, that_invoice_customer: possibleForOrder[0].invoice_customer, action_needed: 'confirm same deal - then put the release # on that invoice' });
         } else {
           noInvoice.push({ release_number: o.release_number, customer: o.customer_name, warehouse: o.warehouse, order_date: o.order_date, status: o.status, country: o.country, qty_total: totQ });
         }
@@ -331,12 +260,12 @@ export async function POST(req) {
       var invNoOrder = [];
       function looksRelease(x) { return /^\d{3,4}-\d{2,5}$/.test(String(x || '').trim()); }
       salesInv.forEach(function (v) {
-        var cand = v.release_number || (looksRelease(v.order_number) ? v.order_number : null);
+        var cand = v.release_number || null;
         var inWin = (!df || !v.invoice_date || v.invoice_date >= df) && (!dt || !v.invoice_date || v.invoice_date <= dt);
         if (inWin && cand && !orderSet[norm(cand)]) { invNoOrder.push({ system: 'sales', ref: cand, customer: v.customer_name || v.customer_name_en, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
       });
       acctInv.forEach(function (v) {
-        var cand2 = v.release_number || (looksRelease(v.po_so_number) ? v.po_so_number : null) || (looksRelease(v.invoice_number) ? v.invoice_number : null);
+        var cand2 = v.release_number || (looksRelease(v.po_so_number) ? v.po_so_number : null);
         var inWin2 = (!df || !v.invoice_date || v.invoice_date >= df) && (!dt || !v.invoice_date || v.invoice_date <= dt);
         if (inWin2 && cand2 && !orderSet[norm(cand2)]) { invNoOrder.push({ system: 'accounting', ref: cand2, invoice_date: v.invoice_date, total_amount: v.total_amount }); }
       });
@@ -347,7 +276,6 @@ export async function POST(req) {
           orders_in_scope: orders.length,
           matched: matched.length,
           orders_without_invoice: noInvoice.length,
-          possible_matches_verify: possible.length,
           invoices_without_order: invNoOrder.length,
           invoices_with_open_balance: unpaid.length,
           overdue_open_balance: unpaid.filter(function (u) { return u.overdue; }).length,
@@ -355,7 +283,6 @@ export async function POST(req) {
           period: { from: df || 'all', to: dt || 'all' }
         },
         orders_without_invoice: noInvoice,
-        possible_matches: possible.slice(0, 300),
         invoices_without_order: invNoOrder.slice(0, 300),
         invoices_with_open_balance: unpaid.slice(0, 300),
         matched: matched.slice(0, 500),
@@ -446,9 +373,19 @@ export async function POST(req) {
     if (action === 'set_release') {
       // v55.83-NP — inline save from the fast-entry screen. Empty clears.
       var sys = body.system; var rid = body.id;
-      var rn = String(body.release_number || '').trim();
+      var rn = String(body.release_number || '').trim().replace(/\s+/g, '');
       if (!rid || (sys !== 'accounting' && sys !== 'sales')) { return NextResponse.json({ error: 'system (accounting|sales) and id required.' }, { status: 400 }); }
-      if (rn && !/^\d{3,4}-\d{2,5}$/.test(rn)) { return NextResponse.json({ error: 'Release format looks wrong — expected like 1002-1193. Not saved.' }, { status: 400 }); }
+      // v55.83-OG — Max types the bare serial (his invoice numbers ARE the
+      // serials); expand it against the imported orders instead of rejecting.
+      if (rn && /^\d{3,5}$/.test(rn)) {
+        var serRes = await db.from('nexttrade_orders').select('release_number').ilike('release_number', '%-' + rn);
+        var serRows = (serRes && serRes.data) || [];
+        var exact = serRows.filter(function (r) { return String(r.release_number || '').split('-')[1] === rn; });
+        if (exact.length === 1) { rn = exact[0].release_number; }
+        else if (exact.length === 0) { return NextResponse.json({ error: 'No imported order ends with -' + rn + '. Type the full release (like 1002-' + rn + '), or import the orders first.' }, { status: 400 }); }
+        else { return NextResponse.json({ error: 'Serial ' + rn + ' is ambiguous: ' + exact.map(function (r) { return r.release_number; }).join(' and ') + '. Type the full one.' }, { status: 400 }); }
+      }
+      else if (rn && !/^\d{3,4}-\d{2,5}$/.test(rn)) { return NextResponse.json({ error: 'Release format looks wrong — expected like 1002-1193 (or just the serial, like 1193). Not saved.' }, { status: 400 }); }
       var tbl2 = sys === 'accounting' ? 'accounting_invoices' : 'invoices';
       var upd = await db.from(tbl2).update({ release_number: rn || null }).eq('id', rid).select('id');
       if (upd.error) { return NextResponse.json({ error: upd.error.message }, { status: 400 }); }
