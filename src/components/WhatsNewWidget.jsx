@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OJ',
+    date: '2026-09-25',
+    label: 'Open Balances screen · Leaderboard in EGP + drill-down · release backfill USA-only',
+    items: [
+      '**💰 New screen: Accounting → Open Balances.** Every invoice with money still owed — customer, release, dates, total, paid, balance, days overdue — biggest balance first. **Late invoices are highlighted light orange**, exactly as you specified, with an overdue count and overdue amount up top.',
+      '**📅 One-tap periods: 1 month · 3 months · 6 months · This year · 2025 · All history — plus custom from/to dates.** Opens on the last 3 months automatically. CSV button for chasing.',
+      '**🏆 The Sales-Rep Leaderboard now reads in EGP, not USD.** The numbers were always your Egyptian pound figures — they were just wearing the wrong label. An invoice with no currency marked now counts as EGP (the Hub’s home currency), so the leaderboard stops inventing a fake “USD” column. A real foreign-currency invoice still shows in its own currency.',
+      '**👆 Click any rep’s row to see exactly what the numbers are built from.** A new drop-down opens under the row listing every invoice behind it — invoice number, customer, date, invoiced, collected, still outstanding, and status. The rows add up to the totals on the line, so nothing is a mystery.',
+      '**🇺🇸 “Load invoices without release #” now shows only USA (accounting) invoices.** Egyptian EGP orders never carry a release number, so they no longer clutter the backfill list or inflate the “missing” count. You only see the invoices that are actually supposed to get a release number.',
+      { superAdminOnly: true, text: 'v55.83-OJ — NO SQL. MERGED build (Open Balances + Leaderboard/backfill). (A) Route action open_balances (Owner/Admin branch): DB-side balance_due>0.009 + invoice_date range, verified columns only, customers via company_name||contact_name, rows sorted by balance desc capped 500, server totals {count,total_open,overdue_count,overdue_open}. New OpenBalancesTab.jsx: preset chips (30/90/183d, 2026-01-01, 2025 full, all) + custom + Go, auto-load 90d on mount, overdue rowStyle #ffedd5/#431407 (contrast rule), zebra otherwise, sticky header, BOM CSV. AccountingTab: sub \'balances\' after recon. NOT DONE: staff access via AR permission (Owner/Admin only for now — say the word), click-through to the invoice, aging buckets (30/60/90). (B) SalesRepDashboard.normalizeCurrency(c, base) defaults blank currency to base (‘EGP’, overridable via baseCurrency prop, now in the useMemo deps) instead of ‘USD’; per-rep×currency buckets retain raw invoices[] and each row expands into a drill-down sub-table (colSpan 10). (C) reconcile/nexttrade list_missing dropped the `invoices` (sales) query — accounting_invoices only, total_missing = USA only; backfill placeholder corrected to “filter by invoice #”. Tests: OJ addendum 5 + NP1(OJ) + A6/H1 currency guards; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OI',
     date: '2026-09-23',
     label: 'Anyone on the team can enter release numbers',

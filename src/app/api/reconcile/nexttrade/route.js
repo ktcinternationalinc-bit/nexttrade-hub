@@ -300,6 +300,33 @@ export async function POST(req) {
       };
     }
 
+    if (action === 'open_balances') {
+      // v55.83-OJ (Max): dedicated Accounting view — who owes what, period-
+      // scoped, overdue called out. Same trusted fields as the report.
+      var df2 = body.date_from || null; var dt2 = body.date_to || null;
+      var inv2 = await fetchAll(function () {
+        var q = db.from('accounting_invoices').select('invoice_number, release_number, po_so_number, accounting_customer_id, invoice_date, due_date, total_amount, amount_paid, balance_due, payment_status').gt('balance_due', 0.009).order('invoice_date', { ascending: false });
+        if (df2) { q = q.gte('invoice_date', df2); }
+        if (dt2) { q = q.lte('invoice_date', dt2); }
+        return q;
+      });
+      var cm2 = {};
+      try {
+        var cr2 = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
+        cr2.forEach(function (c) { cm2[c.id] = c.company_name || c.contact_name || ''; });
+      } catch (eC3) {}
+      var tISO = new Date().toISOString().substring(0, 10);
+      var rows2 = inv2.map(function (v) {
+        var od2 = 0;
+        if (v.due_date && v.due_date < tISO) { od2 = Math.round((new Date(tISO) - new Date(v.due_date)) / 86400000); }
+        return { invoice: v.invoice_number, customer: cm2[v.accounting_customer_id] || '', release: v.release_number || v.po_so_number || '', invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: v.amount_paid != null ? Number(v.amount_paid) : 0, balance_due: Number(v.balance_due) || 0, days_overdue: od2, overdue: od2 > 0 };
+      });
+      rows2.sort(function (a, b) { return b.balance_due - a.balance_due; });
+      var totOpen = 0; var totOd = 0; var cOd = 0;
+      rows2.forEach(function (r) { totOpen += r.balance_due; if (r.overdue) { cOd += 1; totOd += r.balance_due; } });
+      return NextResponse.json({ ok: true, rows: rows2.slice(0, 500), totals: { count: rows2.length, total_open: Math.round(totOpen * 100) / 100, overdue_count: cOd, overdue_open: Math.round(totOd * 100) / 100 }, api_build_marker: API_BUILD_MARKER });
+    }
+
     if (action === 'report') {
       var rep = await buildReport(body.date_from || null, body.date_to || null);
       return NextResponse.json(rep);
@@ -367,14 +394,12 @@ export async function POST(req) {
         return q;
       });
       var custById = {}; acc2.forEach(function (r) { custById[r.id] = custMap[r.accounting_customer_id] || ''; });
-      var salRows = await fetchAll(function () {
-        var q = db.from('invoices').select('id, order_number, customer_name, invoice_date, total_amount').is('release_number', null).order('invoice_date', { ascending: false });
-        if (srch) { q = q.or('order_number.ilike.%' + srch + '%,customer_name.ilike.%' + srch + '%'); }
-        return q;
-      });
+      // v55.83-OJ — release numbers apply ONLY to accounting (USA) invoices. Egyptian EGP sales
+      // orders never carry a release number, so they are intentionally excluded from this backfill
+      // list AND from the total_missing count (which was previously inflated by ~sales rows).
+      // Do NOT re-add the `invoices` (sales) table to this action.
       var out = [];
       accRows.forEach(function (r) { out.push({ system: 'accounting', id: r.id, ref: r.invoice_number || '(no number)', customer: custById[r.id] || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
-      salRows.forEach(function (r) { out.push({ system: 'sales', id: r.id, ref: r.order_number || '(no number)', customer: r.customer_name || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
       out.sort(function (a, b) { return String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')); });
       return NextResponse.json({ ok: true, missing: out.slice(0, 300), total_missing: out.length, api_build_marker: API_BUILD_MARKER });
     }

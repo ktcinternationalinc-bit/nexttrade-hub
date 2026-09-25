@@ -200,7 +200,7 @@ export default function NexttradeReconciliation(props) {
       <div className="bg-white rounded-xl border border-slate-200 p-3 mb-3">
         <div className="flex gap-2 items-end flex-wrap mb-2">
           <div className="text-sm font-extrabold text-slate-900 mr-2">✍️ Enter release numbers on old invoices</div>
-          <input value={msearch} onChange={function (e) { setMsearch(e.target.value); }} placeholder="filter by invoice # / order # / customer"
+          <input value={msearch} onChange={function (e) { setMsearch(e.target.value); }} placeholder="filter by invoice #"
             className="px-2 py-1 rounded border border-slate-300 text-xs" style={{ minWidth: 220 }} />
           <button disabled={busy} onClick={function () {
             setBusy(true);

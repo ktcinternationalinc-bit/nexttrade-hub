@@ -10,6 +10,7 @@ import WaveHub from './WaveHub';
 import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import NexttradeReconciliation from './NexttradeReconciliation';
+import OpenBalancesTab from './OpenBalancesTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
 
@@ -34,6 +35,7 @@ export default function AccountingTab(props) {
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
     ['recon', '🔎 Order Reconciliation'], // v55.83-NV — moved from Admin: it is accounting work
+    ['balances', '💰 Open Balances'], // v55.83-OJ — who owes what, overdue in orange
     ['proformas', '📄 Proformas'],
     ['purchaseorders', '📦 Purchase Orders'],
     ['review', '🏦 Bank Review & Matching'],
@@ -69,6 +71,7 @@ export default function AccountingTab(props) {
       {sub === 'customers' && <AccountingCustomersTab key={'acct-cus|' + waveKey} {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key={'acct-inv|' + waveKey} {...props} defaultMode="invoices" />}
       {sub === 'recon' && <NexttradeReconciliation {...props} />}
+      {sub === 'balances' && <OpenBalancesTab {...props} />}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}

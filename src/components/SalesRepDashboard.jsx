@@ -39,20 +39,29 @@ function fmtInt(n) {
   if (n == null || isNaN(Number(n))) return '0';
   return Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
-function normalizeCurrency(c) {
-  if (!c) return 'USD';
-  return String(c).toUpperCase().trim() || 'USD';
+// v55.83-OJ — blank/unknown currency defaults to the app BASE currency (EGP), NOT USD. The rest of the Hub
+// (Treasury, Inventory P&L) treats EGP as base; defaulting blanks to USD made EGP invoices that have no
+// currency code render as a bogus "USD" bucket (Max: "this should be EGP"). A real non-EGP invoice still keeps
+// its own code. The base is overridable via the baseCurrency prop.
+function normalizeCurrency(c, base) {
+  var b = (base ? String(base).toUpperCase().trim() : '') || 'EGP';
+  if (!c) return b;
+  return String(c).toUpperCase().trim() || b;
 }
 
 export default function SalesRepDashboard(props) {
   // invoices: already-filtered array (the Sales tab's filteredInvoices)
   var invoices = props.invoices || [];
   var label = props.label || 'in selected range';
+  // v55.83-OJ — base currency for invoices that carry no currency code (defaults to EGP, the Hub base).
+  var baseCurrency = props.baseCurrency || 'EGP';
 
   // v55.83-A.6.27.66 (H5) — toggle to include or hide unassigned invoices.
   // Defaults to HIDE so the leaderboard isn't dominated by a giant
   // "(Unassigned)" row from legacy invoices with no sales_rep field set.
   var [showUnassigned, setShowUnassigned] = useState(false);
+  // v55.83-OJ — drill-down: which rep×currency row is expanded to show the invoices behind its numbers.
+  var expState = useState(null); var expandedKey = expState[0]; var setExpandedKey = expState[1];
 
   // Aggregate per (sales_rep × currency). The same rep can appear in
   // multiple currency rows — that's intentional, currencies don't mix.
@@ -60,16 +69,17 @@ export default function SalesRepDashboard(props) {
     var bucket = {}; // 'rep||currency' → totals
     invoices.forEach(function (inv) {
       var rep = (inv.sales_rep || '').trim() || '(Unassigned)';
-      var cur = normalizeCurrency(inv.currency);
+      var cur = normalizeCurrency(inv.currency, baseCurrency);
       var key = rep + '||' + cur;
       if (!bucket[key]) {
         bucket[key] = {
           rep: rep, currency: cur, count: 0, invoiced: 0, collected: 0,
-          outstanding: 0, customers: {},
+          outstanding: 0, customers: {}, invoices: [],
         };
       }
       var b = bucket[key];
       b.count++;
+      b.invoices.push(inv); // v55.83-OJ — keep the raw invoices so the row can drill down to what the numbers are based on
       // v55.83-A.6.27.66 (M6) — use ?? null check instead of || to allow
       // zero as a legitimate value, then read total_amount/amount fallback
       // correctly. Outstanding may be stale; compute as fallback (H3).
@@ -100,7 +110,9 @@ export default function SalesRepDashboard(props) {
       return b.invoiced - a.invoiced;
     });
     return rows;
-  }, [invoices]);
+    // v55.83-OJ — baseCurrency IS a real dependency: if the prop ever overrides the EGP default,
+    // the buckets must recompute. Omitting it made the memo stale on a base change.
+  }, [invoices, baseCurrency]);
 
   var visibleRows = useMemo(function () {
     if (showUnassigned) return perRepCurrency;
@@ -226,13 +238,16 @@ export default function SalesRepDashboard(props) {
           </thead>
           <tbody>
             {visibleRows.map(function (r) {
-              var rankIdx = rankWithinCurrency[r.rep + '||' + r.currency] || 0;
+              var rkey = r.rep + '||' + r.currency;
+              var rankIdx = rankWithinCurrency[rkey] || 0;
               var rankBg = rankIdx === 0 ? 'bg-amber-50' : rankIdx === 1 ? 'bg-slate-50' : rankIdx === 2 ? 'bg-orange-50' : '';
               var rankEmoji = rankIdx === 0 ? '🥇' : rankIdx === 1 ? '🥈' : rankIdx === 2 ? '🥉' : '';
               var isUnassigned = r.rep === '(Unassigned)';
-              return (
-                <tr key={r.rep + '_' + r.currency} className={'border-b border-slate-200 hover:bg-slate-50 ' + rankBg + (isUnassigned ? ' opacity-70' : '')}>
-                  <td className="px-3 py-1.5 text-slate-700 font-mono font-bold">{rankEmoji || (rankIdx + 1)}</td>
+              // v55.83-OJ (Max) — click a rep row to drill down to the invoices its numbers are based on.
+              var isOpen = expandedKey === rkey;
+              var mainRow = (
+                <tr key={rkey} onClick={function () { setExpandedKey(isOpen ? null : rkey); }} title="Click to see the invoices behind these numbers" className={'border-b border-slate-200 cursor-pointer ' + (isOpen ? 'bg-indigo-50 ' : 'hover:bg-indigo-50 ') + rankBg + (isUnassigned ? ' opacity-70' : '')}>
+                  <td className="px-3 py-1.5 text-slate-700 font-mono font-bold"><span className="text-indigo-500 mr-1">{isOpen ? '▾' : '▸'}</span>{rankEmoji || (rankIdx + 1)}</td>
                   <td className="px-3 py-1.5 text-slate-900 font-extrabold">{r.rep}</td>
                   <td className="px-3 py-1.5 text-slate-700 font-mono font-extrabold">{r.currency}</td>
                   <td className="px-3 py-1.5 text-right font-mono text-blue-900">{fmtInt(r.count)}</td>
@@ -251,6 +266,47 @@ export default function SalesRepDashboard(props) {
                   </td>
                 </tr>
               );
+              if (!isOpen) { return mainRow; }
+              var drillRow = (
+                <tr key={rkey + '__drill'} className="bg-slate-50">
+                  <td colSpan={10} className="px-3 py-2">
+                    <div className="text-[11px] font-bold text-slate-700 mb-1">📄 Invoices behind {r.rep} · {r.currency} ({fmtInt(r.count)}) — invoiced {fmtMoney(r.invoiced)}, collected {fmtMoney(r.collected)}, outstanding {fmtMoney(r.outstanding)}</div>
+                    <div className="overflow-auto max-h-72 border border-slate-200 rounded bg-white">
+                      <table className="w-full text-[11px]">
+                        <thead className="bg-slate-100 text-slate-700"><tr>
+                          <th className="px-2 py-1 text-left font-bold">Invoice #</th>
+                          <th className="px-2 py-1 text-left font-bold">Customer</th>
+                          <th className="px-2 py-1 text-left font-bold">Date</th>
+                          <th className="px-2 py-1 text-right font-bold">Invoiced</th>
+                          <th className="px-2 py-1 text-right font-bold">Collected</th>
+                          <th className="px-2 py-1 text-right font-bold">Outstanding</th>
+                          <th className="px-2 py-1 text-left font-bold">Status</th>
+                        </tr></thead>
+                        <tbody>
+                          {r.invoices.slice().sort(function (a, b) { return (Number(b.total_amount != null ? b.total_amount : (b.amount || 0))) - (Number(a.total_amount != null ? a.total_amount : (a.amount || 0))); }).map(function (inv, ii) {
+                            var invd = Number(inv.total_amount != null ? inv.total_amount : (inv.amount || 0));
+                            var coll = Number(inv.total_collected != null ? inv.total_collected : 0);
+                            var outs = inv.outstanding != null ? Number(inv.outstanding) : Math.max(0, invd - coll);
+                            return (
+                              <tr key={(inv.id || inv.invoice_number || ('r' + ii))} className="border-t border-slate-100 hover:bg-slate-50">
+                                <td className="px-2 py-1 font-mono text-slate-800">{inv.invoice_number || inv.id || '—'}</td>
+                                <td className="px-2 py-1 text-slate-700"><div className="truncate max-w-[170px]" title={inv.customer_name_en || inv.customer_name || ''}>{inv.customer_name_en || inv.customer_name || '(no customer)'}</div></td>
+                                <td className="px-2 py-1 text-slate-500 font-mono">{String(inv.invoice_date || inv.date || '').substring(0, 10) || '—'}</td>
+                                <td className="px-2 py-1 text-right font-mono text-emerald-800">{fmtMoney(invd)}</td>
+                                <td className="px-2 py-1 text-right font-mono text-teal-800">{fmtMoney(coll)}</td>
+                                <td className={'px-2 py-1 text-right font-mono ' + (outs > 0 ? 'text-amber-800' : 'text-slate-400')}>{fmtMoney(outs)}</td>
+                                <td className="px-2 py-1 text-slate-600">{inv.status || inv.approval_status || inv.payment_status || '—'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="text-[10px] text-slate-500 italic mt-1">💡 Invoiced = each invoice's total · Collected = payments applied to it · Outstanding = the rest. These rows sum to the totals above.</div>
+                  </td>
+                </tr>
+              );
+              return [mainRow, drillRow];
             })}
           </tbody>
         </table>

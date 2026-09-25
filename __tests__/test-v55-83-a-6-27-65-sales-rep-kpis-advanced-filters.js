@@ -30,10 +30,13 @@ ok('A4: takes invoices prop',
   /var invoices = props\.invoices \|\| \[\]/.test(srd));
 ok('A5: takes optional label prop',
   /var label = props\.label \|\| 'in selected range'/.test(srd));
-ok('A6: perRepCurrency useMemo buckets by sales_rep × currency (with "(Unassigned)" fallback)',
+// v55.83-OJ — normalizeCurrency now takes (c, base) and defaults blanks to base EGP (was 'USD').
+ok('A6: perRepCurrency useMemo buckets by sales_rep × currency (with "(Unassigned)" fallback); blank currency → base EGP',
   /perRepCurrency = useMemo\(function/.test(srd) &&
   /var rep = \(inv\.sales_rep \|\| ''\)\.trim\(\) \|\| '\(Unassigned\)'/.test(srd) &&
-  /normalizeCurrency\(inv\.currency\)/.test(srd));
+  /normalizeCurrency\(inv\.currency, baseCurrency\)/.test(srd) &&
+  /function normalizeCurrency\(c, base\)/.test(srd) &&
+  /\|\| 'EGP';/.test(srd));
 ok('A7: bucket has count + invoiced + collected + outstanding + customers',
   /count: 0,\s+invoiced: 0,\s+collected: 0,/.test(srd) &&
   /customers: \{\}/.test(srd));

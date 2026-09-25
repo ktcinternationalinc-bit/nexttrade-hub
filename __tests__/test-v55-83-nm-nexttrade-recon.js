@@ -219,9 +219,13 @@ if (failures.length) {
   var f = [];
   function okP(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
 
-  okP('NP1: list_missing returns invoices with NO release number from BOTH systems, newest first, searchable',
+  // v55.83-OJ — release numbers apply ONLY to accounting (USA) invoices; Egyptian EGP sales orders never
+  // carry one, so list_missing now lists accounting invoices only (the sales query was removed). This guard
+  // asserts the sales query (salRows) is gone from the route, so it can't silently creep back.
+  okP('NP1 (OJ): list_missing lists ACCOUNTING (USA) invoices only — no release # — searchable; sales query removed',
     /action === 'list_missing'/.test(rt2) && /\.is\('release_number', null\)/.test(rt2) &&
-    /system: 'accounting'/.test(rt2) && /system: 'sales'/.test(rt2) && /total_missing/.test(rt2));
+    /system: 'accounting'/.test(rt2) && !/var salRows/.test(rt2) &&
+    /release numbers apply ONLY to accounting/.test(rt2) && /total_missing/.test(rt2));
   okP('NP2: set_release saves inline per invoice, format-checked, empty clears, wrong id honest 404',
     /action === 'set_release'/.test(rt2) && /Release format looks wrong/.test(rt2) &&
     /release_number: rn \|\| null/.test(rt2) && /Invoice not found\./.test(rt2));
@@ -516,8 +520,9 @@ if (failures.length) {
   function okF(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
   okF('OF1: no code selects a name column from accounting_customers anywhere in the route',
     !/accounting_customers'\)\.select\('[^']*[^_]name[^_]/.test(rf.replace(/company_name|contact_name/g, 'X')));
-  okF('OF2: names derive exactly as the working list does (company_name || contact_name) in BOTH lookups',
-    (rf.match(/c\.company_name \|\| c\.contact_name \|\| ''/g) || []).length === 2);
+  okF('OF2: names derive exactly as the working list does (company_name || contact_name) in EVERY lookup (report, backfill, open-balances)',
+    (rf.match(/c\.company_name \|\| c\.contact_name \|\| ''/g) || []).length >= 3 &&
+    !/select\('id, name'\)/.test(rf));
   okF('OF3: the whitelist entry is corrected and records the lesson',
     /accounting_customers: \['id', 'company_name', 'contact_name'/.test(wf) && /was a GUESS/.test(wf));
   if (f.length) { console.log('OF FAILED: ' + f.join(' | ')); process.exit(1); }
@@ -569,4 +574,32 @@ if (failures.length) {
     /var isAdm = await requireAdmin\(db, userId\);/.test(ri) && /Owner\/Admin only\./.test(ri));
   if (f.length) { console.log('OI FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OI ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OJ ADDENDUM — Accounting > Open Balances (Max: open balances
+// with overdue in light orange, periods + custom).
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fj = require('fs'); var pj = require('path');
+  var rj = fj.readFileSync(pj.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var cj = fj.readFileSync(pj.join(__dirname, '..', 'src/components/OpenBalancesTab.jsx'), 'utf8');
+  var aj = fj.readFileSync(pj.join(__dirname, '..', 'src/components/AccountingTab.jsx'), 'utf8');
+  var f = [];
+  function okJ(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okJ('OJ1: open_balances action filters balance_due>0 in the DATABASE, period-scoped, verified columns',
+    /action === 'open_balances'/.test(rj) && /gt\('balance_due', 0\.009\)/.test(rj) &&
+    /gte\('invoice_date', df2\)/.test(rj) && /company_name \|\| c\.contact_name/.test(rj));
+  okJ('OJ2: totals computed server-side (count, total open, overdue count + amount)',
+    /total_open: Math\.round\(totOpen \* 100\) \/ 100/.test(rj) && /overdue_open: Math\.round\(totOd/.test(rj));
+  okJ('OJ3: overdue rows are LIGHT ORANGE with readable dark text (Max spec + contrast rule)',
+    /r\.overdue \? \{ background: '#ffedd5', color: '#431407' \}/.test(cj));
+  okJ('OJ4: periods 1/3/6 months, this year, 2025, all history AND custom from/to',
+    /'1 month'/.test(cj) && /'Last 3 months'/.test(cj) && /'6 months'/.test(cj) &&
+    /'2025', '2025-01-01', '2025-12-31'/.test(cj) && /'All history'/.test(cj) && /custom:/.test(cj));
+  okJ('OJ5: the tab lives under Accounting with CSV export and auto-load',
+    /\['balances', '💰 Open Balances'\]/.test(aj) && /open-balances\.csv/.test(cj) &&
+    /useEffect\(function \(\) \{ load\(agoDays\(90\), ''\); \}, \[\]\);/.test(cj));
+  if (f.length) { console.log('OJ FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OJ ADDENDUM CHECKS PASSED'); }
 })();
