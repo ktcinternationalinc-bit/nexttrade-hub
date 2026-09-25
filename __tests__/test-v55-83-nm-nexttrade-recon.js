@@ -550,3 +550,23 @@ if (failures.length) {
   if (f.length) { console.log('OG FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OG ADDENDUM CHECKS PASSED'); }
 })();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OI ADDENDUM — release entry is for EVERYONE on the team
+// (Max: "this should be eligible for anyone... quick and easy").
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fi = require('fs'); var pi = require('path');
+  var ri = fi.readFileSync(pi.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var f = [];
+  function okI(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okI('OI1: set_release and list_missing are open to ANY signed-in team member',
+    /OPEN_ACTIONS = \{ set_release: true, list_missing: true \}/.test(ri) &&
+    /ANY team/.test(ri));
+  okI('OI2: the open path still verifies a real Hub user (no anonymous writes)',
+    /Sign in to the Hub first\./.test(ri) && /select\('id'\)\.eq\('id', userId \|\| ''\)\.limit\(1\)/.test(ri));
+  okI('OI3: import, report, flag and the rest remain Owner/Admin',
+    /var isAdm = await requireAdmin\(db, userId\);/.test(ri) && /Owner\/Admin only\./.test(ri));
+  if (f.length) { console.log('OI FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OI ADDENDUM CHECKS PASSED'); }
+})();

@@ -142,8 +142,17 @@ export async function POST(req) {
     var action = body.action;
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
-    var isAdm = await requireAdmin(db, userId);
-    if (!isAdm) { return NextResponse.json({ error: 'Owner/Admin only.' }, { status: 403 }); }
+    // v55.83-OI (Max): entering a release number is quick data entry — ANY team
+    // member does it. Only the heavier actions stay Owner/Admin.
+    var OPEN_ACTIONS = { set_release: true, list_missing: true };
+    if (OPEN_ACTIONS[action] === true) {
+      var uRes = await db.from('users').select('id').eq('id', userId || '').limit(1);
+      var isUser = !!(uRes && uRes.data && uRes.data[0]);
+      if (!isUser) { return NextResponse.json({ error: 'Sign in to the Hub first.' }, { status: 403 }); }
+    } else {
+      var isAdm = await requireAdmin(db, userId);
+      if (!isAdm) { return NextResponse.json({ error: 'Owner/Admin only.' }, { status: 403 }); }
+    }
 
     if (action === 'import') {
       var rows = Array.isArray(body.rows) ? body.rows : [];

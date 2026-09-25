@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OI',
+    date: '2026-09-23',
+    label: 'Anyone on the team can enter release numbers',
+    items: [
+      '**\ud83d\udd13 The \u201cOwner/Admin only\u201d wall on release entry is gone.** Any signed-in team member clicks the Release # field \u2014 on the invoice list, the invoice form, or the backfill screen \u2014 types the number (or just the serial), Enter, saved. That\'s the whole task, for everyone. The heavier controls (importing orders, running the report, flagging to a person) stay with Owner/Admin.',
+      { superAdminOnly: true, text: 'v55.83-OI \u2014 NO SQL. Route gate split: OPEN_ACTIONS {set_release, list_missing} require only a real users-table row (403 \u201cSign in to the Hub first.\u201d otherwise \u2014 no anonymous writes); import/report/flag/cron unchanged behind requireAdmin. Format check + serial expansion + in-cell errors all still apply to everyone. OI addendum 3 assertions; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OH',
     date: '2026-09-23',
     label: 'One rule: Release field \u2194 Release number. Nothing else.',
