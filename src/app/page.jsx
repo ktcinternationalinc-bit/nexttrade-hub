@@ -628,6 +628,14 @@ export default function App() {
         return next;
       });
     }
+    // v55.83-OP — dashboard sleeps again when you leave it, like Treasury.
+    if (tab !== 'dashboard' && nadiaWokenInTab.dashboard) {
+      setNadiaWokenInTab(function(prev) {
+        var next = Object.assign({}, prev);
+        delete next.dashboard;
+        return next;
+      });
+    }
   }, [tab]);
   const [editingTxn, setEditingTxn] = useState(null);
   const [splittingTxn, setSplittingTxn] = useState(null);
@@ -5512,7 +5520,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-OO</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-OQ</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -12080,7 +12088,9 @@ export default function App() {
                 selectedAssistant === 'jenna' ? 'text-rose-700 border-rose-300 hover:bg-rose-50' :
                 selectedAssistant === 'sara'  ? 'text-cyan-700 border-cyan-300 hover:bg-cyan-50' :
                                                 'text-indigo-700 border-indigo-300 hover:bg-indigo-50';
-              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled) ? (
+              // v55.83-OP (Max): no auto-start anywhere — the dashboard chat mounts
+              // ONLY after the Wake button (same pattern Treasury already had).
+              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled && nadiaWokenInTab.dashboard) ? (
                 <div id="nadia-greeter-anchor">
                   <SafeSection label="Nadia">
                     <AIGreeter
@@ -12101,9 +12111,9 @@ export default function App() {
                   </SafeSection>
                 </div>
               ) : greeterSettings.enabled ? (
-                <button onClick={() => setGreeterDismissed(false)}
+                <button onClick={() => { setGreeterDismissed(false); setNadiaWokenInTab(function(prev) { return Object.assign({}, prev, { dashboard: true }); }); }}
                   className={'w-full px-4 py-3 rounded-xl text-sm font-semibold border-2 transition flex items-center justify-center gap-2 bg-white ' + activePersonaColor}>
-                  🤖 <span>Talk to {activePersonaName}</span>
+                  🤖 <span>Wake {activePersonaName}</span>
                 </button>
               ) : null;
               return (

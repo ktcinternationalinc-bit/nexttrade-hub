@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OQ',
+    date: '2026-10-13',
+    label: 'Two businesses, two books \u2014 plus Nadia waits for the button',
+    items: [
+      '**\ud83c\uddfa\ud83c\uddf8\ud83c\uddea\ud83c\uddec US and Egypt are now separate books.** The Accounting Dashboard opens on the US business (USD invoices only); one tap on the Business toggle switches to Egypt (EGP). Nothing is ever mixed \u2014 the other business shows only in its own strip, and every money label carries the right currency.',
+      '**\ud83d\udcb5 New card: Paid in period** \u2014 payments recorded with a date inside the chosen period, for the active business, clickable to the list. (Wave-imported lifetime totals carry no payment dates, so they can\'t be period-dated \u2014 the drill says so instead of pretending.)',
+      '**\ud83d\udcda New tab: Accounting \u2192 All Invoices.** Everything entered in the Hub \u2014 open, closed, partial, overpaid AND drafts \u2014 per business, with status chips, filters, period presets and CSV. **Every invoice counts whether it was pushed to Wave or not**; the In-Wave column is information, never a filter.',
+      '**\ud83d\udca4 Nadia no longer starts talking on her own \u2014 anywhere.** Every page now shows a sleeping \ud83d\udca4 Wake Nadia pill (and the dashboard a Wake button); she is fully dormant \u2014 no greetings, no voice \u2014 until pressed, and closing her puts her back to sleep.',
+      { superAdminOnly: true, text: 'v55.83-OP+OQ \u2014 NO SQL. OP: NadiaFloatingOverlay awake-state (default false, unpersisted; expanded no longer restored from localStorage \u2014 the leak that mounted AIGreeter talking; asleep = AIGreeter UNMOUNTED; X = sleep + speechSynthesis.cancel + audio pause); page.jsx dashboard greeter gated on nadiaWokenInTab.dashboard (Treasury\'s proven pattern) + tab-leave reset; NOTE: the overlay OP base edit appeared in the working copy at 13:11 local from outside this session \u2014 reviewed line-by-line, leak found+fixed, tests added. OQ: AccountingDashboard biz state US|EG \u2192 activeCur USD|EGP drives the arInv currency split (cur !== activeCur \u2192 separate strip), csym() on all five money formatters, paid-in-period from non-void payment rows dated in-window with parent-invoice currency match + honest drill note; BusinessBooksTab (sub all_invoices): client-side like the dashboard, live-record filter only, currency+period scoped, PAID/PARTIAL/UNPAID/DRAFT/CREDIT chips, drafts listed but excluded from money totals, in_wave display-only, canViewArInvoiceBalances gate, CSV. Tests: OP (8), OQ (10), OM1/OM3 realigned to new load signature; runner 122/122.' },
+    ],
+  },
+  {
     version: 'v55.83-OO',
     date: '2026-10-11',
     label: 'P&L: dated product costs \u2192 real profit per invoice and period',

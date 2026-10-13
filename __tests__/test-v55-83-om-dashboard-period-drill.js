@@ -8,15 +8,15 @@ var dash = fs.readFileSync(path.join(__dirname, '..', 'src/components/Accounting
 var failed = [];
 function ok(label, cond) { if (cond) console.log('✓ ' + label); else { failed.push(label); console.log('✗ ' + label); } }
 
-ok('OM1: default period is June 1, 2026 onward (state default AND initial load)',
-  /useState\('2026-06-01'\)/.test(dash) && /load\(false, '2026-06-01', ''\)/.test(dash));
+ok('OM1: default period is June 1, 2026 onward (state default AND initial load; OQ: US book default)',
+  /useState\('2026-06-01'\)/.test(dash) && /load\(false, '2026-06-01', '', 'US'\)/.test(dash));
 ok('OM2: the AR set is filtered by invoice_date within the period, blank = unbounded',
   /if \(pf && idt && idt < pf\) \{ return false; \}/.test(dash) &&
   /if \(pt && idt && idt > pt\) \{ return false; \}/.test(dash));
 ok('OM3: presets include This year, 2025, 2024, All history — plus custom from/to with Apply',
   /\['This year', '2026-01-01', ''\]/.test(dash) && /\['2025', '2025-01-01', '2025-12-31'\]/.test(dash) &&
   /\['2024', '2024-01-01', '2024-12-31'\]/.test(dash) && /\['All history', '', ''\]/.test(dash) &&
-  /load\(true, pFrom, pTo\)/.test(dash));
+  /load\(true, pFrom, pTo, biz\)/.test(dash));
 ok('OM4: all four A-cards are clickable (Open AR, Overdue AR, Customer credits, Approvals)',
   /openDrill\('Open AR'/.test(dash) && /openDrill\('Overdue AR'/.test(dash) &&
   /openDrill\('Customer credits'/.test(dash) && /openDrill\('Approvals pending'/.test(dash));
