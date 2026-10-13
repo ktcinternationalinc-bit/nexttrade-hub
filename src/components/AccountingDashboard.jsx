@@ -80,7 +80,7 @@ export default function AccountingDashboard(props) {
     var today = new Date().toISOString().substring(0, 10);
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
-      fetchAllRows('accounting_customers', 'id,company_name').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_customers', 'id,company_name,business_tag').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,bank_transaction_id,voided').catch(function () { return { data: [] }; }),
       supabase.from('bank_transactions').select('id,review_status,wave_business_id,account_id').then(function (x) { return x; }).catch(function () { return { data: [] }; }),
       supabase.from('wave_sync_log').select('entity_type,success,error_message,completed_at,attempted_at').order('id', { ascending: false }).limit(1).then(function (x) { return x; }).catch(function () { return { data: [] }; }),
@@ -105,7 +105,17 @@ export default function AccountingDashboard(props) {
       var pays = ((r[2] && r[2].data) || []).filter(function (p) { return invIdSet[p.accounting_invoice_id]; });
       var lastLog = (r[4] && r[4].data && r[4].data[0]) || null;
       var activity = (r[6] && r[6].data) || [];
-      var custName = {}; custs.forEach(function (c) { custName[c.id] = c.company_name; });
+      var custName = {}; var custBizTag = {};
+      custs.forEach(function (c) { custName[c.id] = c.company_name; if (c.business_tag) { custBizTag[c.id] = c.business_tag; } });
+      // v55.83-OR (Max): the business is a property of the CUSTOMER. An
+      // Egyptian customer's invoices belong to the Egypt book even when a
+      // given invoice is denominated in USD. EGP currency alone also puts an
+      // invoice in the Egypt book (covers unlinked/legacy rows).
+      function bizOf(i) {
+        if (custBizTag[i.accounting_customer_id] === 'egypt') { return 'EG'; }
+        if ((i.currency || 'USD') === 'EGP') { return 'EG'; }
+        return 'US';
+      }
 
       var payByInv = {};
       pays.forEach(function (p) {
@@ -130,6 +140,7 @@ export default function AccountingDashboard(props) {
       // Blank from = beginning of time, blank to = today and beyond.
       var arInv = inv.filter(function (i) {
         if (!isArEligible(i)) { return false; }
+        if (bizOf(i) !== bz) { return false; } // OR: the selected BUSINESS only — customer tag decides, not just currency
         var idt = i.invoice_date || '';
         if (pf && idt && idt < pf) { return false; }
         if (pt && idt && idt > pt) { return false; }
@@ -379,7 +390,7 @@ export default function AccountingDashboard(props) {
         <DrillPanel />
         {d.nonUsd && d.nonUsd.length > 0 && (
           <div className="mt-2">
-            <div className="text-[11px] font-bold text-amber-300 mb-1">Other business / other currencies (never mixed into {d.activeCur === 'EGP' ? 'EGP' : 'USD'} — switch the Business toggle to work in them):</div>
+            <div className="text-[11px] font-bold text-amber-300 mb-1">This business, other currency (e.g. an Egyptian customer invoiced in USD) — shown separately, never summed into {d.activeCur === 'EGP' ? 'EGP' : 'USD'}:</div>
             <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
               {d.nonUsd.map(function (n) { return <Stat key={n.cur} title={'Open AR (' + n.cur + ')'} big={seeTotals ? (n.cur + ' ' + fmt(n.open)) : 'Restricted'} sub={seeTotals ? (n.count + ' invoice(s) · native') : ''} tone="bg-amber-900" />; })}
             </div>

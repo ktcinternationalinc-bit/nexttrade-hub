@@ -41,7 +41,7 @@ export default function BusinessBooksTab(props) {
     if (!mayView) { setLoading(false); return; }
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
-      fetchAllRows('accounting_customers', 'id,company_name,contact_name').catch(function () { return { data: [] }; }),
+      fetchAllRows('accounting_customers', 'id,company_name,contact_name,business_tag').catch(function () { return { data: [] }; }),
       fetchAllRows('accounting_invoice_payments', 'accounting_invoice_id,amount,payment_date,sync_status,voided').catch(function () { return { data: [] }; })
     ]).then(function (r) {
       setRaw({ inv: (r[0] && r[0].data) || [], custs: (r[1] && r[1].data) || [], pays: (r[2] && r[2].data) || [] });
@@ -53,16 +53,23 @@ export default function BusinessBooksTab(props) {
 
   var activeCur = biz === 'EG' ? 'EGP' : 'USD';
   var sym = activeCur === 'EGP' ? 'EGP ' : '$';
-  var custName = {}; raw.custs.forEach(function (c) { custName[c.id] = c.company_name || c.contact_name || ''; });
+  var custName = {}; var custBizTag = {};
+  raw.custs.forEach(function (c) { custName[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { custBizTag[c.id] = c.business_tag; } });
+  // v55.83-OR — business = customer property (tag), with EGP currency as the fallback signal.
+  function bizOfInv(i) {
+    if (custBizTag[i.accounting_customer_id] === 'egypt') { return 'EG'; }
+    if ((i.currency || 'USD') === 'EGP') { return 'EG'; }
+    return 'US';
+  }
   var payByInv = {};
   raw.pays.forEach(function (p) { if (isPaymentVoid(p)) { return; } payByInv[p.accounting_invoice_id] = (payByInv[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0); });
 
-  var rows = []; var tInvoiced = 0, tPaidAmt = 0, tOpen = 0; var cPaid = 0, cOpen = 0, cDraft = 0, cCredit = 0;
+  var rows = []; var tInvoiced = 0, tPaidAmt = 0, tOpen = 0; var cPaid = 0, cOpen = 0, cDraft = 0, cCredit = 0; var otherCurCount = 0;
   var paidInPeriod = 0;
   raw.inv.forEach(function (i) {
     var rs = i.record_status;
     if (rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted') { return; }
-    if ((i.currency || 'USD') !== activeCur) { return; }
+    if (bizOfInv(i) !== biz) { return; } // OR: the customer's business decides — an Egyptian customer's USD invoice stays in the Egypt book
     var idt = i.invoice_date || '';
     if (from && idt && idt < from) { return; }
     if (to && idt && idt > to) { return; }
@@ -76,8 +83,12 @@ export default function BusinessBooksTab(props) {
     else if (bal <= 0.005) { st = 'PAID'; cPaid += 1; }
     else if (paid > 0.005) { st = 'PARTIAL'; cOpen += 1; }
     else { st = 'UNPAID'; cOpen += 1; }
-    if (!isDraft) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
-    rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
+    var rowCur = i.currency || 'USD';
+    // Money cards stay single-currency (the book's main currency); invoices in
+    // another currency are listed with their own symbol and counted separately.
+    if (!isDraft && rowCur === activeCur) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
+    if (rowCur !== activeCur) { otherCurCount += 1; }
+    rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, cur: rowCur, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
   });
   raw.pays.forEach(function (p) {
     if (isPaymentVoid(p)) { return; }
@@ -86,7 +97,7 @@ export default function BusinessBooksTab(props) {
     if (from && pd < from) { return; }
     if (to && pd > to) { return; }
     var parent = raw.inv.find(function (i) { return i.id === p.accounting_invoice_id; });
-    if (!parent || (parent.currency || 'USD') !== activeCur) { return; }
+    if (!parent || bizOfInv(parent) !== biz || (parent.currency || 'USD') !== activeCur) { return; }
     paidInPeriod = r2(paidInPeriod + (Number(p.amount) || 0));
   });
   rows.sort(function (a, b) { return (a.inv_date || '') < (b.inv_date || '') ? 1 : -1; });
@@ -145,7 +156,7 @@ export default function BusinessBooksTab(props) {
             className="px-2 py-1 rounded text-[10px] font-extrabold"
             style={act ? { background: '#0369a1', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{f[1]}</button>;
         })}
-        <span className="text-[10px] text-slate-500 self-center ml-1">{shown.length} invoice(s) — Hub-entered and Wave-pushed alike, nothing hidden</span>
+        <span className="text-[10px] text-slate-500 self-center ml-1">{shown.length} invoice(s) — Hub-entered and Wave-pushed alike, nothing hidden{otherCurCount ? ' · ' + otherCurCount + ' in another currency (listed with own symbol, excluded from the money cards)' : ''}</span>
       </div>
       <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 480 }}>
         <table className="w-full text-[11px]">
@@ -157,9 +168,9 @@ export default function BusinessBooksTab(props) {
                 <td className="px-2 py-1 truncate" style={{ maxWidth: 220 }}>{r.cust}</td>
                 <td className="px-2 py-1 whitespace-nowrap">{r.inv_date || '—'}</td>
                 <td className="px-2 py-1 whitespace-nowrap">{r.due_date || '—'}</td>
-                <td className="px-2 py-1 text-right font-mono">{sym}{fmt(r.total)}</td>
-                <td className="px-2 py-1 text-right font-mono">{sym}{fmt(r.paid)}</td>
-                <td className="px-2 py-1 text-right font-mono font-bold">{sym}{fmt(r.balance)}</td>
+                <td className="px-2 py-1 text-right font-mono">{(r.cur === 'EGP' ? 'EGP ' : '$')}{fmt(r.total)}</td>
+                <td className="px-2 py-1 text-right font-mono">{(r.cur === 'EGP' ? 'EGP ' : '$')}{fmt(r.paid)}</td>
+                <td className="px-2 py-1 text-right font-mono font-bold">{(r.cur === 'EGP' ? 'EGP ' : '$')}{fmt(r.balance)}</td>
                 <td className="px-2 py-1"><span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={STATUS_STYLE[r.status]}>{r.status}</span></td>
                 <td className="px-2 py-1"><span className={'text-[9px] rounded px-1 py-0.5 font-bold text-white ' + (r.source === 'Wave' ? 'bg-sky-700' : 'bg-emerald-700')}>{r.source}</span></td>
                 <td className="px-2 py-1 text-[10px] font-bold">{r.in_wave ? '✓' : '—'}</td>

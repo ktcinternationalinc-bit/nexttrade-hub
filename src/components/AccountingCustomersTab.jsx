@@ -152,18 +152,32 @@ export default function AccountingCustomersTab(props) {
       <label className="text-xs text-slate-100 font-bold flex items-center gap-2 mb-3 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 w-max cursor-pointer hover:bg-slate-700"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived customers</label>
 
       <div className="border border-slate-700 rounded overflow-hidden mb-4">
-        <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px' }}>
-          <div className="px-2 py-1.5">Company</div><div className="px-2 py-1.5">Contact</div><div className="px-2 py-1.5">Email</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Wave</div>
+        <div className="bg-slate-800/70 text-[11px] font-extrabold grid" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px' }}>
+          <div className="px-2 py-1.5">Company</div><div className="px-2 py-1.5">Contact</div><div className="px-2 py-1.5">Email</div><div className="px-2 py-1.5">Status</div><div className="px-2 py-1.5">Wave</div><div className="px-2 py-1.5">Business</div>
         </div>
         {filtered.length === 0 ? <div className="p-4 text-slate-400 italic text-sm">No accounting customers yet.</div> :
           filtered.map(function (r) {
             return (
-              <div key={r.id} onClick={function () { startEdit(r); }} className="grid items-center border-t border-slate-800 cursor-pointer hover:bg-slate-800/50" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px' }}>
+              <div key={r.id} onClick={function () { startEdit(r); }} className="grid items-center border-t border-slate-800 cursor-pointer hover:bg-slate-800/50" style={{ gridTemplateColumns: '1fr 1fr 140px 90px 90px 96px' }}>
                 <div className="px-2 py-1.5 text-xs text-slate-100 truncate font-semibold">{r.company_name}</div>
                 <div className="px-2 py-1.5 text-xs text-slate-300 truncate">{r.contact_name || '—'}</div>
                 <div className="px-2 py-1.5 text-[11px] text-slate-300 truncate">{r.email || '—'}</div>
                 <div className="px-2 py-1.5"><span className={'text-[10px] px-1.5 py-0.5 rounded font-bold ' + (r.status === 'active' ? 'bg-emerald-700 text-white' : r.status === 'on_hold' ? 'bg-amber-600 text-white' : 'bg-slate-600 text-white')}>{(r.status || 'active').replace('_', ' ')}</span></div>
                 <div className="px-2 py-1.5 text-[10px] text-slate-400">{r.wave_customer_id ? 'linked' : (r.sync_status || 'not synced').replace('_', ' ')}</div>
+                {/* v55.83-OR — which business this customer belongs to. One click
+                    flips it; the dashboard/All-Invoices books follow instantly. */}
+                <div className="px-2 py-1.5" onClick={function (e) { e.stopPropagation(); }}>
+                  <button onClick={function () {
+                    var next = r.business_tag === 'egypt' ? 'us' : 'egypt';
+                    dbUpdate('accounting_customers', r.id, { business_tag: next }, userProfile && userProfile.id)
+                      .then(function () { logActivity(userProfile && userProfile.id, 'Set ' + (r.company_name || 'customer') + ' business to ' + next.toUpperCase(), 'accounting_customers'); load(); })
+                      .catch(function (err) { toast.error('Could not switch business: ' + ((err && err.message) || 'unknown')); });
+                  }}
+                    title="Click to switch this customer between the US and Egypt books"
+                    className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + (r.business_tag === 'egypt' ? 'bg-amber-600 text-white' : 'bg-sky-700 text-white')}>
+                    {r.business_tag === 'egypt' ? '🇪🇬 Egypt' : '🇺🇸 US'}
+                  </button>
+                </div>
               </div>
             );
           })}

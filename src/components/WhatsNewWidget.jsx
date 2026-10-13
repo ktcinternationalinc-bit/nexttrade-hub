@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OR',
+    date: '2026-10-13',
+    label: 'The US/Egypt split now follows the CUSTOMER, not the currency',
+    items: [
+      '**\ud83c\uddea\ud83c\uddec You caught it: Egyptian customers with USD-denominated invoices were landing in the US book.** Currency alone cannot split two businesses. Now each customer carries a business tag \u2014 and ALL of an Egyptian customer\'s invoices belong to the Egypt book, whatever currency they were written in. The dashboard and All Invoices both follow the tag.',
+      '**\u2699\ufe0f One small SQL seeds it automatically:** every customer with any EGP invoice in history is tagged Egypt. For Egyptian customers whose invoices are all USD (the system cannot guess those), the Customers screen now has a one-click \ud83c\uddfa\ud83c\uddf8/\ud83c\uddea\ud83c\uddec switch on each row \u2014 flip them once and every report follows instantly.',
+      '**\ud83d\udcb1 Money stays honest inside each book:** the cards total one currency; an Egyptian customer\'s USD invoice is listed in the Egypt book with its own $ amount, counted separately, never silently converted or summed.',
+      { superAdminOnly: true, text: 'v55.83-OR \u2014 NEEDS SQL: sql/v55-83-OR-customer-business.sql (business_tag on accounting_customers + seed UPDATE from EGP-invoice history, idempotent, WHERE business_tag IS NULL so manual flips are never overwritten by a re-run). Classification bizOf(inv): custBizTag===egypt \u2192 EG, else currency===EGP \u2192 EG, else US \u2014 applied in AccountingDashboard arInv filter (before period) and BusinessBooksTab (rows + paid-in-period). Books money cards total activeCur only; otherCurCount note + per-row currency symbol. AccountingCustomersTab: Business column (grid +96px), one-click toggle via dbUpdate + logActivity + stopPropagation. Tests: OR addendum 6 assertions, OQ8 realigned; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OQ',
     date: '2026-10-13',
     label: 'Two businesses, two books \u2014 plus Nadia waits for the button',
