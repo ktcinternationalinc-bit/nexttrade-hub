@@ -12,6 +12,7 @@ import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, can
 import { isArEligible } from '../lib/ar-eligibility';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
+import { businessOfInvoice } from '../lib/business-of';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -107,15 +108,10 @@ export default function AccountingDashboard(props) {
       var activity = (r[6] && r[6].data) || [];
       var custName = {}; var custBizTag = {};
       custs.forEach(function (c) { custName[c.id] = c.company_name; if (c.business_tag) { custBizTag[c.id] = c.business_tag; } });
-      // v55.83-OR (Max): the business is a property of the CUSTOMER. An
-      // Egyptian customer's invoices belong to the Egypt book even when a
-      // given invoice is denominated in USD. EGP currency alone also puts an
-      // invoice in the Egypt book (covers unlinked/legacy rows).
-      function bizOf(i) {
-        if (custBizTag[i.accounting_customer_id] === 'egypt') { return 'EG'; }
-        if ((i.currency || 'USD') === 'EGP') { return 'EG'; }
-        return 'US';
-      }
+      // v55.83-OS (Max, verbatim): US = "entered or subject to pending move
+      // to Wave"; Egypt = everything else. One shared rule (business-of.js),
+      // customer tag overriding in both directions.
+      function bizOf(i) { return businessOfInvoice(i, custBizTag); }
 
       var payByInv = {};
       pays.forEach(function (p) {

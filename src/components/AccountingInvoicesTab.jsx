@@ -7,6 +7,7 @@ import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
+import { businessOfInvoice } from '../lib/business-of';
 import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';
@@ -77,6 +78,9 @@ export default function AccountingInvoicesTab(props) {
   var [hubPaidMap, setHubPaidMap] = useState({});
   var [showArchived, setShowArchived] = useState(false);
   var [search, setSearch] = useState('');
+  // v55.83-OS (Max): the invoice list opens on the US business ONLY — Wave-
+  // bound invoices (in Wave or pending push). Egypt is its own chip.
+  var [bizFilter, setBizFilter] = useState('US');
   var waveBiz = getActiveWaveBusiness() || '';
   var [waveReg, setWaveReg] = useState([]);
   useEffect(function () { fetchAllRows('wave_business_registry', '*').then(function (r) { setWaveReg((r && r.data) || []); }).catch(function () {}); }, []);
@@ -244,7 +248,10 @@ export default function AccountingInvoicesTab(props) {
   // v55.83-EI — the customer picker must only offer customers in the ACTIVE silo,
   // so an invoice can never be linked to a wrong-/cross-silo customer.
   var scopedCustomers = scopeIfRegistered(customers, waveBiz, waveReg, true);
+  var custTagByIdOS = {};
+  customers.forEach(function (c) { if (c && c.business_tag) { custTagByIdOS[c.id] = c.business_tag; } });
   var displayRows = rows
+    .filter(function (r) { if (!isInvoice()) { return true; } if (bizFilter === 'ALL') { return true; } return businessOfInvoice(r, custTagByIdOS) === bizFilter; }) // OS: US book by default
     .filter(function (r) { if (showArchived) return true; var st = r.record_status; return st !== 'archived' && st !== 'void' && st !== 'cancelled'; })
     .filter(function (r) {
       if (!search.trim()) return true;
@@ -612,6 +619,12 @@ export default function AccountingInvoicesTab(props) {
       </div>
 
       <div className="flex items-center gap-2 mb-2">
+        {isInvoice() && [['US', '🇺🇸 US'], ['EG', '🇪🇬 Egypt'], ['ALL', 'All']].map(function (bf) {
+          var act = bizFilter === bf[0];
+          return <button key={bf[0]} onClick={function () { setBizFilter(bf[0]); }}
+            title={bf[0] === 'US' ? 'US business: invoices in Wave or pending push to Wave' : bf[0] === 'EG' ? 'Egypt business: the Egyptian ledger (never goes to Wave)' : 'Both businesses'}
+            className={'px-2 py-1.5 rounded text-[11px] font-extrabold ' + (act ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-600 hover:bg-slate-700')}>{bf[1]}</button>;
+        })}
         <input value={search} onChange={function (e) { setSearch(e.target.value); }} placeholder={'Search ' + (isInvoice() ? 'invoices' : 'proformas') + ' — number, customer, status, Wave/Hub…'} className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-slate-100 text-xs" style={{ width: '380px' }} />
         {search.trim() && <button onClick={function () { setSearch(''); }} className="text-[11px] text-slate-300 hover:text-white">clear</button>}
         {(function () {

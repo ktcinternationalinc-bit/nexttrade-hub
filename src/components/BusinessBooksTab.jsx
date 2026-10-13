@@ -9,6 +9,7 @@ import React, { useState, useEffect } from 'react';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { canViewArInvoiceBalances } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
+import { businessOfInvoice } from '../lib/business-of';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
@@ -55,12 +56,8 @@ export default function BusinessBooksTab(props) {
   var sym = activeCur === 'EGP' ? 'EGP ' : '$';
   var custName = {}; var custBizTag = {};
   raw.custs.forEach(function (c) { custName[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { custBizTag[c.id] = c.business_tag; } });
-  // v55.83-OR — business = customer property (tag), with EGP currency as the fallback signal.
-  function bizOfInv(i) {
-    if (custBizTag[i.accounting_customer_id] === 'egypt') { return 'EG'; }
-    if ((i.currency || 'USD') === 'EGP') { return 'EG'; }
-    return 'US';
-  }
+  // v55.83-OS — the shared Wave-bound rule: US = in Wave or headed there.
+  function bizOfInv(i) { return businessOfInvoice(i, custBizTag); }
   var payByInv = {};
   raw.pays.forEach(function (p) { if (isPaymentVoid(p)) { return; } payByInv[p.accounting_invoice_id] = (payByInv[p.accounting_invoice_id] || 0) + (Number(p.amount) || 0); });
 

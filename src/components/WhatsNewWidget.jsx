@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OS',
+    date: '2026-10-13',
+    label: 'The US side = Wave only. Your rule, applied everywhere.',
+    items: [
+      '**\ud83c\uddfa\ud83c\uddf8 Your definition is now THE rule, word for word: the US business is what is in Wave or headed to Wave.** An invoice counts as US only if it came from Wave, is already in Wave, or is bound to a Wave business (pending push). Everything else is the Egyptian ledger. No more currency guessing.',
+      '**\ud83d\udcc4 The main Invoices screen now opens on the US business ONLY.** Three chips next to search: \ud83c\uddfa\ud83c\uddf8 US (default) \u00b7 \ud83c\uddea\ud83c\uddec Egypt \u00b7 All. The dashboard and All Invoices follow the same single rule \u2014 one function, every screen, so they can never disagree.',
+      '**\ud83d\udd18 The one-click customer switch still wins** over everything: flip a customer \ud83c\uddfa\ud83c\uddf8\u2194\ud83c\uddea\ud83c\uddec on the Customers screen and all their invoices follow, both directions.',
+      { superAdminOnly: true, text: 'v55.83-OS \u2014 NO SQL (OR\'s business_tag SQL still applies if not run). New src/lib/business-of.js businessOfInvoice(inv, custTagById): tag egypt\u2192EG, tag us\u2192US, currency EGP\u2192EG, source wave_import\u2192US, wave_invoice_id\u2192US, wave_business_id\u2192US (hub-created US invoices get the silo at creation = \u201cpending move to Wave\u201d), else EG. FUNCTIONALLY tested (incl. the exact leak: USD invoice with no Wave linkage \u2192 EG; overrides both ways). Swapped into AccountingDashboard bizOf + BusinessBooksTab bizOfInv (replacing the OR inline heuristic); AccountingInvoicesTab: bizFilter state default US, chips US/EG/ALL beside search (proformas + ALL bypass), custTag map from the select(*) customers. Tests: OR2/OR3 realigned to the lib, OS addendum 3 functional + 2 structural; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OR',
     date: '2026-10-13',
     label: 'The US/Egypt split now follows the CUSTOMER, not the currency',

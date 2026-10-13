@@ -61,11 +61,11 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
   okR('OR1: SQL adds business_tag and SEEDS egypt from customers with any EGP invoice (idempotent)',
     /ADD COLUMN IF NOT EXISTS business_tag text;/.test(sq2) &&
     /WHERE business_tag IS NULL/.test(sq2) && /currency = 'EGP'/.test(sq2));
-  okR('OR2: dashboard classifies by CUSTOMER tag first, EGP currency as fallback — and filters the book on it',
-    /custBizTag\[i\.accounting_customer_id\] === 'egypt'/.test(dash2) &&
+  okR('OR2/OS: dashboard uses the SHARED Wave-bound rule and filters the book on it',
+    /businessOfInvoice\(i, custBizTag\)/.test(dash2) &&
     /if \(bizOf\(i\) !== bz\) \{ return false; \}/.test(dash2));
-  okR('OR3: All Invoices classifies the same way — an Egyptian customer\'s USD invoice lands in the Egypt book',
-    /function bizOfInv\(i\)/.test(bk2) && /if \(bizOfInv\(i\) !== biz\) \{ return; \}/.test(bk2));
+  okR('OR3/OS: All Invoices uses the same shared rule',
+    /businessOfInvoice\(i, custBizTag\)/.test(bk2) && /if \(bizOfInv\(i\) !== biz\) \{ return; \}/.test(bk2));
   okR('OR4: money cards stay single-currency; same-business other-currency invoices are listed with their OWN symbol and counted, never summed',
     /rowCur === activeCur\) \{ tInvoiced/.test(bk2) && /otherCurCount/.test(bk2) &&
     /r\.cur === 'EGP' \? 'EGP ' : '\$'/.test(bk2));
@@ -76,4 +76,42 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
     /e\.stopPropagation\(\)/.test(cu2) && /Set ' \+ \(r\.company_name/.test(cu2));
   if (f.length) { console.log('OR FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OR ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OS ADDENDUM — Max's definitive rule, verbatim: "they should only
+// come from the ones that are entered or subject to pending move to wave.
+// that is the usa business." US = Wave-bound; Egypt = everything else.
+// FUNCTIONAL tests run the real shared rule.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fs3 = require('fs'); var ps3 = require('path');
+  function r3(rel) { return fs3.readFileSync(ps3.join(__dirname, '..', rel), 'utf8'); }
+  var libSrc = r3('src/lib/business-of.js').replace(/export function/g, 'function');
+  libSrc += '\nmodule.exports = { businessOfInvoice: businessOfInvoice };';
+  var tmp3 = ps3.join(__dirname, '.tmp-business-of.cjs');
+  fs3.writeFileSync(tmp3, libSrc);
+  var bo = require(tmp3).businessOfInvoice;
+  fs3.unlinkSync(tmp3);
+  var inv = r3('src/components/AccountingInvoicesTab.jsx');
+  var f = [];
+  function okS(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okS('OS1 functional: Wave-imported, Wave-pushed, and silo-bound (pending push) invoices are US',
+    bo({ source: 'wave_import', currency: 'USD' }, {}) === 'US' &&
+    bo({ wave_invoice_id: 'w1', currency: 'USD' }, {}) === 'US' &&
+    bo({ wave_business_id: 'biz1', currency: 'USD', approval_status: 'draft' }, {}) === 'US');
+  okS('OS2 functional: a USD invoice with NO Wave linkage is EGYPT — exactly the leak Max reported',
+    bo({ currency: 'USD', source: 'hub' }, {}) === 'EG' &&
+    bo({ currency: 'EGP', wave_business_id: 'biz1' }, {}) === 'EG');
+  okS('OS3 functional: the customer tag overrides in BOTH directions',
+    bo({ source: 'wave_import', currency: 'USD', accounting_customer_id: 'c1' }, { c1: 'egypt' }) === 'EG' &&
+    bo({ currency: 'USD', source: 'hub', accounting_customer_id: 'c2' }, { c2: 'us' }) === 'US');
+  okS('OS4: the main Invoices LIST opens on the US business with US/Egypt/All chips',
+    /useState\('US'\)/.test(inv) && /businessOfInvoice\(r, custTagByIdOS\) === bizFilter/.test(inv) &&
+    /🇺🇸 US/.test(inv) && /🇪🇬 Egypt/.test(inv) &&
+    /invoices in Wave or pending push to Wave/.test(inv));
+  okS('OS5: proformas and the ALL chip bypass the filter (nothing becomes unreachable)',
+    /if \(!isInvoice\(\)\) \{ return true; \}/.test(inv) && /bizFilter === 'ALL'/.test(inv));
+  if (f.length) { console.log('OS FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OS ADDENDUM CHECKS PASSED'); }
 })();
