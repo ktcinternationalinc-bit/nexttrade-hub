@@ -33,16 +33,68 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
-    version: 'v55.83-OJ',
-    date: '2026-09-25',
-    label: 'Open Balances screen · Leaderboard in EGP + drill-down · release backfill USA-only',
+    version: 'v55.83-OO',
+    date: '2026-10-11',
+    label: 'P&L: dated product costs \u2192 real profit per invoice and period',
     items: [
-      '**💰 New screen: Accounting → Open Balances.** Every invoice with money still owed — customer, release, dates, total, paid, balance, days overdue — biggest balance first. **Late invoices are highlighted light orange**, exactly as you specified, with an overdue count and overdue amount up top.',
-      '**📅 One-tap periods: 1 month · 3 months · 6 months · This year · 2025 · All history — plus custom from/to dates.** Opens on the last 3 months automatically. CSV button for chasing.',
-      '**🏆 The Sales-Rep Leaderboard now reads in EGP, not USD.** The numbers were always your Egyptian pound figures — they were just wearing the wrong label. An invoice with no currency marked now counts as EGP (the Hub’s home currency), so the leaderboard stops inventing a fake “USD” column. A real foreign-currency invoice still shows in its own currency.',
-      '**👆 Click any rep’s row to see exactly what the numbers are built from.** A new drop-down opens under the row listing every invoice behind it — invoice number, customer, date, invoiced, collected, still outstanding, and status. The rows add up to the totals on the line, so nothing is a mystery.',
-      '**🇺🇸 “Load invoices without release #” now shows only USA (accounting) invoices.** Egyptian EGP orders never carry a release number, so they no longer clutter the backfill list or inflate the “missing” count. You only see the invoices that are actually supposed to get a release number.',
-      { superAdminOnly: true, text: 'v55.83-OJ — NO SQL. MERGED build (Open Balances + Leaderboard/backfill). (A) Route action open_balances (Owner/Admin branch): DB-side balance_due>0.009 + invoice_date range, verified columns only, customers via company_name||contact_name, rows sorted by balance desc capped 500, server totals {count,total_open,overdue_count,overdue_open}. New OpenBalancesTab.jsx: preset chips (30/90/183d, 2026-01-01, 2025 full, all) + custom + Go, auto-load 90d on mount, overdue rowStyle #ffedd5/#431407 (contrast rule), zebra otherwise, sticky header, BOM CSV. AccountingTab: sub \'balances\' after recon. NOT DONE: staff access via AR permission (Owner/Admin only for now — say the word), click-through to the invoice, aging buckets (30/60/90). (B) SalesRepDashboard.normalizeCurrency(c, base) defaults blank currency to base (‘EGP’, overridable via baseCurrency prop, now in the useMemo deps) instead of ‘USD’; per-rep×currency buckets retain raw invoices[] and each row expands into a drill-down sub-table (colSpan 10). (C) reconcile/nexttrade list_missing dropped the `invoices` (sales) query — accounting_invoices only, total_missing = USA only; backfill placeholder corrected to “filter by invoice #”. Tests: OJ addendum 5 + NP1(OJ) + A6/H1 currency guards; runner all green.' },
+      '**\ud83d\udcca New screen: Accounting \u2192 P&L.** Revenue \u2212 cost of goods = profit, per product and per invoice, for any period (default June 1, 2026 \u2192; one-tap Last month \u00b7 3 months \u00b7 6 months \u00b7 This year \u00b7 2025 \u00b7 All \u00b7 custom). Headline cards: Revenue \u00b7 COGS \u00b7 Gross profit \u00b7 Margin % \u00b7 Shipping (separate) \u00b7 Uncosted revenue.',
+      '**\ud83d\udcb2 Costs are DATED, exactly as you specified.** Open \ud83d\udcb2 Product costs (inside the P&L screen), and every product ever sold is listed \u2014 enter its cost per unit AND the date it took effect. Changing a cost later adds a NEW dated row: invoices from that date use the new cost, older invoices keep the old one, and each product\'s full cost history is one click away. Nothing is ever overwritten.',
+      '**\u26a0\ufe0f No guessing, ever.** A product with no cost on an invoice\'s date shows as UNCOSTED \u2014 its revenue is visible but kept out of the margin, with an amber list telling you exactly which products to cost (and why). Shipping lines stay out of COGS; non-USD invoices stay out of the USD P&L.',
+      '**\ud83d\udd10 Two new special permissions, grantable in Settings \u2192 Permissions:** \u201cP&L: View\u201d (see profits) and \u201cP&L: Edit Product Costs\u201d (enter costs) \u2014 separate on purpose, both off for everyone until you grant them. Super admin has both automatically.',
+      { superAdminOnly: true, text: 'v55.83-OO \u2014 NEEDS SQL: sql/v55-83-OO-product-costs.sql (product_costs: product_key+effective_from UNIQUE, 4 RLS, idempotent). New lib src/lib/product-cost.js (normalizeProductKey lower+single-space, pickCost = latest effective_from <= invoice_date else null, groupCosts) \u2014 FUNCTIONALLY tested incl. the change-date boundary (invoice ON the effective date takes the new cost) and pre-cost null. Route /api/accounting/pnl: set_cost/delete_cost behind pnl.edit_costs (upsert onConflict product_key,effective_from \u2014 append-only history), list_costs/report behind pnl.view; report = live USD invoices in period, per-line pickCost by invoice_date, costed vs uncosted revenue split, margin on costed revenue only, shipping regex EN+AR excluded from COGS, by-product (avg price/avg cost/profit/margin) + by-invoice + uncosted_products with reasons + non_usd. PnLTab under Accounting (sub pnl), cost editor toggle (edit perm only), history expand, amber uncosted banners; SettingsTab catalog += pnl.view / pnl.edit_costs. Schema-truth: product_costs in OURS, pnl route in scope. Test OO: 6 functional + 12 structural; runner 120/120. NOT DONE (said plainly): costs here are STANDARD costs per product \u2014 not FIFO landed-cost from inventory layers; wiring P&L to actual inventory receipt costs is the bigger follow-up if wanted.' },
+    ],
+  },
+  {
+    version: 'v55.83-ON',
+    date: '2026-10-11',
+    label: 'Sales Report: what sold, to whom, at what average price \u2014 shipping separate',
+    items: [
+      '**\ud83d\udcc8 New screen: Accounting \u2192 Sales Report.** Default period: June 1, 2026 onward \u2014 one-tap Last month \u00b7 Last 3 months \u00b7 This year \u00b7 2025 \u00b7 All history, plus custom dates. Four headline cards: Product sales \u00b7 Shipping (separate) \u00b7 Grand total \u00b7 Invoices & line items.',
+      '**\ud83e\uddf5 By product:** every product sold in the period \u2014 quantity, revenue, AVERAGE PRICE (revenue \u00f7 quantity, never faked when quantity is zero), and how many invoices it appeared on. Biggest seller first. CSV.',
+      '**\ud83d\udc65 By customer:** each customer\'s product revenue, quantity, shipping charged, and invoice count \u2014 and clicking a customer expands exactly which products they bought and at what average price. CSV.',
+      '**\ud83d\ude9a Shipping is split out by line name** (shipping/freight/delivery, English and Arabic) so product revenue stays clean. **\ud83d\udcb1 Non-USD invoices are listed separately** in their own currency \u2014 never silently added into the USD numbers.',
+      { superAdminOnly: true, text: 'v55.83-ON \u2014 NO SQL. New route /api/accounting/sales-report (cloned scaffolding: admin client, fetchAll, assertPermission ar.view_invoice_balances). Live invoices only (record_status filter \u2014 proven by dashboard code), period on invoice_date; items select invoice_id/description/quantity/unit_price/wave_product_name (proven by blankItem); product key = wave_product_name||description; SHIPPING_RX /ship|freight|delivery|courier|\u0634\u062d\u0646|\u062a\u0648\u0635\u064a\u0644/i on the NAME; aggregates products/customers/customer\u00d7product with avg=rev/qty (null@qty0); non-USD bucketed per currency, excluded from USD tables. SalesReportTab under Accounting (sub sales_report), expandable customer rows, 2 CSVs. Schema-truth: file added to scope, accounting_invoice_items whitelist entry + record_status/currency added (all cited to working code). New required test ON (10 assertions); runner 119/119.' },
+    ],
+  },
+  {
+    version: 'v55.83-OM',
+    date: '2026-10-11',
+    label: 'Dashboard: pick your period, click any number to see its invoices',
+    items: [
+      '**\ud83d\udcc5 The Accounting Dashboard now has a period bar \u2014 default: June 1, 2026 onward.** One-tap: Jun 1 \u2192 \u00b7 This year \u00b7 2025 \u00b7 2024 \u00b7 All history \u2014 plus custom from/to dates with Apply. Every number in Receivables, Upcoming due, and Overdue aging recomputes for the period you pick.',
+      '**\ud83d\udc46 Every card is now clickable.** Open AR, Overdue AR, Customer credits, Approvals pending, each Due bucket, and each Overdue-aging bucket (1\u201330 \u00b7 31\u201360 \u00b7 61\u201390 \u00b7 90+ days late) opens the actual invoice list behind that number \u2014 invoice, customer, dates, total, paid, balance, days \u2014 with a CSV button. Click the card, see the money.',
+      '**\ud83d\udca1 Customer credits, explained where you click it:** invoices where the customer paid MORE than the invoice total \u2014 money owed back to them or applied to their next invoice. It is not receivables, which is why it sits in its own card.',
+      { superAdminOnly: true, text: 'v55.83-OM \u2014 NO SQL. AccountingDashboard: pFrom/pTo state (default 2026-06-01/\'\'), load(silent,pf,pt) filters arInv by invoice_date (blank bounds unbounded) so A/B/C + credits + custBalances + nonUsd all scope; approvals stay all-time (labelled); creditRows + approvalRows collected; du/odBucket return rows; Stat gains onClick (cursor+ring+hint, per-permission gated seeTotals/seeUpcoming/seeOverdue); DrillPanel white table (number/customer/dates/total/paid/balance/days, late in rose, credits negative in violet) + BOM CSV + Close, rendered under section A; period chips + custom + Apply reload silently. Env note: container reset \u2014 rebuilt from the OL output zip + fresh npm install (no cached node_modules anymore). New required test test-v55-83-om (10 assertions) registered. Runner + next build gates below. DEPLOY NOTE: user screenshot shows v55.83-OJ live \u2014 this zip also carries OK (Open Balances AR permission) and OL (force unmatch for Wave-pushed payments).' },
+    ],
+  },
+  {
+    version: 'v55.83-OL',
+    date: '2026-09-25',
+    label: 'Bank matching: the Wave-pushed lock now has a proper exit',
+    items: [
+      '**\ud83d\udd13 The \u201ccan\'t change anything after saving\u201d dead end is fixed.** What was happening: once a payment had been PUSHED TO WAVE, the Hub deliberately locked it \u2014 unmatch refused, re-split refused, and flipping the status to Unreviewed touched no money \u2014 to stop the Hub and Wave from disagreeing. Correct instinct, but it left the accountant with no way forward inside the Hub.',
+      '**\u21a9\ufe0f Now: press Unmatch on a pushed payment \u2192 confirm \u201cUnmatch anyway\u201d \u2192 the Hub reverses everything on its side** (payments voided, invoice balances restored, splits cleared, deposit reopened as Unreviewed) **and shows the exact payment(s) to delete inside Wave** \u2014 invoice, amount, Wave payment id. Delete those in Wave and both systems agree again. Then match, re-match, or split the deposit fresh, and push \u2014 the full old-Wave workflow, with the safety kept.',
+      '**\u2139\ufe0f Not-pushed payments were never locked:** unmatch \u2192 re-match \u2192 split has worked and continues unchanged. The lock only ever applied after a Wave push.',
+      { superAdminOnly: true, text: 'v55.83-OL \u2014 NO SQL. Root cause of the accountant\'s report: pushed payments (wave_payment_id/synced/manual_done) 409 on unmatch + live-payment 409 on save_splits + set_status not touching money = closed loop. NEW bank-write action force_unmatch_wave (payments.match): voids accounting_invoice_payments (sync_status needs_wave_reversal, wave_payment_id preserved) + payment_matches, deletes splits, voids credits/unapplied parks, recompute per invoice, txn \u2192 unreviewed; returns wave_reversal_needed[{invoice, amount, wave_payment_id}]. Plain unmatch 409 message now names the exit (wave_pushed:true). BankReviewTab unmatch catch: on that error \u2192 window.confirm \u2192 force call \u2192 alert checklist + toast. NI6 realigned (force clause tested on full file; un slice unchanged otherwise). Runner all green, exits unmasked.' },
+    ],
+  },
+  {
+    version: 'v55.83-OK',
+    date: '2026-09-25',
+    label: 'Open Balances access = one checkbox: AR View Invoice Balances',
+    items: [
+      '**\ud83d\udd11 Staff access to Open Balances is now one grant:** Settings \u2192 Permissions \u2192 pick the person \u2192 turn on **AR: View Invoice Balances**. That single checkbox opens the Open Balances screen \u2014 the same grant that already governs invoice-balance answers in AI Reports and checks, so one switch controls all of it consistently. Anyone without it gets told exactly which permission to ask for. Super admin needs nothing, as always.',
+      { superAdminOnly: true, text: 'v55.83-OK \u2014 NO SQL. open_balances moved off requireAdmin onto assertPermission(db,userId,ar.view_invoice_balances,req) \u2014 the same ladder as AI Reports list_invoices/list_checks; refusal message names the grant + Settings path. set_release/list_missing stay open-to-team (OI), import/report/flag stay Owner/Admin. OK addendum 3 assertions; runner all green, exits checked unmasked.' },
+    ],
+  },
+  {
+    version: 'v55.83-OJ',
+    date: '2026-09-24',
+    label: 'Accounting \u2192 \ud83d\udcb0 Open Balances \u2014 who owes what, overdue in orange',
+    items: [
+      '**\ud83d\udcb0 New screen: Accounting \u2192 Open Balances.** Every invoice with money still owed \u2014 customer, release, dates, total, paid, balance, days overdue \u2014 biggest balance first. **Late invoices are highlighted light orange**, exactly as you specified, with an overdue count and overdue amount up top.',
+      '**\ud83d\udcc5 One-tap periods: 1 month \u00b7 3 months \u00b7 6 months \u00b7 This year \u00b7 2025 \u00b7 All history \u2014 plus custom from/to dates.** Opens on the last 3 months automatically. CSV button for chasing.',
+      { superAdminOnly: true, text: 'v55.83-OJ \u2014 NO SQL. Route action open_balances (Owner/Admin branch): DB-side balance_due>0.009 + invoice_date range, verified columns only, customers via company_name||contact_name, rows sorted by balance desc capped 500, server totals {count,total_open,overdue_count,overdue_open}. New OpenBalancesTab.jsx: preset chips (30/90/183d, 2026-01-01, 2025 full, all) + custom + Go, auto-load 90d on mount, overdue rowStyle #ffedd5/#431407 (contrast rule), zebra otherwise, sticky header, BOM CSV. AccountingTab: sub \'balances\' after recon. OJ addendum 5 assertions; runner all green. NOT DONE: staff access via AR permission (Owner/Admin only for now \u2014 say the word), click-through to the invoice, aging buckets (30/60/90).' },
     ],
   },
   {

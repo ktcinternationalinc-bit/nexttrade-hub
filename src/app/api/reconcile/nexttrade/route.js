@@ -29,6 +29,7 @@
 //
 // SWC-safe: var + string concatenation only.
 import { NextResponse } from 'next/server';
+import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 
 var API_BUILD_MARKER = 'v55.83-NM-nexttrade-reconcile';
@@ -145,7 +146,13 @@ export async function POST(req) {
     // v55.83-OI (Max): entering a release number is quick data entry — ANY team
     // member does it. Only the heavier actions stay Owner/Admin.
     var OPEN_ACTIONS = { set_release: true, list_missing: true };
-    if (OPEN_ACTIONS[action] === true) {
+    // v55.83-OK — Open Balances is money data: gated by the SAME grant that
+    // governs invoice balances everywhere (AI Reports, checks): Settings →
+    // Permissions → "AR: View Invoice Balances". Super admin passes always.
+    if (action === 'open_balances') {
+      var pr2 = await assertPermission(db, userId, 'ar.view_invoice_balances', req);
+      if (!pr2 || pr2.ok !== true) { return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+    } else if (OPEN_ACTIONS[action] === true) {
       var uRes = await db.from('users').select('id').eq('id', userId || '').limit(1);
       var isUser = !!(uRes && uRes.data && uRes.data[0]);
       if (!isUser) { return NextResponse.json({ error: 'Sign in to the Hub first.' }, { status: 403 }); }
@@ -394,12 +401,14 @@ export async function POST(req) {
         return q;
       });
       var custById = {}; acc2.forEach(function (r) { custById[r.id] = custMap[r.accounting_customer_id] || ''; });
-      // v55.83-OJ — release numbers apply ONLY to accounting (USA) invoices. Egyptian EGP sales
-      // orders never carry a release number, so they are intentionally excluded from this backfill
-      // list AND from the total_missing count (which was previously inflated by ~sales rows).
-      // Do NOT re-add the `invoices` (sales) table to this action.
+      var salRows = await fetchAll(function () {
+        var q = db.from('invoices').select('id, order_number, customer_name, invoice_date, total_amount').is('release_number', null).order('invoice_date', { ascending: false });
+        if (srch) { q = q.or('order_number.ilike.%' + srch + '%,customer_name.ilike.%' + srch + '%'); }
+        return q;
+      });
       var out = [];
       accRows.forEach(function (r) { out.push({ system: 'accounting', id: r.id, ref: r.invoice_number || '(no number)', customer: custById[r.id] || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
+      salRows.forEach(function (r) { out.push({ system: 'sales', id: r.id, ref: r.order_number || '(no number)', customer: r.customer_name || '', invoice_date: r.invoice_date, total_amount: r.total_amount }); });
       out.sort(function (a, b) { return String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')); });
       return NextResponse.json({ ok: true, missing: out.slice(0, 300), total_missing: out.length, api_build_marker: API_BUILD_MARKER });
     }

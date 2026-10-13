@@ -465,6 +465,8 @@ const ACTION_PERMS = [
   { key: 'ar.view_summary',             label: 'AR: View Company Summary',       desc: 'See company-wide Accounts Receivable totals on the dashboard (total owed). Separate from seeing individual invoice balances.' },
   { key: 'ar.view_customer_balances',   label: 'AR: View Customer Balances',     desc: 'See how much each customer owes across all their invoices (top customer balances).' },
   { key: 'ar.view_invoice_balances',    label: 'AR: View Invoice Balances',      desc: 'See the balance due on individual invoices (needed by payment matchers). Does NOT reveal company-wide totals.' },
+  { key: 'pnl.view',                    label: 'P&L: View',                      desc: 'See profit & loss — revenue, cost of goods, margins per product and per invoice. Sensitive: reveals costs.' },
+  { key: 'pnl.edit_costs',              label: 'P&L: Edit Product Costs',        desc: 'Enter and change product costs (with effective-from dates). The most sensitive accounting grant.' },
   { key: 'ar.view_upcoming_due',        label: 'AR: View Upcoming Due',          desc: 'See the upcoming-due buckets (due now / 1-30 / 31-60 / 61-90 days) on the dashboard. Separate from the overall AR summary.' },
   { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },
   { key: 'ar.manage_overdue_dashboard', label: 'AR: Manage Overdue',            desc: 'Ignore / un-ignore invoices on the overdue dashboard (writes to the invoice). Separate from just viewing overdue.' },

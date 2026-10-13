@@ -11,6 +11,8 @@ import AccountingCustomersTab from './AccountingCustomersTab';
 import AccountingInvoicesTab from './AccountingInvoicesTab';
 import NexttradeReconciliation from './NexttradeReconciliation';
 import OpenBalancesTab from './OpenBalancesTab';
+import SalesReportTab from './SalesReportTab';
+import PnLTab from './PnLTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
 
@@ -36,6 +38,8 @@ export default function AccountingTab(props) {
     ['invoices', '🧾 Invoices'],
     ['recon', '🔎 Order Reconciliation'], // v55.83-NV — moved from Admin: it is accounting work
     ['balances', '💰 Open Balances'], // v55.83-OJ — who owes what, overdue in orange
+    ['sales_report', '📈 Sales Report'], // v55.83-ON — by product + customer, avg price, shipping separate
+    ['pnl', '📊 P&L'], // v55.83-OO — effective-dated costs, profit per product/invoice, own permissions
     ['proformas', '📄 Proformas'],
     ['purchaseorders', '📦 Purchase Orders'],
     ['review', '🏦 Bank Review & Matching'],
@@ -72,6 +76,8 @@ export default function AccountingTab(props) {
       {sub === 'invoices' && <AccountingInvoicesTab key={'acct-inv|' + waveKey} {...props} defaultMode="invoices" />}
       {sub === 'recon' && <NexttradeReconciliation {...props} />}
       {sub === 'balances' && <OpenBalancesTab {...props} />}
+      {sub === 'sales_report' && <SalesReportTab {...props} />}
+      {sub === 'pnl' && <PnLTab {...props} />}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}

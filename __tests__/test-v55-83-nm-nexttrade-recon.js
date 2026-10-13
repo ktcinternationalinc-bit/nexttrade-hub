@@ -219,13 +219,9 @@ if (failures.length) {
   var f = [];
   function okP(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
 
-  // v55.83-OJ — release numbers apply ONLY to accounting (USA) invoices; Egyptian EGP sales orders never
-  // carry one, so list_missing now lists accounting invoices only (the sales query was removed). This guard
-  // asserts the sales query (salRows) is gone from the route, so it can't silently creep back.
-  okP('NP1 (OJ): list_missing lists ACCOUNTING (USA) invoices only — no release # — searchable; sales query removed',
+  okP('NP1: list_missing returns invoices with NO release number from BOTH systems, newest first, searchable',
     /action === 'list_missing'/.test(rt2) && /\.is\('release_number', null\)/.test(rt2) &&
-    /system: 'accounting'/.test(rt2) && !/var salRows/.test(rt2) &&
-    /release numbers apply ONLY to accounting/.test(rt2) && /total_missing/.test(rt2));
+    /system: 'accounting'/.test(rt2) && /system: 'sales'/.test(rt2) && /total_missing/.test(rt2));
   okP('NP2: set_release saves inline per invoice, format-checked, empty clears, wrong id honest 404',
     /action === 'set_release'/.test(rt2) && /Release format looks wrong/.test(rt2) &&
     /release_number: rn \|\| null/.test(rt2) && /Invoice not found\./.test(rt2));
@@ -602,4 +598,51 @@ if (failures.length) {
     /useEffect\(function \(\) \{ load\(agoDays\(90\), ''\); \}, \[\]\);/.test(cj));
   if (f.length) { console.log('OJ FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OJ ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OK ADDENDUM — Open Balances access = the AR invoice-balances
+// grant (one checkbox), same ladder as everywhere else.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fk = require('fs'); var pk = require('path');
+  var rk = fk.readFileSync(pk.join(__dirname, '..', 'src/app/api/reconcile/nexttrade/route.js'), 'utf8');
+  var f = [];
+  function okK(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okK('OK1: open_balances is gated by ar.view_invoice_balances via the proven assertPermission ladder',
+    /assertPermission\(db, userId, 'ar\.view_invoice_balances', req\)/.test(rk) &&
+    /import \{ assertPermission \} from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/server-permissions';/.test(rk));
+  okK('OK2: a refusal names the exact grant and where to set it',
+    /"AR: View Invoice Balances" permission — grant it in Settings → Permissions\./.test(rk));
+  okK('OK3: set_release/list_missing stay open to any team member; the rest stays Owner/Admin',
+    /OPEN_ACTIONS = \{ set_release: true, list_missing: true \}/.test(rk) &&
+    /Owner\/Admin only\./.test(rk));
+  if (f.length) { console.log('OK FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OK ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OL ADDENDUM — the Wave-pushed dead end (accountant's report):
+// pushed payments locked the deposit with no exit inside the Hub.
+// force_unmatch_wave reverses locally + hands the exact Wave to-do list.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fl = require('fs'); var pl = require('path');
+  var rl = fl.readFileSync(pl.join(__dirname, '..', 'src/app/api/accounting/bank-write/route.js'), 'utf8');
+  var cl = fl.readFileSync(pl.join(__dirname, '..', 'src/components/BankReviewTab.jsx'), 'utf8');
+  var f = [];
+  function okL(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okL('OL1: force_unmatch_wave exists behind payments.match, reverses payments/matches/splits/credits and recomputes every touched invoice',
+    /action === 'force_unmatch_wave'/.test(rl) && /force_unmatch_wave' \|\| action === 'save_splits'/.test(rl) &&
+    /sync_status: 'needs_wave_reversal'/.test(rl) && /await recompute\(db, fik\[fw\]\);/.test(rl));
+  okL('OL2: it returns the EXACT Wave payments to delete (invoice, amount, wave payment id) and reopens the deposit',
+    /wave_reversal_needed: waveTodo/.test(rl) && /review_status: 'unreviewed'/.test(rl) &&
+    /Now delete these payment\(s\) inside Wave/.test(rl));
+  okL('OL3: the plain unmatch 409 now names the way out instead of a dead end',
+    /Use "Unmatch anyway" to reverse it here/.test(rl) && /wave_pushed: true/.test(rl));
+  okL('OL4: the screen offers Unmatch-anyway on that exact error, confirms first, and shows the Wave checklist',
+    /Unmatch anyway\? The Hub will reverse it here/.test(cl) && /force_unmatch_wave/.test(cl) &&
+    /NOW DELETE THESE PAYMENT\(S\) INSIDE WAVE/.test(cl));
+  if (f.length) { console.log('OL FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OL ADDENDUM CHECKS PASSED'); }
 })();

@@ -32,8 +32,9 @@
     /deposit 271758/.test(un) && /leaves a lie on screen/.test(un));
   okN('NI5: split removal count is reported to the caller',
     /splits_removed: unSplits/.test(un));
-  okN('NI6: Wave-synced payments still block unmatch entirely (guard unchanged)',
-    /already pushed to Wave — reverse it in Wave/.test(un));
+  okN('NI6 (OL): plain unmatch still blocks Wave-synced payments — now naming the deliberate exit (force_unmatch_wave) instead of a dead end',
+    /already pushed to Wave/.test(un) && /Use "Unmatch anyway" to reverse it here/.test(un) &&
+    /action === 'force_unmatch_wave'/.test(bw));
   okN('NI7: recompute still runs for every affected invoice (guard unchanged)',
     /for \(w = 0; w < ik\.length; w\+\+\) \{ await recompute\(db, ik\[w\]\); \}/.test(un));
 

@@ -671,7 +671,29 @@ export default function BankReviewTab(props) {
     // every affected invoice, and unlinks the bank txn — atomically, RLS-proof.
     bankWrite('unmatch', { bank_transaction_id: t.id, wave_business_id: t.wave_business_id || getActiveWaveBusiness() || null })
       .then(function () { toast.success('Unmatched — invoice balance restored'); onReload(); load(); setSel(null); })
-      .catch(function (e) { console.error('[unmatch]', e); toast.error('Unmatch failed: ' + ((e && e.message) || 'unknown error') + ' — screenshot for Claude.'); })
+      .catch(function (e) {
+        var msg = (e && e.message) || 'unknown error';
+        // v55.83-OL — the Wave-pushed dead end gets a real exit: reverse here,
+        // then a checklist of the exact payments to delete inside Wave.
+        if (msg.indexOf('already pushed to Wave') > -1) {
+          var go = window.confirm('This payment was already pushed to Wave.\n\nUnmatch anyway? The Hub will reverse it here (invoice balances restored, deposit reopened) and show you the exact payment(s) you must then delete inside Wave.');
+          if (!go) { toast.error('Unmatch cancelled.'); return; }
+          bankWrite('force_unmatch_wave', { bank_transaction_id: t.id, wave_business_id: t.wave_business_id || getActiveWaveBusiness() || null })
+            .then(function (j) {
+              var todo = (j && j.wave_reversal_needed) || [];
+              if (todo.length) {
+                var lines = todo.map(function (w) { return '• Invoice ' + w.invoice + ' — ' + w.amount + ' (Wave payment: ' + w.wave_payment_id + ')'; });
+                window.alert('Unmatched here. NOW DELETE THESE PAYMENT(S) INSIDE WAVE:\n\n' + lines.join('\n') + '\n\nUntil you do, Wave shows this money as paid and the Hub does not.');
+              }
+              toast.success('Unmatched — invoice balances restored. ' + (todo.length ? todo.length + ' payment(s) to delete in Wave.' : ''));
+              onReload(); load(); setSel(null);
+            })
+            .catch(function (e2) { toast.error('Unmatch anyway failed: ' + ((e2 && e2.message) || 'unknown') + ' — screenshot for Claude.'); })
+            .finally(function () { setBusy(false); });
+          return;
+        }
+        console.error('[unmatch]', e); toast.error('Unmatch failed: ' + msg + ' — screenshot for Claude.');
+      })
       .finally(function () { setBusy(false); });
   }
 

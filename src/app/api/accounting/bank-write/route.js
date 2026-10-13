@@ -120,7 +120,7 @@ export async function POST(req) {
 
     // Permission per action. v55.83-JJ — split-save and park-unapplied allocate money, so they need
     // payments.match (same as match/unmatch/status), per Codex's launch-safe rule.
-    var permKey = (action === 'match_invoice' || action === 'unmatch' || action === 'save_splits' || action === 'create_unapplied' || action === 'update_match' || action === 'mark_review_duplicates') ? 'payments.match'
+    var permKey = (action === 'match_invoice' || action === 'unmatch' || action === 'force_unmatch_wave' || action === 'save_splits' || action === 'create_unapplied' || action === 'update_match' || action === 'mark_review_duplicates') ? 'payments.match'
       : (action === 'set_status' ? 'payments.match' : 'bank.classify');
     var gate = await assertPermission(db, by, permKey, req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
@@ -508,6 +508,47 @@ export async function POST(req) {
     }
 
     // ── unmatch: reverse a match (re-categorize / delete) ──
+    if (action === 'force_unmatch_wave') {
+      // v55.83-OL (accountant's dead end) — a Wave-pushed deposit was fully
+      // locked in the Hub: unmatch 409'd, re-split 409'd on live payments, and
+      // set_status touched no money. This is the exit: reverse EVERYTHING
+      // locally (payments, matches, splits, credits, invoice recompute, back
+      // to unreviewed) and hand back the exact Wave payments to delete by
+      // hand, stamped needs_wave_reversal so nothing desyncs silently.
+      var fbid = body.bank_transaction_id;
+      if (!fbid) { return NextResponse.json({ ok: false, error: 'bank_transaction_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var fPayR = await db.from('accounting_invoice_payments').select('id, accounting_invoice_id, amount, wave_payment_id, sync_status, voided').eq('bank_transaction_id', fbid);
+      if (fPayR && fPayR.error) { return NextResponse.json({ ok: false, error: fPayR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var fRows = (fPayR && fPayR.data) || []; var fk;
+      var waveTodo = []; var fInvIds = {};
+      var invNumMap = {};
+      try {
+        var fInvList = [];
+        for (fk = 0; fk < fRows.length; fk++) { if (fRows[fk].accounting_invoice_id) { fInvList.push(fRows[fk].accounting_invoice_id); } }
+        if (fInvList.length) {
+          var fInvR = await db.from('accounting_invoices').select('id, invoice_number').in('id', fInvList);
+          ((fInvR && fInvR.data) || []).forEach(function (x) { invNumMap[x.id] = x.invoice_number; });
+        }
+      } catch (eN3) {}
+      for (fk = 0; fk < fRows.length; fk++) {
+        var fp = fRows[fk];
+        if (isPaymentVoid(fp)) { continue; }
+        if (fp.accounting_invoice_id) { fInvIds[fp.accounting_invoice_id] = true; }
+        if (fp.wave_payment_id || fp.sync_status === 'synced' || fp.sync_status === 'manual_done') {
+          waveTodo.push({ invoice: invNumMap[fp.accounting_invoice_id] || fp.accounting_invoice_id, amount: fp.amount, wave_payment_id: fp.wave_payment_id || '(pushed manually)' });
+        }
+      }
+      await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'needs_wave_reversal' }).eq('bank_transaction_id', fbid);
+      await db.from('payment_matches').update({ voided: true }).eq('bank_transaction_id', fbid);
+      try { await db.from('customer_credits').update({ status: 'void' }).eq('source_transaction_id', fbid).eq('status', 'open'); } catch (eC4) {}
+      try { await db.from('bank_transaction_splits').delete().eq('bank_transaction_id', fbid); } catch (eS4) {}
+      try { await db.from('unapplied_deposits').update({ status: 'void' }).eq('bank_transaction_id', fbid).eq('status', 'open'); } catch (eU4) {}
+      var fik = Object.keys(fInvIds); var fw;
+      for (fw = 0; fw < fik.length; fw++) { await recompute(db, fik[fw]); }
+      await db.from('bank_transactions').update({ linked_type: null, linked_id: null, matched_invoice_id: null, review_status: 'unreviewed', reviewed_by: null, reviewed_at: null, updated_by: by }).eq('id', fbid);
+      return NextResponse.json({ ok: true, unmatched_invoices: fik.length, wave_reversal_needed: waveTodo, note: waveTodo.length ? 'Now delete these payment(s) inside Wave — the Hub has already reversed them here.' : 'Nothing was pushed to Wave — fully reversed here.', api_build_marker: API_BUILD_MARKER });
+    }
+
     if (action === 'unmatch') {
       var bid = body.bank_transaction_id;
       if (!bid) { return NextResponse.json({ ok: false, error: 'bank_transaction_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -524,7 +565,7 @@ export async function POST(req) {
       var payRows = await db.from('accounting_invoice_payments').select('id, accounting_invoice_id, wave_payment_id, sync_status, voided').eq('bank_transaction_id', bid);
       if (payRows && payRows.error) { return NextResponse.json({ ok: false, error: payRows.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var pr = (payRows && payRows.data) || []; var k;
-      for (k = 0; k < pr.length; k++) { if (pr[k] && !isPaymentVoid(pr[k]) && (pr[k].wave_payment_id || pr[k].sync_status === 'synced' || pr[k].sync_status === 'manual_done')) { return NextResponse.json({ ok: false, error: 'This payment was already pushed to Wave — reverse it in Wave, do not unmatch locally.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); } }
+      for (k = 0; k < pr.length; k++) { if (pr[k] && !isPaymentVoid(pr[k]) && (pr[k].wave_payment_id || pr[k].sync_status === 'synced' || pr[k].sync_status === 'manual_done')) { return NextResponse.json({ ok: false, error: 'This payment was already pushed to Wave. Use "Unmatch anyway" to reverse it here — you will get the exact list of payments to delete in Wave.', wave_pushed: true, api_build_marker: API_BUILD_MARKER }, { status: 409 }); } }
       var invIds = {};
       for (k = 0; k < pr.length; k++) { if (pr[k] && pr[k].accounting_invoice_id) { invIds[pr[k].accounting_invoice_id] = true; } }
       await db.from('accounting_invoice_payments').update({ voided: true, sync_status: 'void' }).eq('bank_transaction_id', bid);

@@ -53,6 +53,11 @@ export default function AccountingDashboard(props) {
   var [busy, setBusy] = useState(false);
   var [viewing, setViewing] = useState(null);
   var [viewItems, setViewItems] = useState([]);
+  // v55.83-OM (Max): period-scoped dashboard. Default = June 1, 2026 onward;
+  // presets + custom dates; every card clicks through to its invoices.
+  var [pFrom, setPFrom] = useState('2026-06-01');
+  var [pTo, setPTo] = useState('');
+  var [drill, setDrill] = useState(null); // { title, note, rows }
 
   function daysUntil(due, today) {
     if (!due) return 0;
@@ -62,7 +67,9 @@ export default function AccountingDashboard(props) {
   // v55.83-HB — load(silent): silent refresh keeps the current dashboard on screen
   // (sets `refreshing` instead of the full-screen `loading`), so a manual Refresh or a
   // silo switch doesn't blank the view.
-  function load(silent) {
+  function load(silent, pf, pt) {
+    if (pf === undefined) { pf = pFrom; }
+    if (pt === undefined) { pt = pTo; }
     if (silent) { setRefreshing(true); } else { setLoading(true); }
     var today = new Date().toISOString().substring(0, 10);
     Promise.all([
@@ -113,9 +120,17 @@ export default function AccountingDashboard(props) {
       function isLive(i) { var st = i.record_status; return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'; }
       function paidOf(i) { return r2((Number(i.wave_imported_paid) || 0) + (payByInv[i.id] || 0)); }
       function openOf(i) { return r2((Number(i.total_amount) || 0) - (Number(i.wave_imported_paid) || 0) - (payByInv[i.id] || 0)); }
-      var arInv = inv.filter(function (i) { return isArEligible(i); });
+      // v55.83-OM — the period scopes everything in sections A/B/C by invoice_date.
+      // Blank from = beginning of time, blank to = today and beyond.
+      var arInv = inv.filter(function (i) {
+        if (!isArEligible(i)) { return false; }
+        var idt = i.invoice_date || '';
+        if (pf && idt && idt < pf) { return false; }
+        if (pt && idt && idt > pt) { return false; }
+        return true;
+      });
 
-      var overdueRows = [], currentRows = [];
+      var overdueRows = [], currentRows = [], creditRows = [];
       var openTotal = 0, openCount = 0, creditTotal = 0;
       var balByCust = {};
       var nonUsd = {};   // currency code -> { open native, count } — kept separate, never summed into USD
@@ -126,7 +141,11 @@ export default function AccountingDashboard(props) {
           if (Math.abs(ob) > 0.005) { if (!nonUsd[cur]) { nonUsd[cur] = { open: 0, count: 0 }; } nonUsd[cur].open += ob; nonUsd[cur].count += 1; }
           return;
         }
-        if (ob < -0.005) { creditTotal += (-ob); return; }
+        if (ob < -0.005) {
+          creditTotal += (-ob);
+          creditRows.push({ id: i.id, num: i.invoice_number, cust: custName[i.accounting_customer_id] || '(unknown)', inv_date: i.invoice_date || '', due_date: i.due_date || '', total: r2(i.total_amount), paid: paidOf(i), balance: ob, du: 0, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
+          return;
+        }
         if (ob <= 0.005) return;
         openTotal += ob; openCount += 1;
         balByCust[i.accounting_customer_id] = (balByCust[i.accounting_customer_id] || 0) + ob;
@@ -147,7 +166,9 @@ export default function AccountingDashboard(props) {
         .sort(function (a, b) { return b.bal - a.bal; }).slice(0, 8);
 
       var unmatched = txns.filter(function (t) { return (t.review_status || 'unreviewed') === 'unreviewed'; });
-      var pendingApproval = inv.filter(function (i) { return isLive(i) && i.approval_status === 'internal_review'; });
+      var pendingApprovalRows = inv.filter(function (i) { return isLive(i) && i.approval_status === 'internal_review'; })
+        .map(function (i) { return { id: i.id, num: i.invoice_number, cust: custName[i.accounting_customer_id] || '(unknown)', inv_date: i.invoice_date || '', due_date: i.due_date || '', total: r2(i.total_amount), paid: 0, balance: r2(i.total_amount), du: 0, source: i.source === 'wave_import' ? 'Wave' : 'Hub' }; });
+      var pendingApproval = pendingApprovalRows;
 
       // Wave sync counts (from invoice wave_sync_status)
       var ws = { pending: 0, failed: 0, conflict: 0, synced: 0 };
@@ -170,14 +191,14 @@ export default function AccountingDashboard(props) {
       setD({
         openTotal: r2(openTotal), openCount: openCount, creditTotal: r2(creditTotal),
         overdueRows: overdueRows, currentRows: currentRows, custBalances: custBalances,
-        unmatchedCount: unmatched.length, pendingApproval: pendingApproval.length,
+        unmatchedCount: unmatched.length, pendingApproval: pendingApproval.length, approvalRows: pendingApprovalRows, creditRows: creditRows.sort(function (a, b) { return a.balance - b.balance; }),
         paidTodayTotal: r2(paidTodayTotal), paidTodayCount: paidTodayCount, paidTodayDefaultScoped: !!defAcctD,
         nonUsd: nonUsdList,
         ws: ws, lastLog: lastLog, activity: activity, diag: diag
       });
     }).catch(function (e) { console.error('[acctdash]', e); }).finally(function () { setLoading(false); setRefreshing(false); setLastLoaded(new Date()); });
   }
-  useEffect(function () { if (anyAccess) load(); else setLoading(false); }, []);
+  useEffect(function () { if (anyAccess) load(false, '2026-06-01', ''); else setLoading(false); }, []);
 
   function toggleIgnore(row, ignore) {
     if (busy) return;
@@ -206,20 +227,76 @@ export default function AccountingDashboard(props) {
   // overdue filter: default hide <$200 and ignored; toggle shows all
   var shownOverdue = showSmall ? d.overdueRows : d.overdueRows.filter(function (r) { return !r.ignored && r.balance >= OVERDUE_MIN; });
   var overdueTotal = r2(shownOverdue.reduce(function (a, r) { return a + r.balance; }, 0));
-  function odBucket(rows, lo, hi) { var f = rows.filter(function (r) { var o = -r.du; return o >= lo && (hi == null || o <= hi); }); return { t: r2(f.reduce(function (a, r) { return a + r.balance; }, 0)), c: f.length }; }
-  function duBucket(rows, lo, hi) { var f = rows.filter(function (r) { return r.du >= lo && (hi == null || r.du <= hi); }); return { t: r2(f.reduce(function (a, r) { return a + r.balance; }, 0)), c: f.length }; }
+  function odBucket(rows, lo, hi) { var f = rows.filter(function (r) { var o = -r.du; return o >= lo && (hi == null || o <= hi); }); return { t: r2(f.reduce(function (a, r) { return a + r.balance; }, 0)), c: f.length, rows: f }; }
+  function duBucket(rows, lo, hi) { var f = rows.filter(function (r) { return r.du >= lo && (hi == null || r.du <= hi); }); return { t: r2(f.reduce(function (a, r) { return a + r.balance; }, 0)), c: f.length, rows: f }; }
   var nowB = duBucket(d.currentRows, 0, 0), d30 = duBucket(d.currentRows, 1, 30), d60 = duBucket(d.currentRows, 31, 60), d90 = duBucket(d.currentRows, 61, 90);
   var o30 = odBucket(shownOverdue, 1, 30), o60 = odBucket(shownOverdue, 31, 60), o90 = odBucket(shownOverdue, 61, 90), o90p = odBucket(shownOverdue, 91, null);
 
   function Stat(p) {
     return (
-      <div className={'rounded-lg p-3 ' + (p.tone || 'bg-slate-800')}>
-        <div className="text-[10px] font-bold text-slate-300 uppercase tracking-wide">{p.title}</div>
+      <div onClick={p.onClick || null} title={p.onClick ? 'Click to see the invoices behind this number' : undefined}
+        className={'rounded-lg p-3 ' + (p.tone || 'bg-slate-800') + (p.onClick ? ' cursor-pointer hover:ring-2 hover:ring-sky-400' : '')}>
+        <div className="text-[10px] font-bold text-slate-300 uppercase tracking-wide">{p.title}{p.onClick ? ' ▸' : ''}</div>
         <div className="text-lg font-extrabold text-white mt-0.5">{p.big}</div>
         {p.sub ? <div className="text-[10px] text-slate-300 mt-0.5">{p.sub}</div> : null}
       </div>
     );
   }
+  // v55.83-OM — drill-down: the invoice list behind whichever card was clicked.
+  function openDrill(title, rows, note) { setDrill({ title: title, rows: rows || [], note: note || '' }); }
+  function drillCsv() {
+    if (!drill || !drill.rows.length) { return; }
+    var cols = ['num', 'cust', 'inv_date', 'due_date', 'total', 'paid', 'balance', 'du', 'source'];
+    var lines = ['invoice,customer,invoice_date,due_date,total,paid,balance,days_to_due,source'];
+    drill.rows.forEach(function (r) { lines.push(cols.map(function (c) { return '"' + String(r[c] == null ? '' : r[c]).replace(/"/g, '""') + '"'; }).join(',')); });
+    var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (drill.title || 'drill').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.csv'; a.click();
+  }
+  function DrillPanel() {
+    if (!drill) { return null; }
+    return (
+      <div className="mt-3 bg-white text-slate-900 rounded-lg p-3 border-2 border-sky-400">
+        <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+          <div className="text-sm font-extrabold">{drill.title} — {drill.rows.length} invoice(s)</div>
+          <div className="flex gap-2">
+            <button onClick={drillCsv} className="text-[10px] bg-slate-800 text-white rounded px-2 py-1 font-bold">⬇ CSV</button>
+            <button onClick={function () { setDrill(null); }} className="text-[10px] bg-slate-500 text-white rounded px-2 py-1 font-bold">✕ Close</button>
+          </div>
+        </div>
+        {drill.note ? <div className="text-[11px] text-slate-600 mb-2">{drill.note}</div> : null}
+        {drill.rows.length === 0 ? <div className="text-xs text-slate-500 italic">Nothing in this bucket for the selected period.</div> : (
+          <div style={{ overflowX: 'auto' }}><div style={{ minWidth: '720px' }}>
+            <div className="grid text-[11px] font-extrabold text-slate-600 border-b border-slate-200" style={{ gridTemplateColumns: '110px 1fr 84px 84px 84px 84px 90px 60px' }}>
+              <div className="py-1">Number</div><div className="py-1">Customer</div><div className="py-1">Inv date</div><div className="py-1">Due date</div><div className="py-1 text-right">Total</div><div className="py-1 text-right">Paid</div><div className="py-1 text-right">Balance</div><div className="py-1 text-right">Days</div>
+            </div>
+            <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
+              {drill.rows.map(function (t) {
+                return (
+                  <div key={t.id} className="grid text-[11px] border-b border-slate-100 last:border-0 items-center" style={{ gridTemplateColumns: '110px 1fr 84px 84px 84px 84px 90px 60px' }}>
+                    <div className="py-1 font-mono font-bold">{t.num || '—'}</div>
+                    <div className="py-1 truncate">{t.cust}</div>
+                    <div className="py-1">{t.inv_date || '—'}</div>
+                    <div className="py-1">{t.due_date || '—'}</div>
+                    <div className="py-1 text-right font-mono">{fmt(t.total)}</div>
+                    <div className="py-1 text-right font-mono">{fmt(t.paid)}</div>
+                    <div className={'py-1 text-right font-mono font-bold ' + (t.balance < 0 ? 'text-violet-700' : t.du < 0 ? 'text-rose-700' : '')}>{fmt(t.balance)}</div>
+                    <div className={'py-1 text-right font-bold ' + (t.du < 0 ? 'text-rose-700' : 'text-slate-600')}>{t.du < 0 ? (-t.du + ' late') : t.du}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div></div>
+        )}
+      </div>
+    );
+  }
+  var PRESETS_OM = [
+    ['Jun 1 →', '2026-06-01', ''],
+    ['This year', '2026-01-01', ''],
+    ['2025', '2025-01-01', '2025-12-31'],
+    ['2024', '2024-01-01', '2024-12-31'],
+    ['All history', '', '']
+  ];
   function Section(p) { return <div className="mt-5"><div className="text-sm font-extrabold text-slate-100 mb-2">{p.title}</div>{p.children}</div>; }
 
   return (
@@ -233,14 +310,34 @@ export default function AccountingDashboard(props) {
         </div>
       </div>
 
+      {/* v55.83-OM — period selector: default June 1 2026 onward; one-tap + custom. */}
+      <div className="flex gap-2 items-center flex-wrap mt-3 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2">
+        <span className="text-[11px] font-extrabold text-slate-200">Period:</span>
+        {PRESETS_OM.map(function (ps) {
+          var active = pFrom === ps[1] && pTo === ps[2];
+          return <button key={ps[0]} disabled={refreshing} onClick={function () { setPFrom(ps[1]); setPTo(ps[2]); setDrill(null); load(true, ps[1], ps[2]); }}
+            className={'px-2 py-1 rounded text-[10px] font-extrabold ' + (active ? 'bg-sky-500 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600')}>{ps[0]}</button>;
+        })}
+        <span className="text-[10px] font-bold text-slate-400 ml-1">custom:</span>
+        <input type="date" value={pFrom} onChange={function (e) { setPFrom(e.target.value); }} className="px-2 py-1 rounded border border-slate-600 bg-slate-900 text-slate-100 text-xs" />
+        <input type="date" value={pTo} onChange={function (e) { setPTo(e.target.value); }} className="px-2 py-1 rounded border border-slate-600 bg-slate-900 text-slate-100 text-xs" />
+        <button disabled={refreshing} onClick={function () { setDrill(null); load(true, pFrom, pTo); }} className="px-3 py-1 rounded text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-500 text-white">Apply</button>
+        <span className="text-[10px] text-slate-400">showing invoices dated {pFrom || 'the beginning'} → {pTo || 'today'} · click any card to see its invoices</span>
+      </div>
+
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · drafts excluded') : ''} tone="bg-slate-800" />
-          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'} />
-          <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'} />
-          <Stat title="Approvals pending" big={seeTotals ? d.pendingApproval : 'Restricted'} sub={seeTotals ? 'invoices in review' : ''} tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'} />
+          <Stat title="Open AR (USD)" big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · drafts excluded') : ''} tone="bg-slate-800"
+            onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed (current + overdue).'); } : null} />
+          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
+            onClick={seeTotals ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
+          <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'}
+            onClick={seeTotals ? function () { openDrill('Customer credits', d.creditRows || [], 'Invoices where the customer PAID MORE than the invoice total — money owed back to them or applied to their next invoice. Negative balance = the credit amount.'); } : null} />
+          <Stat title="Approvals pending" big={seeTotals ? d.pendingApproval : 'Restricted'} sub={seeTotals ? 'invoices in review (all time)' : ''} tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'}
+            onClick={seeTotals ? function () { openDrill('Approvals pending', d.approvalRows || [], 'Hub invoices sitting in internal review, waiting to be approved and pushed. Not period-scoped.'); } : null} />
         </div>
+        <DrillPanel />
         {d.nonUsd && d.nonUsd.length > 0 && (
           <div className="mt-2">
             <div className="text-[11px] font-bold text-amber-300 mb-1">Receivables in other currencies (shown separately — never added to USD):</div>
@@ -255,10 +352,10 @@ export default function AccountingDashboard(props) {
       {/* B — Upcoming Due */}
       <Section title="B · Upcoming due (not overdue)">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-          <Stat title="Due now" big={tdue(nowB.t)} sub={seeUpcoming ? (nowB.c + ' invoice(s)') : ''} tone="bg-slate-800" />
-          <Stat title="Due in 1–30 days" big={tdue(d30.t)} sub={seeUpcoming ? (d30.c + ' invoice(s)') : ''} tone="bg-slate-800" />
-          <Stat title="Due in 31–60 days" big={tdue(d60.t)} sub={seeUpcoming ? (d60.c + ' invoice(s)') : ''} tone="bg-slate-800" />
-          <Stat title="Due in 61–90 days" big={tdue(d90.t)} sub={seeUpcoming ? (d90.c + ' invoice(s)') : ''} tone="bg-slate-800" />
+          <Stat title="Due now" big={tdue(nowB.t)} sub={seeUpcoming ? (nowB.c + ' invoice(s)') : ''} tone="bg-slate-800" onClick={seeUpcoming ? function () { openDrill('Due now (today)', nowB.rows, 'On time — due today, not yet late.'); } : null} />
+          <Stat title="Due in 1–30 days" big={tdue(d30.t)} sub={seeUpcoming ? (d30.c + ' invoice(s)') : ''} tone="bg-slate-800" onClick={seeUpcoming ? function () { openDrill('Due in 1–30 days', d30.rows, 'On time — due within the next 30 days.'); } : null} />
+          <Stat title="Due in 31–60 days" big={tdue(d60.t)} sub={seeUpcoming ? (d60.c + ' invoice(s)') : ''} tone="bg-slate-800" onClick={seeUpcoming ? function () { openDrill('Due in 31–60 days', d60.rows, 'On time — due in 31–60 days.'); } : null} />
+          <Stat title="Due in 61–90 days" big={tdue(d90.t)} sub={seeUpcoming ? (d90.c + ' invoice(s)') : ''} tone="bg-slate-800" onClick={seeUpcoming ? function () { openDrill('Due in 61–90 days', d90.rows, 'On time — due in 61–90 days.'); } : null} />
         </div>
       </Section>
 
@@ -266,10 +363,10 @@ export default function AccountingDashboard(props) {
       <Section title="C · Overdue aging">
         <div className="flex items-center justify-between mb-2">
           <div className="grid gap-2 flex-1" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
-            <Stat title="Overdue 1–30" big={tover(o30.t)} sub={seeOverdue ? (o30.c + ' inv') : ''} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 31–60" big={tover(o60.t)} sub={seeOverdue ? (o60.c + ' inv') : ''} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 61–90" big={tover(o90.t)} sub={seeOverdue ? (o90.c + ' inv') : ''} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} />
-            <Stat title="Overdue 90+" big={tover(o90p.t)} sub={seeOverdue ? (o90p.c + ' inv') : ''} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} />
+            <Stat title="Overdue 1–30" big={tover(o30.t)} sub={seeOverdue ? (o30.c + ' inv') : ''} tone={o30.t ? 'bg-rose-900' : 'bg-slate-800'} onClick={seeOverdue ? function () { openDrill('Overdue 1–30 days late', o30.rows, '1 to 30 days past the due date.'); } : null} />
+            <Stat title="Overdue 31–60" big={tover(o60.t)} sub={seeOverdue ? (o60.c + ' inv') : ''} tone={o60.t ? 'bg-rose-900' : 'bg-slate-800'} onClick={seeOverdue ? function () { openDrill('Overdue 31–60 days late', o60.rows, '31 to 60 days past the due date.'); } : null} />
+            <Stat title="Overdue 61–90" big={tover(o90.t)} sub={seeOverdue ? (o90.c + ' inv') : ''} tone={o90.t ? 'bg-rose-900' : 'bg-slate-800'} onClick={seeOverdue ? function () { openDrill('Overdue 61–90 days late', o90.rows, '61 to 90 days past the due date.'); } : null} />
+            <Stat title="Overdue 90+" big={tover(o90p.t)} sub={seeOverdue ? (o90p.c + ' inv') : ''} tone={o90p.t ? 'bg-rose-950' : 'bg-slate-800'} onClick={seeOverdue ? function () { openDrill('Overdue 90+ days late', o90p.rows, 'More than 90 days past the due date.'); } : null} />
           </div>
         </div>
         {seeOverdue && (

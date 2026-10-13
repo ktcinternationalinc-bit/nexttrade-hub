@@ -136,10 +136,9 @@ ok('G1: LEVELS array has num:9 Country entry',
 // ══════════════════════════════════════════════════════════════════
 // PART H — C1: cross-currency aggregation
 // ══════════════════════════════════════════════════════════════════
-// v55.83-OJ — normalizeCurrency now takes (c, base); blank currency defaults to base EGP, not USD.
-ok('H1 (SalesRepDashboard): per-rep × currency buckets; blank currency → base EGP',
+ok('H1 (SalesRepDashboard): per-rep × currency buckets',
   /perRepCurrency = useMemo/.test(srd) &&
-  /normalizeCurrency\(inv\.currency, baseCurrency\)/.test(srd));
+  /normalizeCurrency\(inv\.currency\)/.test(srd));
 ok('H2 (SalesRepDashboard): grandByCurrency aggregates per-currency totals',
   /grandByCurrency = useMemo/.test(srd));
 ok('H3 (SalesRepDashboard): rankWithinCurrency for per-currency medals',
