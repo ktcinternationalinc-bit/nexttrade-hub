@@ -372,7 +372,7 @@ export default function AccountingDashboard(props) {
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
-          <Stat title={'Open AR (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · drafts excluded') : ''} tone="bg-slate-800"
+          <Stat title={'Open AR (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · every entered invoice counts') : ''} tone="bg-slate-800"
             onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed (current + overdue).'); } : null} />
           <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' recorded payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
             onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'Payments RECORDED in the Hub with a payment date inside this period, for this business. Wave-imported lifetime paid amounts carry no per-payment dates, so they cannot appear here — this card shows Hub-recorded payments.'); } : null} />

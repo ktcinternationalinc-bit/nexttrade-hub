@@ -32,9 +32,9 @@ ok('OQ6: it shows EVERYTHING live — paid, partial, unpaid, drafts, credits —
 ok('OQ7: Hub-entered invoices count whether pushed to Wave or not — push status is DISPLAY ONLY (In Wave column), never a filter',
   /in_wave: !!i\.wave_invoice_id/.test(bk) && /nothing hidden/.test(bk) &&
   !/wave_invoice_id\) \{ return; \}/.test(bk) && !/wave_sync_status[^,]*\) \{ return; \}/.test(bk));
-ok('OQ8: paid = wave_imported_paid + non-void Hub payments (the proven formula); drafts and other-currency rows excluded from money totals but counted and listed (OR)',
+ok('OQ8 (OT): paid = wave_imported_paid + non-void Hub payments; totals include drafts (entered = real), other-currency rows still listed-only',
   /Number\(i\.wave_imported_paid\) \|\| 0\) \+ \(payByInv\[i\.id\] \|\| 0\)/.test(bk) &&
-  /if \(!isDraft && rowCur === activeCur\) \{ tInvoiced/.test(bk) && /entered, not approved yet/.test(bk));
+  /if \(rowCur === activeCur\) \{ tInvoiced/.test(bk) && /entered, not approved yet/.test(bk));
 ok('OQ9: period defaults June 1 2026 → with presets + custom; CSV includes status, source and in-Wave',
   /useState\('2026-06-01'\)/.test(bk) && /'All history'/.test(bk) && /in_wave \? 'yes' : 'no'/.test(bk));
 ok('OQ10: permission-gated via the proven AR invoice-balances helper',
@@ -114,4 +114,37 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
     /if \(!isInvoice\(\)\) \{ return true; \}/.test(inv) && /bizFilter === 'ALL'/.test(inv));
   if (f.length) { console.log('OS FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OS ADDENDUM CHECKS PASSED'); }
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OT ADDENDUM — Max, Oct 14: 65 of 75 US invoices were invisible on
+// the dashboard (approved-only AR rule vs his draft-based workflow), and
+// Egyptian test customers with Wave linkage sat in the US book.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var ft = require('fs'); var pt4 = require('path');
+  function r4(rel) { return ft.readFileSync(pt4.join(__dirname, '..', rel), 'utf8'); }
+  var el = r4('src/lib/ar-eligibility.js');
+  var dash4 = r4('src/components/AccountingDashboard.jsx');
+  var bk4 = r4('src/components/BusinessBooksTab.jsx');
+  var sq4 = r4('sql/v55-83-OT-egypt-customers.sql');
+  var f = [];
+  function okT4(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okT4('OT1: Hub-entered invoices count toward AR regardless of approval status (Max\'s rule, quoted in the lib)',
+    /return true;\s*\/\/ Hub-created: entered = counts/.test(el) &&
+    /ALL invoices that have been/.test(el) && !/approval_status === 'approved';\s*\/\/ Hub-created: must be approved/.test(el));
+  okT4('OT2: dead record statuses and true Wave drafts are still excluded (the guard that matters stays)',
+    /rs === 'void' \|\| rs === 'cancelled' \|\| rs === 'archived' \|\| rs === 'deleted'/.test(el) &&
+    /return ws !== 'DRAFT';/.test(el));
+  okT4('OT3: the dashboard no longer claims drafts are excluded',
+    /every entered invoice counts/.test(dash4) && !/drafts excluded/.test(dash4));
+  okT4('OT4: All Invoices money totals include drafts; the DRAFT chip is information only',
+    /drafts are REAL invoices/.test(bk4) && /if \(rowCur === activeCur\) \{ tInvoiced/.test(bk4) &&
+    /drafts counted — entered = real/.test(bk4));
+  okT4('OT5: the Egyptian-side customers from Max\'s CSV are tagged by SQL (override beats Wave linkage), SAAD EGYPT deliberately not among them',
+    /ILIKE 'Adel Saeed'/.test(sq4) && /ILIKE 'Ahmed Abdel Hafiz'/.test(sq4) && /ILIKE 'ABU FASIF'/.test(sq4) &&
+    /ILIKE 'A K TRADERS'/.test(sq4) && /ILIKE '1 is 3 Company Limited'/.test(sq4) &&
+    !/SAAD EGYPT'/.test(sq4) && /SAAD EGYPT is NOT here/.test(sq4));
+  if (f.length) { console.log('OT FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OT ADDENDUM CHECKS PASSED'); }
 })();

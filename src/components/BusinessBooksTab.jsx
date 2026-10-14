@@ -74,8 +74,9 @@ export default function BusinessBooksTab(props) {
     var paid = r2((Number(i.wave_imported_paid) || 0) + (payByInv[i.id] || 0));
     var bal = r2(total - paid);
     var isDraft = i.wave_status ? i.wave_status === 'DRAFT' : i.approval_status !== 'approved';
+    if (isDraft) { cDraft += 1; }
     var st;
-    if (isDraft) { st = 'DRAFT'; cDraft += 1; }
+    if (isDraft && Math.abs(bal - total) < 0.005 && paid < 0.005 && bal > 0.005) { st = 'DRAFT'; cOpen += 1; }
     else if (bal < -0.005) { st = 'CREDIT'; cCredit += 1; }
     else if (bal <= 0.005) { st = 'PAID'; cPaid += 1; }
     else if (paid > 0.005) { st = 'PARTIAL'; cOpen += 1; }
@@ -83,7 +84,9 @@ export default function BusinessBooksTab(props) {
     var rowCur = i.currency || 'USD';
     // Money cards stay single-currency (the book's main currency); invoices in
     // another currency are listed with their own symbol and counted separately.
-    if (!isDraft && rowCur === activeCur) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
+    // v55.83-OT (Max): drafts are REAL invoices — entered = counted. The
+    // DRAFT chip remains as information only.
+    if (rowCur === activeCur) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
     if (rowCur !== activeCur) { otherCurCount += 1; }
     rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, cur: rowCur, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
   });
@@ -140,7 +143,7 @@ export default function BusinessBooksTab(props) {
         <button onClick={csv} className="ml-auto px-2 py-1 rounded text-[10px] font-bold bg-slate-800 text-white">⬇ CSV</button>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
-        <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Invoiced ({activeCur})</div><div className="text-lg font-black">{fmt(tInvoiced)}</div><div className="text-[9px]">drafts not counted</div></div>
+        <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Invoiced ({activeCur})</div><div className="text-lg font-black">{fmt(tInvoiced)}</div><div className="text-[9px]">drafts counted — entered = real</div></div>
         <div className="rounded-lg p-2" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Paid in period</div><div className="text-lg font-black">{fmt(paidInPeriod)}</div><div className="text-[9px]">recorded payments</div></div>
         <div className="rounded-lg p-2" style={{ background: tOpen ? '#fee2e2' : '#dcfce7', color: tOpen ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Still open</div><div className="text-lg font-black">{fmt(tOpen)}</div></div>
         <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Closed · Open</div><div className="text-lg font-black">{cPaid} · {cOpen}</div>{cCredit ? <div className="text-[9px]">+ {cCredit} overpaid</div> : null}</div>

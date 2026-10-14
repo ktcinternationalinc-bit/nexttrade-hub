@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OT',
+    date: '2026-10-14',
+    label: 'Entered = it counts. And the Egyptian test customers leave the US book.',
+    items: [
+      '**\ud83d\udcc8 The dashboard was hiding 65 of your 75 US invoices.** Root cause: the old rule said only APPROVED invoices count toward receivables \u2014 but your real invoices live as drafts (the approval flow is optional in your practice). Per your rule, \u201centered in the KTC systems = it counts\u201d: the dashboard, Open Balances and All Invoices now count every live Hub-entered invoice, approved or not, pushed to Wave or not. Void/cancelled/archived stay out, as they should.',
+      '**\ud83c\uddea\ud83c\uddec The Egyptian-side customers you saw in the US book (Adel Saeed, Ahmed Abdel Hafiz, ABU FASIF, A K TRADERS, 1 is 3 Company, test)** were there because their test entries carry Wave linkage in the data \u2014 the system was told they were Wave-bound. The OT SQL tags those exact customers as Egypt in one shot; the tag overrides Wave linkage, so ALL their invoices leave the US side the moment you run it. (SAAD EGYPT stays \u2014 AMERICA 1608 is a real US Wave invoice despite the name.)',
+      { superAdminOnly: true, text: 'v55.83-OT \u2014 NEEDS SQL: sql/v55-83-OT-egypt-customers.sql (tags the six named customers from Max\'s own US-book CSV + re-runs the OR EGP seed; idempotent; verification lists all egypt-tagged customers). isArEligible: Hub-created branch returns true (Max\'s quote in the lib); record_status guard + Wave-DRAFT exclusion unchanged \u2014 ripples to dashboard/aging/customer balances/Customer AR History by design (single source of truth). Dashboard sub-label updated; BusinessBooksTab totals include drafts (DRAFT chip = open+unpaid info only, cOpen counts them). Tests: OT addendum 5 assertions, OQ8 realigned; runner all green. NOTE for Max: dtest/j999/\u201cdeposit freiman\u201d-style test invoices should be VOIDED in the Hub \u2014 voiding removes them from every book; tagging only moves them to Egypt.' },
+    ],
+  },
+  {
     version: 'v55.83-OS',
     date: '2026-10-13',
     label: 'The US side = Wave only. Your rule, applied everywhere.',

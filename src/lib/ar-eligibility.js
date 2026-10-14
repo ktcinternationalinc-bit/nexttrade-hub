@@ -16,7 +16,12 @@ export function isArEligible(inv) {
   if (rs === 'void' || rs === 'cancelled' || rs === 'archived' || rs === 'deleted') { return false; }
   var ws = inv.wave_status;
   if (ws) { return ws !== 'DRAFT'; }            // Wave invoice: only true drafts excluded
-  return inv.approval_status === 'approved';      // Hub-created: must be approved
+  // v55.83-OT (Max, Oct 14): "these should include ALL invoices that have been
+  // entered in the KTC systems, whether they have been pushed to wave or not."
+  // His team's real invoices live as approval_status=draft (the approval flow
+  // is optional in practice) — 65 of 75 US invoices were invisible on the
+  // dashboard because of the old approved-only rule. Hub-entered = it counts.
+  return true;                                    // Hub-created: entered = counts
 }
 
 export function arCurrencyOf(inv) { return (inv && inv.currency) || 'USD'; }
