@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeProductKey, pickCost, groupCosts } from '../../../../lib/product-cost';
+import { businessOfInvoice } from '../../../../lib/business-of';
 
 var API_BUILD_MARKER = 'v55.83-OO-pnl';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -106,17 +107,20 @@ export async function POST(req) {
     if (action === 'report') {
       var df = body.date_from || null; var dt = body.date_to || null;
       var inv = await fetchAll(function () {
-        var q = db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, record_status, currency').order('invoice_date', { ascending: false });
+        var q = db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, record_status, currency, source, wave_invoice_id, wave_business_id').order('invoice_date', { ascending: false });
         if (df) { q = q.gte('invoice_date', df); }
         if (dt) { q = q.lte('invoice_date', dt); }
         return q;
       });
       inv = inv.filter(isLiveInvoice);
-      var custMap = {};
+      var custMap = {}; var custTag = {};
       try {
-        var cs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
-        cs.forEach(function (c) { custMap[c.id] = c.company_name || c.contact_name || ''; });
+        var cs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag'); });
+        cs.forEach(function (c) { custMap[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { custTag[c.id] = c.business_tag; } });
       } catch (eC) {}
+      // v55.83-OV — P&L is per BUSINESS (US default), same shared rule.
+      var bizSel = body.business === 'EG' ? 'EG' : 'US';
+      inv = inv.filter(function (i) { return businessOfInvoice(i, custTag) === bizSel; });
       var invById = {}; var usdIds = {}; var nonUsdAgg = {};
       inv.forEach(function (i) {
         invById[i.id] = i;

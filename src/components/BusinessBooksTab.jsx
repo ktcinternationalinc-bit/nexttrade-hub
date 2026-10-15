@@ -84,9 +84,11 @@ export default function BusinessBooksTab(props) {
     var rowCur = i.currency || 'USD';
     // Money cards stay single-currency (the book's main currency); invoices in
     // another currency are listed with their own symbol and counted separately.
-    // v55.83-OT (Max): drafts are REAL invoices — entered = counted. The
-    // DRAFT chip remains as information only.
-    if (rowCur === activeCur) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
+    // v55.83-OT (Max): Hub drafts are REAL invoices — entered = counted.
+    // v55.83-OV: true WAVE drafts (unapproved inside Wave) stay out of money
+    // totals, matching the dashboard's isArEligible — listed with chip only.
+    var isWaveDraft = i.wave_status === 'DRAFT';
+    if (rowCur === activeCur && !isWaveDraft) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
     if (rowCur !== activeCur) { otherCurCount += 1; }
     rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, cur: rowCur, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
   });

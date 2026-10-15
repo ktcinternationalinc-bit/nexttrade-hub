@@ -14,7 +14,7 @@ function read(rel) { return fs.readFileSync(path.join(__dirname, '..', rel), 'ut
 // Proven-by-working-code column lists (source noted per table).
 var VERIFIED = {
   invoices: ['id', 'order_number', 'customer_name', 'customer_name_en', 'customer_id', 'invoice_date', 'total_amount', 'total_collected', 'outstanding', 'sales_rep', 'release_number'], // /api/ask L1299 + page.jsx sales + NO SQL
-  accounting_invoices: ['id', 'invoice_number', 'release_number', 'accounting_customer_id', 'invoice_date', 'due_date', 'notes', 'terms', 'total_amount', 'amount_paid', 'balance_due', 'payment_status', 'approval_status', 'po_so_number', 'record_status', 'currency', 'wave_imported_paid', 'wave_business_id', 'business_id', 'source', 'created_by', 'updated_by'], // AccountingInvoicesTab payload + recompute
+  accounting_invoices: ['id', 'invoice_number', 'release_number', 'accounting_customer_id', 'invoice_date', 'due_date', 'notes', 'terms', 'total_amount', 'amount_paid', 'balance_due', 'payment_status', 'approval_status', 'po_so_number', 'record_status', 'currency', 'wave_status', 'wave_invoice_id', 'wave_business_id', 'wave_imported_paid', 'wave_business_id', 'business_id', 'source', 'created_by', 'updated_by'], // AccountingInvoicesTab payload + recompute
   treasury: ['transaction_date', 'description', 'cash_in', 'cash_out', 'order_number', 'category', 'subcategory'], // /api/ask L1300
   checks: ['check_number', 'customer_name', 'amount', 'check_date', 'collection_date', 'status', 'bank_name', 'order_number'], // /api/ask L1312
   users: ['id', 'name', 'email', 'role', 'is_ai', 'job_title'], // loadUserPermissions + SettingsTab profile editor
@@ -22,7 +22,7 @@ var VERIFIED = {
   ticket_comments: ['ticket_id', 'created_by', 'created_at', 'is_system', 'comment_text'], // TicketsTab
   user_sessions: ['user_id', 'date', 'login_at', 'logout_at', 'last_seen'], // AdminTab/DailyLog/LoginHistoryV2
   accounting_invoice_items: ['invoice_id', 'description', 'quantity', 'unit_price', 'sku', 'product_ref', 'wave_product_id', 'wave_product_name', 'sort_order'], // blankItem() + openView order — the invoice form writes exactly these
-  accounting_customers: ['id', 'company_name', 'contact_name', 'wave_customer_id', 'wave_business_id'] // push-invoice-v2 L78 select + custName (company_name || contact_name) — 'name' was a GUESS that contaminated this list; never again
+  accounting_customers: ['id', 'company_name', 'contact_name', 'wave_customer_id', 'wave_business_id', 'business_tag'] // push-invoice-v2 L78 select + custName; business_tag created by OR SQL; wave_status/wave_invoice_id on invoices written by import-invoices fields — all cited, never guessed
 };
 // Our own tables (created by our SQL) are trusted:
 var OURS = { nexttrade_orders: true, hr_performance_reviews: true, shipments: true, inventory_layers: true, invoice_items: true, product_costs: true };

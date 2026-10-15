@@ -30,6 +30,7 @@
 // SWC-safe: var + string concatenation only.
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { businessOfInvoice } from '../../../../lib/business-of';
 import { createClient } from '@supabase/supabase-js';
 
 var API_BUILD_MARKER = 'v55.83-NM-nexttrade-reconcile';
@@ -51,6 +52,7 @@ async function fetchAll(buildQ) {
   return out;
 }
 function norm(x) { return String(x == null ? '' : x).toUpperCase().replace(/\s+/g, '').trim(); }
+function r2OB(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function toIso(d) {
   // site format MM-DD-YYYY -> YYYY-MM-DD; tolerate already-ISO and '-'
   var s = String(d || '').trim();
@@ -207,24 +209,39 @@ export async function POST(req) {
       });
       var acctInv = await fetchAll(function () {
         // v55.83-NX — accounting_invoices has payment_status + approval_status, NO 'status' (the NW guess 42703'd the report)
-        return db.from('accounting_invoices').select('invoice_number, release_number, po_so_number, accounting_customer_id, invoice_date, due_date, total_amount, amount_paid, balance_due, payment_status');
+        return db.from('accounting_invoices').select('id, invoice_number, release_number, po_so_number, accounting_customer_id, invoice_date, due_date, total_amount, wave_imported_paid, record_status, wave_status, currency, source, wave_invoice_id, wave_business_id');
       });
-      var custMapR = {}; var custLookupNote = '';
+      var custMapR = {}; var custLookupNote = ''; var custTagR = {};
       try {
         // v55.83-OF — accounting_customers has company_name + contact_name, NO 'name'
         // (custName in AccountingInvoicesTab is the proof). The old select 42703'd
         // silently and blanked every customer on the report.
-        var custR = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
-        custR.forEach(function (c) { custMapR[c.id] = c.company_name || c.contact_name || ''; });
+        var custR = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag'); });
+        custR.forEach(function (c) { custMapR[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { custTagR[c.id] = c.business_tag; } });
         custLookupNote = custR.length ? ('customer names: ' + custR.length + ' loaded') : 'customer names: accounting_customers came back EMPTY';
       } catch (eCM) { custLookupNote = 'customer names FAILED: ' + ((eCM && eCM.message) || 'unknown'); }
+      // v55.83-OV — canonical paid map (non-void Hub payments) so the standing
+      // open-balance list can never disagree with the dashboard.
+      var payByR = {};
+      try {
+        var prR = await fetchAll(function () { return db.from('accounting_invoice_payments').select('accounting_invoice_id, amount, voided, sync_status'); });
+        prR.forEach(function (pp) { if (pp.voided === true || pp.sync_status === 'void') { return; } payByR[pp.accounting_invoice_id] = (payByR[pp.accounting_invoice_id] || 0) + (Number(pp.amount) || 0); });
+      } catch (ePR) {}
       // v55.83-NW/NY (Max): invoices with no payment / open balance stay flagged
       // until paid — a STANDING list, recomputed live every run, SCOPED to the
       // reconciliation period.
       var todayISO = new Date().toISOString().substring(0, 10);
       var unpaid = [];
       acctInv.forEach(function (v) {
-        var bal = Number(v.balance_due) || 0;
+        // v55.83-OV — same canon as the dashboard: live only, no Wave drafts,
+        // US business only (NextTrade deals are the US side), balance computed
+        // from payments — never the stale balance_due column.
+        var rsv = v.record_status;
+        if (rsv === 'void' || rsv === 'cancelled' || rsv === 'archived' || rsv === 'deleted') { return; }
+        if (v.wave_status === 'DRAFT') { return; }
+        if (businessOfInvoice(v, custTagR) !== 'US') { return; }
+        var paidC = r2OB((Number(v.wave_imported_paid) || 0) + (payByR[v.id] || 0));
+        var bal = r2OB((Number(v.total_amount) || 0) - paidC);
         if (bal <= 0.009) { return; }
         if (df && v.invoice_date && v.invoice_date < df) { return; }
         if (dt && v.invoice_date && v.invoice_date > dt) { return; }
@@ -232,7 +249,7 @@ export async function POST(req) {
         if (v.due_date && v.due_date < todayISO) { od = Math.round((new Date(todayISO) - new Date(v.due_date)) / 86400000); }
         var custShow = custMapR[v.accounting_customer_id] || '';
         var relShow = v.release_number || v.po_so_number || '';
-        unpaid.push({ invoice: v.invoice_number, customer: custShow, release: relShow, invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: v.amount_paid != null ? Number(v.amount_paid) : 0, balance_due: bal, days_overdue: od, overdue: od > 0 });
+        unpaid.push({ invoice: v.invoice_number, customer: custShow, release: relShow, invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: paidC, balance_due: bal, days_overdue: od, overdue: od > 0 });
       });
       unpaid.sort(function (a, b) { return b.balance_due - a.balance_due; });
 
@@ -310,23 +327,44 @@ export async function POST(req) {
     if (action === 'open_balances') {
       // v55.83-OJ (Max): dedicated Accounting view — who owes what, period-
       // scoped, overdue called out. Same trusted fields as the report.
+      // v55.83-OV — ONE CANON with the dashboard: live invoices only (no
+      // void/cancelled/archived/deleted, no true Wave drafts), balance computed
+      // from total − wave_imported_paid − non-void Hub payments (never the
+      // stale balance_due column), split by business (US default, EG option).
       var df2 = body.date_from || null; var dt2 = body.date_to || null;
+      var biz2 = body.business === 'EG' ? 'EG' : 'US';
       var inv2 = await fetchAll(function () {
-        var q = db.from('accounting_invoices').select('invoice_number, release_number, po_so_number, accounting_customer_id, invoice_date, due_date, total_amount, amount_paid, balance_due, payment_status').gt('balance_due', 0.009).order('invoice_date', { ascending: false });
+        var q = db.from('accounting_invoices').select('invoice_number, release_number, po_so_number, accounting_customer_id, invoice_date, due_date, total_amount, wave_imported_paid, record_status, wave_status, currency, source, wave_invoice_id, wave_business_id, id').order('invoice_date', { ascending: false });
         if (df2) { q = q.gte('invoice_date', df2); }
         if (dt2) { q = q.lte('invoice_date', dt2); }
         return q;
       });
-      var cm2 = {};
+      var cm2 = {}; var tag2 = {};
       try {
-        var cr2 = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name'); });
-        cr2.forEach(function (c) { cm2[c.id] = c.company_name || c.contact_name || ''; });
+        var cr2 = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag'); });
+        cr2.forEach(function (c) { cm2[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { tag2[c.id] = c.business_tag; } });
       } catch (eC3) {}
+      var payBy2 = {};
+      try {
+        var pr3 = await fetchAll(function () { return db.from('accounting_invoice_payments').select('accounting_invoice_id, amount, voided, sync_status'); });
+        pr3.forEach(function (pp) {
+          if (pp.voided === true || pp.sync_status === 'void') { return; }
+          payBy2[pp.accounting_invoice_id] = (payBy2[pp.accounting_invoice_id] || 0) + (Number(pp.amount) || 0);
+        });
+      } catch (eP3) {}
       var tISO = new Date().toISOString().substring(0, 10);
-      var rows2 = inv2.map(function (v) {
+      var rows2 = [];
+      inv2.forEach(function (v) {
+        var rsv = v.record_status;
+        if (rsv === 'void' || rsv === 'cancelled' || rsv === 'archived' || rsv === 'deleted') { return; }
+        if (v.wave_status === 'DRAFT') { return; }
+        if (businessOfInvoice(v, tag2) !== biz2) { return; }
+        var paid2 = r2OB((Number(v.wave_imported_paid) || 0) + (payBy2[v.id] || 0));
+        var bal2 = r2OB((Number(v.total_amount) || 0) - paid2);
+        if (bal2 <= 0.009) { return; }
         var od2 = 0;
         if (v.due_date && v.due_date < tISO) { od2 = Math.round((new Date(tISO) - new Date(v.due_date)) / 86400000); }
-        return { invoice: v.invoice_number, customer: cm2[v.accounting_customer_id] || '', release: v.release_number || v.po_so_number || '', invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: v.amount_paid != null ? Number(v.amount_paid) : 0, balance_due: Number(v.balance_due) || 0, days_overdue: od2, overdue: od2 > 0 };
+        rows2.push({ invoice: v.invoice_number, customer: cm2[v.accounting_customer_id] || '', release: v.release_number || v.po_so_number || '', invoice_date: v.invoice_date, due_date: v.due_date, total: v.total_amount != null ? Number(v.total_amount) : null, paid: paid2, balance_due: bal2, days_overdue: od2, overdue: od2 > 0 });
       });
       rows2.sort(function (a, b) { return b.balance_due - a.balance_due; });
       var totOpen = 0; var totOd = 0; var cOd = 0;

@@ -367,9 +367,9 @@ if (failures.length) {
     /if \(dt && v\.invoice_date && v\.invoice_date > dt\) \{ return; \}/.test(ry));
   okY('NY3: invoices-without-order scoped to the period too',
     /inWin/.test(ry) && /inWin2/.test(ry));
-  okY('NY4 (OH): unpaid rows carry customer, total, paid, balance, days overdue — from real fields only',
+  okY('NY4 (OV): unpaid rows carry customer, total, CANONICAL paid (wave_imported_paid + non-void hub payments), balance, days overdue',
     /var custShow = custMapR\[v\.accounting_customer_id\]/.test(ry) && /days_overdue: od/.test(ry) &&
-    /paid: v\.amount_paid/.test(ry) && !/\(from order\)/.test(ry));
+    /paid: paidC/.test(ry) && /never the stale balance_due column/.test(ry) && !/\(from order\)/.test(ry));
   okY('NY5: the screen header counts overdue from the FULL summary, not the display slice (289-vs-543 bug)',
     /\{sm\.overdue_open_balance \|\| 0\} overdue/.test(cy) &&
     !/invoices_with_open_balance \|\| \[\]\)\.filter/.test(cy));
@@ -520,7 +520,7 @@ if (failures.length) {
     (rf.match(/c\.company_name \|\| c\.contact_name \|\| ''/g) || []).length >= 3 &&
     !/select\('id, name'\)/.test(rf));
   okF('OF3: the whitelist entry is corrected and records the lesson',
-    /accounting_customers: \['id', 'company_name', 'contact_name'/.test(wf) && /was a GUESS/.test(wf));
+    /accounting_customers: \['id', 'company_name', 'contact_name'/.test(wf) && /never guessed/.test(wf));
   if (f.length) { console.log('OF FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OF ADDENDUM CHECKS PASSED'); }
 })();
@@ -583,9 +583,10 @@ if (failures.length) {
   var aj = fj.readFileSync(pj.join(__dirname, '..', 'src/components/AccountingTab.jsx'), 'utf8');
   var f = [];
   function okJ(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
-  okJ('OJ1: open_balances action filters balance_due>0 in the DATABASE, period-scoped, verified columns',
-    /action === 'open_balances'/.test(rj) && /gt\('balance_due', 0\.009\)/.test(rj) &&
-    /gte\('invoice_date', df2\)/.test(rj) && /company_name \|\| c\.contact_name/.test(rj));
+  okJ('OJ1 (OV): open_balances uses THE CANON — live invoices, no Wave drafts, business split, balance from payments (never the stale balance_due column)',
+    /action === 'open_balances'/.test(rj) && !/gt\('balance_due', 0\.009\)/.test(rj) &&
+    /gte\('invoice_date', df2\)/.test(rj) && /company_name \|\| c\.contact_name/.test(rj) &&
+    /businessOfInvoice\(v, tag2\) !== biz2/.test(rj) && /bal2 <= 0\.009\) \{ return; \}/.test(rj));
   okJ('OJ2: totals computed server-side (count, total open, overdue count + amount)',
     /total_open: Math\.round\(totOpen \* 100\) \/ 100/.test(rj) && /overdue_open: Math\.round\(totOd/.test(rj));
   okJ('OJ3: overdue rows are LIGHT ORANGE with readable dark text (Max spec + contrast rule)',

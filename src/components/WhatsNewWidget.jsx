@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OV',
+    date: '2026-10-15',
+    label: 'Consistency audit: every money card now computes from ONE canon',
+    items: [
+      '**\ud83d\udd0d You asked for an inconsistency audit across all the cards \u2014 it found five real drifts, all fixed.** Every screen that shows receivables now uses the SAME two rules: balance = total \u2212 Wave-imported paid \u2212 non-void Hub payments (never the stored balance column, which can go stale), and US/Egypt decided by the one shared business rule.',
+      '**Fixed:** (1) \ud83d\udcb0 Open Balances recomputed from payments, voided invoices and Wave drafts excluded, and it now has its own \ud83c\uddfa\ud83c\uddf8/\ud83c\uddea\ud83c\uddec toggle; (2) the reconciliation\'s open-balance section uses the identical canon (US business only); (3) Sales Report and P&L are now business-aware \u2014 Egyptian customers\' USD invoices can no longer leak into US sales or profit numbers; (4) Paid-in-period now counts a payment by its PAYMENT date even when the invoice is dated before the period; (5) All Invoices money totals exclude true Wave drafts, matching the dashboard (Hub drafts still count \u2014 entered = real).',
+      '**\u2696\ufe0f Result: the dashboard, Open Balances, All Invoices, the reconciliation report, Sales Report and P&L can no longer disagree with each other** \u2014 they all read the same formula and the same business split. Known labeled differences remain by design: the Overdue AR card\'s \u2265$200 filter (toggle shows all) and Approvals pending being all-time.',
+      { superAdminOnly: true, text: 'v55.83-OV \u2014 NO SQL. Audit findings\u2192fixes: open_balances + recon standing section rebuilt on canonical paid map (accounting_invoice_payments non-void + wave_imported_paid) with record_status/wave_status DRAFT exclusions + businessOfInvoice (open_balances takes body.business US|EG, UI toggle added; standing section pinned US); sales-report + pnl routes fetch business_tag and filter businessOfInvoice===bizSel (US default; invoice selects += source/wave_invoice_id/wave_business_id); dashboard arBizAll (eligible+biz, undated) feeds invMeta/curByInv so paid-in-period is payment-date-true; BusinessBooksTab totals exclude wave_status DRAFT only. Schema-truth whitelist += accounting_invoices.wave_status/wave_invoice_id/wave_business_id + accounting_customers.business_tag (cited to import-invoices writes + OR SQL). Tests: OV addendum 6 assertions; stale pins OJ1/NY4/OQ8/OR2/OR4/OT4 realigned to the canon; runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OU',
+    date: '2026-10-15',
+    label: 'Paid-in-period: one line per invoice, real balances, overpayments visible',
+    items: [
+      '**\ud83d\udc1b Both problems from your screenshot, fixed.** The Paid-in-period list now shows **ONE line per invoice** \u2014 all its payments in the period summed into the Paid column (no more five rows for AMERICA 1753), with the latest payment date shown. And the Balance column now shows the invoice\'s REAL remaining balance today \u2014 it was wired to 0 by mistake. Positive = still owed, **negative in violet = OVERPAID**. \u201cPaid 0.00\u201d noise rows are gone. The card reads \u201cN invoice(s) \u00b7 M payment(s)\u201d so both truths stay visible.',
+      { superAdminOnly: true, text: 'v55.83-OU \u2014 NO SQL. AccountingDashboard paid-in-period: paidAgg keyed by invoice id (paid summed, inv_date = max payment date, balance = openOf(invMeta) real \u2014 was hardcoded 0; zero-amount payments skipped; paidPayCount separate); card sub N invoice(s) \u00b7 M payment(s); openDrill unit param; drill note = aggregated semantics (violet negative = overpaid, Wave lifetime amounts undated so absent). OU addendum rewritten to aggregated truth (4+1 assertions); runner all green.' },
+    ],
+  },
+  {
+    version: 'v55.83-OU',
+    date: '2026-10-15',
+    label: 'Paid-in-period drill: real balances, overpayments visible',
+    items: [
+      '**\ud83d\udc1b The zero-balance confusion, fixed.** The Paid-in-period list shows one row PER PAYMENT \u2014 an invoice paid in installments appears once per installment \u2014 but its Balance column was wired to 0 no matter what. Now Balance shows the invoice\'s REAL remaining balance today: positive = still owed, **negative (violet) = OVERPAID**, exactly as ordered. \u201cPaid 0.00\u201d noise rows are gone, the header counts payment(s) not invoice(s), and the note on the list explains each column.',
+      { superAdminOnly: true, text: 'v55.83-OU \u2014 NO SQL. AccountingDashboard paidPeriodRows: skip |amount|<0.005; balance = openOf(invMeta) (real total \u2212 wave_imported_paid \u2212 hub payments; negative = credit, violet via existing DrillPanel style); openDrill gains unit param; paid drill note rewritten (one row = one payment, Inv date = payment date, Balance = today). OU addendum 4 assertions; runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OT',
     date: '2026-10-14',
     label: 'Entered = it counts. And the Egyptian test customers leave the US book.',

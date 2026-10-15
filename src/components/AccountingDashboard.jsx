@@ -134,9 +134,11 @@ export default function AccountingDashboard(props) {
       function openOf(i) { return r2((Number(i.total_amount) || 0) - (Number(i.wave_imported_paid) || 0) - (payByInv[i.id] || 0)); }
       // v55.83-OM — the period scopes everything in sections A/B/C by invoice_date.
       // Blank from = beginning of time, blank to = today and beyond.
-      var arInv = inv.filter(function (i) {
-        if (!isArEligible(i)) { return false; }
-        if (bizOf(i) !== bz) { return false; } // OR: the selected BUSINESS only — customer tag decides, not just currency
+      // v55.83-OV — two sets: arBizAll (eligible + this business, ANY date) so
+      // a payment received in the period counts even when its invoice is dated
+      // before the period; arInv adds the period filter for the AR cards.
+      var arBizAll = inv.filter(function (i) { return isArEligible(i) && bizOf(i) === bz; });
+      var arInv = arBizAll.filter(function (i) {
         var idt = i.invoice_date || '';
         if (pf && idt && idt < pf) { return false; }
         if (pt && idt && idt > pt) { return false; }
@@ -147,8 +149,12 @@ export default function AccountingDashboard(props) {
       // business. (Wave-imported lifetime paid totals carry no per-payment
       // dates, so they cannot be period-dated — the drill note says so.)
       var curByInv = {}; var invMeta = {};
-      arInv.forEach(function (i) { curByInv[i.id] = i.currency || 'USD'; invMeta[i.id] = i; });
-      var paidPeriodTotal = 0; var paidPeriodRows = [];
+      arBizAll.forEach(function (i) { curByInv[i.id] = i.currency || 'USD'; invMeta[i.id] = i; }); // OV: payments count by PAYMENT date, not the invoice's date
+      // v55.83-OU (Max): ONE ROW PER INVOICE — all its payments in the period
+      // aggregated into a single line (Paid = their sum, Inv date = the latest
+      // payment date). Balance = the invoice's REAL remaining balance today
+      // (openOf), negative in violet = OVERPAID. Zero-amount rows are noise.
+      var paidPeriodTotal = 0; var paidAgg = {}; var paidPayCount = 0;
       pays.forEach(function (p) {
         if (isPaymentVoid(p)) { return; }
         var pd = p.payment_date || '';
@@ -156,10 +162,16 @@ export default function AccountingDashboard(props) {
         if (pf && pd < pf) { return; }
         if (pt && pd > pt) { return; }
         if (curByInv[p.accounting_invoice_id] !== activeCur) { return; }
-        var mi = invMeta[p.accounting_invoice_id] || {};
+        if (Math.abs(Number(p.amount) || 0) < 0.005) { return; }
+        var iid = p.accounting_invoice_id;
+        var mi = invMeta[iid] || {};
         paidPeriodTotal += Number(p.amount) || 0;
-        paidPeriodRows.push({ id: p.accounting_invoice_id + ':' + pd + ':' + p.amount, num: mi.invoice_number || '(unknown)', cust: '', inv_date: pd, due_date: mi.due_date || '', total: r2(mi.total_amount), paid: r2(p.amount), balance: 0, du: 0, source: 'payment' });
+        paidPayCount += 1;
+        if (!paidAgg[iid]) { paidAgg[iid] = { id: iid, num: mi.invoice_number || '(unknown)', cust: '', inv_date: pd, due_date: mi.due_date || '', total: r2(mi.total_amount), paid: 0, balance: mi.id ? openOf(mi) : 0, du: 0, source: 'payment' }; }
+        paidAgg[iid].paid = r2(paidAgg[iid].paid + (Number(p.amount) || 0));
+        if (pd > paidAgg[iid].inv_date) { paidAgg[iid].inv_date = pd; }
       });
+      var paidPeriodRows = Object.keys(paidAgg).map(function (k) { return paidAgg[k]; });
       paidPeriodRows.sort(function (a, b) { return (a.inv_date || '') < (b.inv_date || '') ? 1 : -1; });
 
       var overdueRows = [], currentRows = [], creditRows = [];
@@ -222,10 +234,10 @@ export default function AccountingDashboard(props) {
       diag.inclAR = openCount; diag.sumTotal = r2(diag.sumTotal); diag.sumWave = r2(diag.sumWave); diag.sumHub = r2(diag.sumHub);
       var nonUsdList = Object.keys(nonUsd).map(function (c) { return { cur: c, open: r2(nonUsd[c].open), count: nonUsd[c].count }; }).sort(function (a, b) { return b.open - a.open; });
 
-      paidPeriodRows.forEach(function (r) { var mi2 = invMeta[r.id.split(':')[0]]; if (mi2) { r.cust = custName[mi2.accounting_customer_id] || ''; } });
+      paidPeriodRows.forEach(function (r) { var mi2 = invMeta[r.id]; if (mi2) { r.cust = custName[mi2.accounting_customer_id] || ''; } });
       setD({
         activeCur: activeCur, biz: bz,
-        paidPeriodTotal: r2(paidPeriodTotal), paidPeriodRows: paidPeriodRows,
+        paidPeriodTotal: r2(paidPeriodTotal), paidPeriodRows: paidPeriodRows, paidPayCount: paidPayCount,
         openTotal: r2(openTotal), openCount: openCount, creditTotal: r2(creditTotal),
         overdueRows: overdueRows, currentRows: currentRows, custBalances: custBalances,
         unmatchedCount: unmatched.length, pendingApproval: pendingApproval.length, approvalRows: pendingApprovalRows, creditRows: creditRows.sort(function (a, b) { return a.balance - b.balance; }),
@@ -280,7 +292,7 @@ export default function AccountingDashboard(props) {
     );
   }
   // v55.83-OM — drill-down: the invoice list behind whichever card was clicked.
-  function openDrill(title, rows, note) { setDrill({ title: title, rows: rows || [], note: note || '' }); }
+  function openDrill(title, rows, note, unit) { setDrill({ title: title, rows: rows || [], note: note || '', unit: unit || '' }); }
   function drillCsv() {
     if (!drill || !drill.rows.length) { return; }
     var cols = ['num', 'cust', 'inv_date', 'due_date', 'total', 'paid', 'balance', 'du', 'source'];
@@ -294,7 +306,7 @@ export default function AccountingDashboard(props) {
     return (
       <div className="mt-3 bg-white text-slate-900 rounded-lg p-3 border-2 border-sky-400">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <div className="text-sm font-extrabold">{drill.title} — {drill.rows.length} invoice(s)</div>
+          <div className="text-sm font-extrabold">{drill.title} — {drill.rows.length} {drill.unit || 'invoice(s)'}</div>
           <div className="flex gap-2">
             <button onClick={drillCsv} className="text-[10px] bg-slate-800 text-white rounded px-2 py-1 font-bold">⬇ CSV</button>
             <button onClick={function () { setDrill(null); }} className="text-[10px] bg-slate-500 text-white rounded px-2 py-1 font-bold">✕ Close</button>
@@ -374,8 +386,8 @@ export default function AccountingDashboard(props) {
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
           <Stat title={'Open AR (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · every entered invoice counts') : ''} tone="bg-slate-800"
             onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed (current + overdue).'); } : null} />
-          <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' recorded payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
-            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'Payments RECORDED in the Hub with a payment date inside this period, for this business. Wave-imported lifetime paid amounts carry no per-payment dates, so they cannot appear here — this card shows Hub-recorded payments.'); } : null} />
+          <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' invoice(s) · ' + (d.paidPayCount || 0) + ' payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
+            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE: Paid = everything received for it in this period (installments summed), Inv date = the latest payment date, Balance = the invoice\u2019s remaining balance TODAY (negative, in violet, = overpaid). Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />
           <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
             onClick={seeTotals ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
           <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'}

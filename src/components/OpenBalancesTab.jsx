@@ -11,6 +11,7 @@ export default function OpenBalancesTab(props) {
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState('Last 3 months'); var preset = s5[0]; var setPreset = s5[1];
+  var sB = useState('US'); var biz = sB[0]; var setBiz = sB[1];
 
   function iso(d) { return d.toISOString().substring(0, 10); }
   function agoDays(n) { var d = new Date(); d.setDate(d.getDate() - n); return iso(d); }
@@ -23,10 +24,10 @@ export default function OpenBalancesTab(props) {
     ['All history', '', '']
   ];
 
-  function load(f, t) {
+  function load(f, t, b) {
     setBusy(true);
     fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'open_balances', user_id: userProfile && userProfile.id, date_from: f || null, date_to: t || null }) })
+      body: JSON.stringify({ action: 'open_balances', user_id: userProfile && userProfile.id, date_from: f || null, date_to: t || null, business: b || biz }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || j.ok !== true) { toast.error((j && j.error) || 'Load failed'); return; } setData(j); })
       .catch(function (e) { toast.error('Load failed: ' + ((e && e.message) || 'network')); })
@@ -48,6 +49,12 @@ export default function OpenBalancesTab(props) {
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold text-slate-900 mr-1">💰 Invoices with open balances</div>
+        {[['US', '🇺🇸 US'], ['EG', '🇪🇬 Egypt']].map(function (b) {
+          var act = biz === b[0];
+          return <button key={b[0]} disabled={busy} onClick={function () { setBiz(b[0]); load(from, to, b[0]); }}
+            className="px-2 py-1 rounded-lg text-[10px] font-extrabold"
+            style={act ? { background: '#059669', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{b[1]}</button>;
+        })}
         {PRESETS.map(function (ps) {
           var active = preset === ps[0];
           return <button key={ps[0]} disabled={busy} onClick={function () { setPreset(ps[0]); setFrom(ps[1]); setTo(ps[2]); load(ps[1], ps[2]); }}
