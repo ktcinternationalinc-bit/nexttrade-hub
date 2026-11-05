@@ -1,0 +1,16 @@
+-- Trusted operator only. Verify no later dependent postings before using.
+-- psql "service=ktc_us" -X -v ON_ERROR_STOP=1 -v run_uuid=<committed-run> \
+--   -v reversal_date=<open-accounting-date> -v actor_uuid=<verified-owner-auth-UUID> \
+--   -f clickbooks/deploy/reverse-run.psql
+\set ON_ERROR_STOP on
+begin isolation level repeatable read;
+select set_config('cb.actor', :'actor_uuid', true);
+do $$ begin if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid) then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if; end $$;
+select id from clickbooks_us.books where code='KTC_US' for update;
+update clickbooks_us.books set posting_enabled=true where code='KTC_US';
+select clickbooks_us.reverse_migration(:'run_uuid'::uuid,:'reversal_date'::date,:'actor_uuid'::uuid);
+update clickbooks_us.books set posting_enabled=false,historical_data_ready=false where code='KTC_US';
+update clickbooks_us.workflow_settings set migration_execution_enabled=false where singleton;
+commit;
+-- Evidence remains. Do NOT drop journals, delete a posted migration, or clear the
+-- opening cutoff to replay old records. Recovery after a reversed opening requires review.

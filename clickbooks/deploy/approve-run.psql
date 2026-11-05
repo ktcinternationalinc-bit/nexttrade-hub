@@ -1,0 +1,16 @@
+-- Trusted operator only. Run only after account/source mapping, independent reconciliation,
+-- a restore-tested backup and review of this exact snapshot + manifest.
+-- psql "service=ktc_us" -X -v ON_ERROR_STOP=1 -v run_uuid=<run> -v revision=<revision> \
+--   -v actor_uuid=<verified-owner-auth-UUID> -f clickbooks/deploy/approve-run.psql
+\set ON_ERROR_STOP on
+begin isolation level repeatable read;
+select set_config('cb.actor', :'actor_uuid', true);
+do $$ begin
+ if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid)
+ then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if;
+end $$;
+select clickbooks_us.validate_migration(:'run_uuid'::uuid);
+select clickbooks_us.approve_migration(:'run_uuid'::uuid,:'revision'::int,:'actor_uuid'::uuid);
+select id,revision,approval_hash,cutoff,strategy from clickbooks_us.migration_runs where id=:'run_uuid'::uuid;
+commit;
+-- Save the approval hash in the protected release record. This does NOT enable posting.

@@ -1,3 +1,5 @@
+import { authorizeBankVisibility, BankVisibilityError } from './bank-visibility.js';
+
 // src/lib/server-permissions.js — SERVER-SIDE permission resolution for API routes.
 // The Hub is a protective overlay: routes must enforce the SPECIFIC permission server-side,
 // not trust the frontend. super_admin resolves to ALL permissions; everyone else is checked
@@ -30,7 +32,9 @@ var PERMISSION_ALIASES = {
   'customers.create': ['Customer: Create', 'customer.create'],
   // ----- Bank / payments -----
   'bank_transactions.view': ['Bank: View Transactions', 'bank.view_transactions', 'Bank: View', 'bank.view'],
-  'bank_balances.view': ['Bank: View Account Balances', 'bank.view_account_balances', 'Finance: Admin', 'finance.admin'],
+  // Balance visibility is resolved independently below; legacy aliases and
+  // role wildcards never confer this protected capability.
+  'bank_balances.view': [],
   'payments.match': ['Payments: Match', 'payments.match'],
   'payments.unmatch': ['Payments: Unmatch', 'payments.unmatch', 'Payments: Match', 'payments.match'],
   'payments.mark_manual_done': ['Payments: Mark Manual Done', 'payments.mark_manual_done'],
@@ -112,6 +116,7 @@ export async function loadUserPermissions(db, userId) {
 
 export function userHasPermission(ctx, perm) {
   if (!ctx) { return false; }
+  if (perm === 'bank_balances.view') { return ctx.bankVisibility?.canViewBankBalances === true; }
   if (ctx.isSuperAdmin === true) { return true; }       // super_admin = all
   if (mpHas(ctx.mp, perm)) { return true; }              // explicit grant
   if (roleHas(ctx.role, perm)) { return true; }          // temporary role default
@@ -126,6 +131,19 @@ var CRON_ALLOWED_PERMS = { 'wave.import.run': 1, 'wave.categories.pull': 1 };
 // One-call route guard. CRON bearer bypasses ONLY for scheduled-job permissions; otherwise
 // resolves the user and checks the specific permission.
 export async function assertPermission(db, userId, perm, request) {
+  if (perm === 'bank_balances.view') {
+    try {
+      // The supplied db is an existing server client. getUser receives the
+      // actual bearer explicitly, so a supplied userId cannot select identity.
+      var bank = await authorizeBankVisibility(request, function () { return db; }, process.env);
+      if (!bank.canViewBankBalances) return { ok: false, status: 403, error: 'You do not have bank balance access.' };
+      return { ok: true, via: bank.isVerifiedSuperAdmin ? 'verified_super_admin' : 'bank_balance_grant',
+        ctx: { bankVisibility: { canViewBankBalances: true }, authUserId: bank.authUserId, profileId: bank.profileId } };
+    } catch (error) {
+      return { ok: false, status: error instanceof BankVisibilityError ? error.status : 500,
+        error: error instanceof BankVisibilityError ? error.message : 'Bank balance access could not be verified.' };
+    }
+  }
   var cronSecret = process.env.CRON_SECRET;
   var authHeader = '';
   try { authHeader = (request && request.headers && request.headers.get && request.headers.get('authorization')) || ''; } catch (eH) { authHeader = ''; }

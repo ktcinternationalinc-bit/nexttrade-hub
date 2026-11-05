@@ -1,0 +1,26 @@
+-- DANGEROUS FINANCIAL WRITE. NOT EXECUTED BY THIS RELEASE.
+-- Use only for the exact approved manifest. Do not use a fake or current invoice balance
+-- as the independent cutoff trial balance. Preserve full backup and reconciliation evidence.
+-- psql "service=ktc_us" -X -v ON_ERROR_STOP=1 -v run_uuid=<approved-run> \
+--   -v approval_hash=<reviewed-hash> -v actor_uuid=<verified-owner-auth-UUID> \
+--   -f clickbooks/deploy/commit-run.psql
+\set ON_ERROR_STOP on
+begin isolation level repeatable read;
+select set_config('cb.actor', :'actor_uuid', true);
+do $$ begin
+ if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid)
+ then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if;
+end $$;
+-- Hold the book lock for the complete transaction. If anything fails, ON_ERROR_STOP
+-- closes this psql invocation and PostgreSQL rolls back ALL postings and flag changes.
+select id from clickbooks_us.books where code='KTC_US' for update;
+update clickbooks_us.books set posting_enabled=true where code='KTC_US';
+update clickbooks_us.workflow_settings set migration_execution_enabled=true where singleton;
+select clickbooks_us.commit_migration(:'run_uuid'::uuid,:'approval_hash',:'actor_uuid'::uuid);
+-- Never leave either switch on after a one-time import.
+update clickbooks_us.books set posting_enabled=false where code='KTC_US';
+update clickbooks_us.workflow_settings set migration_execution_enabled=false where singleton;
+select * from clickbooks_us.trial_balance((select id from clickbooks_us.books where code='KTC_US'),(select cutoff from clickbooks_us.migration_runs where id=:'run_uuid'::uuid));
+commit;
+-- Run preflight.sql afterwards and independently compare exported account balances.
+-- This does NOT enable ongoing postings, declare history complete or switch off Wave.

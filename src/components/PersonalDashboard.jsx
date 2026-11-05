@@ -16,7 +16,7 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperAdmin, invoices, customers, navigate, fE, users, chatSurface, renderSection }) {
+export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperAdmin, invoices, customers, navigate, fE, users, chatSurface, renderSection, canViewFullDashboard, onOpenCompanySales }) {
   // v55.83-A.6.27.11 (Max May 15 2026) — renderSection prop:
   //   undefined / 'both' → render everything (legacy behavior)
   //   'ai'              → render ONLY the AI hero + bug retest card
@@ -421,8 +421,8 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         intact so the rest of the dashboard (Today's reminders, etc.)
         still works. */}
 
-    {/* Monthly Sales Report - visible to all */}
-    {(() => {
+    {/* Shared company report; personal sales and assigned-work widgets retain their permissions. */}
+    {canViewFullDashboard === true && (() => {
       const monthlySales = {};
       invoices.filter(inv => inv.invoice_date >= '2026-01-01').forEach(inv => {
         const m = (inv.invoice_date || '').substring(0, 7);
@@ -467,10 +467,10 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
                   const monthTo = month + '-' + String(lastDay).padStart(2, '0');
                   return (
                     <tr key={month}
-                        onClick={() => navigate('sales', { from: monthFrom, to: monthTo })}
-                        title={'Click to see all ' + data.count + ' orders from ' + month}
-                        className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
-                      <td className="px-3 py-2 font-semibold">{month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
+                        onClick={onOpenCompanySales ? () => onOpenCompanySales({ from: monthFrom, to: monthTo }) : undefined}
+                        title={onOpenCompanySales ? 'Click to see all ' + data.count + ' orders from ' + month : undefined}
+                        className={'border-b border-slate-50' + (onOpenCompanySales ? ' hover:bg-blue-50 cursor-pointer' : '')}>
+                      <td className="px-3 py-2 font-semibold">{month} {onOpenCompanySales && <span className="text-[9px] text-blue-500 ml-1">→ view orders</span>}</td>
                       <td className="px-3 py-2 text-right">{data.count}</td>
                       <td className="px-3 py-2 text-right font-bold text-blue-600">{fE(data.invoiced)}</td>
                       <td className="px-3 py-2 text-right text-emerald-600">{fE(data.collected)} <span className="text-[9px] text-slate-500">({collPct}%)</span></td>

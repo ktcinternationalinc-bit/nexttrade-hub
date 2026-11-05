@@ -1,0 +1,3 @@
+Full Next.js build NOT verified in this authoring environment.
+`npm ci` was attempted with the repository package-lock and timed out because registry.npmjs.org was unreachable (EAI_AGAIN). The partial install left Next and @supabase/supabase-js invalid/incomplete, so no build pass is claimed.
+The existing accounting/bank regression runner remains 121/122 required: the one failure is test-v55-83-is-unmatch-and-plaid-scope.js, whose shared authorization subtest cannot import the incomplete @supabase/supabase-js package. Other required accounting/bank tests shown by the runner passed.

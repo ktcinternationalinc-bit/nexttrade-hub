@@ -1,0 +1,47 @@
+--- a/src/components/AccountingTab.jsx
++++ b/src/components/AccountingTab.jsx
+@@ -17,6 +17,7 @@
+ import BankReviewTab from './BankReviewTab';
+ import PurchaseOrdersTab from './PurchaseOrdersTab';
+ import LedgerlyHub from './LedgerlyHub';
++import ClickBooksUSCore from './ClickBooksUSCore';
+ import { useBankVisibility } from '../lib/use-bank-visibility';
+ 
+ export default function AccountingTab(props) {
+@@ -36,6 +37,7 @@
+   var tabs = [
+     ['dashboard', '📊 Dashboard'],
+     ['ledgerly', '📗 Ledgerly'],
++    ['clickbooks_us', 'ClickBooks · US'],
+     ['company', '🏢 Company Profile'],
+     ['arhistory', '📒 Customer AR History'],
+     ['ledger', '📑 Customer Ledger'],
+@@ -59,11 +61,13 @@
+   var mp = props.modulePerms || {};
+   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+   var canWaveSync = isSuper || mp['wave.sync.view'] === true;
++  var clickbooksEnabled = process.env.NEXT_PUBLIC_CLICKBOOKS_US_ENABLED === 'true';
++  var canClickbooks = financialAccess.canViewFullDashboard === true || financialAccess.isVerifiedSuperAdmin === true;
+   var canLedgerly = financialAccess.canViewFullDashboard === true || financialAccess.canViewBankBalances === true;
+   return (
+     <div>
+       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
+-        {tabs.filter(function (t) { return t[0] !== 'ledgerly' || canLedgerly; }).map(function (t) {
++        {tabs.filter(function (t) { return (t[0] !== 'ledgerly' || canLedgerly) && (t[0] !== 'clickbooks_us' || (clickbooksEnabled && canClickbooks)); }).map(function (t) {
+           return (
+             <button key={t[0]} onClick={function () { setSub(t[0]); }}
+               className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
+@@ -72,11 +76,12 @@
+           );
+         })}
+       </div>
+-      {sub !== 'ledgerly' && <div className="px-3 pt-3">
++      {sub !== 'ledgerly' && sub !== 'clickbooks_us' && <div className="px-3 pt-3">
+         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
+       </div>}
+       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
+       {sub === 'ledgerly' && <LedgerlyHub {...props} canView={canLedgerly} />}
++      {sub === 'clickbooks_us' && clickbooksEnabled && <ClickBooksUSCore canView={canClickbooks} />}
+       {sub === 'company' && <CompanyProfileTab {...props} />}
+       {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
+       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}

@@ -14,6 +14,7 @@ import {
 } from '../lib/bank-permissions';
 import { classifyApplication, computeInvoiceBalance, validateSplit, bankAllocationStatus, roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
+import { bankSessionHeaders } from '../lib/bank-visibility-client';
 
 function invoiceTotal(inv) {
   // PINNED v55.83-AA: this app stores the invoice total in total_amount
@@ -141,7 +142,7 @@ export default function BankReviewTab(props) {
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('wave_business_registry', '*'),
-      supabase.from('plaid_accounts').select('*'),
+      supabase.from('plaid_accounts').select('id,connection_id,business_id,plaid_account_id,name,official_name,mask,type,subtype,iso_currency,is_read_only,updated_at,wave_business_id'),
       Promise.resolve({ data: [] }), // v55.83-MS (gap-finder #9) — res[6] retired: the paginated, silo-scoped /api/wave/categories route (reloadCats) is the ONLY category source; this slot stays to preserve res[] indices.
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
       supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
@@ -402,7 +403,8 @@ export default function BankReviewTab(props) {
   // filtered to 0 rows by auth.uid()-based RLS). Returns the parsed JSON or throws with the reason.
   function bankWrite(action, payload) {
     var bodyObj = Object.assign({ action: action, user_id: userProfile && userProfile.id }, payload || {});
-    return fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) })
+    return bankSessionHeaders(supabase, true)
+      .then(function (headers) { return fetch('/api/accounting/bank-write', { method: 'POST', headers: headers, body: JSON.stringify(bodyObj) }); })
       .then(function (r) { return r.json(); })
       .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'Server rejected the write.'); } return j; });
   }

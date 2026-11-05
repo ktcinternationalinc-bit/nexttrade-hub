@@ -1,0 +1,29 @@
+{
+  "database": {
+    "p1_p2_ledger": {"passed": 33},
+    "p3_p4_core": {"passed": 53},
+    "p3_p4_source_backed": {"passed": 5},
+    "p5_reporting": {"passed": 8},
+    "p7_shadow_new_invoice_payment": {"passed": 5},
+    "p7_opening_ar_payment": {"passed": 2},
+    "p7_cutover_real_recent_source": {"passed": 12},
+    "all_financial_qa_writes_rolled_back": true
+  },
+  "application": {
+    "combined_clickbooks_handler_tests": {"passed": 87, "failed": 0},
+    "existing_accounting_bank_regression": {"required_passed": 121, "required_total": 122},
+    "full_next_build": "not verified: npm registry DNS EAI_AGAIN prevented complete npm ci",
+    "blocked_legacy_test": "test-v55-83-is-unmatch-and-plaid-scope.js could not import incomplete @supabase/supabase-js after network-blocked npm install"
+  },
+  "security": {
+    "clickbooks_tables_without_rls": 0,
+    "browser_callable_clickbooks_functions": 0,
+    "clickbooks_functions_without_fixed_search_path": 0,
+    "service_role_direct_clickbooks_table_writes": 0,
+    "advisor_note": "Private RLS-with-no-policy notices are intentional deny-by-default. Pre-existing unrelated Hub security findings remain outside this release."
+  },
+  "performance": {
+    "clickbooks_unindexed_foreign_key_findings_after_fix": 0,
+    "new_clickbooks_unused_index_notices": "expected while feature is not live"
+  }
+}

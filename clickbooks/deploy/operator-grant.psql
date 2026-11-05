@@ -1,0 +1,15 @@
+-- PSQL SCRIPT. Only an authorized DB operator may run this after identity verification.
+-- Usage: psql "service=ktc_us" -X -v ON_ERROR_STOP=1 \
+--   -v actor_uuid=<verified-owner-auth-UUID> -v target_uuid=<verified-staff-auth-UUID> \
+--   -v rules=true -v migration=false -v cutover=false -f clickbooks/deploy/operator-grant.psql
+-- Visibility remains separate: migration/cutover also require protected dashboard + bank grants in the app.
+\set ON_ERROR_STOP on
+begin;
+select set_config('cb.actor', :'actor_uuid', true),set_config('cb.target', :'target_uuid', true);
+do $$ begin
+ if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid)
+ or not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.target')::uuid)
+ then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if;
+end $$;
+select public.clickbooks_us_operator_grant_set(:'target_uuid'::uuid,:'rules'::boolean,:'migration'::boolean,:'cutover'::boolean,:'actor_uuid'::uuid);
+commit;

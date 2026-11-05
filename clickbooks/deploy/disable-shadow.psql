@@ -1,0 +1,7 @@
+-- Emergency stop for ClickBooks shadow posting. Does not alter Wave or Plaid.
+\set ON_ERROR_STOP on
+begin;
+update clickbooks_us.cutover_control set shadow_sync_enabled=false,cutover_execution_enabled=false,updated_by=:'actor_uuid'::uuid,updated_at=now() where singleton;
+update clickbooks_us.books set posting_enabled=false where code='KTC_US';
+insert into clickbooks_us.workflow_events(kind,actor_id,details) values('shadow_sync_disabled',:'actor_uuid'::uuid,jsonb_build_object('waveWritesChanged',false));
+commit;

@@ -1,0 +1,18 @@
+# No secrets. Initial source deployment: all ClickBooks flags off.
+# Existing Supabase URL/anon key/server service key remain configured through secure hosting settings.
+# Never prefix a service key, owner allowlist or CRON_SECRET with NEXT_PUBLIC_.
+CLICKBOOKS_US_ENABLED=false
+NEXT_PUBLIC_CLICKBOOKS_US_ENABLED=false
+CLICKBOOKS_US_WORKBENCH_ENABLED=false
+NEXT_PUBLIC_CLICKBOOKS_US_WORKBENCH_ENABLED=false
+CLICKBOOKS_US_STAGE_WRITES_ENABLED=false
+CLICKBOOKS_US_RULES_AUTO_STAGE_ENABLED=false
+# HUB_SUPER_ADMIN_AUTH_USER_IDS=<verified Supabase Auth UUIDs, server-only>
+# CRON_SECRET=<cryptographically random server-only value, at least 32 characters>
+CLICKBOOKS_US_REPORTS_ENABLED=false
+NEXT_PUBLIC_CLICKBOOKS_US_REPORTS_ENABLED=false
+CLICKBOOKS_US_REPORT_SETTINGS_WRITES_ENABLED=false
+CLICKBOOKS_US_CUTOVER_ENABLED=false
+NEXT_PUBLIC_CLICKBOOKS_US_CUTOVER_ENABLED=false
+CLICKBOOKS_US_SHADOW_SYNC_ENABLED=false
+# CLICKBOOKS_US_SYSTEM_AUTH_USER_ID=<verified server-only Supabase Auth UUID used for shadow scheduler audit attribution>

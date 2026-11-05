@@ -209,3 +209,29 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
   if (f.length) { console.log('OV FAILED: ' + f.join(' | ')); process.exit(1); }
   else { console.log('ALL OV ADDENDUM CHECKS PASSED'); }
 })();
+
+// ══════════════════════════════════════════════════════════════════
+// v55.83-OW ADDENDUM — Max: "we need to know the difference between each
+// card... 100% accurate." The cards now define themselves and every drill
+// proves its own sum.
+// ══════════════════════════════════════════════════════════════════
+(function () {
+  var fw2 = require('fs'); var pw2 = require('path');
+  var dw = fw2.readFileSync(pw2.join(__dirname, '..', 'src/components/AccountingDashboard.jsx'), 'utf8');
+  var f = [];
+  function okW2(l, c) { if (c) console.log('✓ ' + l); else { f.push(l); console.log('✗ ' + l); } }
+  okW2('OW1: zero-balance rows are structurally impossible in Open AR (guard precedes every row push)',
+    /if \(ob <= 0\.005\) return;/.test(dw) &&
+    /A zero-balance row is impossible here by construction/.test(dw));
+  okW2('OW2: every drill shows Σ Total / Σ Paid / Σ Balance over its rows — the card proves itself',
+    /Σ Total: \{fmt\(sT\)\}/.test(dw) && /Σ Balance: \{fmt\(sB\)\}/.test(dw) &&
+    /equals the card to the cent/.test(dw));
+  okW2('OW3: the ℹ️ legend defines every card exactly (Open AR, Paid in period incl. the legitimate overlap, Overdue ≤ Open, credits, approvals all-time, B+C=Open AR)',
+    /What does each card mean\?/.test(dw) && /can appear in BOTH cards/.test(dw) &&
+    /Always ≤ Open AR/.test(dw) && /B \+ C together = Open AR/.test(dw) &&
+    /ALL TIME \(not period-scoped/.test(dw));
+  okW2('OW4: the Paid-in-period note says 0.00 = fully collected (good), and that still-owing rows overlap Open AR correctly',
+    /Balance 0\.00 here is GOOD — fully collected\. Still-owing rows also appear in Open AR; that overlap is correct\./.test(dw));
+  if (f.length) { console.log('OW FAILED: ' + f.join(' | ')); process.exit(1); }
+  else { console.log('ALL OW ADDENDUM CHECKS PASSED'); }
+})();

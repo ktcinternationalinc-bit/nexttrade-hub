@@ -1,0 +1,104 @@
+TAP version 13
+# (node:1776) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///mnt/data/clickbooks_work/nexttrade-hub/src/lib/clickbooks-us-read.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /mnt/data/clickbooks_work/nexttrade-hub/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: disabled feature does not read database
+ok 1 - disabled feature does not read database
+  ---
+  duration_ms: 22.385314
+  type: 'test'
+  ...
+# Subtest: posting is not an HTTP capability
+ok 2 - posting is not an HTTP capability
+  ---
+  duration_ms: 0.342776
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?businessId=egypt
+ok 3 - reject browser scope ?businessId=egypt
+  ---
+  duration_ms: 0.65764
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?bank=true
+ok 4 - reject browser scope ?bank=true
+  ---
+  duration_ms: 0.226722
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?resource=treasury
+ok 5 - reject browser scope ?resource=treasury
+  ---
+  duration_ms: 0.51217
+  type: 'test'
+  ...
+# Subtest: unverified identity denied
+ok 6 - unverified identity denied
+  ---
+  duration_ms: 1.502141
+  type: 'test'
+  ...
+# Subtest: bank-only permission cannot grant full dashboard
+ok 7 - bank-only permission cannot grant full dashboard
+  ---
+  duration_ms: 0.396777
+  type: 'test'
+  ...
+# Subtest: dashboard without banking receives redacted snapshot
+ok 8 - dashboard without banking receives redacted snapshot
+  ---
+  duration_ms: 1.363612
+  type: 'test'
+  ...
+# Subtest: verified super admin gets both permissions
+ok 9 - verified super admin gets both permissions
+  ---
+  duration_ms: 1.12271
+  type: 'test'
+  ...
+# Subtest: independent bank grant retained
+ok 10 - independent bank grant retained
+  ---
+  duration_ms: 0.879243
+  type: 'test'
+  ...
+# Subtest: unknown sensitivity fails closed
+ok 11 - unknown sensitivity fails closed
+  ---
+  duration_ms: 0.219551
+  type: 'test'
+  ...
+# Subtest: wrong book cannot be returned
+ok 12 - wrong book cannot be returned
+  ---
+  duration_ms: 0.225589
+  type: 'test'
+  ...
+# Subtest: wrong currency cannot be returned
+ok 13 - wrong currency cannot be returned
+  ---
+  duration_ms: 0.337287
+  type: 'test'
+  ...
+# Subtest: database errors leak no details
+ok 14 - database errors leak no details
+  ---
+  duration_ms: 0.397338
+  type: 'test'
+  ...
+# Subtest: all responses prohibit caching
+ok 15 - all responses prohibit caching
+  ---
+  duration_ms: 0.473202
+  type: 'test'
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 107.687303

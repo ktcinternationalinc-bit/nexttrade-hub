@@ -8,6 +8,7 @@ import PerformanceReviewCenter from './PerformanceReviewCenter';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
 import BackupsPanel from './BackupsPanel';
+import { useBankVisibility } from '../lib/use-bank-visibility';
 import LoginHistoryV2 from './LoginHistoryV2';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
@@ -25,6 +26,7 @@ const PIPELINE_STAGES = [
 ];
 
 export default function AdminTab({ user, userProfile, users, isAdmin, customers, modulePerms }) {
+  var canUseBackups = useBankVisibility().isVerifiedSuperAdmin === true;
   const [logs, setLogs] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [rates, setRates] = useState([]);
@@ -594,7 +596,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         // v55.74 — Backups: super_admin only. Contains snapshots of every
         // business-critical table (treasury, invoices, customers, etc.) so
         // it MUST NOT be visible to regular admins.
-        ...(isSuperAdmin ? [['backups','💾 Backups']] : []),
+        ...(canUseBackups ? [['backups','💾 Backups']] : []),
       ].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
@@ -628,12 +630,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     )}
 
     {/* ===== BACKUPS (v55.74) — super_admin only ===== */}
-    {section === 'backups' && isSuperAdmin && (
+    {section === 'backups' && canUseBackups && (
       <BackupsPanel user={user} userProfile={userProfile} />
     )}
-    {section === 'backups' && !isSuperAdmin && (
+    {section === 'backups' && !canUseBackups && (
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
-        Backups are only available to super_admin. They contain sensitive financial and personnel data.
+        Backups require a verified super admin. They contain sensitive financial and personnel data.
       </div>
     )}
 

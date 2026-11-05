@@ -1,0 +1,25 @@
+{
+  "relative_imports": [
+    {
+      "file": "src/components/ClickBooksUSCore.js",
+      "import": "../lib/supabase",
+      "resolves": true
+    },
+    {
+      "file": "src/app/api/accounting/clickbooks-us/route.js",
+      "import": "../../../../lib/bank-visibility.js",
+      "resolves": true
+    },
+    {
+      "file": "src/app/api/accounting/clickbooks-us/route.js",
+      "import": "../../../../lib/clickbooks-us-read.js",
+      "resolves": true
+    }
+  ],
+  "only_existing_changed_file": "src/components/AccountingTab.jsx",
+  "all_7_docx_pages_visually_checked": true,
+  "new_syntax_checks": "PASS",
+  "full_next_build": "NOT VERIFIED - dependency installation blocked",
+  "production_frontend": "NOT DEPLOYED",
+  "posting_enabled": false
+}

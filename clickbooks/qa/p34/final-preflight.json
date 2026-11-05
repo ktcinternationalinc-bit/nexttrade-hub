@@ -1,0 +1,49 @@
+{
+  "checked_at": "2026-11-02T11:11:37.389279+00:00",
+  "source": "Connected Supabase readback after all QA transactions rolled back",
+  "scope": "KTC_US_ACCOUNTING_ONLY",
+  "book": {
+    "code": "KTC_US",
+    "currency": "USD",
+    "posting_enabled": false,
+    "historical_data_ready": false,
+    "opening_cutoff": null
+  },
+  "migration_execution_enabled": false,
+  "counts": {
+    "accounts": 176,
+    "source_mappings": 1880,
+    "journals": 0,
+    "journal_lines": 0,
+    "rules": 0,
+    "proposals": 0,
+    "qa_accounts": 0,
+    "operator_grants": 0,
+    "bank_ledger_maps": 0
+  },
+  "runs": [
+    {
+      "id": "c5c27993-d696-4fbf-9ae5-360301df9844",
+      "state": "staged",
+      "cutoff": "2026-11-02",
+      "strategy": "opening_balance",
+      "plan_count": 0,
+      "approved_at": null,
+      "committed_at": null
+    }
+  ],
+  "permission_prerequisites": {
+    "visibility_table": null,
+    "identity_rpc": null
+  },
+  "applied_p34_migrations": 8,
+  "source_digests": {
+    "wave_categories": "31c9795fecd1be790967a44aff03ce8d",
+    "invoice_payments": "e191471562a3c4d6aa2d8f327923d1a7",
+    "bank_transactions": "153f78a2ec5e311c7bad4669586bf1d6",
+    "accounting_invoices": "109ae4a50c486abb771c2aa52ef4cd5c"
+  },
+  "source_digests_match_prechange_baseline": true,
+  "frontend_deployed": false,
+  "cron_activated": false
+}

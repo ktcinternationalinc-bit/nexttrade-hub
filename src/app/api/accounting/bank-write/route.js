@@ -10,14 +10,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
 
 var API_BUILD_MARKER = 'v55.83-IP-bank-write';
 var API_ROUTE = '/api/accounting/bank-write';
-
-function admin() {
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-}
 
 // v55.83-JF — server-side money-conservation check for a bank transaction. This is the AUTHORITATIVE
 // gate: the route uses the service-role key (bypasses RLS), so the client-side allocation gating in
@@ -112,17 +109,24 @@ async function protectedBankTxnIds(db, rowsOrIds) {
 }
 
 export async function POST(req) {
-  var db = admin();
   try {
-    var body = await req.json();
-    var by = body.user_id || null;
+    var access = await authorizeBankIdentity(req, createClient, process.env);
+    var db = access.db;
+    var body = await readBankJson(req);
+    // Retain the legacy field for old callers, but never use it as authority or
+    // the audit actor. A mismatched actor is rejected before any mutation.
+    if (body.user_id && body.user_id !== access.profileId && body.user_id !== access.authUserId)
+      throw new BankVisibilityError('The requested user does not match your verified sign-in. Refresh and retry.', 403);
+    var by = access.profileId;
     var action = body.action || '';
 
     // Permission per action. v55.83-JJ — split-save and park-unapplied allocate money, so they need
     // payments.match (same as match/unmatch/status), per Codex's launch-safe rule.
     var permKey = (action === 'match_invoice' || action === 'unmatch' || action === 'force_unmatch_wave' || action === 'save_splits' || action === 'create_unapplied' || action === 'update_match' || action === 'mark_review_duplicates') ? 'payments.match'
       : (action === 'set_status' ? 'payments.match' : 'bank.classify');
-    var gate = await assertPermission(db, by, permKey, req);
+    var verifiedSuper = false;
+    try { verifiedSuper = bankSuperAdminIds(process.env).includes(access.authUserId); } catch (_) { /* keep ordinary operational grants independent */ }
+    var gate = verifiedSuper ? { ok: true } : await assertPermission(db, by, permKey, req);
     if (!gate.ok) { return NextResponse.json({ ok: false, error: gate.error, api_build_marker: API_BUILD_MARKER }, { status: gate.status }); }
 
     // ── set_status: review status on a bank transaction ──
@@ -760,6 +764,7 @@ export async function POST(req) {
 
     return NextResponse.json({ ok: false, error: 'Unknown action: ' + action, api_build_marker: API_BUILD_MARKER }, { status: 400 });
   } catch (e) {
+    if (e instanceof BankVisibilityError) return bankVisibilityErrorResponse(e);
     return NextResponse.json({ ok: false, error: (e && e.message) || String(e), api_build_marker: API_BUILD_MARKER }, { status: 500 });
   }
 }

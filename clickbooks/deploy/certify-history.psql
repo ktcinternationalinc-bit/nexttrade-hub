@@ -1,0 +1,8 @@
+-- Certifies ONLY after an independently reconciled historical import/opening balance exists.
+-- Example: -v cutoff=YYYY-MM-DD -v actor_uuid=... -v evidence='signed reconciliation reference...'
+\set ON_ERROR_STOP on
+begin;
+select set_config('cb.actor', :'actor_uuid', true);
+do $$ begin if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid) then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if; end $$;
+select clickbooks_us.certify_historical_books(:'cutoff'::date,:'evidence',:'actor_uuid'::uuid);
+commit;

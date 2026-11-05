@@ -1,0 +1,3 @@
+87/87 combined ClickBooks handler tests passed on 2026-11-02.
+Includes 25 P5-P8 tests plus 15 prior core read tests and 47 P3/P4 workbench/scheduler tests.
+Full TAP output was observed in the execution session; no browser deployment was performed.

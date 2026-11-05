@@ -1,6 +1,6 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
 import { mapPlaidTransaction, supersededPendingIds } from '../../../../lib/bank-ingest';
+import { readBankJson, projectPlaidAccountMetadata } from '../../../../lib/bank-visibility';
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -9,21 +9,12 @@ var PLAID_BASE = {
   production: 'https://production.plaid.com',
 };
 
-// v55.83-IS (Codex FAIL) — bank ingestion MUST use the service-role key. Falling back to the anon
-// key re-introduces the RLS trap (email-auth: users.id != auth.uid()) and would silently filter the
-// upsert to 0 rows. Return null if it's missing so callers fail loud instead of writing nothing.
-function sb() {
-  var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!key) { return null; }
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, key, { auth: { persistSession: false } });
-}
-
 // POST — pull from Plaid (read-only) and upsert into bank_transactions.
 export async function POST(req) {
   try {
-    var supabase = sb();
-    if (!supabase) { return NextResponse.json({ error: 'Server bank-ingestion key missing (SUPABASE_SERVICE_ROLE_KEY). Bank sync is disabled until it is configured — set it in the server environment.' }, { status: 500 }); }
-    var body = await req.json();
+    var access = await authorizePlaidOperation(req, 'bank_transactions.view', true);
+    var supabase = access.db;
+    var body = await readBankJson(req);
     var connection_id = body.connection_id;
     var start_date = body.start_date;
     var end_date = body.end_date;
@@ -31,10 +22,10 @@ export async function POST(req) {
     var base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
     var connRes = await supabase.from('bank_connections').select('*').eq('id', connection_id).single();
-    if (connRes.error || !connRes.data) return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
+    if (connRes.error || !connRes.data) return plaidJson({ error: 'Connection not found' }, { status: 404 });
     var conn = connRes.data;
     // v55.83-DB — never sync an unassigned bank connection (would create untagged transactions that leak across silos)
-    if (!conn.wave_business_id) { return NextResponse.json({ error: 'This bank connection is not assigned to an accounting silo. Assign it (Bank tab -> Unassigned Bank Data) before syncing.' }, { status: 409 }); }
+    if (!conn.wave_business_id) { return plaidJson({ error: 'This bank connection is not assigned to an accounting silo. Assign it (Bank tab -> Unassigned Bank Data) before syncing.' }, { status: 409 }); }
 
     var today = new Date().toISOString().split('T')[0];
     var thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
@@ -82,7 +73,7 @@ export async function POST(req) {
       data = await plaidRes.json();
       if (data.error_code === 'PRODUCT_NOT_READY') {
         try { await supabase.from('bank_connections').update({ last_sync_status: 'preparing', last_sync_error: 'Plaid is still preparing transactions' }).eq('id', conn.id); } catch (ePrep) {}
-        return NextResponse.json({ pending: true, error_code: 'PRODUCT_NOT_READY', message: 'Your bank is connected. Plaid is still preparing the first batch of transactions (usually under a minute). It will retry automatically.' });
+        return plaidJson({ pending: true, error_code: 'PRODUCT_NOT_READY', message: 'Your bank is connected. Plaid is still preparing the first batch of transactions (usually under a minute). It will retry automatically.' });
       }
       if (data.error_code) { break; } // handled below
       var pageTxns = data.transactions || [];
@@ -98,7 +89,7 @@ export async function POST(req) {
       // symptom: the item silently stopped syncing). Other error codes still surface their message.
       var needsRelink = (data.error_code === 'ITEM_LOGIN_REQUIRED' || data.error_code === 'PENDING_EXPIRATION');
       try { await supabase.from('bank_connections').update({ last_sync_status: 'error', last_sync_error: (data.error_message || data.error_code) }).eq('id', conn.id); } catch (eErr) {}
-      return NextResponse.json({ error: data.error_message || data.error_code, error_code: data.error_code, needs_relink: needsRelink, connection_id: conn.id }, { status: 400 });
+      return plaidJson({ error: data.error_message || data.error_code, error_code: data.error_code, needs_relink: needsRelink, connection_id: conn.id }, { status: 400 });
     }
 
     // v55.83-JU (Codex) — FAIL LOUD if we hit the page-safety cap before fetching the whole window.
@@ -107,7 +98,7 @@ export async function POST(req) {
     // narrow the backfill window (or sync in smaller passes).
     if (totalAvail != null && allTxns.length < totalAvail) {
       try { await supabase.from('bank_connections').update({ last_sync_status: 'error', last_sync_error: 'Backfill window too large: ' + totalAvail + ' transactions exceed the ' + (60 * 500) + '-row single-pass cap.' }).eq('id', conn.id); } catch (eCap) {}
-      return NextResponse.json({ error: 'This backfill window has ' + totalAvail + ' transactions — more than one sync can pull in a single pass (' + (60 * 500) + '). Nothing was imported (to avoid a partial/gap). Narrow the backfill start date and try again, or backfill in smaller windows.', total: totalAvail, fetched: allTxns.length, partial: true, api_build_marker: 'v55.83-JU' }, { status: 400 });
+      return plaidJson({ error: 'This backfill window has ' + totalAvail + ' transactions — more than one sync can pull in a single pass (' + (60 * 500) + '). Nothing was imported (to avoid a partial/gap). Narrow the backfill start date and try again, or backfill in smaller windows.', total: totalAvail, fetched: allTxns.length, partial: true, api_build_marker: 'v55.83-JU' }, { status: 400 });
     }
     var rawTxns = allTxns; // v55.83-JR — ALL pages, not just the first 500
     // Index Plaid accounts so each transaction knows its account type/subtype
@@ -142,7 +133,7 @@ export async function POST(req) {
       var up = await supabase.from('bank_transactions').upsert(rows, { onConflict: 'plaid_transaction_id' });
       if (up.error) {
         console.error('[plaid] upsert error:', up.error.message);
-        return NextResponse.json({ error: up.error.message }, { status: 500 });
+        return plaidJson({ error: up.error.message }, { status: 500 });
       }
       synced = rows.length;
     }
@@ -180,10 +171,10 @@ export async function POST(req) {
       try { await supabase.from('bank_connections').update({ last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null }).eq('id', conn.id); } catch (eBase) {}
     }
 
-    return NextResponse.json({
+    return plaidJson({
       synced: synced,
       superseded: superseded.length,
-      accounts: acctsFromPlaid || [],
+      accounts: projectPlaidAccountMetadata(acctsFromPlaid),
       total: totalAvail,
       pages: pageGuard,
       window: { start: effStart, end: effEnd, incremental: !start_date },
@@ -193,15 +184,15 @@ export async function POST(req) {
       marker_error: markerError
     });
   } catch (e) {
-    return NextResponse.json({ error: (e && e.message) || String(e) }, { status: 500 });
+    return plaidError(e);
   }
 }
 
 // GET — read stored transactions (no Plaid call). Filter by connection / review_status.
 export async function GET(req) {
   try {
-    var supabase = sb();
-    if (!supabase) { return NextResponse.json({ error: 'Server bank-ingestion key missing (SUPABASE_SERVICE_ROLE_KEY).' }, { status: 500 }); }
+    var access = await authorizePlaidOperation(req, 'bank_transactions.view', false);
+    var supabase = access.db;
     var url = new URL(req.url);
     var connectionId = url.searchParams.get('connection_id');
     var reviewStatus = url.searchParams.get('review_status');
@@ -209,9 +200,9 @@ export async function GET(req) {
     if (connectionId) query = query.eq('connection_id', connectionId);
     if (reviewStatus) query = query.eq('review_status', reviewStatus);
     var r = await query.limit(500);
-    if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 });
-    return NextResponse.json({ transactions: r.data });
+    if (r.error) return plaidJson({ error: r.error.message }, { status: 500 });
+    return plaidJson({ transactions: r.data });
   } catch (e) {
-    return NextResponse.json({ error: (e && e.message) || String(e) }, { status: 500 });
+    return plaidError(e);
   }
 }

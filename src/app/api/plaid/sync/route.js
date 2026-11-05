@@ -11,6 +11,7 @@
 //
 // CRON_SECRET protected. Writes nothing to Plaid (read-only). SWC-safe: var + concat.
 import { createClient } from '@supabase/supabase-js';
+import { configuredPlaidCron, isPlaidCron, plaidJson } from '../_auth';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -44,16 +45,13 @@ function callTransactions(base, connectionId, bearer) {
 }
 
 async function runSync(request) {
-  var secret = process.env.CRON_SECRET;
-  if (secret) {
-    var auth = request.headers.get('authorization') || '';
-    if (auth !== ('Bearer ' + secret)) { return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 }); }
-  }
+  if (!configuredPlaidCron(process.env)) { return plaidJson({ ok: false, error: 'Scheduled bank ingestion needs a configured CRON_SECRET.' }, { status: 503 }); }
+  if (!isPlaidCron(request, process.env)) { return plaidJson({ ok: false, error: 'Unauthorized' }, { status: 401 }); }
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return Response.json({ ok: false, error: 'Server database key missing.' }, { status: 500 });
+    return plaidJson({ ok: false, error: 'Server database key missing.' }, { status: 500 });
   }
   if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET) {
-    return Response.json({ ok: false, error: 'Plaid credentials not configured (PLAID_CLIENT_ID / PLAID_SECRET).' }, { status: 400 });
+    return plaidJson({ ok: false, error: 'Plaid credentials not configured (PLAID_CLIENT_ID / PLAID_SECRET).' }, { status: 400 });
   }
 
   var db = admin();
@@ -128,7 +126,7 @@ async function runSync(request) {
     } catch (eLog) { /* best-effort */ }
   }
 
-  return Response.json({
+  return plaidJson({
     ok: true,
     ran_at: new Date().toISOString(),
     scope: includeProduction ? 'all_businesses' : 'test_only',

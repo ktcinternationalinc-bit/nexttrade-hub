@@ -1,0 +1,17 @@
+-- TRUSTED OPERATOR ONLY. The actor has independently reviewed this exact account.
+-- No type, normal side, currency or source-mapping assumptions are changed here.
+-- psql "service=ktc_us" -X -v ON_ERROR_STOP=1 -v actor_uuid=<AuthUUID> \
+--   -v account_uuid=<ledgerUUID> -v expected_code=<reviewed-code> \
+--   -v evidence='Protected accountant-review reference' -f clickbooks/deploy/review-account.psql
+\set ON_ERROR_STOP on
+begin;
+select set_config('cb.actor',:'actor_uuid',true),set_config('cb.account',:'account_uuid',true),set_config('cb.code',:'expected_code',true),set_config('cb.evidence',:'evidence',true);
+do $$ begin
+ if length(trim(current_setting('cb.evidence')))<10 or not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid) then raise exception 'CB_REVIEW_IDENTITY_AND_EVIDENCE_REQUIRED'; end if;
+ perform 1 from clickbooks_us.accounts a join clickbooks_us.books b on b.id=a.book_id where b.code='KTC_US' and a.id=current_setting('cb.account')::uuid and a.code=current_setting('cb.code') and a.is_active for update of a;
+ if not found then raise exception 'CB_REVIEW_ACCOUNT_MISMATCH'; end if;
+end $$;
+update clickbooks_us.accounts set needs_review=false where id=:'account_uuid'::uuid;
+insert into clickbooks_us.workflow_events(kind,object_id,actor_id,details) values('account_review_recorded',:'account_uuid'::uuid,:'actor_uuid'::uuid,jsonb_build_object('expectedCode',:'expected_code','evidence',:'evidence'));
+commit;
+-- This is NOT approval of every Wave source mapping, bank mapping or historical posting.

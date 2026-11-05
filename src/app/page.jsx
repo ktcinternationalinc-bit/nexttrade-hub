@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { filterActiveUsers } from '../lib/active-users';
+import { useBankVisibility } from '../lib/use-bank-visibility';
+import { dashboardCashFlow, dashboardCurrencyRows } from '../lib/dashboard-financial-data';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META, parseAmount, isValidAmount } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import { fmtET, todayET, etDateStr } from '../lib/et-time';
@@ -400,6 +402,7 @@ function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave,
 // MAIN APP
 // ============================================
 export default function App() {
+  const { canViewFullDashboard: seeFullDashboard, canViewBankBalances: seeBankBalances } = useBankVisibility();
   // Auth
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2083,6 +2086,7 @@ export default function App() {
   // count toward invoice.total_collected only.
   const totalBankIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_in || 0), 0), [filteredTreasury]);
   const totalBankOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_out || 0), 0), [filteredTreasury]);
+  const dashboardCurrencyTreasury = useMemo(() => dashboardCurrencyRows(filteredTreasury, seeBankBalances), [filteredTreasury, seeBankBalances]);
 
   // Running balance — computed in display order so top row always = current net when newest first
   const treasuryBalanceMap = useMemo(() => {
@@ -2875,6 +2879,14 @@ export default function App() {
       setMode('ytd');
     }
     setTimeout(() => setTabLoading(false), 300);
+  };
+
+  // Full dashboard is read access. Its links never add access to another
+  // module or open the legacy Treasury editing drills on their own.
+  const openDashboardModule = (target, opts) => {
+    if (!visibleTabs.some(item => item.id === target)) return false;
+    navigate(target, opts);
+    return true;
   };
 
   // Open an invoice while preserving the user's exact Treasury position so
@@ -5520,7 +5532,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-OV</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-OX</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5540,10 +5552,10 @@ export default function App() {
                 focus): left = go to Treasury, right = show/hide. When masked we
                 also drop the coloured status dot, because a green-vs-red dot
                 would still leak whether the company is up or down. */}
-            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+            {(tab === 'dashboard' ? seeFullDashboard : (isSuperAdmin || modulePerms?.['Treasury'] === true)) && (
               <div className="flex items-center border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
                 style={{ background: '#0a0a0a' }}>
-                <button onClick={() => { setTab('treasury'); setMode('all'); }}
+                <button onClick={() => { if (openDashboardModule('treasury')) setMode('all'); }}
                   className="group flex items-center gap-2 pl-3 pr-2 py-1.5"
                   aria-label="View Treasury">
                   <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
@@ -5749,23 +5761,22 @@ export default function App() {
 
         {/* SECONDARY ROW — live ticker of key metrics. Pure terminal flair.
             Renders only on dashboard to keep other tabs distraction-free. */}
-        {tab === 'dashboard' && (isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+        {tab === 'dashboard' && seeFullDashboard && (
           <div className="hidden md:block px-4 py-1.5 border-t border-zinc-900 overflow-hidden" style={{ background: '#0a0a0a' }}>
             <div className="flex items-center gap-6 text-[10px] font-mono whitespace-nowrap overflow-x-auto" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
               {(() => {
                 const todayN = todayET();
                 const monthStart = todayN.substring(0, 7) + '-01';
-                const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
-                const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
-                const monthNet = monthIn - monthOut;
+                const monthFlow = dashboardCashFlow(treasury, monthStart, seeBankBalances);
+                const monthIn = monthFlow.incoming, monthOut = monthFlow.outgoing, monthNet = monthFlow.net;
                 const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
                 const overdue = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).reduce((a, i) => a + Number(i.outstanding || 0), 0);
                 const pendCk = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
                 return (
                   <>
-                    <span><span className="text-zinc-500">MTD IN</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
-                    <span><span className="text-zinc-500">MTD OUT</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
-                    <span><span className="text-zinc-500">MTD NET</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
+                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK IN' : 'MTD CASH IN'}</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
+                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK OUT' : 'MTD CASH OUT'}</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
+                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK NET' : 'MTD CASH NET'}</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
                     <span className="text-zinc-700">│</span>
                     <span><span className="text-zinc-500">A/R</span> <span className="text-zinc-200 tabular-nums">{fE(ar)}</span></span>
                     <span><span className="text-zinc-500">OVERDUE</span> <span className={'tabular-nums ' + (overdue > 0 ? 'text-orange-400' : 'text-zinc-200')}>{fE(overdue)}</span></span>
@@ -10226,6 +10237,8 @@ export default function App() {
                 below (not above) the new dashboard GUI". */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
+              canViewFullDashboard={seeFullDashboard}
+              onOpenCompanySales={visibleTabs.some(item => item.id === 'sales') ? opts => openDashboardModule('sales', opts) : undefined}
               renderSection="rest" />
 
             {/* v55.83-A.6.27.9 — What's New is COLLAPSED by default now.
@@ -10264,16 +10277,15 @@ export default function App() {
                 in JetBrains Mono. Sharp corners. Click-through on every
                 tile to the relevant tab.
                 =========================================================== */}
-            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (() => {
+            {seeFullDashboard && (() => {
               const todayN = todayET();
               const monthStart = todayN.substring(0, 7) + '-01';
               const sevenDaysOut = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
               const myId = userProfile?.id;
 
               // Money flows
-              const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
-              const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
-              const monthNet = monthIn - monthOut;
+              const monthFlow = dashboardCashFlow(treasury, monthStart, seeBankBalances);
+              const monthIn = monthFlow.incoming, monthOut = monthFlow.outgoing, monthNet = monthFlow.net;
 
               // A/R and overdue
               const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
@@ -10299,8 +10311,8 @@ export default function App() {
                 var days = [];
                 for (var i = 29; i >= 0; i--) {
                   var d = new Date(Date.now() - i * 86400000).toISOString().substring(0, 10);
-                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
-                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0), 0);
+                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0), 0);
                   days.push(dayIn - dayOut);
                 }
                 return days;
@@ -10367,11 +10379,11 @@ export default function App() {
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-zinc-800 border border-zinc-800">
                     {/* TILE 1 — TREASURY NET (with sparkline) */}
                     <Tile
-                      label="TREASURY NET"
+                      label="PHYSICAL CASH NET"
                       value={(allTimeNet >= 0 ? '+' : '') + fE(allTimeNet)}
                       valueColor={allTimeNet >= 0 ? '#34d399' : '#f87171'}
                       sub="all-time · click for detail"
-                      onClick={() => { setTab('treasury'); setMode('all'); }}
+                      onClick={() => { if (openDashboardModule('treasury')) setMode('all'); }}
                       badge={<span className="w-1.5 h-1.5 rounded-full" style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />}>
                       {/* 30-day sparkline */}
                       {sparkData.length > 1 && (
@@ -10390,11 +10402,11 @@ export default function App() {
 
                     {/* TILE 2 — MTD NET */}
                     <Tile
-                      label="MTD NET"
+                      label={seeBankBalances ? 'MTD CASH + BANK NET' : 'MTD CASH NET'}
                       value={(monthNet >= 0 ? '+' : '') + fE(monthNet)}
                       valueColor={monthNet >= 0 ? '#34d399' : '#f87171'}
                       sub={'IN ' + fE(monthIn) + ' / OUT ' + fE(monthOut)}
-                      onClick={() => { setTab('treasury'); setMode('mtd'); }}
+                      onClick={() => { if (openDashboardModule('treasury')) setMode('mtd'); }}
                     />
 
                     {/* TILE 3 — ACCOUNTS RECEIVABLE */}
@@ -10405,7 +10417,7 @@ export default function App() {
                       sub={overdueAmt > 0
                         ? <span className="text-orange-400">{overdueInvs.length} overdue · {fE(overdueAmt)}</span>
                         : 'no overdue invoices'}
-                      onClick={() => { setTab('sales'); }}
+                      onClick={() => { openDashboardModule('sales'); }}
                       badge={overdueAmt > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-orange-400" style={{ boxShadow: '0 0 6px #fb923c' }} /> : null}
                     />
 
@@ -10417,7 +10429,7 @@ export default function App() {
                       sub={overdueCk.length > 0
                         ? <span className="text-red-400">{overdueCk.length} overdue · next 7d {fE(next7CkAmt)}</span>
                         : <span>next 7d {fE(next7CkAmt)} ({next7Ck.length})</span>}
-                      onClick={() => { setTab('checks'); }}
+                      onClick={() => { openDashboardModule('checks'); }}
                       badge={overdueCk.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : null}
                     />
 
@@ -10430,7 +10442,7 @@ export default function App() {
                       sub={myT.length > 0
                         ? <span><span className="text-sky-400">{myT.length} mine</span>{overdueT.length > 0 ? <span className="text-red-400"> · {overdueT.length} overdue</span> : null}</span>
                         : 'none assigned to me'}
-                      onClick={() => { setTab('tickets'); }}
+                      onClick={() => { openDashboardModule('tickets'); }}
                       badge={overdueT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : (myT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-sky-400" style={{ boxShadow: '0 0 6px #38bdf8' }} /> : null)}
                     />
 
@@ -10441,7 +10453,7 @@ export default function App() {
                       unit={teamUsers.length === 1 ? 'user' : 'users'}
                       valueColor="#fafafa"
                       sub={<span className="font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{invoices.length} INV · {treasury.length} TXN</span>}
-                      onClick={() => { setTab('admin'); }}
+                      onClick={() => { openDashboardModule('admin'); }}
                       badge={<span className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{ boxShadow: '0 0 6px #34d399' }} />}
                     />
                   </div>
@@ -10509,10 +10521,10 @@ export default function App() {
               const firstName = (userProfile.name || '').split(' ')[0];
 
               // Permission checks
-              const hasTreasury = isSuperAdmin || modulePerms?.['Treasury'];
-              const hasSales = isSuperAdmin || modulePerms?.['Sales'];
+              const hasTreasury = seeFullDashboard || isSuperAdmin || modulePerms?.['Treasury'];
+              const hasSales = seeFullDashboard || isSuperAdmin || modulePerms?.['Sales'];
               const hasTickets = isSuperAdmin || modulePerms?.['Tickets'];
-              const hasChecks = isSuperAdmin || modulePerms?.['Checks'];
+              const hasChecks = seeFullDashboard || isSuperAdmin || modulePerms?.['Checks'];
 
               // Login analysis
               const prevLogins = (lastLoginInfo || []).filter(s => s.date !== todayStr);
@@ -10744,7 +10756,7 @@ export default function App() {
               const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
               const todayEvents = dashEvents.filter(e => e.event_date === todayStr && (e.assigned_to === myId || e.created_by === myId || !e.assigned_to));
               // Check due reminders (today + tomorrow) — for treasury-access users
-              const hasTreasuryAccess = userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury'] === true;
+              const hasTreasuryAccess = seeFullDashboard || userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury'] === true;
               const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
               const checksDueToday = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === todayStr) : [];
               const checksDueTomorrow = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowStr) : [];
@@ -11375,7 +11387,7 @@ export default function App() {
                 per Max's reorder request May 15 2026. See new mount below. */}
 
             {/* ===== PENDING CHECKS ===== */}
-            {pendingChecks && pendingChecks.length > 0 && (isSuperAdmin || modulePerms['Treasury']) && (() => {
+            {pendingChecks && pendingChecks.length > 0 && seeFullDashboard && (() => {
               const expanded = hideSections.dash_pendChecks;
               const sorted = [...pendingChecks].sort((a,b) => (a.check_date || a.date || '').localeCompare(b.check_date || b.date || ''));
               const visible = expanded ? sorted : sorted.slice(0, 5);
@@ -11413,16 +11425,9 @@ export default function App() {
 
 
 
-            {/* v55.83-A.6.27.11 (Max May 15 2026) — Per Max: "no one except
-                the super admin and those with treasury access permissioning
-                can see any financial data on the dashboard from the banks
-                or transactions or sales or otherwise (except for monthly
-                sales)". Wrap the entire Financial Overview block in a single
-                top-level gate so Sales-only users no longer see ANY of it
-                (invoices, cash register, etc.). Monthly Sales is rendered
-                inside PersonalDashboard and stays available to all per the
-                "except for monthly sales" carve-out. */}
-            {(isSuperAdmin || modulePerms['Treasury']) && (<>
+            {/* Shared financial overview requires the dedicated verified
+                dashboard grant. Bank summaries still require their own grant. */}
+            {seeFullDashboard && (<>
             {/* Section: Financial */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
               <div style={{ width: 3, height: 20, borderRadius: 2, background: '#10b981' }} />
@@ -11456,24 +11461,22 @@ export default function App() {
               )}
             </div>
 
-            {/* Invoices — Sales or Treasury access. After A.6.27.11 the outer
-                gate is already Treasury OR super_admin, so this inner gate is
-                effectively the same; keeping it for defense-in-depth. */}
-            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
+            {/* Dashboard read access does not change invoice edit permissions. */}
+            {seeFullDashboard && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
             {!hideSections.invoices && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={() => setDrillType('invoiced')} spark={sparkData.inv} />
-              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={() => setDrillType('collected')} spark={sparkData.col} />
-              <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={() => setDrillType('outstanding')} />
-              <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => navigate('debts')} />
+              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={canEditInvoices ? () => setDrillType('invoiced') : undefined} spark={sparkData.inv} />
+              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={canEditInvoices ? () => setDrillType('collected') : undefined} spark={sparkData.col} />
+              <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={canEditInvoices ? () => setDrillType('outstanding') : undefined} />
+              <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => openDashboardModule('debts')} />
             </div>}
             </>)}
 
-            {/* Cash Register — Treasury access ONLY */}
-            {(isSuperAdmin || modulePerms['Treasury']) && (<>
+            {/* Physical cash figures are part of the shared dashboard. */}
+            {seeFullDashboard && (<>
             <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, cash: !hideSections.cash})}>
               <div>
                 <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
@@ -11484,12 +11487,12 @@ export default function App() {
             {!hideSections.cash && <>
             <div className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide mb-1">Safe / الخزنة (physical cash)</div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Safe only / خزنة فقط" color="#10b981" onClick={() => setTreasuryDrill('in')} spark={sparkData.cin} />
-              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Safe only / خزنة فقط" color="#ef4444" onClick={() => setTreasuryDrill('out')} spark={sparkData.cout} />
-              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Safe balance / رصيد الخزنة" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
-              <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => navigate('checks')} />
+              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Safe only / خزنة فقط" color="#10b981" onClick={canEditTreasury ? () => setTreasuryDrill('in') : undefined} spark={sparkData.cin} />
+              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Safe only / خزنة فقط" color="#ef4444" onClick={canEditTreasury ? () => setTreasuryDrill('out') : undefined} spark={sparkData.cout} />
+              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Safe balance / رصيد الخزنة" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={canEditTreasury ? () => setTreasuryDrill('net') : undefined} />
+              <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => openDashboardModule('checks')} />
             </div>
-            {(totalBankIn > 0 || totalBankOut > 0) && (
+            {seeBankBalances && (totalBankIn > 0 || totalBankOut > 0) && (
               <>
                 <div className="text-[10px] text-indigo-700 font-bold uppercase tracking-wide mb-1">🏦 Bank / البنك (tracked separately — does NOT affect safe balance)</div>
                 <div className="grid grid-cols-3 gap-3 mb-5">
@@ -11532,8 +11535,8 @@ export default function App() {
             </>}{/* end cash register gate */}
             </>)}{/* end treasury gate */}
 
-            {/* Monthly Sales — Sales or Treasury permission, current year only */}
-            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (
+            {/* Company monthly sales, current year only. */}
+            {seeFullDashboard && (
             <div className="bg-white rounded-xl p-4 mb-4">
               <h3 className="text-sm font-bold mb-2">📊 Monthly Sales — {new Date().getFullYear()} / المبيعات الشهرية</h3>
               {(() => {
@@ -11572,7 +11575,7 @@ export default function App() {
                           const monthTo2 = m.month + '-' + String(lastDay2).padStart(2, '0');
                           return (
                             <tr key={m.month}
-                                onClick={() => navigate('sales', { from: monthFrom2, to: monthTo2 })}
+                                onClick={() => openDashboardModule('sales', { from: monthFrom2, to: monthTo2 })}
                                 title={'Click to see all ' + m.count + ' orders from ' + m.month}
                                 className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
                               <td className="px-2 py-1 text-xs font-semibold">{m.month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
@@ -11650,15 +11653,15 @@ export default function App() {
               );
             })()}
 
-            {/* Income/Expense Buckets + USD — Treasury access only */}
-            {(isSuperAdmin || modulePerms['Treasury']) && (<>
+            {/* Company income/expense figures; underlying write rights stay separate. */}
+            {seeFullDashboard && (<>
             {/* Income Buckets */}
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-4">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
                 {incomeBuckets.map((e, i) => (
                   <div key={e.cat}>
-                    <div onClick={() => setExpenseDrill('in:' + e.cat)}
+                    <div onClick={canEditTreasury ? () => setExpenseDrill('in:' + e.cat) : undefined}
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
@@ -11683,7 +11686,7 @@ export default function App() {
               <h3 className="text-sm font-bold mb-2 text-red-700">Expense Buckets / تصنيف المنصرفات</h3>
               {expenseBuckets.map((e, i) => (
                 <div key={e.cat}>
-                  <div onClick={() => setExpenseDrill(e.cat)}
+                    <div onClick={canEditTreasury ? () => setExpenseDrill(e.cat) : undefined}
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
@@ -11743,7 +11746,7 @@ export default function App() {
             })()}
             </>)}{/* end treasury gate for buckets */}
             </div>{/* end financial-command */}
-            </>)}{/* v55.83-A.6.27.11 — end gate: super_admin OR Treasury only */}
+            </>)}{/* end verified Full dashboard access gate */}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
             {egyptBankTxns.length > 0 && (isSuperAdmin || modulePerms['Egypt Bank']) && (() => {
@@ -11760,7 +11763,8 @@ export default function App() {
                   </div>
                   {!hideSections.egyptBankDash && (
                     <div>
-                      <div className="grid grid-cols-4 gap-2 mb-2">
+                      <div className={'grid gap-2 mb-2 ' + (seeBankBalances ? 'grid-cols-4' : 'grid-cols-2')}>
+                        {seeBankBalances && <>
                         <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
                           <div className="text-[9px] text-green-600 font-bold">Deposits</div>
                           <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
@@ -11769,6 +11773,7 @@ export default function App() {
                           <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
                           <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
                         </div>
+                        </>}
                         <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
                           <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
                           <div className="text-xs font-black text-amber-900">{unmatched}</div>
@@ -11800,16 +11805,16 @@ export default function App() {
 
 
             {/* ===== USD DOLLAR LEDGER ===== */}
-            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
-              const usdIn = filteredTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
-              const usdOut = filteredTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
+            {seeFullDashboard && (() => {
+              const usdIn = dashboardCurrencyTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
+              const usdOut = dashboardCurrencyTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
               const usdNet = usdIn - usdOut;
-              const usdTxns = filteredTreasury.filter(t => Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0);
+              const usdTxns = dashboardCurrencyTreasury.filter(t => Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0);
               if (usdTxns.length === 0) return null;
               return (
                 <div className="mt-6">
                   <div className="bg-amber-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, usd: !hideSections.usd})}>
-                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
+                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار{!seeBankBalances && ' · Physical cash'}</span>
                     <span className="text-xs text-amber-600">{hideSections.usd ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.usd && (<>
@@ -11858,8 +11863,8 @@ export default function App() {
             })()}
 
             {/* ===== FOREIGN CURRENCY LEDGER (EUR/GBP/SAR/AED/etc) ===== */}
-            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
-              const foreignTxns = filteredTreasury.filter(t => Number(t.foreign_amount || 0) > 0 && t.foreign_currency);
+            {seeFullDashboard && (() => {
+              const foreignTxns = dashboardCurrencyTreasury.filter(t => Number(t.foreign_amount || 0) > 0 && t.foreign_currency);
               if (foreignTxns.length === 0) return null;
               const byCur = {};
               foreignTxns.forEach(t => {
@@ -11872,7 +11877,7 @@ export default function App() {
               return (
                 <div className="mt-6">
                   <div className="bg-indigo-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, foreign: !hideSections.foreign})}>
-                    <span className="text-sm font-bold text-indigo-800">🌍 FOREIGN CURRENCY LEDGER / دفتر العملات الأجنبية</span>
+                    <span className="text-sm font-bold text-indigo-800">🌍 FOREIGN CURRENCY LEDGER / دفتر العملات الأجنبية{!seeBankBalances && ' · Physical cash'}</span>
                     <span className="text-xs text-indigo-600">{hideSections.foreign ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.foreign && Object.entries(byCur).map(([cur, data]) => (
@@ -11919,7 +11924,7 @@ export default function App() {
 
 
             {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
-            {isAdmin && (() => {
+            {seeFullDashboard && (() => {
               const divData = {};
               filteredInvoices.forEach(inv => {
                 const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);

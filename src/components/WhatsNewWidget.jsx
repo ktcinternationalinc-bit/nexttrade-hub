@@ -33,6 +33,37 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OX',
+    date: '2026-11-04',
+    label: 'ClickBooks US reviewed and merged — your own books, installed but switched off',
+    bullets: [
+      'The ClickBooks accounting system (built in a parallel session) was reviewed line-by-line as an implementing second party, tested against a real database, and merged into this build without losing any existing work — reconciliation, the US/Egypt split, P&L, release numbers and payment matching are all pinned by tests and intact.',
+      'Four new accounting tabs are included but HIDDEN until switched on: ClickBooks · US, Rules & Migration, Reports & Tax, and Parallel & Cutover. Nothing posts to the new ledger yet; Wave stays the boss of US books.',
+      'A new "📗 Ledgerly" tab can mirror an outside accounting source read-only every 15 minutes — it also stays hidden until its credentials are configured.',
+      'Bank balances and the company-wide dashboard are now protected by their own two permissions ("Full dashboard" and "Banking information"), managed in Settings → Financial data access. A role or module toggle can no longer reveal balances.',
+      'IMPORTANT: this build needs one SQL file run in Supabase and two settings added in Vercel before banking screens work — the deployment note that comes with this zip walks through it step by step.',
+    ],
+    technical: {
+      superAdminOnly: true,
+      items: [
+        'Merged ClickBooks P1-P8 package (base = our OW snapshot; verified by full tree diff, 0 residual). Strands: clickbooks_us RPC facade layer (zero direct public-table selects), bank-visibility protected grants (financial_visibility_permissions + 5 security-definer fns), Ledgerly snapshot mirror, backup + /api/users + Plaid auth hardening.',
+        'Gates: acorn parse 129 files OK; ClickBooks handler suites 87/87; package bank/ledgerly/user-admin suites 93/93 (+ SQL migration 15/15 against PGlite Postgres 18); full regression 123/123 required (is-unmatch test unblocked here, 4 legacy tests realigned by package reviewed and adopted); new OX merge-integrity test 23 pins.',
+        'NOT DONE (deliberate, per package design): no ClickBooks posting, no migration run, no cutover, no shadow sync - all DB-side switches remain off; the 21 clickbooks_us migrations are ALREADY installed in Supabase by the parallel session. DEPLOY PREREQS: run sql/bank-balance-visibility.sql (+ sql/ledgerly-automatic-sync.sql if Ledgerly wanted), set HUB_SUPER_ADMIN_AUTH_USER_IDS (Supabase AUTH uuid, not public.users id) and optionally HUB_ADMIN_AUTH_USER_IDS in Vercel; without these, bank-write/user-admin/dashboard-treasury fail closed with 503 by design.',
+      ],
+    },
+  },
+  {
+    version: 'v55.83-OW',
+    date: '2026-10-15',
+    label: 'Every card defines itself \u2014 and every drill proves its own sum',
+    items: [
+      '**\u2139\ufe0f New button on the Accounting Dashboard: \u201cWhat does each card mean?\u201d** \u2014 opens exact definitions: Open AR (dated in period, balance above zero TODAY \u2014 a fully-paid invoice can never appear), Paid in period (money RECEIVED in the period by payment date \u2014 0.00 balance there is GOOD, it means fully collected; a partially-paid invoice legitimately appears in BOTH cards), Overdue (the slice of Open AR past due, always \u2264 Open AR), Credits (overpaid), Approvals (all-time), and B + C together = Open AR.',
+      '**\u03a3 Every drill-down now shows \u03a3 Total / \u03a3 Paid / \u03a3 Balance across its rows** \u2014 so you can SEE that the list sums to the card\'s number, to the cent, every time. The cards no longer ask to be trusted; they show their work.',
+      '**\u2705 Audit answer to your question:** zero balances can never appear in Open AR \u2014 the code throws out anything \u2264 0 before a row is built, and a launch test now pins that. What you saw was the Paid-in-period list on the older OT build (its balance column was fixed in OU).',
+      { superAdminOnly: true, text: 'v55.83-OW \u2014 NO SQL. AccountingDashboard: showLegend toggle + definitions panel (white bg, dark text per contrast rule); DrillPanel \u03a3 footer computed over drill.rows; Open-AR and Paid-in-period drill notes state the zero-balance impossibility and the legitimate overlap. OW addendum 4 assertions (incl. pinning ob<=0.005 guard); runner all green.' },
+    ],
+  },
+  {
     version: 'v55.83-OV',
     date: '2026-10-15',
     label: 'Consistency audit: every money card now computes from ONE canon',

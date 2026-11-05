@@ -1,0 +1,32 @@
+{
+  "base_archive": "NEXTTRADE-HUB-v55.83-OW.zip",
+  "base_zip_sha256": "45c8f222f3006e98f44ed462a6022f4b34e7c73ecebbe9fa9f51c5e2a79f5e16",
+  "changed_existing_files": [
+    "src/components/AccountingTab.jsx"
+  ],
+  "missing_existing_files": [],
+  "new_files": [
+    "clickbooks/.env.example",
+    "clickbooks/README.md",
+    "clickbooks/docs/CLAUDE_HANDOFF.docx",
+    "clickbooks/docs/CLAUDE_HANDOFF.md",
+    "clickbooks/qa/AccountingTab.patch",
+    "clickbooks/qa/baseline-failure-detail.log",
+    "clickbooks/qa/baseline-regression.log",
+    "clickbooks/qa/npm-offline.log",
+    "clickbooks/qa/post-change-regression.log",
+    "clickbooks/qa/read-handler-final.log",
+    "clickbooks/qa/read-handler.log",
+    "clickbooks/qa/source-diff.json",
+    "clickbooks/qa/verified-results.json",
+    "clickbooks/sql/01_us_core.sql",
+    "clickbooks/sql/02_seed_us_chart.sql",
+    "clickbooks/sql/03_source_audit.sql",
+    "clickbooks/sql/04_scope_and_read_facade.sql",
+    "clickbooks/tests/ledger_qa.sql",
+    "clickbooks/tests/read-handler.test.mjs",
+    "src/app/api/accounting/clickbooks-us/route.js",
+    "src/components/ClickBooksUSCore.js",
+    "src/lib/clickbooks-us-read.js"
+  ]
+}

@@ -1,0 +1,18 @@
+-- TRUSTED OPERATOR ONLY. Match provider account to actual ledger account using statements.
+-- psql "service=ktc_us" -X -v ON_ERROR_STOP=1 -v actor_uuid=<AuthUUID> \
+--   -v provider_account_id=<exact-ID-from-US-bank-record> -v ledger_account_uuid=<ledgerUUID> \
+--   -v evidence='Protected bank-statement/account-ownership reference' -f clickbooks/deploy/review-bank-map.psql
+\set ON_ERROR_STOP on
+begin;
+select set_config('cb.actor',:'actor_uuid',true),set_config('cb.provider',:'provider_account_id',true),set_config('cb.ledger',:'ledger_account_uuid',true),set_config('cb.evidence',:'evidence',true);
+do $$ declare b clickbooks_us.books%rowtype; begin
+ select * into strict b from clickbooks_us.books where code='KTC_US' for update;
+ if length(trim(current_setting('cb.evidence')))<10 or not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid) then raise exception 'CB_REVIEW_IDENTITY_AND_EVIDENCE_REQUIRED'; end if;
+ if not exists(select 1 from public.bank_transactions where wave_business_id=b.wave_business_id and account_id=current_setting('cb.provider')) then raise exception 'CB_BANK_SOURCE_OUTSIDE_US_SCOPE'; end if;
+ if not exists(select 1 from clickbooks_us.accounts where book_id=b.id and id=current_setting('cb.ledger')::uuid and is_active and not needs_review and is_bank_sensitive and account_type in ('asset','liability')) then raise exception 'CB_BANK_LEDGER_NOT_REVIEWED'; end if;
+end $$;
+insert into clickbooks_us.bank_ledger_map(book_id,provider_account_id,account_id,reviewed,evidence) select id,:'provider_account_id',:'ledger_account_uuid'::uuid,true,:'evidence' from clickbooks_us.books where code='KTC_US'
+on conflict(book_id,provider_account_id) do update set account_id=excluded.account_id,reviewed=true,evidence=excluded.evidence;
+insert into clickbooks_us.workflow_events(kind,object_id,actor_id,details) values('bank_map_review_recorded',:'ledger_account_uuid'::uuid,:'actor_uuid'::uuid,jsonb_build_object('providerAccountId',:'provider_account_id','evidence',:'evidence'));
+commit;
+-- Revalidation/reapproval is mandatory for previously approved manifests after mapping changes.

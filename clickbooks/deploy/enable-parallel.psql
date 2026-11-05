@@ -1,0 +1,16 @@
+-- Starts ClickBooks shadow posting while Wave remains writable/primary.
+-- Requires certified historical books, reviewed revenue default, and reviewed mappings for every active provider bank account.
+\set ON_ERROR_STOP on
+begin;
+select set_config('cb.actor', :'actor_uuid', true);
+do $$ declare b clickbooks_us.books%rowtype; begin
+ if not exists(select 1 from public.bank_visibility_identity_map() where auth_user_id=current_setting('cb.actor')::uuid) then raise exception 'CB_IDENTITY_NOT_VERIFIED'; end if;
+ select * into strict b from clickbooks_us.books where code='KTC_US' for update;
+ if not b.historical_data_ready or b.opening_cutoff is null then raise exception 'CB_HISTORY_NOT_CERTIFIED'; end if;
+ if not exists(select 1 from clickbooks_us.posting_defaults d join clickbooks_us.accounts a on a.id=d.invoice_income_account_id and a.book_id=d.book_id where d.book_id=b.id and d.reviewed and a.is_active and not a.needs_review and a.account_type='income') then raise exception 'CB_POSTING_DEFAULT_ACCOUNT'; end if;
+ if exists(select 1 from public.plaid_accounts p join public.bank_connections c on c.id=p.connection_id where c.wave_business_id=b.wave_business_id and c.status='active' and not exists(select 1 from clickbooks_us.bank_ledger_map m join clickbooks_us.accounts a on a.id=m.account_id and a.book_id=m.book_id where m.book_id=b.id and m.provider_account_id=p.plaid_account_id and m.reviewed and a.is_active and not a.needs_review and a.is_bank_sensitive)) then raise exception 'CB_BANK_MAPPING_REVIEW_REQUIRED'; end if;
+ update clickbooks_us.books set posting_enabled=true where id=b.id;
+ update clickbooks_us.cutover_control set phase='parallel',shadow_sync_enabled=true,cutover_execution_enabled=false,updated_by=current_setting('cb.actor')::uuid,updated_at=now() where singleton;
+ insert into clickbooks_us.workflow_events(kind,actor_id,details) values('parallel_enabled',current_setting('cb.actor')::uuid,jsonb_build_object('waveWritesChanged',false));
+end $$;
+commit;

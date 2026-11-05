@@ -1,0 +1,5 @@
+-- Approves an immutable staged cutover snapshot. Does not disable Wave.
+\set ON_ERROR_STOP on
+begin;
+select clickbooks_us.approve_cutover(:'run_uuid'::uuid,:'actor_uuid'::uuid) as approval_hash;
+commit;

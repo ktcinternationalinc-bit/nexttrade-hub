@@ -4,8 +4,10 @@ import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supa
 import * as XLSX from 'xlsx';
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
+import { useBankVisibility } from '../lib/use-bank-visibility';
 
 export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload, recalcInvoiceCollected }) {
+  const { canViewBankBalances: seeBankBalances } = useBankVisibility();
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1276,8 +1278,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     return arr;
   }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo, filterMonth, filterYear, isSuperAdmin, showHidden]);
 
-  const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
+  const totalIn = seeBankBalances ? filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0) : null;
+  const totalOut = seeBankBalances ? filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0) : null;
   const matchedCount = filtered.filter(t => t.matched_invoice_id).length;
   const unmatchedCount = filtered.filter(t => !t.matched_invoice_id && !t.is_owner_deposit).length;
 
@@ -1357,14 +1359,14 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           <div className="space-y-2">
             {accounts.map(a => {
               const txnCount = transactions.filter(t => t.account_id === a.id).length;
-              const balance = transactions.filter(t => t.account_id === a.id).reduce((s, t) => s + (t.amount || 0), 0);
+              const balance = seeBankBalances ? transactions.filter(t => t.account_id === a.id).reduce((s, t) => s + (t.amount || 0), 0) : null;
               return (
                 <div key={a.id} className="bg-white rounded-xl p-4 shadow-sm border">
                   <div className="flex justify-between items-center">
                     <div>
                       <div className="font-bold text-sm">{a.bank_name}</div>
                       <div className="text-[10px] text-slate-500">{a.account_number} {a.account_name ? `• ${a.account_name}` : ''} • {a.currency}</div>
-                      <div className="text-xs mt-1">{txnCount} transactions • Net: <span className={balance >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{fmtE(balance)}</span></div>
+                      <div className="text-xs mt-1">{txnCount} transactions{seeBankBalances && <> • Net: <span className={balance >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{fmtE(balance)}</span></>}</div>
                     </div>
                     <div className="flex gap-1">
                       <button onClick={() => { setAccForm(a); setShowAddAccount(true); }} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
@@ -1432,7 +1434,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               </div>
               {!importAccount && <p className="text-xs text-red-500 font-semibold mb-2">⚠️ Select an account above first</p>}
               {/* Summary */}
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              {seeBankBalances && <div className="grid grid-cols-3 gap-2 mb-3">
                 <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
                   <div className="text-[9px] text-green-600 font-bold">Deposits</div>
                   <div className="text-sm font-black text-green-700">+{totalDeposits.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
@@ -1447,7 +1449,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   <div className="text-[9px] text-blue-600 font-bold">Net</div>
                   <div className={'text-sm font-black ' + ((totalDeposits - totalWithdrawals) >= 0 ? 'text-blue-700' : 'text-red-700')}>{(totalDeposits - totalWithdrawals).toLocaleString(undefined, {minimumFractionDigits:2})}</div>
                 </div>
-              </div>
+              </div>}
               <div className="overflow-auto max-h-[500px] bg-white rounded-xl border">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 bg-slate-50">
@@ -1709,7 +1711,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           </div>
 
           {/* Summary */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+          <div className={'grid grid-cols-2 gap-2 mb-3' + (seeBankBalances ? ' md:grid-cols-4' : '')}>
+            {seeBankBalances && <>
             <div className="bg-green-50 rounded-xl p-3 border border-green-200">
               <div className="text-[10px] text-green-600 font-bold">Deposits / إيداعات</div>
               <div className="text-lg font-black text-green-700">{fmtE(totalIn)}</div>
@@ -1718,6 +1721,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               <div className="text-[10px] text-red-600 font-bold">Withdrawals / سحب</div>
               <div className="text-lg font-black text-red-700">{fmtE(totalOut)}</div>
             </div>
+            </>}
             <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
               <div className="text-[10px] text-blue-600 font-bold">Matched / متطابق</div>
               <div className="text-lg font-black text-blue-700">{matchedCount}</div>

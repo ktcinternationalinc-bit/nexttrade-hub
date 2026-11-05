@@ -1,0 +1,2 @@
+src/components/ClickBooksUSWorkflows.jsx: syntax transpile PASS (not typecheck, Next build or browser test)
+src/components/AccountingTab.jsx: syntax transpile PASS (not typecheck, Next build or browser test)

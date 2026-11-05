@@ -5,8 +5,15 @@ import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered } from 
 import SiloBanner from './SiloBanner';
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
+import { useBankVisibility } from '../lib/use-bank-visibility';
+import { bankSessionHeaders } from '../lib/bank-visibility-client';
+
+// These operational projections deliberately omit provider tokens and balances.
+const CONNECTION_FIELDS = 'id,institution_id,institution_name,status,last_synced,created_at,wave_business_id,last_sync_status,last_sync_error,initial_backfill_start_date,last_successful_posted_date,last_successful_plaid_sync_at';
+const ACCOUNT_FIELDS = 'id,connection_id,business_id,plaid_account_id,name,official_name,mask,type,subtype,iso_currency,is_read_only,updated_at,wave_business_id';
 
 export default function BankTab({ user, supabase, modulePerms, userProfile, onGoToBankReview }) {
+  const { canViewBankBalances: seeBankBalances } = useBankVisibility();
   const [connections, setConnections] = useState([]);
   const [plaidAccts, setPlaidAccts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -42,7 +49,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     if (!bizId) { setError('Choose an accounting silo to assign this bank connection to.'); return; }
     setAssigning(true); setError('');
     try {
-      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'assign_connection_silo', connection_id: conn.id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: await bankSessionHeaders(supabase, true), body: JSON.stringify({ action: 'assign_connection_silo', connection_id: conn.id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
       const j = await res.json();
       if (!j || !j.ok) { setError('Assign failed: ' + ((j && j.error) || 'unknown')); }
       else { setNotice('Connection assigned to ' + bizLabel(bizId) + ' — ' + (j.restamped || 0) + ' transaction(s) restamped.'); await loadData(); }
@@ -54,7 +61,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     if (!window.confirm('Archive this bank connection?\n\nIt will be hidden from the active list. Its transactions and matches are kept; you can re-connect later if needed. Use this to remove duplicate/old connection groups.')) return;
     setAssigning(true); setError('');
     try {
-      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'archive_connection', connection_id: conn.id, user_id: (userProfile && userProfile.id) || null }) });
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: await bankSessionHeaders(supabase, true), body: JSON.stringify({ action: 'archive_connection', connection_id: conn.id, user_id: (userProfile && userProfile.id) || null }) });
       const j = await res.json();
       if (!j || !j.ok) { setError('Archive failed: ' + ((j && j.error) || 'unknown')); }
       else { setNotice('Connection archived — duplicate group removed from the active list.'); await loadData(); }
@@ -68,7 +75,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     if (!bizId) { setError('Choose a silo for this account.'); return; }
     setAssigning(true); setError('');
     try {
-      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'assign_account_silo', plaid_account_id: a.plaid_account_id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
+      const res = await fetch('/api/accounting/bank-write', { method: 'POST', headers: await bankSessionHeaders(supabase, true), body: JSON.stringify({ action: 'assign_account_silo', plaid_account_id: a.plaid_account_id, wave_business_id: bizId, user_id: (userProfile && userProfile.id) || null }) });
       const j = await res.json();
       if (!j || !j.ok) { setError('Account assign failed: ' + ((j && j.error) || 'unknown')); }
       else { setNotice('Account ··' + (a.mask || a.plaid_account_id) + ' assigned to ' + bizLabel(bizId) + ' — ' + (j.restamped || 0) + ' transaction(s) restamped.'); await loadData(); }
@@ -96,10 +103,10 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: conns } = await supabase.from('bank_connections').select('*').order('created_at', { ascending: false });
+      const { data: conns } = await supabase.from('bank_connections').select(CONNECTION_FIELDS).order('created_at', { ascending: false });
       // v55.83-JX — hide archived/duplicate connections from the active list.
       setConnections((conns || []).filter(c => c.status !== 'archived'));
-      try { const pa = await supabase.from('plaid_accounts').select('*'); setPlaidAccts((pa && pa.data) || []); } catch (ePA) { setPlaidAccts([]); }
+      try { const pa = await supabase.from('plaid_accounts').select(ACCOUNT_FIELDS); setPlaidAccts((pa && pa.data) || []); } catch (ePA) { setPlaidAccts([]); }
 
       // v55.83-IS (Codex FAIL) — scope by the active silo at the QUERY before the 500 limit, so a
       // silo's freshly-synced rows can't be truncated out by other silos' transactions.
@@ -184,7 +191,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     try {
       const linkRes = await fetch('/api/plaid/link', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await bankSessionHeaders(supabase, true),
         body: JSON.stringify({ user_id: user?.id || 'default' }),
       });
       const linkData = await linkRes.json();
@@ -206,12 +213,13 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       const handler = window.Plaid.create({
         token: linkData.link_token,
         onSuccess: async (public_token, metadata) => {
+          try {
           // v55.83-JT — pass the admin's EXPLICIT backfill start date (chosen in the Connect modal) so
           // first connect / re-link pulls history back to here (bank_connections.initial_backfill_start_date).
           const _bfStart = backfillStartDate();
           const exRes = await fetch('/api/plaid/exchange', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await bankSessionHeaders(supabase, true),
             body: JSON.stringify({ public_token, metadata, wave_business_id: chosenBiz || null, initial_backfill_start_date: _bfStart }),
           });
           const exData = await exRes.json();
@@ -225,6 +233,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           await loadData();
           // Auto-sync after connecting: a first connect should pull the full chosen backfill window.
           if (exData.connection?.id) await syncTransactions(exData.connection.id, 0, true);
+          } catch (exchangeError) {
+            setError(exchangeError && exchangeError.message || 'The bank connection could not be completed. Sign in and try again.');
+          }
         },
         onExit: (err, metadata) => {
           // v55.83-BU — surface the REAL reason. Plaid's onExit gives an error
@@ -275,7 +286,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       }
       const res = await fetch('/api/plaid/transactions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await bankSessionHeaders(supabase, true),
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -418,8 +429,8 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
 
   const matchedCount = scopedTxns.filter(t => t.matched_invoice_id).length;
   const unmatchedCount = scopedTxns.filter(t => !t.matched_invoice_id).length;
-  const totalIn = scopedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
-  const totalOut = scopedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const totalIn = seeBankBalances ? scopedTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0) : null;
+  const totalOut = seeBankBalances ? scopedTxns.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0) : null;
 
   const fmtMoney = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Math.abs(n || 0));
 
@@ -693,6 +704,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       })()}
       {transactions.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-3">
+          {seeBankBalances && <>
           <div className="bg-green-50 rounded-xl p-3 border border-green-200">
             <div className="text-[10px] text-green-600 font-bold">Money In / وارد</div>
             <div className="text-lg font-black text-green-700">{fmtMoney(totalIn)}</div>
@@ -701,6 +713,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
             <div className="text-[10px] text-red-600 font-bold">Money Out / صادر</div>
             <div className="text-lg font-black text-red-700">{fmtMoney(totalOut)}</div>
           </div>
+          </>}
           <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
             <div className="text-[10px] text-blue-600 font-bold">Matched / متطابق</div>
             <div className="text-lg font-black text-blue-700">{matchedCount}</div>

@@ -1,0 +1,8 @@
+✓ 1a: unmatch calls bankWrite("unmatch")
+✓ 1b: the unmatch() function no longer does direct supabase update chains on payment tables
+✓ 2a: loadData scopes bank_transactions by active wave_business_id at the query
+✓ 2b: sync notice is honest ("processed", not implying confirmed inserts), no user-error speculation
+✗ shared authorization test completed — Cannot find package '@supabase/supabase-js' imported from /mnt/data/clickbooks_work/nexttrade-hub/src/app/api/plaid/_auth.js
+
+❌ 1 FAILED:
+   - shared authorization test completed — Cannot find package '@supabase/supabase-js' imported from /mnt/data/clickbooks_work/nexttrade-hub/src/app/api/plaid/_auth.js

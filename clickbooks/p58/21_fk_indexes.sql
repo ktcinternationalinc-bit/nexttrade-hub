@@ -1,0 +1,13 @@
+create index if not exists cb_audit_events_journal on clickbooks_us.audit_events(journal_id);
+create index if not exists cb_audit_runs_book on clickbooks_us.audit_runs(book_id);
+create index if not exists cb_bank_map_account on clickbooks_us.bank_ledger_map(book_id,account_id);
+create index if not exists cb_cutover_events_run on clickbooks_us.cutover_events(run_id);
+create index if not exists cb_journal_lines_book_journal on clickbooks_us.journal_lines(book_id,journal_id);
+create index if not exists cb_journals_reversal on clickbooks_us.journals(book_id,reverses_id);
+create index if not exists cb_migration_postings_reversal on clickbooks_us.migration_postings(reversal_id);
+create index if not exists cb_migration_runs_book on clickbooks_us.migration_runs(book_id);
+create index if not exists cb_opening_subledger_account on clickbooks_us.opening_subledger(book_id,account_id);
+create index if not exists cb_opening_subledger_run on clickbooks_us.opening_subledger(run_id);
+create index if not exists cb_posting_defaults_income on clickbooks_us.posting_defaults(book_id,invoice_income_account_id);
+create index if not exists cb_rule_proposals_rule on clickbooks_us.rule_proposals(rule_id);
+create index if not exists cb_source_account_map_target on clickbooks_us.source_account_map(book_id,account_id);

@@ -1,0 +1,386 @@
+TAP version 13
+# (node:2321) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///mnt/data/clickbooks_p34/nexttrade-hub/src/lib/clickbooks-us-read.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /mnt/data/clickbooks_p34/nexttrade-hub/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: disabled feature does not read database
+ok 1 - disabled feature does not read database
+  ---
+  duration_ms: 25.288375
+  type: 'test'
+  ...
+# Subtest: posting is not an HTTP capability
+ok 2 - posting is not an HTTP capability
+  ---
+  duration_ms: 0.484085
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?businessId=egypt
+ok 3 - reject browser scope ?businessId=egypt
+  ---
+  duration_ms: 0.599949
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?bank=true
+ok 4 - reject browser scope ?bank=true
+  ---
+  duration_ms: 0.391317
+  type: 'test'
+  ...
+# Subtest: reject browser scope ?resource=treasury
+ok 5 - reject browser scope ?resource=treasury
+  ---
+  duration_ms: 0.590535
+  type: 'test'
+  ...
+# Subtest: unverified identity denied
+ok 6 - unverified identity denied
+  ---
+  duration_ms: 1.712867
+  type: 'test'
+  ...
+# Subtest: bank-only permission cannot grant full dashboard
+ok 7 - bank-only permission cannot grant full dashboard
+  ---
+  duration_ms: 0.554902
+  type: 'test'
+  ...
+# Subtest: dashboard without banking receives redacted snapshot
+ok 8 - dashboard without banking receives redacted snapshot
+  ---
+  duration_ms: 1.640078
+  type: 'test'
+  ...
+# Subtest: verified super admin gets both permissions
+ok 9 - verified super admin gets both permissions
+  ---
+  duration_ms: 1.430694
+  type: 'test'
+  ...
+# Subtest: independent bank grant retained
+ok 10 - independent bank grant retained
+  ---
+  duration_ms: 1.00741
+  type: 'test'
+  ...
+# Subtest: unknown sensitivity fails closed
+ok 11 - unknown sensitivity fails closed
+  ---
+  duration_ms: 0.261632
+  type: 'test'
+  ...
+# Subtest: wrong book cannot be returned
+ok 12 - wrong book cannot be returned
+  ---
+  duration_ms: 0.374321
+  type: 'test'
+  ...
+# Subtest: wrong currency cannot be returned
+ok 13 - wrong currency cannot be returned
+  ---
+  duration_ms: 0.269604
+  type: 'test'
+  ...
+# Subtest: database errors leak no details
+ok 14 - database errors leak no details
+  ---
+  duration_ms: 0.472759
+  type: 'test'
+  ...
+# Subtest: all responses prohibit caching
+ok 15 - all responses prohibit caching
+  ---
+  duration_ms: 0.585197
+  type: 'test'
+  ...
+# Subtest: super admin reads rules with server scope
+ok 16 - super admin reads rules with server scope
+  ---
+  duration_ms: 23.769739
+  type: 'test'
+  ...
+# Subtest: verified super admin reads migration
+ok 17 - verified super admin reads migration
+  ---
+  duration_ms: 0.822322
+  type: 'test'
+  ...
+# Subtest: disabled gate denies before database CLICKBOOKS_US_ENABLED
+ok 18 - disabled gate denies before database CLICKBOOKS_US_ENABLED
+  ---
+  duration_ms: 0.50746
+  type: 'test'
+  ...
+# Subtest: disabled gate denies before database CLICKBOOKS_US_WORKBENCH_ENABLED
+ok 19 - disabled gate denies before database CLICKBOOKS_US_WORKBENCH_ENABLED
+  ---
+  duration_ms: 0.397145
+  type: 'test'
+  ...
+# Subtest: invalid verified identity rejected
+ok 20 - invalid verified identity rejected
+  ---
+  duration_ms: 0.798367
+  type: 'test'
+  ...
+# Subtest: ordinary rule operator needs no bank balance permission
+ok 21 - ordinary rule operator needs no bank balance permission
+  ---
+  duration_ms: 0.484426
+  type: 'test'
+  ...
+# Subtest: dashboard and bank permissions alone do not grant rules
+ok 22 - dashboard and bank permissions alone do not grant rules
+  ---
+  duration_ms: 0.523094
+  type: 'test'
+  ...
+# Subtest: migration rejects no-dashboard
+ok 23 - migration rejects no-dashboard
+  ---
+  duration_ms: 0.412728
+  type: 'test'
+  ...
+# Subtest: migration rejects no-bank
+ok 24 - migration rejects no-bank
+  ---
+  duration_ms: 1.254971
+  type: 'test'
+  ...
+# Subtest: migration rejects no-grant
+ok 25 - migration rejects no-grant
+  ---
+  duration_ms: 0.925678
+  type: 'test'
+  ...
+# Subtest: migration explicit grant plus both visibility grants succeeds
+ok 26 - migration explicit grant plus both visibility grants succeeds
+  ---
+  duration_ms: 0.697836
+  type: 'test'
+  ...
+# Subtest: permission lookup failure fails closed
+ok 27 - permission lookup failure fails closed
+  ---
+  duration_ms: 0.414661
+  type: 'test'
+  ...
+# Subtest: rules rejects query ?business_id=EGYPT
+ok 28 - rules rejects query ?business_id=EGYPT
+  ---
+  duration_ms: 0.366229
+  type: 'test'
+  ...
+# Subtest: rules rejects query ?banking=true
+ok 29 - rules rejects query ?banking=true
+  ---
+  duration_ms: 0.306048
+  type: 'test'
+  ...
+# Subtest: rules rejects query ?run=22222222-2222-4222-8222-222222222222
+ok 30 - rules rejects query ?run=22222222-2222-4222-8222-222222222222
+  ---
+  duration_ms: 0.321742
+  type: 'test'
+  ...
+# Subtest: migration rejects duplicate run selector
+ok 31 - migration rejects duplicate run selector
+  ---
+  duration_ms: 0.385788
+  type: 'test'
+  ...
+# Subtest: cross origin rejected before auth
+ok 32 - cross origin rejected before auth
+  ---
+  duration_ms: 0.345798
+  type: 'test'
+  ...
+# Subtest: POST requires Origin
+ok 33 - POST requires Origin
+  ---
+  duration_ms: 0.5668
+  type: 'test'
+  ...
+# Subtest: cross-site fetch denied
+ok 34 - cross-site fetch denied
+  ---
+  duration_ms: 0.338938
+  type: 'test'
+  ...
+# Subtest: POST requires application/json
+ok 35 - POST requires application/json
+  ---
+  duration_ms: 0.461883
+  type: 'test'
+  ...
+# Subtest: preview permitted while staging writes disabled
+ok 36 - preview permitted while staging writes disabled
+  ---
+  duration_ms: 3.876901
+  type: 'test'
+  ...
+# Subtest: staging writes default locked
+ok 37 - staging writes default locked
+  ---
+  duration_ms: 0.561231
+  type: 'test'
+  ...
+# Subtest: server supplies verified actor, not browser role
+ok 38 - server supplies verified actor, not browser role
+  ---
+  duration_ms: 0.624206
+  type: 'test'
+  ...
+# Subtest: unsafe action rejected commit_migration
+ok 39 - unsafe action rejected commit_migration
+  ---
+  duration_ms: 0.257295
+  type: 'test'
+  ...
+# Subtest: unsafe action rejected approve_migration
+ok 40 - unsafe action rejected approve_migration
+  ---
+  duration_ms: 0.121221
+  type: 'test'
+  ...
+# Subtest: unsafe action rejected grant_access
+ok 41 - unsafe action rejected grant_access
+  ---
+  duration_ms: 0.103986
+  type: 'test'
+  ...
+# Subtest: unsafe action rejected post_journal
+ok 42 - unsafe action rejected post_journal
+  ---
+  duration_ms: 0.138998
+  type: 'test'
+  ...
+# Subtest: unsafe action rejected cutover
+ok 43 - unsafe action rejected cutover
+  ---
+  duration_ms: 0.120521
+  type: 'test'
+  ...
+# Subtest: cross-workspace action rejected
+ok 44 - cross-workspace action rejected
+  ---
+  duration_ms: 0.161702
+  type: 'test'
+  ...
+# Subtest: client supplied actor rejected
+ok 45 - client supplied actor rejected
+  ---
+  duration_ms: 0.22016
+  type: 'test'
+  ...
+# Subtest: client supplied company rejected
+ok 46 - client supplied company rejected
+  ---
+  duration_ms: 0.141963
+  type: 'test'
+  ...
+# Subtest: invalid calendar date rejected
+ok 47 - invalid calendar date rejected
+  ---
+  duration_ms: 0.601863
+  type: 'test'
+  ...
+# Subtest: negative revision rejected
+ok 48 - negative revision rejected
+  ---
+  duration_ms: 0.143725
+  type: 'test'
+  ...
+# Subtest: decision requires actual boolean and reason
+ok 49 - decision requires actual boolean and reason
+  ---
+  duration_ms: 0.135844
+  type: 'test'
+  ...
+# Subtest: complete manifest shape required
+ok 50 - complete manifest shape required
+  ---
+  duration_ms: 0.141091
+  type: 'test'
+  ...
+# Subtest: invalid JSON blocked
+ok 51 - invalid JSON blocked
+  ---
+  duration_ms: 0.634511
+  type: 'test'
+  ...
+# Subtest: actual streamed body is capped without content-length
+ok 52 - actual streamed body is capped without content-length
+  ---
+  duration_ms: 1.655312
+  type: 'test'
+  ...
+# Subtest: declared oversized body rejected
+ok 53 - declared oversized body rejected
+  ---
+  duration_ms: 0.26683
+  type: 'test'
+  ...
+# Subtest: raw SQL exception text not returned
+ok 54 - raw SQL exception text not returned
+  ---
+  duration_ms: 0.749684
+  type: 'test'
+  ...
+# Subtest: known business error returns only code
+ok 55 - known business error returns only code
+  ---
+  duration_ms: 0.383635
+  type: 'test'
+  ...
+# Subtest: wrong-scope RPC data withheld
+ok 56 - wrong-scope RPC data withheld
+  ---
+  duration_ms: 0.279078
+  type: 'test'
+  ...
+# Subtest: other methods rejected
+ok 57 - other methods rejected
+  ---
+  duration_ms: 0.230676
+  type: 'test'
+  ...
+# Subtest: scheduler disabled by default
+ok 58 - scheduler disabled by default
+  ---
+  duration_ms: 0.358297
+  type: 'test'
+  ...
+# Subtest: scheduler rejects weak secret
+ok 59 - scheduler rejects weak secret
+  ---
+  duration_ms: 0.185148
+  type: 'test'
+  ...
+# Subtest: scheduler rejects wrong token
+ok 60 - scheduler rejects wrong token
+  ---
+  duration_ms: 0.545107
+  type: 'test'
+  ...
+# Subtest: scheduler authorized request invokes staging, not posting
+ok 61 - scheduler authorized request invokes staging, not posting
+  ---
+  duration_ms: 0.221752
+  type: 'test'
+  ...
+# Subtest: scheduler error sanitized
+ok 62 - scheduler error sanitized
+  ---
+  duration_ms: 0.28067
+  type: 'test'
+  ...
+1..62
+# tests 62
+# suites 0
+# pass 62
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 140.672495

@@ -30,7 +30,7 @@ ok(/from\('bank_transactions'\)\.update\(\{ wave_business_id: newBiz, updated_by
 ok(/from\('bank_data_assignment_audit'\)\.insert/.test(bw),'writes assignment audit');
 
 // still-valid guards
-ok(/if \(!conn\.wave_business_id\) \{ return NextResponse\.json\(\{ error: 'This bank connection is not assigned/.test(rt),'sync blocked when connection unassigned');
+ok(/if \(!conn\.wave_business_id\) \{ return plaidJson\(\{ error: 'This bank connection is not assigned[^\n]+\{ status: 409 \}\); \}/.test(rt),'sync blocked with 409 when connection unassigned');
 ok(/const connectBank = async \(chosenBiz\) =>/.test(bt) && /if \(!chosenBiz\) \{ setError/.test(bt),'connect refuses without a chosen silo');
 ok(/Unassigned Bank Data \(/.test(bt),'Unassigned Bank Data panel');
 // v55.83-JX — connection-level assign now goes through the service-role route (RLS-proof + schema-safe),

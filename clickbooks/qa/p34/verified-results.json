@@ -1,0 +1,71 @@
+{
+  "release": "P3/P4-v1",
+  "verified_date": "2026-11-02",
+  "database": {
+    "main_rollback_suite": {
+      "passed": 53,
+      "failed": 0,
+      "script": "clickbooks/tests/p34_qa.sql"
+    },
+    "source_backed_validation": {
+      "passed": 5,
+      "failed": 0,
+      "script": "clickbooks/tests/p34_transaction_validation.sql"
+    },
+    "synthetic_import_cycle": "validated, approved, posted once, retry checked, reversed to zero; entire transaction rolled back",
+    "fixtures_remaining": 0,
+    "real_financial_postings": 0
+  },
+  "javascript": {
+    "passed": 62,
+    "failed": 0,
+    "new_workbench_scheduler_tests": 47,
+    "prior_read_handler_tests": 15,
+    "log": "clickbooks/qa/p34/handler-tests.log"
+  },
+  "legacy_regression": {
+    "passed": 121,
+    "required": 122,
+    "blocked_test": "test-v55-83-is-unmatch-and-plaid-scope.js",
+    "reason": "Supabase JS dependency unavailable in authoring environment",
+    "stale_excluded": 1,
+    "launch_clean": false,
+    "log": "clickbooks/qa/p34/regression.log"
+  },
+  "jsx_syntax": {
+    "passed": true,
+    "not_a_build": true,
+    "log": "clickbooks/qa/p34/jsx-syntax.log"
+  },
+  "full_build": {
+    "status": "blocked",
+    "reason": "next: not found; dependencies not installed, registry DNS unavailable",
+    "log": "clickbooks/qa/p34/build.log"
+  },
+  "signed_in_browser_qa": {
+    "status": "not_run"
+  },
+  "operator_psql_scripts": {
+    "status": "provided_not_executed",
+    "note": "Protected identity prerequisite and actual reviewed actor/account/run values are required"
+  },
+  "document_qa": {
+    "format": "DOCX",
+    "rendered_pages": 4,
+    "all_pages_visually_inspected": true
+  },
+  "corrected_during_qa": [
+    "Reconciliation SQL alias ambiguity fixed in installed migration 20261102105249",
+    "Invoice-item null child business tags resolved only through verified U.S. parent in installed migration 20261102105553",
+    "Repeated proposal approval revalidates freshness; null bank review/direction fail closed"
+  ],
+  "security": {
+    "scoped_clickbooks_tables_without_rls": 0,
+    "scoped_clickbooks_browser_callable_functions": 0,
+    "scoped_clickbooks_functions_without_fixed_search_path": 0,
+    "private_rls_without_policy": "intentional deny-by-default; service-only facades",
+    "preexisting_hub_findings": "Unrelated public RLS/view/function/auth warnings and errors remain; not modified or declared resolved",
+    "advisor_checked_date": "2026-11-02"
+  },
+  "evidence_note": "Recorded outcomes of executed tools, with runnable test scripts and local logs. No claim that this JSON itself is a signed test attestation."
+}

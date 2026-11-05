@@ -1,0 +1,8 @@
+-- FINAL WRITE CUTOVER: disables only the verified US Wave write/push flags. Bank feed is not disconnected.
+-- Requires a reviewed run_uuid + approval_hash returned from approve-cutover.psql.
+\set ON_ERROR_STOP on
+begin isolation level repeatable read;
+update clickbooks_us.cutover_control set cutover_execution_enabled=true,updated_by=:'actor_uuid'::uuid,updated_at=now() where singleton;
+select clickbooks_us.execute_wave_cutover(:'run_uuid'::uuid,:'approval_hash',:'actor_uuid'::uuid);
+update clickbooks_us.cutover_control set cutover_execution_enabled=false,updated_by=:'actor_uuid'::uuid,updated_at=now() where singleton;
+commit;

@@ -14,9 +14,15 @@ function ok(label, cond, hint) {
 }
 var route = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', 'accounting', 'bank-write', 'route.js'), 'utf8');
 var rc = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankReviewTab.jsx'), 'utf8');
+var identity = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'bank-visibility.js'), 'utf8');
 
 // ---- 1. endpoint uses service-role + permission + handles all core actions ----
-ok('1a: endpoint uses the SERVICE_ROLE key (bypasses RLS)', /SUPABASE_SERVICE_ROLE_KEY/.test(route));
+ok('1a: endpoint uses the shared verified-identity SERVICE_ROLE client (no anon write fallback)',
+  /await authorizeBankIdentity\(req, createClient, process\.env\);\s*var db = access\.db;/.test(route) &&
+  /if \(!env\.NEXT_PUBLIC_SUPABASE_URL \|\| !env\.NEXT_PUBLIC_SUPABASE_ANON_KEY \|\| !env\.SUPABASE_SERVICE_ROLE_KEY\)/.test(identity) &&
+  /var db = createClient\(env\.NEXT_PUBLIC_SUPABASE_URL, env\.SUPABASE_SERVICE_ROLE_KEY, OPTIONS\);/.test(identity) &&
+  identity.indexOf('authClient.auth.getUser(match[1])') >= 0 &&
+  identity.indexOf('authClient.auth.getUser(match[1])') < identity.indexOf('var db = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY'));
 ok('1b: enforces permission per action via assertPermission', /assertPermission\(db, by, permKey, req\)/.test(route));
 ok('1c: handles set_status', /action === 'set_status'/.test(route));
 ok('1d: handles classify + set_wave_category', /action === 'classify' \|\| action === 'set_wave_category'/.test(route));

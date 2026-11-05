@@ -1,0 +1,189 @@
+{
+  "release": "ClickBooks-US-P3-P4-v1",
+  "prepared_at": "2026-11-02T11:13:55.995075+00:00",
+  "verified_at": "2026-11-02T11:11:37.389279+00:00",
+  "project_id": "rmwbcfulncgfandhlzvz",
+  "book": "KTC_US",
+  "wave_business_id": "QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk",
+  "baseline_artifact": "KTC_Hub_ClickBooks_US_P1_P2_2026-11-02.zip",
+  "baseline_sha256": "47b2d066f9ec0380ca4900bf925775ebf9f2f473b6915702470784a676c50c25",
+  "is_verified_current_production_commit": false,
+  "installed_p34_migrations": [
+    {
+      "remote_version": "20261102103809",
+      "name": "clickbooks_us_p34_workflow_storage_v1",
+      "reference_file": "clickbooks/p34/05_workflow_storage.sql",
+      "reference_file_sha256": "cfc0736934da0aa9978222a364a15fb02022e6f0f147ab0ac553d80bffc8db6f",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102103836",
+      "name": "clickbooks_us_p34_source_snapshot_v1",
+      "reference_file": "clickbooks/p34/06_source_snapshot.sql",
+      "reference_file_sha256": "820b48124a583ca3ce571086466bcd5ce51adc78cb4435fa9d10ff5b26fe888f",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102104015",
+      "name": "clickbooks_us_p34_rules_engine_v1",
+      "reference_file": "clickbooks/p34/07_rules_engine.sql",
+      "reference_file_sha256": "a57dcf312bd3a9a5bfd5220a2452374bd93f97b0dcdb97f7645fa5bef1697ee9",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102104342",
+      "name": "clickbooks_us_p34_migration_validation_v1",
+      "reference_file": "clickbooks/p34/08_migration_validation.sql",
+      "reference_file_sha256": "b544eaf5d7bad56dac2e4a052b3093abf645b62c41f93d2dd18ec853e55b9741",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102104359",
+      "name": "clickbooks_us_p34_migration_execution_v1",
+      "reference_file": "clickbooks/p34/09_migration_execution.sql",
+      "reference_file_sha256": "5e88f968978c11704fb3dc5a92ddbe2150e9f35d7276de9349294a5deb3bf658",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102104612",
+      "name": "clickbooks_us_p34_workbench_facades_v1",
+      "reference_file": "clickbooks/p34/10_workbench_facades.sql",
+      "reference_file_sha256": "68d2c2e4d89561152908d67fa2edd83c193bbf84039ca47ac8dc4f7af9e6aea3",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102105249",
+      "name": "clickbooks_us_p34_validation_alias_fix_v1",
+      "reference_file": "clickbooks/p34/11_validation_alias_fix.sql",
+      "reference_file_sha256": "329906659c576e5b7a999cc1a3fd89e89f384a6d4aa70325509de2e8afa7f7ca",
+      "status": "installed; do not replay"
+    },
+    {
+      "remote_version": "20261102105553",
+      "name": "clickbooks_us_p34_source_and_rule_hardening_v1",
+      "reference_file": "clickbooks/p34/12_source_and_rule_hardening.sql",
+      "reference_file_sha256": "cb8c0786e130a432e6f4dc2690941aa2f615f4f480ccc51f7f09cc062761a8b1",
+      "status": "installed; do not replay"
+    }
+  ],
+  "prior_installed_versions": [
+    "20261102093306",
+    "20261102093330",
+    "20261102093537",
+    "20261102093732"
+  ],
+  "application_files_changed_from_p12": [
+    "src/components/AccountingTab.jsx"
+  ],
+  "other_changed_files_from_p12": [
+    "clickbooks/README.md"
+  ],
+  "new_files_from_p12": [
+    "START_HERE_CLICKBOOKS_P34.md",
+    "clickbooks/deploy/accounting-tab-p34.patch",
+    "clickbooks/deploy/approve-run.psql",
+    "clickbooks/deploy/commit-run.psql",
+    "clickbooks/deploy/environment.example",
+    "clickbooks/deploy/merge-rules-cron.mjs",
+    "clickbooks/deploy/operator-grant.psql",
+    "clickbooks/deploy/preflight.sql",
+    "clickbooks/deploy/reverse-run.psql",
+    "clickbooks/deploy/review-account.psql",
+    "clickbooks/deploy/review-bank-map.psql",
+    "clickbooks/docs/CLAUDE_HANDOFF_P34.docx",
+    "clickbooks/docs/CLAUDE_HANDOFF_P34.md",
+    "clickbooks/docs/DEPLOYMENT_RUNBOOK_P34.md",
+    "clickbooks/p34/05_workflow_storage.sql",
+    "clickbooks/p34/06_source_snapshot.sql",
+    "clickbooks/p34/07_rules_engine.sql",
+    "clickbooks/p34/08_migration_validation.sql",
+    "clickbooks/p34/09_migration_execution.sql",
+    "clickbooks/p34/10_workbench_facades.sql",
+    "clickbooks/p34/11_validation_alias_fix.sql",
+    "clickbooks/p34/12_source_and_rule_hardening.sql",
+    "clickbooks/qa/p34/build.log",
+    "clickbooks/qa/p34/final-preflight.json",
+    "clickbooks/qa/p34/handler-tests.log",
+    "clickbooks/qa/p34/jsx-syntax.log",
+    "clickbooks/qa/p34/regression.log",
+    "clickbooks/qa/p34/source-diff.json",
+    "clickbooks/qa/p34/verified-results.json",
+    "clickbooks/release-manifest.json",
+    "clickbooks/tests/p34_qa.sql",
+    "clickbooks/tests/p34_transaction_validation.sql",
+    "clickbooks/tests/workbench.test.mjs",
+    "src/app/api/accounting/clickbooks-us/migration/route.js",
+    "src/app/api/accounting/clickbooks-us/rules/route.js",
+    "src/app/api/accounting/clickbooks-us/rules-job/route.js",
+    "src/components/ClickBooksUSWorkflows.jsx",
+    "src/lib/clickbooks-us-rules-job.js",
+    "src/lib/clickbooks-us-workbench.js"
+  ],
+  "unchanged_critical_files": [
+    "package.json",
+    "package-lock.json",
+    "vercel.json"
+  ],
+  "activation": {
+    "supabase_workflows": "installed",
+    "audit_snapshot": "staged, no financial plan",
+    "frontend": "source_only_not_deployed",
+    "migration": "no real journals posted",
+    "rules": "no enabled definitions; scheduler off",
+    "identity_visibility_prerequisite": "absent; explicit review required",
+    "vercel": "team authorization 403"
+  },
+  "open_launch_gates": [
+    "Current-repository merge and backup/restore test",
+    "Protected identity/visibility SQL plus matching source",
+    "Full locked-dependency build and 122/122 required regression cases",
+    "Signed-in browser and permission QA",
+    "Independent cutoff trial balance, account/bank mappings, open AR/AP evidence",
+    "Source-complete approved manifest and controlled import",
+    "Ongoing journal posting and rule-to-financial-record integration before Wave cutover"
+  ],
+  "qa_reference": "clickbooks/qa/p34/verified-results.json",
+  "runbook": "clickbooks/docs/DEPLOYMENT_RUNBOOK_P34.md",
+  "files_sha256": {
+    "START_HERE_CLICKBOOKS_P34.md": "db949c14164a4786c9bedcb47bb4aa652717a7bd8ad4d32fe400b68842be5a91",
+    "clickbooks/README.md": "9cfd46313712ec86851b89f1c6d0ab6ac3c1818912aa0f2c50eaac1b7786b8d7",
+    "clickbooks/deploy/accounting-tab-p34.patch": "99757ca0fe7c3ff51ea629243113de06d7ee7d1b8e6fccb422c29204ea8cb189",
+    "clickbooks/deploy/approve-run.psql": "fde8b4f02d3a43f474c40d466e9cde00defdc725c659df29635760d373bbfa42",
+    "clickbooks/deploy/commit-run.psql": "75daa959fac05ba99dd5481725ac3b24dc50a516b94edcc3abc614c9a2bbb512",
+    "clickbooks/deploy/environment.example": "2e514dbcbcbc0373dc78ddec5e765c3aa08884250cbd0ba75b488355cf22f010",
+    "clickbooks/deploy/merge-rules-cron.mjs": "ea2de49ef3991ededb183601f19670a3d60ed9eadd9543edbc5b7286bc9ca626",
+    "clickbooks/deploy/operator-grant.psql": "a7088181dad47b8195319d93e5457df2b877a3bd4ac4e2610e4dc975ed7f0da0",
+    "clickbooks/deploy/preflight.sql": "828037d585095e0f3782e29796ccf0ce8b5bbec7e2a6802eced13924cfc98b01",
+    "clickbooks/deploy/reverse-run.psql": "e739c1554e3b5ca6bd8b372ad39ab55b765c575fa869042de05d16088f2ec516",
+    "clickbooks/deploy/review-account.psql": "91dc7cd09f637ab7ff49a8999a99f1e0369284214a2cde7a6dfcea546edc3e39",
+    "clickbooks/deploy/review-bank-map.psql": "7be23b441c106ade3572ea5b2a96eafd096d5ce02c83c72075537114fe31d426",
+    "clickbooks/docs/CLAUDE_HANDOFF_P34.docx": "6dd7dfec950926477f364e17733ff086f30ca0547146a295a07db5ec942cc543",
+    "clickbooks/docs/CLAUDE_HANDOFF_P34.md": "df81e3664459da5f0000fad46928fb5cb4bd90e7bc10586eea5f2112f3446a0c",
+    "clickbooks/docs/DEPLOYMENT_RUNBOOK_P34.md": "ec6ae8393fbc0e90722033b4706c810734945eb6321e979b96a6371b3482719b",
+    "clickbooks/p34/05_workflow_storage.sql": "cfc0736934da0aa9978222a364a15fb02022e6f0f147ab0ac553d80bffc8db6f",
+    "clickbooks/p34/06_source_snapshot.sql": "820b48124a583ca3ce571086466bcd5ce51adc78cb4435fa9d10ff5b26fe888f",
+    "clickbooks/p34/07_rules_engine.sql": "a57dcf312bd3a9a5bfd5220a2452374bd93f97b0dcdb97f7645fa5bef1697ee9",
+    "clickbooks/p34/08_migration_validation.sql": "b544eaf5d7bad56dac2e4a052b3093abf645b62c41f93d2dd18ec853e55b9741",
+    "clickbooks/p34/09_migration_execution.sql": "5e88f968978c11704fb3dc5a92ddbe2150e9f35d7276de9349294a5deb3bf658",
+    "clickbooks/p34/10_workbench_facades.sql": "68d2c2e4d89561152908d67fa2edd83c193bbf84039ca47ac8dc4f7af9e6aea3",
+    "clickbooks/p34/11_validation_alias_fix.sql": "329906659c576e5b7a999cc1a3fd89e89f384a6d4aa70325509de2e8afa7f7ca",
+    "clickbooks/p34/12_source_and_rule_hardening.sql": "cb8c0786e130a432e6f4dc2690941aa2f615f4f480ccc51f7f09cc062761a8b1",
+    "clickbooks/qa/p34/build.log": "2dce46bb0d84acebceef9f9b44a67a8149cd95ae264c3eefdc237b7fd7667b40",
+    "clickbooks/qa/p34/final-preflight.json": "31e4984d047a3112728486f68ef73b1f64864a4319c89864ba51278ffd700049",
+    "clickbooks/qa/p34/handler-tests.log": "072cfdc817f2f155fc59d83eb1a9ba1e59b9cf6ca8bc7c9bd0df08cde41d1a7a",
+    "clickbooks/qa/p34/jsx-syntax.log": "06c8898ecd205ec9f9cfe73ffcdd74d428e253978fede93c9a60cd7e01766a45",
+    "clickbooks/qa/p34/regression.log": "ec16f427768f533aa064e8f0ce6f6d24d49262840fa71775322d85e52accf814",
+    "clickbooks/qa/p34/source-diff.json": "df756f0ad369e34d1b9c50520a3aac56a46e6f706b5a1f551d88013ebec8dd56",
+    "clickbooks/qa/p34/verified-results.json": "cae3334ca5d80a20eef3c9ae30ca5835096dbfec6041b2fb0d697bdde3614f49",
+    "clickbooks/tests/p34_qa.sql": "585d144ff163a7821327622791db4c5b423d345c3908cc87f18e80da57da0162",
+    "clickbooks/tests/p34_transaction_validation.sql": "52fb30f8bfa9ed75bab8ded4c704f7a27d1b960a3ca652e63bdc786d1765dcd5",
+    "clickbooks/tests/workbench.test.mjs": "db5d887dc994777a0505df4defac70740b5bbeca744c60853b967489d83b477f",
+    "src/app/api/accounting/clickbooks-us/migration/route.js": "12c20df87df099a130293c54ca387f63969d50f0b0ae0b5e28d31eddc20da9d3",
+    "src/app/api/accounting/clickbooks-us/rules/route.js": "6c5bf9ceea68ba6714f27a24f802953888eedfb5fe3269413b71fd11a8ac866f",
+    "src/app/api/accounting/clickbooks-us/rules-job/route.js": "e580f2b954b821250c5701db6c9602edf17ce66464145a10deb0ac229bf75a0e",
+    "src/components/AccountingTab.jsx": "97de7b9fd7d072b85d65b8e0f3d49beba9ca41c61521c3bbe50e3c322d3d69be",
+    "src/components/ClickBooksUSWorkflows.jsx": "5a513e2a7af09bb56d1e2e84b5d63244fb5fa2e7258bb01146d5991c0c0c765a",
+    "src/lib/clickbooks-us-rules-job.js": "64b040fba209e97629b79e22ea66dbb6eb95c8b131c7b839bf9ae495cc389f22",
+    "src/lib/clickbooks-us-workbench.js": "5995c400a862c851a9cfe74a4f10467b30c997ddd8cfac8f5ee493beec405f2a"
+  }
+}

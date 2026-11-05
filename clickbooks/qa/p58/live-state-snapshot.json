@@ -1,0 +1,51 @@
+{
+  "verified_date": "2026-11-02",
+  "scope": "KTC_US_ACCOUNTING_ONLY",
+  "supabase_project": "rmwbcfulncgfandhlzvz",
+  "wave_business_label": "KTC INTERNATIONAL ENTERPRISES LLC",
+  "wave_business_id": "QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk",
+  "source_counts": {
+    "usd_invoices": 1366,
+    "invoice_items": 2531,
+    "active_payments": 163,
+    "bank_transactions": 361,
+    "paid_without_active_local_payment_detail": 1142,
+    "invoices_with_multiple_payments": 38,
+    "bank_rows_allocated_across_multiple_invoices": 22,
+    "active_payments_missing_us_invoice": 0,
+    "active_payments_missing_bank_transaction": 0
+  },
+  "clickbooks_live_state": {
+    "accounts": 176,
+    "journals": 0,
+    "journal_lines": 0,
+    "qa_accounts": 0,
+    "rules": 0,
+    "proposals": 0,
+    "reviewed_bank_ledger_maps": 0,
+    "shadow_runs": 0,
+    "cutover_runs": 0,
+    "account_reporting_settings": 176,
+    "posting_enabled": false,
+    "historical_data_ready": false,
+    "opening_cutoff": null,
+    "cutover_phase": "wave_primary",
+    "shadow_sync_enabled": false,
+    "cutover_execution_enabled": false,
+    "posting_default_reviewed": false
+  },
+  "wave_state_after_qa": {
+    "writes_enabled": true,
+    "invoice_push": true,
+    "payment_push": true,
+    "customer_push": true,
+    "category_push": false,
+    "auto_push": false,
+    "production_unlocked": true
+  },
+  "permission_prerequisite": {
+    "financial_visibility_permissions_present": false,
+    "bank_visibility_profile_for_identity_present": false
+  },
+  "note": "Counts are a verified point-in-time snapshot. Live source data continues changing; a fresh migration snapshot is required before any real migration."
+}

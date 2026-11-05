@@ -33,7 +33,10 @@ export function canViewTransactionAmounts(isSuperAdmin, mp) { return isSuperAdmi
 // ---- ADMIN / OWNER-only financial visibility (never granted to operational staff by default) ----
 function isAdminRole(role) { return role === 'admin' || role === 'owner'; }
 export function isFinanceAdmin(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Finance: Admin', 'finance.admin']); }
-export function canViewBankBalances(isSuperAdmin, mp, role) { return isFinanceAdmin(isSuperAdmin, mp, role) || has(mp, ['Bank: View Account Balances', 'bank.view_account_balances']); }
+// Pass the verified /api/bank-visibility capability object. A profile role,
+// finance flag, or legacy module_permissions entry cannot grant this access.
+export function canViewBankBalances(capabilities) { return !!capabilities && capabilities.canViewBankBalances === true; }
+export function canViewFullDashboard(capabilities) { return !!capabilities && capabilities.canViewFullDashboard === true; }
 export function canViewCompanyTotals(isSuperAdmin, mp, role) { return isFinanceAdmin(isSuperAdmin, mp, role) || has(mp, ['Finance: View Company Totals', 'finance.view_company_totals']); }
 export function canViewAllCustomerBalances(isSuperAdmin, mp, role) { return isFinanceAdmin(isSuperAdmin, mp, role) || has(mp, ['Finance: View All Customer Balances', 'finance.view_all_customer_balances']); }
 export function canViewYearlySales(isSuperAdmin, mp, role) { return isFinanceAdmin(isSuperAdmin, mp, role) || has(mp, ['Finance: View Yearly Sales', 'finance.view_yearly_sales']); }

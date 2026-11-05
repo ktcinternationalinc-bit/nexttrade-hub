@@ -21,10 +21,13 @@ function ok(label, cond) {
   else { failures.push(label); console.log('✗ ' + label); }
 }
 
-// Isolate the header NET block so we're not matching stray text elsewhere in
-// a 15k-line file (the dashboard has its own TREASURY NET tile).
-var netBlockMatch = page.match(/modulePerms\?\.\['Treasury'\] === true\) && \([\s\S]{0,4000}?View Treasury[\s\S]{0,4000}?<\/div>\s*\)\}/);
-var netBlock = netBlockMatch ? netBlockMatch[0] : '';
+// Isolate the actual header widget independently of the outer permission
+// expression. Full Dashboard is now a separate trusted read capability; the
+// header gate and navigation are tested explicitly below.
+var netAnchor = page.indexOf('aria-label="View Treasury"');
+var netStart = netAnchor < 0 ? -1 : page.lastIndexOf('<div className="flex items-center border border-zinc-800', netAnchor);
+var netEnd = netAnchor < 0 ? -1 : page.indexOf('{/* Global search', netAnchor);
+var netBlock = netStart >= 0 && netEnd > netStart ? page.slice(netStart, netEnd) : '';
 
 // ══════════════════════════════════════════════════════════════════
 // PART A — Default is OFF, and stays off
@@ -85,16 +88,20 @@ ok('C5: eye and eye-off icons both present (icon changes with state)',
 ok('D1: NO nested buttons — the shell is a div, not a button wrapping a button',
   /<div className="flex items-center border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"/.test(netBlock) &&
   !/<button[\s\S]{0,1500}<button[\s\S]{0,600}<\/button>[\s\S]{0,1500}<\/button>/.test(netBlock.replace(/<\/button>\s*<button/g, '</button>|<button')));
-ok('D2: clicking the NET box still navigates to Treasury in all-time mode',
-  /onClick=\{\(\) => \{ setTab\('treasury'\); setMode\('all'\); \}\}/.test(netBlock));
-ok('D3: the Treasury permission gate is unchanged',
-  /\(isSuperAdmin \|\| modulePerms\?\.\['Treasury'\] === true\) && \(/.test(page));
+ok('D2: NET navigation preserves all-time mode and cannot confer Treasury module access',
+  /onClick=\{\(\) => \{ if \(openDashboardModule\('treasury'\)\) setMode\('all'\); \}\}/.test(netBlock) &&
+  /const openDashboardModule = \(target, opts\) => \{\s*if \(!visibleTabs\.some\(item => item\.id === target\)\) return false;\s*navigate\(target, opts\);\s*return true;/.test(page));
+ok('D3: dashboard NET requires Full Dashboard while operational Treasury keeps its regular permission',
+  /\(tab === 'dashboard' \? seeFullDashboard : \(isSuperAdmin \|\| modulePerms\?\.\['Treasury'\] === true\)\) && \(/.test(page) &&
+  /canViewFullDashboard: seeFullDashboard, canViewBankBalances: seeBankBalances \} = useBankVisibility\(\)/.test(page));
 ok('D4: the NET caption is still shown (only the figure is masked)',
   /uppercase tracking-wider">NET<\/span>/.test(netBlock));
 ok('D5: allTimeNet itself is untouched — no change to how the number is calculated',
   /const allTimeNet = useMemo\(\(\) => treasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_in \|\| 0\) - Number\(t\.cash_out \|\| 0\), 0\), \[treasury\]\)/.test(page));
-ok('D6: the dashboard TREASURY NET tile was left alone (out of scope — toolbar only)',
-  /label="TREASURY NET"/.test(page));
+ok('D6: physical-cash NET stays distinct from independently protected bank totals',
+  /label="PHYSICAL CASH NET"/.test(page) &&
+  /dashboardCashFlow\(treasury, monthStart, seeBankBalances\)/.test(page) &&
+  /label=\{seeBankBalances \? 'MTD CASH \+ BANK NET' : 'MTD CASH NET'\}/.test(page));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Release notes (PERMANENT RULE 1) + the MU/MV backfill

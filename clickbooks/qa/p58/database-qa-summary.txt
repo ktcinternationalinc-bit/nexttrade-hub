@@ -1,0 +1,6 @@
+P5 reporting rollback QA: 8/8 passed.
+P7 shadow new-invoice/payment rollback QA: 5/5 passed.
+P7 opening-AR payment rollback QA: 2/2 passed.
+P7 cutover rollback QA using actual recent US source relationships: 12/12 passed.
+P3/P4 prior QA remains: 53 + 5 passed.
+All financial QA writes were contained in transactions ending ROLLBACK.

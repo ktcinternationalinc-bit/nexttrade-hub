@@ -16,8 +16,15 @@ import PnLTab from './PnLTab';
 import BusinessBooksTab from './BusinessBooksTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
+import LedgerlyHub from './LedgerlyHub';
+import ClickBooksUSCore from './ClickBooksUSCore';
+import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
+import ClickBooksUSReports from './ClickBooksUSReports';
+import ClickBooksUSCutover from './ClickBooksUSCutover';
+import { useBankVisibility } from '../lib/use-bank-visibility';
 
 export default function AccountingTab(props) {
+  var financialAccess = useBankVisibility();
   // v55.83-IN — open directly on a deep-linked sub-tab (e.g. Bank Review from the Bank tab's
   // "Match in Bank Review" button). props.deepLink = { sub, txnId }; txnId flows to children via {...props}.
   var _initSub = (props.deepLink && props.deepLink.sub) || 'dashboard';
@@ -32,6 +39,11 @@ export default function AccountingTab(props) {
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
+    ['ledgerly', '📗 Ledgerly'],
+    ['clickbooks_us', 'ClickBooks · US'],
+    ['clickbooks_workflows', 'ClickBooks · Rules & Migration'],
+    ['clickbooks_reports', 'ClickBooks · Reports & Tax'],
+    ['clickbooks_cutover', 'ClickBooks · Parallel & Cutover'],
     ['company', '🏢 Company Profile'],
     ['arhistory', '📒 Customer AR History'],
     ['ledger', '📑 Customer Ledger'],
@@ -55,10 +67,16 @@ export default function AccountingTab(props) {
   var mp = props.modulePerms || {};
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
   var canWaveSync = isSuper || mp['wave.sync.view'] === true;
+  var clickbooksEnabled = process.env.NEXT_PUBLIC_CLICKBOOKS_US_ENABLED === 'true';
+  var workflowsEnabled = clickbooksEnabled && process.env.NEXT_PUBLIC_CLICKBOOKS_US_WORKBENCH_ENABLED === 'true';
+  var reportsEnabled = clickbooksEnabled && process.env.NEXT_PUBLIC_CLICKBOOKS_US_REPORTS_ENABLED === 'true';
+  var cutoverEnabled = clickbooksEnabled && process.env.NEXT_PUBLIC_CLICKBOOKS_US_CUTOVER_ENABLED === 'true';
+  var canClickbooks = financialAccess.canViewFullDashboard === true || financialAccess.isVerifiedSuperAdmin === true;
+  var canLedgerly = financialAccess.canViewFullDashboard === true || financialAccess.canViewBankBalances === true;
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
-        {tabs.map(function (t) {
+        {tabs.filter(function (t) { return (t[0] !== 'ledgerly' || canLedgerly) && (t[0] !== 'clickbooks_us' || (clickbooksEnabled && canClickbooks)) && (t[0] !== 'clickbooks_workflows' || workflowsEnabled) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_cutover' || cutoverEnabled); }).map(function (t) {
           return (
             <button key={t[0]} onClick={function () { setSub(t[0]); }}
               className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
@@ -67,10 +85,15 @@ export default function AccountingTab(props) {
           );
         })}
       </div>
-      <div className="px-3 pt-3">
+      {sub !== 'ledgerly' && sub !== 'clickbooks_us' && sub !== 'clickbooks_workflows' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_cutover' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
-      </div>
+      </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
+      {sub === 'ledgerly' && <LedgerlyHub {...props} canView={canLedgerly} />}
+      {sub === 'clickbooks_us' && clickbooksEnabled && <ClickBooksUSCore canView={canClickbooks} />}
+      {sub === 'clickbooks_workflows' && workflowsEnabled && <ClickBooksUSWorkflows />}
+      {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
+      {sub === 'clickbooks_cutover' && cutoverEnabled && <ClickBooksUSCutover />}
       {sub === 'company' && <CompanyProfileTab {...props} />}
       {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}

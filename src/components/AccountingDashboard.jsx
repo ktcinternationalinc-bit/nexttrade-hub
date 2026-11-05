@@ -60,6 +60,7 @@ export default function AccountingDashboard(props) {
   var [pFrom, setPFrom] = useState('2026-06-01');
   var [pTo, setPTo] = useState('');
   var [drill, setDrill] = useState(null); // { title, note, rows }
+  var [showLegend, setShowLegend] = useState(false); // v55.83-OW — card definitions on demand
   // v55.83-OQ (Max): US and Egypt are TWO SEPARATE BUSINESSES. The dashboard
   // shows ONE at a time — US = USD invoices only (default), Egypt = EGP only.
   var [biz, setBiz] = useState('US');
@@ -313,6 +314,16 @@ export default function AccountingDashboard(props) {
           </div>
         </div>
         {drill.note ? <div className="text-[11px] text-slate-600 mb-2">{drill.note}</div> : null}
+        {drill.rows.length > 0 && (function () {
+          var sT = 0, sP = 0, sB = 0;
+          drill.rows.forEach(function (r) { sT += Number(r.total) || 0; sP += Number(r.paid) || 0; sB += Number(r.balance) || 0; });
+          return (
+            <div className="flex gap-4 flex-wrap text-[11px] font-extrabold mb-2 px-2 py-1.5 rounded" style={{ background: '#f1f5f9', color: '#0f172a' }}>
+              <span>Σ Total: {fmt(sT)}</span><span>Σ Paid: {fmt(sP)}</span><span>Σ Balance: {fmt(sB)}</span>
+              <span className="font-semibold text-slate-500">— these rows ARE the card's number; the matching Σ equals it to the cent</span>
+            </div>
+          );
+        })()}
         {drill.rows.length === 0 ? <div className="text-xs text-slate-500 italic">Nothing in this bucket for the selected period.</div> : (
           <div style={{ overflowX: 'auto' }}><div style={{ minWidth: '720px' }}>
             <div className="grid text-[11px] font-extrabold text-slate-600 border-b border-slate-200" style={{ gridTemplateColumns: '110px 1fr 84px 84px 84px 84px 90px 60px' }}>
@@ -381,13 +392,27 @@ export default function AccountingDashboard(props) {
         <span className="text-[10px] text-slate-400">showing invoices dated {pFrom || 'the beginning'} → {pTo || 'today'} · click any card to see its invoices</span>
       </div>
 
+      <button onClick={function () { setShowLegend(!showLegend); }} className="mt-2 px-3 py-1.5 rounded text-[11px] font-extrabold bg-slate-800 text-slate-200 border border-slate-600 hover:bg-slate-700">{showLegend ? '✕ Hide card definitions' : 'ℹ️ What does each card mean?'}</button>
+      {showLegend && (
+        <div className="mt-2 bg-white text-slate-900 rounded-lg p-3 text-[12px] leading-relaxed">
+          <div className="font-extrabold mb-1">Every card, defined exactly (all: this business only, live invoices only — void/cancelled/archived and Wave-drafts never count):</div>
+          <div><b>Open AR</b> — invoices DATED in the period whose balance is above zero TODAY (balance = total − everything ever paid). A fully-paid invoice can NEVER appear here.</div>
+          <div><b>Paid in period</b> — money RECEIVED during the period, counted by PAYMENT date (one line per invoice, installments summed). An invoice shows here even if dated before the period, and a 0.00 balance here is GOOD — fully collected. An invoice can appear in BOTH cards: paid something this period AND still owing.</div>
+          <div><b>Overdue AR</b> — the slice of Open AR past its due date, ≥ $200 unless the toggle below shows all. Always ≤ Open AR.</div>
+          <div><b>Customer credits</b> — invoices paid MORE than their total; money owed back. Never part of Open AR.</div>
+          <div><b>Approvals pending</b> — Hub invoices sitting in review, ALL TIME (not period-scoped — labeled so).</div>
+          <div><b>B · Upcoming due</b> — Open AR that is NOT yet overdue, bucketed by days until due. <b>C · Overdue aging</b> — Open AR that IS overdue, bucketed by days late. B + C together = Open AR (C shows ≥$200 unless toggled).</div>
+          <div className="mt-1 text-slate-600">Open any card and check the Σ Balance line — it equals the card to the cent, from the same rows.</div>
+        </div>
+      )}
+
       {/* A — Receivables Summary */}
       <Section title="A · Receivables summary">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
           <Stat title={'Open AR (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.openTotal)} sub={seeTotals ? (d.openCount + ' open · every entered invoice counts') : ''} tone="bg-slate-800"
-            onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed (current + overdue).'); } : null} />
+            onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed TODAY (current + overdue). A zero-balance row is impossible here by construction — fully-collected invoices that received money this period live in the Paid-in-period card instead.'); } : null} />
           <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' invoice(s) · ' + (d.paidPayCount || 0) + ' payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
-            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE: Paid = everything received for it in this period (installments summed), Inv date = the latest payment date, Balance = the invoice\u2019s remaining balance TODAY (negative, in violet, = overpaid). Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />
+            onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE that RECEIVED money this period: Paid = everything received in the period (installments summed), Inv date = latest payment date, Balance = remaining balance TODAY. Balance 0.00 here is GOOD — fully collected. Still-owing rows also appear in Open AR; that overlap is correct. Negative violet = overpaid. Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />
           <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
             onClick={seeTotals ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
           <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'}

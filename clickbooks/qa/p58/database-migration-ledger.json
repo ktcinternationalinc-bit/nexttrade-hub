@@ -1,0 +1,28 @@
+{
+  "project": "rmwbcfulncgfandhlzvz",
+  "schema": "clickbooks_us",
+  "installed_migrations": [
+    ["20261102093306","clickbooks_us_core_tables_v1"],
+    ["20261102093330","clickbooks_us_posting_guards_v1"],
+    ["20261102093537","clickbooks_us_source_audit_v1"],
+    ["20261102093732","clickbooks_us_scope_and_read_facade_v1"],
+    ["20261102103809","clickbooks_us_p34_workflow_storage_v1"],
+    ["20261102103836","clickbooks_us_p34_source_snapshot_v1"],
+    ["20261102104015","clickbooks_us_p34_rules_engine_v1"],
+    ["20261102104342","clickbooks_us_p34_migration_validation_v1"],
+    ["20261102104359","clickbooks_us_p34_migration_execution_v1"],
+    ["20261102104612","clickbooks_us_p34_workbench_facades_v1"],
+    ["20261102105249","clickbooks_us_p34_validation_alias_fix_v1"],
+    ["20261102105553","clickbooks_us_p34_source_and_rule_hardening_v1"],
+    ["20261102205803","clickbooks_us_p58_reporting_v1"],
+    ["20261102205838","clickbooks_us_p58_reporting_fix_v1"],
+    ["20261102210039","clickbooks_us_p58_parallel_cutover_v1"],
+    ["20261102210135","clickbooks_us_p58_operator_permissions_v1"],
+    ["20261102210435","clickbooks_us_p58_cutover_fingerprint_fix_v1"],
+    ["20261102210514","clickbooks_us_p58_operator_grants_read_v1"],
+    ["20261102210814","clickbooks_us_p58_shadow_posting_hardening_v1"],
+    ["20261102210945","clickbooks_us_p58_cutover_readiness_hardening_v1"],
+    ["20261102211650","clickbooks_us_p58_fk_indexes_v1"]
+  ],
+  "warning": "These are already installed in the connected project. Reproduction SQL is for review/source-control reconciliation or a compatible fresh staging environment; do not replay blindly."
+}

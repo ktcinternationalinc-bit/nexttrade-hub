@@ -1,0 +1,125 @@
+{
+  "record_type": "Recorded summary of executed tool results; not a new live query",
+  "verified_at_utc": "2026-11-02T09:43:11.962061Z",
+  "scope": "KTC_US_ACCOUNTING_ONLY",
+  "database_project": "rmwbcfulncgfandhlzvz",
+  "database_state": {
+    "schema": "clickbooks_us",
+    "book_code": "KTC_US",
+    "currency": "USD",
+    "posting_enabled": false,
+    "historical_data_ready": false,
+    "accounts": 176,
+    "source_account_mappings": 1880,
+    "journals": 0,
+    "journal_lines": 0,
+    "posting_audit_events": 0,
+    "qa_accounts_left": 0
+  },
+  "source_counts": {
+    "usd_accounting_invoices": 1366,
+    "non_usd_invoices_held": 3,
+    "accounting_customers": 244,
+    "bank_rows": 360,
+    "posted_bank_rows": 353,
+    "pending_bank_rows": 7,
+    "active_invoice_payments": 159,
+    "void_invoice_payments": 11
+  },
+  "findings": {
+    "usd_paid_invoices_without_local_payment_detail": 1144,
+    "usd_invoices_missing_items": 1,
+    "unreviewed_bank_rows": 206,
+    "bank_rows_missing_wave_account_mapping": 304,
+    "bank_rows_missing_legacy_business_uuid": 360,
+    "us_scheduled_log_rows": 0,
+    "duplicate_wave_invoice_ids": 0,
+    "duplicate_bank_source_ids": 0,
+    "invoice_arithmetic_mismatches": 0
+  },
+  "mapping_policy_counts": {
+    "one_to_one": 168,
+    "receivable_control": 1205,
+    "payable_control": 36,
+    "transfer_clearing": 471
+  },
+  "source_digests_unchanged": true,
+  "source_digests": {
+    "wave_categories": "31c9795fecd1be790967a44aff03ce8d",
+    "invoice_payments": "e191471562a3c4d6aa2d8f327923d1a7",
+    "bank_transactions": "153f78a2ec5e311c7bad4669586bf1d6",
+    "accounting_invoices": "109ae4a50c486abb771c2aa52ef4cd5c"
+  },
+  "database_qa": {
+    "passed": 33,
+    "tests": [
+      "posting disabled by default",
+      "balanced atomic posting",
+      "idempotent retry returns original journal",
+      "conflicting duplicate rejected",
+      "unbalanced journal rejected without partial rows",
+      "fractional cents rejected",
+      "negative amounts rejected",
+      "debit and credit on same line rejected",
+      "zero-value line rejected",
+      "single-line entry rejected",
+      "invalid date rejected",
+      "excluded source type rejected",
+      "non-USD source invoice rejected",
+      "pending bank source rejected",
+      "unknown or wrong-silo source rejected",
+      "posted journal immutable",
+      "posted journal lines immutable",
+      "posted journal deletion rejected",
+      "appending to posted journal rejected",
+      "posted account reclassification blocked",
+      "posting audit append-only",
+      "invoice payment clears receivable without duplicate revenue",
+      "trial balance totals agree",
+      "incorrect reversal rejected",
+      "reversal is exact and retry-safe",
+      "original and reversal both retained and net to zero",
+      "reversing a reversal rejected",
+      "closed period posting rejected",
+      "US business binding immutable",
+      "anonymous and browser roles denied; no direct service writes",
+      "RLS enabled on every ClickBooks table",
+      "bank-disabled response omits sensitive accounts and trial balance",
+      "legacy US source digests unchanged"
+    ],
+    "fixtures": "All fixture rows and temporary posting enablement rolled back"
+  },
+  "handler_qa": {
+    "passed": 15,
+    "failed": 0,
+    "log": "clickbooks/qa/read-handler-final.log"
+  },
+  "legacy_regression": {
+    "passed": 121,
+    "required": 122,
+    "blocked": 1,
+    "stale_excluded": 1,
+    "blocker": "Missing @supabase/supabase-js dependency; identical before and after source change",
+    "log": "clickbooks/qa/post-change-regression.log"
+  },
+  "not_verified": [
+    "Full Next.js build",
+    "Signed-in frontend/browser behavior",
+    "Live provider API responses",
+    "Multi-client concurrency/load testing",
+    "Complete historical ledger reconciliation",
+    "Production frontend deployment"
+  ],
+  "security_advisor": {
+    "checked_at_utc": "2026-11-02T09:43:35.684Z",
+    "new_clickbooks_findings": "Seven INFO no-policy notices; intentional private-schema deny-direct-client design",
+    "preexisting_project_findings": {
+      "security_definer_view": 2,
+      "rls_disabled_in_public": 48,
+      "function_search_path_mutable": 46,
+      "anon_security_definer_function_executable": 3,
+      "authenticated_security_definer_function_executable": 3,
+      "auth_leaked_password_protection": 1
+    }
+  }
+}

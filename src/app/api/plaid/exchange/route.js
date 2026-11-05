@@ -1,5 +1,5 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
+import { readBankJson } from '../../../../lib/bank-visibility';
 
 const PLAID_BASE = {
   sandbox: 'https://sandbox.plaid.com',
@@ -7,14 +7,11 @@ const PLAID_BASE = {
   production: 'https://production.plaid.com',
 };
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
-
 export async function POST(req) {
   try {
-    const { public_token, metadata, wave_business_id, initial_backfill_start_date } = await req.json();
+    const access = await authorizePlaidOperation(req, 'categories.apply', false);
+    const supabase = access.db;
+    const { public_token, metadata, wave_business_id, initial_backfill_start_date } = await readBankJson(req);
     const env = process.env.PLAID_ENV || 'sandbox';
     const base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
@@ -30,7 +27,7 @@ export async function POST(req) {
     });
 
     const data = await res.json();
-    if (data.error_code) return NextResponse.json({ error: data.error_message }, { status: 400 });
+    if (data.error_code) return plaidJson({ error: data.error_message }, { status: 400 });
 
     const { access_token, item_id } = data;
     const institution = metadata?.institution || {};
@@ -57,10 +54,10 @@ export async function POST(req) {
       backfillSaved = false;
       ({ data: conn, error } = await supabase.from('bank_connections').upsert(baseConn, { onConflict: 'plaid_item_id' }).select().single());
     }
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return plaidJson({ error: 'The bank connection could not be stored.' }, { status: 500 });
 
-    // Pull accounts so we can show account names/masks. Balances are stored here but
-    // only shown to admins (bank.view_account_balances) at display time. Non-fatal.
+    // Pull accounts for labels and ingestion. Balances stay server-side; the
+    // migration denies direct browser reads, including through select('*').
     var accountsAssigned = !!wave_business_id; // v55.83-JY — did new accounts get stamped to the chosen silo?
     var accountAssignmentError = null;
     try {
@@ -110,8 +107,8 @@ export async function POST(req) {
       // Connection still succeeds even if account pull fails; accounts refresh on next sync.
     }
 
-    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null, accounts_assigned: accountsAssigned, account_assignment_error: accountAssignmentError });
+    return plaidJson({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null, accounts_assigned: accountsAssigned, account_assignment_error: accountAssignmentError });
   } catch (e) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return plaidError(e);
   }
 }

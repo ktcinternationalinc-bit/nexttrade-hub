@@ -1,0 +1,5 @@
+-- Restores exact Wave write/push flags saved at execution time. Does not erase ClickBooks journals.
+\set ON_ERROR_STOP on
+begin isolation level repeatable read;
+select clickbooks_us.rollback_wave_cutover(:'run_uuid'::uuid,:'actor_uuid'::uuid);
+commit;

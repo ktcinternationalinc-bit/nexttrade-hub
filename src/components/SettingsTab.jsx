@@ -1,12 +1,15 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { fetchUserAdmin } from '../lib/user-admin-client';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
 import BusinessEntitiesPanel from './BusinessEntitiesPanel';
 import AccountingVisibilityPanel from './AccountingVisibilityPanel';
+import BankBalancePermissions from './BankBalancePermissions';
+import ClickBooksOperatorPermissions from './ClickBooksOperatorPermissions';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
 // Existing helper rejects both active===false AND active===null (legacy bug).
@@ -475,7 +478,6 @@ const ACTION_PERMS = [
   { key: 'payments.unmatch',            label: 'Payments: Unmatch',              desc: 'Reverse a payment match. Audit-logged.' },
   { key: 'payments.mark_manual_done',   label: 'Payments: Mark Manual Done',     desc: 'Mark a queued payment as already entered in Wave by hand (clears it from the queue without faking a Wave id).' },
   { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
-  { key: 'bank.view_account_balances',  label: 'Bank: View Account Balances',    desc: 'See bank account balances / net cash. Sensitive — keep limited to finance/management.' },
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
   { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
@@ -1071,6 +1073,11 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   };
 
   const togglePermission = async (userId, module, displayedHasAccess) => {
+    // These grants use the verified-super-admin API, never the legacy map.
+    if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
+      if (toast) toast.error('Use Financial data access to change these permissions.');
+      return;
+    }
     // v55.83-IG (Codex) — flip EXACTLY the state the user sees. The caller passes the displayed
     // hasAccess (which already accounts for legacy fallbacks like Open Accounts via readPerm), so a
     // first click always inverts the visible ON/OFF — no default-vs-display mismatch. Falls back to
@@ -1152,7 +1159,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
     setAddLoading(true); setAddError(''); setAddSuccess('');
     try {
-      var res = await fetch('/api/users', {
+      var res = await fetchUserAdmin(supabase, '/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1172,7 +1179,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
   const handleUpdateUser = async (userId, updates) => {
     try {
-      var res = await fetch('/api/users', {
+      var res = await fetchUserAdmin(supabase, '/api/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: userId, ...updates })
@@ -1186,7 +1193,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const handleDeactivateUser = async (userId, userName) => {
     if (!confirm('Deactivate ' + userName + '? They will no longer be able to log in.')) return;
     try {
-      var res = await fetch('/api/users?id=' + userId, { method: 'DELETE' });
+      var res = await fetchUserAdmin(supabase, '/api/users?id=' + encodeURIComponent(userId), { method: 'DELETE' });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { onReload(); loadPrefs(); }
@@ -1197,7 +1204,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     var confirmation = prompt('Type "DELETE ' + userName + '" to permanently remove this person and all their data. This CANNOT be undone.');
     if (confirmation !== 'DELETE ' + userName) { if (confirmation !== null) alert('Text did not match. Deletion cancelled.'); return; }
     try {
-      var res = await fetch('/api/users?id=' + userId + '&permanent=true', { method: 'DELETE' });
+      var res = await fetchUserAdmin(supabase, '/api/users?id=' + encodeURIComponent(userId) + '&permanent=true', { method: 'DELETE' });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { alert(userName + ' has been permanently deleted.'); onReload(); loadPrefs(); }
@@ -1539,6 +1546,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
             {/* ===== MODULE ACCESS ===== */}
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4">
+          <BankBalancePermissions />
+          <ClickBooksOperatorPermissions />
           {/* v55.83-A.6.27.NEXT (Issues 4, 5, 6) — Permissions table rebuild:
               - Heading + controls live ABOVE the scroll container so they stay
                 visible while scrolling.
@@ -1553,7 +1562,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
             <div>
               <h3 className="text-sm font-bold">Module Access / صلاحيات الوحدات</h3>
-              <p className="text-[10px] text-slate-500 mt-0.5">Super Admin always has full access. Toggle modules and actions for other users.</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">Toggle modules and actions for team members. The two special financial permissions use the separate control above.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <input
