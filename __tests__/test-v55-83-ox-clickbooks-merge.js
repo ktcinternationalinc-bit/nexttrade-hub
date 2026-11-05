@@ -113,6 +113,16 @@ ok('8b: protected financial grants managed only via BankBalancePermissions panel
     s.indexOf("color: '#334155'") >= 0);
 });
 
+// ── 10. PA addendum — Phase 4 activation. Max (Nov 5): parallel mode enabled in
+// DB; the shadow scheduler needs a 15-min cron, and the Bank "Sync done" banner
+// was red-on-yellow (same dark-skin contrast disease).
+ok('10 PA: vercel.json schedules the ClickBooks shadow job every 15 min (and keeps recon + ledgerly)',
+  /clickbooks-us\/shadow-job/.test(R('vercel.json')) && /\*\/15 \* \* \* \*/.test(R('vercel.json')) && /reconcile\/nexttrade/.test(R('vercel.json')));
+ok('10 PA: Bank notice banner uses explicit hex (no amber-utility classes)',
+  (function(){ var s2 = R('src/components/BankTab.jsx'); return s2.indexOf("background: '#fef3c7'") >= 0 && !/\{notice\}[\s\S]{0,200}bg-amber/.test(s2); })());
+ok('10 PA: shadow job stays fail-closed (env flag + 32-char secret + system actor uuid required)',
+  (function(){ var s2 = R('src/lib/clickbooks-us-shadow-job.js'); return /CLICKBOOKS_US_SHADOW_SYNC_ENABLED!=='true'/.test(s2) && /secret\.length<32/.test(s2) && /CLICKBOOKS_US_SYSTEM_AUTH_USER_ID/.test(s2); })());
+
 console.log('');
 console.log('OX merge integrity: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

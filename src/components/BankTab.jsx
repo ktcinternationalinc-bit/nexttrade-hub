@@ -510,8 +510,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       )}
 
       {notice && (
-        <div className="bg-amber-100 border border-amber-300 text-amber-950 text-xs p-3 rounded-lg mb-3 font-bold">
-          ⏳ {notice} <button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button>
+        /* v55.83-PA — contrast rule: explicit hex (dark skin overrides amber utilities; "Sync done" banner was red-on-yellow) */
+        <div className="text-xs p-3 rounded-lg mb-3 font-bold" style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#431407' }}>
+          ⏳ {notice} <button onClick={() => setNotice('')} className="ml-2 underline" style={{ color: '#7c2d12' }}>dismiss</button>
         </div>
       )}
 

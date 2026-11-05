@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PA',
+    date: '2026-11-05',
+    label: 'Both systems live \u2014 ClickBooks shadows Wave every 15 minutes',
+    items: [
+      'Parallel mode is ON: ClickBooks now quietly copies every new approved invoice, linked payment and approved bank event into its own double-entry ledger every 15 minutes, while Wave stays fully in charge. Nothing about day-to-day work changes.',
+      'The opening books were committed and certified at Oct 31, 2026: Chase \u20226338 $125,743.45, Chase \u20226353 $432.48, and $3,184,471.57 of open receivables across 540 invoices \u2014 balanced to the cent and checked against the bank\u2019s own numbers.',
+      'The Chase \u20226353 bank feed was revived (it had been silent since June) and the reconnect was reconciled with zero duplicates \u2014 133 hidden, nothing dropped, all invoice matching preserved.',
+      'The yellow \u201cSync done\u201d banner on the Bank screen is readable again (dark text on light amber).',
+      { superAdminOnly: true, text: 'v55.83-PA \u2014 NO SQL (all DB-side Phase-4 switches were set by operator SQL in session: bank_ledger_map remapped to post-reconnect provider ids, cutover_control phase=parallel, shadow_sync_enabled=true, posting_enabled=true). This build: vercel.json += /api/accounting/clickbooks-us/shadow-job cron */15 (fail-closed: needs CLICKBOOKS_US_SHADOW_SYNC_ENABLED=true, CRON_SECRET >= 32 chars, CLICKBOOKS_US_SYSTEM_AUTH_USER_ID uuid; Vercel sends Bearer CRON_SECRET automatically); BankTab notice banner inline-hex contrast fix; PA addendum pins cron + banner + shadow fail-closed guards. CATCH-UP NEEDED: shadow job window is rolling 24h, so Nov 1-4 events need one manual clickbooks_us_shadow_sync_job(2026-11-01, today, actor) run via SQL after deploy.' },
+    ],
+  },
+  {
     version: 'v55.83-OZ',
     date: '2026-11-05',
     label: 'Financial data access panel readable in dark mode',

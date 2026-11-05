@@ -1,6 +1,17 @@
 # ClickBooks Rollout Plan — keep everything, turn on slowly, run both, then choose
 
-**For:** Max · **Build:** v55.83-OX · **Written:** Nov 4, 2026 (click-by-click edition)
+**For:** Max · **Build:** v55.83-OZ · **Written:** Nov 4, 2026 · **Updated:** Nov 5, 2026
+
+## ✅ STATUS — Nov 5, 2026
+- **Phase 0 done** (backup confirmed, Auth ID verified, maps cleanly)
+- **Phase 1 done** (OZ live; bank-balance-visibility SQL applied; HUB_SUPER_ADMIN_AUTH_USER_IDS set; Financial data access panel working)
+- **Phase 2 done** (ClickBooks tabs on, read-only; STAGE_WRITES was enabled for Phase 3)
+- **Phase 3 done** — opening balance COMMITTED and history CERTIFIED at cutoff **2026-10-31**:
+  Chase •6338 $125,743.45 + •6338's feed-computed figure was rejected in favor of the bank's own number; Chase •6353 $432.48; 540 open receivables $3,184,471.57; offset to acct 3000 $3,310,647.50; trial balance balanced to the cent; run `32996697` approval `c118189c…`; posting gate auto-closed after the one import.
+- **Next: Phase 4 prep** — (1) choose the sales-income account for new invoices (review-posting-default), (2) fix or archive the •6353 bank feed (no synced transactions since June 20; •6338's stored balance also stale since June though its transactions are current), (3) then enable parallel phase + shadow sync.
+- Noted for later: 3 non-USD open invoices stay outside the USD book; Egypt entity's receivable AMERICA 1236 ($35,856.90) is included in US AR as a real intercompany receivable.
+
+
 
 The golden rule the whole plan follows: **Wave stays the boss of the US books until the very
 last phase.** Everything you have today (reconciliation, dashboard, invoices, bank matching,
