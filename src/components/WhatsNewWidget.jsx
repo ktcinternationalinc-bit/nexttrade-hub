@@ -33,24 +33,26 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OY',
+    date: '2026-11-05',
+    label: 'Hotfix: the OX What’s-New entry crashed the whole hub — fixed and armored',
+    items: [
+      '**The white error screen ("Cannot read properties of undefined") is fixed.** The OX build’s What’s-New entry was written in a shape this panel doesn’t understand, and that took down every page on load. The entry is rewritten correctly below, and the panel is now armored so a malformed entry can only hide itself — never crash the hub.',
+      { superAdminOnly: true, text: 'v55.83-OY — NO SQL. Root cause: OX BUILD_HISTORY entry used invented fields (bullets/technical) instead of items[]; filterEntry did entry.items.filter on undefined → app-wide ErrorBoundary for all users. Fix: entry rewritten to items[] shape; filterEntry + item rendering now coerce (entry.items || []) and drop non-string/non-{superAdminOnly,text} items; OY test walks every BUILD_HISTORY entry asserting renderable shape and pins the guard. Lesson applied: the regression suite now shape-checks this file on every build.' },
+    ],
+  },
+  {
     version: 'v55.83-OX',
     date: '2026-11-04',
     label: 'ClickBooks US reviewed and merged — your own books, installed but switched off',
-    bullets: [
+    items: [
       'The ClickBooks accounting system (built in a parallel session) was reviewed line-by-line as an implementing second party, tested against a real database, and merged into this build without losing any existing work — reconciliation, the US/Egypt split, P&L, release numbers and payment matching are all pinned by tests and intact.',
       'Four new accounting tabs are included but HIDDEN until switched on: ClickBooks · US, Rules & Migration, Reports & Tax, and Parallel & Cutover. Nothing posts to the new ledger yet; Wave stays the boss of US books.',
       'A new "📗 Ledgerly" tab can mirror an outside accounting source read-only every 15 minutes — it also stays hidden until its credentials are configured.',
       'Bank balances and the company-wide dashboard are now protected by their own two permissions ("Full dashboard" and "Banking information"), managed in Settings → Financial data access. A role or module toggle can no longer reveal balances.',
       'IMPORTANT: this build needs one SQL file run in Supabase and two settings added in Vercel before banking screens work — the deployment note that comes with this zip walks through it step by step.',
+      { superAdminOnly: true, text: 'Merged ClickBooks P1-P8 package (base = our OW snapshot; verified by full tree diff, 0 residual). Strands: clickbooks_us RPC facade layer (zero direct public-table selects), bank-visibility protected grants (financial_visibility_permissions + 5 security-definer fns), Ledgerly snapshot mirror, backup + /api/users + Plaid auth hardening. Gates: acorn parse 129 files OK; ClickBooks handler suites 87/87; package suites 93/93 (+ SQL migration 15/15 against PGlite Postgres 18); full regression 123/123; OX merge-integrity test 23 pins. NOT DONE (deliberate): no ClickBooks posting/migration/cutover/shadow sync - DB switches off; the 21 clickbooks_us migrations are ALREADY installed in Supabase by the parallel session. DEPLOY PREREQS: run sql/bank-balance-visibility.sql (+ ledgerly SQL if wanted), set HUB_SUPER_ADMIN_AUTH_USER_IDS (Supabase AUTH uuid) and optionally HUB_ADMIN_AUTH_USER_IDS in Vercel; without these, bank-write/user-admin/dashboard-treasury fail closed with 503 by design.' },
     ],
-    technical: {
-      superAdminOnly: true,
-      items: [
-        'Merged ClickBooks P1-P8 package (base = our OW snapshot; verified by full tree diff, 0 residual). Strands: clickbooks_us RPC facade layer (zero direct public-table selects), bank-visibility protected grants (financial_visibility_permissions + 5 security-definer fns), Ledgerly snapshot mirror, backup + /api/users + Plaid auth hardening.',
-        'Gates: acorn parse 129 files OK; ClickBooks handler suites 87/87; package bank/ledgerly/user-admin suites 93/93 (+ SQL migration 15/15 against PGlite Postgres 18); full regression 123/123 required (is-unmatch test unblocked here, 4 legacy tests realigned by package reviewed and adopted); new OX merge-integrity test 23 pins.',
-        'NOT DONE (deliberate, per package design): no ClickBooks posting, no migration run, no cutover, no shadow sync - all DB-side switches remain off; the 21 clickbooks_us migrations are ALREADY installed in Supabase by the parallel session. DEPLOY PREREQS: run sql/bank-balance-visibility.sql (+ sql/ledgerly-automatic-sync.sql if Ledgerly wanted), set HUB_SUPER_ADMIN_AUTH_USER_IDS (Supabase AUTH uuid, not public.users id) and optionally HUB_ADMIN_AUTH_USER_IDS in Vercel; without these, bank-write/user-admin/dashboard-treasury fail closed with 503 by design.',
-      ],
-    },
   },
   {
     version: 'v55.83-OW',
@@ -84,7 +86,7 @@ export const BUILD_HISTORY = [
     ],
   },
   {
-    version: 'v55.83-OU',
+    version: 'v55.83-OU (first pass, superseded same day)',
     date: '2026-10-15',
     label: 'Paid-in-period drill: real balances, overpayments visible',
     items: [
@@ -6384,7 +6386,7 @@ export const BUILD_HISTORY = [
     ],
   },
   {
-    version: 'v55.61',
+    version: 'v55.61 (addendum)',
     date: '2026-05-07',
     label: 'Admin page — fix "Online status shows Offline when I am online"',
     items: [
@@ -6961,13 +6963,20 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin, prominent } = {}
   var canSeeAiConfidential = !!isSuperAdmin;
 
   var filterEntry = function (entry) {
+    // v55.83-OY — ARMOR. The OX outage: an entry written with invented fields
+    // (no items[]) made entry.items.filter throw on undefined, and because this
+    // widget renders on the main page, EVERY user got the full-screen error
+    // boundary. A malformed entry must only hide itself, never crash the hub.
+    if (!entry || !Array.isArray(entry.items)) return null;
     // Drop entirely-superAdminOnly entries for non-super-admins.
     if (entry.superAdminOnlyEntry && !canSeeAiConfidential) return null;
     // Drop entirely-admin entries for non-admins.
     if (entry.adminOnlyEntry && !canSeeAdminInternals) return null;
     // Filter individual bullet items inside the entry.
     var visibleItems = entry.items.filter(function (it) {
+      if (!it) return false;
       if (typeof it === 'string') return true;
+      if (typeof it.text !== 'string') return false;
       // superAdminOnly bullets only visible to super_admin
       if (it.superAdminOnly && !canSeeAiConfidential) return false;
       // adminOnly bullets visible to admin + super_admin
