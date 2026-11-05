@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-OZ',
+    date: '2026-11-05',
+    label: 'Financial data access panel readable in dark mode',
+    items: [
+      'The new Financial data access and ClickBooks workflow panels in Settings were nearly invisible (gray text on gray). Both now paint a solid white card with dark text, like every other table in the hub \u2014 Allowed is a green chip, Hidden a white one.',
+      { superAdminOnly: true, text: 'v55.83-OZ \u2014 NO SQL. Root cause: panels used tailwind color utilities incl. translucent bg-indigo-50/60 / bg-sky-50/60; the hub dark skin overrides utility colors, leaving no painted background (dark-on-dark). Fix: explicit hex inline styles on both panels per the standing contrast rule; OZ addendum pins no-translucent-bg + solid white + #334155 body text. Also: the Vercel warning about NEXT_PUBLIC_ prefixes on the CLICKBOOKS flags is expected and safe (they hold only true/false); never NEXT_PUBLIC_ the HUB_SUPER_ADMIN/CRON/service values.' },
+    ],
+  },
+  {
     version: 'v55.83-OY',
     date: '2026-11-05',
     label: 'Hotfix: the OX What’s-New entry crashed the whole hub — fixed and armored',

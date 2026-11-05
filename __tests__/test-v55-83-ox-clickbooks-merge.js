@@ -101,6 +101,18 @@ ok('8a: pnl.view / pnl.edit_costs still grantable in Settings',
 ok('8b: protected financial grants managed only via BankBalancePermissions panel (legacy toggle blocked)',
   /<BankBalancePermissions \/>/.test(st) && /Use Financial data access to change these permissions/.test(st));
 
+// ── 9. OZ addendum — contrast. Max (Nov 5): "fix font color or background as
+// notes are invicsible in next build". The hub's dark skin overrides tailwind
+// color utilities, so the two new permission panels must use explicit hex
+// inline styles (standing UI contrast rule) and no translucent /NN backgrounds.
+['BankBalancePermissions.jsx', 'ClickBooksOperatorPermissions.jsx'].forEach(function (f) {
+  var s = R('src/components/' + f);
+  ok('9 OZ: ' + f + ' has no translucent bg-*/NN classes and paints a solid white panel',
+    !/bg-(indigo|sky|slate|zinc)-\d+\/\d+/.test(s) && s.indexOf("background: '#ffffff'") >= 0);
+  ok('9 OZ: ' + f + ' body text uses explicit dark hex (#334155) per contrast rule',
+    s.indexOf("color: '#334155'") >= 0);
+});
+
 console.log('');
 console.log('OX merge integrity: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);
