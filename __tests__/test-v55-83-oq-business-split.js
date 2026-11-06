@@ -87,7 +87,8 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
 (function () {
   var fs3 = require('fs'); var ps3 = require('path');
   function r3(rel) { return fs3.readFileSync(ps3.join(__dirname, '..', rel), 'utf8'); }
-  var libSrc = r3('src/lib/business-of.js').replace(/export function/g, 'function');
+  // PB: the lib also exports a const (US_WAVE_BUSINESS_ID) — strip every export keyword, not just functions.
+  var libSrc = r3('src/lib/business-of.js').replace(/export (function|var|const|let)/g, '$1');
   libSrc += '\nmodule.exports = { businessOfInvoice: businessOfInvoice };';
   var tmp3 = ps3.join(__dirname, '.tmp-business-of.cjs');
   fs3.writeFileSync(tmp3, libSrc);

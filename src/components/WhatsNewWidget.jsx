@@ -33,6 +33,77 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PG',
+    date: '2026-11-06',
+    label: 'QA pass: no stuck spinners for staff',
+    items: [
+      'Post-Tier-1 QA sweep: a team member WITHOUT financial permissions opening \ud83c\udfe6 Books used to see two loaders spin forever. Both panels now say plainly which permission they need instead of hanging.',
+      { superAdminOnly: true, text: 'v55.83-PG \u2014 NO SQL. BooksHomeTab cashflow/late loaders set denied-state on non-ok responses and catches; PF test addendum pins it. Remaining QA backlog (tracked in the World-Class Review doc): pnl/sales/bills identity hardening wave, monthly close, feed watchdog, AP-to-ledger, credit-note posting verification.' },
+    ],
+  },
+  {
+    version: 'v55.83-PF',
+    date: '2026-11-06',
+    label: 'Tier 1: chase late money, catch ledger drift, bills by email',
+    items: [
+      '\u23f0 LATE CUSTOMERS on the Books home: everyone 30+ days late with the amount and days overdue. Pick gentle or firm, hit \u2709 Email (sends instantly, English or Arabic) or \ud83d\udfe2 WhatsApp (opens with the message ready to tap). Every reminder is logged on the invoice with who sent it and the exact text.',
+      '\u26a0 LEDGER DRIFT ALARM: if someone re-categorizes a bank expense AFTER it was posted to the books, a red alarm appears on the Books home naming the exact transactions \u2014 the books can no longer silently disagree with Bank Review.',
+      '\ud83d\udce7 BILLS BY EMAIL (machinery ready): a secure inbox endpoint reads emailed bills with the same AI as the \ud83d\udcf7 button and enters them as PENDING VALIDATION with the original document attached \u2014 a human must still run the three checks, always. Point a mailbox at it whenever you choose.',
+      '\ud83d\udd0e WAREHOUSE CHECK inside bill validation: type the reference, one click searches the NextTrade warehouse orders and the receiving ledger, and the match is stored as evidence on the audit trail \u2014 the foundation for the full warehouse link later.',
+      'Run sql/v55-83-PF-tier1.sql (or the new combined file). New permission: AR: Send reminders.',
+      { superAdminOnly: true, text: 'v55.83-PF \u2014 SQL: invoice_reminders (RLS read, service writes), vendor_bills.warehouse_reference, clickbooks_us.classification_drift() + service-only facade. Reminders route: suggest=ar.view_invoice_balances, send=ar.send_reminders, canonical AR math, Resend direct + wa.me handoff (status handoff, never fake sent). Inbound: BILLS_INBOUND_TOKEN (>=24 chars) header gate, JSON + multipart (SendGrid-style), 5 files/10MB caps, duplicate guard, private bucket server-side upload, pending-validation hard rule. extract refactored into src/lib/bill-extract-server.js shared by camera + inbox. match_reference: nexttrade_orders + inv_shipments (columns cited from inventory schema SQL). SETUP: Vercel env BILLS_INBOUND_TOKEN to arm the inbox; RESEND_API_KEY + NOTIFICATION_FROM_EMAIL likely already set (hub email/send uses them). NOT DONE: scheduled auto-reminders (buttons only, by design for now), reminder for customers without email/phone (buttons disable with tooltip), drift auto-repost (deliberate operator action), pnl/sales-report identity hardening (QA follow-up).' },
+    ],
+  },
+  {
+    version: 'v55.83-PE',
+    date: '2026-11-06',
+    label: 'The Bills Register \u2014 validated, disputed-with-tickets, answerable',
+    items: [
+      '\u201cWhat do we owe through\u2026\u201d answer bar on \ud83d\udcb8 Bills: pick any date, get the total, the by-vendor breakdown, every bill with its due date and balance, validated vs pending split, disputed bills excluded and listed separately \u2014 plus CSV. Cumulative by construction, nothing double-counted.',
+      'VALIDATION WITH TEETH: marking a bill validated requires confirming all three checks (matches our records \u00b7 goods/services received \u00b7 charges accurate) plus a written how-I-verified note. Who, when and how land on the bill AND on an append-only audit trail that nobody can edit or delete \u2014 built to be audited.',
+      'DISPUTES: a dispute without a ticket does not exist. Disputing a bill requires a reason and creates a High-priority ticket with a follow-up date; the bill leaves every what-we-owe total until someone records HOW it was resolved.',
+      'Ask Nadia \u201cwhat do we owe through Sept 30?\u201d \u2014 the AI assistant now has the bills register as a tool and answers with the same numbers as the screen.',
+      'Bill documents are now PRIVATE: new scans go to a locked storage area and open through 1-hour signed links instead of permanent public URLs.',
+      'Run sql/v55-83-PE-bills-register.sql (or the new combined file) with this build.',
+    ],
+  },
+  {
+    version: 'v55.83-PD',
+    date: '2026-11-06',
+    label: 'Cash forecast 30/60/90 + your matching work now feeds the books',
+    items: [
+      'NEW \ud83d\udcc8 Forecast tab: what\u2019s coming in and what you owe in honest windows \u2014 \u26a0 Already due, next 30, 30\u201360, 60\u201390, 90+ \u2014 with the net of each window and a running am-I-plus-or-minus line. Click any card to see the exact invoices/bills behind it, summed to the cent, with a CSV export for the accountant.',
+      'Money already late shows as OVERDUE, never as \u201ccoming in the next 30 days\u201d \u2014 the forecast does not flatter you.',
+      'A \ud83d\udea9 Not-flagged strip shows uncategorized expenses and unmatched deposits \u2014 unflagged money is invisible to the books, so it\u2019s one click from here into fixing them.',
+      'THE BRIDGE: expenses your team already categorized in Bank Review now post into the ClickBooks ledger automatically \u2014 the work done in the old system flows into the new one, both live on the same engine. One new SQL (v55-83-PD-classified-bridge.sql) + a one-time mapping of your categories to ledger accounts that Claude prepares with you.',
+      { superAdminOnly: true, text: 'v55.83-PD \u2014 SQL: v55-83-PD-classified-bridge.sql (clickbooks_us.classification_account_map + classified_sync_run + service wrapper, service_role only). Bridge mirrors rule-path discipline: repeatable-read, same cutover/book gates, post_journal source identity bank_transaction+id shared with rules (DB-enforced no-double-post), reviewed+classified+settled+USD+unmatched+unlinked only, unmapped classifications counted+reported, both directions. Shadow cron now runs shadow_sync + classified_sync per tick (bridge fails soft pre-SQL). Forecast: src/lib/aging.js (bucket boundaries functionally tested incl. null-date=OVERDUE rule), forecast action on bills route (schema-gate scanned), CashForecastTab with drill \u03a3 pins. AFTER DEPLOY: run the PD SQL, then Claude prepares the classification\u2192account mapping paste (one-time, owner-reviewed) and a windowed backfill. NOT DONE yet (next builds): overdue reminder buttons (email/WhatsApp dunning), bank-statement reconciliation import, accountant report pack beyond CSV, customer drill page.' },
+    ],
+  },
+  {
+    version: 'v55.83-PC',
+    date: '2026-11-05',
+    label: 'Snap a bill \u2014 it reads itself into the form',
+    items: [
+      'On \ud83d\udcb8 Bills, the new \ud83d\udcf7 Import bill button takes a photo or PDF of a supplier bill and READS it: vendor, bill number, dates, amount and category land pre-filled in the form. You check the fields and hit Save \u2014 nothing saves itself.',
+      'Honesty rules: anything the reader cannot make out stays BLANK and is flagged \u2014 dates and amounts are never guessed. A non-USD bill gets a warning (the US book is USD).',
+      'The imported file itself is stored and linked on the bill with a \ud83d\udcce, so the original is always one click away. Run sql/v55-83-PC-bill-attachments.sql for that link (bills save fine without it, minus the \ud83d\udcce).',
+      { superAdminOnly: true, text: 'v55.83-PC \u2014 SQL: v55-83-PC-bill-attachments.sql (vendor_bills.attachment_path only). extract_bill action on /api/accounting/bills behind bills.manage: Anthropic messages (claude-sonnet-4-6 \u2192 haiku fallback, same pattern/key as ai/reports), PDFs as document blocks, images as image blocks, 10MB cap; src/lib/bill-extract.js parses+disciplines (ISO-date validation, amount coercion, null-never-guess) with 6 functional tests; upload to existing attachments bucket under bills/, failure never blocks save; route gracefully retries without attachment_path when PC SQL not yet run. Uses existing ANTHROPIC_API_KEY \u2014 no new env.' },
+    ],
+  },
+  {
+    version: 'v55.83-PB',
+    date: '2026-11-05',
+    label: 'The Books screen: your money at a glance, work done in one click',
+    items: [
+      'NEW \u201c\ud83c\udfe6 Books\u201d home under Accounting: money that came in and went out for any period, what\u2019s expected in (open invoices due) vs bills due out, plus live work queues \u2014 deposits waiting to be matched (one click into matching) and expenses waiting for a category (pick + \u2713, done).',
+      'NEW \u201c\ud83d\udcb8 Bills\u201d: enter what the company owes, see OPEN / PARTIAL / PAID with overdue highlighted, and pay a bill by picking the real bank transaction. Overpaying is rejected; nothing is ever deleted. Needs one small SQL (v55-83-PB-vendor-bills.sql).',
+      'Background matching for expenses: the rules engine now runs every 15 minutes and its suggestions appear on the Books home with Apply / Dismiss buttons. Your click can become a permanent rule.',
+      'Clutter removed: Ledgerly is hidden (unknown/unused), and the four ClickBooks tabs collapsed into \u201c\ud83d\udcca Financial Reports\u201d plus one \u2699\ufe0f admin tab you\u2019ll rarely need.',
+      'Two new grantable permissions in Settings: Bills: View and Bills: Manage.',
+      { superAdminOnly: true, text: 'v55.83-PB \u2014 SQL: sql/v55-83-PB-vendor-bills.sql (vendor_bills + vendor_bill_payments, browser read-only, writes via service route). New /api/accounting/bills (assertPermission bills.view/manage; canonical AR formula; US_WAVE_BUSINESS_ID constant in business-of.js). BooksHomeTab queues read bank_transactions client-side (unrestricted table); categorize reuses bank-write classify with the GS pending_wave_sync patch; proposals via workbench rules facade (super admin / rules grant; stale filtered). vercel.json: ledgerly cron removed, rules-job cron added (needs CLICKBOOKS_US_RULES_AUTO_STAGE_ENABLED=true + proposals only, never auto-post). Cutover readiness From clamped to >= 2026-11-01 (pre-cutoff events live in the opening entry and can never post - they were reading as false alarms). SCHEMA GATE now scans the bills route - it caught accounting_invoices.business_tag (phantom; tag lives on customers) before ship. NOT DONE: bill scanning/OCR (next), bills posting into ClickBooks ledger (AP is outside P1-P8 by design), live bank balances on Books home (needs the protected balance capability surface).' },
+    ],
+  },
+  {
     version: 'v55.83-PA',
     date: '2026-11-05',
     label: 'Both systems live \u2014 ClickBooks shadows Wave every 15 minutes',

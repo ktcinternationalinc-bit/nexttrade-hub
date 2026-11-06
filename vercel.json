@@ -29,11 +29,11 @@
       "schedule": "0 */6 * * *"
     },
     {
-      "path": "/api/ledgerly/sync",
+      "path": "/api/accounting/clickbooks-us/shadow-job",
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/accounting/clickbooks-us/shadow-job",
+      "path": "/api/accounting/clickbooks-us/rules-job",
       "schedule": "*/15 * * * *"
     }
   ]

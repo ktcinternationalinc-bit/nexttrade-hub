@@ -11,6 +11,11 @@
 // Manual customer override wins in BOTH directions (business_tag on
 // accounting_customers, set with one click on the Customers screen), and an
 // EGP-denominated invoice is Egyptian regardless.
+// v55.83-PB — the verified US Wave business (KTC INTERNATIONAL ENTERPRISES
+// LLC), the same binding the ClickBooks book is fixed to. Used to scope
+// bank-feed queries and new vendor bills to the US business.
+export var US_WAVE_BUSINESS_ID = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk';
+
 export function businessOfInvoice(inv, custTagById) {
   if (!inv) { return 'US'; }
   var tag = custTagById ? custTagById[inv.accounting_customer_id] : null;

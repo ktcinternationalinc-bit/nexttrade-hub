@@ -51,6 +51,14 @@ async function fetchAll(buildQ) {
 
 // ── TOOL DEFINITIONS (what the model sees) ─────────────────────────────────
 var TOOLS = [
+  { // v55.83-PE — Max: "anytime: what do we owe, what vendor we owe up at this date,
+    // how many validated, which disputed — agent friendly." This is that question as a tool.
+    name: 'bills_due_through',
+    description: 'Vendor bills register: everything the company owes due on or before a date — total, breakdown by vendor, each bill with due date, open balance, validation status (validated/pending) and payment status. Disputed bills are excluded from the total and listed separately. Use for any question about bills, payables, what we owe, or vendor balances.',
+    input_schema: { type: 'object', properties: {
+      through: { type: 'string', description: 'YYYY-MM-DD inclusive — bills due on or before this date. Defaults to today.' }
+    } }
+  },
   {
     name: 'list_invoices',
     description: 'List sales invoices with amounts, collected and outstanding balance. Filter by date range, payment state and/or customer. Totals are computed by the database over the full filtered set.',
@@ -124,6 +132,34 @@ async function execTool(db, name, input, userId, req) {
   input = input || {};
   var df = input.date_from || null; var dt = input.date_to || null;
 
+  if (name === 'bills_due_through') {
+    var thru = /^\d{4}-\d{2}-\d{2}$/.test(String(input.through || '')) ? input.through : new Date().toISOString().substring(0, 10);
+    var vb = await fetchAll(function () {
+      return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, due_date, total_amount, record_status, validation_status, disputed, dispute_reason').order('due_date', { ascending: true });
+    });
+    var vp = await fetchAll(function () {
+      return db.from('vendor_bill_payments').select('bill_id, amount, voided');
+    });
+    var paidBy2 = {};
+    vp.forEach(function (x) { if (x.voided !== true) { paidBy2[x.bill_id] = (paidBy2[x.bill_id] || 0) + Number(x.amount || 0); } });
+    var dueRows = []; var excl = []; var tot = 0, vOpen = 0, pOpen = 0; var byV = {};
+    vb.forEach(function (x) {
+      if (x.record_status !== 'active') { return; }
+      var open = r2(Number(x.total_amount || 0) - (paidBy2[x.id] || 0));
+      if (open <= 0.005) { return; }
+      if ((x.due_date || x.bill_date) > thru) { return; }
+      if (x.disputed === true) { excl.push({ vendor: x.vendor_name, bill_number: x.bill_number, open: open, dispute_reason: x.dispute_reason }); return; }
+      tot = r2(tot + open);
+      if (x.validation_status === 'validated') { vOpen = r2(vOpen + open); } else { pOpen = r2(pOpen + open); }
+      byV[x.vendor_name] = r2((byV[x.vendor_name] || 0) + open);
+      dueRows.push({ vendor: x.vendor_name, bill_number: x.bill_number, due_date: x.due_date || x.bill_date, open: open, validation: x.validation_status || 'pending' });
+    });
+    return { through: thru, total_owed: tot, bill_count: dueRows.length,
+      validated_open: vOpen, pending_validation_open: pOpen,
+      by_vendor: byV, bills: dueRows.slice(0, 200),
+      disputed_excluded_from_total: excl,
+      source: 'vendor_bills register, open = amount minus non-void payments, computed in database; disputed excluded per policy' };
+  }
   if (name === 'list_invoices') {
     var rows = await fetchAll(function () {
       var q = db.from('invoices').select('order_number, release_number, customer_name, customer_name_en, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false }); // NW: invoices has no invoice_number

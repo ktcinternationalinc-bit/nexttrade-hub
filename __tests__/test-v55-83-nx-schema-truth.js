@@ -25,14 +25,15 @@ var VERIFIED = {
   accounting_customers: ['id', 'company_name', 'contact_name', 'wave_customer_id', 'wave_business_id', 'business_tag'] // push-invoice-v2 L78 select + custName; business_tag created by OR SQL; wave_status/wave_invoice_id on invoices written by import-invoices fields — all cited, never guessed
 };
 // Our own tables (created by our SQL) are trusted:
-var OURS = { nexttrade_orders: true, hr_performance_reviews: true, shipments: true, inventory_layers: true, invoice_items: true, product_costs: true };
+var OURS = { nexttrade_orders: true, hr_performance_reviews: true, shipments: true, inventory_layers: true, invoice_items: true, product_costs: true, vendor_bills: true, vendor_bill_payments: true /* v55.83-PB SQL */ };
 
 var FILES = [
   'src/app/api/reconcile/nexttrade/route.js',
   'src/app/api/ai/reports/route.js',
   'src/app/api/hr/performance-review/route.js',
   'src/app/api/accounting/sales-report/route.js',
-  'src/app/api/accounting/pnl/route.js'
+  'src/app/api/accounting/pnl/route.js',
+  'src/app/api/accounting/bills/route.js' // v55.83-PB — bills/cash-flow route under the same truth gate
 ];
 
 var failures = [];

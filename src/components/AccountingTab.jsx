@@ -16,7 +16,11 @@ import PnLTab from './PnLTab';
 import BusinessBooksTab from './BusinessBooksTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
-import LedgerlyHub from './LedgerlyHub';
+// v55.83-PB — LedgerlyHub hidden per Max ('i don't know what ledgerly is so hide it');
+// the component file stays on disk but is no longer imported or routed.
+import BooksHomeTab from './BooksHomeTab';
+import BillsTab from './BillsTab';
+import CashForecastTab from './CashForecastTab';
 import ClickBooksUSCore from './ClickBooksUSCore';
 import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
 import ClickBooksUSReports from './ClickBooksUSReports';
@@ -39,11 +43,11 @@ export default function AccountingTab(props) {
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
-    ['ledgerly', '📗 Ledgerly'],
-    ['clickbooks_us', 'ClickBooks · US'],
-    ['clickbooks_workflows', 'ClickBooks · Rules & Migration'],
-    ['clickbooks_reports', 'ClickBooks · Reports & Tax'],
-    ['clickbooks_cutover', 'ClickBooks · Parallel & Cutover'],
+    ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
+    ['bills', '💸 Bills'], // v55.83-PB — vendor bills (AP): what we owe, pay from the bank feed
+    ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
+    ['clickbooks_reports', '📊 Financial Reports'], // v55.83-PB — P&L / balance sheet / GL from the real ledger
+    ['clickbooks_admin', '⚙️ ClickBooks Admin'], // v55.83-PB — foundation/rules/migration/cutover, tucked away
     ['company', '🏢 Company Profile'],
     ['arhistory', '📒 Customer AR History'],
     ['ledger', '📑 Customer Ledger'],
@@ -76,7 +80,7 @@ export default function AccountingTab(props) {
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
-        {tabs.filter(function (t) { return (t[0] !== 'ledgerly' || canLedgerly) && (t[0] !== 'clickbooks_us' || (clickbooksEnabled && canClickbooks)) && (t[0] !== 'clickbooks_workflows' || workflowsEnabled) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_cutover' || cutoverEnabled); }).map(function (t) {
+        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true); }).map(function (t) {
           return (
             <button key={t[0]} onClick={function () { setSub(t[0]); }}
               className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
@@ -85,15 +89,15 @@ export default function AccountingTab(props) {
           );
         })}
       </div>
-      {sub !== 'ledgerly' && sub !== 'clickbooks_us' && sub !== 'clickbooks_workflows' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_cutover' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
-      {sub === 'ledgerly' && <LedgerlyHub {...props} canView={canLedgerly} />}
-      {sub === 'clickbooks_us' && clickbooksEnabled && <ClickBooksUSCore canView={canClickbooks} />}
-      {sub === 'clickbooks_workflows' && workflowsEnabled && <ClickBooksUSWorkflows />}
+      {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
+      {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
+      {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
-      {sub === 'clickbooks_cutover' && cutoverEnabled && <ClickBooksUSCutover />}
+      {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'company' && <CompanyProfileTab {...props} />}
       {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}
@@ -108,6 +112,37 @@ export default function AccountingTab(props) {
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
       {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} initialWaveStep={_initWaveStep} />}
+    </div>
+  );
+}
+
+// v55.83-PB — the four engine-room ClickBooks screens live behind ONE admin tab
+// (Max: "what is this shit with the tabs of clickbook. just useless shit").
+// Daily value lives in 🏦 Books and 📊 Financial Reports; this is the machinery.
+function ClickBooksAdmin(props) {
+  var [view, setView] = useState('foundation');
+  var views = [
+    ['foundation', 'Foundation audit'],
+    ['workflows', 'Rules & Migration'],
+    ['cutover', 'Parallel & Cutover'],
+  ];
+  return (
+    <div className="p-3">
+      <div className="flex gap-1 mb-3">
+        {views.map(function (v) {
+          if (v[0] === 'workflows' && !props.workflowsEnabled) { return null; }
+          if (v[0] === 'cutover' && !props.cutoverEnabled) { return null; }
+          return (
+            <button key={v[0]} onClick={function () { setView(v[0]); }}
+              className={'px-3 py-1.5 text-xs rounded font-bold ' + (view === v[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
+              {v[1]}
+            </button>
+          );
+        })}
+      </div>
+      {view === 'foundation' && <ClickBooksUSCore canView={props.canClickbooks} />}
+      {view === 'workflows' && props.workflowsEnabled && <ClickBooksUSWorkflows />}
+      {view === 'cutover' && props.cutoverEnabled && <ClickBooksUSCutover />}
     </div>
   );
 }

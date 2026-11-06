@@ -41,11 +41,14 @@ var at = R('src/components/AccountingTab.jsx');
 ['recon', 'balances', 'sales_report', 'pnl', 'all_invoices'].forEach(function (sub) {
   ok('2: OW subtab "' + sub + '" still wired', at.indexOf("'" + sub + "'") >= 0);
 });
-ok('2f: ClickBooks tabs appear only behind NEXT_PUBLIC_CLICKBOOKS_US_ENABLED (default hidden)',
+// (PB superseded the original 2f/2g pins: Max ordered the 4 ClickBooks tabs
+// collapsed and Ledgerly hidden entirely. New truth pinned here + in PB.)
+ok('2f (PB): ClickBooks surfaces stay flag-gated — reports behind flag+capability, admin behind flag+verified super admin',
   /NEXT_PUBLIC_CLICKBOOKS_US_ENABLED === 'true'/.test(at) &&
-  /clickbooksEnabled && canClickbooks/.test(at));
-ok('2g: Ledgerly tab requires a verified financial capability, not a legacy role',
-  /canLedgerly = financialAccess\.canViewFullDashboard === true \|\| financialAccess\.canViewBankBalances === true/.test(at));
+  /reportsEnabled && canClickbooks/.test(at) &&
+  /clickbooksEnabled && financialAccess\.isVerifiedSuperAdmin === true/.test(at));
+ok('2g (PB): Ledgerly is hidden — no tab entry survives',
+  at.indexOf("['ledgerly'") < 0);
 
 // ── 3. server-permissions: balances no longer grantable via legacy aliases
 var sp = R('src/lib/server-permissions.js');
@@ -91,8 +94,8 @@ ok('6b: ClickBooks read handler enforces the US book fingerprint (KTC_US / USD)'
 
 // ── 7. vercel.json keeps BOTH crons (our 6-hour recon + ledgerly 15-min)
 var vj = R('vercel.json');
-ok('7: recon cron retained AND ledgerly sync cron added',
-  /reconcile\/nexttrade/.test(vj) && /ledgerly\/sync/.test(vj));
+ok('7 (PB): recon cron retained; ledgerly cron REMOVED per Max; shadow + rules crons present',
+  /reconcile\/nexttrade/.test(vj) && !/ledgerly\/sync/.test(vj) && /shadow-job/.test(vj) && /rules-job/.test(vj));
 
 // ── 8. Settings keeps our P&L permission catalog AND adds the two protected panels
 var st = R('src/components/SettingsTab.jsx');
