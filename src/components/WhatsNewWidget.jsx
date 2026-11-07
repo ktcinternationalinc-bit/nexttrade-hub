@@ -33,6 +33,34 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PN',
+    date: '2026-11-07',
+    label: '\ud83e\uddfe Invoice-backed sales rows on Books home',
+    items: [
+      'The money in & out section now shows SALES WITH ACTUAL INVOICES for the chosen period: INVOICED (invoices issued), COLLECTED (payments recorded on invoices) and STILL OPEN (invoiced in the period, unpaid). All three click through to the exact invoices/payments \u2014 same engine as the \ud83d\udcc9 Stats tab, so the two screens can never disagree.',
+      { superAdminOnly: true, text: 'v55.83-PN \u2014 NO new SQL. BooksHomeTab loads period_stats alongside cashflow (preset/custom reloads both); drill panel generalized to a ps source whose sums come from the card figures themselves; denied period_stats hides the row (no spinner). Test pn (4).' },
+    ],
+  },
+  {
+    version: 'v55.83-PM',
+    date: '2026-11-07',
+    label: '\ud83d\udcb0 SALES RECEIVED card',
+    items: [
+      'New card on the Books home: SALES RECEIVED \u2014 the deposits in the period that are actually sales money (matched to an invoice, or categorized as a customer payment). Clickable like the rest: every row says WHY it counts as sales. Deposits not yet matched/categorized don\u2019t count \u2014 match them and the number grows.',
+      { superAdminOnly: true, text: 'v55.83-PM \u2014 NO new SQL. cashflow bank select + classification, matched_invoice_id; sales_in drill (invoice-matched OR classification=customer_payment, settled, posted-date period \u2014 strict subset of CAME IN); card between CAME IN and WENT OUT. Test pm (4).' },
+    ],
+  },
+  {
+    version: 'v55.83-PL',
+    date: '2026-11-07',
+    label: '\ud83c\udfe6 Period cards: click \u2192 the rows behind the number',
+    items: [
+      'All six money cards on the Books home (Came in, Went out, Net moved, Expected in, Bills due, Projected net) are now clickable: the exact bank transactions, invoices or bills that make up the number open right below, signed +/\u2212, with a \u03a3 that equals the card to the cent. Big lists show the largest 300 rows but the \u03a3 always covers everything.',
+      '"Jun 1 \u2192" is pinned to June 1, 2026 everywhere.',
+      { superAdminOnly: true, text: 'v55.83-PL \u2014 NO new SQL. cashflow action returns drills {came_in, went_out, expected_in, bills_due} with count/sum/rows(cap 300), built from the SAME settled+posted-date filters as cashflowSummary \u2014 one source of truth; NET and PROJECTED drills merge two keys client-side with signed sums. Card component takes onClick; drill panel inline-white (dark-skin safe) with old-deploy fallback notice. Test pl (8).' },
+    ],
+  },
+  {
     version: 'v55.83-PK',
     date: '2026-11-07',
     label: '\ud83d\udcc8 Dashboard strip: click any number \u2192 see the rows',

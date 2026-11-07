@@ -257,7 +257,7 @@ export async function POST(req) {
       var today2 = new Date().toISOString().substring(0, 10);
       var bank = await fetchAll(function () {
         return db.from('bank_transactions')
-          .select('id, direction, amount_abs, pending, date, posted_date, iso_currency, wave_business_id, name, merchant_name')
+          .select('id, direction, amount_abs, pending, date, posted_date, iso_currency, wave_business_id, name, merchant_name, classification, matched_invoice_id')
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
           .gte('date', fromD).lte('date', toD);
       });
@@ -274,7 +274,57 @@ export async function POST(req) {
       var expIn = openInvs
         .filter(function (v) { var d = v.due_date || v.invoice_date; return d && d >= fromD && d <= toD; })
         .sort(function (a, b2) { return b2.open_balance - a.open_balance; }).slice(0, 50);
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: fromD, to: toD, summary: summary, bills_due: dueBills, expected_in: expIn });
+      // v55.83-PL (Max, Nov 7 04:02): "these cards should be clickable and the
+      // underlying data that supports these numbers should be displayed below."
+      // Every card gets its rows; sums are computed over ALL rows server-side
+      // so the Σ equals the card to the cent even when the list is capped.
+      var CAPL = 300;
+      var inRowsL = []; var outRowsL = []; var sumInL = 0; var sumOutL = 0;
+      bank.forEach(function (t) {
+        if (t.pending === true) { return; }
+        var dL = t.posted_date || t.date;
+        if (!(dL >= fromD && dL <= toD)) { return; }
+        var amtL = Number(t.amount_abs) || 0;
+        var rowL = { ref: dL, who: t.merchant_name || t.name || '(no description)', date: dL, amount: r2(amtL), source: 'Bank feed (settled)' };
+        if (t.direction === 'in') { inRowsL.push(rowL); sumInL += amtL; }
+        else if (t.direction === 'out') { outRowsL.push(rowL); sumOutL += amtL; }
+      });
+      // v55.83-PM (Max, Nov 7 04:12): "we should then also have all sales -
+      // which are related to sales... as a card" — SALES RECEIVED = settled
+      // deposits in the period that are MATCHED TO AN INVOICE or categorized
+      // customer_payment. Same period/settled filters as CAME IN, so sales
+      // are always a subset of it.
+      var salesRowsL = []; var sumSalesL = 0;
+      bank.forEach(function (t) {
+        if (t.pending === true || t.direction !== 'in') { return; }
+        var dS = t.posted_date || t.date;
+        if (!(dS >= fromD && dS <= toD)) { return; }
+        var isSales = !!t.matched_invoice_id || t.classification === 'customer_payment';
+        if (!isSales) { return; }
+        var amtS = Number(t.amount_abs) || 0;
+        sumSalesL += amtS;
+        salesRowsL.push({ ref: dS, who: t.merchant_name || t.name || '(no description)', date: dS, amount: r2(amtS),
+          source: t.matched_invoice_id ? 'Deposit matched to an invoice' : 'Deposit categorized customer_payment' });
+      });
+      var byAmtL = function (a2, b3) { return b3.amount - a2.amount; };
+      inRowsL.sort(byAmtL); outRowsL.sort(byAmtL); salesRowsL.sort(byAmtL);
+      var expAllL = openInvs
+        .filter(function (v) { var d2 = v.due_date || v.invoice_date; return d2 && d2 >= fromD && d2 <= toD; })
+        .map(function (v) { return { ref: v.invoice_number || v.id, who: v.customer || '', date: v.due_date || v.invoice_date, amount: r2(v.open_balance), source: 'Open invoice · due ' + (v.due_date || '(invoice date ' + v.invoice_date + ')') }; })
+        .sort(byAmtL);
+      var sumExpL = 0; expAllL.forEach(function (r3) { sumExpL += r3.amount; });
+      var billRowsL = dueBills
+        .map(function (b4) { return { ref: b4.bill_number || b4.id, who: b4.vendor_name || '', date: b4.due_date, amount: r2(b4.open), source: 'Open bill' + (b4.category ? ' · ' + b4.category : '') }; })
+        .sort(byAmtL);
+      var sumBillL = 0; billRowsL.forEach(function (r4) { sumBillL += r4.amount; });
+      var drillsL = {
+        sales_in: { count: salesRowsL.length, sum: r2(sumSalesL), rows: salesRowsL.slice(0, CAPL) },
+        came_in: { count: inRowsL.length, sum: r2(sumInL), rows: inRowsL.slice(0, CAPL) },
+        went_out: { count: outRowsL.length, sum: r2(sumOutL), rows: outRowsL.slice(0, CAPL) },
+        expected_in: { count: expAllL.length, sum: r2(sumExpL), rows: expAllL.slice(0, CAPL) },
+        bills_due: { count: billRowsL.length, sum: r2(sumBillL), rows: billRowsL.slice(0, CAPL) },
+      };
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: fromD, to: toD, summary: summary, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL });
     }
 
     // ── validate_bill: validation is NOT a formality (Max). All three checks

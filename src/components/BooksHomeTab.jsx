@@ -40,6 +40,8 @@ export default function BooksHomeTab(props) {
   var s12 = useState({}); var remTone = s12[0]; var setRemTone = s12[1];
   var s13 = useState(null); var fc = s13[0]; var setFc = s13[1]; // aging forecast strip
   var s14b = useState(null); var fcDrill = s14b[0]; var setFcDrill = s14b[1]; // v55.83-PK {bucket, kind} — the rows behind a strip number
+  var s15b = useState(null); var cfDrill = s15b[0]; var setCfDrill = s15b[1]; // v55.83-PL {keys:[{key,sign}], title} — the rows behind a period card
+  var s16b = useState(null); var ps = s16b[0]; var setPs = s16b[1]; // v55.83-PN — sales with ACTUAL invoices for the period (same engine as the Stats tab)
 
   var PRESETS = [
     ['Jun 1 →', '2026-06-01', ''], // v55.83-PK (Max): "something from june 1st as selection next to month year etc"
@@ -141,10 +143,18 @@ export default function BooksHomeTab(props) {
         else { toast.error((j && j.error) || 'Could not send.'); }
       });
   }
-  useEffect(function () { loadCashflow(from, to); loadQueues(); loadCatalog(); loadProposals(); loadLate(); loadDrift(); loadForecastStrip(); }, []);
+  useEffect(function () { loadCashflow(from, to); loadPeriodStats(from, to); loadQueues(); loadCatalog(); loadProposals(); loadLate(); loadDrift(); loadForecastStrip(); }, []);
   useEffect(function () { prefillSuggestions(outQueue, hubRules); }, [outQueue, hubRules]); // eslint-disable-line // eslint-disable-line
 
-  function applyPeriod(f, t, label) { setFrom(f); setTo(t); setPreset(label); loadCashflow(f, t); }
+  function applyPeriod(f, t, label) { setFrom(f); setTo(t); setPreset(label); loadCashflow(f, t); loadPeriodStats(f, t); }
+  function loadPeriodStats(f, t) {
+    // v55.83-PN (Max, 04:16): "also need to see sales (with actual invoices)
+    // as part of in and out section. add a new set of rows with this data."
+    // Same period_stats engine as the 📉 Stats tab — one source of truth.
+    billsApi({ action: 'period_stats', from: f, to: t || TODAY }).then(function (j) {
+      if (j && j.ok) { setPs(j); } else { setPs(null); }
+    }).catch(function () { setPs(null); });
+  }
 
   function classify(t, cls) {
     if (!cls) { return; }
@@ -172,11 +182,17 @@ export default function BooksHomeTab(props) {
 
   var sum = (cf && cf.summary) || null;
   function Card(p2) {
-    return <div className="rounded-xl p-3" style={{ background: p2.bg, border: '1px solid ' + p2.border, minWidth: 150 }}>
+    // v55.83-PL — cards are buttons: the rows that support the number open below
+    var inner = <React.Fragment>
       <div className="text-[10px] font-extrabold" style={{ color: p2.fg, opacity: 0.75 }}>{p2.label}</div>
       <div className="text-lg font-extrabold tabular-nums" style={{ color: p2.fg }}>{p2.value}</div>
       {p2.sub && <div className="text-[10px] font-semibold" style={{ color: p2.fg, opacity: 0.75 }}>{p2.sub}</div>}
-    </div>;
+    </React.Fragment>;
+    if (p2.onClick) {
+      return <button onClick={p2.onClick} title="Show the rows behind this number" className="rounded-xl p-3 text-left"
+        style={{ background: p2.bg, border: '1px solid ' + p2.border, minWidth: 150, cursor: 'pointer' }}>{inner}</button>;
+    }
+    return <div className="rounded-xl p-3" style={{ background: p2.bg, border: '1px solid ' + p2.border, minWidth: 150 }}>{inner}</div>;
   }
 
   return <div className="flex flex-col gap-3">
@@ -197,13 +213,79 @@ export default function BooksHomeTab(props) {
       {cf && cf.denied ? <div className="text-[11px]" style={{ color: '#92400e' }}>{cf.error || 'The money view needs the Bills: View permission — ask an admin in Settings → Permissions.'}</div> :
        !sum ? <div className="text-[11px] text-slate-500">Loading cash flow…</div> :
         <div className="flex gap-2 flex-wrap">
-          <Card label={'CAME IN (' + sum.actual_in_count + ' bank txns)'} value={'$' + fmt(sum.actual_in)} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="settled deposits" />
-          <Card label={'WENT OUT (' + sum.actual_out_count + ')'} value={'$' + fmt(sum.actual_out)} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="settled spending" />
-          <Card label="NET MOVED" value={(sum.actual_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.actual_net))} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="in − out, bank reality" />
-          <Card label={'EXPECTED IN (' + sum.expected_in_count + ' invoices due)'} value={'$' + fmt(sum.expected_in)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="open invoices due in period" />
-          <Card label={'BILLS DUE (' + sum.due_out_count + ')'} value={'$' + fmt(sum.due_out)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub={sum.overdue_out > 0 ? ('⚠ $' + fmt(sum.overdue_out) + ' already overdue') : 'nothing overdue'} />
-          <Card label="PROJECTED NET" value={(sum.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.projected_net))} bg={sum.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={sum.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={sum.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due" />
+          <Card label={'CAME IN (' + sum.actual_in_count + ' bank txns)'} value={'$' + fmt(sum.actual_in)} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="settled deposits"
+            onClick={function () { setCfDrill({ title: 'Came in — settled bank deposits', keys: [{ key: 'came_in', sign: 1 }] }); }} />
+          <Card label={'SALES RECEIVED (' + (cf.sales_in_count || 0) + ')'} value={'$' + fmt(cf.sales_in || 0)} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="deposits matched to invoices / customer payments"
+            onClick={function () { setCfDrill({ title: 'Sales received — deposits matched to invoices or categorized customer payment', keys: [{ key: 'sales_in', sign: 1 }] }); }} />
+          <Card label={'WENT OUT (' + sum.actual_out_count + ')'} value={'$' + fmt(sum.actual_out)} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="settled spending"
+            onClick={function () { setCfDrill({ title: 'Went out — settled bank spending', keys: [{ key: 'went_out', sign: -1 }] }); }} />
+          <Card label="NET MOVED" value={(sum.actual_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.actual_net))} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="in − out, bank reality"
+            onClick={function () { setCfDrill({ title: 'Net moved — every settled bank transaction (in +, out −)', keys: [{ key: 'came_in', sign: 1 }, { key: 'went_out', sign: -1 }] }); }} />
+          <Card label={'EXPECTED IN (' + sum.expected_in_count + ' invoices due)'} value={'$' + fmt(sum.expected_in)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="open invoices due in period"
+            onClick={function () { setCfDrill({ title: 'Expected in — open invoices due in this period', keys: [{ key: 'expected_in', sign: 1 }] }); }} />
+          <Card label={'BILLS DUE (' + sum.due_out_count + ')'} value={'$' + fmt(sum.due_out)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub={sum.overdue_out > 0 ? ('⚠ $' + fmt(sum.overdue_out) + ' already overdue') : 'nothing overdue'}
+            onClick={function () { setCfDrill({ title: 'Bills due in this period', keys: [{ key: 'bills_due', sign: -1 }] }); }} />
+          <Card label="PROJECTED NET" value={(sum.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.projected_net))} bg={sum.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={sum.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={sum.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due"
+            onClick={function () { setCfDrill({ title: 'Projected net — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); }} />
         </div>}
+      {ps && ps.invoices && <div className="mt-2">
+        <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🧾 SALES — ACTUAL INVOICES IN THIS PERIOD (click for the invoices)</div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          <Card label={'INVOICED (' + (ps.invoices.count || 0) + ' invoices)'} value={'$' + fmt(ps.invoices.invoiced)} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
+            onClick={function () { setCfDrill({ src: 'ps', title: 'Invoiced — actual invoices issued in this period', keys: [{ key: 'invoiced', sign: 1 }] }); }} />
+          <Card label={'COLLECTED (' + (ps.invoices.collected_count || 0) + ' payments)'} value={'$' + fmt(ps.invoices.collected)} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="payments recorded on invoices in the period"
+            onClick={function () { setCfDrill({ src: 'ps', title: 'Collected — payments recorded on invoices in this period', keys: [{ key: 'collected', sign: 1 }] }); }} />
+          <Card label="STILL OPEN (from these invoices)" value={'$' + fmt(ps.invoices.still_open_from_period)} bg="#fffbeb" border="#fcd34d" fg="#78350f" sub="invoiced in period, not yet paid"
+            onClick={function () { setCfDrill({ src: 'ps', title: 'Still open — invoiced in this period, not yet paid', keys: [{ key: 'open_invoices', sign: 1 }] }); }} />
+        </div>
+      </div>}
+      {cfDrill && cfDrill.src === 'ps' && !ps && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Could not load the invoice data for this period — check your Bills/AR permission.</div>}
+      {cfDrill && (cfDrill.src === 'ps' ? (ps && ps.drills) : (cf && cf.drills)) && (function () {
+        var srcMap = cf && cf.drills;
+        if (cfDrill.src === 'ps') {
+          var inv2 = ps.invoices || {};
+          srcMap = {
+            invoiced: { count: inv2.count || 0, sum: inv2.invoiced || 0, rows: (ps.drills && ps.drills.invoiced) || [] },
+            collected: { count: inv2.collected_count || 0, sum: inv2.collected || 0, rows: (ps.drills && ps.drills.collected) || [] },
+            open_invoices: { count: ((ps.drills && ps.drills.open_invoices) || []).length, sum: inv2.still_open_from_period || 0, rows: (ps.drills && ps.drills.open_invoices) || [] },
+          };
+        }
+        return (function () {
+        var merged = []; var total = 0; var fullCount = 0; var capped = false;
+        cfDrill.keys.forEach(function (k) {
+          var d3 = srcMap[k.key]; if (!d3) { return; }
+          total += k.sign * d3.sum; fullCount += d3.count;
+          if (d3.count > (d3.rows || []).length) { capped = true; }
+          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, amount: r5.amount, sign: k.sign, source: r5.source }); });
+        });
+        merged.sort(function (a3, b5) { return b5.amount - a3.amount; });
+        var shown2 = merged.slice(0, 300);
+        return <div className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <div className="flex gap-2 items-center mb-1 flex-wrap">
+            <div className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>
+              {cfDrill.title} — {fullCount} row(s), Σ {(total >= 0 ? '+$' : '−$') + fmt(Math.abs(Math.round(total * 100) / 100))} (equals the card to the cent)</div>
+            <div className="flex-1" />
+            <button onClick={function () { setCfDrill(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
+          </div>
+          <div className="overflow-x-auto" style={{ maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[10px]">
+            <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+              <th className="py-1 pr-2 text-left font-semibold">Date / Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
+              <th className="py-1 pr-2 text-right font-semibold">Amount</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
+            <tbody style={{ color: '#0f172a' }}>
+              {shown2.map(function (r6, i2) {
+                return <tr key={i2} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{r6.ref}</td>
+                  <td className="py-0.5 pr-2 font-semibold">{String(r6.who || '').substring(0, 60)}</td>
+                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: r6.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r6.sign < 0 ? '−$' : '+$') + fmt(r6.amount)}</td>
+                  <td className="py-0.5" style={{ color: '#64748b' }}>{r6.source}</td></tr>;
+              })}
+            </tbody>
+          </table></div>
+          {(capped || merged.length > shown2.length) && <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Biggest rows shown ({shown2.length} of {fullCount}) — the Σ above still covers ALL of them. Narrow the period for the full list.</div>}
+        </div>;
+      })();
+      })()}
+      {cfDrill && cfDrill.src !== 'ps' && cf && !cf.drills && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Deploy v55.83-PL to get the rows behind the cards — then click again.</div>}
       {cf && cf.bills_due && cf.bills_due.length > 0 && <div className="mt-2 text-[11px]" style={{ color: '#431407' }}>
         <b>Due in this period:</b> {cf.bills_due.map(function (b) { return b.vendor_name + ' $' + fmt(b.open) + (b.due_date ? ' (' + b.due_date + ')' : ''); }).join(' · ')}
       </div>}
