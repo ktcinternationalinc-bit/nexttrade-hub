@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { CLASSIFICATIONS } from '../lib/bank-permissions';
 import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
+import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
@@ -43,6 +44,7 @@ export default function BooksHomeTab(props) {
   var s14b = useState(null); var fcDrill = s14b[0]; var setFcDrill = s14b[1]; // v55.83-PK {bucket, kind} — the rows behind a strip number
   var s15b = useState(null); var cfDrill = s15b[0]; var setCfDrill = s15b[1]; // v55.83-PL {keys:[{key,sign}], title} — the rows behind a period card
   var s16b = useState(null); var ps = s16b[0]; var setPs = s16b[1]; // v55.83-PN — sales with ACTUAL invoices for the period (same engine as the Stats tab)
+  var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
 
   var PRESETS = [
     ['Jun 1 →', '2026-06-01', ''], // v55.83-PK (Max): "something from june 1st as selection next to month year etc"
@@ -197,6 +199,7 @@ export default function BooksHomeTab(props) {
   }
 
   return <div className="flex flex-col gap-3">
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
     {/* ── Period + cash flow ── */}
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
@@ -248,17 +251,28 @@ export default function BooksHomeTab(props) {
                 onClick={function () { setCfDrill({ src: 'ps', title: 'Collected — every invoice payment received in this period (old invoices included)', keys: [{ key: 'collected', sign: 1 }] }); }} />
             </div>
           </div>}
-          <div>
-            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>📅 4 · WHAT'S AHEAD — open items falling due in this period</div>
+          {cf.ahead && <div>
+            {/* v55.83-PS (Max 05:33): "expected in... for what period?" — AHEAD
+                means AHEAD: the next 30 days from TODAY, whatever period the
+                cards above are set to. Overdue money lives in the Late strip. */}
+            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>📅 4 · WHAT'S AHEAD — falling due in the NEXT 30 DAYS ({cf.ahead.from} → {cf.ahead.to}), whatever period is picked above. Already-late money is in the strip below, aged.</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'EXPECTED IN (' + sum.expected_in_count + ' invoices due)'} value={'$' + fmt(sum.expected_in)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="open invoices due in period"
-                onClick={function () { setCfDrill({ title: 'Expected in — open invoices due in this period', keys: [{ key: 'expected_in', sign: 1 }] }); }} />
-              <Card label={'BILLS DUE (' + sum.due_out_count + ')'} value={'$' + fmt(sum.due_out)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub={sum.overdue_out > 0 ? ('⚠ $' + fmt(sum.overdue_out) + ' already overdue') : 'nothing overdue'}
-                onClick={function () { setCfDrill({ title: 'Bills due in this period', keys: [{ key: 'bills_due', sign: -1 }] }); }} />
-              <Card label="PROJECTED NET" value={(sum.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.projected_net))} bg={sum.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={sum.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={sum.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due"
-                onClick={function () { setCfDrill({ title: 'Projected net — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); }} />
+              {/* v55.83-PS (Max 05:34): "next 30 days.. 31-60. 61-90 90+.
+                  expected money based on invoices" — the four due windows,
+                  fed by the SAME buckets as the strip (one source of truth). */}
+              {fc && fc.buckets && ['D0-30', 'D31-60', 'D61-90', 'D90+'].map(function (bk) {
+                var LB = { 'D0-30': 'EXPECTED ≤30 DAYS', 'D31-60': 'EXPECTED 31–60', 'D61-90': 'EXPECTED 61–90', 'D90+': 'EXPECTED 90+ DAYS' };
+                return <Card key={bk} label={LB[bk] + ' (' + fc.buckets[bk].ar_count + ' inv)'} value={'$' + fmt(fc.buckets[bk].ar)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub={bk === 'D0-30' ? 'open invoices due in the next 30 days' : 'open invoices due in this window'}
+                  onClick={function () { setFcDrill({ bucket: bk, kind: 'in' }); }} />;
+              })}
+              {!(fc && fc.buckets) && <Card label={'EXPECTED IN (' + cf.ahead.expected_in_count + ' invoices due)'} value={'$' + fmt(cf.ahead.expected_in)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="open invoices due in the next 30 days"
+                onClick={function () { setCfDrill({ title: 'Expected in — open invoices due in the next 30 days', keys: [{ key: 'expected_in', sign: 1 }] }); }} />}
+              <Card label={'BILLS DUE (' + cf.ahead.due_out_count + ')'} value={'$' + fmt(cf.ahead.due_out)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub="open bills due in the next 30 days"
+                onClick={function () { setCfDrill({ title: 'Bills due in the next 30 days', keys: [{ key: 'bills_due', sign: -1 }] }); }} />
+              <Card label="PROJECTED NET (30d)" value={(cf.ahead.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(cf.ahead.projected_net))} bg={cf.ahead.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={cf.ahead.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={cf.ahead.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due, next 30 days"
+                onClick={function () { setCfDrill({ title: 'Projected net, next 30 days — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); }} />
             </div>
-          </div>
+          </div>}
         </div>}
       {cfDrill && cfDrill.src === 'ps' && !ps && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Could not load the invoice data for this period — check your Bills/AR permission.</div>}
       {cfDrill && (cfDrill.src === 'ps' ? (ps && ps.drills) : (cf && cf.drills)) && (function () {
@@ -278,7 +292,7 @@ export default function BooksHomeTab(props) {
           var d3 = srcMap[k.key]; if (!d3) { return; }
           total += k.sign * d3.sum; fullCount += d3.count;
           if (d3.count > (d3.rows || []).length) { capped = true; }
-          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, due: r5.due, total: r5.total, paid: r5.paid, open: r5.open, amount: r5.amount, sign: k.sign, source: r5.source }); });
+          (d3.rows || []).forEach(function (r5) { merged.push({ invoice_id: r5.invoice_id || null, rel: r5.rel || null, ref: r5.ref, who: r5.who, date: r5.date, due: r5.due, total: r5.total, paid: r5.paid, open: r5.open, amount: r5.amount, sign: k.sign, source: r5.source }); });
         });
         merged.sort(function (a3, b5) { return b5.amount - a3.amount; });
         var shown2 = merged.slice(0, 300);
@@ -299,7 +313,9 @@ export default function BooksHomeTab(props) {
             <tbody style={{ color: '#0f172a' }}>
               {shown2.map(function (r6, i2) {
                 return <tr key={i2} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td className="py-0.5 pr-2 whitespace-nowrap">{r6.ref}</td>
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{r6.invoice_id
+                    ? <button onClick={function () { setPeekId(r6.invoice_id); }} className="font-bold underline" style={{ color: '#1d4ed8' }} title="Open the invoice">{r6.ref}{r6.rel ? ' · ' + r6.rel : ''}</button>
+                    : <span>{r6.ref}</span>}</td>
                   <td className="py-0.5 pr-2 font-semibold">{String(r6.who || '').substring(0, 48)}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap">{r6.date || '—'}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r6.due || '—'}</td>
@@ -410,7 +426,9 @@ export default function BooksHomeTab(props) {
             <tbody style={{ color: '#0f172a' }}>
               {shown.map(function (r, i) {
                 return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td className="py-0.5 pr-2 font-semibold">{r.ref}</td><td className="py-0.5 pr-2">{r.who}</td>
+                  <td className="py-0.5 pr-2 font-semibold">{r.invoice_id
+                    ? <button onClick={function () { setPeekId(r.invoice_id); }} className="font-bold underline" style={{ color: '#1d4ed8' }} title="Open the invoice">{r.ref}{r.rel ? ' · ' + r.rel : ''}</button>
+                    : <span>{r.ref}</span>}</td><td className="py-0.5 pr-2">{r.who}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap">{r.date || '—'}</td>
                   <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
                   <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r.total)}</td>

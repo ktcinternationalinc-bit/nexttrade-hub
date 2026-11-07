@@ -18,13 +18,13 @@ console.log('PO — dates + original/paid/open in every drill');
 
 // ── 1. Server rows carry due / total / paid / open ──
 var br = R('src/app/api/accounting/bills/route.js');
-ok('1a: period_stats invoice select now includes due_date',
-  /invoice_number, invoice_date, due_date, currency, total_amount/.test(br));
-ok('1b: invoiced + still-open rows carry due, original (total), paid, open',
-  /rowsInvoiced\.push\(\{ ref: inv\.invoice_number[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br) &&
-  /rowsOpenInv\.push\(\{ ref: inv\.invoice_number[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br));
-ok('1c: collected / billed / open-bills / bills-paid rows carry the dates+balances too',
-  /var rowC = \{ ref: srcInv\.invoice_number[^\n]*due: srcInv\.due_date \|\| null, total: r2\(srcInv\.total_amount\)/.test(br) && // (PP wrapped it as rowC, annotated period-vs-older)
+ok('1a (PS): period_stats invoice select includes release_number + due_date',
+  /invoice_number, release_number, invoice_date, due_date, currency, total_amount/.test(br));
+ok('1b (PS): invoiced + still-open rows carry invoice_id, release, due, original (total), paid, open',
+  /rowsInvoiced\.push\(\{ invoice_id: inv\.id, ref: inv\.invoice_number, rel: inv\.release_number \|\| null[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br) &&
+  /rowsOpenInv\.push\(\{ invoice_id: inv\.id, ref: inv\.invoice_number, rel: inv\.release_number \|\| null[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br));
+ok('1c (PS): collected / billed / open-bills / bills-paid rows carry the dates+balances too',
+  /var rowC = \{ invoice_id: srcInv\.id, ref: srcInv\.invoice_number, rel: srcInv\.release_number \|\| null[^\n]*due: srcInv\.due_date \|\| null, total: r2\(srcInv\.total_amount\)/.test(br) && // (PP rowC; PS added id+release)
   /rowsOpenBills\.push\(\{[^\n]*date: b\.bill_date, due: b\.due_date \|\| null, total: r2\(b\.total_amount\), paid: r2\(b\.paid\), open: r2\(b\.open\)/.test(br) &&
   /rowsBillsPaid\.push\(\{[^\n]*due: pb\.due_date \|\| null, total: r2\(pb\.total_amount\)/.test(br));
 ok('1d: open-invoice loader exposes original + paid (total − open) so EVERY screen built on it has balances',

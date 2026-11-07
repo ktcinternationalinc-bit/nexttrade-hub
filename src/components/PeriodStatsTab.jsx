@@ -3,6 +3,7 @@
 // on for both invoices and bills to see stats". Default June 1, 2026 → today;
 // invoices and bills side by side; month-by-month table; CSV.
 import React, { useState, useEffect } from 'react';
+import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -18,6 +19,7 @@ export default function PeriodStatsTab(props) {
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
   var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
+  var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState(null); var drill = s5[0]; var setDrill = s5[1]; // {key, title, unitWho}
@@ -116,6 +118,7 @@ export default function PeriodStatsTab(props) {
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
   return <div className="bg-white rounded-xl border border-slate-200 p-3">
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900">📉 Stats — invoices & bills</div>
       <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={from} onChange={function (e) { setFrom(e.target.value); }} />
@@ -179,7 +182,9 @@ export default function PeriodStatsTab(props) {
           <tbody style={{ color: '#0f172a' }}>
             {drillRows().slice().sort(function (a, b2) { return b2.amount - a.amount; }).map(function (r, i) {
               return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                <td className="py-1 pr-2 font-semibold">{r.ref}</td><td className="py-1 pr-2">{r.who}</td>
+                <td className="py-1 pr-2 font-semibold">{r.invoice_id
+                  ? <button onClick={function () { setPeekId(r.invoice_id); }} className="font-bold underline" style={{ color: '#1d4ed8' }} title="Open the invoice">{r.ref}{r.rel ? ' · ' + r.rel : ''}</button>
+                  : <span>{r.ref}</span>}</td><td className="py-1 pr-2">{r.who}</td>
                 <td className="py-1 pr-2 whitespace-nowrap">{r.date || '—'}</td>
                 <td className="py-1 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
                 <td className="py-1 pr-2 text-right tabular-nums">{nd(r.total)}</td>

@@ -66,7 +66,7 @@ export function tagRows(invoices, bills, today) {
     var open = Number(v.open_balance) || 0;
     if (open <= 0.005) { return; }
     rows.push({ kind: 'in', bucket: bucketOf(v.due_date || v.invoice_date, today),
-      ref: v.invoice_number || v.id, who: v.customer || '', date: v.invoice_date || '', due: v.due_date || null,
+      invoice_id: v.id || null, ref: v.invoice_number || v.id, rel: v.release_number || null, who: v.customer || '', date: v.invoice_date || '', due: v.due_date || null,
       total: v.total === undefined ? null : r2(v.total), paid: v.paid === undefined ? null : r2(v.paid), open: r2(open),
       amount: r2(open), source: 'Invoice' + (v.due_date ? ' · due ' + v.due_date : ' · no due date, dated ' + (v.invoice_date || '?')) });
   });

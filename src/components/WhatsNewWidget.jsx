@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PS',
+    date: '2026-11-07',
+    label: '\ud83d\udcc5 WHAT\u2019S AHEAD is now truly ahead',
+    items: [
+      'Max asked the right question (\u201cexpected in\u2026 for what period?\u201d): with the period set to \u201cJun 1 \u2192 today\u201d, EXPECTED IN was showing money already overdue since June. Group 4 is now FORWARD-LOOKING regardless of the period picked above: EXPECTED money laddered \u2264\u200a30 / 31\u201360 / 61\u201390 / 90+ days ahead (based on open invoices\u2019 due dates, same buckets as the strip \u2014 the two can never disagree), BILLS DUE next 30 days, PROJECTED NET (30d). Already-late money lives only in the \u26a0 aged strip.',
+      'Click ANY invoice reference in any drill (Books cards, the strip, \ud83d\udcc8 Forecast, \ud83d\udcc9 Stats) and the INVOICE POPS UP: invoice + RELEASE number, customer, dates, Original/Paid/Balance, every line item and every dated payment. References everywhere now show \u201cINVOICE \u00b7 RELEASE\u201d.',
+      { superAdminOnly: true, text: 'v55.83-PS \u2014 NO new SQL. cashflow: ahead block (today\u2192+30d, Apr-1 creation cutoff, expected_in/due_out/projected_net + forward drills for expected_in/bills_due incl. due/total/paid/open on bill rows); Books group 4 reads cf.ahead, EXPECTED ladder = fc.buckets D* cards \u2192 setFcDrill (one source of truth with the strip), fallback single card when fc absent; PP pin 2a realigned (annotated); PS pins 3a\u20133c live in test pr. Shipped same morning as PR.' },
+    ],
+  },
+  {
     version: 'v55.83-PR',
     date: '2026-11-07',
     label: '\u2194 Intra-company transfers: scan, suggest, register',

@@ -33,7 +33,7 @@ ok('2a: four labeled groups, each answering one question',
   /1 · BANK REALITY — money that actually moved in this period/.test(bh) &&
   /2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices/.test(bh) &&
   /3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date/.test(bh) &&
-  /4 · WHAT'S AHEAD — open items falling due in this period/.test(bh));
+  /4 · WHAT'S AHEAD — falling due in the NEXT 30 DAYS/.test(bh)); // (PS made group 4 forward-looking)
 ok('2b: cohort group = INVOICED / PAID ON THESE / STILL OPEN, with the cohort drill wired',
   /PAID ON THESE \(/.test(bh) && /received in period, on THESE invoices only/.test(bh) &&
   /keys: \[\{ key: 'collected_on_period', sign: 1 \}\]/.test(bh) &&

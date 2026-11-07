@@ -81,7 +81,7 @@ function isPayable(b) { return b.record_status === 'active' && b.disputed !== tr
 async function loadOpenUsInvoices(db) {
   var invs = await fetchAll(function () {
     return db.from('accounting_invoices')
-      .select('id, invoice_number, invoice_date, due_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
+      .select('id, invoice_number, release_number, invoice_date, due_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
       .order('created_at', { ascending: false });
   });
   var pays = await fetchAll(function () {
@@ -107,7 +107,7 @@ async function loadOpenUsInvoices(db) {
     if (open <= 0.005) { return; }
     var totA = r2(Number(inv.total_amount) || 0);
     out.push({
-      id: inv.id, invoice_number: inv.invoice_number, customer: nameById[inv.accounting_customer_id] || '',
+      id: inv.id, invoice_number: inv.invoice_number, release_number: inv.release_number || null, customer: nameById[inv.accounting_customer_id] || '',
       invoice_date: inv.invoice_date, due_date: inv.due_date, open_balance: open,
       total: totA, paid: r2(totA - open), // PO: original + paid visible in every drill
     });
@@ -310,13 +310,20 @@ export async function POST(req) {
       });
       var byAmtL = function (a2, b3) { return b3.amount - a2.amount; };
       inRowsL.sort(byAmtL); outRowsL.sort(byAmtL); salesRowsL.sort(byAmtL);
+      // v55.83-PS (Max, 05:33: "expected in... for what period?") — WHAT'S
+      // AHEAD is now truly AHEAD: open invoices/bills falling due in the NEXT
+      // 30 DAYS FROM TODAY, whatever period the cards above are set to. Money
+      // already overdue lives in the Late strip, aged — never double-sold as
+      // "expected". Same Apr-1 creation cutoff as the forecast.
+      var aheadToF = new Date(Date.now() + 30 * 86400000).toISOString().substring(0, 10);
       var expAllL = openInvs
-        .filter(function (v) { var d2 = v.due_date || v.invoice_date; return d2 && d2 >= fromD && d2 <= toD; })
-        .map(function (v) { return { ref: v.invoice_number || v.id, who: v.customer || '', date: v.invoice_date, due: v.due_date || null, total: v.total, paid: v.paid, open: r2(v.open_balance), amount: r2(v.open_balance), source: 'Open invoice · due ' + (v.due_date || '(invoice date ' + v.invoice_date + ')') }; })
+        .filter(function (v) { if ((v.invoice_date || '') < '2026-04-01') { return false; } var d2 = v.due_date || v.invoice_date; return d2 && d2 >= today2 && d2 <= aheadToF; })
+        .map(function (v) { return { invoice_id: v.id || null, ref: v.invoice_number || v.id, rel: v.release_number || null, who: v.customer || '', date: v.invoice_date, due: v.due_date || null, total: v.total, paid: v.paid, open: r2(v.open_balance), amount: r2(v.open_balance), source: 'Open invoice · due ' + (v.due_date || '(invoice date ' + v.invoice_date + ')') }; })
         .sort(byAmtL);
       var sumExpL = 0; expAllL.forEach(function (r3) { sumExpL += r3.amount; });
-      var billRowsL = dueBills
-        .map(function (b4) { return { ref: b4.bill_number || b4.id, who: b4.vendor_name || '', date: b4.due_date, amount: r2(b4.open), source: 'Open bill' + (b4.category ? ' · ' + b4.category : '') }; })
+      var billsAheadL = openBills.filter(function (b5) { var d5 = b5.due_date || b5.bill_date; return d5 && d5 >= today2 && d5 <= aheadToF; });
+      var billRowsL = billsAheadL
+        .map(function (b4) { return { ref: b4.bill_number || b4.id, who: b4.vendor_name || '', date: b4.bill_date, due: b4.due_date || null, total: r2(b4.total_amount), paid: r2(b4.paid), open: r2(b4.open), amount: r2(b4.open), source: 'Open bill' + (b4.category ? ' · ' + b4.category : '') }; })
         .sort(byAmtL);
       var sumBillL = 0; billRowsL.forEach(function (r4) { sumBillL += r4.amount; });
       var drillsL = {
@@ -326,7 +333,11 @@ export async function POST(req) {
         expected_in: { count: expAllL.length, sum: r2(sumExpL), rows: expAllL.slice(0, CAPL) },
         bills_due: { count: billRowsL.length, sum: r2(sumBillL), rows: billRowsL.slice(0, CAPL) },
       };
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: fromD, to: toD, summary: summary, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL });
+      var aheadL = { from: today2, to: aheadToF,
+        expected_in: r2(sumExpL), expected_in_count: expAllL.length,
+        due_out: r2(sumBillL), due_out_count: billRowsL.length,
+        projected_net: r2(sumExpL - sumBillL) };
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: fromD, to: toD, summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL });
     }
 
     // ── validate_bill: validation is NOT a formality (Max). All three checks
@@ -569,7 +580,7 @@ export async function POST(req) {
       // Invoices side (US, canonical eligibility; all invoices in period, not just open)
       var invsP = await fetchAll(function () {
         return db.from('accounting_invoices')
-          .select('id, invoice_number, invoice_date, due_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
+          .select('id, invoice_number, release_number, invoice_date, due_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
           .order('created_at', { ascending: false });
       });
       var paysP = await fetchAll(function () {
@@ -602,10 +613,10 @@ export async function POST(req) {
         invoiced = r2(invoiced + amt); invCount++;
         addM(months, monthOf(inv.invoice_date), 'invoiced', amt);
         var open = r2(amt - (Number(inv.wave_imported_paid) || 0) - (paidByP[inv.id] || 0));
-        rowsInvoiced.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: amt, source: 'Invoice dated in period' }); // PO: dates+balances visible
+        rowsInvoiced.push({ invoice_id: inv.id, ref: inv.invoice_number, rel: inv.release_number || null, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: amt, source: 'Invoice dated in period' }); // PO: dates+balances visible
         if (open > 0.005) {
           stillOpen = r2(stillOpen + open);
-          rowsOpenInv.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: open, source: 'Unpaid balance of a period invoice' });
+          rowsOpenInv.push({ invoice_id: inv.id, ref: inv.invoice_number, rel: inv.release_number || null, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: open, source: 'Unpaid balance of a period invoice' });
         }
       });
       // v55.83-PP (Max, 04:35): two DIFFERENT questions, kept apart:
@@ -624,7 +635,7 @@ export async function POST(req) {
         collected = r2(collected + amt2); colCount++;
         addM(months, monthOf(pp.payment_date), 'collected', amt2);
         var invInPeriod = srcInv.invoice_date && srcInv.invoice_date >= pFrom && srcInv.invoice_date <= pTo;
-        var rowC = { ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, due: srcInv.due_date || null, total: r2(srcInv.total_amount), amount: amt2,
+        var rowC = { invoice_id: srcInv.id, ref: srcInv.invoice_number, rel: srcInv.release_number || null, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, due: srcInv.due_date || null, total: r2(srcInv.total_amount), amount: amt2,
           source: invInPeriod ? 'Payment on an invoice created in this period' : 'Payment on an OLDER invoice (dated ' + (srcInv.invoice_date || '?') + ')' };
         rowsCollected.push(rowC);
         if (invInPeriod) { collectedCohort = r2(collectedCohort + amt2); colCohortCount++; rowsCollectedCohort.push(rowC); }

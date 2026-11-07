@@ -7,6 +7,7 @@
 // OVERDUE gets its own column: money already late is never sold as
 // "coming in the next 30 days". Every drill-down sums to its card.
 import React, { useState, useEffect } from 'react';
+import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -23,6 +24,7 @@ export default function CashForecastTab(props) {
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
   var s3 = useState(null); var drill = s3[0]; var setDrill = s3[1]; // {bucket, kind}
+  var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
 
   function load() {
     setBusy(true);
@@ -64,6 +66,7 @@ export default function CashForecastTab(props) {
   }
 
   return <div className="flex flex-col gap-3">
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold text-slate-900">📈 Cash forecast — as of {data.today}</div>
@@ -157,7 +160,9 @@ export default function CashForecastTab(props) {
         <tbody style={{ color: '#0f172a' }}>
           {drillRows().map(function (r, i) {
             return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-              <td className="py-1.5 pr-2 font-semibold">{r.ref}</td><td className="py-1.5 pr-2">{r.who}</td>
+              <td className="py-1.5 pr-2 font-semibold">{r.invoice_id
+                ? <button onClick={function () { setPeekId(r.invoice_id); }} className="font-bold underline" style={{ color: '#1d4ed8' }} title="Open the invoice">{r.ref}{r.rel ? ' · ' + r.rel : ''}</button>
+                : <span>{r.ref}</span>}</td><td className="py-1.5 pr-2">{r.who}</td>
               <td className="py-1.5 pr-2 whitespace-nowrap">{r.date || '—'}</td>
               <td className="py-1.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
               <td className="py-1.5 pr-2 text-right tabular-nums">{nd(r.total)}</td>
