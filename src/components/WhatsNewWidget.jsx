@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PK',
+    date: '2026-11-07',
+    label: '\ud83d\udcc8 Dashboard strip: click any number \u2192 see the rows',
+    items: [
+      'Every In/Out number on the "Late & upcoming" strip is now a button: click it and the exact invoices or bills behind that number open right there, summed to the cent (biggest 80 shown; the \ud83d\udcc8 Forecast tab has the full list + CSV). The strip was also repainted \u2014 its numbers were nearly invisible on the dark theme.',
+      'Quick period buttons \u2014 Jun 1 \u2192, This month, Last month, This year \u2014 added next to the date pickers on both the \ud83c\udfe6 Books home and the \ud83d\udcc9 Stats tab.',
+      { superAdminOnly: true, text: 'v55.83-PK \u2014 NO new SQL. BooksHomeTab: strip card explicit inline #ffffff (dark-skin class override had made the inline-dark In/Out rows unreadable \u2014 same bug class as OZ/PA), In/Out cells \u2192 setFcDrill drill panel fed from fc.rows (one source of truth with the buckets), 80-row cap with honest pointer; PRESETS + Jun 1 \u2192/This year. PeriodStatsTab preset chips. Test pk (7).' },
+    ],
+  },
+  {
     version: 'v55.83-PJ',
     date: '2026-11-06',
     label: '\ud83d\udcb8 Bill categories: dropdown + remembered per vendor',

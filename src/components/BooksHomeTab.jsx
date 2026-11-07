@@ -39,8 +39,11 @@ export default function BooksHomeTab(props) {
   var s11 = useState(null); var drift = s11[0]; var setDrift = s11[1];
   var s12 = useState({}); var remTone = s12[0]; var setRemTone = s12[1];
   var s13 = useState(null); var fc = s13[0]; var setFc = s13[1]; // aging forecast strip
+  var s14b = useState(null); var fcDrill = s14b[0]; var setFcDrill = s14b[1]; // v55.83-PK {bucket, kind} — the rows behind a strip number
 
   var PRESETS = [
+    ['Jun 1 →', '2026-06-01', ''], // v55.83-PK (Max): "something from june 1st as selection next to month year etc"
+    ['This year', TODAY.substring(0, 4) + '-01-01', ''],
     ['Nov 1 →', '2026-11-01', ''],
     ['Last 30 days', agoDays(30), ''],
     ['Last 7 days', agoDays(7), ''],
@@ -207,9 +210,9 @@ export default function BooksHomeTab(props) {
     </div>
 
     {/* ── Aging forecast strip (Max: the dashboard should show late 1-30/31-60/61-90/90+ and upcoming, in AND out, with shortage forecasting) ── */}
-    {fc && !fc.denied && fc.buckets && <div className="bg-white rounded-xl border border-slate-200 p-3">
+    {fc && !fc.denied && fc.buckets && <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center mb-2">
-        <div className="text-xs font-extrabold text-slate-900">📈 Late & upcoming — in vs out</div>
+        <div className="text-xs font-extrabold" style={{ color: '#0f172a' }}>📈 Late & upcoming — in vs out</div>
         <div className="flex-1" />
         {(function () {
           var order = fc.bucket_order || []; var firstShort = null;
@@ -231,9 +234,19 @@ export default function BooksHomeTab(props) {
         </tr></thead>
         <tbody style={{ color: '#0f172a' }}>
           <tr><td className="py-1 pr-2 font-bold" style={{ color: '#065f46' }}>In</td>
-            {(fc.bucket_order || []).map(function (b) { return <td key={b} className="py-1 px-1 text-right tabular-nums">${fmt(fc.buckets[b].ar)}</td>; })}</tr>
+            {(fc.bucket_order || []).map(function (b) {
+              return <td key={b} className="py-0.5 px-0.5 text-right">
+                <button onClick={function () { setFcDrill({ bucket: b, kind: 'in' }); }} title="Show the invoices behind this number"
+                  className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
+                  style={{ background: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0' }}>${fmt(fc.buckets[b].ar)}</button></td>;
+            })}</tr>
           <tr><td className="py-1 pr-2 font-bold" style={{ color: '#7f1d1d' }}>Out</td>
-            {(fc.bucket_order || []).map(function (b) { return <td key={b} className="py-1 px-1 text-right tabular-nums">${fmt(fc.buckets[b].ap)}</td>; })}</tr>
+            {(fc.bucket_order || []).map(function (b) {
+              return <td key={b} className="py-0.5 px-0.5 text-right">
+                <button onClick={function () { setFcDrill({ bucket: b, kind: 'out' }); }} title="Show the bills behind this number"
+                  className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
+                  style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fecaca' }}>${fmt(fc.buckets[b].ap)}</button></td>;
+            })}</tr>
           <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position</td>
             {(fc.bucket_order || []).map(function (b) {
               var pos = fc.buckets[b].running >= 0;
@@ -241,7 +254,37 @@ export default function BooksHomeTab(props) {
             })}</tr>
         </tbody>
       </table></div>
-      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Position = running money in − money out across the windows: where it turns red is where cash runs short if nothing changes. Click "full forecast" for the rows behind every number.</div>
+      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Position = running money in − money out across the windows: where it turns red is where cash runs short if nothing changes. Click any green/red number for the exact rows behind it.</div>
+      {fcDrill && (function () {
+        var L2 = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
+        var all = (fc.rows || []).filter(function (r) { return r.bucket === fcDrill.bucket && r.kind === fcDrill.kind; })
+          .sort(function (a, b) { return b.amount - a.amount; });
+        var sum = 0; all.forEach(function (r) { sum += r.amount; });
+        var shown = all.slice(0, 80);
+        return <div className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <div className="flex gap-2 items-center mb-1">
+            <div className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>
+              {(fcDrill.kind === 'in' ? 'Coming in · ' : 'Going out · ') + (L2[fcDrill.bucket] || fcDrill.bucket)} — {all.length} row(s), Σ ${fmt(sum)} (equals the number above to the cent)</div>
+            <div className="flex-1" />
+            <button onClick={function () { setFcDrill(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
+          </div>
+          <table className="w-full text-[10px]">
+            <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+              <th className="py-1 pr-2 text-left font-semibold">Reference</th><th className="py-1 pr-2 text-left font-semibold">{fcDrill.kind === 'in' ? 'Customer' : 'Vendor'}</th>
+              <th className="py-1 pr-2 text-left font-semibold">Due</th><th className="py-1 pr-2 text-right font-semibold">Open</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
+            <tbody style={{ color: '#0f172a' }}>
+              {shown.map(function (r, i) {
+                return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td className="py-0.5 pr-2 font-semibold">{r.ref}</td><td className="py-0.5 pr-2">{r.who}</td>
+                  <td className="py-0.5 pr-2">{r.date || '—'}</td>
+                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums">${fmt(r.amount)}</td>
+                  <td className="py-0.5" style={{ color: '#64748b' }}>{r.source}</td></tr>;
+              })}
+            </tbody>
+          </table>
+          {all.length > shown.length && <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Showing the biggest {shown.length} of {all.length} — the 📈 Forecast tab has the full list + CSV.</div>}
+        </div>;
+      })()}
     </div>}
 
     {/* ── Work queues ── */}

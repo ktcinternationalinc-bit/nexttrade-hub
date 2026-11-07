@@ -68,7 +68,21 @@ export default function PeriodStatsTab(props) {
       <span className="text-[10px] text-slate-500">→</span>
       <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { setTo(e.target.value); }} />
       <button onClick={function () { load(from, to); }} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>{busy ? '…' : 'Go'}</button>
-      <button onClick={function () { setFrom('2026-06-01'); setTo(TODAY); load('2026-06-01', TODAY); }} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#f1f5f9', color: '#334155' }}>Jun 1 →</button>
+      {/* v55.83-PK (Max): "the dates has something from june 1st as selection next to month year etc" */}
+      {(function () {
+        var y = TODAY.substring(0, 4);
+        var m0 = TODAY.substring(0, 8) + '01';
+        var lastM = new Date(Number(y), Number(TODAY.substring(5, 7)) - 2, 1);
+        var lmFrom = lastM.toISOString().substring(0, 10);
+        var lmEnd = new Date(Number(y), Number(TODAY.substring(5, 7)) - 1, 0).toISOString().substring(0, 10);
+        var P = [['Jun 1 →', '2026-06-01', TODAY], ['This month', m0, TODAY], ['Last month', lmFrom, lmEnd], ['This year', y + '-01-01', TODAY]];
+        return P.map(function (p2) {
+          var on = from === p2[1] && to === p2[2];
+          return <button key={p2[0]} onClick={function () { setFrom(p2[1]); setTo(p2[2]); load(p2[1], p2[2]); }}
+            className="px-2 py-1 rounded-lg text-[10px] font-extrabold"
+            style={on ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{p2[0]}</button>;
+        });
+      })()}
       <div className="flex-1" />
       {data && data.months && <button onClick={csv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
     </div>
