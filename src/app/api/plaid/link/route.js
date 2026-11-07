@@ -23,6 +23,13 @@ export async function POST(req) {
         user: { client_user_id: access.authUserId },
         client_name: 'KTC NextTrade Hub',
         products: ['transactions'],
+        // v55.83-PU (Max, Nov 7 05:57/06:01: "prepull of bank transactions from
+        // 2 years... only show me the one from the previous month") — without
+        // days_requested Plaid ingests its DEFAULT ~90 days at connect, so the
+        // "All (2 years)" backfill had nothing older to pull. 730 is Plaid's
+        // maximum. Existing connections must be RECONNECTED once after this
+        // deploys for Plaid to ingest the older history.
+        transactions: { days_requested: 730 },
         country_codes: ['US'],
         language: 'en',
       }),

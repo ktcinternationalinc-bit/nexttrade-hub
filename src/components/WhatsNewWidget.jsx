@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PU',
+    date: '2026-11-07',
+    label: '\ud83c\udfe6 Bank history: full 2 years unlocked',
+    items: [
+      'Why only ~a month of bank history showed: connections were created with Plaid\u2019s silent default of ~90 days of history, so the \u201cAll (2 years)\u201d backfill had nothing older to pull from. New connections now request Plaid\u2019s maximum (730 days). TO GET THE OLDER HISTORY: reconnect each bank connection once (same reconnect flow as before \u2014 duplicate protection keeps existing matches safe), then run Pull with the \u201cAll\u201d window.',
+      { superAdminOnly: true, text: 'v55.83-PU \u2014 NO new SQL. link/token/create + transactions:{days_requested:730}. Existing items keep their 90d server-side window until re-linked; the JT backfill selector + explicit start_date re-pull path were already correct. Pin 6 in test pr.' },
+    ],
+  },
+  {
+    version: 'v55.83-PT',
+    date: '2026-11-07',
+    label: '\u26a0 Overdue ladder cards',
+    items: [
+      'New card row on the Books home: \u26a0 OVERDUE INVOICES \u2014 late 1\u201330 / 31\u201360 / 61\u201390 / 91+ days, plus TOTAL OVERDUE. Same buckets as the strip, every card clicks through to the exact invoices (and from there, any reference opens the invoice).',
+      { superAdminOnly: true, text: 'v55.83-PT \u2014 NO new SQL. Group 5 cards read fc.buckets L1-30/L31-60/L61-90/L90+ (.ar/.ar_count) \u2192 setFcDrill; Apr-1 creation cutoff inherited from the forecast action. Pin 5 in test pr.' },
+    ],
+  },
+  {
     version: 'v55.83-PS',
     date: '2026-11-07',
     label: '\ud83d\udcc5 WHAT\u2019S AHEAD is now truly ahead',

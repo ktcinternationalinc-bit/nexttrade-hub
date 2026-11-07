@@ -75,6 +75,18 @@ function wired(t) { return /setPeekId\(r/.test(t) && /<InvoicePeek invoiceId=\{p
 ok('4c: every drill surface (Books cards + strip, Forecast tab, Stats tab) opens the peek from the reference, showing "INV · RELEASE"',
   wired(bhA) && wired(cfA) && wired(psA) && /setPeekId\(r6\.invoice_id\)/.test(bhA));
 
+// ── PT (Max 05:48): overdue ladder as cards ──
+ok('5 (PT): OVERDUE invoices laddered 1–30 / 31–60 / 61–90 / 91+ as clickable cards + TOTAL OVERDUE, same L-buckets as the strip',
+  /\['L1-30', 'L31-60', 'L61-90', 'L90\+'\]\.map/.test(bhA2()) &&
+  /LATE 1–30 DAYS/.test(bhA2()) && /LATE 91\+ DAYS/.test(bhA2()) &&
+  /TOTAL OVERDUE/.test(bhA2()) && /setFcDrill\(\{ bucket: lk, kind: 'in' \}\)/.test(bhA2()));
+function bhA2() { return R('src/components/BooksHomeTab.jsx'); }
+
+// ── PU (Max 06:01: 2 years exist, only last month shows) ──
+ok('6 (PU): Plaid link tokens request the MAXIMUM history (days_requested 730) — the silent 90-day default was why "All (2 years)" had nothing older to pull',
+  /transactions: \{ days_requested: 730 \}/.test(R('src/app/api/plaid/link/route.js')) &&
+  /must be RECONNECTED once/.test(R('src/app/api/plaid/link/route.js')));
+
 console.log('');
 console.log('PR: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

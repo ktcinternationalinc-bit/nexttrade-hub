@@ -273,6 +273,21 @@ export default function BooksHomeTab(props) {
                 onClick={function () { setCfDrill({ title: 'Projected net, next 30 days — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); }} />
             </div>
           </div>}
+          {fc && fc.buckets && <div>
+            {/* v55.83-PT (Max 05:48): "also need to see invoice overdue 1-30.
+                31-60. 61-90. 91+" — the late ladder as cards, same buckets as
+                the strip (one source of truth), click → the exact invoices. */}
+            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#7f1d1d' }}>⚠ 5 · OVERDUE INVOICES — already past the due date, aged by days late (invoices created since Apr 1, 2026)</div>
+            <div className="flex gap-2 flex-wrap">
+              {['L1-30', 'L31-60', 'L61-90', 'L90+'].map(function (lk) {
+                var LL = { 'L1-30': 'LATE 1–30 DAYS', 'L31-60': 'LATE 31–60', 'L61-90': 'LATE 61–90', 'L90+': 'LATE 91+ DAYS' };
+                return <Card key={lk} label={LL[lk] + ' (' + fc.buckets[lk].ar_count + ' inv)'} value={'$' + fmt(fc.buckets[lk].ar)} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="click for the exact invoices"
+                  onClick={function () { setFcDrill({ bucket: lk, kind: 'in' }); }} />;
+              })}
+              <Card label="TOTAL OVERDUE" value={'$' + fmt((fc.buckets['L1-30'].ar + fc.buckets['L31-60'].ar + fc.buckets['L61-90'].ar + fc.buckets['L90+'].ar))} bg="#fff1f2" border="#fecdd3" fg="#7f1d1d" sub={(fc.buckets['L1-30'].ar_count + fc.buckets['L31-60'].ar_count + fc.buckets['L61-90'].ar_count + fc.buckets['L90+'].ar_count) + ' invoices late in total'}
+                onClick={function () { setFcDrill({ bucket: 'L1-30', kind: 'in' }); }} />
+            </div>
+          </div>}
         </div>}
       {cfDrill && cfDrill.src === 'ps' && !ps && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Could not load the invoice data for this period — check your Bills/AR permission.</div>}
       {cfDrill && (cfDrill.src === 'ps' ? (ps && ps.drills) : (cf && cf.drills)) && (function () {
