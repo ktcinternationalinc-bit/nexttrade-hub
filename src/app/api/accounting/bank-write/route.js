@@ -501,7 +501,26 @@ export async function POST(req) {
       var matchId = (mIns && mIns.data && mIns.data.length) ? mIns.data[0].id : null;
 
       // 2) payment row (the Wave-bound item)
-      var pIns = await db.from('accounting_invoice_payments').insert({ business_id: biz, wave_business_id: siloId, accounting_invoice_id: inv.id, accounting_customer_id: inv.accounting_customer_id || null, amount: c.applied_to_invoice, payment_date: t.posted_date || t.date || null, source: 'plaid_match', bank_transaction_id: t.id, payment_match_id: matchId, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: inv.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: body.notes || null, created_by: by });
+      // v55.83-QP (Max 16:01, the red banner): unmatch VOIDS the old payment
+      // (never deletes), but uq_invpay_bank_txn_per_invoice counts the voided
+      // corpse — so re-matching the same deposit to the same invoice was
+      // refused forever after one unmatch. Fix: a LIVE pair refuses with a
+      // plain answer; a VOIDED pair is REVIVED (same row, fresh amount/date/
+      // links) instead of inserting a twin. History stays intact.
+      var pairQ = await db.from('accounting_invoice_payments').select('id, voided, sync_status, wave_payment_id').eq('bank_transaction_id', t.id).eq('accounting_invoice_id', inv.id);
+      if (pairQ && pairQ.error) { try { await db.from('payment_matches').update({ voided: true }).eq('id', matchId); } catch (ePq) {} return NextResponse.json({ ok: false, error: pairQ.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var pairLive = null; var pairVoid = null;
+      ((pairQ && pairQ.data) || []).forEach(function (pp9) { if (isPaymentVoid(pp9)) { if (!pairVoid) { pairVoid = pp9; } } else { pairLive = pp9; } });
+      if (pairLive) {
+        try { await db.from('payment_matches').update({ voided: true }).eq('id', matchId); } catch (ePl) {}
+        return NextResponse.json({ ok: false, error: 'This deposit is ALREADY matched to this invoice. To change the amount: ⊘ unmatch first, then match again — or pick a different invoice.', api_build_marker: API_BUILD_MARKER }, { status: 409 });
+      }
+      var pIns;
+      if (pairVoid) {
+        pIns = await db.from('accounting_invoice_payments').update({ voided: false, business_id: biz, wave_business_id: siloId, accounting_customer_id: inv.accounting_customer_id || null, amount: c.applied_to_invoice, payment_date: t.posted_date || t.date || null, source: 'plaid_match', payment_match_id: matchId, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: inv.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: body.notes || null }).eq('id', pairVoid.id).select('id');
+      } else {
+        pIns = await db.from('accounting_invoice_payments').insert({ business_id: biz, wave_business_id: siloId, accounting_invoice_id: inv.id, accounting_customer_id: inv.accounting_customer_id || null, amount: c.applied_to_invoice, payment_date: t.posted_date || t.date || null, source: 'plaid_match', bank_transaction_id: t.id, payment_match_id: matchId, wave_payment_id: null, sync_status: 'pending_wave_sync', wave_invoice_id: inv.wave_invoice_id || null, wave_customer_id: body.wave_customer_id || null, memo: body.notes || null, created_by: by });
+      }
       if (pIns && pIns.error) {
         // atomic rollback: void the orphan match
         try { await db.from('payment_matches').update({ voided: true }).eq('id', matchId); } catch (eR) {}

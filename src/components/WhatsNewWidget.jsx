@@ -33,6 +33,14 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QP',
+    date: '2026-11-07',
+    label: '\ud83d\udd17 Re-match after unmatch \u2014 fixed',
+    items: [
+      'FIXED the red \u201cduplicate key \u2026 uq_invpay_bank_txn_per_invoice\u201d error: unmatching keeps the old payment as a voided record (by design), but the one-payment-per-deposit-per-invoice rule counted that voided record \u2014 so the same pair could never be matched again. Now a re-match REVIVES the voided record in place (fresh amount and date), and matching a pair that is still live says plainly: \u2298 unmatch first.',
+    ],
+  },
+  {
     version: 'v55.83-QO',
     date: '2026-11-07',
     label: '\ud83d\udcc4 Bill-from-document fix \u2014 multi-page PDFs read now',
