@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PR',
+    date: '2026-11-07',
+    label: '\u2194 Intra-company transfers: scan, suggest, register',
+    items: [
+      'New \u2194 Intra-company transfers panel in \ud83c\udff7 Categories & Rules: \ud83d\udd0e SCAN reads through ALL your connected accounts (credit cards included) and SUGGESTS transfer pairs \u2014 same amount to the cent, opposite direction, different account, within 7 days. One click links them as ONE intra-company transfer: not income, not an expense, booked through the Inter-account transfer clearing account that nets to zero. Picking the "Transfer" category on any expense immediately offers its other leg.',
+      'Transfer REGISTER: every linked transfer for any period \u2014 date, from-account \u2192 to-account, amount, total moved \u2014 with CSV for the accountant. One-leg links are flagged.',
+      { superAdminOnly: true, text: 'v55.83-PR \u2014 NO new SQL (uses PQ transfer_group_id). transfer_suggestions: 180d window, 2000-row scan, greedy best-score (7\u2212gap + text hints), each in-leg used once, unpaired+uninvoiced only; transfers_report groups by gid with plaid account names (from=out leg, to=in leg, legs count surfaces one-leg groups). UI panel inline-white; recategorize(transfer)\u2192openPair hook. Suggested ClickBooks map: transfer \u2192 1090 clearing. Test pr (6).' },
+    ],
+  },
+  {
     version: 'v55.83-PQ',
     date: '2026-11-07',
     label: '\ud83d\udce6 The overnight batch \u2014 12 fixes & features',

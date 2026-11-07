@@ -152,6 +152,81 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, row: vr.data && vr.data[0], api_build_marker: API_BUILD_MARKER });
     }
 
+    // ── transfer_suggestions (v55.83-PR, Max 05:25: "must be able to read
+    //    through accounts and give suggestions to transfers... and link them,
+    //    in the proper accounting terminology") — scan the silo's accounts and
+    //    PROPOSE intra-company transfer pairs: same amount to the cent,
+    //    opposite direction, DIFFERENT account, within 7 days, neither leg
+    //    paired or matched to an invoice. Suggestions only — a human links. ──
+    if (action === 'transfer_suggestions') {
+      var sinceS = new Date(Date.now() - 180 * 86400000).toISOString().substring(0, 10);
+      var txS = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, transfer_group_id, matched_invoice_id')
+        .eq('wave_business_id', US_WAVE_BUSINESS_ID).neq('pending', true)
+        .is('transfer_group_id', null).is('matched_invoice_id', null)
+        .gte('date', sinceS).order('date', { ascending: false }).limit(2000);
+      if (txS.error) { return NextResponse.json({ ok: false, error: txS.error.message + (/transfer_group_id/.test(txS.error.message) ? ' — run the PQ SQL first.' : ''), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var accS = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
+      var acName = {};
+      (accS.data || []).forEach(function (a8) { acName[a8.plaid_account_id] = (a8.name || 'account') + (a8.mask ? ' •' + a8.mask : ''); });
+      var outs = []; var ins = [];
+      (txS.data || []).forEach(function (t8) { (t8.direction === 'out' ? outs : t8.direction === 'in' ? ins : []).push(t8); });
+      var hintRx = /transfer|xfer|trnsfr|internal|between accounts|payment to chk|payment to cc|crcardpmt|credit crd|card payment/i;
+      var usedIn = {}; var pairs = [];
+      for (var oi = 0; oi < outs.length && pairs.length < 50; oi++) {
+        var O = outs[oi]; var best = null; var bestScore = -1;
+        for (var ii = 0; ii < ins.length; ii++) {
+          var I = ins[ii];
+          if (usedIn[I.id]) { continue; }
+          if ((I.account_id || '') === (O.account_id || '')) { continue; } // a transfer LEAVES one account and ARRIVES in another
+          if (Math.abs((Number(I.amount_abs) || 0) - (Number(O.amount_abs) || 0)) > 0.005) { continue; }
+          var gap = Math.abs(Math.round((Date.parse(I.posted_date || I.date) - Date.parse(O.posted_date || O.date)) / 86400000));
+          if (gap > 7) { continue; }
+          var score = (7 - gap) + (hintRx.test((O.merchant_name || '') + ' ' + (O.name || '')) ? 2 : 0) + (hintRx.test((I.merchant_name || '') + ' ' + (I.name || '')) ? 2 : 0);
+          if (score > bestScore) { bestScore = score; best = { gap: gap, inTx: I }; }
+        }
+        if (best) {
+          usedIn[best.inTx.id] = true;
+          pairs.push({
+            amount: Math.round((Number(O.amount_abs) || 0) * 100) / 100, days_apart: best.gap,
+            out: { id: O.id, date: O.posted_date || O.date, account: acName[O.account_id] || 'account', who: O.merchant_name || O.name || '' },
+            inn: { id: best.inTx.id, date: best.inTx.posted_date || best.inTx.date, account: acName[best.inTx.account_id] || 'account', who: best.inTx.merchant_name || best.inTx.name || '' },
+          });
+        }
+      }
+      pairs.sort(function (p8, q8) { return q8.amount - p8.amount; });
+      return NextResponse.json({ ok: true, suggestions: pairs, scanned_since: sinceS, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── transfers_report (v55.83-PR): the intra-company transfer register —
+    //    every LINKED pair in a period, from-account → to-account, filter by
+    //    dates, built for the accountant (both legs net to zero through the
+    //    transfer clearing account in ClickBooks). ──
+    if (action === 'transfers_report') {
+      var tf = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.from) || '')) ? body.payload.from : '2026-01-01';
+      var tt = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.to) || '')) ? body.payload.to : new Date().toISOString().substring(0, 10);
+      var txR = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, direction, account_id, transfer_group_id')
+        .eq('wave_business_id', US_WAVE_BUSINESS_ID).not('transfer_group_id', 'is', null)
+        .gte('date', tf).lte('date', tt).limit(2000);
+      if (txR.error) { return NextResponse.json({ ok: false, error: txR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var accR = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
+      var acName2 = {};
+      (accR.data || []).forEach(function (a9) { acName2[a9.plaid_account_id] = (a9.name || 'account') + (a9.mask ? ' •' + a9.mask : ''); });
+      var byGid = {};
+      (txR.data || []).forEach(function (t9) {
+        if (!byGid[t9.transfer_group_id]) { byGid[t9.transfer_group_id] = { gid: t9.transfer_group_id, amount: Math.round((Number(t9.amount_abs) || 0) * 100) / 100, date: null, from_account: null, to_account: null, legs: 0 }; }
+        var g9 = byGid[t9.transfer_group_id]; g9.legs++;
+        var d9 = t9.posted_date || t9.date;
+        if (!g9.date || d9 < g9.date) { g9.date = d9; }
+        if (t9.direction === 'out') { g9.from_account = acName2[t9.account_id] || 'account'; }
+        if (t9.direction === 'in') { g9.to_account = acName2[t9.account_id] || 'account'; }
+      });
+      var rowsR = Object.values(byGid).sort(function (a0, b0) { return (b0.date || '') < (a0.date || '') ? -1 : 1; });
+      var sumR = 0; rowsR.forEach(function (r0) { sumR = Math.round((sumR + r0.amount) * 100) / 100; });
+      return NextResponse.json({ ok: true, from: tf, to: tt, transfers: rowsR, count: rowsR.length, total: sumR, api_build_marker: API_BUILD_MARKER });
+    }
+
     // ── transfer_candidates: the other leg of a transfer (incl. credit cards) ──
     // Same amount (to the cent), opposite direction, different account, within
     // 7 days, settled, not already paired. Suggestions only — a human pairs.

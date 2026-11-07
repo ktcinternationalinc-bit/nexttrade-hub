@@ -34,6 +34,10 @@ export default function ExpenseRulesTab(props) {
   var sW = useState(null); var waveAccts = sW[0]; var setWaveAccts = sW[1]; // v55.83-PQ — Wave chart for the link editor
   var sW2 = useState(false); var showWave = sW2[0]; var setShowWave = sW2[1];
   var sPr = useState(null); var pairPanel = sPr[0]; var setPairPanel = sPr[1]; // v55.83-PQ — {txn, candidates} transfer pairing
+  var sSg = useState(null); var suggestions = sSg[0]; var setSuggestions = sSg[1]; // v55.83-PR — scanned transfer pairs
+  var sTr = useState(null); var trReport = sTr[0]; var setTrReport = sTr[1];       // v55.83-PR — intra-company transfer register
+  var sTf = useState('2026-01-01'); var trFrom = sTf[0]; var setTrFrom = sTf[1];
+  var sTt = useState(new Date().toISOString().substring(0, 10)); var trTo = sTt[0]; var setTrTo = sTt[1];
 
   function api(action, payload) {
     return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -106,9 +110,39 @@ export default function ExpenseRulesTab(props) {
       return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
         body: JSON.stringify({ action: 'classify', bank_transaction_id: t.id, patch: patch, user_id: userProfile && userProfile.id }) });
     }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j && (j.ok || j.success)) { toast.success('Categorized — rule remembered.'); loadExpenses(filter); loadAll(); }
+      if (j && (j.ok || j.success)) {
+        toast.success('Categorized — rule remembered.'); loadExpenses(filter); loadAll();
+        if (cls === 'transfer' && !t.transfer_group_id) { openPair(t); } // v55.83-PR — picking "transfer" immediately offers the other leg
+      }
       else { toast.error((j && j.error) || 'Could not categorize.'); }
     }).finally(function () { setBusy(false); });
+  }
+  function scanTransfers() {
+    setBusy(true);
+    api('transfer_suggestions').then(function (j) {
+      if (j && j.ok) { setSuggestions(j.suggestions || []); if ((j.suggestions || []).length === 0) { toast.success('Scanned all accounts — no unlinked transfer pairs found.'); } }
+      else { toast.error((j && j.error) || 'Scan failed.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function acceptSuggestion(sg) {
+    setBusy(true);
+    api('pair_transfer', { a: sg.out.id, b: sg.inn.id }).then(function (j) {
+      if (j && j.ok) { toast.success('Linked as an intra-company transfer ↔'); setSuggestions((suggestions || []).filter(function (x) { return x !== sg; })); loadTransfersReport(); loadExpenses(filter); }
+      else { toast.error((j && j.error) || 'Could not link.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function loadTransfersReport() {
+    api('transfers_report', { from: trFrom, to: trTo }).then(function (j) {
+      if (j && j.ok) { setTrReport(j); }
+    });
+  }
+  function trCsv() {
+    if (!trReport) { return; }
+    var lines = ['date,from_account,to_account,amount_usd,legs'];
+    (trReport.transfers || []).forEach(function (g) { lines.push((g.date || '') + ',"' + String(g.from_account || '?').replace(/"/g, '""') + '","' + String(g.to_account || '?').replace(/"/g, '""') + '",' + g.amount.toFixed(2) + ',' + g.legs); });
+    var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'intra-company-transfers-' + trFrom + '_to_' + trTo + '.csv'; a.click();
   }
   function openPair(t) {
     setBusy(true);
@@ -238,6 +272,54 @@ export default function ExpenseRulesTab(props) {
           </tbody>
         </table></div>}
       <div className="text-[10px] mt-1.5" style={{ color: '#64748b' }}>🧠 learned rules are written automatically every time a human categorizes an expense — changing your pick on the same merchant updates the rule. Rules only ever fill in UNCATEGORIZED expenses (they never overwrite a human) and run on their own every 15 minutes.</div>
+    </div>
+
+    {/* ②½ Intra-company transfers (v55.83-PR, Max: "read through accounts and
+        give suggestions to transfers... link them in the proper accounting
+        terminology... sorting filtering and report building") */}
+    <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+      <div className="flex gap-2 items-center flex-wrap mb-1">
+        <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>↔ Intra-company transfers</div>
+        <button onClick={scanTransfers} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>🔎 Scan accounts for transfer pairs</button>
+        <div className="flex-1" />
+        <input type="date" value={trFrom} onChange={function (e) { setTrFrom(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px]" style={{ color: '#0f172a', background: '#ffffff' }} />
+        <span className="text-[10px]" style={{ color: '#64748b' }}>→</span>
+        <input type="date" value={trTo} onChange={function (e) { setTrTo(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px]" style={{ color: '#0f172a', background: '#ffffff' }} />
+        <button onClick={loadTransfersReport} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>Register</button>
+        {trReport && <button onClick={trCsv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
+      </div>
+      <div className="text-[10px] mb-2" style={{ color: '#64748b' }}>Money moved between the company's own accounts (checking ↔ savings ↔ credit cards) is an <b>intra-company transfer</b>: one movement of funds, not income and not an expense. Linking the two legs books them through the <b>Inter-account transfer clearing</b> account, which nets to zero — balances move, the P&L doesn't.</div>
+      {suggestions && suggestions.length > 0 && <div className="mb-2 rounded-lg p-2" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#1e3a8a' }}>Suggested pairs ({suggestions.length}) — same amount, opposite direction, different account, ≤7 days apart:</div>
+        {suggestions.map(function (sg, i3) {
+          return <div key={i3} className="flex gap-2 items-center py-1 flex-wrap" style={{ borderBottom: '1px solid #dbeafe' }}>
+            <span className="text-[11px] font-extrabold tabular-nums" style={{ color: '#0f172a', minWidth: 90 }}>${fmt(sg.amount)}</span>
+            <span className="text-[10px] font-semibold" style={{ color: '#7f1d1d' }}>{sg.out.date} out of {sg.out.account}</span>
+            <span className="text-[10px]" style={{ color: '#64748b' }}>→</span>
+            <span className="text-[10px] font-semibold" style={{ color: '#065f46' }}>{sg.inn.date} into {sg.inn.account}</span>
+            {sg.days_apart > 0 && <span className="text-[9px]" style={{ color: '#64748b' }}>({sg.days_apart}d apart)</span>}
+            <div className="flex-1" />
+            <button onClick={function () { acceptSuggestion(sg); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>link as transfer ↔</button>
+          </div>;
+        })}
+      </div>}
+      {trReport && <div>
+        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#0f172a' }}>Transfer register {trReport.from} → {trReport.to}: {trReport.count} transfer(s), ${fmt(trReport.total)} moved between own accounts</div>
+        {trReport.transfers.length > 0 && <table className="w-full text-[10px]">
+          <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+            <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">From account</th>
+            <th className="py-1 pr-2 text-left font-semibold">To account</th><th className="py-1 text-right font-semibold">Amount</th></tr></thead>
+          <tbody style={{ color: '#0f172a' }}>
+            {trReport.transfers.map(function (g) {
+              return <tr key={g.gid} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                <td className="py-0.5 pr-2 whitespace-nowrap">{g.date}</td>
+                <td className="py-0.5 pr-2">{g.from_account || '?'}{g.legs < 2 ? ' ⚠ one leg only' : ''}</td>
+                <td className="py-0.5 pr-2">{g.to_account || '?'}</td>
+                <td className="py-0.5 text-right font-extrabold tabular-nums">${fmt(g.amount)}</td></tr>;
+            })}
+          </tbody>
+        </table>}
+      </div>}
     </div>
 
     {/* ③ Expenses — Unverified / Verified / All */}
