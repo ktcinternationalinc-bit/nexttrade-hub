@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PX',
+    date: '2026-11-07',
+    label: '\ud83d\udcb5 Open Balances: sort + hide small',
+    items: [
+      'Open Balances columns are clickable: sort by due date, invoice date, total, paid, balance or DAYS OVERDUE \u2014 click again to flip earliest\u2194latest / most\u2194least late. New \u201cignore under $200\u201d checkbox hides small balances from the list (they stay open and stay in the totals \u2014 the hidden count and sum are shown, never silently dropped).',
+      { superAdminOnly: true, text: 'v55.83-PX \u2014 NO new SQL. OpenBalancesTab: client-side sort (numeric for money/days, string for dates), default days_overdue desc; hideSmall filter affects the LIST only (cards keep server totals); hidden rows counted+summed in a footnote. Test px (3).' },
+    ],
+  },
+  {
     version: 'v55.83-PW',
     date: '2026-11-07',
     label: '\ud83d\udcda Category types \u2014 QuickBooks-style',

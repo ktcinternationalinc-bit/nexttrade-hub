@@ -12,6 +12,12 @@ export default function OpenBalancesTab(props) {
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState('Last 3 months'); var preset = s5[0]; var setPreset = s5[1];
   var sB = useState('US'); var biz = sB[0]; var setBiz = sB[1];
+  // v55.83-PX (Max, Nov 7 11:07): "should be able to sort by earliest to
+  // latest... and vice versa with how late it is... also a box to check to
+  // ignore under $200 with balances."
+  var sS = useState('days_overdue'); var sortKey = sS[0]; var setSortKey = sS[1];
+  var sD = useState(true); var sortDesc = sD[0]; var setSortDesc = sD[1];
+  var sM = useState(false); var hideSmall = sM[0]; var setHideSmall = sM[1];
 
   function iso(d) { return d.toISOString().substring(0, 10); }
   function agoDays(n) { var d = new Date(); d.setDate(d.getDate() - n); return iso(d); }
@@ -65,7 +71,9 @@ export default function OpenBalancesTab(props) {
         <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" />
         <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" />
         <button disabled={busy} onClick={function () { setPreset('custom'); load(from, to); }} className="px-3 py-1 rounded-lg text-xs font-extrabold bg-slate-700 text-white disabled:opacity-50">Go</button>
-        <button disabled={busy || !data || !(data.rows || []).length} onClick={csv} className="ml-auto px-2 py-1 rounded text-[10px] font-bold bg-slate-800 text-white disabled:opacity-40">⬇ CSV</button>
+        <label className="ml-auto flex items-center gap-1 text-[10px] font-bold cursor-pointer select-none" style={{ color: '#0f172a' }} title="Hide rows with a balance under $200 — they stay open and stay in the totals, just out of the list">
+          <input type="checkbox" checked={hideSmall} onChange={function (e) { setHideSmall(e.target.checked); }} /> ignore under $200</label>
+        <button disabled={busy || !data || !(data.rows || []).length} onClick={csv} className="px-2 py-1 rounded text-[10px] font-bold bg-slate-800 text-white disabled:opacity-40">⬇ CSV</button>
       </div>
       {tt && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
@@ -76,11 +84,30 @@ export default function OpenBalancesTab(props) {
         </div>
       )}
       {data && (data.rows || []).length === 0 && <div className="text-[11px] font-bold p-2 rounded" style={{ background: '#dcfce7', color: '#052e16' }}>🎉 No open balances in this period.</div>}
-      {data && (data.rows || []).length > 0 && (
+      {data && (data.rows || []).length > 0 && (function () {
+        var view = (data.rows || []).filter(function (r) { return !hideSmall || Number(r.balance_due) >= 200; });
+        var SORTABLE = { 'Invoice date': 'invoice_date', 'Due date': 'due_date', 'Total': 'total', 'Paid': 'paid', 'Balance due': 'balance_due', 'Days overdue': 'days_overdue' };
+        view = view.slice().sort(function (a, b) {
+          var va = a[sortKey]; var vb = b[sortKey];
+          if (sortKey === 'total' || sortKey === 'paid' || sortKey === 'balance_due' || sortKey === 'days_overdue') { va = Number(va) || 0; vb = Number(vb) || 0; }
+          else { va = String(va || ''); vb = String(vb || ''); }
+          if (va < vb) { return sortDesc ? 1 : -1; }
+          if (va > vb) { return sortDesc ? -1 : 1; }
+          return 0;
+        });
+        var hiddenCount = (data.rows || []).length - view.length;
+        var hiddenSum = 0; (data.rows || []).forEach(function (r) { if (hideSmall && Number(r.balance_due) < 200) { hiddenSum += Number(r.balance_due) || 0; } });
+        return (
         <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 480 }}>
           <table className="w-full text-[11px]">
-            <thead><tr>{['Invoice', 'Customer', 'Release #', 'Invoice date', 'Due date', 'Total', 'Paid', 'Balance due', 'Days overdue'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={{ background: '#0f172a', color: '#fff' }}>{h}</th>; })}</tr></thead>
-            <tbody>{data.rows.map(function (r, i) {
+            <thead><tr>{['Invoice', 'Customer', 'Release #', 'Invoice date', 'Due date', 'Total', 'Paid', 'Balance due', 'Days overdue'].map(function (h) {
+              var k = SORTABLE[h];
+              return <th key={h} onClick={function () { if (!k) { return; } if (sortKey === k) { setSortDesc(!sortDesc); } else { setSortKey(k); setSortDesc(true); } }}
+                className={'px-2 py-1 text-left font-bold sticky top-0' + (k ? ' cursor-pointer select-none' : '')}
+                style={{ background: '#0f172a', color: '#fff' }} title={k ? 'Click to sort — click again to flip earliest/latest' : ''}>
+                {h}{sortKey === k ? (sortDesc ? ' ↓' : ' ↑') : ''}</th>;
+            })}</tr></thead>
+            <tbody>{view.map(function (r, i) {
               // Max's spec: late = light orange highlight
               var rowStyle = r.overdue ? { background: '#ffedd5', color: '#431407' } : { background: i % 2 ? '#f8fafc' : '#fff', color: '#0f172a' };
               return (
@@ -98,8 +125,9 @@ export default function OpenBalancesTab(props) {
               );
             })}</tbody>
           </table>
+          {hideSmall && hiddenCount > 0 && <div className="text-[10px] mt-1 font-bold" style={{ color: '#9a3412' }}>{hiddenCount} small balance(s) under $200 hidden — ${hiddenSum.toLocaleString()} in total, still open and still counted in the cards above.</div>}
         </div>
-      )}
+      ); })()}
     </div>
   );
 }
