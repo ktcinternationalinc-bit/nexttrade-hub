@@ -33,6 +33,24 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QL',
+    date: '2026-11-07',
+    label: '\ud83e\ude7a Email scanner: Test connection',
+    items: [
+      'New \ud83e\ude7a Test connection button next to the mailbox scan: it checks every layer separately \u2014 are the settings in Vercel, does the sign-in work, can it open the inbox, which keywords matched how many emails \u2014 and shows the 5 newest matching emails exactly as the scanner sees them (sender, subject, whether the attachment is readable, already processed or not).',
+      'Every failure is NAMED with its fix: missing setting \u2192 set it and REDEPLOY; sign-in refused \u2192 the Hostinger mailbox password; zero matches \u2192 the real reasons listed (different mailbox, different wording, Spam folder, time window).',
+    ],
+  },
+  {
+    version: 'v55.83-QK',
+    date: '2026-11-07',
+    label: '\ud83d\udce7 Pick how far back the mailbox scan looks',
+    items: [
+      'Next to \ud83d\udce7 Scan mailbox now there is a dropdown: last 2 weeks, month, 2 months, 3 months or 4 months. Pick \u201clast 3 months\u201d and scan.',
+      'Big backlogs are walked safely: each pass reads up to 8 new emails (each attachment is an AI read), tells you how many are left, and the next click \u2014 or the hourly auto-run \u2014 continues where it stopped. Nothing is ever read twice.',
+    ],
+  },
+  {
     version: 'v55.83-QJ',
     date: '2026-11-07',
     label: '\ud83d\udce7 Scan mailbox now',

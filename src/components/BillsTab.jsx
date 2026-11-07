@@ -35,6 +35,7 @@ export default function BillsTab(props) {
   var s15 = useState(null); var cats = s15[0]; var setCats = s15[1];           // v55.83-PJ — shared category list (null = not loaded, free text fallback)
   var s16 = useState(''); var newCatB = s16[0]; var setNewCatB = s16[1];       // v55.83-PJ — inline add-category
   var s17 = useState(false); var addingCat = s17[0]; var setAddingCat = s17[1];
+  var s18b = useState('14'); var scanDays = s18b[0]; var setScanDays = s18b[1]; // v55.83-QK — how far back the mailbox scan looks
   var fileInputRef = React.useRef(null);
 
   function api(payload) {
@@ -92,17 +93,33 @@ export default function BillsTab(props) {
   // v55.83-QJ (Max 12:42/12:47: "baby steps to set up email... ktcus.com
   // lives on hostinger") — a Scan-now button so the mailbox setup can be
   // TESTED immediately instead of waiting for the hourly run.
-  function scanMailbox() {
-    setReading(true); setImportNotes(['📧 Scanning the bills mailbox…']);
+  // v55.83-QL (Max 13:19): 🩺 investigates layer by layer — settings,
+  // sign-in, inbox, keywords, what the scanner actually SEES — so "is it
+  // working?" always gets a named answer.
+  function diagnoseMailbox() {
+    setReading(true); setImportNotes(['🩺 Testing the mailbox connection, step by step…']);
     fetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userProfile && userProfile.id }) })
+      body: JSON.stringify({ user_id: userProfile && userProfile.id, diagnose: true, days: Number(scanDays) }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.diagnose) { setImportNotes(j.steps || []); toast[j.working ? 'success' : 'error'](j.working ? 'Connection WORKS — see the step-by-step report.' : 'Found the problem — see the step-by-step report.'); }
+        else { setImportNotes([(j && j.error) || 'Test failed.']); toast.error((j && j.error) || 'Test failed.'); }
+      })
+      .catch(function (e3) { toast.error((e3 && e3.message) || 'Test failed.'); })
+      .finally(function () { setReading(false); });
+  }
+  function scanMailbox() {
+    setReading(true); setImportNotes(['📧 Scanning the bills mailbox (last ' + scanDays + ' days)…']);
+    fetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userProfile && userProfile.id, days: Number(scanDays) }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j && j.ok) {
           var lines = ['📧 ' + j.mailbox + ' — keywords: ' + (j.keywords || []).join(', '),
-            '— ' + j.matched_messages + ' matching email(s) in the last 14 days · ' + j.new_messages_processed + ' new · ' + j.bills_created + ' bill(s) created as PENDING VALIDATION'];
+            '— ' + j.matched_messages + ' matching email(s) in the last ' + (j.days || scanDays) + ' days · ' + j.new_messages_processed + ' new · ' + j.bills_created + ' bill(s) created as PENDING VALIDATION'];
           (j.bills || []).forEach(function (b0) { lines.push('✅ ' + (b0.vendor || '(unread vendor)') + (b0.amount ? ' — $' + Number(b0.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + (b0.warned ? ' · ⚠ possible duplicate — check the note' : '')); });
           (j.skipped || []).forEach(function (s0) { lines.push('⏭ ' + s0.file + ' — ' + s0.reason); });
+          if (Number(j.remaining_new) > 0) { lines.push('⏳ ' + j.remaining_new + ' more matching email(s) not yet read — click 📧 Scan again to continue (it reads up to 8 new emails per pass, so a 3-month backlog takes a few clicks; the hourly auto-run keeps chipping away too).'); }
           setImportNotes(lines);
           toast.success(j.bills_created + ' bill(s) from the mailbox — the scanner runs hourly on its own.');
           if (j.bills_created > 0) { load(); }
@@ -266,8 +283,13 @@ export default function BillsTab(props) {
       })}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
+      {canManage && <select value={scanDays} onChange={function (e) { setScanDays(e.target.value); }} title="How far back the mailbox scan looks" className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light">
+        <option value="14">last 2 weeks</option><option value="30">last month</option><option value="60">last 2 months</option><option value="90">last 3 months</option><option value="120">last 4 months</option>
+      </select>}
       {canManage && <button onClick={scanMailbox} disabled={reading || busy} title="Check the bills mailbox NOW (it also runs every hour by itself): searches for your keywords, reads attached bills, enters them as pending validation with the duplicate radar."
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#0e7490', color: '#ffffff', opacity: (reading || busy) ? 0.5 : 1 }}>📧 Scan mailbox now</button>}
+      {canManage && <button onClick={diagnoseMailbox} disabled={reading || busy} title="Investigate the email setup layer by layer: settings present → sign-in → inbox → keyword matches → what the scanner actually sees. Names the exact problem when something is off."
+        className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#475569', color: '#ffffff', opacity: (reading || busy) ? 0.5 : 1 }}>🩺 Test connection</button>}
       <input ref={fileInputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" style={{ display: 'none' }} onChange={onPickFiles} />
       {canManage && <button onClick={function () { setEditing({ bill_date: TODAY }); }} disabled={busy}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>+ Add bill</button>}

@@ -16,7 +16,7 @@ ok('1: 📧 Scan mailbox now button in Bills (manage-only) → POSTs the scanner
   /📧 Scan mailbox now/.test(bt) && /fetch\('\/api\/accounting\/bills\/email-scan'/.test(bt) &&
   /canManage && <button onClick=\{scanMailbox\}/.test(bt));
 ok('2: the result is SHOWN line by line — mailbox, keywords, matched/new/created counts, each bill (with ⚠ duplicate note), each skip with its reason',
-  /matching email\(s\) in the last 14 days/.test(bt) && /PENDING VALIDATION/.test(bt) &&
+  /matching email\(s\) in the last ' \+ \(j\.days \|\| scanDays\) \+ ' days/.test(bt) && /PENDING VALIDATION/.test(bt) && // (QK made the window selectable)
   /⚠ possible duplicate — check the note/.test(bt) && /'⏭ ' \+ s0\.file \+ ' — ' \+ s0\.reason/.test(bt));
 ok('3: a not-configured server answers with the NAMED env vars, never a mystery error (route behavior)',
   /set BILLS_IMAP_EMAIL and BILLS_IMAP_APP_PASSWORD/.test(R('src/app/api/accounting/bills/email-scan/route.js')));
