@@ -20,6 +20,11 @@ import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64 } from '../../../../lib/bill-extract-server';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+
+// v55.83-QO (Max 15:53: "attempted to add bill from document and nothing
+// happened") — the AI read of a multi-page PDF outlives Vercel's DEFAULT
+// 10s function limit, which killed the request mid-read. 60s fixes it.
+export const maxDuration = 60;
 import { learnRule, suggestCategory } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
@@ -344,6 +349,7 @@ export async function POST(req) {
         return db.from('bank_transactions')
           .select('id, direction, amount_abs, pending, date, posted_date, iso_currency, wave_business_id, name, merchant_name, classification, matched_invoice_id')
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+          .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count
           .gte('date', fromD).lte('date', toD);
       });
       var bankTx = bank.map(function (t) {
@@ -676,6 +682,57 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, flagged: body.clear !== true });
     }
 
+    // ── v55.83-QM (Max 15:33: "add the matching and category features on
+    //    this location as well" — the All Invoices screen): candidates the
+    //    OTHER way round — pick an invoice, see the deposits that could pay
+    //    it (money in, not pending, not transfer, not duplicate, with money
+    //    still unapplied), scored by fit. The write stays bank-write
+    //    match_invoice — same guards, money math in one place. ──
+    if (action === 'invoice_match_candidates') {
+      var invQ = await db.from('accounting_invoices').select('*').eq('id', body.invoice_id).maybeSingle();
+      if (invQ.error || !invQ.data) { return NextResponse.json({ ok: false, error: 'Invoice not found.' }, { status: 404 }); }
+      var openListQ = await loadOpenUsInvoices(db);
+      var invMeta = null;
+      openListQ.forEach(function (v9) { if (v9.id === body.invoice_id) { invMeta = v9; } });
+      var invOpen = invMeta ? invMeta.open_balance : null;
+      var sinceQ = new Date(Date.now() - 240 * 86400000).toISOString().substring(0, 10);
+      var txQ = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, name, merchant_name, wave_business_id, matched_invoice_id, transfer_group_id, pending, classification, business_id')
+        .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'in')
+        .neq('pending', true).neq('review_status', 'duplicate')
+        .is('transfer_group_id', null)
+        .gte('date', sinceQ).order('date', { ascending: false }).limit(3000);
+      if (txQ.error) { return NextResponse.json({ ok: false, error: txQ.error.message }, { status: 400 }); }
+      var appQ = {}; // applied per deposit
+      try {
+        var payQ = await db.from('accounting_invoice_payments').select('bank_transaction_id, amount, voided, sync_status').not('bank_transaction_id', 'is', null).gte('payment_date', sinceQ).limit(20000);
+        ((payQ && payQ.data) || []).forEach(function (p9b) {
+          var st9 = String(p9b.sync_status || '').toLowerCase();
+          if (p9b.voided === true || st9 === 'void' || st9 === 'voided' || st9 === 'cancelled' || st9 === 'reversed' || st9 === 'deleted') { return; }
+          appQ[p9b.bank_transaction_id] = r2((appQ[p9b.bank_transaction_id] || 0) + (Number(p9b.amount) || 0));
+        });
+      } catch (eQp) {}
+      var custNmQ = '';
+      try {
+        if (invQ.data.accounting_customer_id) {
+          var cQ = await db.from('accounting_customers').select('company_name, contact_name').eq('id', invQ.data.accounting_customer_id).maybeSingle();
+          custNmQ = String((cQ.data && (cQ.data.company_name || cQ.data.contact_name)) || '').toLowerCase();
+        }
+      } catch (eQc) {}
+      var toksQ = custNmQ.split(/[^a-z0-9&]+/).filter(function (t9b) { return t9b.length >= 3; });
+      var candsQ = (txQ.data || []).map(function (t9c) {
+        var rem9 = r2(t9c.amount_abs - (appQ[t9c.id] || 0));
+        if (rem9 <= 0.005) { return null; }
+        var sc9 = 0;
+        if (invOpen != null && Math.abs(rem9 - invOpen) <= 0.01) { sc9 += 100; }
+        else if (invOpen != null && rem9 <= invOpen + 0.01) { sc9 += 10; }
+        var hay9 = String((t9c.merchant_name || '') + ' ' + (t9c.name || '')).toLowerCase();
+        toksQ.forEach(function (t9d) { if (hay9.indexOf(t9d) >= 0) { sc9 += 25; } });
+        return { txn: t9c, remaining: rem9, score: sc9, exact: invOpen != null && Math.abs(rem9 - invOpen) <= 0.01 };
+      }).filter(Boolean).sort(function (a9, b9) { return b9.score - a9.score || String(b9.txn.date).localeCompare(String(a9.txn.date)); }).slice(0, 20);
+      return NextResponse.json({ ok: true, invoice: invQ.data, invoice_open: invOpen, candidates: candsQ, api_build_marker: API_BUILD_MARKER });
+    }
+
     if (action === 'deposit_match_candidates') {
       var txDm = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, wave_business_id, matched_invoice_id').eq('id', body.bank_transaction_id).maybeSingle();
       if (txDm.error || !txDm.data) { return NextResponse.json({ ok: false, error: 'Deposit not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
@@ -976,6 +1033,7 @@ export async function POST(req) {
           return db.from('bank_transactions')
             .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
+            .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
             .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
         });
         var catLabels = {}; var catKinds = {};

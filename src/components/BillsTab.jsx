@@ -194,6 +194,9 @@ export default function BillsTab(props) {
           });
           toast.success('Bill read — check every field, then Save.');
         } else { toast.error((j && j.error) || 'Could not read the bill — enter it manually.'); }
+      }).catch(function (eR9) { // v55.83-QO — a killed/timed-out request is SAID, never silent
+        toast.error('The reader took too long or the connection dropped (' + ((eR9 && eR9.message) || 'network') + ') — try again. If it keeps happening, send just the invoice page (page 1) instead of the merged PDF.');
+        setImportNotes(['✗ Read failed — the request timed out or dropped. Try again (the fix in this build raises the server time limit), or import just page 1.']);
       }).finally(function () { setReading(false); });
     };
     rd.readAsDataURL(f);

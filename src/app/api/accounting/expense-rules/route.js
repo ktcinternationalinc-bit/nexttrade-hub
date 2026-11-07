@@ -131,6 +131,7 @@ export async function POST(req) {
       var q = db.from('bank_transactions')
         .select('id, date, posted_date, amount_abs, name, merchant_name, classification, category_source, review_status, category_verified, category_verified_at, pending, transfer_group_id')
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true)
+        .neq('review_status', 'duplicate') // v55.83-QM (Max 13:33 "why are they duplicates here") — marked relink copies never show
         .order('posted_date', { ascending: false }).limit(200);
       if (filter === 'verified') { q = q.eq('category_verified', true); }
       if (filter === 'unverified') { q = q.eq('category_verified', false).not('classification', 'is', null); }
@@ -306,18 +307,18 @@ export async function POST(req) {
       var txA = await db.from('bank_transactions')
         .select(selColsA + ', third_party_payer, advance_flag') // v55.83-QB/QF — RTM + advance flags ride along
         .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-        .gte('date', fA).lte('date', tA)
+        .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
         .order('date', { ascending: false }).limit(5000);
       if (txA.error && /advance_flag/.test(txA.error.message || '')) { // QF SQL not run yet
         txA = await db.from('bank_transactions').select(selColsA + ', third_party_payer')
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-          .gte('date', fA).lte('date', tA)
+          .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
           .order('date', { ascending: false }).limit(5000);
       }
       if (txA.error && /third_party_payer/.test(txA.error.message || '')) { // QB SQL not run yet
         txA = await db.from('bank_transactions').select(selColsA)
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-          .gte('date', fA).lte('date', tA)
+          .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
           .order('date', { ascending: false }).limit(5000);
       }
       if (txA.error) { return NextResponse.json({ ok: false, error: txA.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }

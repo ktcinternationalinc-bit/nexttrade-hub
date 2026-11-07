@@ -6,6 +6,9 @@
 // approved or still a draft (drafts are labeled; they stay out of AR money
 // elsewhere, but they are never invisible). US = USD, Egypt = EGP.
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { bankSessionHeaders } from '../lib/bank-visibility-client'; // v55.83-QM — match deposits from here too
+import InvoicePeek from './InvoicePeek'; // v55.83-QN — click an invoice number → details + ✏ Edit
 import { isPaymentVoid } from '../lib/payment-matching';
 import { canViewArInvoiceBalances } from '../lib/bank-permissions';
 import { fetchAllRows } from '../lib/fetch-all-rows';
@@ -25,6 +28,16 @@ export default function BusinessBooksTab(props) {
   var [to, setTo] = useState('');
   var [preset, setPreset] = useState('Jun 1 →');
   var [statusFilter, setStatusFilter] = useState('all'); // all | open | paid | draft
+  var [mInv, setMInv] = useState(null);     // v55.83-QM (Max 15:33 "add the matching... on this location as well") — {invoice, invoice_open, candidates}
+  var [mAmt2, setMAmt2] = useState({});
+  var [mBusy, setMBusy] = useState(false);
+  var [mErr2, setMErr2] = useState('');
+  var [peekId2, setPeekId2] = useState(null); // v55.83-QN (Max 15:49)
+  var onGo2 = props.onGo || function () {};
+  function openInvoiceEditor2(idQ) {
+    try { window.__ntOpenInvoiceEdit = idQ; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: idQ })); } catch (eQ2) {}
+    setPeekId2(null); onGo2('invoices');
+  }
   var [raw, setRaw] = useState(null);
   var [loading, setLoading] = useState(true);
 
@@ -38,7 +51,7 @@ export default function BusinessBooksTab(props) {
     ['All history', '', '']
   ];
 
-  useEffect(function () {
+  function load() { // v55.83-QM — reusable so matching refreshes the list
     if (!mayView) { setLoading(false); return; }
     Promise.all([
       fetchAllRows('accounting_invoices', '*').catch(function () { return { data: [] }; }),
@@ -47,7 +60,8 @@ export default function BusinessBooksTab(props) {
     ]).then(function (r) {
       setRaw({ inv: (r[0] && r[0].data) || [], custs: (r[1] && r[1].data) || [], pays: (r[2] && r[2].data) || [] });
     }).catch(function () { setRaw({ inv: [], custs: [], pays: [] }); }).finally(function () { setLoading(false); });
-  }, []);
+  }
+  useEffect(function () { load(); }, []); // eslint-disable-line
 
   if (!mayView) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — needs "AR: View Invoice Balances" (Settings → Permissions).</div>; }
   if (loading || !raw) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-500">Loading all invoices…</div>; }
@@ -110,6 +124,36 @@ export default function BusinessBooksTab(props) {
     return true;
   });
 
+  // v55.83-QM — match FROM an invoice: pick the deposits that paid it.
+  // Candidates come from invoice_match_candidates (money-in, unapplied
+  // remainder, scored); the WRITE is bank-write match_invoice — the same
+  // guarded path as everywhere else.
+  function openInvMatch(r) {
+    setMBusy(true); setMErr2('');
+    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'invoice_match_candidates', invoice_id: r.id, user_id: userProfile && userProfile.id }) })
+      .then(function (x) { return x.json(); })
+      .then(function (j) {
+        if (j && j.ok) {
+          var d0 = {};
+          (j.candidates || []).forEach(function (c0) { d0[c0.txn.id] = String(Math.min(c0.remaining, j.invoice_open != null ? j.invoice_open : c0.remaining)); });
+          setMAmt2(d0); setMInv(j);
+        } else { alert((j && j.error) || 'Could not load deposit candidates.'); }
+      }).finally(function () { setMBusy(false); });
+  }
+  function applyInvMatch(c0) {
+    var amt0 = Number(mAmt2[c0.txn.id]);
+    if (!(amt0 > 0)) { setMErr2('Enter the amount to apply.'); return; }
+    setMBusy(true); setMErr2('');
+    bankSessionHeaders(supabase, true).then(function (h) {
+      return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
+        body: JSON.stringify({ action: 'match_invoice', txn: c0.txn, invoice: mInv.invoice, amount: amt0, user_id: userProfile && userProfile.id }) });
+    }).then(function (x) { return x.json(); }).then(function (j) {
+      if (j && (j.ok || j.success)) { openInvMatch({ id: mInv.invoice.id }); load(); }
+      else { setMErr2((j && j.error) || 'Match failed.'); }
+    }).catch(function (e0) { setMErr2('Could not reach the matching service: ' + ((e0 && e0.message) || 'network error')); })
+      .finally(function () { setMBusy(false); });
+  }
   function csv() {
     if (!shown.length) { return; }
     var lines = ['invoice,customer,invoice_date,due_date,total,paid,balance,status,source,in_wave'];
@@ -145,11 +189,12 @@ export default function BusinessBooksTab(props) {
         <button onClick={csv} className="ml-auto px-2 py-1 rounded text-[10px] font-bold bg-slate-800 text-white">⬇ CSV</button>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
-        <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Invoiced ({activeCur})</div><div className="text-lg font-black">{fmt(tInvoiced)}</div><div className="text-[9px]">drafts counted — entered = real</div></div>
-        <div className="rounded-lg p-2" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Paid in period</div><div className="text-lg font-black">{fmt(paidInPeriod)}</div><div className="text-[9px]">recorded payments</div></div>
-        <div className="rounded-lg p-2" style={{ background: tOpen ? '#fee2e2' : '#dcfce7', color: tOpen ? '#450a0a' : '#052e16' }}><div className="text-[10px] font-bold">Still open</div><div className="text-lg font-black">{fmt(tOpen)}</div></div>
-        <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Closed · Open</div><div className="text-lg font-black">{cPaid} · {cOpen}</div>{cCredit ? <div className="text-[9px]">+ {cCredit} overpaid</div> : null}</div>
-        <div className="rounded-lg p-2" style={{ background: cDraft ? '#e2e8f0' : '#f1f5f9', color: '#334155' }}><div className="text-[10px] font-bold">Drafts</div><div className="text-lg font-black">{cDraft}</div><div className="text-[9px]">entered, not approved yet</div></div>
+        {/* v55.83-QM (Max 15:33): cards are CLICKABLE — the table below IS the underlying data */}
+        <div onClick={function () { setStatusFilter('all'); }} className="rounded-lg p-2 cursor-pointer" title="Click: show every invoice behind this number below" style={{ background: '#f1f5f9', color: '#0f172a', outline: statusFilter === 'all' ? '2px solid #0369a1' : 'none' }}><div className="text-[10px] font-bold">Invoiced ({activeCur})</div><div className="text-lg font-black">{fmt(tInvoiced)}</div><div className="text-[9px]">drafts counted — entered = real · click for rows</div></div>
+        <div onClick={function () { setStatusFilter('all'); }} className="rounded-lg p-2 cursor-pointer" title="Click: the rows below — the Paid column is what was collected" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Paid in period</div><div className="text-lg font-black">{fmt(paidInPeriod)}</div><div className="text-[9px]">recorded payments · click for rows</div></div>
+        <div onClick={function () { setStatusFilter('open'); }} className="rounded-lg p-2 cursor-pointer" title="Click: only the invoices still carrying a balance" style={{ background: tOpen ? '#fee2e2' : '#dcfce7', color: tOpen ? '#450a0a' : '#052e16', outline: statusFilter === 'open' ? '2px solid #0369a1' : 'none' }}><div className="text-[10px] font-bold">Still open</div><div className="text-lg font-black">{fmt(tOpen)}</div><div className="text-[9px]">click for rows</div></div>
+        <div onClick={function () { setStatusFilter('paid'); }} className="rounded-lg p-2 cursor-pointer" title="Click: the closed (fully paid) invoices" style={{ background: '#f1f5f9', color: '#0f172a', outline: statusFilter === 'paid' ? '2px solid #0369a1' : 'none' }}><div className="text-[10px] font-bold">Closed · Open</div><div className="text-lg font-black">{cPaid} · {cOpen}</div>{cCredit ? <div className="text-[9px]">+ {cCredit} overpaid</div> : <div className="text-[9px]">click for rows</div>}</div>
+        <div onClick={function () { setStatusFilter('draft'); }} className="rounded-lg p-2 cursor-pointer" title="Click: entered but not approved yet" style={{ background: cDraft ? '#e2e8f0' : '#f1f5f9', color: '#334155', outline: statusFilter === 'draft' ? '2px solid #0369a1' : 'none' }}><div className="text-[10px] font-bold">Drafts</div><div className="text-lg font-black">{cDraft}</div><div className="text-[9px]">entered, not approved yet · click for rows</div></div>
       </div>
       <div className="flex gap-1 mb-2">
         {[['all', 'All'], ['open', 'Open'], ['paid', 'Closed (paid)'], ['draft', 'Drafts']].map(function (f) {
@@ -162,11 +207,11 @@ export default function BusinessBooksTab(props) {
       </div>
       <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 480 }}>
         <table className="w-full text-[11px]">
-          <thead><tr>{['Invoice', 'Customer', 'Inv date', 'Due date', 'Total', 'Paid', 'Balance', 'Status', 'Source', 'In Wave'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
+          <thead><tr>{['Invoice', 'Customer', 'Inv date', 'Due date', 'Total', 'Paid', 'Balance', 'Status', 'Source', 'In Wave', ''].map(function (h, hi) { return <th key={hi} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
           <tbody>{shown.map(function (r, i) {
             return (
               <tr key={r.id} className="border-t border-slate-200" style={{ background: i % 2 ? '#f8fafc' : '#fff', color: '#0f172a' }}>
-                <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{r.num}</td>
+                <td className="px-2 py-1 font-mono font-bold whitespace-nowrap"><button onClick={function () { setPeekId2(r.id); }} title="Open this invoice — details, items, payments, and ✏ Edit" className="underline decoration-dotted" style={{ color: '#0369a1' }}>{r.num}</button></td>
                 <td className="px-2 py-1 truncate" style={{ maxWidth: 220 }}>{r.cust}</td>
                 <td className="px-2 py-1 whitespace-nowrap">{r.inv_date || '—'}</td>
                 <td className="px-2 py-1 whitespace-nowrap">{r.due_date || '—'}</td>
@@ -176,11 +221,36 @@ export default function BusinessBooksTab(props) {
                 <td className="px-2 py-1"><span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={STATUS_STYLE[r.status]}>{r.status}</span></td>
                 <td className="px-2 py-1"><span className={'text-[9px] rounded px-1 py-0.5 font-bold text-white ' + (r.source === 'Wave' ? 'bg-sky-700' : 'bg-emerald-700')}>{r.source}</span></td>
                 <td className="px-2 py-1 text-[10px] font-bold">{r.in_wave ? '✓' : '—'}</td>
+                <td className="px-2 py-1">{r.balance > 0.005 && r.cur !== 'EGP' &&
+                  <button onClick={function () { openInvMatch(r); }} disabled={mBusy} title="Match this invoice to the deposit(s) that paid it — same guarded matching as everywhere else" className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#eef2ff', color: '#312e81' }}>🔗 match</button>}</td>
               </tr>
             );
           })}</tbody>
         </table>
       </div>
+      {peekId2 && <InvoicePeek invoiceId={peekId2} onClose={function () { setPeekId2(null); }} onEdit={openInvoiceEditor2} />}
+      {mInv && <div onClick={function () { setMInv(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div onClick={function (e) { e.stopPropagation(); }} className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0', maxWidth: 760, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+          <div className="flex gap-2 items-center flex-wrap mb-1">
+            <div className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔗 Which deposit(s) paid invoice {mInv.invoice.invoice_number || ''}{mInv.invoice.release_number ? ' · Release ' + mInv.invoice.release_number : ''}? Open balance <b>${fmt(mInv.invoice_open || 0)}</b> — deposits with unapplied money, best fit first (💯 = equals it to the cent):</div>
+            <div className="flex-1" />
+            <button onClick={function () { setMInv(null); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>✓ done</button>
+          </div>
+          {mErr2 && <div className="mb-1 rounded p-1.5 text-[10px] font-extrabold" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#7f1d1d' }}>✗ {mErr2}</div>}
+          {(mInv.candidates || []).length === 0 && <div className="text-[10px]" style={{ color: '#334155' }}>No deposits with unapplied money found in the last 8 months. If the money arrived under another account, connect that bank — or match from 📑 All Transactions when it lands.</div>}
+          {(mInv.candidates || []).map(function (c0) {
+            return <div key={c0.txn.id} className="flex gap-2 items-center py-1 flex-wrap" style={{ borderBottom: '1px solid #f1f5f9' }}>
+              {c0.exact && <span>💯</span>}
+              <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{c0.txn.posted_date || c0.txn.date} · {String(c0.txn.merchant_name || c0.txn.name || '').substring(0, 44)}</span>
+              <span className="text-[10px]" style={{ color: '#64748b' }}>deposit ${fmt(c0.txn.amount_abs)} · unapplied <b style={{ color: '#065f46' }}>${fmt(c0.remaining)}</b></span>
+              <div className="flex-1" />
+              <input value={mAmt2[c0.txn.id] || ''} onChange={function (e) { var n0 = Object.assign({}, mAmt2); n0[c0.txn.id] = e.target.value; setMAmt2(n0); }}
+                className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] text-right tabular-nums nt-light" style={{ width: 100 }} />
+              <button onClick={function () { applyInvMatch(c0); }} disabled={mBusy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: mBusy ? 0.5 : 1 }}>apply ✓</button>
+            </div>;
+          })}
+        </div>
+      </div>}
     </div>
   );
 }

@@ -146,7 +146,7 @@ export default function AccountingTab(props) {
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} /></div>}
       {sub === 'company' && <CompanyProfileTab {...props} />}
-      {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
+      {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} onGo={setSub} />}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}
       {sub === 'customers' && <AccountingCustomersTab key={'acct-cus|' + waveKey} {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key={'acct-inv|' + waveKey} {...props} defaultMode="invoices" />}
@@ -154,7 +154,7 @@ export default function AccountingTab(props) {
       {sub === 'balances' && <OpenBalancesTab {...props} />}
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
-      {sub === 'all_invoices' && <BusinessBooksTab {...props} />}
+      {sub === 'all_invoices' && <BusinessBooksTab {...props} onGo={setSub} />}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
       {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}

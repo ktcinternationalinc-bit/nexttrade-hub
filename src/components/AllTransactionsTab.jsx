@@ -41,6 +41,8 @@ export default function AllTransactionsTab(props) {
   var s17 = useState(null); var tPanel = s17[0]; var setTPanel = s17[1];   // v55.83-PZ (Max 11:24) — transfer pairing {txn, candidates}
   var s18 = useState(null); var rtmPanel = s18[0]; var setRtmPanel = s18[1]; // v55.83-QB (Max 11:38) — RTM third-party payment {txn, bills, amt}
   var s19 = useState(''); var mQ = s19[0]; var setMQ = s19[1];               // v55.83-QF (Max 12:08) — search inside the match popup
+  var s20 = useState(''); var mErr = s20[0]; var setMErr = s20[1];           // v55.83-QM (Max 15:08 "it wont apply") — the REASON shows IN the popup, impossible to miss
+  var s21 = useState(null); var dupPanel = s21[0]; var setDupPanel = s21[1]; // v55.83-QM (Max 13:33/15:03 "there are duplicates.. help") — {groups}
 
   function api(action, payload) {
     return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -76,7 +78,15 @@ export default function AllTransactionsTab(props) {
     if (fCat === 'transfers' && !(t.transfer || t.classification === 'transfer')) { return false; }
     if (fCat === 'matched' && !t.matched) { return false; }
     if (fCat === 'advances' && !t.advance) { return false; } // v55.83-QF
-    if (q.trim() && String(t.who).toLowerCase().indexOf(q.trim().toLowerCase()) < 0) { return false; }
+    if (q.trim()) {
+      // v55.83-QM (Max 15:03): "the search should be able to look at description
+      // or ANY other data on the line... including the customer or date etc"
+      var hayQ = (String(t.who) + ' ' + String(t.who_full || '') + ' ' + String(t.date || '') + ' ' + String(t.account || '') + ' ' +
+        String(t.amount) + ' ' + Number(t.amount).toFixed(2) + ' ' + String(labelOf[t.classification] || t.classification || '') + ' ' +
+        (t.matched ? 'matched ' : '') + (t.transfer ? 'transfer ' : '') + (t.advance ? 'advance ' : '') + (t.third_party ? 'rtm ' : '') +
+        (t.verified ? 'verified ' : '') + String(t.review_status || '')).toLowerCase();
+      if (hayQ.indexOf(q.trim().toLowerCase()) < 0) { return false; }
+    }
     return true;
   });
   rows = rows.slice().sort(function (a, b) {
@@ -139,8 +149,8 @@ export default function AllTransactionsTab(props) {
     fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'record_payment', bill_id: cand.bill_id, amount: amt, paid_date: mPanel.txn.posted_date || mPanel.txn.date, bank_transaction_id: mPanel.txn.id, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); }).then(function (j) {
-        if (j && (j.ok || !j.error)) { toast.success('Bill ' + cand.ref + ' paid $' + fmt(amt) + ' ✓ — popup stays open: match more or ✕ when done (the rest can wait).'); openMatch(mPanel.src, mQ, true); load(); }
-        else { toast.error(j.error || 'Could not record the bill payment.'); }
+        if (j && (j.ok || !j.error)) { setMErr(''); toast.success('Bill ' + cand.ref + ' paid $' + fmt(amt) + ' ✓ — popup stays open: match more or ✕ when done (the rest can wait).'); openMatch(mPanel.src, mQ, true); load(); }
+        else { setMErr(j.error || 'Could not record the bill payment.'); toast.error(j.error || 'Could not record the bill payment.'); }
       }).finally(function () { setBusy(false); });
   }
   function doMatch(cand) {
@@ -153,9 +163,10 @@ export default function AllTransactionsTab(props) {
       return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
         body: JSON.stringify({ action: 'match_invoice', txn: mPanel.txn, invoice: cand.invoice, amount: amt, user_id: userProfile && userProfile.id }) });
     }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j && (j.ok || j.success)) { toast.success('Matched $' + fmt(amt) + ' to ' + cand.ref + ' ✓ (flows to Wave + ClickBooks) — match more or ✕ when done; whatever is left shows as ◐ PARTIAL.'); openMatch(mPanel.src, mQ, true); load(); }
-      else { toast.error((j && j.error) || 'Match failed.'); }
-    }).finally(function () { setBusy(false); });
+      if (j && (j.ok || j.success)) { setMErr(''); toast.success('Matched $' + fmt(amt) + ' to ' + cand.ref + ' ✓ (flows to Wave + ClickBooks) — match more or ✕ when done; whatever is left shows as ◐ PARTIAL.'); openMatch(mPanel.src, mQ, true); load(); }
+      else { setMErr((j && j.error) || 'Match failed — no reason given by the server.'); toast.error((j && j.error) || 'Match failed.'); }
+    }).catch(function (eM2) { setMErr('Could not reach the matching service: ' + ((eM2 && eM2.message) || 'network error') + ' — try again; nothing was saved.'); })
+      .finally(function () { setBusy(false); });
   }
   // v55.83-PZ (Max, Nov 7 11:24): "when matching or categorization we can
   // select transfer and that clickbooks will give options to other transfers
@@ -184,6 +195,19 @@ export default function AllTransactionsTab(props) {
   // rule learned, Wave ride-along; picking Transfer offers the other leg.
   function setCatOne(t, key) {
     if (!key) { return; }
+    // v55.83-QM (Max 13:27): "able to add categories on the fly from the drop down"
+    if (key === '__new__') {
+      var nm = window.prompt('New category name (it is created as an EXPENSE type — change the type later in 🏷 Categories & Rules):');
+      if (!nm || !nm.trim()) { return; }
+      setBusy(true);
+      api('save_category', { label: nm.trim(), kind: 'expense' }).then(function (jc) {
+        var newKey = jc && (jc.key || (jc.category && jc.category.key));
+        if (jc && jc.ok && newKey) { load(); setBusy(false); setCatOne(t, newKey); }
+        else if (jc && jc.ok) { load(); toast.success('Category created — pick it from the dropdown.'); }
+        else { toast.error((jc && jc.error) || 'Could not create the category.'); }
+      }).finally(function () { setBusy(false); });
+      return;
+    }
     setBusy(true);
     api('bulk_classify', { ids: [t.id], classification: key }).then(function (j) {
       if (j && j.ok) {
@@ -244,6 +268,25 @@ export default function AllTransactionsTab(props) {
       } else { toast.error((j && j.error) || 'Could not flag the advance.'); }
     }).finally(function () { setBusy(false); });
   }
+  // v55.83-QM (Max 13:30/15:08): "need to be able to unmatch after matching...
+  // To change from original matching." Goes through bank-write 'unmatch' —
+  // payments voided (never hard-deleted), invoice balances restored, the
+  // deposit reopened. Wave-pushed payments ask once, then reverse here and
+  // name what to delete inside Wave.
+  function doUnmatch(t, force) {
+    if (!force && !window.confirm('Unmatch this transaction?\n\nAll its matches are REVERSED (voided + logged, never deleted), invoice balances are restored, and it can be re-matched or split differently afterwards.')) { return; }
+    setBusy(true);
+    bankSessionHeaders(supabase, true).then(function (h) {
+      return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
+        body: JSON.stringify({ action: force ? 'force_unmatch_wave' : 'unmatch', bank_transaction_id: t.id, user_id: userProfile && userProfile.id }) });
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) { setMErr(''); toast.success('Unmatched ✓ — balances restored; match it again or split it however you need.'); setMPanel(null); load(); }
+      else if (j && j.wave_pushed) {
+        if (window.confirm('This payment was already pushed to Wave.\n\nUnmatch anyway? The hub reverses it here and shows the exact payment(s) you must then delete inside Wave.')) { doUnmatch(t, true); }
+      } else { setMErr((j && j.error) || 'Unmatch failed.'); toast.error((j && j.error) || 'Unmatch failed.'); }
+    }).catch(function (eU2) { toast.error((eU2 && eU2.message) || 'Unmatch failed.'); })
+      .finally(function () { setBusy(false); });
+  }
   function openRtm(t) {
     setBusy(true);
     billsApi({ action: 'rtm_open_bills' }).then(function (j) {
@@ -279,6 +322,48 @@ export default function AllTransactionsTab(props) {
       });
     }).finally(function () { setBusy(false); });
   }
+  // v55.83-QM (Max 13:33 + 15:03: "there are duplicates .. help and why are
+  // they showing"): relink copies — the SAME real transaction stored once
+  // under the old bank link and once under the new one. The scan groups
+  // identical lines (account label + date + amount + direction + text),
+  // KEEPS the copy carrying work (match/category/verified, else the first)
+  // and sends the extras to bank-write mark_review_duplicates — the server
+  // re-verifies high confidence and refuses protected rows. Marked
+  // duplicates vanish from every list and every total (never deleted).
+  function scanDuplicates() {
+    var groups = {}; var found = [];
+    rows.forEach(function (t0) {
+      if (t0.pending) { return; }
+      var k0 = String(t0.account) + '|' + String(t0.date) + '|' + Number(t0.amount).toFixed(2) + '|' + t0.direction + '|' + String(t0.who || '').toLowerCase().replace(/\s+/g, ' ').trim().substring(0, 80);
+      if (!groups[k0]) { groups[k0] = []; }
+      groups[k0].push(t0);
+    });
+    Object.keys(groups).forEach(function (k1) {
+      var g1 = groups[k1];
+      if (g1.length < 2) { return; }
+      var keep = g1[0];
+      g1.forEach(function (t1) { if ((t1.matched || t1.verified || t1.classification) && !(keep.matched || keep.verified || keep.classification)) { keep = t1; } });
+      found.push({ keep: keep, extras: g1.filter(function (t2) { return t2.id !== keep.id; }) });
+    });
+    if (!found.length) { toast.success('No identical copies found in the loaded rows — nothing to clean.'); return; }
+    setDupPanel({ groups: found });
+  }
+  function hideDuplicates() {
+    var ids = [];
+    (dupPanel.groups || []).forEach(function (g2) { g2.extras.forEach(function (t3) { ids.push(t3.id); }); });
+    if (!ids.length) { return; }
+    setBusy(true);
+    bankSessionHeaders(supabase, true).then(function (h) {
+      return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
+        body: JSON.stringify({ action: 'mark_review_duplicates', duplicate_transaction_ids: ids, user_id: userProfile && userProfile.id }) });
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) {
+        toast.success('🧹 ' + (j.marked || 0) + ' duplicate copy(ies) hidden from every list and total' + ((j.skipped || 0) > 0 ? ' · ' + j.skipped + ' skipped (has accounting activity or did not verify as a safe copy — handle those by hand)' : '') + '. Nothing was deleted — they are marked DUPLICATE and recoverable.');
+        setDupPanel(null); load();
+      } else { toast.error((j && j.error) || 'Could not mark the duplicates.'); }
+    }).catch(function (eD3) { toast.error((eD3 && eD3.message) || 'Could not mark the duplicates.'); })
+      .finally(function () { setBusy(false); });
+  }
   function csv() {
     var lines = ['date,account,description,direction,amount,category,verified,matched,transfer'];
     rows.forEach(function (t) {
@@ -299,6 +384,7 @@ export default function AllTransactionsTab(props) {
         <span className="text-[10px]" style={{ color: '#64748b' }}>→</span>
         <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }} />
         <button onClick={load} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Load</button>
+        <button onClick={scanDuplicates} title="Find identical copies left by a bank reconnect (same account, date, amount, direction, text) — keep the one carrying work, hide the extras from every list and total. Nothing is deleted." className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>🧹 Find duplicates</button>
         <button onClick={csv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>
       </div>
       <div className="flex gap-1.5 items-center flex-wrap mb-2">
@@ -357,6 +443,7 @@ export default function AllTransactionsTab(props) {
                       className="px-1 py-0.5 rounded border border-slate-300 text-[9px] font-bold nt-light" style={{ color: t.classification ? '#334155' : '#9a3412', background: '#ffffff', maxWidth: 150 }}>
                       <option value="">— pick…</option>
                       {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+                      <option value="__new__">➕ new category…</option>
                     </select>}</td>
               <td className="py-1 text-[9px]">
                 {t.pending && <span className="mr-1" style={{ color: '#64748b' }}>pending</span>}
@@ -376,6 +463,8 @@ export default function AllTransactionsTab(props) {
                 {t.transfer && <span className="px-1 py-0.5 rounded font-extrabold mr-1" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ transfer</span>}
                 {t.advance && <span className="px-1 py-0.5 rounded font-extrabold mr-1" title="Advance — money sent before the bills exist. Click 🔗 to attach the real bills when they arrive." style={{ background: '#fef3c7', color: '#92400e' }}>⏳ advance</span>}
                 {t.verified && <span className="px-1 py-0.5 rounded font-extrabold mr-1" style={{ background: '#ecfdf5', color: '#064e3b' }}>✓</span>}
+                {!t.transfer && !t.pending && (t.matched || (Number(t.applied) || 0) > 0.005) &&
+                  <button onClick={function () { doUnmatch(t); }} title="Unmatch — reverse ALL matches on this transaction (voided + logged, never deleted); balances restored; re-match or split differently after" className="px-1 py-0.5 rounded font-bold mr-1" style={{ background: '#fff1f2', color: '#9f1239' }}>⊘</button>}
                 {((!t.matched && !t.transfer && !t.pending) || (!t.transfer && !t.pending && (Number(t.applied) || 0) > 0.005 && (Number(t.applied) || 0) < t.amount - 0.005)) &&
                   <button onClick={function () { openMatch(t); }} title={t.direction === 'in' ? 'Match this deposit to an invoice right here — several invoices can share one deposit' : 'Match this payment to an open BILL right here — several bills can share one payment'} className="px-1 py-0.5 rounded font-bold mr-1" style={{ background: '#eef2ff', color: '#312e81' }}>🔗 {t.direction === 'in' ? 'match' : 'bill'}</button>}
                 {!t.transfer && !t.pending &&
@@ -398,6 +487,7 @@ export default function AllTransactionsTab(props) {
           <div className="flex-1" />
           {mPanel.kind === 'bill' && <button onClick={createBillFromTxn} disabled={busy} title="No bill entered yet? Create it from this transaction (vendor, date, amount) and record this payment against it — one click"
             className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>➕ Create bill from this transaction</button>}
+          {((mPanel.txn.applied || 0) > 0.005 || (mPanel.src && mPanel.src.matched)) && <button onClick={function () { doUnmatch(mPanel.src || mPanel.txn); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#fff1f2', color: '#9f1239' }}>↩ unmatch all & start over</button>}
           <button onClick={function () { onGo('review'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>splits / unapplied → Bank Review</button>
           <button onClick={function () { setMPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>✓ done</button>
         </div>
@@ -414,6 +504,7 @@ export default function AllTransactionsTab(props) {
             ⏳ Advance for FUTURE bills — flag now, attach the actual bills here later</label>
           {mPanel.src && mPanel.src.advance && <button onClick={function () { flagAdvance(mPanel.src, true); }} className="px-2 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#fef3c7', color: '#92400e' }}>bills attached → clear ⏳ flag</button>}
         </div>}
+        {mErr && <div className="mb-1 rounded p-1.5 text-[10px] font-extrabold" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#7f1d1d' }}>✗ {mErr}</div>}
         {/* v55.83-QF (Max 12:08) — applied/remaining tracker + search over ALL open rows */}
         <div className="flex gap-2 items-center flex-wrap mb-1">
           <span className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: (mPanel.txn.applied || 0) > 0.005 ? '#fef3c7' : '#ffffff', border: '1px solid #c7d2fe', color: '#312e81' }}>
@@ -492,6 +583,27 @@ export default function AllTransactionsTab(props) {
           })()}
           <div className="flex-1" />
           <button onClick={saveRtm} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#9d174d', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Save — flag RTM & cover selected ✓</button>
+        </div>
+      </div>
+      </div>}
+      {dupPanel && <div onClick={function () { setDupPanel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-3" style={{ background: '#fffbeb', border: '1px solid #fde68a', maxWidth: 820, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div className="flex gap-2 items-center mb-1 flex-wrap">
+          <div className="text-[11px] font-extrabold" style={{ color: '#78350f' }}>🧹 {dupPanel.groups.length} duplicate group(s) — same account, date, amount, direction and text. These come from reconnecting a bank (the old link's copies stayed). The copy carrying your work is KEPT; the extras get marked DUPLICATE — out of every list and total, never deleted, recoverable.</div>
+          <div className="flex-1" />
+          <button onClick={function () { setDupPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fef3c7', color: '#78350f' }}>✕</button>
+        </div>
+        {dupPanel.groups.slice(0, 40).map(function (g3, gi) {
+          return <div key={gi} className="py-1" style={{ borderBottom: '1px solid #fde68a' }}>
+            <div className="text-[10px] font-extrabold" style={{ color: '#0f172a' }}>{g3.keep.date} · {String(g3.keep.who || '').substring(0, 60)} · {(g3.keep.direction === 'out' ? '−$' : '+$') + fmt(g3.keep.amount)} · {g3.keep.account}</div>
+            <div className="text-[9px]" style={{ color: '#78350f' }}>keeps: 1 copy{g3.keep.matched ? ' (matched)' : g3.keep.classification ? ' (categorized)' : ''} · hides: {g3.extras.length} extra cop{g3.extras.length === 1 ? 'y' : 'ies'}</div>
+          </div>;
+        })}
+        {dupPanel.groups.length > 40 && <div className="text-[9px] mt-1" style={{ color: '#78350f' }}>…and {dupPanel.groups.length - 40} more group(s) — all included below.</div>}
+        <div className="mt-2">
+          <button onClick={hideDuplicates} disabled={busy} className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#b45309', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>
+            Hide {(function () { var n4 = 0; dupPanel.groups.forEach(function (g4) { n4 += g4.extras.length; }); return n4; })()} duplicate cop{(function () { var n5 = 0; dupPanel.groups.forEach(function (g5) { n5 += g5.extras.length; }); return n5 === 1 ? 'y' : 'ies'; })()} ✓
+          </button>
         </div>
       </div>
       </div>}

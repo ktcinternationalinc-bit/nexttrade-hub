@@ -33,6 +33,37 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QO',
+    date: '2026-11-07',
+    label: '\ud83d\udcc4 Bill-from-document fix \u2014 multi-page PDFs read now',
+    items: [
+      'FIXED: \ud83d\udcf7 Import bill did nothing on multi-page PDFs \u2014 the server was cut off mid-read by a 10-second platform limit. The reading routes now get 60 seconds, enough for merged invoice+BOL documents.',
+      'And if a read ever dies again, you SEE it: a clear message with the fallback (send just the invoice page) \u2014 never silence.',
+    ],
+  },
+  {
+    version: 'v55.83-QN',
+    date: '2026-11-07',
+    label: '\ud83e\uddfe Invoices clickable everywhere',
+    items: [
+      'In \ud83d\udcd2 Customer AR History and \ud83c\udf82 All Invoices, every invoice NUMBER is clickable \u2014 the invoice pops up with its items, dates and payments, and \u270f Edit invoice jumps straight into the real editor.',
+    ],
+  },
+  {
+    version: 'v55.83-QM',
+    date: '2026-11-07',
+    label: '\u2298 Unmatch \u00b7 \ud83e\uddf9 duplicates \u00b7 \ud83d\udd17 match from invoices \u00b7 discounts',
+    items: [
+      'UNMATCH everywhere: \u2298 on any matched/partial row in \ud83d\udcd1 All Transactions and \u201c\u21a9 unmatch all & start over\u201d inside the match popup. Matches are REVERSED (voided + logged, never deleted), balances restored \u2014 re-match or split differently, including leaving part uncategorized. Wave-pushed payments ask once, then reverse here and name exactly what to delete inside Wave.',
+      'The match popup now shows the FAILURE REASON in red inside the popup \u2014 \u201cclicked apply, nothing happened\u201d cannot happen anymore. Whatever the server refuses, you see why.',
+      '\ud83e\uddf9 FIND DUPLICATES (All Transactions): reconnecting a bank left the old link\u2019s copies next to the new ones \u2014 that is what you saw in Verification. One click groups identical lines, KEEPS the copy carrying your work, and hides the extras from every list and every total (marked DUPLICATE \u2014 recoverable, never deleted).',
+      '\u2795 New category straight from the dropdown \u00b7 search in All Transactions now looks at EVERYTHING on the line (customer, date, amount, account, status words like rtm/advance/matched).',
+      'Deleting an invoice now RELEASES its bank matches \u2014 the deposits reopen as unmatched instantly (that is the 15:17 bug, fixed on both delete paths).',
+      'Invoices: \u2212 add discount line \u2014 a discount is a negative line, so totals, balances, reports and Wave stay exact.',
+      'All Invoices: the five cards are CLICKABLE (the table below is the underlying data), and every open invoice has \ud83d\udd17 match \u2014 pick the deposit(s) that paid it, same guarded engine, errors shown in the modal.',
+    ],
+  },
+  {
     version: 'v55.83-QL',
     date: '2026-11-07',
     label: '\ud83e\ude7a Email scanner: Test connection',

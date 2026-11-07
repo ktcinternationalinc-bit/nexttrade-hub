@@ -4,6 +4,7 @@
 // Wave imported paid is NEVER turned into payment rows -> no double-count.
 import { useState, useEffect } from 'react';
 import RestrictedNotice from './RestrictedNotice';
+import InvoicePeek from './InvoicePeek'; // v55.83-QN (Max 15:49: "invoices should be clickable and editable")
 import { isArEligible } from '../lib/ar-eligibility';
 import { supabase } from '../lib/supabase';
 import { canViewAccountingCustomers, canViewCustomerAr, canSeeAmounts } from '../lib/bank-permissions';
@@ -18,6 +19,12 @@ function isDead(inv) { var s = inv.record_status; return s === 'void' || s === '
 function isDraft(inv) { return inv.wave_status === 'DRAFT' || inv.wave_status === 'SAVED' || inv.approval_status === 'draft'; }
 
 export default function AccountingCustomerHistory(props) {
+  var peekGo = props.onGo || function () {};
+  var pk = useState(null); var peekId = pk[0]; var setPeekId = pk[1]; // v55.83-QN — click an invoice → popup; ✏ Edit jumps to the editor
+  function openInvoiceEditor(idQ) {
+    try { window.__ntOpenInvoiceEdit = idQ; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: idQ })); } catch (eQ) {}
+    setPeekId(null); peekGo('invoices');
+  }
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
@@ -281,7 +288,7 @@ export default function AccountingCustomerHistory(props) {
                   <tbody>{invoicesFor(selCust.id).filter(function (i) { return isWithinWindow(i.invoice_date, arFloor); }).slice().sort(function (a, b) { var da = a.invoice_date || ''; var db = b.invoice_date || ''; if (da === db) return 0; return (invSort === 'desc' ? (da < db ? 1 : -1) : (da < db ? -1 : 1)); }).map(function (i) {
                     var hub = hubPaidForInvoice(i.id); var bal = n(i.total_amount) - n(i.wave_imported_paid) - hub; var dead = isDead(i);
                     return <tr key={i.id} className={'border-t border-slate-800 ' + (dead ? 'opacity-50 line-through' : '')}>
-                      <td className="py-1 font-bold text-slate-100">{i.invoice_number || i.id.slice(0, 6)}</td>
+                      <td className="py-1 font-bold"><button onClick={function () { setPeekId(i.id); }} title="Open this invoice — details, items, payments, and ✏ Edit" className="underline decoration-dotted" style={{ color: '#7dd3fc' }}>{i.invoice_number || i.id.slice(0, 6)}</button></td>
                       <td>{i.source === 'wave_import' ? <span className="text-[9px] bg-sky-700 text-white rounded px-1">Wave</span> : <span className="text-[9px] bg-emerald-700 text-white rounded px-1">Hub</span>}{i.is_historical ? <span className="ml-1 text-[9px] bg-slate-600 text-white rounded px-1">hist</span> : null}</td>
                       <td>{i.invoice_date || ''}</td><td>{i.due_date || ''}</td><td>{i.payment_status || ''}{i.record_status && i.record_status !== 'active' ? ' · ' + i.record_status : ''}</td>
                       <td className="text-right">{money(i.total_amount, showAmt)}</td><td className="text-right">{money(i.wave_imported_paid, showAmt)}</td><td className="text-right">{money(hub, showAmt)}</td>
@@ -329,6 +336,7 @@ export default function AccountingCustomerHistory(props) {
           )}
         </div>
       </div>
+      {peekId && <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={openInvoiceEditor} />}
     </div>
   );
 }

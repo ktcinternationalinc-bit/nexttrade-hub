@@ -157,9 +157,28 @@ export default function AccountingInvoicesTab(props) {
   function lcName(row) { return (isInvoice() ? row.invoice_number : row.proforma_number) || row.id; }
   function lcKind() { return isInvoice() ? 'invoice' : 'proforma'; }
   function lcRefresh() { setEditing(null); load(); }
+  // v55.83-QM (Max 15:17: "tried to delete an invoice and it was not removed
+  // and remained on all transactions") — deleting an invoice RELEASES its
+  // bank matches: its payments are voided (never hard-deleted) and the
+  // deposits reopen as unmatched, so All Transactions reflects it instantly.
+  function releaseBankMatches(invoiceId) {
+    return supabase.from('accounting_invoice_payments')
+      .update({ voided: true })
+      .eq('accounting_invoice_id', invoiceId).not('bank_transaction_id', 'is', null).neq('voided', true)
+      .select('bank_transaction_id')
+      .then(function (r0) {
+        var txIds = []; ((r0 && r0.data) || []).forEach(function (p0) { if (p0.bank_transaction_id && txIds.indexOf(p0.bank_transaction_id) < 0) { txIds.push(p0.bank_transaction_id); } });
+        return supabase.from('bank_transactions')
+          .update({ matched_invoice_id: null, review_status: 'unreviewed' })
+          .eq('matched_invoice_id', invoiceId)
+          .then(function () { return txIds.length; });
+      }).catch(function () { return 0; });
+  }
   function doLcDelete(row) {
-    if (!window.confirm('Permanently delete this ' + lcKind() + '? This CANNOT be undone.')) return;
-    dbDelete(lcTbl(), row.id, userProfile && userProfile.id)
+    if (!window.confirm('Permanently delete this ' + lcKind() + '? This CANNOT be undone.\n\nAny bank deposits matched to it are RELEASED back to unmatched (their payments voided, never deleted).')) return;
+    releaseBankMatches(row.id)
+      .then(function (nRel) { if (nRel > 0) { toast.success(nRel + ' bank match(es) released back to unmatched.'); } })
+      .then(function () { return dbDelete(lcTbl(), row.id, userProfile && userProfile.id); })
       .then(function () { return logActivity(userProfile && userProfile.id, 'Deleted ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
       .then(function () { toast.success('Deleted'); lcRefresh(); })
       .catch(function (e) { console.error('[lifecycle] delete', e); toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
@@ -178,6 +197,7 @@ export default function AccountingInvoicesTab(props) {
       'This CANNOT be undone.');
     if (!sure) { return; }
     setBusy(true);
+    releaseBankMatches(row.id).then(function (nRel) { if (nRel > 0) { toast.success(nRel + ' bank match(es) released back to unmatched.'); } }); // v55.83-QM — Wave-path deletes release matches too
     fetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_delete: true, acknowledge_hub_payments: ackHubPayments === true, user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
       .then(function (res) {
@@ -887,6 +907,9 @@ export default function AccountingInvoicesTab(props) {
             });
           })()}
           {!locked(editing) && <button onClick={addItem} className="text-[11px] text-indigo-300 font-bold mb-2">+ add line</button>}
+          {!locked(editing) && <button onClick={function () { setItems(items.concat([{ description: 'Discount', quantity: '1', unit_price: '-0.00', sku: '', product_ref: '', wave_product_id: '', wave_product_name: '' }])); }}
+            title="v55.83-QM (Max): discounts on invoices — a discount is a NEGATIVE line, so every total, balance, report and Wave push stays exact with zero special cases. Type the discount as a negative price."
+            className="text-[11px] text-emerald-300 font-bold mb-2 ml-3">− add discount line</button>}
           <div className="text-right text-sm font-bold mb-2">Total: {fmt(liveTotal)}</div>
 
           <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr' }}>

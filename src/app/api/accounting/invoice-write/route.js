@@ -11,6 +11,9 @@ import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
 
+// v55.83-QO — AI document reads need more than Vercel's default 10s.
+export const maxDuration = 60;
+
 var API_BUILD_MARKER = 'v55.83-JD-invoice-write';
 
 function admin() {
