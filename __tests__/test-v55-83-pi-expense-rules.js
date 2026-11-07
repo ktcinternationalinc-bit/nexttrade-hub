@@ -71,7 +71,7 @@ ok('3b: a MANUAL rule is never silently retargeted by the learner; needs_clarifi
   /classification === 'needs_clarification'\) \{ return \{ skipped: 'no_classification' \};/.test(srv));
 var bw = R('src/app/api/accounting/bank-write/route.js');
 ok('3c: bank-write classify LEARNS on every human expense categorization, fail-soft, out-direction only',
-  /import \{ learnRule \}/.test(bw) && /cRes\.data\[0\]\.direction === 'out'/.test(bw) &&
+  /import \{ learnRule, waveAccountForCategory \}/.test(bw) && /cRes\.data\[0\]\.direction === 'out'/.test(bw) && // (PZ widened the import for the Wave ride-along)
   /learnRule\(db, \(cRes\.data\[0\]\.merchant_name \|\| ''\) \+ ' ' \+ \(cRes\.data\[0\]\.name \|\| ''\), cPatch\.classification, by\)/.test(bw));
 
 // ── 4. Applying: rules only ever FILL BLANKS ──

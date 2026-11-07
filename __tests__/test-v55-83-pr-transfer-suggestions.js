@@ -98,9 +98,9 @@ ok('7b (PV): Stats shows 💰 Money in by category with % of income, row drills,
   /Money in by category/.test(psV) && /% of income/.test(psV) &&
   /Transfers between own accounts — NOT income/.test(psV) &&
   /Real money in \(transfers excluded\)/.test(psV));
-ok('7c (PV): the accountant pack gained income CSVs (10 by-category, 11 detail) — 11 files total',
+ok('7c (PV, PY grew it to 12): the accountant pack carries income CSVs (10 by-category, 11 detail) + the PY income statement — 12 files total',
   /tax-pack-10-income-by-category-/.test(psV) && /tax-pack-11-income-detail-/.test(psV) &&
-  /11 CSVs for/.test(psV));
+  /12 CSVs for/.test(psV));
 
 // ── PW (Max 10:42: "categories should be whether they are income or expense
 //    as quickbooks does") ──
@@ -213,6 +213,62 @@ ok('14: money-out matches to OPEN BILLS inline — ranked candidates (exact flag
   /Bills are paid by money OUT — this is a deposit\./.test(R('src/app/api/accounting/bills/route.js')) &&
   /action: 'record_payment', bill_id: cand\.bill_id, amount: amt, paid_date: mPanel\.txn\.posted_date \|\| mPanel\.txn\.date, bank_transaction_id: mPanel\.txn\.id/.test(R('src/components/AllTransactionsTab.jsx')) &&
   /🔗 \{t\.direction === 'in' \? 'match' : 'bill'\}/.test(R('src/components/AllTransactionsTab.jsx')));
+
+// ── PZ (Max 11:16, screenshot): "clicking on match nothing happens" (panel
+//    rendered below the scroll table, off-screen) + "need to see full
+//    description if needed" ──
+var attZ = R('src/components/AllTransactionsTab.jsx');
+ok('15a (PZ): the match panel is a CENTERED MODAL (fixed overlay, backdrop click closes) — it can never load off-screen again',
+  /\{mPanel && <div onClick=\{function \(\) \{ setMPanel\(null\); \}\} style=\{\{ position: 'fixed', inset: 0/.test(attZ) &&
+  /maxHeight: '80vh', overflowY: 'auto'/.test(attZ));
+ok('15b (PZ): click any description to expand the FULL text (merchant · bank line, wrapped), click again to collapse; server sends who_full',
+  /who_full: wfull\.join\(' · '\) \|\| '\(no description\)'/.test(R('src/app/api/accounting/expense-rules/route.js')) &&
+  /expanded\[t\.id\] \? \(t\.who_full \|\| t\.who\)/.test(attZ) &&
+  /whiteSpace: 'normal', wordBreak: 'break-word'/.test(attZ));
+
+// ── PZ part 2 (Max 11:17/11:19/11:20): Accounting tabs organized ──
+var atZ = R('src/components/AccountingTab.jsx');
+ok('16: tabs grouped by activity — DAILY WORK / SELLING (Order Reconciliation here, per Max) / BUYING / three REPORTS rows split by subject / SYSTEM; same tabs, same permission filter',
+  /📥 DAILY WORK — handle the money/.test(atZ) &&
+  /'🧾 SELLING — customers & what they owe', \['invoices', 'all_invoices', 'proformas', 'recon'/.test(atZ) &&
+  /'🛒 BUYING — vendors & what we owe', \['bills', 'purchaseorders'\]/.test(atZ) &&
+  /REPORTS · SALES & CUSTOMERS/.test(atZ) && /REPORTS · MONEY & CASH/.test(atZ) && /REPORTS · LEDGER \(ClickBooks\)/.test(atZ) &&
+  /⚙️ SYSTEM — rarely touched/.test(atZ) && /TAB_GROUPS\.map\(function \(g\)/.test(atZ));
+
+// ── PZ part 3 (Max 11:22: All-Transactions work auto-updates the WAVE side;
+//    not compatible → stay empty; closest COMPATIBLE → save) ──
+var ersZ = R('src/lib/expense-rules-server.js');
+var erZ = R('src/app/api/accounting/expense-rules/route.js');
+ok('17a: one resolver — explicit 🌊 link first, else EXACT normalized name match against Wave\'s own chart, saved onto the category; ambiguous/none → null (Wave stays empty, never fuzzy-guessed)',
+  /export async function waveAccountForCategory\(db, clsKey\)/.test(ersZ) &&
+  /if \(hits\.length !== 1\) \{ return null; \}/.test(ersZ) &&
+  /how: 'name_match_saved'/.test(ersZ));
+ok('17b: BULK categorize rides the Wave account onto every selected txn that has NO Wave category and was never synced — existing Wave data never overwritten; outcome told in the toast',
+  /\.in\('id', idsB\)\.is\('wave_account_id', null\)\.is\('wave_transaction_id', null\)/.test(erZ) &&
+  /category_status: 'pending_wave_sync'/.test(erZ) &&
+  /no compatible Wave account — Wave left empty/.test(R('src/components/AllTransactionsTab.jsx')));
+ok('17c: single classify uses the SAME resolver (matching already flows to Wave via match_invoice — unchanged)',
+  /waveAccountForCategory\(db, cPatch\.classification\)/.test(R('src/app/api/accounting/bank-write/route.js')));
+
+// ── PZ part 4 (Max 11:24: "when matching or categorization we can select
+//    transfer and that clickbooks will give options to other transfers that
+//    match from other accounts and will not count as income etc in tax
+//    reporting or pnl") ──
+var attZ4 = R('src/components/AllTransactionsTab.jsx');
+ok('18a: every unpaired row in 📑 All Transactions has ↔ — opens the SAME transfer_candidates/pair_transfer engine as the 🏷 tab, in a centered modal',
+  /openTransfer\(t\); \}\} title="This is a transfer between our own accounts/.test(attZ4) &&
+  /api\('transfer_candidates', \{ bank_transaction_id: t\.id \}\)/.test(attZ4) &&
+  /api\('pair_transfer', \{ a: a2, b: b2 \}\)/.test(attZ4) &&
+  /\{tPanel && <div onClick=\{function \(\) \{ setTPanel\(null\); \}\} style=\{\{ position: 'fixed', inset: 0/.test(attZ4));
+ok('18b: candidates are OTHER accounts only, opposite direction, cent-equal, ±7 days (server enforces; never already-paired rows)',
+  /neq\('account_id', t0\.account_id \|\| ''\)/.test(R('src/app/api/accounting/expense-rules/route.js')) &&
+  /is\('transfer_group_id', null\)/.test(R('src/app/api/accounting/expense-rules/route.js')));
+ok('18c: transfer NEVER counts as income/spending — period_stats keys any transfer (paired OR just classified) out of both sides, and the UI says so',
+  /var isTrf = !!t6\.transfer_group_id \|\| t6\.classification === 'transfer';/.test(R('src/app/api/accounting/bills/route.js')) &&
+  /never count as income or deductible spending — they are excluded from tax reports, the P&L/.test(attZ4) &&
+  /never count as income or spending in any report/.test(attZ4));
+ok('18d: the Wave ride-along SKIPS transfers — a transfer is never pushed into Wave\'s income/expense chart',
+  /clsKey === 'transfer'\) \{ return null; \} \/\/ a transfer is never a Wave income\/expense category/.test(R('src/lib/expense-rules-server.js')));
 
 console.log('');
 console.log('PR: ' + pass + ' passed, ' + fail + ' failed');

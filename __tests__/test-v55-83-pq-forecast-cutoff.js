@@ -69,8 +69,9 @@ ok('5b: on a human category pick, the linked Wave account rides along ONLY when 
   /cPatch\.classification && !cPatch\.wave_account_id && preRow && !preRow\.wave_account_id/.test(bw) &&
   /changingCat = true; \/\/ it IS a category change for Wave/.test(bw) &&
   /wave_auto_category: waveAuto/.test(bw));
-ok('5c: rules NEVER set the Wave account in the background — only a human pick does (applyExpenseRules untouched)',
-  !/wave_account/.test(R('src/lib/expense-rules-server.js')));
+ok('5c (PZ): rules NEVER set the Wave account in the background — applyExpenseRules patch stays classification-only (the PZ resolver lives in the same lib but only HUMAN paths call it)',
+  /update\(\{ classification: r\.classification, category_source: 'rule' \}\)/.test(R('src/lib/expense-rules-server.js')) &&
+  !/waveAccountForCategory/.test(R('src/lib/expense-rules-server.js').split('export async function applyExpenseRules')[1]));
 ok('5d (PW renamed the button to cover types too): editor in Categories & Rules — per-category Wave select, never-overwrite promise stated',
   /📚 \{showWave \? 'Hide' : 'Edit'\} category types & Wave links/.test(ert) &&
   /api\/wave\/categories/.test(ert) && /never overwritten/.test(ert) &&
