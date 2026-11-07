@@ -68,8 +68,8 @@ export default function OpenBalancesTab(props) {
             style={active ? { background: '#0f172a', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{ps[0]}</button>;
         })}
         <span className="text-[10px] font-bold text-slate-500 ml-1">custom:</span>
-        <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" />
-        <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs" />
+        <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs nt-light" />
+        <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded border border-slate-300 text-xs nt-light" />
         <button disabled={busy} onClick={function () { setPreset('custom'); load(from, to); }} className="px-3 py-1 rounded-lg text-xs font-extrabold bg-slate-700 text-white disabled:opacity-50">Go</button>
         <label className="ml-auto flex items-center gap-1 text-[10px] font-bold cursor-pointer select-none" style={{ color: '#0f172a' }} title="Hide rows with a balance under $200 — they stay open and stay in the totals, just out of the list">
           <input type="checkbox" checked={hideSmall} onChange={function (e) { setHideSmall(e.target.checked); }} /> ignore under $200</label>

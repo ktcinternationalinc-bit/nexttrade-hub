@@ -14,7 +14,7 @@ import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → 
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
-function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
 function iso(d) { return d.toISOString().substring(0, 10); }
 function agoDays(n) { var d = new Date(); d.setDate(d.getDate() - n); return iso(d); }
 var TODAY = iso(new Date());
@@ -214,6 +214,8 @@ export default function BooksHomeTab(props) {
         <span className="text-[10px] text-slate-500">→</span>
         <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { applyPeriod(from, e.target.value, 'custom'); }} />
       </div>
+      {cf && cf.totals_masked && <div className="mb-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+        🔒 Totals show as ••• for your account ("Accounting: See Money Totals" not granted).{cf.rows_visible ? ' You CAN still click any card and work with the underlying rows.' : ' Underlying rows are hidden too.'}{cf.date_filters_locked ? ' · Date range locked to the default.' : ''}</div>}
       {cf && cf.denied ? <div className="text-[11px]" style={{ color: '#92400e' }}>{cf.error || 'The money view needs the Bills: View permission — ask an admin in Settings → Permissions.'}</div> :
        !sum ? <div className="text-[11px] text-slate-500">Loading cash flow…</div> :
         <div className="flex flex-col gap-2.5">

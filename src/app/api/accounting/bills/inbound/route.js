@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { readBillFromBase64 } from '../../../../../lib/bill-extract-server';
+import { billDupVerdict } from '../../../../../lib/bill-dup-server'; // v55.83-QH — one duplicate radar everywhere
 import { US_WAVE_BUSINESS_ID } from '../../../../../lib/business-of';
 
 export const dynamic = 'force-dynamic';
@@ -28,7 +29,12 @@ function admin() {
 export async function POST(req) {
   var token = process.env.BILLS_INBOUND_TOKEN || '';
   if (token.length < 24) { return NextResponse.json({ ok: false, error: 'Inbound bills are not configured on this server (BILLS_INBOUND_TOKEN).' }, { status: 503 }); }
+  // v55.83-QH — inbound email services (Mailgun routes, SendGrid Parse)
+  // cannot send custom headers, so the token may ride in the URL instead.
   var got = req.headers.get('x-inbound-token') || '';
+  if (got !== token) {
+    try { got = new URL(req.url).searchParams.get('token') || ''; } catch (eT) { got = ''; }
+  }
   if (got !== token) { return NextResponse.json({ ok: false }, { status: 401 }); }
 
   var from = ''; var subject = ''; var files = []; // {filename, content_type, b64}
@@ -69,17 +75,13 @@ export async function POST(req) {
     var rd = await readBillFromBase64(file.b64, file.content_type);
     if (rd.error) { skipped.push({ file: file.filename, reason: rd.error }); continue; }
     var d = rd.draft;
-    // Duplicate guard: same vendor + bill number already active → never enter twice.
-    if (d.vendor_name && d.bill_number) {
-      var dup = await db.from('vendor_bills').select('id')
-        .ilike('vendor_name', d.vendor_name).ilike('bill_number', d.bill_number)
-        .eq('record_status', 'active').limit(1);
-      if (!dup.error && dup.data && dup.data.length > 0) {
-        await db.from('vendor_bill_events').insert({ bill_id: dup.data[0].id, kind: 'email_duplicate_skipped', details: { from: from, subject: subject, file: file.filename } });
-        skipped.push({ file: file.filename, reason: 'Duplicate of an existing active bill (' + d.vendor_name + ' ' + d.bill_number + ').' });
-        continue;
-      }
-    }
+    // v55.83-QH (Max 12:26: "duplicates can be anything similar... same date
+    // or reference or release number or container number") — ONE shared
+    // radar: hard duplicates skipped, look-alikes (shared reference tokens,
+    // same amount near-date, same vendor+date) created with a loud ⚠.
+    var verdict2 = await billDupVerdict(db, { vendor_name: d.vendor_name, bill_number: d.bill_number, bill_date: d.bill_date, total_amount: d.total_amount, notes: (d.notes || '') + ' ' + subject });
+    if (verdict2.skip) { skipped.push({ file: file.filename, reason: verdict2.skip }); continue; }
+    var warn2 = verdict2.warn;
     // Store the ORIGINAL document privately — the line item carries the proof.
     var safeName = String(file.filename || 'bill').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 60);
     var path = 'pv/email-' + Date.now() + '-' + f + '-' + safeName;
@@ -93,7 +95,7 @@ export async function POST(req) {
       bill_number: d.bill_number, bill_date: d.bill_date || new Date().toISOString().substring(0, 10),
       due_date: d.due_date, total_amount: d.total_amount || 0.01,
       category: d.category, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID,
-      notes: ('Received by email' + (from ? ' from ' + from : '') + (subject ? ' — "' + subject + '"' : '') +
+      notes: ((warn2 ? warn2 + ' · ' : '') + 'Received by email' + (from ? ' from ' + from : '') + (subject ? ' — "' + subject + '"' : '') +
               (rd.problems.length ? ' · READER FLAGS: ' + rd.problems.join(' ') : '')).substring(0, 900),
       validation_status: 'pending',
       attachment_path: upErr ? null : path,

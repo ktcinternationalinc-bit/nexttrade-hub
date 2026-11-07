@@ -35,6 +35,10 @@
     {
       "path": "/api/accounting/clickbooks-us/rules-job",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/accounting/bills/email-scan",
+      "schedule": "20 * * * *"
     }
   ]
 }

@@ -571,3 +571,26 @@ h3 { letter-spacing: -0.02em; }
 .avatar-listening-pulse {
   animation: avatarListeningBreath 1.4s ease-in-out infinite;
 }
+
+
+/* ═══ v55.83-QF (Max, Nov 7 12:10: picking a category "remains empty or
+   invisible") — the dark-skin rules above force EVERY input/select to dark
+   glass with !important, which beats inline styles. Controls that sit on a
+   WHITE Accounting panel use .nt-light, declared with !important and higher
+   specificity, so the picked value is always dark-on-white and the dropdown
+   options are readable. ═══ */
+input.nt-light, select.nt-light, textarea.nt-light {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+  color-scheme: light;
+  min-height: 0 !important;
+  font-size: 11px !important;
+}
+select.nt-light option { background: #ffffff !important; color: #0f172a !important; }
+input.nt-light::placeholder { color: #94a3b8 !important; opacity: 1; }
+input.nt-light:focus, select.nt-light:focus, textarea.nt-light:focus {
+  background: #ffffff !important;
+  border-color: #1d4ed8 !important;
+  box-shadow: 0 0 0 2px rgba(29,78,216,0.15) !important;
+}

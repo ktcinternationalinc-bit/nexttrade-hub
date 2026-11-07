@@ -33,6 +33,73 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QJ',
+    date: '2026-11-07',
+    label: '\ud83d\udce7 Scan mailbox now',
+    items: [
+      'New button in \ud83e\uddfe Bills: \ud83d\udce7 Scan mailbox now \u2014 checks the bills mailbox immediately (it also runs hourly on its own) and shows exactly what it found: matching emails, bills created as pending validation, duplicates flagged, and anything skipped with the reason.',
+      'Works with the controller@ktcus.com mailbox on Hostinger \u2014 three Vercel settings and done.',
+    ],
+  },
+  {
+    version: 'v55.83-QI',
+    date: '2026-11-07',
+    label: '\ud83d\udd10 Permission tiers + \ud83e\uddfe Audit Trail + \ud83d\udce7 email scanner',
+    items: [
+      'Permissions now work in TIERS, exactly as specified: no accounting grant \u2192 the Accounting section does not even appear in the sidebar. \u201cSee Money Totals\u201d shows the numbers on cards. Without it, totals render as \u2022\u2022\u2022 \u2014 and a separate \u201cOpen Cards (rows only)\u201d grant lets someone still click a card and work the underlying rows for matching/categorization. All enforced on the server, not just hidden buttons.',
+      'Date filters are their own permission (\u201cChange Date Filters\u201d): without it the time range is locked to the defaults and the server clamps any attempt \u2014 with a banner saying so.',
+      '\ud83e\uddfe AUDIT TRAIL (new tab under SYSTEM): who categorized, matched, created, paid, validated, flagged or imported what \u2014 and when. Append-only: nobody can edit or erase audit rows, not even admins. Viewing it is its own permission (\u201cAudit: View Trail\u201d).',
+      '\ud83d\udce7 EMAIL SCANNER: the hub checks the mailbox ITSELF every hour \u2014 no forwarding needed. It searches for your keywords, downloads attached bills, and enters them as pending-validation with the duplicate radar applied. Read-only on the mailbox: it never marks, moves or deletes anything. Setup: two Vercel settings (mailbox + a Google App Password).',
+      'Bank connections remain their own permission (from the previous build). Bank BALANCES remain the separate protected grant \u2014 untouched by all of this.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-QI-audit-log.sql. Email scanner env: BILLS_IMAP_EMAIL + BILLS_IMAP_APP_PASSWORD (Google App Password; 2-Step must be ON), optional BILLS_EMAIL_KEYWORDS. Also still outstanding if not run: QF, QB, PW SQLs.' },
+    ],
+  },
+  {
+    version: 'v55.83-QH',
+    date: '2026-11-07',
+    label: '\ud83d\udce1 Duplicate radar widened \u2014 references, releases, containers, dates',
+    items: [
+      'The bill duplicate radar now flags ANYTHING similar, not just same amount: a shared reference / release number / container number found on the document (any code with digits, 5+ characters), same vendor with the same amount within 10 days, and same vendor on the same date. Each warning NAMES the suspect bill and says when that one is already PAID.',
+      'Exact duplicates (same vendor + bill number) are still skipped outright and reported. Look-alikes are always CREATED with the \u26a0 warning \u2014 a human decides, never the machine.',
+      'One radar everywhere: the multi-file import and the bills email address use the exact same checks.',
+      { superAdminOnly: true, text: 'The bills inbound endpoint now also accepts the token in the URL (?token=\u2026) \u2014 required for Mailgun/SendGrid email delivery when you set up the bills address.' },
+    ],
+  },
+  {
+    version: 'v55.83-QG',
+    date: '2026-11-07',
+    label: '\ud83d\udcc7 Import many bills at once + duplicate radar',
+    items: [
+      '\ud83d\udcf7 Import bill(s) now takes MANY documents in one go (photos or PDFs, up to 20). One file still opens the check-every-field editor; several run a queue \u2014 each becomes a PENDING-VALIDATION bill with the original document attached and the vendor\u2019s remembered category filled in. Nothing is validated for you \u2014 ever.',
+      'Duplicate radar on every import path (files AND the bills email address): an exact duplicate (same vendor + bill number) is skipped and reported; a look-alike (same vendor, same amount, dated within 10 days) is created WITH a loud \u26a0 naming the suspect bill \u2014 and telling you when that one is already PAID.',
+      'Bills by email was already built: forward any bill to the hub\u2019s inbound address and it enters as pending validation with the document attached \u2014 your Gmail can auto-forward anything matching your keywords. Ask for the 10-minute setup when ready.',
+    ],
+  },
+  {
+    version: 'v55.83-QF',
+    date: '2026-11-07',
+    label: '\ud83d\udd0d Match anything, split anything + the invisible-category fix',
+    items: [
+      'FIXED: picking a category looked like nothing happened \u2014 the dark theme was forcing light text onto white dropdowns, so your pick saved but was INVISIBLE. Dropdowns and inputs on white panels are now always dark-on-white, including the option lists.',
+      'The \ud83d\udd17 match popup has a SEARCH box \u2014 type anything (name, invoice #, release, digits of an amount) and it searches ALL open invoices/bills, not just the suggestions.',
+      'Match one deposit to SEVERAL invoices (or one payment to several bills): the popup stays open after each apply, shows applied \u00b7 remaining as you go, and amounts prefill the remaining. Leave a part for later \u2014 the row shows \u25d0 partial \u00b7 $X left. Status chips now read: \u25d0 partial \u00b7 \u25d0 split partial \u00b7 \ud83d\udd17 split full (N) \u00b7 \ud83d\udd17 matched. (Also fixed: after the first apply the \ud83d\udd17 button used to disappear \u2014 a second invoice was impossible.)',
+      'RTM moved where it belongs (your call): inside the match popup as a radio \u2014 Pay open bills \u00b7 \ud83c\udfe2 RTM professional fee \u00b7 \u23f3 Advance. No more RTM button on every row; only flagged rows keep a chip.',
+      '\u23f3 ADVANCE for future payment: flag money sent before the bills exist, find it any time under the \u23f3 Advances filter, attach the real bills in the same popup when they arrive, then clear the flag.',
+      'Hub \u2192 ClickBooks is now fully automatic: a category with no ledger account gets matched by EXACT name \u2014 and if no account exists, the ledger account is CREATED from your category (income/expense type included), the mapping saved, and it posts. Transfers never post as expenses. Loan/owner categories still wait for a human \u2014 by design.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-QF-advance-flag.sql (advance column + the ClickBooks auto-map/auto-create bridge v2). Also still outstanding if not run: v55-83-QB-rtm-third-party.sql and v55-83-PW-category-kinds.sql.' },
+    ],
+  },
+  {
+    version: 'v55.83-QE',
+    date: '2026-11-07',
+    label: '\ud83c\uddfa\ud83c\uddf8 / \ud83c\uddea\ud83c\uddec Sidebar regrouped by country',
+    items: [
+      'The sidebar now separates the two sides of the business: \ud83c\uddfa\ud83c\uddf8 USA FINANCE (Bank, Accounting) and \ud83c\uddea\ud83c\uddec EGYPT FINANCE (Sales, Quotes, Treasury, Checks, Debts, Egypt Bank) \u2014 no more mixing the two sides.',
+      'Open Accounts is its OWN section, and Reports has its own row.',
+      'Nothing moved behind the scenes: same pages, same permissions, breadcrumbs follow the new names.',
+    ],
+  },
+  {
     version: 'v55.83-QD',
     date: '2026-11-07',
     label: '\ud83d\udea9 CSV + Plaid on the same account \u2014 duplicates flagged & ignored',

@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { applyExpenseRules, waveAccountForCategory } from '../../../../lib/expense-rules-server';
+import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 
 var API_BUILD_MARKER = 'v55.83-PI-expense-rules';
@@ -157,6 +158,7 @@ export async function POST(req) {
       }
       var vr = await db.from('bank_transactions').update(vp).eq('id', txid).select();
       if (vr.error) { return NextResponse.json({ ok: false, error: vr.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      await audit(db, by, 'category_verified_stamp', 'bank_transaction', body.payload && body.payload.bank_transaction_id, { verified: !!(body.payload && body.payload.verified) }); // v55.83-QI
       return NextResponse.json({ ok: true, row: vr.data && vr.data[0], api_build_marker: API_BUILD_MARKER });
     }
 
@@ -282,6 +284,7 @@ export async function POST(req) {
           if (!wUpd.error) { waveSet = (wUpd.data || []).length; }
         }
       } catch (eWv) { waveSet = 0; }
+      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, wave_updated: waveSet }); // v55.83-QI
       return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, wave_updated: waveSet, wave_how: waveHow, api_build_marker: API_BUILD_MARKER });
     }
 
@@ -290,12 +293,27 @@ export async function POST(req) {
     if (action === 'all_transactions') {
       var fA = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.from) || '')) ? body.payload.from : '2026-01-01';
       var tA = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.to) || '')) ? body.payload.to : new Date().toISOString().substring(0, 10);
+      // v55.83-QI (Max 12:35): moving the window beyond the default needs
+      // accounting.change_dates (super admins always pass).
+      var atLocked = false;
+      var visDA = await assertPermission(db, body.user_id, 'accounting.change_dates', req);
+      if (!visDA.ok) {
+        var atTod = new Date().toISOString().substring(0, 10);
+        if (fA < '2026-01-01') { fA = '2026-01-01'; atLocked = true; }
+        if (tA > atTod) { tA = atTod; atLocked = true; }
+      }
       var selColsA = 'id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, category_source, review_status, category_verified, matched_invoice_id, transfer_group_id, pending';
       var txA = await db.from('bank_transactions')
-        .select(selColsA + ', third_party_payer') // v55.83-QB — RTM flag rides along
+        .select(selColsA + ', third_party_payer, advance_flag') // v55.83-QB/QF — RTM + advance flags ride along
         .eq('wave_business_id', US_WAVE_BUSINESS_ID)
         .gte('date', fA).lte('date', tA)
         .order('date', { ascending: false }).limit(5000);
+      if (txA.error && /advance_flag/.test(txA.error.message || '')) { // QF SQL not run yet
+        txA = await db.from('bank_transactions').select(selColsA + ', third_party_payer')
+          .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+          .gte('date', fA).lte('date', tA)
+          .order('date', { ascending: false }).limit(5000);
+      }
       if (txA.error && /third_party_payer/.test(txA.error.message || '')) { // QB SQL not run yet
         txA = await db.from('bank_transactions').select(selColsA)
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
@@ -303,6 +321,34 @@ export async function POST(req) {
           .order('date', { ascending: false }).limit(5000);
       }
       if (txA.error) { return NextResponse.json({ ok: false, error: txA.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // v55.83-QF (Max 12:08: "should be signified as partial matched or
+      // split full or split partial or unmatched") — how much of each txn is
+      // applied, summed from BOTH payment ledgers (invoice payments for
+      // deposits, bill payments for spending incl. RTM), fetched by the same
+      // date window; fail-soft: on any error the chips fall back to the
+      // simple matched flag.
+      var appliedBy = {}; var legsBy = {};
+      try {
+        var payWinA = await db.from('accounting_invoice_payments')
+          .select('bank_transaction_id, amount, voided, sync_status')
+          .not('bank_transaction_id', 'is', null)
+          .gte('payment_date', fA).lte('payment_date', tA).limit(20000);
+        ((payWinA && payWinA.data) || []).forEach(function (p7) {
+          var st7 = String(p7.sync_status || '').toLowerCase();
+          if (p7.voided === true || st7 === 'void' || st7 === 'voided' || st7 === 'cancelled' || st7 === 'reversed' || st7 === 'deleted') { return; }
+          appliedBy[p7.bank_transaction_id] = Math.round(((appliedBy[p7.bank_transaction_id] || 0) + (Number(p7.amount) || 0)) * 100) / 100;
+          legsBy[p7.bank_transaction_id] = (legsBy[p7.bank_transaction_id] || 0) + 1;
+        });
+        var billWinA = await db.from('vendor_bill_payments')
+          .select('bank_transaction_id, amount, voided')
+          .not('bank_transaction_id', 'is', null)
+          .gte('paid_date', fA).lte('paid_date', tA).limit(20000);
+        ((billWinA && billWinA.data) || []).forEach(function (p8) {
+          if (p8.voided === true) { return; }
+          appliedBy[p8.bank_transaction_id] = Math.round(((appliedBy[p8.bank_transaction_id] || 0) + (Number(p8.amount) || 0)) * 100) / 100;
+          legsBy[p8.bank_transaction_id] = (legsBy[p8.bank_transaction_id] || 0) + 1;
+        });
+      } catch (eApW) { appliedBy = {}; legsBy = {}; }
       var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
       var acMap = {};
       (accA.data || []).forEach(function (a6) { acMap[a6.plaid_account_id] = (a6.name || 'account') + (a6.mask ? ' •' + a6.mask : ''); });
@@ -315,9 +361,10 @@ export async function POST(req) {
           direction: t7.direction, amount: Math.round((Number(t7.amount_abs) || 0) * 100) / 100,
           classification: t7.classification, verified: t7.category_verified === true,
           matched: !!t7.matched_invoice_id, transfer: !!t7.transfer_group_id, pending: t7.pending === true, review_status: t7.review_status,
-          third_party: t7.third_party_payer || null };
+          third_party: t7.third_party_payer || null, advance: t7.advance_flag === true,
+          applied: appliedBy[t7.id] || 0, applied_legs: legsBy[t7.id] || 0 };
       });
-      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: (txA.data || []).length >= 5000, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: (txA.data || []).length >= 5000, date_filters_locked: atLocked, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── transfer_candidates: the other leg of a transfer (incl. credit cards) ──
@@ -360,6 +407,7 @@ export async function POST(req) {
         .in('id', [idA, idB]).is('transfer_group_id', null).select('id');
       if (updP.error) { return NextResponse.json({ ok: false, error: updP.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!updP.data || updP.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Pairing raced another change — nothing saved, try again.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      await audit(db, by, 'transfer_paired', 'bank_transaction', idA + '+' + idB, { transfer_group_id: gid }); // v55.83-QI
       return NextResponse.json({ ok: true, transfer_group_id: gid, paired: [idA, idB], api_build_marker: API_BUILD_MARKER });
     }
 
@@ -369,6 +417,7 @@ export async function POST(req) {
       if (!gid2) { return NextResponse.json({ ok: false, error: 'transfer_group_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var un = await db.from('bank_transactions').update({ transfer_group_id: null, updated_by: by }).eq('transfer_group_id', gid2).select('id');
       if (un.error) { return NextResponse.json({ ok: false, error: un.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      await audit(db, by, 'transfer_unpaired', 'transfer_group', gid2, { legs: (un.data || []).length }); // v55.83-QI
       return NextResponse.json({ ok: true, unpaired: (un.data || []).length, api_build_marker: API_BUILD_MARKER });
     }
 

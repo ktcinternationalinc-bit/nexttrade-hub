@@ -221,8 +221,8 @@ export default function ExpenseRulesTab(props) {
             {c.label}</button>;
         })}
         <input value={newCat} onChange={function (e) { setNewCat(e.target.value); }} placeholder="new category…"
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff', width: 140 }} />
-        <select value={newKind} onChange={function (e) { setNewKind(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff' }} title="QuickBooks-style type for the new category">
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 140 }} />
+        <select value={newKind} onChange={function (e) { setNewKind(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }} title="QuickBooks-style type for the new category">
           {KINDS.map(function (k) { return <option key={k} value={k}>{KIND_LABELS[k]}</option>; })}
         </select>
         <button onClick={addCategory} disabled={busy || !newCat.trim()} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !newCat.trim()) ? 0.5 : 1 }}>+ add</button>
@@ -239,7 +239,7 @@ export default function ExpenseRulesTab(props) {
               return <div key={c.id} className="flex gap-1.5 items-center">
                 <span className="text-[11px] font-bold" style={{ color: '#0f172a', minWidth: 130 }}>{c.label}</span>
                 <select value={c.kind || 'expense'} onChange={function (e) { changeKind(c, e.target.value); }} disabled={busy} title="QuickBooks-style type — drives taxable income / deductible spending in every report"
-                  className="px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={{ color: c.kind === 'not_pnl' ? '#6b21a8' : '#0f172a', background: '#ffffff', width: 118 }}>
+                  className="px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={{ color: c.kind === 'not_pnl' ? '#6b21a8' : '#0f172a', background: '#ffffff', width: 118 }}>
                   {KINDS.map(function (k2) { return <option key={k2} value={k2}>{KIND_LABELS[k2]}</option>; })}
                 </select>
                 <select value={c.wave_account_id || ''} onChange={function (e) { linkWave(c, e.target.value); }} disabled={busy}
@@ -262,10 +262,10 @@ export default function ExpenseRulesTab(props) {
       </div>
       <div className="flex gap-1.5 flex-wrap items-center mb-2">
         <input value={nr.match_text} onChange={function (e) { setNr(Object.assign({}, nr, { match_text: e.target.value })); }} placeholder="bank line contains… (e.g. shell oil)"
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff', width: 220 }} />
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 220 }} />
         <span className="text-[11px] font-bold" style={{ color: '#64748b' }}>→</span>
         <select value={nr.classification} onChange={function (e) { setNr(Object.assign({}, nr, { classification: e.target.value })); }}
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff' }}>
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
           <option value="">category…</option>
           {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
         </select>
@@ -299,9 +299,9 @@ export default function ExpenseRulesTab(props) {
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>↔ Intra-company transfers</div>
         <button onClick={scanTransfers} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>🔎 Scan accounts for transfer pairs</button>
         <div className="flex-1" />
-        <input type="date" value={trFrom} onChange={function (e) { setTrFrom(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px]" style={{ color: '#0f172a', background: '#ffffff' }} />
+        <input type="date" value={trFrom} onChange={function (e) { setTrFrom(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }} />
         <span className="text-[10px]" style={{ color: '#64748b' }}>→</span>
-        <input type="date" value={trTo} onChange={function (e) { setTrTo(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px]" style={{ color: '#0f172a', background: '#ffffff' }} />
+        <input type="date" value={trTo} onChange={function (e) { setTrTo(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }} />
         <button onClick={loadTransfersReport} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>Register</button>
         {trReport && <button onClick={trCsv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
       </div>
@@ -365,7 +365,7 @@ export default function ExpenseRulesTab(props) {
                 <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(t.amount_abs)}</td>
                 <td className="py-1.5 pr-2">
                   <select value={catDraft[t.id] || t.classification || ''} onChange={function (e) { var d = {}; d[t.id] = e.target.value; setCatDraft(Object.assign({}, catDraft, d)); recategorize(t, e.target.value); }}
-                    className="px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={{ color: '#0f172a', background: '#ffffff' }}>
+                    className="px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
                     <option value="">category…</option>
                     {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
                   </select></td>

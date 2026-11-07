@@ -484,6 +484,9 @@ const ACTION_PERMS = [
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
   { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
+  { key: 'accounting.view_underlying',  label: 'Accounting: Open Cards (rows only)', desc: 'Click a Stats/Forecast card and see the UNDERLYING rows for matching/categorization even when the card TOTALS are blocked (no "See Money Totals"). Totals stay masked as •••. (v55.83-QI)' },
+  { key: 'audit.view',                  label: 'Audit: View Trail',              desc: 'See the 🧾 Audit Trail — who categorized, matched, created, paid, validated what and when. Append-only; nobody can edit or delete audit rows. Super admins always can. (v55.83-QI)' },
+  { key: 'accounting.change_dates',     label: 'Accounting: Change Date Filters', desc: 'Move the time filters beyond the defaults (Stats/Books: June 1 2026 → today; All Transactions: Jan 1 2026 → today). Without it the server clamps the range and says so. (v55.83-QI)' },
   { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
   // v55.83-GW — Inventory Report Center permissions (keys match inventory-permissions.js).
   // view falls back to general Inventory access; export/valuation are explicit grants.

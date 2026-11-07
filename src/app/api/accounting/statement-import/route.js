@@ -21,6 +21,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 
 function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -154,6 +155,7 @@ export async function POST(req) {
         if (up.error) { return NextResponse.json({ ok: false, error: up.error.message }, { status: 500 }); }
         inserted = toInsert.length;
       }
+      await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
       return NextResponse.json({ ok: true, imported: inserted, skipped_existing: skippedExisting, skipped_bad: bad,
         bad_examples: badWhy, window: { from: minD, to: maxD },
         account: { name: acc.data.name, mask: acc.data.mask } });

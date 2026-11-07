@@ -18,6 +18,8 @@ import { isPaymentVoid } from '../../../../lib/payment-matching';
 import { billOpenBalance, billStatus, cashflowSummary } from '../../../../lib/cashflow';
 import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64 } from '../../../../lib/bill-extract-server';
+import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
+import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { learnRule, suggestCategory } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
@@ -136,7 +138,7 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
-    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1 }; // v55.83-QB
+    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1 }; // v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -153,6 +155,36 @@ export async function POST(req) {
     }
     if (!gate || gate.ok !== true) {
       return NextResponse.json({ error: 'This needs the "' + (WRITE_ACTIONS[action] ? 'Bills: Manage' : 'Accounting: See Money Totals (or Bills/AR: View)') + '" permission — grant it in Settings → Permissions.' }, { status: gate && gate.status ? gate.status : 403 });
+    }
+    // v55.83-QI (Max 12:33/12:35) — three visibility levels, resolved ONCE:
+    //   canTotals — sees the numbers on cards (accounting.view_totals);
+    //   canRows   — totals masked ••• but can open cards and see rows
+    //               (accounting.view_underlying);
+    //   canDates  — may move date filters beyond the defaults
+    //               (accounting.change_dates). Super admin passes all.
+    var visT = await assertPermission(db, userId, 'accounting.view_totals', req);
+    var canTotals = !!visT.ok;
+    var canRows = canTotals;
+    if (!canRows) { var visU = await assertPermission(db, userId, 'accounting.view_underlying', req); canRows = !!visU.ok; }
+    var visD = await assertPermission(db, userId, 'accounting.change_dates', req);
+    var canDates = !!visD.ok;
+    var ROW_KEYS = { drills: 1, rows: 1, in_rows: 1, bills_due: 1, expected_in: 1 };
+    function maskVis(node, inRows) {
+      if (node == null) { return node; }
+      if (typeof node === 'number') { return inRows ? node : null; }
+      if (Array.isArray(node)) {
+        if (!inRows && !canRows) { return []; } // no totals AND no underlying → no rows either
+        return node.map(function (x) { return maskVis(x, inRows); });
+      }
+      if (typeof node === 'object') {
+        var o = {}; var k;
+        for (k in node) {
+          if (!Object.prototype.hasOwnProperty.call(node, k)) { continue; }
+          o[k] = maskVis(node[k], inRows || ROW_KEYS[k] === 1);
+        }
+        return o;
+      }
+      return node;
     }
 
     // ── list: bills with status + payments
@@ -208,6 +240,7 @@ export async function POST(req) {
         if (up.error) { throw new Error(up.error.message); }
         var learnedU = null;
         if (fields.category) { learnedU = await learnRule(db, vendor, fields.category, userId); } // v55.83-PJ — a changed pick updates the rule
+        await audit(db, userId, 'bill_updated', 'vendor_bill', bl.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
         return NextResponse.json({ ok: true, id: bl.id, updated: true, rule_learned: learnedU, warning: qbWarnU || undefined });
       }
       // v55.83-PJ (Max): "remember and categorize later on with new bills
@@ -236,6 +269,7 @@ export async function POST(req) {
       if (ins.error) { throw new Error(ins.error.message); }
       var learnedB = null;
       if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
+      await audit(db, userId, 'bill_created', 'vendor_bill', ins.data && ins.data.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
       return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, rule_learned: learnedB });
     }
 
@@ -281,6 +315,7 @@ export async function POST(req) {
         bank_transaction_id: bankId, method: String(body.method || '').trim() || null, created_by: userId,
       }).select('id').maybeSingle();
       if (pIns.error) { throw new Error(pIns.error.message); }
+      await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', billId, { amount: pAmt, paid_date: body.paid_date, bank_transaction_id: bankId, method: String(body.method || '').trim() || null }); // v55.83-QI
       return NextResponse.json({ ok: true, payment_id: pIns.data && pIns.data.id });
     }
 
@@ -297,6 +332,13 @@ export async function POST(req) {
     if (action === 'cashflow') {
       var fromD = isDate(body.from) ? body.from : '2026-11-01';
       var toD = isDate(body.to) ? body.to : new Date().toISOString().substring(0, 10);
+      // v55.83-QI — date filters beyond the default need accounting.change_dates
+      var cfLocked = false;
+      if (!canDates) {
+        var cfTod = new Date().toISOString().substring(0, 10);
+        if (fromD < '2026-06-01') { fromD = '2026-06-01'; cfLocked = true; }
+        if (toD > cfTod) { toD = cfTod; cfLocked = true; }
+      }
       var today2 = new Date().toISOString().substring(0, 10);
       var bank = await fetchAll(function () {
         return db.from('bank_transactions')
@@ -378,7 +420,11 @@ export async function POST(req) {
         expected_in: r2(sumExpL), expected_in_count: expAllL.length,
         due_out: r2(sumBillL), due_out_count: billRowsL.length,
         projected_net: r2(sumExpL - sumBillL) };
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: fromD, to: toD, summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL });
+      var cfPayload = { summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL };
+      if (!canTotals) { cfPayload = maskVis(cfPayload, false); } // v55.83-QI — tiered card visibility
+      cfPayload.ok = true; cfPayload.marker = API_BUILD_MARKER; cfPayload.from = fromD; cfPayload.to = toD;
+      cfPayload.totals_masked = !canTotals; cfPayload.rows_visible = canRows; cfPayload.date_filters_locked = cfLocked;
+      return NextResponse.json(cfPayload);
     }
 
     // ── validate_bill: validation is NOT a formality (Max). All three checks
@@ -404,6 +450,7 @@ export async function POST(req) {
       await db.from('vendor_bill_events').insert({ bill_id: body.id, kind: 'validated', actor_id: userId,
         details: { checks: { matches_records: true, goods_received: true, charges_accurate: true }, notes: vNotes.substring(0, 1000), attachment_path: vPatch.validation_attachment_path || null,
           warehouse_reference: vPatch.warehouse_reference || null, system_match: body.system_match || null } });
+      await audit(db, userId, 'bill_validated', 'vendor_bill', body.id, { notes: vNotes.substring(0, 200) }); // v55.83-QI
       return NextResponse.json({ ok: true, validated: true });
     }
     if (action === 'reopen_validation') {
@@ -492,6 +539,56 @@ export async function POST(req) {
     // already uses (Anthropic). The model PROPOSES; parseBillExtraction
     // disciplines (invalid dates/amounts become null, never guessed); the
     // HUMAN confirms in the form before anything is saved.
+    // ── v55.83-QG (Max 12:19: "can we import multiple documents at the same
+    //    time... check for duplicates or previously paid.. still have a human
+    //    validation column") — ONE file in, ONE pending-validation bill out,
+    //    called once per file by the multi-import queue. Same discipline as
+    //    the email-in path: extraction never guesses, exact vendor+number
+    //    duplicates are SKIPPED (reported), same-vendor same-amount near-date
+    //    look-alikes are CREATED with a loud ⚠ note naming the suspect (and
+    //    whether that one is already PAID) — a human decides, always.
+    if (action === 'ingest_bill_file') {
+      var gB64 = String(body.file_base64 || '');
+      var gType = String(body.media_type || '');
+      var gName = String(body.filename || 'bill').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 60);
+      if (!gB64 || !gType) { return NextResponse.json({ error: 'file_base64 and media_type required.' }, { status: 400 }); }
+      var gRead = await readBillFromBase64(gB64, gType);
+      if (gRead.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gRead.error }); }
+      var gD = gRead.draft;
+      // v55.83-QH (Max 12:26) — ONE shared duplicate radar (lib): hard
+      // vendor+number duplicates SKIP; shared reference/release/container
+      // tokens, same amount near-date, and same vendor+date all WARN loudly
+      // (incl. already-PAID), and the bill is still created for a human.
+      var gVerdict = await billDupVerdict(db, { vendor_name: gD.vendor_name, bill_number: gD.bill_number, bill_date: gD.bill_date, total_amount: gD.total_amount, notes: gD.notes || '' });
+      if (gVerdict.skip) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gVerdict.skip }); }
+      var gWarn = gVerdict.warn;
+      var gCat = gD.category || null;
+      if (!gCat) { try { gCat = await suggestCategory(db, gD.vendor_name || ''); } catch (eGC) { gCat = null; } }
+      var gPath = 'pv/upload-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '-' + gName;
+      var gUpErr = null;
+      try {
+        var gUp = await db.storage.from('bills-private').upload(gPath, Buffer.from(gB64, 'base64'), { contentType: gType, upsert: false });
+        if (gUp.error) { gUpErr = gUp.error.message; }
+      } catch (eGU) { gUpErr = (eGU && eGU.message) || 'upload failed'; }
+      var gIns = await db.from('vendor_bills').insert({
+        vendor_name: gD.vendor_name || ('UNREAD VENDOR (file ' + gName + ')'),
+        bill_number: gD.bill_number, bill_date: gD.bill_date || new Date().toISOString().substring(0, 10),
+        due_date: gD.due_date, total_amount: gD.total_amount || 0.01,
+        category: gCat, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID,
+        notes: ((gWarn ? gWarn + ' · ' : '') + 'Imported from file ' + gName +
+                (gRead.problems.length ? ' · READER FLAGS: ' + gRead.problems.join(' ') : '')).substring(0, 900),
+        validation_status: 'pending',
+        attachment_path: gUpErr ? null : gPath,
+        created_by: userId,
+      }).select('id').maybeSingle();
+      if (gIns.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gIns.error.message }); }
+      try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr } }); } catch (eGE) {}
+      await audit(db, userId, 'bill_imported_from_file', 'vendor_bill', gIns.data.id, { file: gName, duplicate_warning: gWarn }); // v55.83-QI
+      return NextResponse.json({ ok: true, created: true, id: gIns.data.id, file: gName,
+        vendor: gD.vendor_name || null, amount: gD.total_amount || null,
+        duplicate_warning: gWarn, reader_flags: gRead.problems });
+    }
+
     if (action === 'extract_bill') {
       var rd = await readBillFromBase64(String(body.file_base64 || ''), String(body.media_type || ''));
       if (rd.error) { return NextResponse.json({ error: rd.error }, { status: rd.status || 500 }); }
@@ -554,6 +651,19 @@ export async function POST(req) {
       });
       return NextResponse.json({ ok: true, bills: rowsR });
     }
+    // ── v55.83-QF (Max 12:14): ⏳ ADVANCE — money sent before the bills
+    //    exist. Flag now; later the SAME 🔗 match flow attaches the real
+    //    bills (record_payment guards unchanged). The flag only makes the
+    //    transaction findable until then.
+    if (action === 'advance_flag') {
+      var txAv = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
+      if (txAv.error || !txAv.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+      if (txAv.data.direction !== 'out') { return NextResponse.json({ error: 'An advance is MONEY OUT — that transaction is money in.' }, { status: 409 }); }
+      var upAv = await db.from('bank_transactions').update({ advance_flag: body.clear !== true }).eq('id', body.bank_transaction_id).select('id');
+      if (upAv.error) { return NextResponse.json({ error: upAv.error.message + (/advance_flag/.test(upAv.error.message || '') ? ' — run sql/v55-83-QF-advance-flag.sql first.' : '') }, { status: 400 }); }
+      await audit(db, userId, body.clear === true ? 'advance_flag_cleared' : 'advance_flagged', 'bank_transaction', body.bank_transaction_id, null); // v55.83-QI
+      return NextResponse.json({ ok: true, advance: body.clear !== true });
+    }
     if (action === 'rtm_flag') {
       var txR = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
       if (txR.error || !txR.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
@@ -562,6 +672,7 @@ export async function POST(req) {
         .update({ third_party_payer: body.clear === true ? null : String(body.payer || 'RTM Capital').substring(0, 60) })
         .eq('id', body.bank_transaction_id).select('id');
       if (upR.error) { return NextResponse.json({ error: upR.error.message + (/third_party_payer/.test(upR.error.message || '') ? ' — run sql/v55-83-QB-rtm-third-party.sql first.' : '') }, { status: 400 }); }
+      await audit(db, userId, body.clear === true ? 'rtm_flag_cleared' : 'rtm_payment_flagged', 'bank_transaction', body.bank_transaction_id, null); // v55.83-QI
       return NextResponse.json({ ok: true, flagged: body.clear !== true });
     }
 
@@ -570,6 +681,30 @@ export async function POST(req) {
       if (txDm.error || !txDm.data) { return NextResponse.json({ ok: false, error: 'Deposit not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       var openDm = await loadOpenUsInvoices(db);
       var amtDm = r2(txDm.data.amount_abs);
+      // v55.83-QF (Max 12:08): "have a search to search for something or
+      // keyword or phrase or number" — q filters ALL open invoices (ref,
+      // release, customer, amount digits) BEFORE scoring, so anything is
+      // findable, not just the top-20 best guesses.
+      var qDm = String(body.q || '').trim().toLowerCase();
+      if (qDm.length >= 1) {
+        var qDigits = qDm.replace(/[^0-9.]/g, '');
+        openDm = openDm.filter(function (v0) {
+          var hay = (String(v0.invoice_number || '') + ' ' + String(v0.release_number || '') + ' ' + String(v0.customer || '')).toLowerCase();
+          if (hay.indexOf(qDm) >= 0) { return true; }
+          if (qDigits.length >= 3 && (String(v0.open_balance.toFixed(2)).indexOf(qDigits) >= 0 || String((Number(v0.total) || 0).toFixed(2)).indexOf(qDigits) >= 0)) { return true; }
+          return false;
+        });
+      }
+      // v55.83-QF — how much of this deposit is ALREADY applied (multi-invoice
+      // splits), so the popup can show "remaining" and the amounts prefill it.
+      var apDm = 0;
+      try {
+        var apQ = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('bank_transaction_id', txDm.data.id);
+        ((apQ && apQ.data) || []).forEach(function (p0) {
+          var st0 = String(p0.sync_status || '').toLowerCase();
+          if (p0.voided !== true && st0 !== 'void' && st0 !== 'voided' && st0 !== 'cancelled' && st0 !== 'reversed' && st0 !== 'deleted') { apDm = r2(apDm + (Number(p0.amount) || 0)); }
+        });
+      } catch (eAp) { apDm = 0; }
       var toksDm = String((txDm.data.merchant_name || '') + ' ' + (txDm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
       var scored = openDm.map(function (v) {
         var sc = 0;
@@ -586,7 +721,8 @@ export async function POST(req) {
         return { invoice: fullBy[x.v.id] || null, id: x.v.id, ref: x.v.invoice_number, rel: x.v.release_number || null,
           customer: x.v.customer, open: x.v.open_balance, total: x.v.total, due: x.v.due_date, score: x.sc, exact: Math.abs(x.v.open_balance - amtDm) <= 0.01 };
       }).filter(function (c9) { return c9.invoice; });
-      return NextResponse.json({ ok: true, txn: txDm.data, candidates: candsDm, api_build_marker: API_BUILD_MARKER });
+      var txOutDm = Object.assign({}, txDm.data, { applied: apDm, remaining: Math.max(0, r2(amtDm - apDm)) });
+      return NextResponse.json({ ok: true, txn: txOutDm, candidates: candsDm, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── bill_match_candidates (v55.83-PW, Max 11:02: "must be able to match
@@ -601,6 +737,22 @@ export async function POST(req) {
       var LBm = await loadBills(db);
       var openBm = decorate(LBm.bills, LBm.pays).filter(function (b0) { return isPayable(b0); });
       var amtBm = r2(txBm.data.amount_abs);
+      // v55.83-QF — same search for bills: vendor, bill number, amount digits.
+      var qBm = String(body.q || '').trim().toLowerCase();
+      if (qBm.length >= 1) {
+        var qDigB = qBm.replace(/[^0-9.]/g, '');
+        openBm = openBm.filter(function (b00) {
+          var hayB = (String(b00.bill_number || '') + ' ' + String(b00.vendor_name || '') + ' ' + String(b00.category || '')).toLowerCase();
+          if (hayB.indexOf(qBm) >= 0) { return true; }
+          if (qDigB.length >= 3 && (String(b00.open.toFixed(2)).indexOf(qDigB) >= 0 || String((Number(b00.total_amount) || 0).toFixed(2)).indexOf(qDigB) >= 0)) { return true; }
+          return false;
+        });
+      }
+      var apBm = 0;
+      try {
+        var apQ2 = await db.from('vendor_bill_payments').select('amount, voided').eq('bank_transaction_id', txBm.data.id);
+        ((apQ2 && apQ2.data) || []).forEach(function (p1) { if (p1.voided !== true) { apBm = r2(apBm + (Number(p1.amount) || 0)); } });
+      } catch (eAp2) { apBm = 0; }
       var toksBm = String((txBm.data.merchant_name || '') + ' ' + (txBm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
       var scoredBm = openBm.map(function (b1) {
         var sc = 0;
@@ -613,7 +765,8 @@ export async function POST(req) {
       var candsBm = scoredBm.map(function (x) {
         return { bill_id: x.b.id, ref: x.b.bill_number || '—', vendor: x.b.vendor_name || '', open: r2(x.b.open), total: r2(x.b.total_amount), due: x.b.due_date || null, score: x.sc, exact: Math.abs(x.b.open - amtBm) <= 0.01 };
       });
-      return NextResponse.json({ ok: true, txn: txBm.data, candidates: candsBm, api_build_marker: API_BUILD_MARKER });
+      var txOutBm = Object.assign({}, txBm.data, { applied: apBm, remaining: Math.max(0, r2(amtBm - apBm)) });
+      return NextResponse.json({ ok: true, txn: txOutBm, candidates: candsBm, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── forecast: aging buckets in/out + drill rows + unflagged counts
@@ -686,11 +839,14 @@ export async function POST(req) {
           }
         }
       } catch (eBal) { balF = null; }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, today: todayF,
-        bucket_order: BUCKETS, buckets: buckets, rows: rows,
+      var fcPayload = { buckets: buckets, rows: rows,
         excluded_old: { count: exCount, sum: exSum, before: FORECAST_CREATED_FROM },
-        bank_balance: balF,
-        unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } });
+        unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } };
+      if (!canTotals) { fcPayload = maskVis(fcPayload, false); } // v55.83-QI — tiered card visibility
+      fcPayload.ok = true; fcPayload.marker = API_BUILD_MARKER; fcPayload.today = todayF; fcPayload.bucket_order = BUCKETS;
+      fcPayload.bank_balance = balF; // its own PROTECTED grant decided this above — null unless granted
+      fcPayload.totals_masked = !canTotals; fcPayload.rows_visible = canRows;
+      return NextResponse.json(fcPayload);
     }
 
     // ── period_stats (PH): "a tab from june 1st on for both invoices and
@@ -698,6 +854,14 @@ export async function POST(req) {
     if (action === 'period_stats') {
       var pFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(body.from || '')) ? body.from : '2026-06-01';
       var pTo = /^\d{4}-\d{2}-\d{2}$/.test(String(body.to || '')) ? body.to : new Date().toISOString().substring(0, 10);
+      // v55.83-QI (Max 12:35): date filters beyond the default are their own permission.
+      var pLocked = false;
+      if (!canDates) {
+        var pTod = new Date().toISOString().substring(0, 10);
+        if (pFrom < '2026-06-01') { pFrom = '2026-06-01'; pLocked = true; }
+        if (pTo > pTod) { pTo = pTod; pLocked = true; }
+        if (String(body.from || '') && body.from !== pFrom) { pLocked = true; }
+      }
       function monthOf(d) { return String(d || '').substring(0, 7); }
       function addM(map, m, key, amt) {
         if (!m || m.length !== 7) { return; }
@@ -908,14 +1072,18 @@ export async function POST(req) {
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
           taxable_income: taxable, not_pnl_in: notPnlIn };
       } catch (eSp) { spend = null; }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: pFrom, to: pTo,
+      var psPayload = {
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },
         bills: { billed: billed, count: billCount, paid: billsPaid, paid_count: billsPaidCount, still_open_from_period: billsOpen, disputed_open: billsDisputed },
         months: monthRows,
         spending: spend,
         // drill rows: every card's exact underlying records ("show where these numbers came from")
         drills: { invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv,
-                  billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } });
+                  billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } };
+      if (!canTotals) { psPayload = maskVis(psPayload, false); }
+      psPayload.totals_masked = !canTotals; psPayload.rows_visible = canRows; psPayload.date_filters_locked = pLocked;
+      psPayload.from = pFrom; psPayload.to = pTo; psPayload.ok = true; psPayload.marker = API_BUILD_MARKER;
+      return NextResponse.json(psPayload);
     }
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });

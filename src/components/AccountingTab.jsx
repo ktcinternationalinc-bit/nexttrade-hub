@@ -28,6 +28,7 @@ import ClickBooksUSCore from './ClickBooksUSCore';
 import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
 import ClickBooksUSReports from './ClickBooksUSReports';
 import ClickBooksUSCutover from './ClickBooksUSCutover';
+import AuditTrailTab from './AuditTrailTab'; // v55.83-QI
 import { useBankVisibility } from '../lib/use-bank-visibility';
 
 export default function AccountingTab(props) {
@@ -54,6 +55,7 @@ export default function AccountingTab(props) {
     ['all_txns', '📑 All Transactions'], // v55.83-PW — every account, sort/filter/bulk-categorize
     ['clickbooks_reports', '📊 Financial Reports'], // v55.83-PB — P&L / balance sheet / GL from the real ledger
     ['clickbooks_admin', '⚙️ ClickBooks Admin'], // v55.83-PB — foundation/rules/migration/cutover, tucked away
+    ['audit', '🧾 Audit Trail'], // v55.83-QI (Max 12:33) — who changed/matched/created/validated what, append-only
     ['company', '🏢 Company Profile'],
     ['arhistory', '📒 Customer AR History'],
     ['ledger', '📑 Customer Ledger'],
@@ -90,7 +92,7 @@ export default function AccountingTab(props) {
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast']],
     ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports']],
-    ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin']],
+    ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
   ];
   var hasAnyAccounting = isSuper || mp['accounting.view'] === true || mp['accounting.view_totals'] === true ||
     mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true ||
@@ -114,7 +116,7 @@ export default function AccountingTab(props) {
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'audit' || isSuper || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">
@@ -142,6 +144,7 @@ export default function AccountingTab(props) {
       {sub === 'all_txns' && <div className="p-3"><AllTransactionsTab {...props} onGo={setSub} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
+      {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} /></div>}
       {sub === 'company' && <CompanyProfileTab {...props} />}
       {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} />}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}

@@ -82,9 +82,79 @@ export default function BillsTab(props) {
 
   // v55.83-PC — import a bill: the AI reads it, the form gets pre-filled,
   // MAX confirms. Unreadable fields stay blank — never guessed.
-  function onPickFile(e) {
-    var f = e.target.files && e.target.files[0];
+  // v55.83-QG (Max 12:19: "can we import multiple documents at the same
+  // time... check for duplicates or previously paid.. still have a human
+  // validation column"). ONE file keeps the check-every-field editor flow;
+  // SEVERAL files run the queue: each becomes a PENDING-VALIDATION bill
+  // (document attached, vendor memory fills the category, exact duplicates
+  // skipped and said, same-amount look-alikes created with a loud ⚠ naming
+  // the suspect and whether it is already PAID). Humans validate, always.
+  // v55.83-QJ (Max 12:42/12:47: "baby steps to set up email... ktcus.com
+  // lives on hostinger") — a Scan-now button so the mailbox setup can be
+  // TESTED immediately instead of waiting for the hourly run.
+  function scanMailbox() {
+    setReading(true); setImportNotes(['📧 Scanning the bills mailbox…']);
+    fetch('/api/accounting/bills/email-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.ok) {
+          var lines = ['📧 ' + j.mailbox + ' — keywords: ' + (j.keywords || []).join(', '),
+            '— ' + j.matched_messages + ' matching email(s) in the last 14 days · ' + j.new_messages_processed + ' new · ' + j.bills_created + ' bill(s) created as PENDING VALIDATION'];
+          (j.bills || []).forEach(function (b0) { lines.push('✅ ' + (b0.vendor || '(unread vendor)') + (b0.amount ? ' — $' + Number(b0.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + (b0.warned ? ' · ⚠ possible duplicate — check the note' : '')); });
+          (j.skipped || []).forEach(function (s0) { lines.push('⏭ ' + s0.file + ' — ' + s0.reason); });
+          setImportNotes(lines);
+          toast.success(j.bills_created + ' bill(s) from the mailbox — the scanner runs hourly on its own.');
+          if (j.bills_created > 0) { load(); }
+        } else {
+          setImportNotes([(j && j.error) || 'Scan failed.']);
+          toast.error((j && j.error) || 'Scan failed.');
+        }
+      })
+      .catch(function (e2) { toast.error((e2 && e2.message) || 'Scan failed.'); })
+      .finally(function () { setReading(false); });
+  }
+  function onPickFiles(e) {
+    var list = Array.prototype.slice.call((e.target.files || []), 0, 20);
     e.target.value = '';
+    if (!list.length) { return; }
+    if (list.length === 1) { onPickFile(list[0]); return; }
+    var okT = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'image/gif': 1, 'application/pdf': 1 };
+    var good = list.filter(function (f0) { return okT[f0.type] && f0.size <= 10 * 1024 * 1024; });
+    if (!good.length) { toast.error('Use JPG/PNG photos or PDFs under 10 MB.'); return; }
+    setReading(true); setImportNotes(['⏳ Importing ' + good.length + ' document(s)…']);
+    var notesQ = []; var madeQ = 0;
+    var chainQ = Promise.resolve(true);
+    good.forEach(function (f1, qi) {
+      chainQ = chainQ.then(function () {
+        return new Promise(function (res) {
+          var rq = new FileReader();
+          rq.onload = function () {
+            var b64q = String(rq.result).split(',')[1] || '';
+            api({ action: 'ingest_bill_file', filename: f1.name, media_type: f1.type, file_base64: b64q }).then(function (jq) {
+              if (jq && jq.created) {
+                madeQ++;
+                notesQ.push('✅ ' + (jq.vendor || f1.name) + (jq.amount ? ' — $' + Number(jq.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + ' → PENDING VALIDATION' + (jq.duplicate_warning ? ' · ' + jq.duplicate_warning : '') + ((jq.reader_flags || []).length ? ' · reader flags: ' + jq.reader_flags.length : ''));
+              } else if (jq && jq.skipped) {
+                notesQ.push('⏭ ' + f1.name + ' — skipped: ' + (jq.reason || '')); 
+              } else {
+                notesQ.push('✗ ' + f1.name + ' — ' + ((jq && jq.error) || 'failed'));
+              }
+              setImportNotes(['⏳ ' + (qi + 1) + ' of ' + good.length + ' processed…'].concat(notesQ));
+              res(true);
+            }).catch(function () { notesQ.push('✗ ' + f1.name + ' — network error'); res(true); });
+          };
+          rq.readAsDataURL(f1);
+        });
+      });
+    });
+    chainQ.then(function () {
+      setImportNotes(notesQ.concat(['— ' + madeQ + ' bill(s) created as PENDING VALIDATION. Open each, run the three checks, and validate.']));
+      toast.success(madeQ + ' of ' + good.length + ' document(s) imported — every one awaits YOUR validation.');
+      load();
+    }).finally(function () { setReading(false); });
+  }
+  function onPickFile(f) {
     if (!f) { return; }
     var okTypes = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'image/gif': 1, 'application/pdf': 1 };
     if (!okTypes[f.type]) { toast.error('Use a JPG/PNG photo or a PDF.'); return; }
@@ -183,7 +253,7 @@ export default function BillsTab(props) {
       }).finally(function () { setBusy(false); });
   }
 
-  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white';
+  var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white nt-light';
   return <div className="bg-white rounded-xl border border-slate-200 p-3">
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900 mr-1">💸 Bills — what we owe</div>
@@ -195,8 +265,10 @@ export default function BillsTab(props) {
           style={filter === f ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{f.toUpperCase()}</button>;
       })}
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
-        className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill'}</button>}
-      <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" style={{ display: 'none' }} onChange={onPickFile} />
+        className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
+      {canManage && <button onClick={scanMailbox} disabled={reading || busy} title="Check the bills mailbox NOW (it also runs every hour by itself): searches for your keywords, reads attached bills, enters them as pending validation with the duplicate radar."
+        className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#0e7490', color: '#ffffff', opacity: (reading || busy) ? 0.5 : 1 }}>📧 Scan mailbox now</button>}
+      <input ref={fileInputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" style={{ display: 'none' }} onChange={onPickFiles} />
       {canManage && <button onClick={function () { setEditing({ bill_date: TODAY }); }} disabled={busy}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>+ Add bill</button>}
       <button onClick={load} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>↻</button>

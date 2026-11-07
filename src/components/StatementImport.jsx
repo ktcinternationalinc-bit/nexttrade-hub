@@ -181,7 +181,7 @@ export default function StatementImport(props) {
   function colSel(label, key) {
     return <label className="text-[10px] font-bold" style={{ color: '#334155' }}>{label}
       <select value={map[key]} onChange={function (e) { var m2 = Object.assign({}, map); m2[key] = Number(e.target.value); setMap(m2); }}
-        className="ml-1 px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={selStyle}>
+        className="ml-1 px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={selStyle}>
         <option value={-1}>—</option>
         {parsed.headers.map(function (h, i) { return <option key={i} value={i}>{String(h).substring(0, 24) || ('col ' + (i + 1))}</option>; })}
       </select></label>;
@@ -195,7 +195,7 @@ export default function StatementImport(props) {
     <div className="text-[10px] mb-2" style={{ color: '#64748b' }}>Download the transactions CSV from the bank's own online banking (full date range), upload it here, check the mapping, import. Rows join the normal pipeline — categories, rules, matching, transfers, reports. Anything already stored (Plaid or an earlier import) is skipped automatically, so re-importing is always safe.</div>
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <input type="file" accept=".csv,text/csv" onChange={onFile} className="text-[10px]" style={{ color: '#334155' }} />
-      <select value={target} onChange={function (e) { setTarget(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px]" style={selStyle}>
+      <select value={target} onChange={function (e) { setTarget(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={selStyle}>
         <option value="">these rows belong to account…</option>
         {targets.map(function (a) { return <option key={a.plaid_account_id} value={a.plaid_account_id}>{a.institution} · {a.name}{a.mask ? ' •' + a.mask : ''}{a.connection_status === 'archived' ? ' (archived link)' : ''}</option>; })}
       </select>
@@ -204,13 +204,13 @@ export default function StatementImport(props) {
       {colSel('Date', 'dateCol')}
       {colSel('Description', 'descCol')}
       <label className="text-[10px] font-bold" style={{ color: '#334155' }}>Amounts
-        <select value={map.mode} onChange={function (e) { setMap(Object.assign({}, map, { mode: e.target.value })); }} className="ml-1 px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={selStyle}>
+        <select value={map.mode} onChange={function (e) { setMap(Object.assign({}, map, { mode: e.target.value })); }} className="ml-1 px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={selStyle}>
           <option value="single">one amount column</option>
           <option value="debitcredit">separate debit / credit columns</option>
         </select></label>
       {map.mode === 'single' && colSel('Amount', 'amountCol')}
       {map.mode === 'single' && <label className="text-[10px] font-bold" style={{ color: '#334155' }}>
-        <select value={map.negIsOut ? 'neg' : 'pos'} onChange={function (e) { setMap(Object.assign({}, map, { negIsOut: e.target.value === 'neg' })); }} className="px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={selStyle}>
+        <select value={map.negIsOut ? 'neg' : 'pos'} onChange={function (e) { setMap(Object.assign({}, map, { negIsOut: e.target.value === 'neg' })); }} className="px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={selStyle}>
           <option value="neg">negative = money out (most banks)</option>
           <option value="pos">positive = money out</option>
         </select></label>}

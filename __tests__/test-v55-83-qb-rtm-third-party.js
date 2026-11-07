@@ -35,7 +35,7 @@ ok('2a: via-RTM bills NEVER count in what-we-owe / forecasts / shortages — isP
 ok('2b: covering a bill from the RTM payment is a NORMAL record_payment with method "rtm" — overpay + over-allocation guards reused, no duplicated money math',
   /if \(action === 'rtm_flag'\)/.test(bills) && /if \(action === 'rtm_open_bills'\)/.test(bills) &&
   !/from\('vendor_bill_payments'\)\.insert[\s\S]{0,200}method: 'rtm'/.test(bills) &&
-  /rtm_flag: 1 \}; \/\/ v55\.83-QB/.test(bills));
+  /WRITE_ACTIONS = \{[^\n]*rtm_flag: 1/.test(bills)); // (pin made append-proof — QF/QG kept adding WRITE actions to the same line)
 ok('2c: rtm_flag stamps MONEY-OUT only and names the QB SQL when the column is missing',
   /An RTM payment is MONEY OUT/.test(bills) &&
   /run sql\/v55-83-QB-rtm-third-party\.sql first\./.test(bills));
@@ -49,11 +49,12 @@ ok('2e: period_stats rtm block — payments from stamped out-txns, covered bills
   /spend = \{ rtm: rtmBlk, categories: catRows/.test(bills));
 
 var at = R('src/components/AllTransactionsTab.jsx');
-ok('3a: 🏢 RTM on every money-out row — opens the via-RTM bill picker; flagged rows show RTM ✓',
-  /openRtm\(t\); \}\} title="RTM Capital pays bills for us/.test(at) &&
-  /\{t\.third_party \? '🏢 RTM ✓' : '🏢 RTM'\}/.test(at));
-ok('3b: the picker enforces Σ selected ≤ the payment, shows the remainder as RTM SERVICE FEE, and per-bill writes go through record_payment method rtm',
-  /exceed this payment/.test(at) && /RTM service fee remainder \$/.test(at) &&
+ok('3a (QF realigned — Max 12:13: "not crazy that you put everything... with rtm symbol"): RTM entry lives in the 🔗 match popup as a RADIO; only flagged rows keep the 🏢 RTM ✓ chip',
+  /RTM professional fee — pick the via-RTM bills it covers/.test(at) &&
+  /t\.third_party && !t\.pending &&/.test(at) &&
+  /🏢 RTM ✓/.test(at) && at.indexOf("'🏢 RTM ✓' : '🏢 RTM'") < 0);
+ok('3b (QF wording): the picker enforces Σ selected ≤ the payment, shows the remainder as RTM\'s PROFESSIONAL/MANAGEMENT FEE, and per-bill writes go through record_payment method rtm',
+  /exceed this payment/.test(at) && /RTM professional\/management fee \(the rest\): \$/.test(at) &&
   /action: 'record_payment', bill_id: p\.bill\.id, amount: p\.amount, paid_date: t\.date, bank_transaction_id: t\.id, method: 'rtm'/.test(at));
 ok('3c: a mid-save failure is SAID with exactly how many bills stayed covered — never silent',
   /ARE covered and stay covered/.test(at));

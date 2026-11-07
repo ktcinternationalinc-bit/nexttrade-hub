@@ -31,7 +31,7 @@ function rtmAdjust(cats0, rtm) {
     .sort(function (x, y) { return y.total - x.total; });
 }
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
-function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
 var TODAY = new Date().toISOString().substring(0, 10);
 
 export default function PeriodStatsTab(props) {
@@ -107,6 +107,7 @@ export default function PeriodStatsTab(props) {
     return lines;
   }
   function taxPack() {
+    if (data && data.totals_masked) { toast.error('The accountant pack needs the "Accounting: See Money Totals" permission — totals are hidden for your account.'); return; } // v55.83-QI
     // v55.83-PQ (Max, Nov 7 05:09): "need to make sure we have the reports
     // necessary to file our taxes" — one click, every hub CSV the accountant
     // needs for the chosen period, consistently named. (Wave remains the 2026
@@ -289,6 +290,9 @@ export default function PeriodStatsTab(props) {
         US business, USD. Invoiced = by invoice date; Collected = by payment date (so a payment on an older invoice still counts in its month). Bills by bill date; disputed bills stay out of the open totals.
       </div>
 
+      {data && data.totals_masked && <div className="mt-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+        🔒 Totals are hidden for your account ("Accounting: See Money Totals" not granted).{data.rows_visible ? ' You CAN open any card and work with the underlying rows.' : ' Underlying rows are hidden too — ask for "Accounting: Open Cards (rows only)" or "See Money Totals".'}{data.date_filters_locked ? ' · Date range locked to the default — "Accounting: Change Date Filters" unlocks it.' : ''}</div>}
+      {data && !data.totals_masked && data.date_filters_locked && <div className="mt-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>🔒 Date range was clamped to the default — "Accounting: Change Date Filters" unlocks other periods.</div>}
       {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
       {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
         <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>

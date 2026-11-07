@@ -38,7 +38,7 @@ ok('2: both the strip and the Forecast tab SAY what was excluded and why ("payme
 ok('3a: bank balance only joins the forecast for holders of the PROTECTED balance grant (super admin env or financial_visibility), fail-soft otherwise',
   /HUB_SUPER_ADMIN_AUTH_USER_IDS/.test(br) && /can_view_bank_balances/.test(br) &&
   /bank_visibility_identity_map/.test(br) && /catch \(eBal\) \{ balF = null; \}/.test(br) &&
-  /bank_balance: balF,/.test(br));
+  /fcPayload\.bank_balance = balF;/.test(br)); // (QI superseded: the balance attaches AFTER totals-masking, still under its own protected grant)
 ok('3b: alias plaid rows deduped per mask (freshest wins) and the as-of date is reported, never hidden',
   /one row per mask \(reconnects leave alias rows\)/.test(br) && /as_of: asOf\.substring\(0, 10\)/.test(br));
 ok('3c: Projected balance row = real bank total + running position, labeled with the as-of date',

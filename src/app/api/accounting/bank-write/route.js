@@ -10,6 +10,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { learnRule, waveAccountForCategory } from '../../../../lib/expense-rules-server'; // v55.83-PI/PZ — remember picks + Wave ride-along
+import { audit } from '../../../../lib/audit-server'; // v55.83-QI — who did what, when (append-only, fail-soft)
 import { assertPermission } from '../../../../lib/server-permissions';
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
@@ -384,6 +385,7 @@ export async function POST(req) {
       if (body.accounting_customer_id) { spPatch.accounting_customer_id = body.accounting_customer_id; }
       if (tRow.review_status === 'unreviewed' && spAlloc && spAlloc.complete) { spPatch.review_status = 'reviewed'; spPatch.reviewed_by = by; spPatch.reviewed_at = new Date().toISOString(); }
       await db.from('bank_transactions').update(spPatch).eq('id', t.id);
+      await audit(db, by, 'deposit_split_saved', 'bank_transaction', (body.txn && body.txn.id) || body.bank_transaction_id || null, { lines: rows.length }); // v55.83-QI
       return NextResponse.json({ ok: true, lines: rows.length, results: results, allocation: spAlloc, marked_reviewed: spPatch.review_status === 'reviewed', stale_splits_replaced: staleRemoved, api_build_marker: API_BUILD_MARKER });
     }
 
@@ -449,6 +451,7 @@ export async function POST(req) {
       if (cPatch.classification && cRes.data[0] && cRes.data[0].direction === 'out') {
         learn = await learnRule(db, (cRes.data[0].merchant_name || '') + ' ' + (cRes.data[0].name || ''), cPatch.classification, by);
       }
+      await audit(db, by, 'bank_classify', 'bank_transaction', body.bank_transaction_id, { classification: cPatch.classification, wave_account_id: cPatch.wave_account_id || null }); // v55.83-QI
       return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, wave_auto_category: waveAuto, api_build_marker: API_BUILD_MARKER });
     }
 
@@ -535,6 +538,7 @@ export async function POST(req) {
       var recomputed = null; var recomputeFailed = false;
       try { recomputed = await recompute(db, inv.id); } catch (eRc) { recomputeFailed = true; }
 
+      await audit(db, by, 'deposit_matched_to_invoice', 'bank_transaction', (body.txn && body.txn.id) || null, { invoice_id: (body.invoice && body.invoice.id) || null, applied: c.applied_to_invoice, deposit_remaining: depositRemaining }); // v55.83-QI
       return NextResponse.json({ ok: true, match_id: matchId, applied: c.applied_to_invoice, overpayment: c.overpayment, type: c.type, invoice: recomputed, recompute_failed: recomputeFailed, deposit_remaining: depositRemaining, fully_allocated: fullyAllocated, review_status: nextStatus, api_build_marker: API_BUILD_MARKER });
     }
 
@@ -619,6 +623,7 @@ export async function POST(req) {
       var ik = Object.keys(invIds); var w;
       for (w = 0; w < ik.length; w++) { await recompute(db, ik[w]); }
       await db.from('bank_transactions').update({ linked_type: null, linked_id: null, matched_invoice_id: null, review_status: 'unreviewed', reviewed_by: null, reviewed_at: null, updated_by: by }).eq('id', bid);
+      await audit(db, by, 'match_reversed', 'bank_transaction', body.bank_transaction_id || null, { invoices: ik.length, splits_removed: unSplits }); // v55.83-QI
       return NextResponse.json({ ok: true, unmatched_invoices: ik.length, splits_removed: unSplits, api_build_marker: API_BUILD_MARKER });
     }
 

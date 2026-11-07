@@ -60,8 +60,9 @@ ok('3a: endpoint refuses without a >=24-char shared token; constant-time-ish hea
   /token\.length < 24/.test(ir) && /x-inbound-token/.test(ir));
 ok('3b: every ingested bill enters as PENDING validation with the original document stored privately on the line item',
   /validation_status: 'pending'/.test(ir) && /bills-private'\)\.upload/.test(ir) && !/validation_status: 'validated'/.test(ir));
-ok('3c: duplicate guard (same vendor + bill number active) skips and logs instead of double-entering',
-  /email_duplicate_skipped/.test(ir) && /Duplicate of an existing active bill/.test(ir));
+ok('3c (QH moved the guard into the shared radar lib): duplicate guard (same vendor + bill number active) skips and reports instead of double-entering',
+  /billDupVerdict/.test(ir) && /verdict2\.skip\) \{ skipped\.push/.test(ir) &&
+  /Duplicate of an existing active bill/.test(R('src/lib/bill-dup-server.js')));
 ok('3d: reader flags and sender context land in the bill notes + audit event',
   /READER FLAGS/.test(ir) && /kind: 'email_ingested'/.test(ir) && /reader_flags: rd\.problems/.test(ir));
 ok('3e: shared reading engine — one lib behind 📷 and the inbox',
