@@ -36,6 +36,7 @@ export default function BillsTab(props) {
   var s16 = useState(''); var newCatB = s16[0]; var setNewCatB = s16[1];       // v55.83-PJ — inline add-category
   var s17 = useState(false); var addingCat = s17[0]; var setAddingCat = s17[1];
   var s18b = useState('14'); var scanDays = s18b[0]; var setScanDays = s18b[1]; // v55.83-QK — how far back the mailbox scan looks
+  var s19v = useState(''); var thruVendor = s19v[0]; var setThruVendor = s19v[1]; // v55.83-QR — '' = all vendors
   var fileInputRef = React.useRef(null);
 
   function api(payload) {
@@ -135,6 +136,8 @@ export default function BillsTab(props) {
     var list = Array.prototype.slice.call((e.target.files || []), 0, 20);
     e.target.value = '';
     if (!list.length) { return; }
+    var badT = list.filter(function (f9) { return ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'].indexOf(f9.type) < 0; });
+    if (badT.length === list.length) { toast.error('Those files are not photos or PDFs (' + badT.map(function (f8) { return f8.name + ': ' + (f8.type || 'unknown type'); }).join(', ') + ').'); setImportNotes(['✗ Not a JPG/PNG/PDF: ' + badT.map(function (f7) { return f7.name; }).join(', ')]); return; }
     if (list.length === 1) { onPickFile(list[0]); return; }
     var okT = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'image/gif': 1, 'application/pdf': 1 };
     var good = list.filter(function (f0) { return okT[f0.type] && f0.size <= 10 * 1024 * 1024; });
@@ -179,8 +182,9 @@ export default function BillsTab(props) {
     var rd = new FileReader();
     rd.onload = function () {
       var b64 = String(rd.result).split(',')[1] || '';
-      setReading(true); setImportNotes([]);
-      api({ action: 'extract_bill', file_base64: b64, media_type: f.type }).then(function (j) {
+      setReading(true); setImportNotes(['📄 Reading "' + f.name + '" (' + Math.round(f.size / 1024) + ' KB) — the AI is extracting vendor, number, dates and amount…']);
+      var guard = new Promise(function (res, rej) { setTimeout(function () { rej(new Error('no answer after 75 seconds')); }, 75000); });
+      Promise.race([api({ action: 'extract_bill', file_base64: b64, media_type: f.type }), guard]).then(function (j) {
         if (j && j.ok && j.draft) {
           setImportFile({ file: f, base64: b64, media_type: f.type });
           var notes2 = (j.problems || []).slice();
@@ -193,7 +197,8 @@ export default function BillsTab(props) {
             notes: j.draft.notes || '', _imported: true,
           });
           toast.success('Bill read — check every field, then Save.');
-        } else { toast.error((j && j.error) || 'Could not read the bill — enter it manually.'); }
+          setTimeout(function () { try { var ed = document.getElementById('nt-bill-editor'); if (ed) { ed.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS) {} }, 60);
+        } else { toast.error((j && j.error) || 'Could not read the bill — enter it manually.'); setImportNotes(['✗ ' + ((j && j.error) || 'Could not read the bill — enter it manually.')]); }
       }).catch(function (eR9) { // v55.83-QO — a killed/timed-out request is SAID, never silent
         toast.error('The reader took too long or the connection dropped (' + ((eR9 && eR9.message) || 'network') + ') — try again. If it keeps happening, send just the invoice page (page 1) instead of the merged PDF.');
         setImportNotes(['✗ Read failed — the request timed out or dropped. Try again (the fix in this build raises the server time limit), or import just page 1.']);
@@ -299,32 +304,75 @@ export default function BillsTab(props) {
       <button onClick={load} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>↻</button>
     </div>
 
+    {/* v55.83-QS (Max, Nov 8 01:02: "the import bills is not working... nothing
+        happens") — status lines (reading, multi-import results, mailbox scan,
+        🩺 diagnostics) used to render ONLY inside an open bill editor, so most
+        of them were never visible. Now they always show here. */}
+    {(reading || (importNotes.length > 0 && !(editing && editing._imported))) && <div className="rounded-xl p-3 mb-3" style={{ background: '#f0f9ff', border: '1px solid #7dd3fc' }}>
+      <div className="flex gap-2 items-center mb-1">
+        <span className="text-xs font-extrabold" style={{ color: '#0c4a6e' }}>{reading ? '⏳ Working… (reading a document can take up to a minute — keep this tab open)' : '📋 Result'}</span>
+        <div className="flex-1" />
+        {!reading && <button onClick={function () { setImportNotes([]); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0f2fe', color: '#0c4a6e' }}>✕ clear</button>}
+      </div>
+      {importNotes.map(function (ln, li) { return <div key={li} className="text-[11px] py-0.5" style={{ color: '#0f172a', whiteSpace: 'pre-wrap' }}>{ln}</div>; })}
+    </div>}
+
     {/* v55.83-PE — "If I ask how much we owe through <date>, I should immediately
         receive a complete and accurate list, by vendor, with the total." */}
     <div className="rounded-xl p-3 mb-3" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
       <div className="flex gap-2 items-center flex-wrap">
-        <span className="text-xs font-extrabold" style={{ color: '#0f172a' }}>What do we owe through…</span>
+        <span className="text-xs font-extrabold" style={{ color: '#0f172a' }}>What do we owe</span>
+        {/* v55.83-QR (Max): one vendor, or all — up to a chosen date */}
+        <select value={thruVendor} onChange={function (e) { setThruVendor(e.target.value); setDueThru(null); }} className={inp} style={{ maxWidth: 240 }} title="Pick a vendor, or leave on All vendors">
+          <option value="">— all vendors —</option>
+          {(function () { var seen = {}; var list = []; bills.forEach(function (b0) { var v0 = String(b0.vendor_name || '').trim(); if (v0 && b0.record_status === 'active' && !seen[v0.toLowerCase()]) { seen[v0.toLowerCase()] = true; list.push(v0); } }); return list.sort(function (a, b) { return a.localeCompare(b); }).map(function (v1) { return <option key={v1} value={v1}>{v1}</option>; }); })()}
+        </select>
+        <span className="text-xs font-extrabold" style={{ color: '#0f172a' }}>through</span>
         <input type="date" className={inp} value={thruDate} onChange={function (e) { setThruDate(e.target.value); }} />
-        <button onClick={function () { if (!thruDate) { toast.error('Pick a date.'); return; } setBusy(true); api({ action: 'due_through', through: thruDate }).then(function (j) { if (j && j.ok) { setDueThru(j); } else { toast.error((j && j.error) || 'Failed.'); } }).finally(function () { setBusy(false); }); }}
+        <button onClick={function () { if (!thruDate) { toast.error('Pick a date.'); return; } setBusy(true); api({ action: 'due_through', through: thruDate, vendor: thruVendor || undefined }).then(function (j) { if (j && j.ok) { setDueThru(j); } else { toast.error((j && j.error) || 'Failed.'); } }).finally(function () { setBusy(false); }); }}
           disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>Answer</button>
         {dueThru && <button onClick={function () {
           var L2 = ['vendor,bill_number,due_date,open_balance,validation'];
           (dueThru.bills || []).forEach(function (b2) { L2.push(['"' + String(b2.vendor).replace(/"/g, '""') + '"', '"' + String(b2.bill_number || '').replace(/"/g, '""') + '"', b2.due_date, b2.open.toFixed(2), b2.validation].join(',')); });
           L2.push(''); L2.push('TOTAL OWED through ' + dueThru.through + ',,,' + dueThru.total_owed.toFixed(2) + ',');
           var blob = new Blob([L2.join('\n')], { type: 'text/csv' }); var a2 = document.createElement('a');
-          a2.href = URL.createObjectURL(blob); a2.download = 'bills-due-through-' + dueThru.through + '.csv'; a2.click();
+          a2.href = URL.createObjectURL(blob); a2.download = 'bills-due' + (dueThru.vendor ? '-' + String(dueThru.vendor).replace(/[^a-zA-Z0-9]+/g, '_').substring(0, 30) : '') + '-through-' + dueThru.through + '.csv'; a2.click();
         }} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
       </div>
       {dueThru && <div className="mt-2">
         <div className="flex gap-2 flex-wrap text-[11px] font-extrabold">
-          <span className="px-2 py-1 rounded-lg" style={{ background: '#fee2e2', color: '#7f1d1d' }}>TOTAL through {dueThru.through}: ${fmt(dueThru.total_owed)} ({dueThru.bill_count} bills)</span>
+          <span className="px-2 py-1 rounded-lg" style={{ background: '#fee2e2', color: '#7f1d1d' }}>{dueThru.vendor ? dueThru.vendor + ' — ' : ''}TOTAL through {dueThru.through}: ${fmt(dueThru.total_owed)} ({dueThru.bill_count} bills)</span>
+          <span className="px-2 py-1 rounded-lg" style={{ background: '#ffedd5', color: '#431407' }}>already overdue: ${fmt(dueThru.overdue_now)}</span>
+          <span className="px-2 py-1 rounded-lg" style={{ background: '#e0f2fe', color: '#0c4a6e' }}>coming due by {dueThru.through}: ${fmt(dueThru.not_yet_due)}</span>
           <span className="px-2 py-1 rounded-lg" style={{ background: '#d1fae5', color: '#065f46' }}>validated: ${fmt(dueThru.validated_open)}</span>
           <span className="px-2 py-1 rounded-lg" style={{ background: '#ffedd5', color: '#431407' }}>pending validation: ${fmt(dueThru.pending_validation_open)}</span>
           {(dueThru.disputed_excluded || []).length > 0 && <span className="px-2 py-1 rounded-lg" style={{ background: '#ede9fe', color: '#5b21b6' }}>{dueThru.disputed_excluded.length} disputed bill(s) EXCLUDED from the total</span>}
         </div>
-        <div className="text-[11px] mt-1" style={{ color: '#334155' }}>
+        {!dueThru.vendor && <div className="text-[11px] mt-1" style={{ color: '#334155' }}>
           <b>By vendor:</b> {(dueThru.by_vendor || []).map(function (v) { return v.vendor + ' $' + fmt(v.open) + ' (' + v.count + ')'; }).join(' · ') || 'nothing due'}
-        </div>
+        </div>}
+        {/* v55.83-QR — the bills behind the number, one line each */}
+        {(dueThru.bills || []).length > 0 && <table className="w-full text-[11px] mt-2">
+          <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+            {(dueThru.vendor ? [] : ['Vendor']).concat(['Bill #', 'Bill date', 'Due', 'Total', 'Paid', 'Owed', 'Validation']).map(function (h) { return <th key={h} className={'py-1 pr-2 font-semibold ' + (['Total', 'Paid', 'Owed'].indexOf(h) >= 0 ? 'text-right' : 'text-left')}>{h}</th>; })}
+          </tr></thead>
+          <tbody style={{ color: '#0f172a' }}>
+            {dueThru.bills.map(function (b3) {
+              var late3 = String(b3.due_date) < TODAY;
+              return <tr key={b3.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                {!dueThru.vendor && <td className="py-1 pr-2 font-semibold">{b3.vendor}</td>}
+                <td className="py-1 pr-2">{b3.bill_number || '—'}</td>
+                <td className="py-1 pr-2">{b3.bill_date || '—'}</td>
+                <td className="py-1 pr-2" style={{ color: late3 ? '#9a3412' : '#0f172a', fontWeight: late3 ? 700 : 400 }}>{b3.due_date}{late3 ? ' ⚠ overdue' : ''}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">${fmt(b3.total)}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">${fmt(b3.paid)}</td>
+                <td className="py-1 pr-2 text-right tabular-nums font-extrabold">${fmt(b3.open)}</td>
+                <td className="py-1 pr-2">{b3.validation === 'validated' ? '✅ validated' : '⏳ pending'}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>}
+        {(dueThru.bills || []).length === 0 && <div className="text-[11px] mt-1" style={{ color: '#065f46' }}>Nothing owed{dueThru.vendor ? ' to ' + dueThru.vendor : ''} through {dueThru.through}.</div>}
       </div>}
     </div>
 
@@ -382,7 +430,7 @@ export default function BillsTab(props) {
       </div>
     </div>}
 
-    {editing && <div className="rounded-xl p-3 mb-3" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+    {editing && <div id="nt-bill-editor" className="rounded-xl p-3 mb-3" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
       <div className="text-xs font-extrabold mb-2" style={{ color: '#1e3a8a' }}>{editing.id ? 'Edit bill' : (editing._imported ? '📷 Imported bill — CHECK every field before saving' : 'New bill')}</div>
       {editing._imported && importNotes.length > 0 && <div className="text-[11px] rounded-lg p-2 mb-2" style={{ background: '#ffedd5', color: '#431407', border: '1px solid #fdba74' }}>{importNotes.join(' ')}</div>}
       <div className="flex gap-2 flex-wrap items-center">

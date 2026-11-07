@@ -349,6 +349,14 @@ export async function POST(req) {
           appliedBy[p8.bank_transaction_id] = Math.round(((appliedBy[p8.bank_transaction_id] || 0) + (Number(p8.amount) || 0)) * 100) / 100;
           legsBy[p8.bank_transaction_id] = (legsBy[p8.bank_transaction_id] || 0) + 1;
         });
+        // v55.83-QQ — money PARKED as uncategorized (unapplied_deposits)
+        // counts as placed, so an auto-parked remainder never shows ◐ partial.
+        var unWinA = await db.from('unapplied_deposits').select('bank_transaction_id, amount, status').eq('status', 'open').limit(5000);
+        ((unWinA && unWinA.data) || []).forEach(function (u7) {
+          if (!u7.bank_transaction_id) { return; }
+          appliedBy[u7.bank_transaction_id] = Math.round(((appliedBy[u7.bank_transaction_id] || 0) + (Number(u7.amount) || 0)) * 100) / 100;
+          legsBy[u7.bank_transaction_id] = (legsBy[u7.bank_transaction_id] || 0) + 1;
+        });
       } catch (eApW) { appliedBy = {}; legsBy = {}; }
       var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
       var acMap = {};

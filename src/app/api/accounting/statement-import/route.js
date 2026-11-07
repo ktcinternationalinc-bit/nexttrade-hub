@@ -22,6 +22,8 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
+import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 
 function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -53,6 +55,44 @@ export async function POST(req) {
           wave_business_id: a.wave_business_id || c.wave_business_id || null };
       }).filter(function (a) { return !!a.wave_business_id; }); // never offer an unassigned target
       return NextResponse.json({ ok: true, accounts: out });
+    }
+
+    // v55.83-QS (Max, Nov 8 01:00: "i need to be able to add a csv file for
+    // an account i cannot add from plaid... add a new account such as pnc").
+    // A MANUAL account: a real bank_connections + plaid_accounts pair marked
+    // status 'manual' (never pulled from Plaid), in the US books, with the
+    // last-4 so a later Plaid connection is recognized as the SAME account.
+    if (action === 'create_manual_account') {
+      var instM = String(body.institution || '').trim().substring(0, 60);
+      var nameM = String(body.name || '').trim().substring(0, 80);
+      var maskM = String(body.mask || '').replace(/[^0-9]/g, '').slice(-4);
+      if (!instM) { return NextResponse.json({ ok: false, error: 'Type the bank name (e.g. PNC).' }, { status: 400 }); }
+      if (maskM.length !== 4) { return NextResponse.json({ ok: false, error: 'Type the LAST 4 digits of the account — that is how a later Plaid connection is recognized as the same account (no duplicates).' }, { status: 400 }); }
+      // same bank + same last-4 already exists → reuse it, never a second copy
+      var exM = await d.from('plaid_accounts').select('plaid_account_id, name, mask, connection_id').eq('mask', maskM);
+      var instTokM = (instM.toLowerCase().match(/[a-z0-9]+/) || [''])[0];
+      if (!exM.error && exM.data && exM.data.length) {
+        var exConns = await d.from('bank_connections').select('id, institution_name').in('id', exM.data.map(function (r) { return r.connection_id; }));
+        var exHit = null;
+        ((exConns && exConns.data) || []).forEach(function (c0) {
+          var t0 = (String(c0.institution_name || '').toLowerCase().match(/[a-z0-9]+/) || [''])[0];
+          if (t0 && t0 === instTokM) { exM.data.forEach(function (a0) { if (a0.connection_id === c0.id && !exHit) { exHit = a0; } }); }
+        });
+        if (exHit) { return NextResponse.json({ ok: true, existing: true, account: { plaid_account_id: exHit.plaid_account_id, name: exHit.name, mask: exHit.mask }, note: 'That account is already in the hub — importing into it.' }); }
+      }
+      var uid = crypto.randomUUID();
+      var connRowM = { plaid_item_id: 'manual-' + uid, access_token: 'manual-no-plaid', institution_name: instM, status: 'manual', wave_business_id: body.wave_business_id || US_WAVE_BUSINESS_ID };
+      var connM = await d.from('bank_connections').insert(connRowM).select('id').single();
+      if (connM.error && /status|check/i.test(connM.error.message || '')) { // a status rule refuses 'manual' → store as active; the manual- id prefix still keeps Plaid away
+        connRowM.status = 'active';
+        connM = await d.from('bank_connections').insert(connRowM).select('id').single();
+      }
+      if (connM.error) { return NextResponse.json({ ok: false, error: 'Could not create the account: ' + connM.error.message }, { status: 400 }); }
+      var acctId = 'manual-acct-' + uid;
+      var accM = await d.from('plaid_accounts').insert({ connection_id: connM.data.id, plaid_account_id: acctId, name: nameM || (instM + ' account'), official_name: nameM || null, mask: maskM, type: 'depository', subtype: 'checking', iso_currency: 'USD', is_read_only: true, wave_business_id: body.wave_business_id || US_WAVE_BUSINESS_ID, updated_at: new Date().toISOString() });
+      if (accM.error) { return NextResponse.json({ ok: false, error: 'Could not create the account: ' + accM.error.message }, { status: 400 }); }
+      await audit(d, userId, 'manual_account_created', 'plaid_account', acctId, { institution: instM, name: nameM, mask: maskM });
+      return NextResponse.json({ ok: true, created: true, account: { plaid_account_id: acctId, name: nameM || (instM + ' account'), mask: maskM, institution: instM } });
     }
 
     if (action === 'import_rows') {
@@ -101,9 +141,12 @@ export async function POST(req) {
       //      Plaid is caught by amount+date+direction, counted per
       //      occurrence (legit twins survive because the CSV carries both
       //      lines and Plaid carries both slots).
+      // v55.83-QS — look across TWIN accounts (manual PNC •1234 ⇄ Plaid PNC
+      // •1234): whichever door a transaction came through, it counts once.
+      var twinsI = await accountTwins(d, [target]);
       var ex = await d.from('bank_transactions')
         .select('id, date, posted_date, amount_abs, direction, name, plaid_transaction_id')
-        .eq('account_id', target).gte('date', minD).lte('date', maxD).limit(20000);
+        .in('account_id', twinsI[target] || [target]).neq('review_status', 'duplicate').gte('date', minD).lte('date', maxD).limit(20000);
       if (ex.error) { return NextResponse.json({ ok: false, error: ex.error.message }, { status: 400 }); }
       var manualCount = {}; var plaidCount = {};
       (ex.data || []).forEach(function (t0) {

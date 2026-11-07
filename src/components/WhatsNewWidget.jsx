@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QS',
+    date: '2026-11-08',
+    label: '\ud83c\udfe6 Add PNC (or any bank) by CSV \u00b7 \ud83d\udcc4 bill import shows its progress',
+    items: [
+      'Banks Plaid can\u2019t connect yet (PNC) can now be ADDED by hand: Bank \u2192 \ud83d\udcc4 Import statement CSV \u2192 \u201c\u2795 account not in the list\u201d \u2192 bank name, account name, last 4 digits \u2192 then import its CSV. It behaves like any bank account everywhere in the hub.',
+      'No duplicates, whichever way the data comes: re-importing the same CSV adds nothing, and if Plaid ever connects that same account the hub recognizes it by bank + last 4 and skips every transaction you already imported. The manual account is never pulled from Plaid.',
+      'FIXED \u201cimport bills \u2014 nothing happens\u201d: the progress and result messages were only shown inside an open bill editor, so you never saw them. Now a status panel appears right away (\u201c\u23f3 Reading Trinity\u2026pdf\u201d), the editor scrolls into view when the read is done, and any refusal is written there with its reason. Same fix makes the mailbox scan and \ud83e\ude7a Test connection results visible.',
+    ],
+  },
+  {
+    version: 'v55.83-QR',
+    date: '2026-11-08',
+    label: '\ud83d\udcb8 What we owe ONE vendor, through any date',
+    items: [
+      'In \ud83d\udcb8 Bills, the \u201cWhat do we owe\u201d box now has a VENDOR dropdown: pick a vendor (or keep all vendors), pick a date, Answer. You get the total, split into already overdue and coming due by that date, plus every bill behind it \u2014 bill #, dates, total, paid, owed, validation \u2014 and a CSV named for the vendor.',
+    ],
+  },
+  {
+    version: 'v55.83-QQ',
+    date: '2026-11-07',
+    label: '\ud83d\udcb0 The split ledger \u2014 see where every dollar went',
+    items: [
+      'The match popup now shows \ud83d\udcb0 WHERE THIS MONEY WENT: every applied piece on its own line \u2014 $X \u2192 AMERICA 1747 \u00b7 Release \u2026, $Y \u2192 \ud83d\udce5 UNCATEGORIZED (parked) \u2014 so a split is always clear while you build it.',
+      '\u2713 done now PARKS the remainder as UNCATEGORIZED automatically (the button tells you the amount before you click). Every dollar of the deposit is placed \u2014 nothing lingers as \u25d0 partial \u2014 and the parked part waits in Bank Review to be placed later.',
+      'Parked money counts as placed everywhere: remaining in the popup and the status chips both know about it.',
+      'Cleaner popup rows: aligned columns (invoice \u00b7 amount \u00b7 apply), zebra striping, and a \u201cPut the REST\u201d header once money is applied.',
+    ],
+  },
+  {
     version: 'v55.83-QP',
     date: '2026-11-07',
     label: '\ud83d\udd17 Re-match after unmatch \u2014 fixed',

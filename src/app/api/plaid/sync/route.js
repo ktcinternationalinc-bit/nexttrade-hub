@@ -70,7 +70,7 @@ async function runSync(request) {
   }
 
   // All bank connections that are assigned to an in-scope silo.
-  var connRes = await db.from('bank_connections').select('id, institution_name, wave_business_id');
+  var connRes = await db.from('bank_connections').select('id, institution_name, wave_business_id, status, plaid_item_id');
   var conns = (connRes && connRes.data) || [];
 
   // Derive the deployment origin so we can call our own transactions route. Prefer an
@@ -91,6 +91,7 @@ async function runSync(request) {
   var k;
   for (k = 0; k < conns.length; k++) {
     var c = conns[k];
+    if (c.status === 'manual' || /^manual-/.test(String(c.plaid_item_id || ''))) { continue; } // v55.83-QS — CSV-only account, nothing to pull from Plaid
     if (!c.wave_business_id) { skippedUnassigned = skippedUnassigned + 1; continue; }
     if (!inScope[c.wave_business_id]) { skippedOutOfScope = skippedOutOfScope + 1; continue; }
 

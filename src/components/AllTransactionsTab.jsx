@@ -273,6 +273,25 @@ export default function AllTransactionsTab(props) {
   // payments voided (never hard-deleted), invoice balances restored, the
   // deposit reopened. Wave-pushed payments ask once, then reverse here and
   // name what to delete inside Wave.
+  // v55.83-QQ (Max 16:08: "all remaining amounts should automatically move
+  // to uncategorized") — ✓ done parks the remainder as an UNAPPLIED
+  // (uncategorized) deposit through the same guarded bank-write path, so
+  // every dollar is placed and the row never lingers as ◐ partial.
+  function finishMatch() {
+    var t = mPanel.src || mPanel.txn;
+    var rem = mPanel.txn.remaining != null ? mPanel.txn.remaining : 0;
+    if (mPanel.kind !== 'invoice' || !(rem > 0.005) || !(Number(mPanel.txn.applied) > 0.005)) { setMPanel(null); return; }
+    setBusy(true);
+    bankSessionHeaders(supabase, true).then(function (h) {
+      return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
+        body: JSON.stringify({ action: 'create_unapplied', txn: { id: t.id }, amount: rem, notes: 'Parked automatically from the match popup — place it later from Bank Review.', user_id: userProfile && userProfile.id }) });
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) { toast.success('✓ $' + fmt(rem) + ' parked as UNCATEGORIZED — every dollar of this deposit is placed; move it later from Bank Review.'); }
+      else { toast.error((j && j.error) || 'Could not park the remainder — it stays as ◐ partial.'); }
+      setMPanel(null); load();
+    }).catch(function (eP9) { toast.error((eP9 && eP9.message) || 'Could not park the remainder.'); setMPanel(null); })
+      .finally(function () { setBusy(false); });
+  }
   function doUnmatch(t, force) {
     if (!force && !window.confirm('Unmatch this transaction?\n\nAll its matches are REVERSED (voided + logged, never deleted), invoice balances are restored, and it can be re-matched or split differently afterwards.')) { return; }
     setBusy(true);
@@ -489,7 +508,8 @@ export default function AllTransactionsTab(props) {
             className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>➕ Create bill from this transaction</button>}
           {((mPanel.txn.applied || 0) > 0.005 || (mPanel.src && mPanel.src.matched)) && <button onClick={function () { doUnmatch(mPanel.src || mPanel.txn); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#fff1f2', color: '#9f1239' }}>↩ unmatch all & start over</button>}
           <button onClick={function () { onGo('review'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>splits / unapplied → Bank Review</button>
-          <button onClick={function () { setMPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>✓ done</button>
+          <button onClick={finishMatch} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>
+            {mPanel.kind === 'invoice' && (Number(mPanel.txn.applied) || 0) > 0.005 && (mPanel.txn.remaining || 0) > 0.005 ? '✓ done — park $' + fmt(mPanel.txn.remaining) + ' as UNCATEGORIZED' : '✓ done'}</button>
         </div>
         {/* v55.83-QF (Max 12:13): the RTM choice lives HERE, not on every row —
             "when you click to match there is a radio box to select RTM
@@ -505,6 +525,19 @@ export default function AllTransactionsTab(props) {
           {mPanel.src && mPanel.src.advance && <button onClick={function () { flagAdvance(mPanel.src, true); }} className="px-2 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#fef3c7', color: '#92400e' }}>bills attached → clear ⏳ flag</button>}
         </div>}
         {mErr && <div className="mb-1 rounded p-1.5 text-[10px] font-extrabold" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#7f1d1d' }}>✗ {mErr}</div>}
+        {/* v55.83-QQ — WHERE THE MONEY WENT: every applied piece, named */}
+        {(mPanel.txn.applied_detail || []).length > 0 && <div className="mb-1 rounded-lg p-2" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+          <div className="text-[10px] font-extrabold mb-0.5" style={{ color: '#064e3b' }}>💰 Where this money went so far:</div>
+          {(mPanel.txn.applied_detail || []).map(function (d5, di) {
+            return <div key={di} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: di < mPanel.txn.applied_detail.length - 1 ? '1px solid #d1fae5' : 'none', color: '#064e3b' }}>
+              <span className="font-extrabold tabular-nums">${fmt(d5.amount)}</span>
+              <span>→</span>
+              <span className="font-bold">{d5.kind === 'unapplied' ? '📥 UNCATEGORIZED (parked — place later from Bank Review)' : (d5.kind === 'rtm_bill' ? '🏢 RTM-covered bill: ' : '') + (d5.ref || d5.invoice_id || d5.bill_id)}{d5.rel ? ' · Release ' + d5.rel : ''}</span>
+              <div className="flex-1" />
+              <span style={{ color: '#047857' }}>{d5.date || ''}</span>
+            </div>;
+          })}
+        </div>}
         {/* v55.83-QF (Max 12:08) — applied/remaining tracker + search over ALL open rows */}
         <div className="flex gap-2 items-center flex-wrap mb-1">
           <span className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: (mPanel.txn.applied || 0) > 0.005 ? '#fef3c7' : '#ffffff', border: '1px solid #c7d2fe', color: '#312e81' }}>
@@ -518,17 +551,20 @@ export default function AllTransactionsTab(props) {
           <button onClick={function () { openMatch(mPanel.src, mQ, true); }} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>🔍 search all</button>
         </div>
         {mPanel.candidates.length === 0 ? <div className="text-[10px]" style={{ color: '#312e81' }}>{mQ ? 'Nothing matches "' + mQ + '" among the OPEN ' + (mPanel.kind === 'bill' ? 'bills' : 'invoices') + ' — try fewer words, or just digits of the amount.' : 'No open ' + (mPanel.kind === 'bill' ? 'bills' : 'invoices') + ' found to match against.'}</div> :
-          mPanel.candidates.map(function (c3) {
+          mPanel.candidates.map(function (c3, ci3) {
             var cid = c3.id || c3.bill_id;
-            return <div key={cid} className="flex gap-2 items-center py-1 flex-wrap" style={{ borderBottom: '1px solid #e0e7ff' }}>
-              {c3.exact && <span title="Open balance equals this amount to the cent">💯</span>}
-              <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{c3.ref}{c3.rel ? ' · ' + c3.rel : ''}</span>
-              <span className="text-[10px] font-semibold" style={{ color: '#334155' }}>{String(c3.customer || c3.vendor || '').substring(0, 34)}</span>
-              <span className="text-[10px]" style={{ color: '#64748b' }}>due {c3.due || '—'} · open <b style={{ color: '#78350f' }}>${fmt(c3.open)}</b> of ${fmt(c3.total)}</span>
-              <div className="flex-1" />
+            return <div key={cid}>
+            {ci3 === 0 && <div className="text-[10px] font-extrabold mb-0.5 mt-1" style={{ color: '#312e81' }}>{(Number(mPanel.txn.applied) || 0) > 0.005 ? '➡ Put the REST (or ✓ done parks it as UNCATEGORIZED):' : '➡ Pick where this money goes:'}</div>}
+            <div className="py-1 px-1 rounded" style={{ borderBottom: '1px solid #e0e7ff', background: ci3 % 2 ? '#f8fafc' : 'transparent', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 84px', gap: 8, alignItems: 'center' }}>
+              <div style={{ minWidth: 0 }}>
+                <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{c3.exact ? '💯 ' : ''}{c3.ref}{c3.rel ? ' · ' + c3.rel : ''}</span>
+                <span className="text-[10px] font-semibold ml-1" style={{ color: '#334155' }}>{String(c3.customer || c3.vendor || '').substring(0, 34)}</span>
+                <div className="text-[10px]" style={{ color: '#64748b' }}>due {c3.due || '—'} · open <b style={{ color: '#78350f' }}>${fmt(c3.open)}</b> of ${fmt(c3.total)}</div>
+              </div>
               <input value={mAmt[cid] || ''} onChange={function (e) { var n3 = Object.assign({}, mAmt); n3[cid] = e.target.value; setMAmt(n3); }}
-                className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] text-right tabular-nums nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 100 }} />
+                className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] text-right tabular-nums nt-light" />
               <button onClick={function () { if (mPanel.kind === 'bill') { doBillMatch(c3); } else { doMatch(c3); } }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>apply ✓</button>
+            </div>
             </div>;
           })}
       </div>

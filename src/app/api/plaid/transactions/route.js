@@ -1,6 +1,7 @@
 import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
 import { mapPlaidTransaction, supersededPendingIds } from '../../../../lib/bank-ingest';
 import { readBankJson, projectPlaidAccountMetadata } from '../../../../lib/bank-visibility';
+import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -30,6 +31,10 @@ export async function POST(req) {
     var base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
     var connRes = await supabase.from('bank_connections').select('*').eq('id', connection_id).single();
+    // v55.83-QS — a MANUAL (CSV-only) account has nothing to pull from Plaid.
+    if (connRes && connRes.data && (connRes.data.status === 'manual' || /^manual-/.test(String(connRes.data.plaid_item_id || '')))) {
+      return plaidJson({ ok: true, manual: true, inserted: 0, synced: 0, note: 'Manual (CSV) account — add its transactions with 📄 Import statement CSV.' });
+    }
     if (connRes.error || !connRes.data) return plaidJson({ error: 'Connection not found' }, { status: 404 });
     var conn = connRes.data;
     // v55.83-DB — never sync an unassigned bank connection (would create untagged transactions that leak across silos)
@@ -148,15 +153,21 @@ export async function POST(req) {
       if (rows.length > 0) {
         var mdMin = null; var mdMax = null; var mdAccts = {};
         rows.forEach(function (r0) { var d0 = r0.posted_date || r0.date; if (d0) { if (!mdMin || d0 < mdMin) { mdMin = d0; } if (!mdMax || d0 > mdMax) { mdMax = d0; } } if (r0.account_id) { mdAccts[r0.account_id] = 1; } });
+        // v55.83-QS — look across TWIN accounts too: a MANUAL "PNC •1234"
+        // filled by CSV before Plaid could connect is the same real account
+        // as the Plaid PNC •1234 — its rows count as already stored.
+        var twinsMD = await accountTwins(supabase, Object.keys(mdAccts));
+        var asPlaid = {}; var lookIds = [];
+        Object.keys(twinsMD).forEach(function (pa) { twinsMD[pa].forEach(function (tw) { asPlaid[tw] = pa; if (lookIds.indexOf(tw) < 0) { lookIds.push(tw); } }); });
         var manQ = await supabase.from('bank_transactions')
           .select('id, account_id, date, posted_date, amount_abs, direction')
           .like('plaid_transaction_id', 'manual-%')
-          .in('account_id', Object.keys(mdAccts))
+          .in('account_id', lookIds)
           .gte('date', mdMin).lte('date', mdMax).limit(20000);
         if (!manQ.error && manQ.data && manQ.data.length) {
           var manCount = {};
           manQ.data.forEach(function (m0) {
-            var k0 = m0.account_id + '|' + (m0.posted_date || m0.date) + '|' + (Math.round((Number(m0.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + m0.direction;
+            var k0 = (asPlaid[m0.account_id] || m0.account_id) + '|' + (m0.posted_date || m0.date) + '|' + (Math.round((Number(m0.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + m0.direction;
             manCount[k0] = (manCount[k0] || 0) + 1;
           });
           rows = rows.filter(function (r1) {

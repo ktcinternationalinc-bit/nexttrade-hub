@@ -59,8 +59,8 @@ ok('3a: due_through returns total, per-vendor breakdown, per-bill rows with vali
   /validated_open: validatedOpen, pending_validation_open: pendingOpen/.test(br) && /disputed_excluded:/.test(br));
 ok('3b: cumulative by construction — one filtered set (due_date <= through), each bill counted once, open = amount − non-void payments',
   /\(b\.due_date \|\| b\.bill_date\) <= thru/.test(br));
-ok('3c: UI answer bar: pick a date → total + validated/pending split + by-vendor + CSV',
-  /What do we owe through…/.test(bt) && /TOTAL through \{dueThru\.through\}/.test(bt) && /bills-due-through-/.test(bt));
+ok('3c (QR added a vendor pick between "What do we owe" and "through"): UI answer bar: pick a date → total + validated/pending split + by-vendor + CSV',
+  /What do we owe<\/span>/.test(bt) && />through<\/span>/.test(bt) && /TOTAL through \{dueThru\.through\}/.test(bt) && /-through-' \+ dueThru\.through \+ '\.csv'/.test(bt));
 
 // ── 4. Agent friendly: Nadia can answer it
 ok('4: bills_due_through tool registered in the AI assistant with executor (disputed excluded, totals in DB terms)',

@@ -514,6 +514,12 @@ export async function POST(req) {
       var thru = /^\d{4}-\d{2}-\d{2}$/.test(String(body.through || '')) ? body.through : new Date().toISOString().substring(0, 10);
       var LT = await loadBills(db);
       var all = decorate(LT.bills, LT.pays);
+      // v55.83-QR (Max, Nov 8 00:41: "able to request amount of bills due for a
+      // specific vendor up to a certain period of time") — optional vendor
+      // filter, exact name (case/space-insensitive) so a pick never fuzzes
+      // into a different vendor. Same isPayable gate — money math unchanged.
+      var vendQ = String(body.vendor || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (vendQ) { all = all.filter(function (b) { return String(b.vendor_name || '').trim().toLowerCase().replace(/\s+/g, ' ') === vendQ; }); }
       var due = all.filter(function (b) { return isPayable(b) && (b.due_date || b.bill_date) <= thru; })
         .sort(function (a, b2) { return String(a.due_date || a.bill_date).localeCompare(String(b2.due_date || b2.bill_date)); });
       var disputedExcluded = all.filter(function (b) { return b.record_status === 'active' && b.disputed === true && b.open > 0.005 && (b.due_date || b.bill_date) <= thru; });
@@ -526,11 +532,14 @@ export async function POST(req) {
         if (!byVendor[k]) { byVendor[k] = { vendor: k, open: 0, count: 0 }; }
         byVendor[k].open = Math.round((byVendor[k].open + b.open) * 100) / 100; byVendor[k].count++;
       });
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, through: thru,
+      var todayDT = new Date().toISOString().substring(0, 10);
+      var overdueNow = 0; due.forEach(function (b) { if ((b.due_date || b.bill_date) < todayDT) { overdueNow = Math.round((overdueNow + b.open) * 100) / 100; } });
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, through: thru, vendor: vendQ ? (due[0] ? due[0].vendor_name : body.vendor) : null,
+        overdue_now: overdueNow, not_yet_due: Math.round((total - overdueNow) * 100) / 100,
         total_owed: total, bill_count: due.length,
         validated_open: validatedOpen, pending_validation_open: pendingOpen,
         by_vendor: Object.values(byVendor).sort(function (a, b2) { return b2.open - a.open; }),
-        bills: due.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, due_date: b.due_date || b.bill_date, open: b.open, validation: b.validation_status, status: b.status }; }),
+        bills: due.map(function (b) { return { id: b.id, vendor: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date, due_date: b.due_date || b.bill_date, total: Math.round((Number(b.total_amount) || 0) * 100) / 100, paid: b.paid, open: b.open, validation: b.validation_status, status: b.status, category: b.category || null }; }),
         disputed_excluded: disputedExcluded.map(function (b) { return { vendor: b.vendor_name, bill_number: b.bill_number, open: b.open, reason: b.dispute_reason }; }) });
     }
 
@@ -754,13 +763,28 @@ export async function POST(req) {
       }
       // v55.83-QF — how much of this deposit is ALREADY applied (multi-invoice
       // splits), so the popup can show "remaining" and the amounts prefill it.
-      var apDm = 0;
+      var apDm = 0; var apDetail = [];
       try {
-        var apQ = await db.from('accounting_invoice_payments').select('amount, voided, sync_status').eq('bank_transaction_id', txDm.data.id);
+        // v55.83-QQ (Max 16:08: "it should show it somewhere... where they
+        // went... so it is clear where I put the money as I split it")
+        var apQ = await db.from('accounting_invoice_payments').select('accounting_invoice_id, amount, payment_date, voided, sync_status').eq('bank_transaction_id', txDm.data.id);
+        var apInvIds = [];
         ((apQ && apQ.data) || []).forEach(function (p0) {
           var st0 = String(p0.sync_status || '').toLowerCase();
-          if (p0.voided !== true && st0 !== 'void' && st0 !== 'voided' && st0 !== 'cancelled' && st0 !== 'reversed' && st0 !== 'deleted') { apDm = r2(apDm + (Number(p0.amount) || 0)); }
+          if (p0.voided !== true && st0 !== 'void' && st0 !== 'voided' && st0 !== 'cancelled' && st0 !== 'reversed' && st0 !== 'deleted') {
+            apDm = r2(apDm + (Number(p0.amount) || 0));
+            apDetail.push({ kind: 'invoice', invoice_id: p0.accounting_invoice_id, amount: r2(p0.amount), date: p0.payment_date });
+            if (apInvIds.indexOf(p0.accounting_invoice_id) < 0) { apInvIds.push(p0.accounting_invoice_id); }
+          }
         });
+        if (apInvIds.length) {
+          var apRefs = await db.from('accounting_invoices').select('id, invoice_number, release_number, accounting_customer_id').in('id', apInvIds.slice(0, 50));
+          var apRefBy = {}; ((apRefs && apRefs.data) || []).forEach(function (r0) { apRefBy[r0.id] = r0; });
+          apDetail.forEach(function (d0) { var r1 = apRefBy[d0.invoice_id]; if (r1) { d0.ref = r1.invoice_number; d0.rel = r1.release_number || null; } });
+        }
+        // parked (UNCATEGORIZED/unapplied) money counts as placed too
+        var apUn = await db.from('unapplied_deposits').select('amount, status').eq('bank_transaction_id', txDm.data.id).eq('status', 'open');
+        ((apUn && apUn.data) || []).forEach(function (u0) { apDm = r2(apDm + (Number(u0.amount) || 0)); apDetail.push({ kind: 'unapplied', amount: r2(u0.amount) }); });
       } catch (eAp) { apDm = 0; }
       var toksDm = String((txDm.data.merchant_name || '') + ' ' + (txDm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
       var scored = openDm.map(function (v) {
@@ -778,7 +802,7 @@ export async function POST(req) {
         return { invoice: fullBy[x.v.id] || null, id: x.v.id, ref: x.v.invoice_number, rel: x.v.release_number || null,
           customer: x.v.customer, open: x.v.open_balance, total: x.v.total, due: x.v.due_date, score: x.sc, exact: Math.abs(x.v.open_balance - amtDm) <= 0.01 };
       }).filter(function (c9) { return c9.invoice; });
-      var txOutDm = Object.assign({}, txDm.data, { applied: apDm, remaining: Math.max(0, r2(amtDm - apDm)) });
+      var txOutDm = Object.assign({}, txDm.data, { applied: apDm, remaining: Math.max(0, r2(amtDm - apDm)), applied_detail: apDetail });
       return NextResponse.json({ ok: true, txn: txOutDm, candidates: candsDm, api_build_marker: API_BUILD_MARKER });
     }
 
@@ -805,10 +829,22 @@ export async function POST(req) {
           return false;
         });
       }
-      var apBm = 0;
+      var apBm = 0; var apDetailB = [];
       try {
-        var apQ2 = await db.from('vendor_bill_payments').select('amount, voided').eq('bank_transaction_id', txBm.data.id);
-        ((apQ2 && apQ2.data) || []).forEach(function (p1) { if (p1.voided !== true) { apBm = r2(apBm + (Number(p1.amount) || 0)); } });
+        var apQ2 = await db.from('vendor_bill_payments').select('bill_id, amount, paid_date, method, voided').eq('bank_transaction_id', txBm.data.id);
+        var apBillIds = [];
+        ((apQ2 && apQ2.data) || []).forEach(function (p1) {
+          if (p1.voided !== true) {
+            apBm = r2(apBm + (Number(p1.amount) || 0));
+            apDetailB.push({ kind: p1.method === 'rtm' ? 'rtm_bill' : 'bill', bill_id: p1.bill_id, amount: r2(p1.amount), date: p1.paid_date });
+            if (apBillIds.indexOf(p1.bill_id) < 0) { apBillIds.push(p1.bill_id); }
+          }
+        });
+        if (apBillIds.length) {
+          var apBr = await db.from('vendor_bills').select('id, vendor_name, bill_number').in('id', apBillIds.slice(0, 50));
+          var apBrBy = {}; ((apBr && apBr.data) || []).forEach(function (r2b) { apBrBy[r2b.id] = r2b; });
+          apDetailB.forEach(function (d1) { var r3 = apBrBy[d1.bill_id]; if (r3) { d1.ref = (r3.vendor_name || '') + (r3.bill_number ? ' · ' + r3.bill_number : ''); } });
+        }
       } catch (eAp2) { apBm = 0; }
       var toksBm = String((txBm.data.merchant_name || '') + ' ' + (txBm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
       var scoredBm = openBm.map(function (b1) {
@@ -822,7 +858,7 @@ export async function POST(req) {
       var candsBm = scoredBm.map(function (x) {
         return { bill_id: x.b.id, ref: x.b.bill_number || '—', vendor: x.b.vendor_name || '', open: r2(x.b.open), total: r2(x.b.total_amount), due: x.b.due_date || null, score: x.sc, exact: Math.abs(x.b.open - amtBm) <= 0.01 };
       });
-      var txOutBm = Object.assign({}, txBm.data, { applied: apBm, remaining: Math.max(0, r2(amtBm - apBm)) });
+      var txOutBm = Object.assign({}, txBm.data, { applied: apBm, remaining: Math.max(0, r2(amtBm - apBm)), applied_detail: apDetailB });
       return NextResponse.json({ ok: true, txn: txOutBm, candidates: candsBm, api_build_marker: API_BUILD_MARKER });
     }
 
