@@ -9,6 +9,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { CLASSIFICATIONS } from '../lib/bank-permissions';
+import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -29,12 +30,15 @@ export default function BooksHomeTab(props) {
   var s4 = useState({ in_unmatched: 0, out_unreviewed: 0 }); var qCounts = s4[0]; var setQCounts = s4[1];
   var s5 = useState([]); var outQueue = s5[0]; var setOutQueue = s5[1];
   var s6 = useState({}); var clsDraft = s6[0]; var setClsDraft = s6[1];
+  var sCat = useState(null); var dynCats = sCat[0]; var setDynCats = sCat[1]; // v55.83-PI custom categories
+  var sRul = useState([]); var hubRules = sRul[0]; var setHubRules = sRul[1]; // v55.83-PI learned/manual rules
   var s7 = useState([]); var proposals = s7[0]; var setProposals = s7[1];
   var s8 = useState(false); var busy = s8[0]; var setBusy = s8[1];
   var s9 = useState('Nov 1 →'); var preset = s9[0]; var setPreset = s9[1];
   var s10 = useState(null); var late = s10[0]; var setLate = s10[1];
   var s11 = useState(null); var drift = s11[0]; var setDrift = s11[1];
   var s12 = useState({}); var remTone = s12[0]; var setRemTone = s12[1];
+  var s13 = useState(null); var fc = s13[0]; var setFc = s13[1]; // aging forecast strip
 
   var PRESETS = [
     ['Nov 1 →', '2026-11-01', ''],
@@ -67,11 +71,34 @@ export default function BooksHomeTab(props) {
       .select('id, date, posted_date, amount_abs, name, merchant_name, classification, review_status, pending')
       .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').eq('review_status', 'unreviewed')
       .neq('pending', true).order('date', { ascending: false }).limit(8)
-      .then(function (r) { setOutQueue(r.data || []); });
+      .then(function (r) { setOutQueue(r.data || []); prefillSuggestions(r.data || [], hubRules); });
     supabase.from('bank_transactions')
       .select('id', { count: 'exact', head: true })
       .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').eq('review_status', 'unreviewed').neq('pending', true)
       .then(function (r) { setQCounts(function (q) { return Object.assign({}, q, { out_unreviewed: r.count || 0 }); }); });
+  }
+  function loadCatalog() {
+    // v55.83-PI — Max: "create categories to mark expenses... automatically
+    // remember previous selections for the future and use them". Fail-soft:
+    // until the PI SQL runs, the built-in list keeps working.
+    supabase.from('expense_categories').select('key, label, active, sort').eq('active', true).order('sort')
+      .then(function (r) { if (!r.error && r.data && r.data.length) { setDynCats(r.data); } })
+      .catch(function () {});
+    supabase.from('us_expense_rules').select('id, match_text, classification, auto_apply, active').eq('active', true).limit(1000)
+      .then(function (r) { if (!r.error && r.data) { setHubRules(r.data); prefillSuggestions(outQueue, r.data); } })
+      .catch(function () {});
+  }
+  function prefillSuggestions(queue, rulesList) {
+    if (!queue || !queue.length || !rulesList || !rulesList.length) { return; }
+    setClsDraft(function (d) {
+      var nd = Object.assign({}, d);
+      queue.forEach(function (t) {
+        if (nd[t.id]) { return; } // never stomp a human's draft
+        var r = bestRule(rulesList, (t.merchant_name || '') + ' ' + (t.name || ''));
+        if (r) { nd[t.id] = r.classification; }
+      });
+      return nd;
+    });
   }
   function loadProposals() {
     // Background rule engine suggestions (super admin / rules operators; hidden otherwise)
@@ -90,6 +117,11 @@ export default function BooksHomeTab(props) {
         else { setLate({ rows: [], total_late: 0, total_open: 0, denied: true, error: (j && j.error) || '' }); } // PG: degrade, don't hang
       }).catch(function () { setLate({ rows: [], total_late: 0, total_open: 0, denied: true }); });
   }
+  function loadForecastStrip() {
+    billsApi({ action: 'forecast' }).then(function (j) {
+      if (j && j.ok) { setFc(j); } else { setFc({ denied: true }); }
+    }).catch(function () { setFc({ denied: true }); });
+  }
   function loadDrift() {
     billsApi({ action: 'drift_status' }).then(function (j) {
       if (j && j.ok && j.available && j.drift && Number(j.drift.count) > 0) { setDrift(j.drift); }
@@ -106,7 +138,8 @@ export default function BooksHomeTab(props) {
         else { toast.error((j && j.error) || 'Could not send.'); }
       });
   }
-  useEffect(function () { loadCashflow(from, to); loadQueues(); loadProposals(); loadLate(); loadDrift(); }, []); // eslint-disable-line
+  useEffect(function () { loadCashflow(from, to); loadQueues(); loadCatalog(); loadProposals(); loadLate(); loadDrift(); loadForecastStrip(); }, []);
+  useEffect(function () { prefillSuggestions(outQueue, hubRules); }, [outQueue, hubRules]); // eslint-disable-line // eslint-disable-line
 
   function applyPeriod(f, t, label) { setFrom(f); setTo(t); setPreset(label); loadCashflow(f, t); }
 
@@ -173,6 +206,44 @@ export default function BooksHomeTab(props) {
       </div>}
     </div>
 
+    {/* ── Aging forecast strip (Max: the dashboard should show late 1-30/31-60/61-90/90+ and upcoming, in AND out, with shortage forecasting) ── */}
+    {fc && !fc.denied && fc.buckets && <div className="bg-white rounded-xl border border-slate-200 p-3">
+      <div className="flex gap-2 items-center mb-2">
+        <div className="text-xs font-extrabold text-slate-900">📈 Late & upcoming — in vs out</div>
+        <div className="flex-1" />
+        {(function () {
+          var order = fc.bucket_order || []; var firstShort = null;
+          order.forEach(function (b) { if (firstShort === null && fc.buckets[b] && fc.buckets[b].running < -0.005) { firstShort = b; } });
+          var L = { 'L90+': '90+ late', 'L61-90': '61–90 late', 'L31-60': '31–60 late', 'L1-30': '1–30 late', 'D0-30': 'due ≤30d', 'D31-60': 'due 31–60', 'D61-90': 'due 61–90', 'D90+': 'due 90+' };
+          return firstShort
+            ? <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>⚠ projected shortage from "{L[firstShort] || firstShort}" window</span>
+            : <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#d1fae5', color: '#065f46' }}>bills covered by expected collections ✓</span>;
+        })()}
+        <button onClick={function () { onGo('forecast'); }} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>full forecast →</button>
+      </div>
+      <div className="overflow-x-auto"><table className="w-full text-[11px]" style={{ minWidth: 700 }}>
+        <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+          <th className="py-1 pr-2 text-left font-semibold">&nbsp;</th>
+          {(fc.bucket_order || []).map(function (b) {
+            var L = { 'L90+': '⚠90+ late', 'L61-90': '⚠61–90', 'L31-60': '⚠31–60', 'L1-30': '⚠1–30', 'D0-30': 'due ≤30', 'D31-60': '31–60', 'D61-90': '61–90', 'D90+': '90+' };
+            return <th key={b} className="py-1 px-1 text-right font-semibold" style={String(b).charAt(0) === 'L' ? { color: '#7f1d1d' } : {}}>{L[b] || b}</th>;
+          })}
+        </tr></thead>
+        <tbody style={{ color: '#0f172a' }}>
+          <tr><td className="py-1 pr-2 font-bold" style={{ color: '#065f46' }}>In</td>
+            {(fc.bucket_order || []).map(function (b) { return <td key={b} className="py-1 px-1 text-right tabular-nums">${fmt(fc.buckets[b].ar)}</td>; })}</tr>
+          <tr><td className="py-1 pr-2 font-bold" style={{ color: '#7f1d1d' }}>Out</td>
+            {(fc.bucket_order || []).map(function (b) { return <td key={b} className="py-1 px-1 text-right tabular-nums">${fmt(fc.buckets[b].ap)}</td>; })}</tr>
+          <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position</td>
+            {(fc.bucket_order || []).map(function (b) {
+              var pos = fc.buckets[b].running >= 0;
+              return <td key={b} className="py-1 px-1 text-right font-extrabold tabular-nums" style={{ color: pos ? '#065f46' : '#7f1d1d', background: pos ? '#f0fdf4' : '#fff1f2' }}>{(pos ? '+' : '−') + '$' + fmt(Math.abs(fc.buckets[b].running))}</td>;
+            })}</tr>
+        </tbody>
+      </table></div>
+      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Position = running money in − money out across the windows: where it turns red is where cash runs short if nothing changes. Click "full forecast" for the rows behind every number.</div>
+    </div>}
+
     {/* ── Work queues ── */}
     <div className="grid md:grid-cols-2 gap-3">
       <div className="bg-white rounded-xl border border-slate-200 p-3">
@@ -192,7 +263,7 @@ export default function BooksHomeTab(props) {
               <span className="text-[11px] font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(t.amount_abs)}</span>
               <select className="px-1 py-0.5 rounded border border-slate-300 text-[10px] text-slate-900 bg-white" value={clsDraft[t.id] || ''} onChange={function (e) { var d = {}; d[t.id] = e.target.value; setClsDraft(Object.assign({}, clsDraft, d)); }}>
                 <option value="">category…</option>
-                {CLASSIFICATIONS.map(function (c) { return <option key={c} value={c}>{c}</option>; })}
+                {(dynCats || CLASSIFICATIONS.map(function (c) { return { key: c, label: c }; })).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
               </select>
               <button onClick={function () { classify(t, clsDraft[t.id]); }} disabled={busy || !clsDraft[t.id]} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !clsDraft[t.id]) ? 0.5 : 1 }}>✓</button>
             </div>;

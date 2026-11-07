@@ -9,6 +9,7 @@
 // Permission is enforced in code (assertPermission). SWC-safe: var + string concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { learnRule } from '../../../../lib/expense-rules-server'; // v55.83-PI — remember human picks
 import { assertPermission } from '../../../../lib/server-permissions';
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
 import { classifyApplication, roundMoney, isPaymentVoid, bankAllocationStatus, summarizeBankAllocation } from '../../../../lib/payment-matching';
@@ -422,7 +423,15 @@ export async function POST(req) {
       var cRes = await db.from('bank_transactions').update(cPatch).eq('id', body.bank_transaction_id).select();
       if (cRes && cRes.error) { return NextResponse.json({ ok: false, error: cRes.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!(cRes && cRes.data && cRes.data.length)) { return NextResponse.json({ ok: false, error: 'No row updated (transaction not found).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
-      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, api_build_marker: API_BUILD_MARKER });
+      // v55.83-PI (Max): "automatically remember previous selections for the
+      // future... rules automatically saved and updated if i manually change
+      // something." Every human categorization of an EXPENSE upserts a learned
+      // rule keyed on the merchant. Fail-soft: learning never blocks the save.
+      var learn = null;
+      if (cPatch.classification && cRes.data[0] && cRes.data[0].direction === 'out') {
+        learn = await learnRule(db, (cRes.data[0].merchant_name || '') + ' ' + (cRes.data[0].name || ''), cPatch.classification, by);
+      }
+      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── match_invoice: link a deposit to an invoice (the core workflow) ──

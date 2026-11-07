@@ -34,34 +34,38 @@ var forecastBuckets = mod.exports.forecastBuckets;
 var tagRows = mod.exports.tagRows;
 
 var T = '2026-11-06';
-ok('1a: boundaries exact — today=0-30, +30=0-30, +31=31-60, +60=31-60, +61=61-90, +90=61-90, +91=90+',
-  bucketOf('2026-11-06', T) === '0-30' && bucketOf('2026-12-06', T) === '0-30' &&
-  bucketOf('2026-12-07', T) === '31-60' && bucketOf('2027-01-05', T) === '31-60' &&
-  bucketOf('2027-01-06', T) === '61-90' && bucketOf('2027-02-04', T) === '61-90' &&
-  bucketOf('2027-02-05', T) === '90+');
-ok('1b: past due = OVERDUE, and a missing date is treated as due NOW, never future cash',
-  bucketOf('2026-11-05', T) === 'OVERDUE' && bucketOf('2021-02-02', T) === 'OVERDUE' && bucketOf(null, T) === 'OVERDUE');
+// (PH superseded the single OVERDUE bucket: Max asked for LATE aged 1-30 /
+// 31-60 / 61-90 / 90+ plus the due-ahead windows — "late 1-30 days. 30-60.
+// 60-90. 90+. same with bills." New truth pinned here.)
+ok('1a (PH): due-ahead boundaries exact — today=D0-30, +30=D0-30, +31=D31-60, +61=D61-90, +91=D90+',
+  bucketOf('2026-11-06', T) === 'D0-30' && bucketOf('2026-12-06', T) === 'D0-30' &&
+  bucketOf('2026-12-07', T) === 'D31-60' && bucketOf('2027-01-06', T) === 'D61-90' &&
+  bucketOf('2027-02-05', T) === 'D90+');
+ok('1b (PH): LATE aged by days past due — 1d=L1-30, 31d=L31-60, 61d=L61-90, 91d/ancient/dateless=L90+',
+  bucketOf('2026-11-05', T) === 'L1-30' && bucketOf('2026-10-06', T) === 'L31-60' &&
+  bucketOf('2026-09-06', T) === 'L61-90' && bucketOf('2026-08-06', T) === 'L90+' &&
+  bucketOf('2021-02-02', T) === 'L90+' && bucketOf(null, T) === 'L90+');
 
 var invs = [
-  { open_balance: 1000, due_date: '2026-11-20' },                    // 0-30
-  { open_balance: 500, due_date: null, invoice_date: '2026-12-20' }, // falls back → 31-60
-  { open_balance: 300, due_date: '2021-06-14' },                     // ancient → OVERDUE
+  { open_balance: 1000, due_date: '2026-11-20' },                    // D0-30
+  { open_balance: 500, due_date: null, invoice_date: '2026-12-20' }, // falls back → D31-60
+  { open_balance: 300, due_date: '2021-06-14' },                     // ancient → L90+
   { open_balance: 0, due_date: '2026-11-20' },                       // nothing open → excluded
 ];
 var bills = [
-  { open: 700, due_date: '2026-11-10', bill_date: '2026-11-01' },    // 0-30
-  { open: 400, due_date: '2026-10-28', bill_date: '2026-10-01' },    // OVERDUE
+  { open: 700, due_date: '2026-11-10', bill_date: '2026-11-01' },    // D0-30
+  { open: 400, due_date: '2026-10-28', bill_date: '2026-10-01' },    // L1-30
 ];
 var B = forecastBuckets(invs, bills, T);
-ok('1c: buckets sum correctly (0-30: ar 1000 / ap 700 / net +300; OVERDUE: ar 300 / ap 400 / net −100)',
-  B['0-30'].ar === 1000 && B['0-30'].ap === 700 && B['0-30'].net === 300 &&
-  B.OVERDUE.ar === 300 && B.OVERDUE.ap === 400 && B.OVERDUE.net === -100);
-ok('1d: running position is cumulative in bucket order ("are we plus or minus paying our bills")',
-  B.OVERDUE.running === -100 && B['0-30'].running === 200 && B['31-60'].running === 700 && B['90+'].running === 700);
+ok('1c (PH): buckets sum correctly (D0-30: ar 1000/ap 700/net +300; L90+: ar 300; L1-30: ap 400)',
+  B['D0-30'].ar === 1000 && B['D0-30'].ap === 700 && B['D0-30'].net === 300 &&
+  B['L90+'].ar === 300 && B['L1-30'].ap === 400 && B['L1-30'].net === -400);
+ok('1d (PH): running position cumulative, oldest-late first ("are we plus or minus paying our bills")',
+  B['L90+'].running === 300 && B['L1-30'].running === -100 && B['D0-30'].running === 200 && B['D90+'].running === 700);
 var rows = tagRows(invs, bills, T);
-var sum030in = 0; rows.forEach(function (r) { if (r.bucket === '0-30' && r.kind === 'in') { sum030in += r.amount; } });
-ok('1e: drill rows sum EXACTLY to their card (0-30 coming-in rows = 1000) and name their source',
-  sum030in === B['0-30'].ar && rows.every(function (r) { return /Invoice|Bill/.test(r.source); }));
+var sumD30in = 0; rows.forEach(function (r) { if (r.bucket === 'D0-30' && r.kind === 'in') { sumD30in += r.amount; } });
+ok('1e: drill rows sum EXACTLY to their card (D0-30 coming-in rows = 1000) and name their source',
+  sumD30in === B['D0-30'].ar && rows.every(function (r) { return /Invoice|Bill/.test(r.source); }));
 
 // ── 2. Forecast wiring
 var br = R('src/app/api/accounting/bills/route.js');
@@ -72,9 +76,9 @@ var at = R('src/components/AccountingTab.jsx');
 ok('2b: 📈 Forecast tab wired behind bills/AR permissions',
   at.indexOf("['forecast', '📈 Forecast']") >= 0 && /sub === 'forecast' && <div className="p-3"><CashForecastTab/.test(at));
 var ft = R('src/components/CashForecastTab.jsx');
-ok('2c: cards are clickable, drill has a Σ footer, OVERDUE is its own honest column, CSV export exists',
+ok('2c (PH): cards clickable, Σ footer, LATE columns aged and marked ⚠, CSV export exists',
   /setDrill\(\{ bucket: b, kind: 'in' \}\)/.test(ft) && /equals the card to the cent/.test(ft) &&
-  /'OVERDUE': '⚠ Already due'/.test(ft) && /CSV for the accountant/.test(ft));
+  /'L1-30': '⚠ 1–30 late'/.test(ft) && /CSV for the accountant/.test(ft));
 ok('2d: unflagged work surfaced with deep links ("expenses that have not been flagged yet")',
   /expense\(s\) uncategorized/.test(ft) && /deposit\(s\) unmatched/.test(ft) && /onGo\('review'\)/.test(ft));
 

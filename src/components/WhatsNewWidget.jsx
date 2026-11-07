@@ -33,6 +33,35 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PJ',
+    date: '2026-11-06',
+    label: '\ud83d\udcb8 Bill categories: dropdown + remembered per vendor',
+    items: [
+      'Bills now use the SAME category list as expenses: pick from a dropdown, or hit \uff0b to add a new category right there. When you import a bill, the vendor\u2019s remembered category is pre-filled automatically (clearly marked \u2014 you still confirm every field), and every category you pick is remembered for that vendor\u2019s next bill.',
+      { superAdminOnly: true, text: 'v55.83-PJ \u2014 NO new SQL (uses PI tables). suggestCategory in expense-rules-server (active us_expense_rules, bestRule, null never guessed); bills route: save_bill create auto-fills missing category from vendor rule (reported auto_category) and learns explicit picks on create+edit via learnRule (auto-filled picks NOT re-learned \u2014 no self-reinforcement); extract_bill returns suggested_category only when the document names none. expense-rules route: bills.manage unlocks list+save_category only. BillsTab: dropdown w/ free-text fallback until PI SQL, inline add (selects new key on the open bill), legacy category values still shown, table shows labels. Test pj (10).' },
+    ],
+  },
+  {
+    version: 'v55.83-PI',
+    date: '2026-11-06',
+    label: '\ud83c\udff7 Your own expense categories + rules that learn + Verified',
+    items: [
+      'New \ud83c\udff7 Categories & Rules tab under Accounting: create your OWN expense categories (they appear in every dropdown), build \u201ccontains X \u2192 category Y\u201d rules, and watch the rules the system LEARNED \u2014 every time you categorize an expense it remembers the pick for that merchant, and if you change your mind the rule updates itself. Rules run automatically every 15 minutes and only ever fill in UNCATEGORIZED expenses \u2014 they never overwrite a person.',
+      'Verified: a human stamp on an expense\u2019s category (To verify / \u2713 Verified / All). Verifying confirms the category and lets it flow into ClickBooks \u2014 it NEVER removes the expense from any total.',
+      { superAdminOnly: true, text: 'v55.83-PI \u2014 ONE SQL: sql/v55-83-PI-expense-categories-rules.sql (expense_categories seeded with the 11 built-ins, us_expense_rules (renamed: legacy public.expense_rules is the old Egypt categorize table, untouched) unique on lower(match_text), category_verified+by/at on bank_transactions, open-RLS email-auth pattern, no DELETE policy). learnRule hooked into bank-write classify (out-direction only, fail-soft, manual rules never retargeted, needs_clarification never learned); applyExpenseRules runs in the shadow-job tick (blanks only, re-checked update, category_source=rule, never reviews/verifies); /api/accounting/expense-rules gated bank.classify; verify advances unreviewed\u2192reviewed for out+unmatched only (JG deposit gate untouched); Books home dropdown dynamic with rule-suggestion prefill. Test pi (24) incl. a sweep asserting category_verified appears in ZERO money-math files.' },
+    ],
+  },
+  {
+    version: 'v55.83-PH',
+    date: '2026-11-06',
+    label: '\ud83d\udcc9 Stats: invoices & bills from June 1, month by month',
+    items: [
+      'New \ud83d\udcc9 Stats tab under Accounting, defaulting to June 1, 2026 \u2192 today: what we invoiced and collected, what bills we entered and paid, what\u2019s still open from the period \u2014 and a month-by-month table with net cash (collected \u2212 bills paid). Click ANY card to see the exact invoices, payments or bills behind the number, summed to the cent. Change the dates for any period. CSV included.',
+      'The \ud83d\udcc8 Forecast now ages LATE money properly: late 1\u201330, 31\u201360, 61\u201390 and 90+ days get their own \u26a0 columns (invoices AND bills), alongside the due-ahead 30/60/90 windows \u2014 and the \ud83c\udfe6 Books home dashboard carries a live "Late & upcoming \u2014 in vs out" strip with the running position and a projected-shortage flag naming the window where money runs short.',
+      { superAdminOnly: true, text: 'v55.83-PH \u2014 NO SQL. period_stats action on bills route (bills.view/manage or ar.view_invoice_balances): invoices by invoice_date with canonical isArEligible+businessOfInvoice US/USD scope, collected by payment_date (payments on older invoices count in their month), bills by bill_date, bill payments by paid_date, disputed open reported separately; monthly rollup server-side. PeriodStatsTab with Jun-1 reset, CSV, graceful permission denial.' },
+    ],
+  },
+  {
     version: 'v55.83-PG',
     date: '2026-11-06',
     label: 'QA pass: no stuck spinners for staff',

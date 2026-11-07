@@ -9,7 +9,7 @@
 import React, { useState, useEffect } from 'react';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-var LABELS = { 'OVERDUE': '⚠ Already due', '0-30': 'Next 30 days', '31-60': '30–60 days', '61-90': '60–90 days', '90+': '90+ days out' };
+var LABELS = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
 
 export default function CashForecastTab(props) {
   var userProfile = props.userProfile;
@@ -76,7 +76,7 @@ export default function CashForecastTab(props) {
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-2 pr-2 text-left font-semibold">&nbsp;</th>
             {order.map(function (b) {
-              return <th key={b} className="py-2 px-2 text-right font-semibold" style={b === 'OVERDUE' ? { color: '#7f1d1d' } : {}}>{LABELS[b] || b}</th>;
+              return <th key={b} className="py-2 px-2 text-right font-semibold" style={String(b).charAt(0) === 'L' ? { color: '#7f1d1d' } : {}}>{LABELS[b] || b}</th>;
             })}
           </tr></thead>
           <tbody style={{ color: '#0f172a' }}>
@@ -122,7 +122,7 @@ export default function CashForecastTab(props) {
         </table>
       </div>
       <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>
-        Dates come from each invoice's/bill's due date (falling back to its document date). "⚠ Already due" is money past its date — honest overdue, not future cash. Click any green/red card for the exact rows behind it.
+        Dates come from each invoice's/bill's due date (falling back to its document date). ⚠ columns are money already LATE, aged by how long — never dressed up as future cash. Click any green/red card for the exact rows behind it.
       </div>
     </div>
 

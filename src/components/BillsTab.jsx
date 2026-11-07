@@ -32,6 +32,9 @@ export default function BillsTab(props) {
   var s12 = useState(null); var disputing = s12[0]; var setDisputing = s12[1];   // {bill, reason, follow_up_date}
   var s13 = useState(null); var dueThru = s13[0]; var setDueThru = s13[1];       // result of due_through
   var s14 = useState(''); var thruDate = s14[0]; var setThruDate = s14[1];
+  var s15 = useState(null); var cats = s15[0]; var setCats = s15[1];           // v55.83-PJ — shared category list (null = not loaded, free text fallback)
+  var s16 = useState(''); var newCatB = s16[0]; var setNewCatB = s16[1];       // v55.83-PJ — inline add-category
+  var s17 = useState(false); var addingCat = s17[0]; var setAddingCat = s17[1];
   var fileInputRef = React.useRef(null);
 
   function api(payload) {
@@ -45,7 +48,28 @@ export default function BillsTab(props) {
       if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load bills.'); }
     }).finally(function () { setBusy(false); });
   }
-  useEffect(function () { if (canView) { load(); } }, []); // eslint-disable-line
+  useEffect(function () { if (canView) { load(); loadCats(); } }, []); // eslint-disable-line
+  function loadCats() {
+    // v55.83-PJ (Max): "categories for bills should be a dropdown to select
+    // with an ability to add a category". Shared list with expenses. Fail-soft:
+    // if the PI SQL hasn't run, the old free-text box keeps working.
+    supabase.from('expense_categories').select('key, label, active, sort').eq('active', true).order('sort')
+      .then(function (r) { if (!r.error && r.data && r.data.length) { setCats(r.data); } })
+      .catch(function () {});
+  }
+  function addCatB() {
+    var label = newCatB.trim();
+    if (label.length < 2) { return; }
+    setBusy(true);
+    fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save_category', payload: { label: label }, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok) {
+          toast.success('Category "' + label + '" added.'); setNewCatB(''); setAddingCat(false); loadCats();
+          if (j.category && j.category.key) { setEditing(function (ed) { return ed ? Object.assign({}, ed, { category: j.category.key }) : ed; }); }
+        } else { toast.error((j && j.error) || 'Could not add the category.'); }
+      }).finally(function () { setBusy(false); });
+  }
 
   // settled OUT bank transactions of the US business, newest first, for the pay picker
   function loadOutTxns() {
@@ -72,11 +96,13 @@ export default function BillsTab(props) {
       api({ action: 'extract_bill', file_base64: b64, media_type: f.type }).then(function (j) {
         if (j && j.ok && j.draft) {
           setImportFile({ file: f, base64: b64, media_type: f.type });
-          setImportNotes(j.problems || []);
+          var notes2 = (j.problems || []).slice();
+          if (!j.draft.category && j.suggested_category) { notes2.push('🧠 Category pre-filled from what you picked for this vendor before — change it if wrong.'); }
+          setImportNotes(notes2);
           setEditing({
             vendor_name: j.draft.vendor_name || '', bill_number: j.draft.bill_number || '',
             bill_date: j.draft.bill_date || TODAY, due_date: j.draft.due_date || '',
-            total_amount: j.draft.total_amount || '', category: j.draft.category || '',
+            total_amount: j.draft.total_amount || '', category: j.draft.category || j.suggested_category || '',
             notes: j.draft.notes || '', _imported: true,
           });
           toast.success('Bill read — check every field, then Save.');
@@ -91,6 +117,7 @@ export default function BillsTab(props) {
       Bills need the <b>Bills: View</b> permission — ask an admin to grant it in Settings → Permissions.</div>;
   }
 
+  var catLabelOf = {}; (cats || []).forEach(function (c) { catLabelOf[c.key] = c.label; }); // v55.83-PJ
   var bills = (data && data.bills) || [];
   var payments = (data && data.payments) || [];
   var totals = (data && data.totals) || { open: 0, overdue: 0, open_count: 0 };
@@ -267,7 +294,20 @@ export default function BillsTab(props) {
         <input className={inp} type="number" step="0.01" style={{ width: 120 }} placeholder="Amount *" value={editing.total_amount || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { total_amount: e.target.value })); }} />
         <label className="text-[10px] font-bold text-slate-600">Bill date<input className={inp + ' ml-1'} type="date" value={editing.bill_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { bill_date: e.target.value })); }} /></label>
         <label className="text-[10px] font-bold text-slate-600">Due<input className={inp + ' ml-1'} type="date" value={editing.due_date || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { due_date: e.target.value })); }} /></label>
-        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />
+        {cats ? <span className="inline-flex items-center gap-1">
+          <select className={inp} style={{ width: 170 }} value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }}>
+            <option value="">category…</option>
+            {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+            {editing.category && !cats.some(function (c) { return c.key === editing.category; }) && <option value={editing.category}>{editing.category}</option>}
+          </select>
+          {!addingCat && <button onClick={function () { setAddingCat(true); }} title="Add a new category" className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>＋</button>}
+          {addingCat && <span className="inline-flex items-center gap-1">
+            <input className={inp} style={{ width: 130 }} placeholder="new category…" value={newCatB} onChange={function (e) { setNewCatB(e.target.value); }} />
+            <button onClick={addCatB} disabled={busy || newCatB.trim().length < 2} className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || newCatB.trim().length < 2) ? 0.5 : 1 }}>add</button>
+            <button onClick={function () { setAddingCat(false); setNewCatB(''); }} className="px-1.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button>
+          </span>}
+        </span> :
+        <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />}
         <input className={inp} style={{ width: 220 }} placeholder="Notes" value={editing.notes || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { notes: e.target.value })); }} />
         <button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setEditing(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
@@ -311,7 +351,7 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.total_amount)}</td>
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
-                <td className="py-1.5 pr-2">{b.category || '—'}</td>
+                <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}</td>
                 <td className="py-1.5 pr-2">{chip(b.status)}{b.attachment_path && <button className="ml-1" title="View the imported bill file (private link, 1 hour)" onClick={function () { openDoc(b.attachment_path); }}>📎</button>}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}</td>
                 <td className="py-1.5 whitespace-nowrap">

@@ -21,6 +21,8 @@ import PurchaseOrdersTab from './PurchaseOrdersTab';
 import BooksHomeTab from './BooksHomeTab';
 import BillsTab from './BillsTab';
 import CashForecastTab from './CashForecastTab';
+import PeriodStatsTab from './PeriodStatsTab';
+import ExpenseRulesTab from './ExpenseRulesTab'; // v55.83-PI
 import ClickBooksUSCore from './ClickBooksUSCore';
 import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
 import ClickBooksUSReports from './ClickBooksUSReports';
@@ -46,6 +48,8 @@ export default function AccountingTab(props) {
     ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
     ['bills', '💸 Bills'], // v55.83-PB — vendor bills (AP): what we owe, pay from the bank feed
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
+    ['period_stats', '📉 Stats'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
+    ['categories', '🏷 Categories & Rules'], // v55.83-PI — own categories, learned rules, verified stamp
     ['clickbooks_reports', '📊 Financial Reports'], // v55.83-PB — P&L / balance sheet / GL from the real ledger
     ['clickbooks_admin', '⚙️ ClickBooks Admin'], // v55.83-PB — foundation/rules/migration/cutover, tucked away
     ['company', '🏢 Company Profile'],
@@ -80,7 +84,7 @@ export default function AccountingTab(props) {
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
-        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true); }).map(function (t) {
+        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true); }).map(function (t) {
           return (
             <button key={t[0]} onClick={function () { setSub(t[0]); }}
               className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
@@ -89,13 +93,15 @@ export default function AccountingTab(props) {
           );
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
       {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
       {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}
+      {sub === 'period_stats' && <div className="p-3"><PeriodStatsTab {...props} /></div>}
+      {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'company' && <CompanyProfileTab {...props} />}

@@ -3,21 +3,32 @@
 // shortages that we're expecting... are we in the plus or minus paying our
 // bills... by clicking in those cards we should see the underlying numbers".
 //
-// HONESTY RULE: an invoice already past its due date is NOT "coming in the
-// next 30 days" — it gets its own OVERDUE bucket so old AR can't dress up as
-// near-term cash. Date basis: due_date, falling back to invoice/bill date.
+// HONESTY RULE: money already past its due date is NOT "coming in the next
+// 30 days" — it gets its own LATE buckets, aged 1-30/31-60/61-90/90+ (Max,
+// Nov 6: "late 1-30 days. 30-60. 60-90. 90+. same with bills"), so old AR
+// can't dress up as near-term cash. Date basis: due_date, falling back to
+// invoice/bill date.
 // Pure functions; the launch test runs the real math.
 
-export var BUCKETS = ['OVERDUE', '0-30', '31-60', '61-90', '90+'];
+export var BUCKETS = ['L90+', 'L61-90', 'L31-60', 'L1-30', 'D0-30', 'D31-60', 'D61-90', 'D90+'];
+// L* = already LATE, bucketed by how many days past due (Max, Nov 6: "late
+// 1-30 days. 30-60. 60-90. 90+. same with bills"). D* = coming due ahead.
+// Reading order: oldest debt first, then the future.
 
 export function bucketOf(dueDate, today) {
-  if (!dueDate) { return 'OVERDUE'; } // no date = no promise = treat as due now, never as future cash
-  if (dueDate < today) { return 'OVERDUE'; }
+  if (!dueDate) { return 'L90+'; } // no date = no promise: oldest bucket, never future cash
   var days = Math.round((Date.parse(dueDate) - Date.parse(today)) / 86400000);
-  if (days <= 30) { return '0-30'; }
-  if (days <= 60) { return '31-60'; }
-  if (days <= 90) { return '61-90'; }
-  return '90+';
+  if (days < 0) {
+    var late = -days;
+    if (late <= 30) { return 'L1-30'; }
+    if (late <= 60) { return 'L31-60'; }
+    if (late <= 90) { return 'L61-90'; }
+    return 'L90+';
+  }
+  if (days <= 30) { return 'D0-30'; }
+  if (days <= 60) { return 'D31-60'; }
+  if (days <= 90) { return 'D61-90'; }
+  return 'D90+';
 }
 
 function r2(x) { return Math.round(x * 100) / 100; }

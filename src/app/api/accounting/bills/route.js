@@ -18,6 +18,7 @@ import { isPaymentVoid } from '../../../../lib/payment-matching';
 import { billOpenBalance, billStatus, cashflowSummary } from '../../../../lib/cashflow';
 import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64 } from '../../../../lib/bill-extract-server';
+import { learnRule, suggestCategory } from '../../../../lib/expense-rules-server'; // v55.83-PJ — bills remember vendor categories
 
 var API_BUILD_MARKER = 'v55.83-PB-bills';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -168,7 +169,17 @@ export async function POST(req) {
         if (amt + 0.005 < paidSoFar) { return NextResponse.json({ error: 'Amount cannot be below what is already paid (' + r2(paidSoFar).toFixed(2) + '). Void the payments first.' }, { status: 409 }); }
         var up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle();
         if (up.error) { throw new Error(up.error.message); }
-        return NextResponse.json({ ok: true, id: bl.id, updated: true });
+        var learnedU = null;
+        if (fields.category) { learnedU = await learnRule(db, vendor, fields.category, userId); } // v55.83-PJ — a changed pick updates the rule
+        return NextResponse.json({ ok: true, id: bl.id, updated: true, rule_learned: learnedU });
+      }
+      // v55.83-PJ (Max): "remember and categorize later on with new bills
+      // automatically when imported" — no category given? use the vendor's
+      // remembered one. Category given? remember it for next time. Fail-soft.
+      var autoCat = null;
+      if (!fields.category) {
+        autoCat = await suggestCategory(db, vendor);
+        if (autoCat) { fields.category = autoCat; }
       }
       fields.created_by = userId;
       var ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle();
@@ -180,7 +191,9 @@ export async function POST(req) {
         return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, warning: 'Saved WITHOUT the file link — run sql/v55-83-PC-bill-attachments.sql to store attachments.' });
       }
       if (ins.error) { throw new Error(ins.error.message); }
-      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true });
+      var learnedB = null;
+      if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
+      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, rule_learned: learnedB });
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)
@@ -378,7 +391,11 @@ export async function POST(req) {
     if (action === 'extract_bill') {
       var rd = await readBillFromBase64(String(body.file_base64 || ''), String(body.media_type || ''));
       if (rd.error) { return NextResponse.json({ error: rd.error }, { status: rd.status || 500 }); }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems });
+      // v55.83-PJ — the document rarely names a category; the vendor's
+      // REMEMBERED one is suggested (clearly marked, human still confirms).
+      var sugg = null;
+      if (rd.draft && rd.draft.vendor_name && !rd.draft.category) { sugg = await suggestCategory(db, rd.draft.vendor_name); }
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, suggested_category: sugg });
     }
 
     // ── match_reference (PF): the underlying hook for the future warehouse
@@ -427,6 +444,109 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, today: todayF,
         bucket_order: BUCKETS, buckets: buckets, rows: rows,
         unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } });
+    }
+
+    // ── period_stats (PH): "a tab from june 1st on for both invoices and
+    // bills to see stats" — one period, both sides, monthly breakdown.
+    if (action === 'period_stats') {
+      var pFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(body.from || '')) ? body.from : '2026-06-01';
+      var pTo = /^\d{4}-\d{2}-\d{2}$/.test(String(body.to || '')) ? body.to : new Date().toISOString().substring(0, 10);
+      function monthOf(d) { return String(d || '').substring(0, 7); }
+      function addM(map, m, key, amt) {
+        if (!m || m.length !== 7) { return; }
+        if (!map[m]) { map[m] = { month: m, invoiced: 0, invoiced_count: 0, collected: 0, collected_count: 0, billed: 0, billed_count: 0, bills_paid: 0, bills_paid_count: 0 }; }
+        map[m][key] = r2(map[m][key] + amt); map[m][key + '_count']++;
+      }
+      // Invoices side (US, canonical eligibility; all invoices in period, not just open)
+      var invsP = await fetchAll(function () {
+        return db.from('accounting_invoices')
+          .select('id, invoice_number, invoice_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
+          .order('created_at', { ascending: false });
+      });
+      var paysP = await fetchAll(function () {
+        return db.from('accounting_invoice_payments').select('id, accounting_invoice_id, amount, payment_date, voided, sync_status');
+      });
+      var custsP = await fetchAll(function () {
+        return db.from('accounting_customers').select('id, company_name, contact_name, business_tag');
+      });
+      var tagByIdP = {}; custsP.forEach(function (c) { tagByIdP[c.id] = c.business_tag || null; });
+      var nameByIdP = {}; custsP.forEach(function (c) { nameByIdP[c.id] = c.company_name || c.contact_name || ''; });
+      var usInv = {}; var paidByP = {};
+      invsP.forEach(function (inv) {
+        if (!isArEligible(inv)) { return; }
+        if (businessOfInvoice(inv, tagByIdP) !== 'US') { return; }
+        if ((inv.currency || 'USD') !== 'USD') { return; }
+        usInv[inv.id] = inv;
+      });
+      paysP.forEach(function (pp) {
+        if (isPaymentVoid(pp)) { return; }
+        if (!usInv[pp.accounting_invoice_id]) { return; }
+        paidByP[pp.accounting_invoice_id] = (paidByP[pp.accounting_invoice_id] || 0) + (Number(pp.amount) || 0);
+      });
+      var months = {};
+      var invoiced = 0, invCount = 0, stillOpen = 0;
+      var rowsInvoiced = []; var rowsOpenInv = []; var rowsCollected = [];
+      Object.keys(usInv).forEach(function (k) {
+        var inv = usInv[k];
+        if (!inv.invoice_date || inv.invoice_date < pFrom || inv.invoice_date > pTo) { return; }
+        var amt = r2(inv.total_amount);
+        invoiced = r2(invoiced + amt); invCount++;
+        addM(months, monthOf(inv.invoice_date), 'invoiced', amt);
+        var open = r2(amt - (Number(inv.wave_imported_paid) || 0) - (paidByP[inv.id] || 0));
+        rowsInvoiced.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, amount: amt, source: 'Invoice dated in period' });
+        if (open > 0.005) {
+          stillOpen = r2(stillOpen + open);
+          rowsOpenInv.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, amount: open, source: 'Unpaid balance of a period invoice' });
+        }
+      });
+      var collected = 0, colCount = 0;
+      paysP.forEach(function (pp) {
+        if (isPaymentVoid(pp)) { return; }
+        var srcInv = usInv[pp.accounting_invoice_id];
+        if (!srcInv) { return; }
+        if (!pp.payment_date || pp.payment_date < pFrom || pp.payment_date > pTo) { return; }
+        var amt2 = r2(pp.amount);
+        collected = r2(collected + amt2); colCount++;
+        addM(months, monthOf(pp.payment_date), 'collected', amt2);
+        rowsCollected.push({ ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, amount: amt2, source: 'Payment received in period' });
+      });
+      // Bills side
+      var LS = await loadBills(db);
+      var allB = decorate(LS.bills, LS.pays);
+      var billed = 0, billCount = 0, billsOpen = 0, billsDisputed = 0;
+      var rowsBilled = []; var rowsOpenBills = []; var rowsBillsPaid = [];
+      var billNameById = {}; allB.forEach(function (b) { billNameById[b.id] = b; });
+      allB.forEach(function (b) {
+        if (b.record_status !== 'active') { return; }
+        if (b.bill_date && b.bill_date >= pFrom && b.bill_date <= pTo) {
+          billed = r2(billed + (Number(b.total_amount) || 0)); billCount++;
+          addM(months, monthOf(b.bill_date), 'billed', r2(b.total_amount));
+          rowsBilled.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, amount: r2(b.total_amount), source: b.disputed === true ? 'Bill (DISPUTED)' : 'Bill entered in period' });
+          if (b.disputed === true) { billsDisputed = r2(billsDisputed + b.open); }
+          else if (b.open > 0.005) {
+            billsOpen = r2(billsOpen + b.open);
+            rowsOpenBills.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.due_date || b.bill_date, amount: b.open, source: 'Unpaid balance of a period bill' });
+          }
+        }
+      });
+      var billsPaid = 0, billsPaidCount = 0;
+      (LS.pays || []).forEach(function (bp) {
+        if (bp.voided === true) { return; }
+        if (!bp.paid_date || bp.paid_date < pFrom || bp.paid_date > pTo) { return; }
+        billsPaid = r2(billsPaid + (Number(bp.amount) || 0)); billsPaidCount++;
+        addM(months, monthOf(bp.paid_date), 'bills_paid', r2(bp.amount));
+        var pb = billNameById[bp.bill_id] || {};
+        rowsBillsPaid.push({ ref: pb.bill_number || '—', who: pb.vendor_name || '?', date: bp.paid_date, amount: r2(bp.amount), source: bp.bank_transaction_id ? 'Bill payment (bank-linked)' : 'Bill payment' });
+      });
+      var monthRows = Object.values(months).sort(function (a, b2) { return a.month.localeCompare(b2.month); });
+      monthRows.forEach(function (m) { m.net = r2(m.collected - m.bills_paid); });
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: pFrom, to: pTo,
+        invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, still_open_from_period: stillOpen },
+        bills: { billed: billed, count: billCount, paid: billsPaid, paid_count: billsPaidCount, still_open_from_period: billsOpen, disputed_open: billsDisputed },
+        months: monthRows,
+        // drill rows: every card's exact underlying records ("show where these numbers came from")
+        drills: { invoiced: rowsInvoiced, collected: rowsCollected, open_invoices: rowsOpenInv,
+                  billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } });
     }
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });
