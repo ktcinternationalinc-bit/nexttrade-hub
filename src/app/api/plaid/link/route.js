@@ -9,7 +9,12 @@ const PLAID_BASE = {
 
 export async function POST(req) {
   try {
-    const access = await authorizePlaidOperation(req, 'categories.apply', false);
+    // v55.83-QB (Max): bank connections are their own permission; super admins
+    // always pass (env-verified inside the authorizer). Legacy grants keep
+    // working so nobody is locked out by the new key.
+    let access;
+    try { access = await authorizePlaidOperation(req, 'bank.connections', false); }
+    catch (eQB) { access = await authorizePlaidOperation(req, 'categories.apply', false); }
     await readBankJson(req);
     const env = process.env.PLAID_ENV || 'sandbox';
     const base = PLAID_BASE[env] || PLAID_BASE.sandbox;

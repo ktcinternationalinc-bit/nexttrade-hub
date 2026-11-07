@@ -37,6 +37,9 @@ export default function AllTransactionsTab(props) {
   var s13 = useState([]); var cats = s13[0]; var setCats = s13[1];
   var s14 = useState(null); var mPanel = s14[0]; var setMPanel = s14[1]; // v55.83-PW inline matching {txn, candidates}
   var s15 = useState({}); var mAmt = s15[0]; var setMAmt = s15[1];       // per-candidate apply amount
+  var s16 = useState({}); var expanded = s16[0]; var setExpanded = s16[1]; // v55.83-PZ — click a description to see ALL of it
+  var s17 = useState(null); var tPanel = s17[0]; var setTPanel = s17[1];   // v55.83-PZ (Max 11:24) — transfer pairing {txn, candidates}
+  var s18 = useState(null); var rtmPanel = s18[0]; var setRtmPanel = s18[1]; // v55.83-QB (Max 11:38) — RTM third-party payment {txn, bills, amt}
 
   function api(action, payload) {
     return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -98,7 +101,11 @@ export default function AllTransactionsTab(props) {
     if (!bulkCat || selIds.length === 0) { return; }
     setBusy(true);
     api('bulk_classify', { ids: selIds, classification: bulkCat }).then(function (j) {
-      if (j && j.ok) { toast.success('Category applied to ' + j.updated + ' transaction(s); ' + (j.rules_learned || 0) + ' rule(s) learned.'); load(); }
+      if (j && j.ok) {
+        if (bulkCat === 'transfer') { toast.success('Marked ' + j.updated + ' as TRANSFERS — they never count as income or spending in any report; click ↔ on a row to pair its other leg.'); }
+        else { toast.success('Category applied to ' + j.updated + ' transaction(s); ' + (j.rules_learned || 0) + ' rule(s) learned' + (j.wave_updated ? '; Wave category set on ' + j.wave_updated + ' (queued to sync)' : '; no compatible Wave account — Wave left empty') + '.'); }
+        load();
+      }
       else { toast.error((j && j.error) || 'Bulk update failed.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -140,6 +147,118 @@ export default function AllTransactionsTab(props) {
     }).then(function (r) { return r.json(); }).then(function (j) {
       if (j && (j.ok || j.success)) { toast.success('Matched $' + fmt(amt) + ' to ' + cand.ref + ' ✓ (flows to Wave + ClickBooks automatically)'); setMPanel(null); load(); }
       else { toast.error((j && j.error) || 'Match failed.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  // v55.83-PZ (Max, Nov 7 11:24): "when matching or categorization we can
+  // select transfer and that clickbooks will give options to other transfers
+  // that match from other accounts and will not count as income etc in tax
+  // reporting or pnl". Same engine as the 🏷 tab: transfer_candidates finds
+  // the opposite leg (same cents, other account, ±7 days); pair_transfer
+  // writes ONE group — and anything classified 'transfer' (paired or not) is
+  // already excluded from income, spending, tax reports and the P&L.
+  function openTransfer(t) {
+    setBusy(true);
+    api('transfer_candidates', { bank_transaction_id: t.id }).then(function (j) {
+      if (j && j.ok) { setTPanel({ txn: j.txn, candidates: j.candidates || [] }); }
+      else { toast.error((j && j.error) || 'Could not look for the other leg.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function doPair(a2, b2) {
+    setBusy(true);
+    api('pair_transfer', { a: a2, b: b2 }).then(function (j) {
+      if (j && j.ok) { toast.success('Paired ↔ both legs are ONE transfer — never income, never spending; excluded from tax reports and the P&L.'); setTPanel(null); load(); }
+      else { toast.error((j && j.error) || 'Could not pair.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  // v55.83-QA (Max, Nov 7 11:32 screenshot): "we need to be able to enter
+  // categories ... from here" — the Category column is now a dropdown on
+  // every row. One pick = the SAME engine as bulk: whitelisted category,
+  // rule learned, Wave ride-along; picking Transfer offers the other leg.
+  function setCatOne(t, key) {
+    if (!key) { return; }
+    setBusy(true);
+    api('bulk_classify', { ids: [t.id], classification: key }).then(function (j) {
+      if (j && j.ok) {
+        if (key === 'transfer') { toast.success('Marked as a TRANSFER — never income, never spending in any report.'); openTransfer(t); }
+        else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + '.'); }
+        load();
+      } else { toast.error((j && j.error) || 'Could not save the category.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  // v55.83-QA (Max 11:32): "...and also attach it to a bill from here" — even
+  // when the bill was never entered: ➕ creates the bill FROM the transaction
+  // (vendor, date, amount — vendor's remembered category fills in server-side)
+  // and immediately records this transaction as its payment. Two guarded
+  // writes, same paths as the Bills tab (save_bill + record_payment).
+  function createBillFromTxn() {
+    var t = mPanel.txn;
+    var vend = String(t.merchant_name || t.name || '').trim();
+    if (!vend) { toast.error('This transaction has no merchant name — add the bill in the Bills tab instead.'); return; }
+    setBusy(true);
+    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save_bill', user_id: userProfile && userProfile.id,
+        bill: { vendor_name: vend, bill_date: t.posted_date || t.date, total_amount: t.amount_abs,
+          category: t.classification || '', notes: 'Created from bank transaction dated ' + (t.posted_date || t.date) + ' in All Transactions.' } }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.id) { throw new Error((j && j.error) || 'Could not create the bill.'); }
+        return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'record_payment', bill_id: j.id, amount: t.amount_abs,
+            paid_date: t.posted_date || t.date, bank_transaction_id: t.id, user_id: userProfile && userProfile.id }) })
+          .then(function (r2) { return r2.json(); })
+          .then(function (j2) {
+            if (j2 && j2.error) { toast.success('Bill created for ' + vend + ' — but the payment link failed: ' + j2.error); }
+            else { toast.success('Bill created for ' + vend + ' ($' + fmt(t.amount_abs) + ') and PAID by this transaction ✓'); }
+            setMPanel(null); load();
+          });
+      })
+      .catch(function (e) { toast.error((e && e.message) || 'Could not create the bill.'); })
+      .finally(function () { setBusy(false); });
+  }
+  // v55.83-QB (Max, Nov 7 11:38): "when we select RTM for a transfer...
+  // it asks for what bills it's paid. Then we can select those bills and
+  // match those bills to that payment." The per-bill MONEY writes reuse
+  // record_payment (method 'rtm') — same guards as every bill payment —
+  // and rtm_flag only stamps the transaction. Tax reports keep ONE
+  // professional-fee line; the Stats radio shows the real categories.
+  function billsApi(payload) {
+    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
+      .then(function (r) { return r.json(); });
+  }
+  function openRtm(t) {
+    setBusy(true);
+    billsApi({ action: 'rtm_open_bills' }).then(function (j) {
+      if (j && j.ok) { setRtmPanel({ txn: t, bills: j.bills || [], amt: {} }); }
+      else { toast.error((j && j.error) || 'Could not load the via-RTM bills.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function saveRtm() {
+    var t = rtmPanel.txn;
+    var picks = [];
+    (rtmPanel.bills || []).forEach(function (b) { var a = Number(rtmPanel.amt[b.id]); if (a > 0) { picks.push({ bill: b, amount: Math.round(a * 100) / 100 }); } });
+    var sum = 0; picks.forEach(function (p) { sum += p.amount; });
+    if (sum > t.amount + 0.005) { toast.error('Selected bills ($' + fmt(sum) + ') exceed this payment ($' + fmt(t.amount) + ') — RTM cannot cover more than you sent.'); return; }
+    setBusy(true);
+    var chain = Promise.resolve({ okAll: true, done: 0 });
+    picks.forEach(function (p) {
+      chain = chain.then(function (acc) {
+        if (!acc.okAll) { return acc; }
+        return billsApi({ action: 'record_payment', bill_id: p.bill.id, amount: p.amount, paid_date: t.date, bank_transaction_id: t.id, method: 'rtm' })
+          .then(function (j) {
+            if (j && (j.ok || !j.error)) { return { okAll: true, done: acc.done + 1 }; }
+            toast.error('Stopped at ' + (p.bill.vendor_name || 'a bill') + ': ' + (j.error || 'failed') + '. ' + acc.done + ' bill(s) before it ARE covered and stay covered.');
+            return { okAll: false, done: acc.done };
+          });
+      });
+    });
+    chain.then(function (acc) {
+      return billsApi({ action: 'rtm_flag', bank_transaction_id: t.id }).then(function (jf) {
+        if (jf && jf.ok) {
+          if (acc.okAll) { toast.success('🏢 RTM payment saved — ' + acc.done + ' bill(s) covered ($' + fmt(Math.min(sum, t.amount)) + '). Tax reports keep ONE professional-fee line; flip the radio in 📈 Stats to see the real categories.'); }
+        } else { toast.error((jf && jf.error) || 'Could not flag the payment as RTM.'); }
+        setRtmPanel(null); load();
+      });
     }).finally(function () { setBusy(false); });
   }
   function csv() {
@@ -208,26 +327,43 @@ export default function AllTransactionsTab(props) {
               <td className="py-1 pr-1"><input type="checkbox" checked={!!sel[t.id]} onChange={function () { var n2 = Object.assign({}, sel); n2[t.id] = !n2[t.id]; setSel(n2); }} /></td>
               <td className="py-1 pr-2 whitespace-nowrap">{t.date}</td>
               <td className="py-1 pr-2 whitespace-nowrap text-[10px]">{t.account}</td>
-              <td className="py-1 pr-2 font-semibold" title={t.who}>{String(t.who).substring(0, 46)}</td>
+              <td className="py-1 pr-2 font-semibold cursor-pointer" title="Click to show the full description"
+                onClick={function () { var e2 = Object.assign({}, expanded); e2[t.id] = !e2[t.id]; setExpanded(e2); }}
+                style={expanded[t.id] ? { whiteSpace: 'normal', wordBreak: 'break-word' } : {}}>
+                {expanded[t.id] ? (t.who_full || t.who) : (String(t.who).substring(0, 46) + (String(t.who_full || t.who).length > 46 ? '…' : ''))}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: t.direction === 'out' ? '#7f1d1d' : '#065f46' }}>{(t.direction === 'out' ? '−$' : '+$') + fmt(t.amount)}</td>
-              <td className="py-1 pr-2">{t.classification ? <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#f1f5f9', color: '#334155' }}>{labelOf[t.classification] || t.classification}</span> : <span className="text-[9px]" style={{ color: '#9a3412' }}>—</span>}</td>
+              <td className="py-1 pr-2">
+                {t.transfer ? <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ transfer</span>
+                  : <select value={t.classification || ''} disabled={busy || t.pending} title="Pick a category right here — it learns a rule and updates Wave too"
+                      onChange={function (e) { setCatOne(t, e.target.value); }}
+                      className="px-1 py-0.5 rounded border border-slate-300 text-[9px] font-bold" style={{ color: t.classification ? '#334155' : '#9a3412', background: '#ffffff', maxWidth: 150 }}>
+                      <option value="">— pick…</option>
+                      {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+                    </select>}</td>
               <td className="py-1 text-[9px]">
                 {t.pending && <span className="mr-1" style={{ color: '#64748b' }}>pending</span>}
                 {t.matched && <span className="px-1 py-0.5 rounded font-extrabold mr-1" style={{ background: '#d1fae5', color: '#065f46' }}>🔗 matched</span>}
                 {t.transfer && <span className="px-1 py-0.5 rounded font-extrabold mr-1" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ transfer</span>}
                 {t.verified && <span className="px-1 py-0.5 rounded font-extrabold mr-1" style={{ background: '#ecfdf5', color: '#064e3b' }}>✓</span>}
                 {!t.matched && !t.transfer && !t.pending &&
-                  <button onClick={function () { openMatch(t); }} title={t.direction === 'in' ? 'Match this deposit to an invoice right here' : 'Match this payment to an open BILL right here'} className="px-1 py-0.5 rounded font-bold" style={{ background: '#eef2ff', color: '#312e81' }}>🔗 {t.direction === 'in' ? 'match' : 'bill'}</button>}
+                  <button onClick={function () { openMatch(t); }} title={t.direction === 'in' ? 'Match this deposit to an invoice right here' : 'Match this payment to an open BILL right here'} className="px-1 py-0.5 rounded font-bold mr-1" style={{ background: '#eef2ff', color: '#312e81' }}>🔗 {t.direction === 'in' ? 'match' : 'bill'}</button>}
+                {!t.transfer && !t.pending &&
+                  <button onClick={function () { openTransfer(t); }} title="This is a transfer between our own accounts (incl. credit cards) — find the matching leg on another account. Transfers never count as income or spending." className="px-1 py-0.5 rounded font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔</button>}
+                {t.direction === 'out' && !t.pending &&
+                  <button onClick={function () { openRtm(t); }} title="RTM Capital pays bills for us — flag this payment as the RTM fee and pick which of our via-RTM bills it covers. Tax reports keep ONE professional-fee line." className="px-1 py-0.5 rounded font-bold ml-1" style={t.third_party ? { background: '#fbcfe8', color: '#9d174d' } : { background: '#fdf2f8', color: '#9d174d' }}>{t.third_party ? '🏢 RTM ✓' : '🏢 RTM'}</button>}
               </td></tr>;
           })}
         </tbody>
       </table></div>
       {rows.length > 1000 && <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Showing the first 1,000 of {rows.length} — tighten the filters; the CSV carries all of them.</div>}
-      {mPanel && <div className="mt-2 rounded-lg p-2" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
+      {mPanel && <div onClick={function () { setMPanel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-3" style={{ background: '#eef2ff', border: '1px solid #c7d2fe', maxWidth: 760, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
         <div className="flex gap-2 items-center mb-1 flex-wrap">
           <div className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>
             🔗 {mPanel.kind === 'bill' ? 'Match payment to a BILL' : 'Match deposit to an invoice'}: {String(mPanel.txn.merchant_name || mPanel.txn.name || '').substring(0, 44)} · {(mPanel.kind === 'bill' ? '−$' : '+$') + fmt(mPanel.txn.amount_abs)} on {mPanel.txn.posted_date || mPanel.txn.date} — best candidates first (💯 = open balance equals it to the cent):</div>
           <div className="flex-1" />
+          {mPanel.kind === 'bill' && <button onClick={createBillFromTxn} disabled={busy} title="No bill entered yet? Create it from this transaction (vendor, date, amount) and record this payment against it — one click"
+            className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>➕ Create bill from this transaction</button>}
           <button onClick={function () { onGo('review'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>splits / unapplied → Bank Review</button>
           <button onClick={function () { setMPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button>
         </div>
@@ -245,6 +381,55 @@ export default function AllTransactionsTab(props) {
               <button onClick={function () { if (mPanel.kind === 'bill') { doBillMatch(c3); } else { doMatch(c3); } }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>apply ✓</button>
             </div>;
           })}
+      </div>
+      </div>}
+      {tPanel && <div onClick={function () { setTPanel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-3" style={{ background: '#eff6ff', border: '1px solid #bfdbfe', maxWidth: 680, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div className="flex gap-2 items-center mb-1 flex-wrap">
+          <div className="text-[11px] font-extrabold" style={{ color: '#1e3a8a' }}>
+            ↔ Pair the transfer: {String(tPanel.txn.merchant_name || tPanel.txn.name || '').substring(0, 44)} · {(tPanel.txn.direction === 'out' ? '−$' : '+$') + fmt(tPanel.txn.amount_abs)} on {tPanel.txn.posted_date || tPanel.txn.date} — the other leg (same amount, opposite direction, ANOTHER account, ±7 days):</div>
+          <div className="flex-1" />
+          <button onClick={function () { setTPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#dbeafe', color: '#1e3a8a' }}>✕</button>
+        </div>
+        <div className="text-[9px] mb-1" style={{ color: '#1e40af' }}>Paired transfers never count as income or deductible spending — they are excluded from tax reports, the P&L and the Books totals automatically.</div>
+        {tPanel.candidates.length === 0 ? <div className="text-[10px]" style={{ color: '#1e3a8a' }}>No matching opposite leg found (same amount within ±7 days on another account). If the other account isn't connected yet, connect it in the Bank tab first — or just apply the Transfer category: it is still excluded from income and spending.</div> :
+          tPanel.candidates.map(function (c4) {
+            return <div key={c4.id} className="flex gap-2 items-center py-0.5" style={{ borderBottom: '1px solid #dbeafe' }}>
+              <span className="text-[10px] font-semibold flex-1" style={{ color: '#0f172a' }}>{c4.posted_date || c4.date} · {String(c4.merchant_name || c4.name || '').substring(0, 50)} · ${fmt(c4.amount_abs)} ({c4.direction === 'in' ? 'money in' : 'money out'})</span>
+              <button onClick={function () { doPair(tPanel.txn.id, c4.id); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>pair these ↔</button>
+            </div>;
+          })}
+      </div>
+      </div>}
+      {rtmPanel && <div onClick={function () { setRtmPanel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-3" style={{ background: '#fdf2f8', border: '1px solid #fbcfe8', maxWidth: 760, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div className="flex gap-2 items-center mb-1 flex-wrap">
+          <div className="text-[11px] font-extrabold" style={{ color: '#9d174d' }}>🏢 RTM payment: {String(rtmPanel.txn.who || '').substring(0, 40)} · −${fmt(rtmPanel.txn.amount)} on {rtmPanel.txn.date} — pick the bills RTM covers with this money:</div>
+          <div className="flex-1" />
+          <button onClick={function () { setRtmPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fce7f3', color: '#9d174d' }}>✕</button>
+        </div>
+        <div className="text-[9px] mb-1" style={{ color: '#9d174d' }}>Tax reports and the default P&L keep this payment as ONE line under its own category (professional fees). The covered bills appear in their REAL categories only when the RTM radio in 📈 Stats is on. Anything you leave unallocated = RTM's service fee.</div>
+        {(rtmPanel.bills || []).length === 0 && <div className="text-[10px] mb-2" style={{ color: '#9d174d' }}>No open "via RTM" bills yet. Enter them in 🧾 Bills and tick 🏢 Paid via RTM Capital on each — then come back. You can still flag this payment now.</div>}
+        {(rtmPanel.bills || []).map(function (b5) {
+          return <div key={b5.id} className="flex gap-2 items-center py-1 flex-wrap" style={{ borderBottom: '1px solid #fce7f3' }}>
+            <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{b5.vendor_name}{b5.bill_number ? ' · ' + b5.bill_number : ''}</span>
+            <span className="text-[10px]" style={{ color: '#64748b' }}>{b5.category || 'uncategorized'} · due {b5.due_date || '—'} · open <b style={{ color: '#78350f' }}>${fmt(b5.open)}</b> of ${fmt(b5.total_amount)}</span>
+            <div className="flex-1" />
+            <input value={rtmPanel.amt[b5.id] || ''} placeholder="0.00" onChange={function (e) { var n5 = Object.assign({}, rtmPanel.amt); n5[b5.id] = e.target.value; setRtmPanel(Object.assign({}, rtmPanel, { amt: n5 })); }}
+              className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] text-right tabular-nums" style={{ color: '#0f172a', background: '#ffffff', width: 100 }} />
+            <button onClick={function () { var n6 = Object.assign({}, rtmPanel.amt); n6[b5.id] = String(Math.min(b5.open, rtmPanel.txn.amount)); setRtmPanel(Object.assign({}, rtmPanel, { amt: n6 })); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: '#fce7f3', color: '#9d174d' }}>fill</button>
+          </div>;
+        })}
+        <div className="flex gap-2 items-center mt-2 flex-wrap">
+          {(function () {
+            var s6 = 0; (rtmPanel.bills || []).forEach(function (b6) { var a6 = Number(rtmPanel.amt[b6.id]); if (a6 > 0) { s6 += a6; } });
+            var rem = Math.round((rtmPanel.txn.amount - s6) * 100) / 100;
+            return <span className="text-[10px] font-extrabold" style={{ color: rem < -0.005 ? '#7f1d1d' : '#9d174d' }}>Σ selected ${fmt(s6)} of ${fmt(rtmPanel.txn.amount)} — {rem < -0.005 ? 'OVER by $' + fmt(Math.abs(rem)) : 'RTM service fee remainder $' + fmt(rem)}</span>;
+          })()}
+          <div className="flex-1" />
+          <button onClick={saveRtm} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#9d174d', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Save — flag RTM & cover selected ✓</button>
+        </div>
+      </div>
       </div>}
     </div>
   </div>;

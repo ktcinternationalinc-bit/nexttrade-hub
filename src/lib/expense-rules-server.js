@@ -47,6 +47,38 @@ export async function suggestCategory(db, text) {
   } catch (e) { return null; }
 }
 
+// v55.83-PZ (Max, Nov 7 11:22): "whatever done in all transactions should
+// automatically update in the wave accounting section as well... if not
+// compatible remain empty in wave or select the closest one that is
+// compatible on the wave side and save."
+// Resolution order: 1) the category's explicit 🌊 link; 2) an EXACT
+// (normalized) name match against Wave's own chart — found once, SAVED onto
+// the category so it shows in the 🏷 editor; 3) nothing — Wave stays empty.
+// "Closest" never means fuzzy guessing into the books: equal names only,
+// and only when exactly ONE Wave account matches.
+function normName(x) { return String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+export async function waveAccountForCategory(db, clsKey) {
+  try {
+    if (!clsKey || clsKey === 'needs_clarification' || clsKey === 'transfer') { return null; } // a transfer is never a Wave income/expense category
+    var cat = await db.from('expense_categories').select('id, key, label, wave_account_id, wave_account_name').eq('key', clsKey).maybeSingle();
+    if (!cat.data) { return null; }
+    if (cat.data.wave_account_id) { return { wave_account_id: cat.data.wave_account_id, wave_account_name: cat.data.wave_account_name || null, how: 'linked' }; }
+    var wc = await db.from('wave_categories').select('wave_account_id, wave_account_name, is_active').eq('wave_business_id', US_WAVE_BUSINESS_ID).limit(3000);
+    if (wc.error) { return null; }
+    var want1 = normName(cat.data.label); var want2 = normName(String(cat.data.key).replace(/_/g, ' '));
+    var hits = [];
+    (wc.data || []).forEach(function (w) {
+      if (w.is_active === false) { return; }
+      var nm = normName(w.wave_account_name);
+      if (nm && (nm === want1 || nm === want2)) { hits.push(w); }
+    });
+    if (hits.length !== 1) { return null; } // ambiguous or none → Wave stays empty (Max's fallback)
+    // SAVE the discovered link on the category, so it is visible and editable
+    await db.from('expense_categories').update({ wave_account_id: hits[0].wave_account_id, wave_account_name: hits[0].wave_account_name || null, updated_at: new Date().toISOString() }).eq('id', cat.data.id);
+    return { wave_account_id: hits[0].wave_account_id, wave_account_name: hits[0].wave_account_name || null, how: 'name_match_saved' };
+  } catch (e) { return null; }
+}
+
 export async function applyExpenseRules(db, limit) {
   try {
     var rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count').eq('active', true).eq('auto_apply', true).limit(1000);

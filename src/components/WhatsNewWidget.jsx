@@ -33,6 +33,72 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-QD',
+    date: '2026-11-07',
+    label: '\ud83d\udea9 CSV + Plaid on the same account \u2014 duplicates flagged & ignored',
+    items: [
+      'You can run CSV imports AND Plaid on the SAME account safely, in any order. If Plaid later pulls a transaction the CSV already brought in, the sync skips it and the banner says so: \u201c\ud83d\udea9 N duplicate(s) already in from a CSV import \u2014 flagged and ignored, nothing doubled.\u201d',
+      'The other direction already held and got stronger: importing a CSV over a period Plaid covered now catches Plaid\u2019s copies even though the bank\u2019s CSV wording never matches Plaid\u2019s wording \u2014 duplicates are matched by date + amount + direction, counted one-for-one, so two genuinely identical charges on the same day still both survive.',
+      'Nothing is ever silently dropped: both the sync banner and the import summary state exactly how many duplicates were skipped.',
+    ],
+  },
+  {
+    version: 'v55.83-QC',
+    date: '2026-11-07',
+    label: '\ud83d\udcc4 CSV statement import \u2014 when Plaid can\u2019t get the history',
+    items: [
+      'New in the Bank tab: \ud83d\udcc4 Import statement CSV. When a bank won\u2019t give Plaid its history (M&T gave ONE transaction across four links), download the transactions CSV from the bank\u2019s own online banking and import it \u2014 pick the account, check the column mapping (auto-guessed), see a preview with totals, import.',
+      'Imported rows behave EXACTLY like Plaid transactions: they join categorization, rules, bulk updates, invoice matching, transfer pairing, Wave and every report \u2014 including the 2026 tax pack and the cash-basis income statement.',
+      'Safe by construction: anything already stored (from Plaid or an earlier import) is skipped automatically, so re-importing the same file adds NOTHING \u2014 while two genuinely identical charges on the same day both survive. Unreadable lines (headers, balance rows) are counted and reported, never guessed into the books.',
+      'It needs the \u201cBank: Manage Connections\u201d permission (super admins always have it).',
+    ],
+  },
+  {
+    version: 'v55.83-QB',
+    date: '2026-11-07',
+    label: '\ud83c\udfe2 RTM Capital third-party payer + connections permission',
+    items: [
+      'RTM Capital (the third party that pays trucking and other bills for us) is now built in. Enter those bills in \ud83e\uddfe Bills and tick \ud83c\udfe2 Paid via RTM Capital \u2014 they are tracked (vendor history, categories) but stay OUT of what-we-owe totals and cash forecasts, because the money that actually leaves our bank is the RTM payment.',
+      'When the payment to RTM shows in \ud83d\udcd1 All Transactions, click \ud83c\udfe2 RTM on the row: pick which via-RTM bills that money covers (full or partial). Anything left unallocated is automatically RTM\u2019s service fee. The covering runs through the same guarded bill-payment path as everything else \u2014 no double counting is possible.',
+      'In \ud83d\udcc8 Stats there is now an RTM radio: TAX VIEW (default) keeps the RTM payment as ONE line under its category \u2014 clean for filing. REAL-COST VIEW shows the covered bills in their ACTUAL categories (trucking under trucking) plus the RTM service fee line \u2014 and the totals are identical in both views. The accountant tax pack always uses the tax view.',
+      'Bank connections are now their own permission: \u201cBank: Manage Connections\u201d controls Connect Bank, Deep re-pull history, archiving duplicate links and moving accounts between silos. Super admins always can; anyone who could connect before still can.',
+      'The sync banner is honest about empty deep re-pulls: when Plaid answers ZERO for the whole window right after a connect/reconnect, it now says Plaid is still building the 2-year history in the background (wait, then re-pull again) \u2014 instead of \u201cno recent activity\u201d.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-QB-rtm-third-party.sql (two columns: vendor_bills.paid_via + bank_transactions.third_party_payer). sql/v55-83-PW-category-kinds.sql is still outstanding if not yet run.' },
+    ],
+  },
+  {
+    version: 'v55.83-QA',
+    date: '2026-11-07',
+    label: '\ud83c\udff7 Categorize on the row + create a bill from a transaction',
+    items: [
+      'In \ud83d\udcd1 All Transactions the Category column is now a DROPDOWN on every row \u2014 pick right there, no selecting needed. Each pick teaches the rules (next time it fills itself), carries the Wave category along, and picking Transfer immediately offers the matching leg from another account.',
+      'In the \ud83d\udd17 bill popup on a money-out transaction: \u2795 Create bill from this transaction \u2014 when the bill was never entered, one click creates it (vendor, date and amount taken from the bank line, the vendor\u2019s remembered category fills in) and records this transaction as its payment.',
+      'A paired \u2194 transfer row keeps its locked chip \u2014 no dropdown there, so a pair can\u2019t be broken by accident.',
+    ],
+  },
+  {
+    version: 'v55.83-PZ',
+    date: '2026-11-07',
+    label: '\ud83d\udd17 Match popup fixed + full descriptions',
+    items: [
+      'The \ud83d\udd17 match button in \ud83d\udcd1 All Transactions now opens a CENTERED POPUP \u2014 before, the candidate list loaded below the table where you couldn\u2019t see it, which looked like \u201cnothing happens\u201d. And click any transaction description to expand the FULL bank text (merchant \u00b7 bank line); click again to collapse.',
+      'The Accounting tabs are ORGANIZED into labeled rows by what you\u2019re doing: \ud83d\udce5 DAILY WORK \u00b7 \ud83e\uddfe SELLING (Order Reconciliation lives here) \u00b7 \ud83d\uded2 BUYING \u00b7 three \ud83d\udcca REPORTS rows split by subject (sales / money & cash / ledger) \u00b7 \u2699\ufe0f SYSTEM. Same tabs, same permissions \u2014 just findable.',
+      'Work done in \ud83d\udcd1 All Transactions updates the WAVE side automatically: matching already flowed to Wave; now categorization (single AND bulk) carries the category\u2019s Wave account onto the transactions too \u2014 explicit \ud83c\udf0a link first, else an EXACT name match against Wave\u2019s own chart (found once, saved onto the category). Not compatible \u2192 Wave simply stays empty, never fuzzy-guessed, and existing Wave data is never overwritten. The bulk toast tells you which happened.',
+      'Transfers between your own accounts, from \ud83d\udcd1 All Transactions too: every row has \u2194 \u2014 it finds the matching leg on ANOTHER account (same cents, opposite direction, \u00b17 days) and pairs them as ONE transfer. Anything marked Transfer \u2014 paired or not \u2014 NEVER counts as income or deductible spending: excluded from tax reports, the P&L and the Books totals, and never pushed into Wave\u2019s income/expense chart.',
+      { superAdminOnly: true, text: 'v55.83-PZ \u2014 NO new SQL. mPanel \u2192 fixed overlay modal (backdrop close, 80vh scroll); all_transactions adds who_full (merchant \u00b7 name deduped); description cell click-toggles expanded state with wrap. Pins 15a/15b in test pr.' },
+    ],
+  },
+  {
+    version: 'v55.83-PY',
+    date: '2026-11-07',
+    label: '\ud83d\udcca 2026 reports takeover \u2014 the income statement',
+    items: [
+      'The \ud83d\udcc9 Stats tab now assembles a real INCOME STATEMENT (cash basis) for any period, straight from the bank record \u2014 the one money source that is dated and complete for ALL of 2026: Revenue \u2212 COGS = Gross profit \u2212 Operating expenses = Operating profit \u00b1 Other = NET PROFIT. Transfers and Not-P&L money (loans, owner) are excluded by your category types. If anything is still uncategorized, the statement SAYS so and shows exactly how much sits outside it \u2014 when that reaches zero, the statement covers the whole year. Also in the \ud83e\uddfe Accountant pack as CSV #12.',
+      'The path to \u201creports take over for 2026\u201d: 1) finish the 2-year bank pull, 2) categorize the year (rules + bulk updates in \ud83d\udcd1 All Transactions do most of it), 3) pair transfers \u2014 then this statement + the 12-CSV pack IS the 2026 filing package (cash basis; your accountant confirms the basis). ClickBooks\u2019 accrual ledger keeps running in parallel and takes over for 2027 filings.',
+      { superAdminOnly: true, text: 'v55.83-PY \u2014 NO new SQL. Statement assembled client-side from period_stats spending block (kind-driven: income/other_income in; cogs/expense/other_expense out; not_pnl+transfers excluded both sides); uncategorized surfaced as outside-the-statement warnings; pack CSV 12 with the same warnings. Test py (4).' },
+    ],
+  },
+  {
     version: 'v55.83-PX',
     date: '2026-11-07',
     label: '\ud83d\udcb5 Open Balances: sort + hide small',

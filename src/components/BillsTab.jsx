@@ -308,6 +308,10 @@ export default function BillsTab(props) {
           </span>}
         </span> :
         <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />}
+        {/* v55.83-QB (Max): RTM Capital pays some bills for us as a third party */}
+        <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#9d174d' }} title="A third party (RTM Capital) pays this bill for us. It is tracked here but stays OUT of what-we-owe totals and cash forecasts. Cover it from the RTM payment: All Transactions → 🏢 RTM on the money-out transaction.">
+          <input type="checkbox" checked={!!editing.paid_via} onChange={function (e) { setEditing(Object.assign({}, editing, { paid_via: e.target.checked ? 'RTM Capital' : null })); }} />
+          🏢 Paid via RTM Capital</label>
         <input className={inp} style={{ width: 220 }} placeholder="Notes" value={editing.notes || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { notes: e.target.value })); }} />
         <button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setEditing(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
@@ -344,7 +348,7 @@ export default function BillsTab(props) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
             return <React.Fragment key={b.id}>
               <tr style={late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
-                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}</td>
+                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="A third party pays this — it stays out of what-we-owe and cash forecasts; cover it from the RTM payment in All Transactions (🏢 RTM)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}</td>
                 <td className="py-1.5 pr-2">{b.bill_number || '—'}</td>
                 <td className="py-1.5 pr-2">{b.bill_date}</td>
                 <td className="py-1.5 pr-2">{b.due_date || '—'}{late ? ' ⚠' : ''}</td>

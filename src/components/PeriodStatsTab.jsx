@@ -6,6 +6,30 @@ import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' }; // v55.83-PW
+
+// v55.83-QB (Max, Nov 7): the RTM radio. Real-cost view = take the RTM
+// payments OUT of the category they were paid under (professional fees),
+// put the covered bills INTO their real categories, and show the
+// unallocated remainder as RTM's service fee. −payments + bills + fee = 0,
+// so every total is IDENTICAL in both views — only the breakdown moves.
+function rtmAdjust(cats0, rtm) {
+  var r2a = function (x) { return Math.round((Number(x) || 0) * 100) / 100; };
+  var map = {};
+  (cats0 || []).forEach(function (c) { map[c.key] = { key: c.key, label: c.label, kind: c.kind, count: c.count, total: c.total }; });
+  ((rtm && rtm.payments_by_cat) || []).forEach(function (p) {
+    if (!map[p.key]) { map[p.key] = { key: p.key, label: p.label || p.key, kind: 'expense', count: 0, total: 0 }; }
+    map[p.key].total = r2a(map[p.key].total - p.total); map[p.key].rtm_out = p.total;
+  });
+  ((rtm && rtm.allocations_by_cat) || []).forEach(function (a) {
+    if (!map[a.key]) { map[a.key] = { key: a.key, label: a.label || a.key, kind: a.kind || 'expense', count: 0, total: 0 }; }
+    map[a.key].total = r2a(map[a.key].total + a.total); map[a.key].via_rtm = r2a((map[a.key].via_rtm || 0) + a.total); map[a.key].count += a.count || 0;
+  });
+  var fee = r2a((rtm && rtm.service_fee) || 0);
+  if (Math.abs(fee) > 0.005) { map.__rtm_fee = { key: '__rtm_fee', label: 'RTM service fee (payments − covered bills)', kind: 'expense', count: (rtm && rtm.payments_count) || 0, total: fee }; }
+  return Object.keys(map).map(function (k) { return map[k]; })
+    .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out; })
+    .sort(function (x, y) { return y.total - x.total; });
+}
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var TODAY = new Date().toISOString().substring(0, 10);
@@ -20,6 +44,7 @@ export default function PeriodStatsTab(props) {
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
   var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
+  var sRt = useState(false); var rtmOn = sRt[0]; var setRtmOn = sRt[1]; // v55.83-QB — DEFAULT false = tax view (one professional-fee line)
   var sIn = useState(null); var inCat = sIn[0]; var setInCat = sIn[1]; // v55.83-PV — income-by-category drill
   var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
@@ -127,10 +152,27 @@ export default function PeriodStatsTab(props) {
       (data.spending.in_rows || []).forEach(function (r) { deti.push(r.date + ',"' + String(r.who).replace(/"/g, '""') + '",' + Number(r.amount).toFixed(2) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
       dl('tax-pack-11-income-detail-' + tag + '.csv', deti);
     }
+    if (data.spending && data.spending.in_categories) {
+      var revP = 0, cogsP = 0, expP = 0, oinP = 0, oexP = 0;
+      (data.spending.in_categories || []).forEach(function (c) { if (c.kind === 'income') { revP += c.total; } else if (c.kind === 'other_income') { oinP += c.total; } });
+      (data.spending.categories || []).forEach(function (c) { if (c.kind === 'cogs') { cogsP += c.total; } else if (c.kind === 'other_expense') { oexP += c.total; } else if (c.kind !== 'not_pnl') { expP += c.total; } });
+      var isCsv = ['line,amount_usd'];
+      isCsv.push('"Revenue (cash received)",' + revP.toFixed(2));
+      isCsv.push('"Cost of goods sold",-' + cogsP.toFixed(2));
+      isCsv.push('"GROSS PROFIT",' + (revP - cogsP).toFixed(2));
+      isCsv.push('"Operating expenses",-' + expP.toFixed(2));
+      isCsv.push('"OPERATING PROFIT",' + (revP - cogsP - expP).toFixed(2));
+      isCsv.push('"Other income",' + oinP.toFixed(2));
+      isCsv.push('"Other expenses",-' + oexP.toFixed(2));
+      isCsv.push('"NET PROFIT (cash basis)",' + (revP - cogsP - expP + oinP - oexP).toFixed(2));
+      if (data.spending.in_uncategorized && data.spending.in_uncategorized.total > 0.005) { isCsv.push('"WARNING: uncategorized deposits OUTSIDE this statement",' + data.spending.in_uncategorized.total.toFixed(2)); }
+      if (data.spending.uncategorized && data.spending.uncategorized.total > 0.005) { isCsv.push('"WARNING: uncategorized spending OUTSIDE this statement",' + data.spending.uncategorized.total.toFixed(2)); }
+      dl('tax-pack-12-income-statement-cash-basis-' + tag + '.csv', isCsv);
+    }
     var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
     (data.months || []).forEach(function (m) { mo.push(m.month + ',' + m.invoiced.toFixed(2) + ',' + m.collected.toFixed(2) + ',' + m.billed.toFixed(2) + ',' + m.bills_paid.toFixed(2) + ',' + m.net.toFixed(2)); });
     dl('tax-pack-9-monthly-summary-' + tag + '.csv', mo);
-    toast.success('Accountant pack downloaded — 11 CSVs for ' + from + ' → ' + to + '.');
+    toast.success('Accountant pack downloaded — 12 CSVs for ' + from + ' → ' + to + ' (incl. the cash-basis income statement).');
   }
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
@@ -250,12 +292,18 @@ export default function PeriodStatsTab(props) {
       {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
       {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
         <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>
+        {data.spending.rtm && <div className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: '#fdf2f8', border: '1px solid #fbcfe8' }}>
+          <span className="text-[10px] font-extrabold" style={{ color: '#9d174d' }}>🏢 RTM Capital (third-party payer):</span>
+          <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!rtmOn} onChange={function () { setRtmOn(false); }} /> Tax view — RTM payments stay ONE line (${fmt(data.spending.rtm.payments_total)})</label>
+          <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={rtmOn} onChange={function () { setRtmOn(true); }} /> Real-cost view — covered bills in their ACTUAL categories (${fmt(data.spending.rtm.allocations_total)} + ${fmt(data.spending.rtm.service_fee)} service fee)</label>
+          {rtmOn && <span className="text-[9px]" style={{ color: '#9d174d' }}>Totals identical in both views. The accountant tax pack ALWAYS uses the tax view. Row drills show direct bank rows only.</span>}
+        </div>}
         <table className="w-full text-[11px]">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1 pr-2 text-left font-semibold">Category</th><th className="py-1 pr-2 text-right font-semibold">Txns</th>
             <th className="py-1 pr-2 text-right font-semibold">Total</th><th className="py-1 text-right font-semibold">% of spending</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
-            {(data.spending.categories || []).map(function (c) {
+            {((rtmOn && data.spending.rtm) ? rtmAdjust(data.spending.categories, data.spending.rtm) : (data.spending.categories || [])).map(function (c) {
               var pct = data.spending.real_spending > 0 ? Math.round(c.total / data.spending.real_spending * 1000) / 10 : 0;
               return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setSpCat(spCat === c.key ? null : c.key); }}>
                 <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
@@ -335,7 +383,52 @@ export default function PeriodStatsTab(props) {
               <td className="py-1.5 pr-2 font-extrabold">Real money in (transfers excluded)</td><td />
               <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(data.spending.real_income)}</td><td /></tr></tfoot>
           </table>
-          {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+          {/* v55.83-PY (Max, Nov 7 11:10: "i need the reports to take over from
+            now for 2026. so make it happen.. find a way") — the CASH-BASIS
+            INCOME STATEMENT, assembled from the bank record: the one dated,
+            complete money source for all of 2026. Revenue = money actually
+            received (P&L income kinds), expenses = money actually spent (P&L
+            expense kinds). Transfers and Not-P&L money excluded on both
+            sides. Uncategorized shown as its own line so the gap to a
+            filing-ready statement is VISIBLE, never hidden. */}
+        {data.spending.in_categories && (function () {
+          var rev = 0; var cogs2 = 0; var exp2 = 0; var oin = 0; var oex = 0;
+          (data.spending.in_categories || []).forEach(function (c) {
+            if (c.kind === 'income') { rev += c.total; } else if (c.kind === 'other_income') { oin += c.total; }
+          });
+          // v55.83-QB — the RTM radio applies to the income statement too:
+          // same totals, real-category breakdown.
+          ((rtmOn && data.spending.rtm) ? rtmAdjust(data.spending.categories, data.spending.rtm) : (data.spending.categories || [])).forEach(function (c) {
+            if (c.kind === 'cogs') { cogs2 += c.total; } else if (c.kind === 'other_expense') { oex += c.total; } else if (c.kind !== 'not_pnl') { exp2 += c.total; }
+          });
+          var r2x = function (x) { return Math.round(x * 100) / 100; };
+          rev = r2x(rev); cogs2 = r2x(cogs2); exp2 = r2x(exp2); oin = r2x(oin); oex = r2x(oex);
+          var gross = r2x(rev - cogs2);
+          var op = r2x(gross - exp2);
+          var net = r2x(op + oin - oex);
+          var uncIn2 = (data.spending.in_uncategorized && data.spending.in_uncategorized.total) || 0;
+          var uncOut2 = (data.spending.uncategorized && data.spending.uncategorized.total) || 0;
+          function line(lbl, val, strong, color) {
+            return <div className="flex text-[11px] py-0.5" style={{ borderBottom: strong ? '2px solid #cbd5e1' : '1px solid #f1f5f9', color: color || '#0f172a', fontWeight: strong ? 800 : 500 }}>
+              <span className="flex-1">{lbl}</span><span className="tabular-nums">{(val < 0 ? '−$' : '$') + fmt(Math.abs(val))}</span></div>;
+          }
+          return <div className="mt-3 rounded-lg p-3" style={{ background: '#ffffff', border: '2px solid #312e81', maxWidth: 560 }}>
+            <div className="text-xs font-extrabold mb-1" style={{ color: '#312e81' }}>📊 INCOME STATEMENT (cash basis, from the bank record) — {from} → {to}{rtmOn && data.spending.rtm ? ' — RTM BREAKDOWN ON' : ''}</div>
+            {line('Revenue (money received, income categories)', rev)}
+            {line('− Cost of goods sold', -cogs2)}
+            {line('GROSS PROFIT', gross, true)}
+            {line('− Operating expenses', -exp2)}
+            {line('OPERATING PROFIT', op, true)}
+            {oin > 0 && line('+ Other income', oin)}
+            {oex > 0 && line('− Other expenses', -oex)}
+            {line('NET PROFIT (cash basis)', net, true, net >= 0 ? '#065f46' : '#7f1d1d')}
+            {(uncIn2 > 0.005 || uncOut2 > 0.005) && <div className="mt-1.5 rounded p-1.5 text-[10px] font-bold" style={{ background: '#fff7ed', color: '#9a3412' }}>
+              ⚠ Not filing-ready yet: ${fmt(uncIn2)} of deposits and ${fmt(uncOut2)} of spending are still UNCATEGORIZED and sit outside this statement. Categorize them (rules + bulk updates do most of it) and this statement is complete.</div>}
+            {(uncIn2 <= 0.005 && uncOut2 <= 0.005) && <div className="mt-1.5 text-[10px] font-bold" style={{ color: '#065f46' }}>✓ Every transaction in the period is categorized — this statement covers the whole period.</div>}
+            <div className="text-[9px] mt-1" style={{ color: '#64748b' }}>Cash basis = income when received, expenses when paid — the standard filing basis for most LLCs (your accountant confirms which basis you file on). Transfers and Not-P&L money (loans, owner) are excluded by the category types.</div>
+          </div>;
+        })()}
+        {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
             <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
               {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).map(function (r, i) {
                 return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>

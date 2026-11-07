@@ -17,6 +17,14 @@ export async function POST(req) {
     var body = await readBankJson(req);
     var connection_id = body.connection_id;
     var start_date = body.start_date;
+    // v55.83-QB — Deep re-pull (an explicit start_date backfill) is a
+    // CONNECTION-management operation: require bank.connections unless the
+    // caller is the cron or a verified super admin. Legacy behavior for
+    // normal incremental sync is unchanged.
+    if (body && body.start_date && access && access.via !== 'cron' && access.isVerifiedSuperAdmin !== true) {
+      try { await authorizePlaidOperation(req, 'bank.connections', false); }
+      catch (eQB2) { return plaidJson({ error: 'Deep re-pull history needs the "Bank: Manage Connections" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+    }
     var end_date = body.end_date;
     var env = process.env.PLAID_ENV || 'sandbox';
     var base = PLAID_BASE[env] || PLAID_BASE.sandbox;
@@ -125,6 +133,41 @@ export async function POST(req) {
 
     var rows = rawTxns.map(function (t) { return mapPlaidTransaction(t, conn, accountsById, acctSiloMap); });
 
+    // v55.83-QD (Max, Nov 7 11:59): "imports and plaid can be done for same
+    // account and any duplicates to be flagged and ignored." The importer
+    // already skips what Plaid pulled; this is the OTHER direction — a Plaid
+    // sync skips transactions the CSV already brought in. Match is COUNTED
+    // per (account, posted date, amount, direction) — descriptions differ
+    // between a bank's CSV and Plaid, so the name is deliberately not part
+    // of the key; the counting keeps legitimate same-day twins (the CSV had
+    // both lines, so both slots exist). Stateless and deterministic: every
+    // sync re-derives the same skips. Fail-soft: a lookup error means no
+    // dedupe this pass (upsert idempotency still protects exact ids).
+    var manualDeduped = 0;
+    try {
+      if (rows.length > 0) {
+        var mdMin = null; var mdMax = null; var mdAccts = {};
+        rows.forEach(function (r0) { var d0 = r0.posted_date || r0.date; if (d0) { if (!mdMin || d0 < mdMin) { mdMin = d0; } if (!mdMax || d0 > mdMax) { mdMax = d0; } } if (r0.account_id) { mdAccts[r0.account_id] = 1; } });
+        var manQ = await supabase.from('bank_transactions')
+          .select('id, account_id, date, posted_date, amount_abs, direction')
+          .like('plaid_transaction_id', 'manual-%')
+          .in('account_id', Object.keys(mdAccts))
+          .gte('date', mdMin).lte('date', mdMax).limit(20000);
+        if (!manQ.error && manQ.data && manQ.data.length) {
+          var manCount = {};
+          manQ.data.forEach(function (m0) {
+            var k0 = m0.account_id + '|' + (m0.posted_date || m0.date) + '|' + (Math.round((Number(m0.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + m0.direction;
+            manCount[k0] = (manCount[k0] || 0) + 1;
+          });
+          rows = rows.filter(function (r1) {
+            var k1 = r1.account_id + '|' + (r1.posted_date || r1.date) + '|' + (Math.round((Number(r1.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + r1.direction;
+            if ((manCount[k1] || 0) > 0) { manCount[k1]--; manualDeduped++; return false; }
+            return true;
+          });
+        }
+      }
+    } catch (eMD) { manualDeduped = 0; }
+
     var synced = 0;
     if (rows.length > 0) {
       // onConflict on plaid_transaction_id => idempotent dedupe. Payload carries
@@ -181,7 +224,8 @@ export async function POST(req) {
       newest_posted_date: newestOverall,
       newest_by_account: newestByAccount,
       markers_persisted: markersPersisted,
-      marker_error: markerError
+      marker_error: markerError,
+      manual_deduped: manualDeduped // v55.83-QD — flagged + ignored CSV twins
     });
   } catch (e) {
     return plaidError(e);

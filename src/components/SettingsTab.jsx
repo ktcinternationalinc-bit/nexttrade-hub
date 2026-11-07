@@ -483,6 +483,7 @@ const ACTION_PERMS = [
   { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
+  { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
   { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
   // v55.83-GW — Inventory Report Center permissions (keys match inventory-permissions.js).
   // view falls back to general Inventory access; export/valuation are explicit grants.

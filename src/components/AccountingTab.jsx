@@ -79,6 +79,19 @@ export default function AccountingTab(props) {
   // v55.83-PW (Max): LEVEL 1 — "permission to see accounting in general".
   // The umbrella accounting.view opens the area; so does ANY specific
   // accounting permission (backward compatible). Super admin always.
+  // v55.83-PZ (Max, Nov 7 11:17: "i need this organized in a better way...
+  // to make sense") — tabs grouped by WHAT YOU'RE DOING, labeled rows like
+  // the Books-home card groups. Order Reconciliation under SELLING (Max,
+  // 11:19). Same tabs, same permissions — only the arrangement changed.
+  var TAB_GROUPS = [
+    ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
+    ['🧾 SELLING — customers & what they owe', ['invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
+    ['🛒 BUYING — vendors & what we owe', ['bills', 'purchaseorders']],
+    ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'pnl']],
+    ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast']],
+    ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports']],
+    ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin']],
+  ];
   var hasAnyAccounting = isSuper || mp['accounting.view'] === true || mp['accounting.view_totals'] === true ||
     mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true ||
     mp['bank.classify'] === true || mp['bank.view'] === true || mp['payments.match'] === true ||
@@ -98,14 +111,23 @@ export default function AccountingTab(props) {
   }
   return (
     <div>
-      <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
-        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true); }).map(function (t) {
-          return (
-            <button key={t[0]} onClick={function () { setSub(t[0]); }}
-              className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
-              {t[1]}
-            </button>
-          );
+      <div className="p-3 border-b border-slate-800">
+        {TAB_GROUPS.map(function (g) {
+          var keep = {};
+          tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          var items = g[1].filter(function (k) { return keep[k]; });
+          if (!items.length) { return null; }
+          return <div key={g[0]} className="mb-1.5">
+            <div className="text-[9px] font-extrabold uppercase tracking-wider mb-0.5" style={{ color: '#64748b' }}>{g[0]}</div>
+            <div className="flex flex-wrap gap-1">
+              {items.map(function (k) {
+                return <button key={k} onClick={function () { setSub(k); }}
+                  className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === k ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
+                  {keep[k]}
+                </button>;
+              })}
+            </div>
+          </div>;
         })}
       </div>
       {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">

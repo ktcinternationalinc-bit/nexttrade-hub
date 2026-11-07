@@ -7,6 +7,7 @@ import { fetchAllRows } from '../lib/fetch-all-rows';
 import { floorDateFor, labelForWindow } from '../lib/visibility-window';
 import { useBankVisibility } from '../lib/use-bank-visibility';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import StatementImport from './StatementImport'; // v55.83-QC — CSV import when Plaid can't get the history
 
 // These operational projections deliberately omit provider tokens and balances.
 const CONNECTION_FIELDS = 'id,institution_id,institution_name,status,last_synced,created_at,wave_business_id,last_sync_status,last_sync_error,initial_backfill_start_date,last_successful_posted_date,last_successful_plaid_sync_at';
@@ -322,7 +323,14 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       var msg = '✅ Sync done — ' + procN + ' transaction(s) processed' + (totalN != null ? (' (Plaid total in window: ' + totalN + ')') : '') + (data.pages > 1 ? (' across ' + data.pages + ' pages') : '') + '.';
       if (win.start) { msg += ' Pulled ' + (win.incremental ? 'forward from ' : 'from ') + win.start + ' → ' + (win.end || 'today') + '.'; }
       if (data.newest_posted_date) { msg += ' Newest posted: ' + data.newest_posted_date + '.'; }
-      if (procN === 0) { msg += ' No new transactions since the last sync — this account may have no recent activity (use “Deep re-pull history” to backfill older history).'; }
+      if (Number(data.manual_deduped) > 0) { msg += ' 🚩 ' + data.manual_deduped + ' duplicate(s) already in from a CSV import — flagged and ignored, nothing doubled.'; }
+      // v55.83-QB (Max, Nov 7 11:40: "where is the rest of the history... something
+      // is not right") — a DEEP re-pull that comes back with Plaid total 0 for the
+      // whole window is NOT "no recent activity": right after a connect/reconnect
+      // Plaid is still building the bank's 2-year history in the background.
+      if (procN === 0 && totalN === 0 && win.start && win.incremental === false) {
+        msg += ' ⏳ Plaid reported ZERO transactions for this ENTIRE window — after a connect/reconnect, Plaid builds the 2-year history in the background (usually minutes, up to ~an hour for some banks). Wait a bit and click “Re-pull history” again. If a duplicate-link warning shows above, Archive duplicate first — your earlier transactions live on the other link and nothing is lost.';
+      } else if (procN === 0) { msg += ' No new transactions since the last sync — this account may have no recent activity (use “Deep re-pull history” to backfill older history).'; }
       // v55.83-JT — if the incremental markers didn't persist (JR SQL not run), warn LOUDLY: the next
       // sync would silently fall back to the legacy 30-day window (the stale/gap class we're fixing).
       if (data.markers_persisted === false) { msg += ' ⚠ Incremental markers could NOT be saved (run sql/v55-83-JR-plaid-incremental-sync.sql) — until then each sync falls back to ~30 days and can miss older gaps.'; }
@@ -725,6 +733,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           </div>
         </div>
       )}
+
+      {/* v55.83-QC (Max): manual CSV statement import — the guaranteed route
+          when a bank (M&T) won't give Plaid its history. bank.connections
+          permission; super admins always. */}
+      <StatementImport userProfile={userProfile} canUse={isSuperAdmin || !!(modulePerms && modulePerms['bank.connections'] === true)} />
 
       {/* Pull range (changes Plaid import) vs display filters (change only what you see) */}
       {transactions.length > 0 && (
