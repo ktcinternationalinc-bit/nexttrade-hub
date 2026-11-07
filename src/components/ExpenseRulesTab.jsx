@@ -13,6 +13,8 @@ import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of'; // v55.83-PQ — Wave link
 
+var KINDS = ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl']; // v55.83-PW — QuickBooks-style types
+var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' };
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export default function ExpenseRulesTab(props) {
@@ -28,6 +30,7 @@ export default function ExpenseRulesTab(props) {
   var s4 = useState('unverified'); var filter = s4[0]; var setFilter = s4[1];
   var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
   var s6 = useState(''); var newCat = s6[0]; var setNewCat = s6[1];
+  var sK = useState('expense'); var newKind = sK[0]; var setNewKind = sK[1]; // v55.83-PW
   var s7 = useState({ match_text: '', classification: '' }); var nr = s7[0]; var setNr = s7[1];
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
@@ -68,9 +71,16 @@ export default function ExpenseRulesTab(props) {
   function addCategory() {
     if (!newCat.trim()) { return; }
     setBusy(true);
-    api('save_category', { label: newCat.trim() }).then(function (j) {
+    api('save_category', { label: newCat.trim(), kind: newKind }).then(function (j) {
       if (j && j.ok) { toast.success('Category "' + newCat.trim() + '" added.'); setNewCat(''); loadAll(); }
       else { toast.error((j && j.error) || 'Could not add the category.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function changeKind(c, kind) {
+    setBusy(true);
+    api('save_category', { id: c.id, label: c.label, kind: kind }).then(function (j) {
+      if (j && j.ok) { toast.success(c.label + ' → ' + (KIND_LABELS[kind] || kind) + '. Reports updated.'); loadAll(); }
+      else { toast.error((j && j.error) || 'Could not change the type.'); }
     }).finally(function () { setBusy(false); });
   }
   function toggleCat(c) {
@@ -180,7 +190,7 @@ export default function ExpenseRulesTab(props) {
       body: JSON.stringify({ wave_business_id: US_WAVE_BUSINESS_ID, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok) { setWaveAccts(j.categories || []); setShowWave(true); }
-        else { toast.error((j && j.error) || 'Could not load the Wave account list.'); }
+        else { setWaveAccts([]); setShowWave(true); toast.error(((j && j.error) || 'Could not load the Wave account list.') + ' — category types are still editable.'); }
       }).finally(function () { setBusy(false); });
   }
   function linkWave(c, waveId) {
@@ -212,19 +222,26 @@ export default function ExpenseRulesTab(props) {
         })}
         <input value={newCat} onChange={function (e) { setNewCat(e.target.value); }} placeholder="new category…"
           className="px-2 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff', width: 140 }} />
+        <select value={newKind} onChange={function (e) { setNewKind(e.target.value); }} className="px-1.5 py-1 rounded-lg border border-slate-300 text-[11px]" style={{ color: '#0f172a', background: '#ffffff' }} title="QuickBooks-style type for the new category">
+          {KINDS.map(function (k) { return <option key={k} value={k}>{KIND_LABELS[k]}</option>; })}
+        </select>
         <button onClick={addCategory} disabled={busy || !newCat.trim()} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !newCat.trim()) ? 0.5 : 1 }}>+ add</button>
       </div>
       <div className="text-[10px] mt-1.5" style={{ color: '#64748b' }}>Categories show in every expense dropdown (Books home, Bank Review, here). Deactivating hides a category from pickers — nothing already categorized changes.</div>
       {/* v55.83-PQ (Max): one click → hub + ClickBooks + Wave */}
       <div className="mt-2">
         <button onClick={loadWaveAccts} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#0e7490', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>
-          🌊 {showWave ? 'Hide' : 'Link categories to'} Wave accounts</button>
+          📚 {showWave ? 'Hide' : 'Edit'} category types & Wave links</button>
         {showWave && waveAccts && <div className="mt-2 rounded-lg p-2" style={{ background: '#f0f9ff', border: '1px solid #bae6fd' }}>
-          <div className="text-[10px] font-bold mb-1" style={{ color: '#155e75' }}>Optional: give a category its Wave account — then ONE category pick books the expense in the hub, ClickBooks (via your approved map) AND Wave. A transaction that already has a Wave category is never overwritten.</div>
+          <div className="text-[10px] font-bold mb-1" style={{ color: '#155e75' }}>Each category has a TYPE, QuickBooks-style — Income / COGS / Expense / Other income / Other expense / Transfer / Not P&L. Types drive TAXABLE INCOME and DEDUCTIBLE SPENDING in every report (loan money and owner money are Not P&L: never income, never deductible). The Wave account link is optional — then ONE pick books it in the hub, ClickBooks AND Wave; an existing Wave category is never overwritten.</div>
           <div className="grid sm:grid-cols-2 gap-1.5">
             {activeCats.map(function (c) {
               return <div key={c.id} className="flex gap-1.5 items-center">
                 <span className="text-[11px] font-bold" style={{ color: '#0f172a', minWidth: 130 }}>{c.label}</span>
+                <select value={c.kind || 'expense'} onChange={function (e) { changeKind(c, e.target.value); }} disabled={busy} title="QuickBooks-style type — drives taxable income / deductible spending in every report"
+                  className="px-1 py-0.5 rounded border border-slate-300 text-[10px]" style={{ color: c.kind === 'not_pnl' ? '#6b21a8' : '#0f172a', background: '#ffffff', width: 118 }}>
+                  {KINDS.map(function (k2) { return <option key={k2} value={k2}>{KIND_LABELS[k2]}</option>; })}
+                </select>
                 <select value={c.wave_account_id || ''} onChange={function (e) { linkWave(c, e.target.value); }} disabled={busy}
                   className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] flex-1" style={{ color: '#0f172a', background: '#ffffff' }}>
                   <option value="">— no Wave link —</option>

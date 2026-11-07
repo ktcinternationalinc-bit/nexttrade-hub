@@ -17,7 +17,7 @@ export default function CashForecastTab(props) {
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var canView = isSuperAdmin || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true;
+  var canView = isSuperAdmin || modulePerms['accounting.view_totals'] === true || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true; // v55.83-PW — accounting.view_totals is the explicit totals level
   var toast = props.toast || { success: function () {}, error: function () {} };
   var onGo = props.onGo || function () {};
 
@@ -66,7 +66,7 @@ export default function CashForecastTab(props) {
   }
 
   return <div className="flex flex-col gap-3">
-    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold text-slate-900">📈 Cash forecast — as of {data.today}</div>

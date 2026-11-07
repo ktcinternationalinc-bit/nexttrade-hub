@@ -124,10 +124,22 @@ export async function POST(req) {
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
     var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1 };
-    var permKey = WRITE_ACTIONS[action] ? 'bills.manage' : 'bills.view';
-    var gate = await assertPermission(db, userId, permKey, req);
+    // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
+    // Bills: Manage. READS accept ANY totals-level permission — the explicit
+    // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
+    // (backward compatible: nobody loses access they had yesterday).
+    var gate = null;
+    if (WRITE_ACTIONS[action]) {
+      gate = await assertPermission(db, userId, 'bills.manage', req);
+    } else {
+      var READ_KEYS = ['bills.view', 'bills.manage', 'accounting.view_totals', 'ar.view_invoice_balances'];
+      for (var gk = 0; gk < READ_KEYS.length; gk++) {
+        gate = await assertPermission(db, userId, READ_KEYS[gk], req);
+        if (gate && gate.ok === true) { break; }
+      }
+    }
     if (!gate || gate.ok !== true) {
-      return NextResponse.json({ error: 'This needs the "' + (permKey === 'bills.manage' ? 'Bills: Manage' : 'Bills: View') + '" permission — grant it in Settings → Permissions.' }, { status: gate && gate.status ? gate.status : 403 });
+      return NextResponse.json({ error: 'This needs the "' + (WRITE_ACTIONS[action] ? 'Bills: Manage' : 'Accounting: See Money Totals (or Bills/AR: View)') + '" permission — grant it in Settings → Permissions.' }, { status: gate && gate.status ? gate.status : 403 });
     }
 
     // ── list: bills with status + payments
@@ -489,6 +501,63 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, available: true, drift: dj.data });
     }
 
+    // ── deposit_match_candidates (v55.83-PW, Max 10:54: "why can't we do
+    //    matching from here as well. can be done in multiple places") — rank
+    //    open invoices against one deposit so ANY screen can offer matching.
+    //    ALL open invoices qualify (no Apr-1 cutoff: a deposit may well pay
+    //    an old invoice). Candidates only — the WRITE goes through bank-write
+    //    match_invoice with its silo + over-apply guards.
+    if (action === 'deposit_match_candidates') {
+      var txDm = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, wave_business_id, matched_invoice_id').eq('id', body.bank_transaction_id).maybeSingle();
+      if (txDm.error || !txDm.data) { return NextResponse.json({ ok: false, error: 'Deposit not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      var openDm = await loadOpenUsInvoices(db);
+      var amtDm = r2(txDm.data.amount_abs);
+      var toksDm = String((txDm.data.merchant_name || '') + ' ' + (txDm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
+      var scored = openDm.map(function (v) {
+        var sc = 0;
+        if (Math.abs(v.open_balance - amtDm) <= 0.01) { sc += 100; } // exact open balance
+        else if (v.open_balance >= amtDm - 0.01) { sc += 10; }       // deposit fits inside
+        var nm = String(v.customer || '').toLowerCase();
+        toksDm.forEach(function (t1) { if (nm && nm.indexOf(t1) >= 0) { sc += 25; } });
+        return { v: v, sc: sc };
+      }).sort(function (a, b) { return b.sc - a.sc || b.v.open_balance - a.v.open_balance; }).slice(0, 20);
+      var idsDm = scored.map(function (x) { return x.v.id; });
+      var fullDm = idsDm.length ? await db.from('accounting_invoices').select('*').in('id', idsDm) : { data: [] };
+      var fullBy = {}; (fullDm.data || []).forEach(function (r8) { fullBy[r8.id] = r8; });
+      var candsDm = scored.map(function (x) {
+        return { invoice: fullBy[x.v.id] || null, id: x.v.id, ref: x.v.invoice_number, rel: x.v.release_number || null,
+          customer: x.v.customer, open: x.v.open_balance, total: x.v.total, due: x.v.due_date, score: x.sc, exact: Math.abs(x.v.open_balance - amtDm) <= 0.01 };
+      }).filter(function (c9) { return c9.invoice; });
+      return NextResponse.json({ ok: true, txn: txDm.data, candidates: candsDm, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── bill_match_candidates (v55.83-PW, Max 11:02: "must be able to match
+    //    bills to payments") — rank OPEN bills against one money-out
+    //    transaction, so spending can be matched to bills from All
+    //    Transactions too. The WRITE stays record_payment with its overpay +
+    //    over-allocation + settled-out guards.
+    if (action === 'bill_match_candidates') {
+      var txBm = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, direction').eq('id', body.bank_transaction_id).maybeSingle();
+      if (txBm.error || !txBm.data) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      if (txBm.data.direction !== 'out') { return NextResponse.json({ ok: false, error: 'Bills are paid by money OUT — this is a deposit.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var LBm = await loadBills(db);
+      var openBm = decorate(LBm.bills, LBm.pays).filter(function (b0) { return isPayable(b0); });
+      var amtBm = r2(txBm.data.amount_abs);
+      var toksBm = String((txBm.data.merchant_name || '') + ' ' + (txBm.data.name || '')).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t0) { return t0.length >= 3; });
+      var scoredBm = openBm.map(function (b1) {
+        var sc = 0;
+        if (Math.abs(b1.open - amtBm) <= 0.01) { sc += 100; }
+        else if (b1.open >= amtBm - 0.01) { sc += 10; }
+        var nm = String(b1.vendor_name || '').toLowerCase();
+        toksBm.forEach(function (t1) { if (nm && nm.indexOf(t1) >= 0) { sc += 25; } });
+        return { b: b1, sc: sc };
+      }).sort(function (a, b2) { return b2.sc - a.sc || b2.b.open - a.b.open; }).slice(0, 20);
+      var candsBm = scoredBm.map(function (x) {
+        return { bill_id: x.b.id, ref: x.b.bill_number || '—', vendor: x.b.vendor_name || '', open: r2(x.b.open), total: r2(x.b.total_amount), due: x.b.due_date || null, score: x.sc, exact: Math.abs(x.b.open - amtBm) <= 0.01 };
+      });
+      return NextResponse.json({ ok: true, txn: txBm.data, candidates: candsBm, api_build_marker: API_BUILD_MARKER });
+    }
+
     // ── forecast: aging buckets in/out + drill rows + unflagged counts
     // (Max: "what's coming in the next 30 days, 30-60, 60-90, 90 plus...
     //  bills we owe same thing... shortages... click the cards to see the
@@ -677,35 +746,66 @@ export async function POST(req) {
       // on the transfer column until the PQ SQL runs.
       var spend = null;
       try {
+        // v55.83-PV (Max, Nov 7 10:34: "tax reports need data for all of 2026
+        // to start") — Wave's API exposes no dated payment records, so the
+        // bank feed IS the dated 2026 money record (both directions, cash
+        // basis). Fetch in AND out; the income side mirrors the spending side.
         var spTx = await fetchAll(function () {
           return db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id')
-            .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true)
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction')
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
             .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
         });
-        var catLabels = {};
+        var catLabels = {}; var catKinds = {};
         try {
-          var catsSp = await db.from('expense_categories').select('key, label');
-          (catsSp.data || []).forEach(function (c6) { catLabels[c6.key] = c6.label; });
+          var catsSp = await db.from('expense_categories').select('key, label, kind');
+          (catsSp.data || []).forEach(function (c6) { catLabels[c6.key] = c6.label; catKinds[c6.key] = c6.kind || 'expense'; });
         } catch (eC) {}
+        // v55.83-PW (Max): QuickBooks-style types. P&L kinds count toward
+        // taxable income / deductible spending; not_pnl money (loan principal,
+        // owner contributions) NEVER does — that is proper accounting.
+        var kindOf = function (k0) { return catKinds[k0] || 'expense'; };
         var byCat = {}; var trf = { count: 0, total: 0 }; var unc = { count: 0, total: 0 }; var totOut = 0;
         var spRows = [];
+        var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
+        var inRows = [];
         spTx.forEach(function (t6) {
           var d6 = t6.posted_date || t6.date;
           if (!(d6 >= pFrom && d6 <= pTo)) { return; }
           var amt6 = r2(t6.amount_abs);
-          totOut = r2(totOut + amt6);
           var isTrf = !!t6.transfer_group_id || t6.classification === 'transfer';
+          if (t6.direction === 'in') {
+            // income side: an invoice-matched deposit counts as sales even
+            // when nobody also set a classification on it.
+            totIn = r2(totIn + amt6);
+            var keyI = isTrf ? 'transfer' : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null));
+            if (inRows.length < 500) { inRows.push({ date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id }); }
+            if (isTrf) { trfIn.count++; trfIn.total = r2(trfIn.total + amt6); return; }
+            if (!keyI) { uncIn.count++; uncIn.total = r2(uncIn.total + amt6); return; }
+            if (!byCatIn[keyI]) { byCatIn[keyI] = { key: keyI, label: catLabels[keyI] || keyI, kind: kindOf(keyI), count: 0, total: 0 }; }
+            byCatIn[keyI].count++; byCatIn[keyI].total = r2(byCatIn[keyI].total + amt6);
+            return;
+          }
+          totOut = r2(totOut + amt6);
           var key6 = isTrf ? 'transfer' : (t6.classification || null);
           if (spRows.length < 500) { spRows.push({ date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id }); }
           if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
           if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
-          if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, count: 0, total: 0 }; }
+          if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, kind: kindOf(key6), count: 0, total: 0 }; }
           byCat[key6].count++; byCat[key6].total = r2(byCat[key6].total + amt6);
         });
         var catRows = Object.values(byCat).sort(function (a6, b6) { return b6.total - a6.total; });
+        var catRowsIn = Object.values(byCatIn).sort(function (a7, b7) { return b7.total - a7.total; });
+        var notPnlOut = { count: 0, total: 0 }; var deductible = 0;
+        catRows.forEach(function (c7) { if (c7.kind === 'not_pnl') { notPnlOut.count += c7.count; notPnlOut.total = r2(notPnlOut.total + c7.total); } else { deductible = r2(deductible + c7.total); } });
+        var notPnlIn = { count: 0, total: 0 }; var taxable = 0;
+        catRowsIn.forEach(function (c8) { if (c8.kind === 'not_pnl') { notPnlIn.count += c8.count; notPnlIn.total = r2(notPnlIn.total + c8.total); } else { taxable = r2(taxable + c8.total); } });
         spend = { categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
-          real_spending: r2(totOut - trf.total), rows: spRows };
+          real_spending: r2(totOut - trf.total), rows: spRows,
+          deductible_spending: deductible, not_pnl_out: notPnlOut,
+          in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
+          real_income: r2(totIn - trfIn.total), in_rows: inRows,
+          taxable_income: taxable, not_pnl_in: notPnlIn };
       } catch (eSp) { spend = null; }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: pFrom, to: pTo,
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },

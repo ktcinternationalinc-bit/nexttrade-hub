@@ -57,6 +57,8 @@ export default function InvoicePeek(props) {
             <div className="text-[10px]" style={{ color: '#64748b' }}>Dated {d.inv.invoice_date || '—'} · Due <span style={{ color: '#7f1d1d', fontWeight: 700 }}>{d.inv.due_date || '—'}</span> · {d.inv.currency || 'USD'} · {d.inv.source === 'wave_import' ? 'Wave' : 'Hub'} · {d.inv.record_status || 'active'}</div>
           </div>
           <div className="flex-1" />
+          {props.onEdit && <button onClick={function () { props.onEdit(invoiceId); }} title="Open this invoice in the Invoices editor"
+            className="px-2 py-1 rounded-lg text-xs font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>✏ Edit invoice</button>}
           <button onClick={onClose} className="px-2 py-1 rounded-lg text-xs font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕ close</button>
         </div>
         <div className="flex gap-2 flex-wrap mb-2">

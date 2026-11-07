@@ -106,8 +106,9 @@ ok('5d: classifications come from the shared bank-permissions list (same choices
 
 // ── 6. Bills API: permissions + honesty guards
 var br = R('src/app/api/accounting/bills/route.js');
-ok('6a: writes need bills.manage, reads bills.view (assertPermission on every action)',
-  /bills\.manage/.test(br) && /bills\.view/.test(br) && /assertPermission\(db, userId, permKey, req\)/.test(br));
+ok('6a (PW): writes still need bills.manage; reads accept any totals-level key (PW permission levels — bills.view kept for back-compat)',
+  /assertPermission\(db, userId, 'bills\.manage', req\)/.test(br) &&
+  /READ_KEYS = \['bills\.view', 'bills\.manage', 'accounting\.view_totals', 'ar\.view_invoice_balances'\]/.test(br));
 ok('6b: overpaying a bill is rejected; bank-linked payment must be settled money OUT and never over-allocated',
   /overpays the bill/.test(br) && /direction !== 'out'/.test(br) && /pending === true/.test(br) && /already allocated to bills/.test(br));
 ok('6c: bills are US-business records (verified Wave business constant), USD',

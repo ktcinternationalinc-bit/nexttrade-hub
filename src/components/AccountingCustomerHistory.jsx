@@ -25,7 +25,7 @@ export default function AccountingCustomerHistory(props) {
   var _role = userProfile && userProfile.role;
   var mayView = canViewAccountingCustomers(isSuperAdmin, modulePerms, _role) || canViewCustomerAr(isSuperAdmin, modulePerms);
   var showAmt = canSeeAmounts(isSuperAdmin, modulePerms);
-  var toast = props.toast || { error: function () {} };
+  var toast = props.toast || { error: function () {}, success: function () {} };
 
   var [customers, setCustomers] = useState([]);
   var [invoices, setInvoices] = useState([]);
@@ -72,11 +72,51 @@ export default function AccountingCustomerHistory(props) {
   // accounting_customer_id, so matching only on accounting_customer_id UNDER-COUNTS a customer's invoices.
   // Also match by the customer's wave_customer_id when present (no bleed: only this customer's Wave id).
   function custWaveId(custId) { var c = customers.find(function (x) { return x.id === custId; }); return c && c.wave_customer_id ? c.wave_customer_id : null; }
-  function invoicesFor(custId) { var w = custWaveId(custId); return invoices.filter(function (i) { return i.accounting_customer_id === custId || (w && i.wave_customer_id && i.wave_customer_id === w); }); }
-  function proformasFor(custId) { var w = custWaveId(custId); return proformas.filter(function (p) { return p.accounting_customer_id === custId || (w && p.wave_customer_id && p.wave_customer_id === w); }); }
+  // v55.83-PW (Max): "merge and unmerge more than one customer to make it one
+  // set of data aggregated... see the names together." A merged customer
+  // points at its primary (merged_into); every lookup below aggregates across
+  // the WHOLE group. Nothing on invoices/payments is rewritten — unmerge just
+  // clears the pointer.
+  function groupMembers(custId) {
+    var ids = [custId];
+    customers.forEach(function (c) { if (c.merged_into === custId) { ids.push(c.id); } });
+    return ids;
+  }
+  function groupWaveIds(custId) {
+    var ws = [];
+    groupMembers(custId).forEach(function (id2) { var w2 = custWaveId(id2); if (w2) { ws.push(w2); } });
+    return ws;
+  }
+  function groupNames(custId) {
+    return groupMembers(custId).map(function (id3) {
+      var c3 = customers.find(function (x) { return x.id === id3; });
+      return c3 ? (c3.company_name || c3.contact_name || '?') : '?';
+    });
+  }
+  function mergeInto(memberId, primaryId) {
+    if (!memberId || memberId === primaryId) { return; }
+    // flatten: anything already merged into the member follows it to the new primary
+    var toMove = [memberId];
+    customers.forEach(function (c) { if (c.merged_into === memberId) { toMove.push(c.id); } });
+    supabase.from('accounting_customers').update({ merged_into: primaryId }).in('id', toMove).select('id').then(function (r) {
+      if (r.error) { toast.error('Merge failed: ' + r.error.message + (/merged_into/.test(r.error.message) ? ' — run the PW SQL first.' : '')); return; }
+      setCustomers(customers.map(function (c) { return toMove.indexOf(c.id) >= 0 ? Object.assign({}, c, { merged_into: primaryId }) : c; }));
+      toast.success('Merged — totals now aggregated. Unmerge any time.');
+    });
+  }
+  function unmergeOne(memberId) {
+    supabase.from('accounting_customers').update({ merged_into: null }).eq('id', memberId).select('id').then(function (r) {
+      if (r.error) { toast.error('Unmerge failed: ' + r.error.message); return; }
+      setCustomers(customers.map(function (c) { return c.id === memberId ? Object.assign({}, c, { merged_into: null }) : c; }));
+      toast.success('Unmerged — the name is its own customer again.');
+    });
+  }
+  function invoicesFor(custId) { var ids = groupMembers(custId); var ws = groupWaveIds(custId); return invoices.filter(function (i) { return ids.indexOf(i.accounting_customer_id) >= 0 || (i.wave_customer_id && ws.indexOf(i.wave_customer_id) >= 0); }); }
+  function proformasFor(custId) { var ids = groupMembers(custId); var ws = groupWaveIds(custId); return proformas.filter(function (p) { return ids.indexOf(p.accounting_customer_id) >= 0 || (p.wave_customer_id && ws.indexOf(p.wave_customer_id) >= 0); }); }
   function paymentsFor(custId) {
     var invIds = {}; invoicesFor(custId).forEach(function (i) { invIds[i.id] = true; });
-    return payments.filter(function (p) { return p.accounting_customer_id === custId || invIds[p.accounting_invoice_id]; });
+    var gids = groupMembers(custId);
+    return payments.filter(function (p) { return gids.indexOf(p.accounting_customer_id) >= 0 || invIds[p.accounting_invoice_id]; });
   }
 
   // v55.83-KB (Max, final call — overrides the earlier AR-aging-exemption): EMPLOYEES see ONLY the
@@ -135,6 +175,7 @@ export default function AccountingCustomerHistory(props) {
   if (loading) return <div className="p-6 text-slate-300">Loading customer AR history…</div>;
 
   var listed = customers.filter(function (c) {
+    if (c.merged_into) { return false; } // folded into its primary — names shown together there
     if (filter === 'review' && c.needs_review !== true) return false;
     if (filter === 'open' && summary(c.id).open <= 0.0001) return false;
     if (search.trim()) { var q = search.trim().toLowerCase(); if ((c.company_name || '').toLowerCase().indexOf(q) < 0 && (c.email || '').toLowerCase().indexOf(q) < 0) return false; }
@@ -162,7 +203,8 @@ export default function AccountingCustomerHistory(props) {
                 return (
                   <div key={c.id} onClick={function () { setSel(c.id); }} className={'px-2 py-1.5 cursor-pointer border-b border-slate-800 ' + (sel === c.id ? 'bg-slate-700' : 'hover:bg-slate-800')}>
                     <div className="flex items-center justify-between gap-1">
-                      <span className="font-bold text-xs text-slate-100 truncate">{c.company_name || '(no name)'}</span>
+                      <span className="font-bold text-xs text-slate-100 truncate">{groupNames(c.id).join(' + ') || '(no name)'}</span>
+                      {groupMembers(c.id).length > 1 && <span className="text-[9px] rounded px-1 py-0.5 font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>⛓ {groupMembers(c.id).length} merged</span>}
                       {c.needs_review === true && <span className="text-[9px] bg-amber-400 text-amber-950 rounded px-1 font-bold">review</span>}
                     </div>
                     <div className="text-[10px] text-slate-400">Open: {money(st.open, showAmt)}</div>
@@ -177,8 +219,30 @@ export default function AccountingCustomerHistory(props) {
           {!selCust ? <div className="text-slate-400 italic text-sm p-4">Select a customer to see their receivables history.</div> : (
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <div className="text-base font-extrabold">{selCust.company_name}</div>
+                <div className="text-base font-extrabold">{groupNames(selCust.id).join(' + ')}</div>
+                {groupMembers(selCust.id).length > 1 && <span className="text-[10px] rounded px-1.5 py-0.5 font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>⛓ one customer, {groupMembers(selCust.id).length} names — totals aggregated</span>}
                 {selCust.needs_review === true && <span className="text-[10px] bg-amber-400 text-amber-950 rounded px-1.5 py-0.5 font-bold">NEEDS REVIEW (placeholder from import)</span>}
+              </div>
+              {/* v55.83-PW — merge/unmerge (super admin): non-destructive, one
+                  pointer per merged name; unmerge restores instantly. */}
+              {isSuperAdmin && <div className="flex gap-2 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: '#0f172a', border: '1px solid #334155' }}>
+                <span className="text-[10px] font-extrabold text-slate-300">⛓ Merge:</span>
+                <select value="" onChange={function (e) { if (e.target.value) { mergeInto(e.target.value, selCust.id); } }}
+                  className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-100 text-[11px]" style={{ maxWidth: 260 }}>
+                  <option value="">merge another customer into this one…</option>
+                  {customers.filter(function (c5) { return c5.id !== selCust.id && !c5.merged_into; }).map(function (c5) {
+                    return <option key={c5.id} value={c5.id}>{c5.company_name || c5.contact_name || '(no name)'}</option>;
+                  })}
+                </select>
+                {groupMembers(selCust.id).filter(function (id5) { return id5 !== selCust.id; }).map(function (id5) {
+                  var c6 = customers.find(function (x) { return x.id === id5; });
+                  return <span key={id5} className="inline-flex items-center gap-1 text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' }}>
+                    {(c6 && (c6.company_name || c6.contact_name)) || '?'}
+                    <button onClick={function () { unmergeOne(id5); }} title="Unmerge — this name becomes its own customer again" className="font-extrabold" style={{ color: '#f87171' }}>✕ unmerge</button></span>;
+                })}
+                <span className="text-[9px] text-slate-500">Nothing is rewritten — invoices keep their original customer; unmerge any name any time.</span>
+              </div>}
+              <div className="flex gap-2 items-center flex-wrap" style={{ display: 'none' }}>
                 <span className="text-[11px] text-slate-400 ml-1" title="Org history-visibility window (super admin sets it in Settings → Accounting Visibility). Employees see ONLY this window — every total, count and balance is limited to it. Super-admin sees all history.">Visibility: <b className={arFloor ? 'text-sky-300' : 'text-slate-200'}>{isSuperAdmin ? 'All history (super-admin)' : labelForWindow(visCfg.window, visCfg.customDays)}</b>{arFloor ? <span> (everything from {arFloor})</span> : null}</span>
               </div>
 

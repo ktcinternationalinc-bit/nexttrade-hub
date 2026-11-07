@@ -71,8 +71,8 @@ ok('5b: on a human category pick, the linked Wave account rides along ONLY when 
   /wave_auto_category: waveAuto/.test(bw));
 ok('5c: rules NEVER set the Wave account in the background — only a human pick does (applyExpenseRules untouched)',
   !/wave_account/.test(R('src/lib/expense-rules-server.js')));
-ok('5d: 🌊 link editor in Categories & Rules — per-category Wave select from the paginated silo chart, with the never-overwrite promise stated',
-  /🌊 \{showWave \? 'Hide' : 'Link categories to'\} Wave accounts/.test(ert) &&
+ok('5d (PW renamed the button to cover types too): editor in Categories & Rules — per-category Wave select, never-overwrite promise stated',
+  /📚 \{showWave \? 'Hide' : 'Edit'\} category types & Wave links/.test(ert) &&
   /api\/wave\/categories/.test(ert) && /never overwritten/.test(ert) &&
   /linkWave\(c, e\.target\.value\)/.test(ert));
 

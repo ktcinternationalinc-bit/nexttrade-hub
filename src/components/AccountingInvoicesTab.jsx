@@ -317,6 +317,24 @@ export default function AccountingInvoicesTab(props) {
     };
     rd.readAsDataURL(file);
   }
+  // v55.83-PW (Max, 10:46): "should be able to click on button to actually
+  // open invoice to edit if necessary from here" — any invoice peek's ✏ Edit
+  // lands here: fetch the full row by id and open the SAME editor.
+  function openEditById(id) {
+    if (!id || !isInvoice()) { return; }
+    if (!mayEdit) { toast.error('You need invoice edit permission for that.'); return; }
+    supabase.from('accounting_invoices').select('*').eq('id', id).maybeSingle().then(function (r) {
+      if (r && r.data) { startEdit(r.data); }
+      else { toast.error('Could not open that invoice for editing.'); }
+    });
+  }
+  useEffect(function () {
+    var pending = typeof window !== 'undefined' ? window.__ntOpenInvoiceEdit : null;
+    if (pending) { window.__ntOpenInvoiceEdit = null; openEditById(pending); }
+    function onEvt(e) { if (e && e.detail) { window.__ntOpenInvoiceEdit = null; openEditById(e.detail); } }
+    window.addEventListener('nt-open-invoice-edit', onEvt);
+    return function () { window.removeEventListener('nt-open-invoice-edit', onEvt); };
+  }, []); // eslint-disable-line
   function startEdit(row) {
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';

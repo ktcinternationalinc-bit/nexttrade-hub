@@ -5,6 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 
+var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' }; // v55.83-PW
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var TODAY = new Date().toISOString().substring(0, 10);
@@ -13,12 +14,13 @@ export default function PeriodStatsTab(props) {
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var canView = isSuperAdmin || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true;
+  var canView = isSuperAdmin || modulePerms['accounting.view_totals'] === true || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true; // v55.83-PW — accounting.view_totals is the explicit totals level
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
   var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
+  var sIn = useState(null); var inCat = sIn[0]; var setInCat = sIn[1]; // v55.83-PV — income-by-category drill
   var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
@@ -100,8 +102,10 @@ export default function PeriodStatsTab(props) {
     dl('tax-pack-5-bills-paid-' + tag + '.csv', rowsCsv(d.bills_paid));
     dl('tax-pack-6-open-payables-' + tag + '.csv', rowsCsv(d.open_bills));
     if (data.spending) {
-      var sp = ['category,transactions,total_usd'];
-      (data.spending.categories || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + c.count + ',' + Number(c.total).toFixed(2)); });
+      var sp = ['category,type,transactions,total_usd'];
+      (data.spending.categories || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + (KIND_LABELS[c.kind] || c.kind || 'Expense') + ',' + c.count + ',' + Number(c.total).toFixed(2)); });
+      if (data.spending.not_pnl_out && data.spending.not_pnl_out.count > 0) { sp.push('"NOT P&L - loan principal / owner (NOT deductible)",,' + data.spending.not_pnl_out.count + ',' + Number(data.spending.not_pnl_out.total).toFixed(2)); }
+      if (data.spending.deductible_spending !== undefined) { sp.push('"DEDUCTIBLE SPENDING (P&L categories only)",,,' + Number(data.spending.deductible_spending).toFixed(2)); }
       if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + Number(data.spending.uncategorized.total).toFixed(2)); }
       if (data.spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + data.spending.transfers.count + ',' + Number(data.spending.transfers.total).toFixed(2)); }
       sp.push('"REAL SPENDING (transfers excluded)",,' + Number(data.spending.real_spending).toFixed(2));
@@ -110,15 +114,28 @@ export default function PeriodStatsTab(props) {
       (data.spending.rows || []).forEach(function (r) { det.push(r.date + ',"' + String(r.who).replace(/"/g, '""') + '",' + Number(r.amount).toFixed(2) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
       dl('tax-pack-8-spending-detail-' + tag + '.csv', det);
     }
+    if (data.spending && data.spending.in_categories) {
+      var spi = ['category,type,deposits,total_usd'];
+      (data.spending.in_categories || []).forEach(function (c) { spi.push('"' + String(c.label).replace(/"/g, '""') + '",' + (KIND_LABELS[c.kind] || c.kind || '') + ',' + c.count + ',' + Number(c.total).toFixed(2)); });
+      if (data.spending.not_pnl_in && data.spending.not_pnl_in.count > 0) { spi.push('"NOT P&L - loan proceeds / owner (NOT income)",,' + data.spending.not_pnl_in.count + ',' + Number(data.spending.not_pnl_in.total).toFixed(2)); }
+      if (data.spending.taxable_income !== undefined) { spi.push('"TAXABLE INCOME (P&L categories only)",,,' + Number(data.spending.taxable_income).toFixed(2)); }
+      if (data.spending.in_uncategorized) { spi.push('"UNCATEGORIZED DEPOSITS (match before filing)",' + data.spending.in_uncategorized.count + ',' + Number(data.spending.in_uncategorized.total).toFixed(2)); }
+      if (data.spending.in_transfers) { spi.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not income)",' + data.spending.in_transfers.count + ',' + Number(data.spending.in_transfers.total).toFixed(2)); }
+      spi.push('"REAL MONEY IN (transfers excluded)",,' + Number(data.spending.real_income).toFixed(2));
+      dl('tax-pack-10-income-by-category-' + tag + '.csv', spi);
+      var deti = ['date,who,amount,category,paired_transfer'];
+      (data.spending.in_rows || []).forEach(function (r) { deti.push(r.date + ',"' + String(r.who).replace(/"/g, '""') + '",' + Number(r.amount).toFixed(2) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
+      dl('tax-pack-11-income-detail-' + tag + '.csv', deti);
+    }
     var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
     (data.months || []).forEach(function (m) { mo.push(m.month + ',' + m.invoiced.toFixed(2) + ',' + m.collected.toFixed(2) + ',' + m.billed.toFixed(2) + ',' + m.bills_paid.toFixed(2) + ',' + m.net.toFixed(2)); });
     dl('tax-pack-9-monthly-summary-' + tag + '.csv', mo);
-    toast.success('Accountant pack downloaded — 9 CSVs for ' + from + ' → ' + to + '.');
+    toast.success('Accountant pack downloaded — 11 CSVs for ' + from + ' → ' + to + '.');
   }
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
   return <div className="bg-white rounded-xl border border-slate-200 p-3">
-    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900">📉 Stats — invoices & bills</div>
       <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={from} onChange={function (e) { setFrom(e.target.value); }} />
@@ -241,7 +258,7 @@ export default function PeriodStatsTab(props) {
             {(data.spending.categories || []).map(function (c) {
               var pct = data.spending.real_spending > 0 ? Math.round(c.total / data.spending.real_spending * 1000) / 10 : 0;
               return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setSpCat(spCat === c.key ? null : c.key); }}>
-                <td className="py-1 pr-2 font-bold">{c.label} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
+                <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
                 <td className="py-1 pr-2 text-right tabular-nums">{c.count}</td>
                 <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(c.total)}</td>
                 <td className="py-1 text-right tabular-nums">{pct}%</td></tr>;
@@ -255,7 +272,15 @@ export default function PeriodStatsTab(props) {
               <td className="py-1 pr-2 text-right tabular-nums">{data.spending.transfers.count}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#1e40af' }}>${fmt(data.spending.transfers.total)}</td><td /></tr>}
           </tbody>
-          <tfoot><tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
+          <tfoot>
+            {data.spending.not_pnl_out && data.spending.not_pnl_out.count > 0 && <tr style={{ color: '#6b21a8' }}>
+              <td className="py-1 pr-2 font-bold">Not P&L — loan principal / owner money (NOT deductible)</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{data.spending.not_pnl_out.count}</td>
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.not_pnl_out.total)}</td><td /></tr>}
+            {data.spending.deductible_spending !== undefined && <tr style={{ color: '#0f172a' }}>
+              <td className="py-1 pr-2 font-extrabold">DEDUCTIBLE SPENDING (P&L categories only)</td><td />
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>${fmt(data.spending.deductible_spending)}</td><td /></tr>}
+            <tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
             <td className="py-1.5 pr-2 font-extrabold">Real spending (transfers excluded)</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">{(data.spending.total_out ? '' : '')}</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.real_spending)}</td><td /></tr></tfoot>
@@ -270,6 +295,57 @@ export default function PeriodStatsTab(props) {
                 <td className="py-0.5 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td></tr>;
             })}
           </tbody></table>
+        </div>}
+
+        {/* v55.83-PV (Max): "tax reports need data for all of 2026" — the income
+            side, from the bank feed (the only DATED full-year money record). */}
+        {data.spending.in_categories && <div className="mt-3">
+          <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💰 Money in by category — {from} → {to} (bank deposits)</div>
+          <table className="w-full text-[11px]">
+            <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+              <th className="py-1 pr-2 text-left font-semibold">Category</th><th className="py-1 pr-2 text-right font-semibold">Deposits</th>
+              <th className="py-1 pr-2 text-right font-semibold">Total</th><th className="py-1 text-right font-semibold">% of income</th></tr></thead>
+            <tbody style={{ color: '#0f172a' }}>
+              {(data.spending.in_categories || []).map(function (c) {
+                var pct = data.spending.real_income > 0 ? Math.round(c.total / data.spending.real_income * 1000) / 10 : 0;
+                return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setInCat(inCat === c.key ? null : c.key); }}>
+                  <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{c.count}</td>
+                  <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(c.total)}</td>
+                  <td className="py-1 text-right tabular-nums">{pct}%</td></tr>;
+              })}
+              {data.spending.in_uncategorized && data.spending.in_uncategorized.count > 0 && <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: '#fff7ed' }} onClick={function () { setInCat(inCat === '' ? null : ''); }}>
+                <td className="py-1 pr-2 font-bold" style={{ color: '#9a3412' }}>⚠ Uncategorized deposits — match or categorize before filing</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{data.spending.in_uncategorized.count}</td>
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#9a3412' }}>${fmt(data.spending.in_uncategorized.total)}</td><td /></tr>}
+              {data.spending.in_transfers && data.spending.in_transfers.count > 0 && <tr style={{ cursor: 'pointer', background: '#eff6ff' }} onClick={function () { setInCat(inCat === 'transfer' ? null : 'transfer'); }}>
+                <td className="py-1 pr-2 font-bold" style={{ color: '#1e40af' }}>↔ Transfers between own accounts — NOT income</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{data.spending.in_transfers.count}</td>
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#1e40af' }}>${fmt(data.spending.in_transfers.total)}</td><td /></tr>}
+            </tbody>
+            <tfoot>
+              {data.spending.not_pnl_in && data.spending.not_pnl_in.count > 0 && <tr style={{ color: '#6b21a8' }}>
+                <td className="py-1 pr-2 font-bold">Not P&L — loan proceeds / owner money (NOT income)</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{data.spending.not_pnl_in.count}</td>
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.not_pnl_in.total)}</td><td /></tr>}
+              {data.spending.taxable_income !== undefined && <tr style={{ color: '#0f172a' }}>
+                <td className="py-1 pr-2 font-extrabold">TAXABLE INCOME (P&L categories only)</td><td />
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(data.spending.taxable_income)}</td><td /></tr>}
+              <tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
+              <td className="py-1.5 pr-2 font-extrabold">Real money in (transfers excluded)</td><td />
+              <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>${fmt(data.spending.real_income)}</td><td /></tr></tfoot>
+          </table>
+          {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+            <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
+              {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).map(function (r, i) {
+                return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
+                  <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
+                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>+${fmt(r.amount)}</td>
+                  <td className="py-0.5 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td></tr>;
+              })}
+            </tbody></table>
+          </div>}
         </div>}
       </div>}
      </div>}

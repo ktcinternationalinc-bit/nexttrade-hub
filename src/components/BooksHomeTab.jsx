@@ -199,7 +199,7 @@ export default function BooksHomeTab(props) {
   }
 
   return <div className="flex flex-col gap-3">
-    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />
+    <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     {/* ── Period + cash flow ── */}
     <div className="bg-white rounded-xl border border-slate-200 p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">

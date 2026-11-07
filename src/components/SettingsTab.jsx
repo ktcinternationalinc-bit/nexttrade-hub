@@ -492,6 +492,11 @@ const ACTION_PERMS = [
   // v55.83-HR (Codex P0) — Accounting DOCUMENT permissions. These let staff work invoices,
   // customers, company profile, and purchase orders WITHOUT needing Bank: View. Bank: View now
   // only controls Bank Review & Matching. Stable codes (ACCT-001..007) are shown for admins.
+  // v55.83-PW (Max, Nov 7 10:56/10:59) — the three permission LEVELS:
+  // general accounting access, money TOTALS on cards, bank balances (the
+  // protected SQL grant). Super admin always sees all.
+  { key: 'accounting.view',             label: 'ACCT-000 - Accounting: View (general)', desc: 'Open the Accounting area at all. Anyone with any specific accounting permission below also gets in — this is the simple umbrella switch.' },
+  { key: 'accounting.view_totals',      label: 'ACCT-008 - Accounting: See Money Totals', desc: 'See the aggregate money cards (Came in / Sales / Expected / Stats / Forecast strips). WITHOUT this, a worker with Bank: Categorize + Payments: Match still sees individual transactions for matching and categorizing — just not the totals. Bank BALANCES stay a separate protected grant.' },
   { key: 'accounting.company_profile.view', label: 'ACCT-001 - Company Profile: View', desc: 'View the company profile used on printed invoices/proformas. Does NOT require Bank: View.' },
   { key: 'accounting.company_profile.edit', label: 'ACCT-001E - Company Profile: Edit', desc: 'Edit the company profile (name, logo, branding on printed invoices/proformas). Admins/super-admin always have this.' },
   { key: 'accounting.customers.view',       label: 'ACCT-002 - Accounting Customers: View', desc: 'View Hub accounting customers (separate from CRM and from bank transactions). Does NOT require Bank: View.' },

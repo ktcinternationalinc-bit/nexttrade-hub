@@ -87,6 +87,133 @@ ok('6 (PU): Plaid link tokens request the MAXIMUM history (days_requested 730) �
   /transactions: \{ days_requested: 730 \}/.test(R('src/app/api/plaid/link/route.js')) &&
   /must be RECONNECTED once/.test(R('src/app/api/plaid/link/route.js')));
 
+// ── PV (Max 10:34: "tax reports need data for all of 2026 to start") ──
+var brV = R('src/app/api/accounting/bills/route.js');
+var psV = R('src/components/PeriodStatsTab.jsx');
+ok('7a (PV): the money record now covers BOTH directions — income side mirrors spending (invoice-matched deposits count as sales, transfers excluded, uncategorized flagged)',
+  /in\('direction', \['in', 'out'\]\)/.test(brV) &&
+  /t6\.matched_invoice_id \? 'customer_payment' : \(t6\.classification \|\| null\)/.test(brV) &&
+  /real_income: r2\(totIn - trfIn\.total\)/.test(brV));
+ok('7b (PV): Stats shows 💰 Money in by category with % of income, row drills, and the not-income transfers line',
+  /Money in by category/.test(psV) && /% of income/.test(psV) &&
+  /Transfers between own accounts — NOT income/.test(psV) &&
+  /Real money in \(transfers excluded\)/.test(psV));
+ok('7c (PV): the accountant pack gained income CSVs (10 by-category, 11 detail) — 11 files total',
+  /tax-pack-10-income-by-category-/.test(psV) && /tax-pack-11-income-detail-/.test(psV) &&
+  /11 CSVs for/.test(psV));
+
+// ── PW (Max 10:42: "categories should be whether they are income or expense
+//    as quickbooks does") ──
+var sqlK = R('sql/v55-83-PW-category-kinds.sql');
+var erK = R('src/app/api/accounting/expense-rules/route.js');
+var brK = R('src/app/api/accounting/bills/route.js');
+var psK = R('src/components/PeriodStatsTab.jsx');
+var ertK = R('src/components/ExpenseRulesTab.jsx');
+ok('8a (PW): kind column, DB CHECK whitelist, built-ins typed (loan + owner → not_pnl: never income, never deductible)',
+  /CHECK \(kind IN \('income','cogs','expense','other_income','other_expense','transfer','not_pnl'\)\)/.test(sqlK) &&
+  /SET kind = 'not_pnl'\s+WHERE key = 'loan'/.test(sqlK) &&
+  /SET kind = 'not_pnl'\s+WHERE key = 'owner_contribution'/.test(sqlK));
+ok('8b: route whitelists kind on create AND edit — never free text into the books',
+  /KINDS\.indexOf\(body\.payload\.kind\) < 0\) \{ return NextResponse\.json\(\{ ok: false, error: 'Unknown category type/.test(erK) &&
+  /var insKind = 'expense';/.test(erK));
+ok('8c: reports split by kind — taxable income and deductible spending EXCLUDE not_pnl money on both sides',
+  /if \(c7\.kind === 'not_pnl'\)/.test(brK) && /if \(c8\.kind === 'not_pnl'\)/.test(brK) &&
+  /taxable_income: taxable, not_pnl_in: notPnlIn/.test(brK));
+ok('8d: Stats shows the type on every row + TAXABLE INCOME / DEDUCTIBLE SPENDING lines; both pack CSVs carry the type column + subtotals',
+  /TAXABLE INCOME \(P&L categories only\)/.test(psK) && /DEDUCTIBLE SPENDING \(P&L categories only\)/.test(psK) &&
+  /category,type,transactions,total_usd/.test(psK) && /category,type,deposits,total_usd/.test(psK) &&
+  /NOT P&L - loan proceeds \/ owner \(NOT income\)/.test(psK));
+ok('8e: 🏷 tab — type picker on add (default Expense) + per-category type select; types editable even when Wave is unreachable',
+  /sK = useState\('expense'\)/.test(ertK) && /changeKind\(c, e\.target\.value\)/.test(ertK) &&
+  /category types are still editable/.test(ertK));
+
+// ── PW part 2 (Max 10:46): ✏ Edit from the invoice popup ──
+var pkE = R('src/components/InvoicePeek.jsx');
+var aitE = R('src/components/AccountingInvoicesTab.jsx');
+ok('9a: the peek offers ✏ Edit invoice (only when a parent wires onEdit), which opens the REAL editor',
+  /props\.onEdit && <button onClick=\{function \(\) \{ props\.onEdit\(invoiceId\); \}\}/.test(pkE) &&
+  /✏ Edit invoice/.test(pkE));
+ok('9b: the Invoices tab accepts the handoff (flag + event), fetches the FULL row, respects edit permission, and reuses startEdit',
+  /window\.__ntOpenInvoiceEdit/.test(aitE) && /nt-open-invoice-edit/.test(aitE) &&
+  /if \(!mayEdit\) \{ toast\.error\('You need invoice edit permission/.test(aitE) &&
+  /\{ startEdit\(r\.data\); \}/.test(aitE));
+ok('9c: all three peek hosts navigate to the Invoices tab on edit (onGo(\'invoices\')), PeriodStats now receives onGo',
+  (R('src/components/BooksHomeTab.jsx').match(/onGo\('invoices'\)/g) || []).length >= 1 &&
+  /onGo\('invoices'\)/.test(R('src/components/CashForecastTab.jsx')) &&
+  /onGo\('invoices'\)/.test(R('src/components/PeriodStatsTab.jsx')) &&
+  /<PeriodStatsTab \{\.\.\.props\} onGo=\{setSub\} \/>/.test(R('src/components/AccountingTab.jsx')));
+
+// ── PW part 3 (Max 10:49: customer merge/unmerge, names together) ──
+var achM = R('src/components/AccountingCustomerHistory.jsx');
+ok('10a: merge is NON-DESTRUCTIVE — a merged_into pointer only; invoices/payments untouched; unmerge clears it; flattening repoints nested members',
+  /ADD COLUMN IF NOT EXISTS merged_into uuid;/.test(R('sql/v55-83-PW-category-kinds.sql')) &&
+  /update\(\{ merged_into: primaryId \}\)\.in\('id', toMove\)/.test(achM) &&
+  /update\(\{ merged_into: null \}\)\.eq\('id', memberId\)/.test(achM) &&
+  /if \(c\.merged_into === memberId\) \{ toMove\.push\(c\.id\); \}/.test(achM));
+ok('10b: the whole group aggregates — invoices, proformas AND payments match any member id or member Wave id; merged names fold out of the list',
+  /function groupMembers\(custId\)/.test(achM) &&
+  /ids\.indexOf\(i\.accounting_customer_id\) >= 0 \|\| \(i\.wave_customer_id && ws\.indexOf\(i\.wave_customer_id\) >= 0\)/.test(achM) &&
+  /gids\.indexOf\(p\.accounting_customer_id\) >= 0/.test(achM) &&
+  /if \(c\.merged_into\) \{ return false; \}/.test(achM));
+ok('10c: names shown TOGETHER (joined with +) in the list and header, ⛓ merged chip, super-admin merge select + per-name ✕ unmerge',
+  /groupNames\(c\.id\)\.join\(' \+ '\)/.test(achM) && /groupNames\(selCust\.id\)\.join\(' \+ '\)/.test(achM) &&
+  /merge another customer into this one…/.test(achM) && /✕ unmerge/.test(achM) &&
+  /Nothing is rewritten — invoices keep their original customer/.test(achM));
+
+// ── PW part 4 (Max 10:51: all transactions, all accounts, sort/filter/bulk) ──
+var erT = R('src/app/api/accounting/expense-rules/route.js');
+var attT = R('src/components/AllTransactionsTab.jsx');
+var atW = R('src/components/AccountingTab.jsx');
+ok('11a: all_transactions = every account in the window with account names, flags (matched/transfer/verified/pending), 5000-row cap REPORTED',
+  /action === 'all_transactions'/.test(erT) && /acMap\[t7\.account_id\] \|\| '\(account\)'/.test(erT) &&
+  /capped: \(txA\.data \|\| \[\]\)\.length >= 5000/.test(erT));
+ok('11b: bulk_classify — explicit ids only (max 500), whitelisted category, NEVER touches review/verified/matches, learns per distinct merchant (cap 50)',
+  /action === 'bulk_classify'/.test(erT) && /Max 500 transactions per bulk update/.test(erT) &&
+  !/review_status/.test(erT.substring(erT.indexOf("action === 'bulk_classify'"), erT.indexOf("action === 'all_transactions'"))) &&
+  /learnedB2 < 50/.test(erT));
+ok('11c: 📑 tab — column-click sorting, account/direction/state/text/date filters, select-all-filtered, Σ of selection, CSV, match → Bank Review handoff',
+  /function th\(key, label, right\)/.test(attT) && /toggleAll/.test(attT) &&
+  /Apply to \{selIds\.length \|\| '…'\} selected/.test(attT) && /🔗 match/.test(attT) && // (matching moved INLINE same build)
+  /onGo\('review'\)/.test(attT) && /all-transactions-/.test(attT));
+ok('11d: wired under Accounting behind bank.classify',
+  atW.indexOf("['all_txns', '📑 All Transactions']") >= 0 &&
+  /t\[0\] !== 'all_txns' \|\| isSuper \|\| mp\['bank\.classify'\] === true/.test(atW));
+
+// ── PW part 5 (Max 10:56 + 10:59 "build the permissioning"): three levels ──
+var stP = R('src/components/SettingsTab.jsx');
+var atP = R('src/components/AccountingTab.jsx');
+var brP = R('src/app/api/accounting/bills/route.js');
+ok('12a: the two switches exist in Settings — ACCT-000 general view (umbrella) + ACCT-008 money totals; balances stay the protected SQL grant',
+  /ACCT-000 - Accounting: View \(general\)/.test(stP) && /ACCT-008 - Accounting: See Money Totals/.test(stP) &&
+  /Bank BALANCES stay a separate protected grant/.test(stP));
+ok('12b: LEVEL 1 umbrella — any accounting permission opens the area (backward compatible), none → a plain locked message; computed AFTER mp/isSuper exist',
+  /var hasAnyAccounting = isSuper \|\| mp\['accounting\.view'\] === true/.test(atP) &&
+  /Accounting is locked for your account\./.test(atP) &&
+  atP.indexOf('var mp = props.modulePerms') < atP.indexOf('var hasAnyAccounting'));
+ok('12c: LEVEL 3 totals — server READ gate accepts bills.view/manage, accounting.view_totals or AR balances; WRITES still need Bills: Manage; totals tabs + canView widened',
+  /READ_KEYS = \['bills\.view', 'bills\.manage', 'accounting\.view_totals', 'ar\.view_invoice_balances'\]/.test(brP) &&
+  /WRITE_ACTIONS\[action\]\) \{\n      gate = await assertPermission\(db, userId, 'bills\.manage', req\);/.test(brP) &&
+  /accounting\.view_totals'\] === true \|\| modulePerms\['bills\.view'\]/.test(R('src/components/CashForecastTab.jsx')) &&
+  /accounting\.view_totals'\] === true \|\| modulePerms\['bills\.view'\]/.test(R('src/components/PeriodStatsTab.jsx')));
+ok('12d: workers keep working — bank.classify/payments.match routes unchanged (expense-rules gate untouched by the totals level)',
+  /assertPermission\(db, userId, 'bank\.classify', req\)/.test(R('src/app/api/accounting/expense-rules/route.js')));
+
+// ── PW part 6: inline matching in All Transactions (Max 10:54) ──
+var attM = R('src/components/AllTransactionsTab.jsx');
+ok('13a: deposit_match_candidates ranks ALL open invoices (no Apr cutoff — old invoices matchable), exact-amount flagged, write stays in guarded bank-write',
+  /action === 'deposit_match_candidates'/.test(brP) && /exact: Math\.abs\(x\.v\.open_balance - amtDm\) <= 0\.01/.test(brP) &&
+  /the WRITE goes through bank-write/.test(brP));
+ok('13b: 📑 inline matcher — 💯 exact candidates, editable apply amount (full or partial), match_invoice via bankSessionHeaders, Bank Review handoff for splits',
+  /💯/.test(attM) && /action: 'match_invoice', txn: mPanel\.txn, invoice: cand\.invoice, amount: amt/.test(attM) &&
+  /splits \/ unapplied → Bank Review/.test(attM));
+
+// ── PW part 7 (Max 11:02: "must be able to match bills to payments") ──
+ok('14: money-out matches to OPEN BILLS inline — ranked candidates (exact flagged), write via record_payment with its overpay/settled-out guards, deposits refused',
+  /action === 'bill_match_candidates'/.test(R('src/app/api/accounting/bills/route.js')) &&
+  /Bills are paid by money OUT — this is a deposit\./.test(R('src/app/api/accounting/bills/route.js')) &&
+  /action: 'record_payment', bill_id: cand\.bill_id, amount: amt, paid_date: mPanel\.txn\.posted_date \|\| mPanel\.txn\.date, bank_transaction_id: mPanel\.txn\.id/.test(R('src/components/AllTransactionsTab.jsx')) &&
+  /🔗 \{t\.direction === 'in' \? 'match' : 'bill'\}/.test(R('src/components/AllTransactionsTab.jsx')));
+
 console.log('');
 console.log('PR: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

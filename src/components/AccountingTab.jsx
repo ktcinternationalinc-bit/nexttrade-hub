@@ -23,6 +23,7 @@ import BillsTab from './BillsTab';
 import CashForecastTab from './CashForecastTab';
 import PeriodStatsTab from './PeriodStatsTab';
 import ExpenseRulesTab from './ExpenseRulesTab'; // v55.83-PI
+import AllTransactionsTab from './AllTransactionsTab'; // v55.83-PW
 import ClickBooksUSCore from './ClickBooksUSCore';
 import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
 import ClickBooksUSReports from './ClickBooksUSReports';
@@ -50,6 +51,7 @@ export default function AccountingTab(props) {
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
     ['period_stats', '📉 Stats'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
     ['categories', '🏷 Categories & Rules'], // v55.83-PI — own categories, learned rules, verified stamp
+    ['all_txns', '📑 All Transactions'], // v55.83-PW — every account, sort/filter/bulk-categorize
     ['clickbooks_reports', '📊 Financial Reports'], // v55.83-PB — P&L / balance sheet / GL from the real ledger
     ['clickbooks_admin', '⚙️ ClickBooks Admin'], // v55.83-PB — foundation/rules/migration/cutover, tucked away
     ['company', '🏢 Company Profile'],
@@ -74,6 +76,15 @@ export default function AccountingTab(props) {
   // specific push/import/settings permissions; this controls the screen itself.)
   var mp = props.modulePerms || {};
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+  // v55.83-PW (Max): LEVEL 1 — "permission to see accounting in general".
+  // The umbrella accounting.view opens the area; so does ANY specific
+  // accounting permission (backward compatible). Super admin always.
+  var hasAnyAccounting = isSuper || mp['accounting.view'] === true || mp['accounting.view_totals'] === true ||
+    mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true ||
+    mp['bank.classify'] === true || mp['bank.view'] === true || mp['payments.match'] === true ||
+    mp['invoice.view'] === true || mp['invoice.create'] === true ||
+    mp['accounting.customers.view'] === true || mp['accounting.company_profile.view'] === true;
+
   var canWaveSync = isSuper || mp['wave.sync.view'] === true;
   var clickbooksEnabled = process.env.NEXT_PUBLIC_CLICKBOOKS_US_ENABLED === 'true';
   var workflowsEnabled = clickbooksEnabled && process.env.NEXT_PUBLIC_CLICKBOOKS_US_WORKBENCH_ENABLED === 'true';
@@ -81,10 +92,14 @@ export default function AccountingTab(props) {
   var cutoverEnabled = clickbooksEnabled && process.env.NEXT_PUBLIC_CLICKBOOKS_US_CUTOVER_ENABLED === 'true';
   var canClickbooks = financialAccess.canViewFullDashboard === true || financialAccess.isVerifiedSuperAdmin === true;
   var canLedgerly = financialAccess.canViewFullDashboard === true || financialAccess.canViewBankBalances === true;
+  if (!hasAnyAccounting) {
+    return <div className="p-6"><div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155', maxWidth: 560 }}>
+      <b>Accounting is locked for your account.</b> Ask an admin for <b>ACCT-000 — Accounting: View</b> (or a specific permission like Bills, Invoices or Bank: Categorize) in Settings → Permissions.</div></div>;
+  }
   return (
     <div>
       <div className="flex flex-wrap gap-1 p-3 border-b border-slate-800">
-        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true); }).map(function (t) {
+        {tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true); }).map(function (t) {
           return (
             <button key={t[0]} onClick={function () { setSub(t[0]); }}
               className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === t[0] ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
@@ -93,15 +108,16 @@ export default function AccountingTab(props) {
           );
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
       {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
       {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}
-      {sub === 'period_stats' && <div className="p-3"><PeriodStatsTab {...props} /></div>}
+      {sub === 'period_stats' && <div className="p-3"><PeriodStatsTab {...props} onGo={setSub} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}
+      {sub === 'all_txns' && <div className="p-3"><AllTransactionsTab {...props} onGo={setSub} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'company' && <CompanyProfileTab {...props} />}

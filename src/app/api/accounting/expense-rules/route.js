@@ -46,7 +46,7 @@ export async function POST(req) {
 
     // ── list: categories + rules in one call ──
     if (action === 'list') {
-      var cats = await db.from('expense_categories').select('id, key, label, active, sort, wave_account_id, wave_account_name').order('sort').order('label');
+      var cats = await db.from('expense_categories').select('id, key, label, active, sort, kind, wave_account_id, wave_account_name').order('sort').order('label');
       if (cats.error) { return NextResponse.json({ ok: false, error: cats.error.message + ' — run sql/v55-83-PI-expense-categories-rules.sql first.', needs_sql: true, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var rules = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at').order('updated_at', { ascending: false }).limit(1000);
       return NextResponse.json({ ok: true, categories: cats.data || [], rules: (rules.data || []), api_build_marker: API_BUILD_MARKER });
@@ -58,6 +58,12 @@ export async function POST(req) {
       if (label.length < 2) { return NextResponse.json({ ok: false, error: 'Category name must be at least 2 characters.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (body.payload && body.payload.id) {
         var cpatch = { label: label, updated_at: new Date().toISOString() };
+        // v55.83-PW — QuickBooks-style type; whitelisted, never free text.
+        var KINDS = ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl'];
+        if (body.payload.kind !== undefined) {
+          if (KINDS.indexOf(body.payload.kind) < 0) { return NextResponse.json({ ok: false, error: 'Unknown category type "' + body.payload.kind + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+          cpatch.kind = body.payload.kind;
+        }
         // v55.83-PQ — optional Wave account link ("all three places at once").
         // Passed explicitly (even as null = unlink); absent = untouched.
         if (Object.prototype.hasOwnProperty.call(body.payload, 'wave_account_id')) {
@@ -70,7 +76,9 @@ export async function POST(req) {
       }
       var key = slugify(label);
       if (key.length < 2) { return NextResponse.json({ ok: false, error: 'Category name needs letters or numbers.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var insc = await db.from('expense_categories').insert({ key: key, label: label, created_by: by }).select();
+      var insKind = 'expense';
+      if (body.payload && body.payload.kind && ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl'].indexOf(body.payload.kind) >= 0) { insKind = body.payload.kind; }
+      var insc = await db.from('expense_categories').insert({ key: key, label: label, kind: insKind, created_by: by }).select();
       if (insc.error) { return NextResponse.json({ ok: false, error: /duplicate|unique/i.test(insc.error.message) ? 'A category with that name already exists.' : insc.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       return NextResponse.json({ ok: true, category: insc.data && insc.data[0], api_build_marker: API_BUILD_MARKER });
     }
@@ -225,6 +233,61 @@ export async function POST(req) {
       var rowsR = Object.values(byGid).sort(function (a0, b0) { return (b0.date || '') < (a0.date || '') ? -1 : 1; });
       var sumR = 0; rowsR.forEach(function (r0) { sumR = Math.round((sumR + r0.amount) * 100) / 100; });
       return NextResponse.json({ ok: true, from: tf, to: tt, transfers: rowsR, count: rowsR.length, total: sumR, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── bulk_classify (v55.83-PW, Max 10:51: "all accounting transactions
+    //    from all bank accounts... do multiple category updates") — one
+    //    category onto up to 500 EXPLICITLY-CHOSEN transactions. This is a
+    //    deliberate human action, so it may overwrite earlier categories;
+    //    it NEVER touches review/verified status or invoice matches, and it
+    //    learns a rule per distinct merchant (capped) like single picks do. ──
+    if (action === 'bulk_classify') {
+      var idsB = (body.payload && body.payload.ids) || [];
+      var clsB = body.payload && body.payload.classification;
+      if (!Array.isArray(idsB) || idsB.length === 0) { return NextResponse.json({ ok: false, error: 'Pick at least one transaction.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (idsB.length > 500) { return NextResponse.json({ ok: false, error: 'Max 500 transactions per bulk update — narrow the selection.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!clsB) { return NextResponse.json({ ok: false, error: 'Pick the category to apply.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var catOkB = await db.from('expense_categories').select('key').eq('key', clsB).limit(1);
+      if (!catOkB.error && (!catOkB.data || !catOkB.data.length)) { return NextResponse.json({ ok: false, error: 'Unknown category "' + clsB + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var updB = await db.from('bank_transactions')
+        .update({ classification: clsB, category_source: 'classification' })
+        .in('id', idsB).select('id, direction, merchant_name, name');
+      if (updB.error) { return NextResponse.json({ ok: false, error: updB.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var learnedB2 = 0; var seenKeys = {};
+      var rowsB = updB.data || [];
+      for (var bi = 0; bi < rowsB.length && learnedB2 < 50; bi++) {
+        var tB = rowsB[bi];
+        if (tB.direction !== 'out') { continue; }
+        var textB = (tB.merchant_name || '') + ' ' + (tB.name || '');
+        if (seenKeys[textB]) { continue; }
+        seenKeys[textB] = true;
+        var lr = await learnRule(db, textB, clsB, by);
+        if (lr && (lr.learned || lr.updated)) { learnedB2++; }
+      }
+      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── all_transactions: every account, one table — sort/filter server-side
+    //    kept simple: the client gets the full window and sorts locally. ──
+    if (action === 'all_transactions') {
+      var fA = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.from) || '')) ? body.payload.from : '2026-01-01';
+      var tA = /^\d{4}-\d{2}-\d{2}$/.test(String((body.payload && body.payload.to) || '')) ? body.payload.to : new Date().toISOString().substring(0, 10);
+      var txA = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, category_source, review_status, category_verified, matched_invoice_id, transfer_group_id, pending')
+        .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+        .gte('date', fA).lte('date', tA)
+        .order('date', { ascending: false }).limit(5000);
+      if (txA.error) { return NextResponse.json({ ok: false, error: txA.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
+      var acMap = {};
+      (accA.data || []).forEach(function (a6) { acMap[a6.plaid_account_id] = (a6.name || 'account') + (a6.mask ? ' •' + a6.mask : ''); });
+      var outA = (txA.data || []).map(function (t7) {
+        return { id: t7.id, date: t7.posted_date || t7.date, account: acMap[t7.account_id] || '(account)', who: t7.merchant_name || t7.name || '',
+          direction: t7.direction, amount: Math.round((Number(t7.amount_abs) || 0) * 100) / 100,
+          classification: t7.classification, verified: t7.category_verified === true,
+          matched: !!t7.matched_invoice_id, transfer: !!t7.transfer_group_id, pending: t7.pending === true, review_status: t7.review_status };
+      });
+      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: (txA.data || []).length >= 5000, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── transfer_candidates: the other leg of a transfer (incl. credit cards) ──

@@ -33,6 +33,27 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PW',
+    date: '2026-11-07',
+    label: '\ud83d\udcda Category types \u2014 QuickBooks-style',
+    items: [
+      'Every category now has a TYPE, like QuickBooks: Income / Cost of goods sold / Expense / Other income / Other expense / Transfer / Not P&L. Set it when creating a category or change it any time in \ud83c\udff7 Categories & Rules \u2192 \ud83d\udcda Edit category types & Wave links. The built-ins arrive pre-typed \u2014 and the accounting is done RIGHT: loan money and owner contributions are Not P&L (never income, never deductible).',
+      'Every report follows the types: the \ud83d\udcc9 Stats money tables show each category\u2019s type and new bottom lines \u2014 TAXABLE INCOME and DEDUCTIBLE SPENDING (P&L categories only) \u2014 and the \ud83e\uddfe Accountant pack CSVs carry a type column with the same subtotals. ONE SQL to run with this build.',
+      '\u270f Click EDIT INVOICE inside any invoice popup to open it in the real editor. Customers can be MERGED (\u26d3 names shown together, totals aggregated \u2014 nothing rewritten, unmerge any time) in Customer AR History. New \ud83d\udcd1 ALL TRANSACTIONS tab: every account in one table \u2014 sort by any column, filter by account/direction/state/text/dates, tick rows and apply ONE category to all of them, and \ud83d\udd17 MATCH RIGHT THERE: deposits \u2192 invoices AND payments \u2192 open BILLS (best candidates ranked, \ud83d\udcaf = exact amount, full or partial \u2014 same guarded server paths as Bank Review and the Bills tab).',
+      'PERMISSION LEVELS, as Max specified: ACCT-000 Accounting: View (the general switch) \u00b7 ACCT-008 Accounting: See Money Totals (workers WITHOUT it still see individual transactions for matching/categorizing \u2014 just no aggregate cards) \u00b7 bank balances stay the separate protected grant \u00b7 super admin always sees everything. Backward compatible: nobody loses access they had yesterday.',
+      { superAdminOnly: true, text: 'v55.83-PW \u2014 ONE SQL: sql/v55-83-PW-category-kinds.sql (kind + CHECK whitelist + built-in typing; idempotent, only retypes rows still at default). Route: kind whitelisted on create+edit; period_stats catKinds map \u2192 kind on category rows + taxable_income/deductible_spending/not_pnl_in/not_pnl_out; Stats kind chips + subtotal lines; pack CSVs 7/10 gain type column + NOT-P&L/taxable/deductible lines; \ud83c\udff7 add-with-type + per-category kind select, editable even when Wave fetch fails. pq 5d realigned (annotated). Pins 8a\u20138e in test pr.' },
+    ],
+  },
+  {
+    version: 'v55.83-PV',
+    date: '2026-11-07',
+    label: '\ud83d\udcb0 Full-2026 tax data: the income side',
+    items: [
+      'Tax reporting now covers ALL of 2026 in both directions from the bank record (the only money data with dates for the whole year \u2014 Wave\u2019s API exposes payment totals without dates, verified). \ud83d\udcc9 Stats gains \ud83d\udcb0 MONEY IN BY CATEGORY: every deposit categorized (invoice-matched deposits count as sales automatically), \u26a0 uncategorized flagged, transfers excluded from income. The \ud83e\uddfe Accountant pack grows to 11 CSVs (income by category + income detail). Set the period to Jan 1 \u2192 Dec 31 after the 2-year bank pull and the whole year is there.',
+      { superAdminOnly: true, text: 'v55.83-PV \u2014 NO new SQL. period_stats spending block fetches both directions (.in direction [in,out]); income keying: transfer-group/classification transfer \u2192 transfer, else matched_invoice_id \u2192 customer_payment, else classification, else uncategorized; real_income = totIn \u2212 transfers; in_rows cap 500. Stats income table + inCat drill; pack CSVs 10/11. Wave API limitation verified against the public invoice schema (amountPaid aggregate only). Pins 7a\u20137c in test pr.' },
+    ],
+  },
+  {
     version: 'v55.83-PU',
     date: '2026-11-07',
     label: '\ud83c\udfe6 Bank history: full 2 years unlocked',
