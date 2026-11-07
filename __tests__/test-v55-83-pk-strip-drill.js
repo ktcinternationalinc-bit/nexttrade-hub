@@ -32,9 +32,10 @@ ok('2a: In cells click through to the invoices behind the number',
   /setFcDrill\(\{ bucket: b, kind: 'in' \}\)/.test(bh) && /Show the invoices behind this number/.test(bh));
 ok('2b: Out cells click through to the bills behind the number',
   /setFcDrill\(\{ bucket: b, kind: 'out' \}\)/.test(bh) && /Show the bills behind this number/.test(bh));
-ok('2c: the drill panel sums its rows and says it equals the number to the cent; rows come from fc.rows (same payload as the card — one source of truth)',
+ok('2c (PQ): drill sums rows to the cent from fc.rows — one source of truth; PQ added the cumulative Position drill alongside the per-cell filter',
   /equals the number above to the cent/.test(bh) &&
-  /\(fc\.rows \|\| \[\]\)\.filter\(function \(r\) \{ return r\.bucket === fcDrill\.bucket && r\.kind === fcDrill\.kind; \}\)/.test(bh));
+  /return r\.bucket === fcDrill\.bucket && r\.kind === fcDrill\.kind;/.test(bh) &&
+  /\(fc\.rows \|\| \[\]\)\.filter\(function \(r\) \{/.test(bh));
 ok('2d: big buckets are capped at 80 rows with an honest pointer to the full Forecast list',
   /all\.slice\(0, 80\)/.test(bh) && /Showing the biggest \{shown\.length\} of \{all\.length\}/.test(bh));
 

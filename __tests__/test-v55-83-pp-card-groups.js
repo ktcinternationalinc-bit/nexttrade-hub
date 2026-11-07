@@ -43,6 +43,9 @@ ok('2c: all-collections card explains itself (old invoices included, rows say wh
 ok('2d: bank cards say transfers are included, SALES is "of which"',
   /ALL settled deposits \(incl\. transfers\)/.test(bh) && /of which SALES \(/.test(bh));
 
+ok('3 (PQ): Books-home drill has a BALANCE column (open) between Paid and Amount, carried through merged rows',
+  />Balance</.test(bh) && /nd\(r6\.open\)/.test(bh) && /open: r5\.open, amount: r5\.amount, sign: k\.sign/.test(bh));
+
 console.log('');
 console.log('PP: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

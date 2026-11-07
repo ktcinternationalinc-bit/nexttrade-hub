@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
 
 var API_BUILD_MARKER = 'v55.83-JD-invoice-write';
 
@@ -26,6 +27,32 @@ export async function POST(req) {
     var body = await req.json();
     var by = body.user_id || null;
     var action = body.action || 'set_approval';
+    // v55.83-PQ (Max, 05:13): "upload invoices and from invoices it will
+    // create the invoice based on data and show on both systems" — the reader
+    // PROPOSES a draft (null, never a guess), the human confirms it in the
+    // normal editor, and the SAVED invoice flows to Wave + ClickBooks exactly
+    // like a hand-entered one. Customer is MATCHED against existing customers,
+    // never auto-created.
+    if (action === 'extract_invoice') {
+      var gX = await assertPermission(db, by, 'invoice.create', req);
+      if (!gX.ok) { return NextResponse.json({ ok: false, error: gX.error, api_build_marker: API_BUILD_MARKER }, { status: gX.status || 403 }); }
+      var rdI = await readInvoiceFromBase64(String(body.file_base64 || ''), String(body.media_type || ''));
+      if (rdI.error) { return NextResponse.json({ ok: false, error: rdI.error, api_build_marker: API_BUILD_MARKER }, { status: rdI.status || 500 }); }
+      var candI = [];
+      if (rdI.draft && rdI.draft.customer_name) {
+        var toks = String(rdI.draft.customer_name).toLowerCase().split(/[^a-z0-9&]+/).filter(function (t9) { return t9.length >= 3; }).slice(0, 3);
+        var custAll = await db.from('accounting_customers').select('id, company_name, contact_name, business_tag').limit(3000);
+        (custAll.data || []).forEach(function (c9) {
+          var nm = ((c9.company_name || '') + ' ' + (c9.contact_name || '')).toLowerCase();
+          var hits = 0; toks.forEach(function (t10) { if (nm.indexOf(t10) >= 0) { hits++; } });
+          if (hits > 0 && toks.length > 0) { candI.push({ id: c9.id, name: c9.company_name || c9.contact_name || '', score: hits / toks.length }); }
+        });
+        candI.sort(function (a9, b9) { return b9.score - a9.score; });
+        candI = candI.slice(0, 6);
+      }
+      return NextResponse.json({ ok: true, draft: rdI.draft, problems: rdI.problems, customer_candidates: candI, api_build_marker: API_BUILD_MARKER });
+    }
+
     var invoiceId = body.invoice_id || null;
     if (!invoiceId) { return NextResponse.json({ ok: false, error: 'invoice_id is required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
 

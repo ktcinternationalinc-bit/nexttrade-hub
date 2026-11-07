@@ -405,6 +405,24 @@ export async function POST(req) {
       var fk;
       for (fk in rawPatch) { if (Object.prototype.hasOwnProperty.call(rawPatch, fk) && CLASSIFY_FIELDS[fk]) { cPatch[fk] = rawPatch[fk]; } }
       if (cPatch.review_status === 'approved') { delete cPatch.review_status; } // approval never comes through categorize
+      // v55.83-PQ (Max approved): "one click categorizes the expense in all
+      // three places at once." A category can carry its Wave account: when the
+      // pick names a classification, the patch carries NO Wave account, and
+      // the transaction has none yet, the category's linked Wave account rides
+      // along (pending_wave_sync). An existing Wave account is NEVER
+      // overwritten by this. Fail-soft: lookup errors change nothing.
+      var waveAuto = null;
+      if (cPatch.classification && !cPatch.wave_account_id && preRow && !preRow.wave_account_id) {
+        try {
+          var catW = await db.from('expense_categories').select('wave_account_id, wave_account_name').eq('key', cPatch.classification).maybeSingle();
+          if (catW && catW.data && catW.data.wave_account_id) {
+            cPatch.wave_account_id = catW.data.wave_account_id;
+            cPatch.wave_account_name = catW.data.wave_account_name || null;
+            changingCat = true; // it IS a category change for Wave — sync it
+            waveAuto = catW.data.wave_account_id;
+          }
+        } catch (eW) { waveAuto = null; }
+      }
       if (changingCat) { cPatch.category_status = 'pending_wave_sync'; }
       cPatch.updated_by = by;
       // v55.83-JG (Codex P0) — classify/set_wave_category patches carry review_status:'reviewed' to
@@ -431,7 +449,7 @@ export async function POST(req) {
       if (cPatch.classification && cRes.data[0] && cRes.data[0].direction === 'out') {
         learn = await learnRule(db, (cRes.data[0].merchant_name || '') + ' ' + (cRes.data[0].name || ''), cPatch.classification, by);
       }
-      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, wave_auto_category: waveAuto, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── match_invoice: link a deposit to an invoice (the core workflow) ──

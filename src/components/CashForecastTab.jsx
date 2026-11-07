@@ -123,7 +123,7 @@ export default function CashForecastTab(props) {
         </table>
       </div>
       <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>
-        Dates come from each invoice's/bill's due date (falling back to its document date). ⚠ columns are money already LATE, aged by how long — never dressed up as future cash. Click any green/red card for the exact rows behind it.
+        Dates come from each invoice's/bill's due date (falling back to its document date). ⚠ columns are money already LATE, aged by how long — never dressed up as future cash. Click any green/red card for the exact rows behind it.{data.excluded_old && data.excluded_old.count > 0 ? ' · Only invoices CREATED since Apr 1, 2026 are counted — ' + data.excluded_old.count + ' older invoice(s) ($' + fmt(data.excluded_old.sum) + ') excluded as pre-system history (payments may never have been matched); they remain in All Invoices / Open Balances.' : ''}
       </div>
     </div>
 

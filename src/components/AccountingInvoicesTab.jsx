@@ -277,6 +277,46 @@ export default function AccountingInvoicesTab(props) {
     else setHdr({ proforma_number: '', accounting_customer_id: '', proforma_date: today, valid_until: '', notes: '', terms: '' });
     setItems([blankItem()]); setEditing('new');
   }
+  // v55.83-PQ (Max, 05:13): "upload invoices and from invoices it will create
+  // the invoice based on data and show on both systems" — the reader proposes,
+  // the HUMAN confirms in this same editor, the save flows to Wave + ClickBooks
+  // like any hand-entered invoice.
+  function importInvoiceFile(file) {
+    if (!file) { return; }
+    var rd = new FileReader();
+    rd.onload = function () {
+      var b64 = String(rd.result || '').split(',')[1] || '';
+      setBusy(true);
+      toast.success('Reading the invoice…');
+      fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'extract_invoice', invoice_id: 'n/a', file_base64: b64, media_type: file.type, user_id: userProfile && userProfile.id }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!(j && j.ok && j.draft)) { toast.error((j && j.error) || 'Could not read the invoice.'); return; }
+          var d2 = j.draft;
+          var today2 = new Date().toISOString().substring(0, 10);
+          var pickedCust = '';
+          var cands = j.customer_candidates || [];
+          if (cands.length > 0 && cands[0].score >= 0.99) { pickedCust = cands[0].id; } // exact-ish match only; otherwise the human picks
+          setHdr({ invoice_number: d2.invoice_number || '', release_number: '', accounting_customer_id: pickedCust,
+            invoice_date: d2.invoice_date || today2, due_date: d2.due_date || '',
+            notes: (d2.notes || '') + (d2.customer_name && !pickedCust ? ((d2.notes ? ' · ' : '') + 'Document says customer: ' + d2.customer_name) : ''), terms: '' });
+          var its = (d2.line_items || []).map(function (li) {
+            return { description: li.description || '', quantity: String(li.quantity !== null && li.quantity !== undefined ? li.quantity : 1),
+              unit_price: String(li.unit_price !== null && li.unit_price !== undefined ? li.unit_price : (li.line_total !== null && li.line_total !== undefined ? li.line_total : 0)),
+              sku: '', product_ref: '', wave_product_id: '', wave_product_name: '' };
+          });
+          setItems(its.length ? its : [blankItem()]);
+          setEditing('new');
+          var msgs = (j.problems || []).slice();
+          if (!pickedCust) { msgs.unshift(cands.length ? 'Pick the customer (best guesses are in the dropdown).' : 'Pick the customer.'); }
+          if (msgs.length) { toast.error('Check before saving: ' + msgs.join(' ')); } else { toast.success('Invoice read — review every field, then Save.'); }
+        })
+        .catch(function (e) { toast.error('Import failed: ' + ((e && e.message) || 'network')); })
+        .finally(function () { setBusy(false); });
+    };
+    rd.readAsDataURL(file);
+  }
   function startEdit(row) {
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
@@ -616,6 +656,10 @@ export default function AccountingInvoicesTab(props) {
           <label className="text-xs text-slate-100 font-bold flex items-center gap-2 ml-2 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 cursor-pointer hover:bg-slate-700"><input type="checkbox" checked={showArchived} onChange={function (e) { setShowArchived(e.target.checked); }} /> Show archived/voided</label>
         </div>
         {mayEdit && <button onClick={startNew} className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded font-bold">+ New {isInvoice() ? 'invoice' : 'proforma'}</button>}
+        {mayEdit && isInvoice() && <label className="px-3 py-1.5 text-xs rounded font-bold" style={{ background: '#1d4ed8', color: '#ffffff', cursor: 'pointer' }} title="Upload a photo/PDF of an invoice — it is read and opened in the editor for you to confirm; saving pushes to Wave and ClickBooks like any invoice">
+          📷 Import invoice
+          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" style={{ display: 'none' }}
+            onChange={function (e) { var f = e.target.files && e.target.files[0]; e.target.value = ''; importInvoiceFile(f); }} /></label>}
       </div>
 
       <div className="flex items-center gap-2 mb-2">

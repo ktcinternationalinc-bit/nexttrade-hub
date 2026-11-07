@@ -65,6 +65,11 @@ async function loadLate(db, minDays) {
   var out = [];
   invs.forEach(function (inv) {
     if (!isArEligible(inv)) { return; }
+    // v55.83-PQ (Max, Nov 7 05:07): "late customers... only after april 1st
+    // 2026 showing should be displayed" — pre-system invoices (whose payments
+    // were often never matched) don't belong on the reminder list; nobody
+    // should get dunned over history.
+    if ((inv.invoice_date || '') < '2026-04-01') { return; }
     if (businessOfInvoice(inv, tagById) !== 'US') { return; }
     if ((inv.currency || 'USD') !== 'USD') { return; }
     var open = r2((Number(inv.total_amount) || 0) - (Number(inv.wave_imported_paid) || 0) - (paidBy[inv.id] || 0));

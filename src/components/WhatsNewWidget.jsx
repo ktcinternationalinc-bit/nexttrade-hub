@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PQ',
+    date: '2026-11-07',
+    label: '\ud83d\udce6 The overnight batch \u2014 12 fixes & features',
+    items: [
+      'Drills everywhere now show BALANCE next to Original and Paid. The late/due views (strip, \ud83d\udcc8 Forecast, \u23f0 Late customers) count only invoices CREATED since Apr 1, 2026 \u2014 pre-system history whose payments were never matched is excluded, counted and labeled, never silently dropped.',
+      'Click the POSITION row on the strip for every invoice/bill behind the running number \u2014 and holders of the bank-balance permission get a \ud83d\udcb0 PROJECTED BALANCE row: real bank balance (with its as-of date) plus what comes in minus what falls due, per window.',
+      '\ud83c\udff7 Categories: panels repainted (rules and merchant text were unreadable on the dark theme), and each category can link to a WAVE ACCOUNT \u2014 one pick then books the expense in the hub, ClickBooks AND Wave. Background rules never touch Wave; only a human pick does, and an existing Wave category is never overwritten.',
+      '\u2194 TRANSFER PAIRING: in the \ud83c\udff7 tab, pair the two legs of a transfer between your own accounts (credit cards included) \u2014 same amount, opposite direction, different account, \u00b17 days, suggested automatically. Paired transfers are ONE move of money, excluded from spending.',
+      '\ud83d\udcb8 SPENDING BY CATEGORY on the \ud83d\udcc9 Stats tab \u2014 every category with totals and %, \u26a0 uncategorized flagged, transfers listed separately as NOT spending. Plus \ud83e\uddfe ACCOUNTANT PACK: one click, 9 named CSVs for any period (revenue invoiced/collected, open AR, bills entered/paid, open AP, spending + detail, monthly summary) \u2014 with an honest in-file note that Wave-era payments without dated rows need Wave\u2019s own report.',
+      '\ud83d\udcf7 IMPORT INVOICE: upload a photo/PDF of a sales invoice \u2014 it is read (null, never a guess), opened in the normal editor for YOUR confirmation (customer matched against existing customers only), and the saved invoice flows to Wave and ClickBooks like any other. Dashboard and Books now cross-label their twin numbers so the two screens explain each other.',
+      { superAdminOnly: true, text: 'v55.83-PQ \u2014 ONE SQL: sql/v55-83-PQ-category-wave-link.sql (expense_categories.wave_account_id/name + bank_transactions.transfer_group_id + partial index). FORECAST_CREATED_FROM=2026-04-01 in forecast action (excluded_old reported) + reminders loadLate; bank_balance in forecast gated by HUB_SUPER_ADMIN_AUTH_USER_IDS/financial_visibility via bank_visibility_identity_map, plaid alias rows deduped per mask freshest-wins, as_of surfaced; strip cum drill (signed \u03a3); classify injects category\u2019s Wave account only when txn+patch have none (changingCat\u2192pending_wave_sync, response wave_auto_category); transfer_candidates/pair_transfer (one-in-one-out, cent-equal, raced pair saves nothing)/unpair_transfer in expense-rules route; period_stats spending block (isTrf = group OR classification, real_spending=totOut\u2212transfers, 500-row cap); tax pack 9 CSVs client-side from drills; extract_invoice in invoice-write (invoice.create, before invoice_id gate, customer candidates token-scored, auto-pick only score\u22650.99); invoice-extract lib functional-tested (de-comma, date-or-null, lines-vs-total mismatch flagged). ExpenseRulesTab panels inline-white. oq/pk pins realigned (annotated). Test pq (24). Runner 139\u2192140 files? (pq registered Nov 7).' },
+    ],
+  },
+  {
     version: 'v55.83-PP',
     date: '2026-11-07',
     label: '\ud83d\uddc2 Books home regrouped — four clear questions',

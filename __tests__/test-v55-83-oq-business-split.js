@@ -138,7 +138,7 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
     /rs === 'void' \|\| rs === 'cancelled' \|\| rs === 'archived' \|\| rs === 'deleted'/.test(el) &&
     /return ws !== 'DRAFT';/.test(el));
   okT4('OT3: the dashboard no longer claims drafts are excluded',
-    /every entered invoice counts/.test(dash4) && !/drafts excluded/.test(dash4));
+    /invoices DATED in this period/.test(dash4) && !/drafts excluded/.test(dash4)); // (PQ reworded the sub to cross-reference Books; OT rule unchanged)
   okT4('OT4 (OV): All Invoices money totals include HUB drafts (entered = real); only true Wave drafts stay out, matching the dashboard',
     /Hub drafts are REAL invoices/.test(bk4) && /rowCur === activeCur && !isWaveDraft\) \{ tInvoiced/.test(bk4) &&
     /drafts counted — entered = real/.test(bk4));

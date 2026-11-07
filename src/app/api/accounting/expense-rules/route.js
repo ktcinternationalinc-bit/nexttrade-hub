@@ -46,7 +46,7 @@ export async function POST(req) {
 
     // ── list: categories + rules in one call ──
     if (action === 'list') {
-      var cats = await db.from('expense_categories').select('id, key, label, active, sort').order('sort').order('label');
+      var cats = await db.from('expense_categories').select('id, key, label, active, sort, wave_account_id, wave_account_name').order('sort').order('label');
       if (cats.error) { return NextResponse.json({ ok: false, error: cats.error.message + ' — run sql/v55-83-PI-expense-categories-rules.sql first.', needs_sql: true, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var rules = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at').order('updated_at', { ascending: false }).limit(1000);
       return NextResponse.json({ ok: true, categories: cats.data || [], rules: (rules.data || []), api_build_marker: API_BUILD_MARKER });
@@ -57,7 +57,14 @@ export async function POST(req) {
       var label = String((body.payload && body.payload.label) || '').trim();
       if (label.length < 2) { return NextResponse.json({ ok: false, error: 'Category name must be at least 2 characters.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (body.payload && body.payload.id) {
-        var updc = await db.from('expense_categories').update({ label: label, updated_at: new Date().toISOString() }).eq('id', body.payload.id).select();
+        var cpatch = { label: label, updated_at: new Date().toISOString() };
+        // v55.83-PQ — optional Wave account link ("all three places at once").
+        // Passed explicitly (even as null = unlink); absent = untouched.
+        if (Object.prototype.hasOwnProperty.call(body.payload, 'wave_account_id')) {
+          cpatch.wave_account_id = body.payload.wave_account_id || null;
+          cpatch.wave_account_name = body.payload.wave_account_name || null;
+        }
+        var updc = await db.from('expense_categories').update(cpatch).eq('id', body.payload.id).select();
         if (updc.error) { return NextResponse.json({ ok: false, error: updc.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
         return NextResponse.json({ ok: true, category: updc.data && updc.data[0], api_build_marker: API_BUILD_MARKER });
       }
@@ -113,7 +120,7 @@ export async function POST(req) {
     if (action === 'expenses') {
       var filter = (body.payload && body.payload.filter) || 'unverified';
       var q = db.from('bank_transactions')
-        .select('id, date, posted_date, amount_abs, name, merchant_name, classification, category_source, review_status, category_verified, category_verified_at, pending')
+        .select('id, date, posted_date, amount_abs, name, merchant_name, classification, category_source, review_status, category_verified, category_verified_at, pending, transfer_group_id')
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true)
         .order('posted_date', { ascending: false }).limit(200);
       if (filter === 'verified') { q = q.eq('category_verified', true); }
@@ -143,6 +150,58 @@ export async function POST(req) {
       var vr = await db.from('bank_transactions').update(vp).eq('id', txid).select();
       if (vr.error) { return NextResponse.json({ ok: false, error: vr.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       return NextResponse.json({ ok: true, row: vr.data && vr.data[0], api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── transfer_candidates: the other leg of a transfer (incl. credit cards) ──
+    // Same amount (to the cent), opposite direction, different account, within
+    // 7 days, settled, not already paired. Suggestions only — a human pairs.
+    if (action === 'transfer_candidates') {
+      var txq = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, transfer_group_id')
+        .eq('id', body.payload && body.payload.bank_transaction_id).maybeSingle();
+      if (txq.error || !txq.data) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      var t0 = txq.data;
+      var d0 = t0.posted_date || t0.date;
+      var lo = new Date(Date.parse(d0) - 7 * 86400000).toISOString().substring(0, 10);
+      var hi = new Date(Date.parse(d0) + 7 * 86400000).toISOString().substring(0, 10);
+      var cand = await db.from('bank_transactions')
+        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, transfer_group_id')
+        .eq('direction', t0.direction === 'out' ? 'in' : 'out')
+        .gte('amount_abs', (Number(t0.amount_abs) || 0) - 0.005).lte('amount_abs', (Number(t0.amount_abs) || 0) + 0.005)
+        .gte('date', lo).lte('date', hi)
+        .neq('pending', true).is('transfer_group_id', null)
+        .neq('account_id', t0.account_id || '').limit(20);
+      if (cand.error) { return NextResponse.json({ ok: false, error: cand.error.message + (/transfer_group_id/.test(cand.error.message) ? ' — run sql/v55-83-PQ-category-wave-link.sql first.' : ''), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      return NextResponse.json({ ok: true, txn: t0, candidates: cand.data || [], api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── pair_transfer: both legs become ONE transfer (classification=transfer,
+    //    shared group id). Never touches rows already paired elsewhere. ──
+    if (action === 'pair_transfer') {
+      var idA = body.payload && body.payload.a; var idB = body.payload && body.payload.b;
+      if (!idA || !idB || idA === idB) { return NextResponse.json({ ok: false, error: 'Two different transactions required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var both = await db.from('bank_transactions').select('id, direction, amount_abs, account_id, transfer_group_id').in('id', [idA, idB]);
+      if (both.error || !both.data || both.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Transactions not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      var A = both.data[0]; var B = both.data[1];
+      if (A.transfer_group_id || B.transfer_group_id) { return NextResponse.json({ ok: false, error: 'One of them is already paired to another transfer.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      if (A.direction === B.direction) { return NextResponse.json({ ok: false, error: 'A transfer pair needs one money-out and one money-in leg.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (Math.abs((Number(A.amount_abs) || 0) - (Number(B.amount_abs) || 0)) > 0.005) { return NextResponse.json({ ok: false, error: 'Amounts differ — a transfer\'s two legs must match to the cent.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var gid = (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : require('crypto').randomUUID();
+      var updP = await db.from('bank_transactions')
+        .update({ transfer_group_id: gid, classification: 'transfer', category_source: 'classification', updated_by: by })
+        .in('id', [idA, idB]).is('transfer_group_id', null).select('id');
+      if (updP.error) { return NextResponse.json({ ok: false, error: updP.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (!updP.data || updP.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Pairing raced another change — nothing saved, try again.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
+      return NextResponse.json({ ok: true, transfer_group_id: gid, paired: [idA, idB], api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── unpair_transfer ──
+    if (action === 'unpair_transfer') {
+      var gid2 = body.payload && body.payload.transfer_group_id;
+      if (!gid2) { return NextResponse.json({ ok: false, error: 'transfer_group_id required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var un = await db.from('bank_transactions').update({ transfer_group_id: null, updated_by: by }).eq('transfer_group_id', gid2).select('id');
+      if (un.error) { return NextResponse.json({ ok: false, error: un.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      return NextResponse.json({ ok: true, unpaired: (un.data || []).length, api_build_marker: API_BUILD_MARKER });
     }
 
     return NextResponse.json({ ok: false, error: 'Unknown action "' + action + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 });

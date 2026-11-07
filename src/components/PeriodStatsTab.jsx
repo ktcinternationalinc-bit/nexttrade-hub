@@ -17,6 +17,7 @@ export default function PeriodStatsTab(props) {
 
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
+  var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState(null); var drill = s5[0]; var setDrill = s5[1]; // {key, title, unitWho}
@@ -60,6 +61,58 @@ export default function PeriodStatsTab(props) {
   function drillRows() { return (data && data.drills && data.drills[drill.key]) || []; }
   function drillSum() { var t2 = 0; drillRows().forEach(function (r) { t2 += Number(r.amount) || 0; }); return Math.round(t2 * 100) / 100; }
 
+  function dl(name, lines) {
+    var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = name; a.click();
+  }
+  function rowsCsv(rows, kindLabel) {
+    var lines = ['reference,who,date,due_date,original,paid,open,amount,source'];
+    (rows || []).forEach(function (r) {
+      lines.push(['"' + String(r.ref || '').replace(/"/g, '""') + '"', '"' + String(r.who || '').replace(/"/g, '""') + '"',
+        r.date || '', r.due || '', r.total === null || r.total === undefined ? '' : Number(r.total).toFixed(2),
+        r.paid === null || r.paid === undefined ? '' : Number(r.paid).toFixed(2),
+        r.open === null || r.open === undefined ? '' : Number(r.open).toFixed(2),
+        Number(r.amount || 0).toFixed(2), '"' + String(r.source || '') + '"'].join(','));
+    });
+    return lines;
+  }
+  function taxPack() {
+    // v55.83-PQ (Max, Nov 7 05:09): "need to make sure we have the reports
+    // necessary to file our taxes" — one click, every hub CSV the accountant
+    // needs for the chosen period, consistently named. (Wave remains the 2026
+    // book of record until cutover; this is the supporting detail.)
+    var tag = from + '_to_' + to;
+    var d = data.drills || {};
+    dl('tax-pack-1-revenue-invoiced-' + tag + '.csv', rowsCsv(d.invoiced));
+    var col2 = rowsCsv(d.collected);
+    // v55.83-PQ (Max, 05:12): "pull data from other system to complete full tax
+    // reporting" — Wave-era payments were imported as LIFETIME totals without
+    // per-payment dates, so they cannot appear in a dated CSV. Say so IN the
+    // file, so no accountant mistakes this for the whole year's collections.
+    col2.push('');
+    col2.push('"NOTE: payments recorded in Wave before the hub tracked dated payment rows are NOT listed here (Wave stores them as lifetime totals without dates). For periods before the hub, use Wave\'s own Income/Payments report, or ask for the Wave payment-history migration."');
+    dl('tax-pack-2-revenue-collected-' + tag + '.csv', col2);
+    dl('tax-pack-3-open-receivables-' + tag + '.csv', rowsCsv(d.open_invoices));
+    dl('tax-pack-4-bills-entered-' + tag + '.csv', rowsCsv(d.billed));
+    dl('tax-pack-5-bills-paid-' + tag + '.csv', rowsCsv(d.bills_paid));
+    dl('tax-pack-6-open-payables-' + tag + '.csv', rowsCsv(d.open_bills));
+    if (data.spending) {
+      var sp = ['category,transactions,total_usd'];
+      (data.spending.categories || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + c.count + ',' + Number(c.total).toFixed(2)); });
+      if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + Number(data.spending.uncategorized.total).toFixed(2)); }
+      if (data.spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + data.spending.transfers.count + ',' + Number(data.spending.transfers.total).toFixed(2)); }
+      sp.push('"REAL SPENDING (transfers excluded)",,' + Number(data.spending.real_spending).toFixed(2));
+      dl('tax-pack-7-spending-by-category-' + tag + '.csv', sp);
+      var det = ['date,who,amount,category,paired_transfer'];
+      (data.spending.rows || []).forEach(function (r) { det.push(r.date + ',"' + String(r.who).replace(/"/g, '""') + '",' + Number(r.amount).toFixed(2) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
+      dl('tax-pack-8-spending-detail-' + tag + '.csv', det);
+    }
+    var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
+    (data.months || []).forEach(function (m) { mo.push(m.month + ',' + m.invoiced.toFixed(2) + ',' + m.collected.toFixed(2) + ',' + m.billed.toFixed(2) + ',' + m.bills_paid.toFixed(2) + ',' + m.net.toFixed(2)); });
+    dl('tax-pack-9-monthly-summary-' + tag + '.csv', mo);
+    toast.success('Accountant pack downloaded — 9 CSVs for ' + from + ' → ' + to + '.');
+  }
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
   return <div className="bg-white rounded-xl border border-slate-200 p-3">
@@ -86,6 +139,8 @@ export default function PeriodStatsTab(props) {
       })()}
       <div className="flex-1" />
       {data && data.months && <button onClick={csv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
+      {data && data.drills && <button onClick={taxPack} title="Every CSV your accountant needs from the hub for this period, named and dated"
+        className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>🧾 Accountant pack</button>}
     </div>
 
     {!data ? <div className="text-[11px] text-slate-500">Loading…</div> :
@@ -169,6 +224,49 @@ export default function PeriodStatsTab(props) {
       <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>
         US business, USD. Invoiced = by invoice date; Collected = by payment date (so a payment on an older invoice still counts in its month). Bills by bill date; disputed bills stay out of the open totals.
       </div>
+
+      {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
+      {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>
+        <table className="w-full text-[11px]">
+          <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+            <th className="py-1 pr-2 text-left font-semibold">Category</th><th className="py-1 pr-2 text-right font-semibold">Txns</th>
+            <th className="py-1 pr-2 text-right font-semibold">Total</th><th className="py-1 text-right font-semibold">% of spending</th></tr></thead>
+          <tbody style={{ color: '#0f172a' }}>
+            {(data.spending.categories || []).map(function (c) {
+              var pct = data.spending.real_spending > 0 ? Math.round(c.total / data.spending.real_spending * 1000) / 10 : 0;
+              return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setSpCat(spCat === c.key ? null : c.key); }}>
+                <td className="py-1 pr-2 font-bold">{c.label} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
+                <td className="py-1 pr-2 text-right tabular-nums">{c.count}</td>
+                <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(c.total)}</td>
+                <td className="py-1 text-right tabular-nums">{pct}%</td></tr>;
+            })}
+            {data.spending.uncategorized && data.spending.uncategorized.count > 0 && <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: '#fff7ed' }} onClick={function () { setSpCat(spCat === '' ? null : ''); }}>
+              <td className="py-1 pr-2 font-bold" style={{ color: '#9a3412' }}>⚠ Uncategorized — needs a category</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{data.spending.uncategorized.count}</td>
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#9a3412' }}>${fmt(data.spending.uncategorized.total)}</td><td /></tr>}
+            {data.spending.transfers && data.spending.transfers.count > 0 && <tr style={{ cursor: 'pointer', background: '#eff6ff' }} onClick={function () { setSpCat(spCat === 'transfer' ? null : 'transfer'); }}>
+              <td className="py-1 pr-2 font-bold" style={{ color: '#1e40af' }}>↔ Transfers between own accounts — NOT spending</td>
+              <td className="py-1 pr-2 text-right tabular-nums">{data.spending.transfers.count}</td>
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#1e40af' }}>${fmt(data.spending.transfers.total)}</td><td /></tr>}
+          </tbody>
+          <tfoot><tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
+            <td className="py-1.5 pr-2 font-extrabold">Real spending (transfers excluded)</td>
+            <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">{(data.spending.total_out ? '' : '')}</td>
+            <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(data.spending.real_spending)}</td><td /></tr></tfoot>
+        </table>
+        {spCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+          <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
+            {(data.spending.rows || []).filter(function (r) { return spCat === 'transfer' ? r.category === 'transfer' : r.category === spCat; }).map(function (r, i) {
+              return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
+                <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
+                <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(r.amount)}</td>
+                <td className="py-0.5 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td></tr>;
+            })}
+          </tbody></table>
+        </div>}
+      </div>}
      </div>}
   </div>;
 }

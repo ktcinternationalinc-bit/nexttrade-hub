@@ -278,7 +278,7 @@ export default function BooksHomeTab(props) {
           var d3 = srcMap[k.key]; if (!d3) { return; }
           total += k.sign * d3.sum; fullCount += d3.count;
           if (d3.count > (d3.rows || []).length) { capped = true; }
-          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, due: r5.due, total: r5.total, paid: r5.paid, amount: r5.amount, sign: k.sign, source: r5.source }); });
+          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, due: r5.due, total: r5.total, paid: r5.paid, open: r5.open, amount: r5.amount, sign: k.sign, source: r5.source }); });
         });
         merged.sort(function (a3, b5) { return b5.amount - a3.amount; });
         var shown2 = merged.slice(0, 300);
@@ -294,6 +294,7 @@ export default function BooksHomeTab(props) {
               <th className="py-1 pr-2 text-left font-semibold">Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
               <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
               <th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th>
+              <th className="py-1 pr-2 text-right font-semibold">Balance</th>
               <th className="py-1 pr-2 text-right font-semibold">Amount</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
             <tbody style={{ color: '#0f172a' }}>
               {shown2.map(function (r6, i2) {
@@ -304,6 +305,7 @@ export default function BooksHomeTab(props) {
                   <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r6.due || '—'}</td>
                   <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.total)}</td>
                   <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.paid)}</td>
+                  <td className="py-0.5 pr-2 text-right font-bold tabular-nums" style={{ color: '#78350f' }}>{nd(r6.open)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: r6.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r6.sign < 0 ? '−$' : '+$') + fmt(r6.amount)}</td>
                   <td className="py-0.5" style={{ color: '#64748b' }}>{r6.source}</td></tr>;
               })}
@@ -365,30 +367,43 @@ export default function BooksHomeTab(props) {
                   className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
                   style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fecaca' }}>${fmt(fc.buckets[b].ap)}<div className="text-[8px] font-bold" style={{ opacity: 0.75 }}>{fc.buckets[b].ap_count} bill(s)</div></button></td>;
             })}</tr>
-          <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position</td>
+          <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>running in − out</div></td>
             {(fc.bucket_order || []).map(function (b) {
               var pos = fc.buckets[b].running >= 0;
-              return <td key={b} className="py-1 px-1 text-right font-extrabold tabular-nums" style={{ color: pos ? '#065f46' : '#7f1d1d', background: pos ? '#f0fdf4' : '#fff1f2' }}>{(pos ? '+' : '−') + '$' + fmt(Math.abs(fc.buckets[b].running))}</td>;
+              return <td key={b} className="py-0.5 px-0.5 text-right">
+                <button onClick={function () { setFcDrill({ bucket: b, kind: 'cum' }); }} title="Show every invoice/bill making up this running number"
+                  className="w-full rounded px-1 py-1 text-right font-extrabold tabular-nums"
+                  style={{ color: pos ? '#065f46' : '#7f1d1d', background: pos ? '#f0fdf4' : '#fff1f2', border: '1px solid ' + (pos ? '#bbf7d0' : '#fecdd3') }}>{(pos ? '+' : '−') + '$' + fmt(Math.abs(fc.buckets[b].running))}</button></td>;
             })}</tr>
+          {fc.bank_balance && <tr style={{ borderTop: '1px solid #e2e8f0' }}>
+            <td className="py-1 pr-2 font-bold whitespace-nowrap" style={{ color: '#1d4ed8' }}>💰 Projected balance<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>bank ${fmt(fc.bank_balance.total)} (as of {fc.bank_balance.as_of}) + position</div></td>
+            {(fc.bucket_order || []).map(function (b) {
+              var pb = Math.round((fc.bank_balance.total + fc.buckets[b].running) * 100) / 100;
+              var pos2 = pb >= 0;
+              return <td key={b} className="py-1 px-1 text-right font-extrabold tabular-nums" style={{ color: pos2 ? '#1e3a8a' : '#7f1d1d', background: pos2 ? '#eff6ff' : '#fff1f2' }}>{(pos2 ? '$' : '−$') + fmt(Math.abs(pb))}</td>;
+            })}</tr>}
         </tbody>
       </table></div>
-      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Every number here is real invoices/bills by DUE DATE — nothing else. ⚠ side = already late (aged by how long). Green side = on time, by when it comes due. Position = running in − out; where it turns red is where cash runs short. Click any number for the exact invoices/bills behind it.</div>
+      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Every number here is real invoices/bills by DUE DATE — nothing else. ⚠ side = already late (aged by how long). Green side = on time, by when it comes due. Position = running in − out; where it turns red is where cash runs short. Click any number for the exact invoices/bills behind it.{fc.excluded_old && fc.excluded_old.count > 0 ? ' · Only invoices CREATED since Apr 1, 2026 are counted — ' + fc.excluded_old.count + ' older invoice(s) ($' + fmt(fc.excluded_old.sum) + ') are left out as pre-system history whose payments may simply never have been matched.' : ''}</div>
       {fcDrill && (function () {
         var L2 = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
-        var all = (fc.rows || []).filter(function (r) { return r.bucket === fcDrill.bucket && r.kind === fcDrill.kind; })
-          .sort(function (a, b) { return b.amount - a.amount; });
-        var sum = 0; all.forEach(function (r) { sum += r.amount; });
+        var cumIdx = (fc.bucket_order || []).indexOf(fcDrill.bucket);
+        var all = (fc.rows || []).filter(function (r) {
+          if (fcDrill.kind === 'cum') { return (fc.bucket_order || []).indexOf(r.bucket) <= cumIdx; } // every row up to this window
+          return r.bucket === fcDrill.bucket && r.kind === fcDrill.kind;
+        }).sort(function (a, b) { return b.amount - a.amount; });
+        var sum = 0; all.forEach(function (r) { sum += (fcDrill.kind === 'cum' && r.kind === 'out') ? -r.amount : r.amount; });
         var shown = all.slice(0, 80);
         return <div className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
           <div className="flex gap-2 items-center mb-1">
             <div className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>
-              {(fcDrill.kind === 'in' ? 'Coming in · ' : 'Going out · ') + (L2[fcDrill.bucket] || fcDrill.bucket)} — {all.length} row(s), Σ ${fmt(sum)} (equals the number above to the cent)</div>
+              {(fcDrill.kind === 'cum' ? 'Running position through · ' : fcDrill.kind === 'in' ? 'Coming in · ' : 'Going out · ') + (L2[fcDrill.bucket] || fcDrill.bucket)} — {all.length} row(s), Σ {(sum < 0 ? '−$' : '$') + fmt(Math.abs(Math.round(sum * 100) / 100))} (equals the number above to the cent)</div>
             <div className="flex-1" />
             <button onClick={function () { setFcDrill(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
           </div>
           <table className="w-full text-[10px]">
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
-              <th className="py-1 pr-2 text-left font-semibold">Reference</th><th className="py-1 pr-2 text-left font-semibold">{fcDrill.kind === 'in' ? 'Customer' : 'Vendor'}</th>
+              <th className="py-1 pr-2 text-left font-semibold">Reference</th><th className="py-1 pr-2 text-left font-semibold">{fcDrill.kind === 'out' ? 'Vendor' : fcDrill.kind === 'cum' ? 'Customer / Vendor' : 'Customer'}</th>
               <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
               <th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th>
               <th className="py-1 pr-2 text-right font-semibold">Open</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
@@ -400,7 +415,7 @@ export default function BooksHomeTab(props) {
                   <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
                   <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r.total)}</td>
                   <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r.paid)}</td>
-                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums">${fmt(r.amount)}</td>
+                  <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={fcDrill.kind === 'cum' && r.kind === 'out' ? { color: '#7f1d1d' } : {}}>{(fcDrill.kind === 'cum' ? (r.kind === 'out' ? '−$' : '+$') : '$') + fmt(r.amount)}</td>
                   <td className="py-0.5" style={{ color: '#64748b' }}>{r.source}</td></tr>;
               })}
             </tbody>

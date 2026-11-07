@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import { US_WAVE_BUSINESS_ID } from '../lib/business-of'; // v55.83-PQ — Wave link
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -30,6 +31,9 @@ export default function ExpenseRulesTab(props) {
   var s7 = useState({ match_text: '', classification: '' }); var nr = s7[0]; var setNr = s7[1];
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
+  var sW = useState(null); var waveAccts = sW[0]; var setWaveAccts = sW[1]; // v55.83-PQ — Wave chart for the link editor
+  var sW2 = useState(false); var showWave = sW2[0]; var setShowWave = sW2[1];
+  var sPr = useState(null); var pairPanel = sPr[0]; var setPairPanel = sPr[1]; // v55.83-PQ — {txn, candidates} transfer pairing
 
   function api(action, payload) {
     return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -53,7 +57,7 @@ export default function ExpenseRulesTab(props) {
   useEffect(function () { if (canUse) { loadAll(); } }, []); // eslint-disable-line
 
   if (!canUse) {
-    return <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm" style={{ color: '#334155' }}>
+    return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
       Categories &amp; Rules needs the <b>Bank: Categorize Transactions</b> permission — ask an admin in Settings → Permissions.</div>;
   }
 
@@ -106,6 +110,27 @@ export default function ExpenseRulesTab(props) {
       else { toast.error((j && j.error) || 'Could not categorize.'); }
     }).finally(function () { setBusy(false); });
   }
+  function openPair(t) {
+    setBusy(true);
+    api('transfer_candidates', { bank_transaction_id: t.id }).then(function (j) {
+      if (j && j.ok) { setPairPanel({ txn: j.txn, candidates: j.candidates || [] }); }
+      else { toast.error((j && j.error) || 'Could not look for the other leg.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function doPair(a, b) {
+    setBusy(true);
+    api('pair_transfer', { a: a, b: b }).then(function (j) {
+      if (j && j.ok) { toast.success('Paired ↔ both legs are now ONE transfer — excluded from spending.'); setPairPanel(null); loadExpenses(filter); }
+      else { toast.error((j && j.error) || 'Could not pair.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function unpair(t) {
+    setBusy(true);
+    api('unpair_transfer', { transfer_group_id: t.transfer_group_id }).then(function (j) {
+      if (j && j.ok) { toast.success('Unpaired.'); loadExpenses(filter); }
+      else { toast.error((j && j.error) || 'Could not unpair.'); }
+    }).finally(function () { setBusy(false); });
+  }
   function verify(t, want) {
     setBusy(true);
     api('verify', { bank_transaction_id: t.id, verified: want }).then(function (j) {
@@ -114,6 +139,25 @@ export default function ExpenseRulesTab(props) {
     }).finally(function () { setBusy(false); });
   }
 
+  function loadWaveAccts() {
+    if (waveAccts) { setShowWave(!showWave); return; }
+    setBusy(true);
+    fetch('/api/wave/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wave_business_id: US_WAVE_BUSINESS_ID, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok) { setWaveAccts(j.categories || []); setShowWave(true); }
+        else { toast.error((j && j.error) || 'Could not load the Wave account list.'); }
+      }).finally(function () { setBusy(false); });
+  }
+  function linkWave(c, waveId) {
+    var wa = null; (waveAccts || []).forEach(function (w) { if (w.wave_account_id === waveId) { wa = w; } });
+    setBusy(true);
+    api('save_category', { id: c.id, label: c.label, wave_account_id: waveId || null, wave_account_name: wa ? wa.wave_account_name : null })
+      .then(function (j) {
+        if (j && j.ok) { toast.success(waveId ? 'Linked — picking this category now also sets the Wave category.' : 'Wave link removed.'); loadAll(); }
+        else { toast.error((j && j.error) || 'Could not save the Wave link.'); }
+      }).finally(function () { setBusy(false); });
+  }
   var activeCats = cats.filter(function (c) { return c.active !== false; });
   var labelOf = {}; cats.forEach(function (c) { labelOf[c.key] = c.label; });
 
@@ -122,7 +166,7 @@ export default function ExpenseRulesTab(props) {
       ⚠ One SQL to run first: paste <b>sql/v55-83-PI-expense-categories-rules.sql</b> into the Supabase SQL Editor. ({needsSql})</div>}
 
     {/* ① Categories */}
-    <div className="bg-white rounded-xl border border-slate-200 p-3">
+    <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="text-sm font-extrabold mb-2" style={{ color: '#0f172a' }}>🏷 Your expense categories</div>
       <div className="flex gap-1.5 flex-wrap items-center">
         {cats.map(function (c) {
@@ -137,10 +181,29 @@ export default function ExpenseRulesTab(props) {
         <button onClick={addCategory} disabled={busy || !newCat.trim()} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !newCat.trim()) ? 0.5 : 1 }}>+ add</button>
       </div>
       <div className="text-[10px] mt-1.5" style={{ color: '#64748b' }}>Categories show in every expense dropdown (Books home, Bank Review, here). Deactivating hides a category from pickers — nothing already categorized changes.</div>
+      {/* v55.83-PQ (Max): one click → hub + ClickBooks + Wave */}
+      <div className="mt-2">
+        <button onClick={loadWaveAccts} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#0e7490', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>
+          🌊 {showWave ? 'Hide' : 'Link categories to'} Wave accounts</button>
+        {showWave && waveAccts && <div className="mt-2 rounded-lg p-2" style={{ background: '#f0f9ff', border: '1px solid #bae6fd' }}>
+          <div className="text-[10px] font-bold mb-1" style={{ color: '#155e75' }}>Optional: give a category its Wave account — then ONE category pick books the expense in the hub, ClickBooks (via your approved map) AND Wave. A transaction that already has a Wave category is never overwritten.</div>
+          <div className="grid sm:grid-cols-2 gap-1.5">
+            {activeCats.map(function (c) {
+              return <div key={c.id} className="flex gap-1.5 items-center">
+                <span className="text-[11px] font-bold" style={{ color: '#0f172a', minWidth: 130 }}>{c.label}</span>
+                <select value={c.wave_account_id || ''} onChange={function (e) { linkWave(c, e.target.value); }} disabled={busy}
+                  className="px-1.5 py-0.5 rounded border border-slate-300 text-[10px] flex-1" style={{ color: '#0f172a', background: '#ffffff' }}>
+                  <option value="">— no Wave link —</option>
+                  {waveAccts.map(function (w) { return <option key={w.wave_account_id} value={w.wave_account_id}>{w.wave_account_name}{w.type ? ' · ' + w.type : ''}</option>; })}
+                </select></div>;
+            })}
+          </div>
+        </div>}
+      </div>
     </div>
 
     {/* ② Rules */}
-    <div className="bg-white rounded-xl border border-slate-200 p-3">
+    <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>🤖 Rules — "contains X → category Y"</div>
         <div className="flex-1" />
@@ -178,7 +241,7 @@ export default function ExpenseRulesTab(props) {
     </div>
 
     {/* ③ Expenses — Unverified / Verified / All */}
-    <div className="bg-white rounded-xl border border-slate-200 p-3">
+    <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>✅ Verification</div>
         {['unverified', 'verified', 'all'].map(function (f) {
@@ -194,7 +257,7 @@ export default function ExpenseRulesTab(props) {
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1.5 pr-2 text-left font-semibold">Date</th><th className="py-1.5 pr-2 text-left font-semibold">Merchant / description</th>
             <th className="py-1.5 pr-2 text-right font-semibold">Amount</th><th className="py-1.5 pr-2 text-left font-semibold">Category</th>
-            <th className="py-1.5 pr-2 text-left font-semibold">How</th><th className="py-1.5 text-left font-semibold">Verified</th></tr></thead>
+            <th className="py-1.5 pr-2 text-left font-semibold">How</th><th className="py-1.5 pr-2 text-left font-semibold">Verified</th><th className="py-1.5 text-left font-semibold">↔</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
             {exps.map(function (t) {
               return <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -214,10 +277,32 @@ export default function ExpenseRulesTab(props) {
                       <button onClick={function () { verify(t, false); }} disabled={busy} className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: '#f1f5f9', color: '#64748b' }}>undo</button></span>
                     : <button onClick={function () { verify(t, true); }} disabled={busy || !t.classification} title={t.classification ? 'Confirm this category' : 'Pick a category first'}
                       className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !t.classification) ? 0.5 : 1 }}>✓ verify</button>}
+                </td>
+                <td className="py-1.5">
+                  {t.transfer_group_id
+                    ? <span className="inline-flex items-center gap-1"><span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ paired</span>
+                      <button onClick={function () { unpair(t); }} disabled={busy} className="px-1 py-0.5 rounded text-[9px] font-bold" style={{ background: '#f1f5f9', color: '#64748b' }}>undo</button></span>
+                    : <button onClick={function () { openPair(t); }} disabled={busy} title="This is a transfer between our own accounts (incl. credit cards) — find its other leg"
+                      className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe' }}>↔ pair</button>}
                 </td></tr>;
             })}
           </tbody>
         </table></div>}
+      {pairPanel && <div className="mt-2 rounded-lg p-2" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+        <div className="flex gap-2 items-center mb-1">
+          <div className="text-[11px] font-extrabold" style={{ color: '#1e3a8a' }}>
+            ↔ Pair the transfer: {String(pairPanel.txn.merchant_name || pairPanel.txn.name || '').substring(0, 40)} · ${fmt(pairPanel.txn.amount_abs)} on {pairPanel.txn.posted_date || pairPanel.txn.date} — pick its other leg (same amount, opposite direction, different account, ±7 days):</div>
+          <div className="flex-1" />
+          <button onClick={function () { setPairPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕</button>
+        </div>
+        {pairPanel.candidates.length === 0 ? <div className="text-[10px]" style={{ color: '#1e3a8a' }}>No matching opposite leg found (same amount within ±7 days on another account). If the other account isn't connected yet, connect it in the Bank tab first.</div> :
+          pairPanel.candidates.map(function (c2) {
+            return <div key={c2.id} className="flex gap-2 items-center py-0.5" style={{ borderBottom: '1px solid #dbeafe' }}>
+              <span className="text-[10px] font-semibold flex-1" style={{ color: '#0f172a' }}>{c2.posted_date || c2.date} · {String(c2.merchant_name || c2.name || '').substring(0, 50)} · ${fmt(c2.amount_abs)} ({c2.direction === 'in' ? 'money in' : 'money out'})</span>
+              <button onClick={function () { doPair(pairPanel.txn.id, c2.id); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>pair these ↔</button>
+            </div>;
+          })}
+      </div>}
     </div>
   </div>;
 }

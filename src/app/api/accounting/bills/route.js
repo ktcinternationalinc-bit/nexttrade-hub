@@ -484,7 +484,21 @@ export async function POST(req) {
     //  underlying numbers and where they're coming from")
     if (action === 'forecast') {
       var todayF = new Date().toISOString().substring(0, 10);
-      var openInvsF = await loadOpenUsInvoices(db);
+      // v55.83-PQ (Max, Nov 7 04:54): "it pulls in invoices that are not
+      // matched in the new system and thus showing as old... maybe we should
+      // just look at only invoices April 1st on created... and we need to see
+      // what will be due." Invoices CREATED before Apr 1, 2026 are mostly
+      // pre-hub history whose payments were never matched — they'd all pile
+      // into 90+ LATE and drown the real picture. They are EXCLUDED here but
+      // COUNTED AND REPORTED (never silently dropped), and they still exist
+      // everywhere else (All Invoices, Open Balances, ClickBooks AR).
+      var FORECAST_CREATED_FROM = '2026-04-01';
+      var allOpenF = await loadOpenUsInvoices(db);
+      var exCount = 0; var exSum = 0;
+      var openInvsF = allOpenF.filter(function (v) {
+        if ((v.invoice_date || '') >= FORECAST_CREATED_FROM) { return true; }
+        exCount++; exSum = Math.round((exSum + v.open_balance) * 100) / 100; return false;
+      });
       var LF = await loadBills(db);
       var openBillsF = decorate(LF.bills, LF.pays).filter(isPayable);
       var buckets = forecastBuckets(openInvsF, openBillsF, todayF);
@@ -493,8 +507,51 @@ export async function POST(req) {
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').eq('review_status', 'unreviewed').neq('pending', true);
       var unmatchedIn = await db.from('bank_transactions').select('id', { count: 'exact', head: true })
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'in').eq('review_status', 'unreviewed').is('matched_invoice_id', null).neq('pending', true);
+      // v55.83-PQ (Max, 04:55): "see how our balances will be" — the projected
+      // balance row starts from the REAL bank balance, so it is only included
+      // for people with the protected bank-balance permission (same grant as
+      // the dashboard). Fail-soft: no permission (or stale map) → no balance
+      // row, forecast still works.
+      var balF = null;
+      try {
+        var profF = await db.from('profiles').select('email').eq('id', userId).maybeSingle();
+        var emailF = profF.data && profF.data.email ? String(profF.data.email).toLowerCase() : null;
+        if (emailF) {
+          var idsF = await db.rpc('bank_visibility_identity_map');
+          var authF = null;
+          (idsF.data || []).forEach(function (r7) { if (String(r7.email || '').toLowerCase() === emailF) { authF = r7.auth_user_id; } });
+          if (authF) {
+            var superIdsF = String(process.env.HUB_SUPER_ADMIN_AUTH_USER_IDS || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+            var okBal = superIdsF.indexOf(authF) >= 0;
+            if (!okBal) {
+              var gF = await db.from('financial_visibility_permissions').select('can_view_bank_balances').eq('auth_user_id', authF).maybeSingle();
+              okBal = !!(gF.data && gF.data.can_view_bank_balances === true);
+            }
+            if (okBal) {
+              var acF = await db.from('plaid_accounts').select('name, mask, current_balance, iso_currency, updated_at').eq('wave_business_id', US_WAVE_BUSINESS_ID);
+              // one row per mask (reconnects leave alias rows) — keep the freshest
+              var byMask = {};
+              (acF.data || []).forEach(function (a4) {
+                if (a4.current_balance === null || a4.current_balance === undefined) { return; }
+                var k4 = a4.mask || a4.name || '?';
+                if (!byMask[k4] || String(a4.updated_at || '') > String(byMask[k4].updated_at || '')) { byMask[k4] = a4; }
+              });
+              var tot = 0; var asOf = ''; var accs = [];
+              Object.keys(byMask).forEach(function (k5) {
+                var a5 = byMask[k5];
+                tot = Math.round((tot + (Number(a5.current_balance) || 0)) * 100) / 100;
+                if (String(a5.updated_at || '') > asOf) { asOf = String(a5.updated_at || ''); }
+                accs.push({ name: a5.name, mask: a5.mask, balance: Math.round((Number(a5.current_balance) || 0) * 100) / 100 });
+              });
+              if (accs.length) { balF = { total: tot, as_of: asOf.substring(0, 10), accounts: accs }; }
+            }
+          }
+        }
+      } catch (eBal) { balF = null; }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, today: todayF,
         bucket_order: BUCKETS, buckets: buckets, rows: rows,
+        excluded_old: { count: exCount, sum: exSum, before: FORECAST_CREATED_FROM },
+        bank_balance: balF,
         unflagged: { expenses: unrevOut.count || 0, deposits: unmatchedIn.count || 0 } });
     }
 
@@ -602,10 +659,48 @@ export async function POST(req) {
       });
       var monthRows = Object.values(months).sort(function (a, b2) { return a.month.localeCompare(b2.month); });
       monthRows.forEach(function (m) { m.net = r2(m.collected - m.bills_paid); });
+      // v55.83-PQ (Max, 05:05): "categorizing etc should affect the underlying
+      // reports" — SPENDING BY CATEGORY: settled money-out in the period,
+      // grouped by the category humans/rules picked. Transfers between own
+      // accounts are their own line and NEVER counted as spending. Fail-soft
+      // on the transfer column until the PQ SQL runs.
+      var spend = null;
+      try {
+        var spTx = await fetchAll(function () {
+          return db.from('bank_transactions')
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id')
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true)
+            .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
+        });
+        var catLabels = {};
+        try {
+          var catsSp = await db.from('expense_categories').select('key, label');
+          (catsSp.data || []).forEach(function (c6) { catLabels[c6.key] = c6.label; });
+        } catch (eC) {}
+        var byCat = {}; var trf = { count: 0, total: 0 }; var unc = { count: 0, total: 0 }; var totOut = 0;
+        var spRows = [];
+        spTx.forEach(function (t6) {
+          var d6 = t6.posted_date || t6.date;
+          if (!(d6 >= pFrom && d6 <= pTo)) { return; }
+          var amt6 = r2(t6.amount_abs);
+          totOut = r2(totOut + amt6);
+          var isTrf = !!t6.transfer_group_id || t6.classification === 'transfer';
+          var key6 = isTrf ? 'transfer' : (t6.classification || null);
+          if (spRows.length < 500) { spRows.push({ date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id }); }
+          if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
+          if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
+          if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, count: 0, total: 0 }; }
+          byCat[key6].count++; byCat[key6].total = r2(byCat[key6].total + amt6);
+        });
+        var catRows = Object.values(byCat).sort(function (a6, b6) { return b6.total - a6.total; });
+        spend = { categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
+          real_spending: r2(totOut - trf.total), rows: spRows };
+      } catch (eSp) { spend = null; }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: pFrom, to: pTo,
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },
         bills: { billed: billed, count: billCount, paid: billsPaid, paid_count: billsPaidCount, still_open_from_period: billsOpen, disputed_open: billsDisputed },
         months: monthRows,
+        spending: spend,
         // drill rows: every card's exact underlying records ("show where these numbers came from")
         drills: { invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv,
                   billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } });
