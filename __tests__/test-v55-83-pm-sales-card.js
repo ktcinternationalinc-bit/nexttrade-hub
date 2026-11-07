@@ -26,8 +26,8 @@ ok('1c: drill + card figures from the same sum; each row says WHY it counts as s
   /'Deposit matched to an invoice' : 'Deposit categorized customer_payment'/.test(br));
 
 var bh = R('src/components/BooksHomeTab.jsx');
-ok('2: SALES RECEIVED card rendered, clickable, with its own drill key',
-  /SALES RECEIVED \(/.test(bh) && /keys: \[\{ key: 'sales_in', sign: 1 \}\]/.test(bh) &&
+ok('2 (PP): sales card rendered inside BANK REALITY group as "of which SALES", clickable, own drill key',
+  /of which SALES \(/.test(bh) && /keys: \[\{ key: 'sales_in', sign: 1 \}\]/.test(bh) &&
   /deposits matched to invoices \/ customer payments/.test(bh));
 
 console.log('');

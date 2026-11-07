@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PP',
+    date: '2026-11-07',
+    label: '\ud83d\uddc2 Books home regrouped — four clear questions',
+    items: [
+      'The money cards are now FOUR labeled groups, each answering one question: 1\ufe0f\u20e3 BANK REALITY (came in / of which sales / went out / net \u2014 transfers included and labeled), 2\ufe0f\u20e3 INVOICES CREATED IN THIS PERIOD (invoiced / PAID ON THESE in the period / still open), 3\ufe0f\u20e3 ALL INVOICE MONEY RECEIVED THIS PERIOD (old invoices included \u2014 each row says if its invoice is from this period or older), 4\ufe0f\u20e3 WHAT\u2019S AHEAD (expected in / bills due / projected net). Every card still clicks through to its exact rows.',
+      { superAdminOnly: true, text: 'v55.83-PP \u2014 NO new SQL. period_stats cohort split: collected_on_period(+count,+drill) = payments in period on invoices dated in period; all-collections rows annotated period-vs-older; Books home card area rebuilt as 4 labeled groups (old separate SALES row removed); ps drill map + collected_on_period. Test pp (7).' },
+    ],
+  },
+  {
     version: 'v55.83-PO',
     date: '2026-11-07',
     label: '\ud83d\udcc5 Due dates + original/paid/balance in every drill',

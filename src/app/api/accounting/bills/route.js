@@ -551,7 +551,13 @@ export async function POST(req) {
           rowsOpenInv.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: open, source: 'Unpaid balance of a period invoice' });
         }
       });
+      // v55.83-PP (Max, 04:35): two DIFFERENT questions, kept apart:
+      //   collected            = ALL payments received in the period (the
+      //                          invoice may be older than the period)
+      //   collected_on_period  = payments received in the period ON INVOICES
+      //                          CREATED IN THE PERIOD (the cohort)
       var collected = 0, colCount = 0;
+      var collectedCohort = 0, colCohortCount = 0; var rowsCollectedCohort = [];
       paysP.forEach(function (pp) {
         if (isPaymentVoid(pp)) { return; }
         var srcInv = usInv[pp.accounting_invoice_id];
@@ -560,7 +566,11 @@ export async function POST(req) {
         var amt2 = r2(pp.amount);
         collected = r2(collected + amt2); colCount++;
         addM(months, monthOf(pp.payment_date), 'collected', amt2);
-        rowsCollected.push({ ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, due: srcInv.due_date || null, total: r2(srcInv.total_amount), amount: amt2, source: 'Payment received in period' });
+        var invInPeriod = srcInv.invoice_date && srcInv.invoice_date >= pFrom && srcInv.invoice_date <= pTo;
+        var rowC = { ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, due: srcInv.due_date || null, total: r2(srcInv.total_amount), amount: amt2,
+          source: invInPeriod ? 'Payment on an invoice created in this period' : 'Payment on an OLDER invoice (dated ' + (srcInv.invoice_date || '?') + ')' };
+        rowsCollected.push(rowC);
+        if (invInPeriod) { collectedCohort = r2(collectedCohort + amt2); colCohortCount++; rowsCollectedCohort.push(rowC); }
       });
       // Bills side
       var LS = await loadBills(db);
@@ -593,11 +603,11 @@ export async function POST(req) {
       var monthRows = Object.values(months).sort(function (a, b2) { return a.month.localeCompare(b2.month); });
       monthRows.forEach(function (m) { m.net = r2(m.collected - m.bills_paid); });
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, from: pFrom, to: pTo,
-        invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, still_open_from_period: stillOpen },
+        invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },
         bills: { billed: billed, count: billCount, paid: billsPaid, paid_count: billsPaidCount, still_open_from_period: billsOpen, disputed_open: billsDisputed },
         months: monthRows,
         // drill rows: every card's exact underlying records ("show where these numbers came from")
-        drills: { invoiced: rowsInvoiced, collected: rowsCollected, open_invoices: rowsOpenInv,
+        drills: { invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv,
                   billed: rowsBilled, bills_paid: rowsBillsPaid, open_bills: rowsOpenBills } });
     }
 

@@ -15,10 +15,10 @@ function ok(name, cond) {
 console.log('PN — invoice-backed sales rows on Books home');
 
 var bh = R('src/components/BooksHomeTab.jsx');
-ok('1: new row of cards — INVOICED / COLLECTED / STILL OPEN — fed by the SAME period_stats engine as the Stats tab (one source of truth)',
+ok('1 (PP superseded the single SALES row with groups 2+3): invoice cards fed by the SAME period_stats engine as the Stats tab',
   /action: 'period_stats', from: f, to: t \|\| TODAY/.test(bh) &&
-  /SALES — ACTUAL INVOICES IN THIS PERIOD/.test(bh) &&
-  /invoices issued in the period/.test(bh) && /payments recorded on invoices in the period/.test(bh) &&
+  /INVOICES CREATED IN THIS PERIOD/.test(bh) &&
+  /invoices issued in the period/.test(bh) &&
   /invoiced in period, not yet paid/.test(bh));
 ok('2: all three cards clickable with ps-sourced drills (invoiced / collected / open_invoices)',
   /src: 'ps', title: 'Invoiced — actual invoices issued in this period'/.test(bh) &&

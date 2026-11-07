@@ -24,7 +24,7 @@ ok('1b: invoiced + still-open rows carry due, original (total), paid, open',
   /rowsInvoiced\.push\(\{ ref: inv\.invoice_number[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br) &&
   /rowsOpenInv\.push\(\{ ref: inv\.invoice_number[^\n]*due: inv\.due_date \|\| null, total: amt, paid: r2\(amt - open\), open: open/.test(br));
 ok('1c: collected / billed / open-bills / bills-paid rows carry the dates+balances too',
-  /rowsCollected\.push\(\{[^\n]*due: srcInv\.due_date \|\| null, total: r2\(srcInv\.total_amount\)/.test(br) &&
+  /var rowC = \{ ref: srcInv\.invoice_number[^\n]*due: srcInv\.due_date \|\| null, total: r2\(srcInv\.total_amount\)/.test(br) && // (PP wrapped it as rowC, annotated period-vs-older)
   /rowsOpenBills\.push\(\{[^\n]*date: b\.bill_date, due: b\.due_date \|\| null, total: r2\(b\.total_amount\), paid: r2\(b\.paid\), open: r2\(b\.open\)/.test(br) &&
   /rowsBillsPaid\.push\(\{[^\n]*due: pb\.due_date \|\| null, total: r2\(pb\.total_amount\)/.test(br));
 ok('1d: open-invoice loader exposes original + paid (total − open) so EVERY screen built on it has balances',

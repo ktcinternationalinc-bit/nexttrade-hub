@@ -28,7 +28,7 @@ ok('5: tab wired with Jun 1 default + CSV + permission gate + graceful denial',
   at.indexOf("['period_stats', '\ud83d\udcc9 Stats']") >= 0 &&
   /useState\('2026-06-01'\)/.test(st) && /period-stats-/.test(st) && /data\.denied/.test(st));
 ok('6: every card is clickable and returns its exact underlying rows with a sum-to-the-cent footer',
-  /drills: \{ invoiced: rowsInvoiced, collected: rowsCollected, open_invoices: rowsOpenInv/.test(br) &&
+  /drills: \{ invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv/.test(br) && // (PP added the cohort drill)
   /openDrill\('invoiced'/.test(st) && /openDrill\('bills_paid'/.test(st) && /openDrill\('open_bills'/.test(st) &&
   /equals the card to the cent/.test(st));
 
