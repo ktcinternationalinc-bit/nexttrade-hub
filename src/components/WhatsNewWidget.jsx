@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-PO',
+    date: '2026-11-07',
+    label: '\ud83d\udcc5 Due dates + original/paid/balance in every drill',
+    items: [
+      'Every drill-down table (Books home cards, the Late & upcoming strip, the \ud83d\udcc8 Forecast tab, the \ud83d\udcc9 Stats tab) now shows: document date, DUE DATE, original amount, paid so far, and the open balance \u2014 next to the amount the card counts. Missing values show as \u2014, never a fake zero.',
+      'The Late & upcoming strip now says exactly what it is: open INVOICES (what customers owe us) and open BILLS (what we owe), placed by their due dates \u2014 \u26a0 ALREADY LATE aged by days late, ON TIME by when it comes due \u2014 with the invoice/bill count on every cell.',
+      { superAdminOnly: true, text: 'v55.83-PO \u2014 NO new SQL. period_stats select + due_date; all six period_stats row builders + cashflow expected-in + loadOpenUsInvoices (total/paid) + aging tagRows (date/due/total/paid/open passthrough) enriched; 4 drill UIs get Date/Due/Original/Paid columns with nd() em-dash for absent values; \u03a3 footers re-aligned (colSpan 6/7); strip group headers + per-cell counts. Test po (9).' },
+    ],
+  },
+  {
     version: 'v55.83-PN',
     date: '2026-11-07',
     label: '\ud83e\uddfe Invoice-backed sales rows on Books home',

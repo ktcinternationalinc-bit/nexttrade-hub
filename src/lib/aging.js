@@ -66,14 +66,16 @@ export function tagRows(invoices, bills, today) {
     var open = Number(v.open_balance) || 0;
     if (open <= 0.005) { return; }
     rows.push({ kind: 'in', bucket: bucketOf(v.due_date || v.invoice_date, today),
-      ref: v.invoice_number || v.id, who: v.customer || '', date: v.due_date || v.invoice_date || '',
+      ref: v.invoice_number || v.id, who: v.customer || '', date: v.invoice_date || '', due: v.due_date || null,
+      total: v.total === undefined ? null : r2(v.total), paid: v.paid === undefined ? null : r2(v.paid), open: r2(open),
       amount: r2(open), source: 'Invoice' + (v.due_date ? ' · due ' + v.due_date : ' · no due date, dated ' + (v.invoice_date || '?')) });
   });
   (bills || []).forEach(function (b2) {
     var open = Number(b2.open) || 0;
     if (open <= 0.005) { return; }
     rows.push({ kind: 'out', bucket: bucketOf(b2.due_date || b2.bill_date, today),
-      ref: b2.bill_number || b2.id, who: b2.vendor_name || '', date: b2.due_date || b2.bill_date || '',
+      ref: b2.bill_number || b2.id, who: b2.vendor_name || '', date: b2.bill_date || '', due: b2.due_date || null,
+      total: b2.total_amount === undefined ? null : r2(b2.total_amount), paid: b2.paid === undefined ? null : r2(b2.paid), open: r2(open),
       amount: r2(open), source: 'Bill' + (b2.due_date ? ' · due ' + b2.due_date : ' · no due date') });
   });
   return rows;

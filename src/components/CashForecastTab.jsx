@@ -8,6 +8,7 @@
 // "coming in the next 30 days". Every drill-down sums to its card.
 import React, { useState, useEffect } from 'react';
 
+function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var LABELS = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
 
@@ -150,18 +151,23 @@ export default function CashForecastTab(props) {
       <div className="overflow-x-auto"><table className="w-full text-xs">
         <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
           <th className="py-1.5 pr-2 text-left font-semibold">Reference</th><th className="py-1.5 pr-2 text-left font-semibold">{drill.kind === 'in' ? 'Customer' : 'Vendor'}</th>
-          <th className="py-1.5 pr-2 text-left font-semibold">Date</th><th className="py-1.5 pr-2 text-right font-semibold">Open</th><th className="py-1.5 text-left font-semibold">Where it comes from</th></tr></thead>
+          <th className="py-1.5 pr-2 text-left font-semibold">Date</th><th className="py-1.5 pr-2 text-left font-semibold">Due</th>
+          <th className="py-1.5 pr-2 text-right font-semibold">Original</th><th className="py-1.5 pr-2 text-right font-semibold">Paid</th>
+          <th className="py-1.5 pr-2 text-right font-semibold">Open</th><th className="py-1.5 text-left font-semibold">Where it comes from</th></tr></thead>
         <tbody style={{ color: '#0f172a' }}>
           {drillRows().map(function (r, i) {
             return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
               <td className="py-1.5 pr-2 font-semibold">{r.ref}</td><td className="py-1.5 pr-2">{r.who}</td>
-              <td className="py-1.5 pr-2">{r.date || '—'}</td>
+              <td className="py-1.5 pr-2 whitespace-nowrap">{r.date || '—'}</td>
+              <td className="py-1.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
+              <td className="py-1.5 pr-2 text-right tabular-nums">{nd(r.total)}</td>
+              <td className="py-1.5 pr-2 text-right tabular-nums">{nd(r.paid)}</td>
               <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(r.amount)}</td>
               <td className="py-1.5 text-[10px]" style={{ color: '#64748b' }}>{r.source}</td></tr>;
           })}
         </tbody>
         <tfoot><tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
-          <td className="py-2 pr-2 font-extrabold" colSpan={3}>Σ total — equals the card to the cent</td>
+          <td className="py-2 pr-2 font-extrabold" colSpan={6}>Σ total — equals the card to the cent</td>
           <td className="py-2 pr-2 text-right font-extrabold tabular-nums">${fmt(Math.abs(drillSum()))}</td><td /></tr></tfoot>
       </table></div>
     </div>}

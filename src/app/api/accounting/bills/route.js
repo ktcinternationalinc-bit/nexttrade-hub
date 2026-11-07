@@ -105,9 +105,11 @@ async function loadOpenUsInvoices(db) {
     if ((inv.currency || 'USD') !== 'USD') { return; }
     var open = r2((Number(inv.total_amount) || 0) - (Number(inv.wave_imported_paid) || 0) - (paidBy[inv.id] || 0));
     if (open <= 0.005) { return; }
+    var totA = r2(Number(inv.total_amount) || 0);
     out.push({
       id: inv.id, invoice_number: inv.invoice_number, customer: nameById[inv.accounting_customer_id] || '',
       invoice_date: inv.invoice_date, due_date: inv.due_date, open_balance: open,
+      total: totA, paid: r2(totA - open), // PO: original + paid visible in every drill
     });
   });
   return out;
@@ -310,7 +312,7 @@ export async function POST(req) {
       inRowsL.sort(byAmtL); outRowsL.sort(byAmtL); salesRowsL.sort(byAmtL);
       var expAllL = openInvs
         .filter(function (v) { var d2 = v.due_date || v.invoice_date; return d2 && d2 >= fromD && d2 <= toD; })
-        .map(function (v) { return { ref: v.invoice_number || v.id, who: v.customer || '', date: v.due_date || v.invoice_date, amount: r2(v.open_balance), source: 'Open invoice · due ' + (v.due_date || '(invoice date ' + v.invoice_date + ')') }; })
+        .map(function (v) { return { ref: v.invoice_number || v.id, who: v.customer || '', date: v.invoice_date, due: v.due_date || null, total: v.total, paid: v.paid, open: r2(v.open_balance), amount: r2(v.open_balance), source: 'Open invoice · due ' + (v.due_date || '(invoice date ' + v.invoice_date + ')') }; })
         .sort(byAmtL);
       var sumExpL = 0; expAllL.forEach(function (r3) { sumExpL += r3.amount; });
       var billRowsL = dueBills
@@ -510,7 +512,7 @@ export async function POST(req) {
       // Invoices side (US, canonical eligibility; all invoices in period, not just open)
       var invsP = await fetchAll(function () {
         return db.from('accounting_invoices')
-          .select('id, invoice_number, invoice_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
+          .select('id, invoice_number, invoice_date, due_date, currency, total_amount, wave_imported_paid, record_status, approval_status, wave_status, wave_invoice_id, wave_business_id, source, accounting_customer_id')
           .order('created_at', { ascending: false });
       });
       var paysP = await fetchAll(function () {
@@ -543,10 +545,10 @@ export async function POST(req) {
         invoiced = r2(invoiced + amt); invCount++;
         addM(months, monthOf(inv.invoice_date), 'invoiced', amt);
         var open = r2(amt - (Number(inv.wave_imported_paid) || 0) - (paidByP[inv.id] || 0));
-        rowsInvoiced.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, amount: amt, source: 'Invoice dated in period' });
+        rowsInvoiced.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: amt, source: 'Invoice dated in period' }); // PO: dates+balances visible
         if (open > 0.005) {
           stillOpen = r2(stillOpen + open);
-          rowsOpenInv.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, amount: open, source: 'Unpaid balance of a period invoice' });
+          rowsOpenInv.push({ ref: inv.invoice_number, who: nameByIdP[inv.accounting_customer_id] || '', date: inv.invoice_date, due: inv.due_date || null, total: amt, paid: r2(amt - open), open: open, amount: open, source: 'Unpaid balance of a period invoice' });
         }
       });
       var collected = 0, colCount = 0;
@@ -558,7 +560,7 @@ export async function POST(req) {
         var amt2 = r2(pp.amount);
         collected = r2(collected + amt2); colCount++;
         addM(months, monthOf(pp.payment_date), 'collected', amt2);
-        rowsCollected.push({ ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, amount: amt2, source: 'Payment received in period' });
+        rowsCollected.push({ ref: srcInv.invoice_number, who: nameByIdP[srcInv.accounting_customer_id] || '', date: pp.payment_date, due: srcInv.due_date || null, total: r2(srcInv.total_amount), amount: amt2, source: 'Payment received in period' });
       });
       // Bills side
       var LS = await loadBills(db);
@@ -571,11 +573,11 @@ export async function POST(req) {
         if (b.bill_date && b.bill_date >= pFrom && b.bill_date <= pTo) {
           billed = r2(billed + (Number(b.total_amount) || 0)); billCount++;
           addM(months, monthOf(b.bill_date), 'billed', r2(b.total_amount));
-          rowsBilled.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, amount: r2(b.total_amount), source: b.disputed === true ? 'Bill (DISPUTED)' : 'Bill entered in period' });
+          rowsBilled.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: r2(b.total_amount), source: b.disputed === true ? 'Bill (DISPUTED)' : 'Bill entered in period' });
           if (b.disputed === true) { billsDisputed = r2(billsDisputed + b.open); }
           else if (b.open > 0.005) {
             billsOpen = r2(billsOpen + b.open);
-            rowsOpenBills.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.due_date || b.bill_date, amount: b.open, source: 'Unpaid balance of a period bill' });
+            rowsOpenBills.push({ ref: b.bill_number || '—', who: b.vendor_name, date: b.bill_date, due: b.due_date || null, total: r2(b.total_amount), paid: r2(b.paid), open: r2(b.open), amount: b.open, source: 'Unpaid balance of a period bill' });
           }
         }
       });
@@ -586,7 +588,7 @@ export async function POST(req) {
         billsPaid = r2(billsPaid + (Number(bp.amount) || 0)); billsPaidCount++;
         addM(months, monthOf(bp.paid_date), 'bills_paid', r2(bp.amount));
         var pb = billNameById[bp.bill_id] || {};
-        rowsBillsPaid.push({ ref: pb.bill_number || '—', who: pb.vendor_name || '?', date: bp.paid_date, amount: r2(bp.amount), source: bp.bank_transaction_id ? 'Bill payment (bank-linked)' : 'Bill payment' });
+        rowsBillsPaid.push({ ref: pb.bill_number || '—', who: pb.vendor_name || '?', date: bp.paid_date, due: pb.due_date || null, total: r2(pb.total_amount), amount: r2(bp.amount), source: bp.bank_transaction_id ? 'Bill payment (bank-linked)' : 'Bill payment' });
       });
       var monthRows = Object.values(months).sort(function (a, b2) { return a.month.localeCompare(b2.month); });
       monthRows.forEach(function (m) { m.net = r2(m.collected - m.bills_paid); });

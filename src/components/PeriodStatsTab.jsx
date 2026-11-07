@@ -4,6 +4,7 @@
 // invoices and bills side by side; month-by-month table; CSV.
 import React, { useState, useEffect } from 'react';
 
+function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var TODAY = new Date().toISOString().substring(0, 10);
 
@@ -114,20 +115,28 @@ export default function PeriodStatsTab(props) {
             <th className="py-1 pr-2 text-left font-semibold">Reference</th>
             <th className="py-1 pr-2 text-left font-semibold">{drill.unitWho}</th>
             <th className="py-1 pr-2 text-left font-semibold">Date</th>
+            <th className="py-1 pr-2 text-left font-semibold">Due</th>
+            <th className="py-1 pr-2 text-right font-semibold">Original</th>
+            <th className="py-1 pr-2 text-right font-semibold">Paid</th>
+            <th className="py-1 pr-2 text-right font-semibold">Open</th>
             <th className="py-1 pr-2 text-right font-semibold">Amount</th>
             <th className="py-1 text-left font-semibold">Where it comes from</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
             {drillRows().slice().sort(function (a, b2) { return b2.amount - a.amount; }).map(function (r, i) {
               return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                 <td className="py-1 pr-2 font-semibold">{r.ref}</td><td className="py-1 pr-2">{r.who}</td>
-                <td className="py-1 pr-2">{r.date || '—'}</td>
+                <td className="py-1 pr-2 whitespace-nowrap">{r.date || '—'}</td>
+                <td className="py-1 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{nd(r.total)}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{nd(r.paid)}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{nd(r.open)}</td>
                 <td className="py-1 pr-2 text-right font-extrabold tabular-nums">${fmt(r.amount)}</td>
                 <td className="py-1 text-[10px]" style={{ color: '#64748b' }}>{r.source}</td></tr>;
             })}
-            {drillRows().length === 0 && <tr><td colSpan={5} className="py-2 text-center text-slate-500 text-[11px]">No rows in this period.</td></tr>}
+            {drillRows().length === 0 && <tr><td colSpan={9} className="py-2 text-center text-slate-500 text-[11px]">No rows in this period.</td></tr>}
           </tbody>
           <tfoot><tr style={{ borderTop: '2px solid #cbd5e1', color: '#0f172a' }}>
-            <td className="py-1.5 pr-2 font-extrabold" colSpan={3}>Σ total — equals the card to the cent</td>
+            <td className="py-1.5 pr-2 font-extrabold" colSpan={7}>Σ total — equals the card to the cent</td>
             <td className="py-1.5 pr-2 text-right font-extrabold tabular-nums">${fmt(drillSum())}</td><td /></tr></tfoot>
         </table></div>
       </div>}

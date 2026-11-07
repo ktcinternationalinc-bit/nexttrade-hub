@@ -12,6 +12,7 @@ import { CLASSIFICATIONS } from '../lib/bank-permissions';
 import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 
+function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function iso(d) { return d.toISOString().substring(0, 10); }
 function agoDays(n) { var d = new Date(); d.setDate(d.getDate() - n); return iso(d); }
@@ -24,7 +25,7 @@ export default function BooksHomeTab(props) {
   var toast = props.toast || { success: function () {}, error: function () {} };
   var onGo = props.onGo || function () {};
 
-  var s1 = useState('2026-11-01'); var from = s1[0]; var setFrom = s1[1];
+  var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1]; // v55.83-PO (Max 04:31): "should default to june 1st when first showing page"
   var s2 = useState(''); var to = s2[0]; var setTo = s2[1];
   var s3 = useState(null); var cf = s3[0]; var setCf = s3[1];
   var s4 = useState({ in_unmatched: 0, out_unreviewed: 0 }); var qCounts = s4[0]; var setQCounts = s4[1];
@@ -34,7 +35,7 @@ export default function BooksHomeTab(props) {
   var sRul = useState([]); var hubRules = sRul[0]; var setHubRules = sRul[1]; // v55.83-PI learned/manual rules
   var s7 = useState([]); var proposals = s7[0]; var setProposals = s7[1];
   var s8 = useState(false); var busy = s8[0]; var setBusy = s8[1];
-  var s9 = useState('Nov 1 →'); var preset = s9[0]; var setPreset = s9[1];
+  var s9 = useState('Jun 1 →'); var preset = s9[0]; var setPreset = s9[1];
   var s10 = useState(null); var late = s10[0]; var setLate = s10[1];
   var s11 = useState(null); var drift = s11[0]; var setDrift = s11[1];
   var s12 = useState({}); var remTone = s12[0]; var setRemTone = s12[1];
@@ -256,7 +257,7 @@ export default function BooksHomeTab(props) {
           var d3 = srcMap[k.key]; if (!d3) { return; }
           total += k.sign * d3.sum; fullCount += d3.count;
           if (d3.count > (d3.rows || []).length) { capped = true; }
-          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, amount: r5.amount, sign: k.sign, source: r5.source }); });
+          (d3.rows || []).forEach(function (r5) { merged.push({ ref: r5.ref, who: r5.who, date: r5.date, due: r5.due, total: r5.total, paid: r5.paid, amount: r5.amount, sign: k.sign, source: r5.source }); });
         });
         merged.sort(function (a3, b5) { return b5.amount - a3.amount; });
         var shown2 = merged.slice(0, 300);
@@ -269,13 +270,19 @@ export default function BooksHomeTab(props) {
           </div>
           <div className="overflow-x-auto" style={{ maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[10px]">
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
-              <th className="py-1 pr-2 text-left font-semibold">Date / Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
+              <th className="py-1 pr-2 text-left font-semibold">Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
+              <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
+              <th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th>
               <th className="py-1 pr-2 text-right font-semibold">Amount</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
             <tbody style={{ color: '#0f172a' }}>
               {shown2.map(function (r6, i2) {
                 return <tr key={i2} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td className="py-0.5 pr-2 whitespace-nowrap">{r6.ref}</td>
-                  <td className="py-0.5 pr-2 font-semibold">{String(r6.who || '').substring(0, 60)}</td>
+                  <td className="py-0.5 pr-2 font-semibold">{String(r6.who || '').substring(0, 48)}</td>
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{r6.date || '—'}</td>
+                  <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r6.due || '—'}</td>
+                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.total)}</td>
+                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r6.paid)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: r6.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r6.sign < 0 ? '−$' : '+$') + fmt(r6.amount)}</td>
                   <td className="py-0.5" style={{ color: '#64748b' }}>{r6.source}</td></tr>;
               })}
@@ -307,27 +314,35 @@ export default function BooksHomeTab(props) {
         <button onClick={function () { onGo('forecast'); }} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>full forecast →</button>
       </div>
       <div className="overflow-x-auto"><table className="w-full text-[11px]" style={{ minWidth: 700 }}>
-        <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+        <thead>
+          {/* v55.83-PO (Max 04:30): "should be really based on invoices that are
+              late or on time" — it IS: these group headers now say so. */}
+          <tr style={{ color: '#475569' }}>
+            <th className="py-0.5 pr-2">&nbsp;</th>
+            <th colSpan={4} className="py-0.5 px-1 text-center font-extrabold" style={{ color: '#7f1d1d', background: '#fff1f2', borderRadius: 6 }}>⚠ ALREADY LATE — past the due date, aged by days late</th>
+            <th colSpan={4} className="py-0.5 px-1 text-center font-extrabold" style={{ color: '#065f46', background: '#f0fdf4', borderRadius: 6 }}>ON TIME — not due yet, by when it comes due</th>
+          </tr>
+          <tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
           <th className="py-1 pr-2 text-left font-semibold">&nbsp;</th>
           {(fc.bucket_order || []).map(function (b) {
-            var L = { 'L90+': '⚠90+ late', 'L61-90': '⚠61–90', 'L31-60': '⚠31–60', 'L1-30': '⚠1–30', 'D0-30': 'due ≤30', 'D31-60': '31–60', 'D61-90': '61–90', 'D90+': '90+' };
+            var L = { 'L90+': '90+ days late', 'L61-90': '61–90 late', 'L31-60': '31–60 late', 'L1-30': '1–30 late', 'D0-30': 'due ≤30d', 'D31-60': 'due 31–60d', 'D61-90': 'due 61–90d', 'D90+': 'due 90d+' };
             return <th key={b} className="py-1 px-1 text-right font-semibold" style={String(b).charAt(0) === 'L' ? { color: '#7f1d1d' } : {}}>{L[b] || b}</th>;
           })}
         </tr></thead>
         <tbody style={{ color: '#0f172a' }}>
-          <tr><td className="py-1 pr-2 font-bold" style={{ color: '#065f46' }}>In</td>
+          <tr><td className="py-1 pr-2 font-bold whitespace-nowrap" style={{ color: '#065f46' }}>In — open invoices<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>what customers owe us</div></td>
             {(fc.bucket_order || []).map(function (b) {
               return <td key={b} className="py-0.5 px-0.5 text-right">
                 <button onClick={function () { setFcDrill({ bucket: b, kind: 'in' }); }} title="Show the invoices behind this number"
                   className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
-                  style={{ background: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0' }}>${fmt(fc.buckets[b].ar)}</button></td>;
+                  style={{ background: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0' }}>${fmt(fc.buckets[b].ar)}<div className="text-[8px] font-bold" style={{ opacity: 0.75 }}>{fc.buckets[b].ar_count} invoice(s)</div></button></td>;
             })}</tr>
-          <tr><td className="py-1 pr-2 font-bold" style={{ color: '#7f1d1d' }}>Out</td>
+          <tr><td className="py-1 pr-2 font-bold whitespace-nowrap" style={{ color: '#7f1d1d' }}>Out — open bills<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>what we owe vendors</div></td>
             {(fc.bucket_order || []).map(function (b) {
               return <td key={b} className="py-0.5 px-0.5 text-right">
                 <button onClick={function () { setFcDrill({ bucket: b, kind: 'out' }); }} title="Show the bills behind this number"
                   className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
-                  style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fecaca' }}>${fmt(fc.buckets[b].ap)}</button></td>;
+                  style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fecaca' }}>${fmt(fc.buckets[b].ap)}<div className="text-[8px] font-bold" style={{ opacity: 0.75 }}>{fc.buckets[b].ap_count} bill(s)</div></button></td>;
             })}</tr>
           <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position</td>
             {(fc.bucket_order || []).map(function (b) {
@@ -336,7 +351,7 @@ export default function BooksHomeTab(props) {
             })}</tr>
         </tbody>
       </table></div>
-      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Position = running money in − money out across the windows: where it turns red is where cash runs short if nothing changes. Click any green/red number for the exact rows behind it.</div>
+      <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Every number here is real invoices/bills by DUE DATE — nothing else. ⚠ side = already late (aged by how long). Green side = on time, by when it comes due. Position = running in − out; where it turns red is where cash runs short. Click any number for the exact invoices/bills behind it.</div>
       {fcDrill && (function () {
         var L2 = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
         var all = (fc.rows || []).filter(function (r) { return r.bucket === fcDrill.bucket && r.kind === fcDrill.kind; })
@@ -353,12 +368,17 @@ export default function BooksHomeTab(props) {
           <table className="w-full text-[10px]">
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
               <th className="py-1 pr-2 text-left font-semibold">Reference</th><th className="py-1 pr-2 text-left font-semibold">{fcDrill.kind === 'in' ? 'Customer' : 'Vendor'}</th>
-              <th className="py-1 pr-2 text-left font-semibold">Due</th><th className="py-1 pr-2 text-right font-semibold">Open</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
+              <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
+              <th className="py-1 pr-2 text-right font-semibold">Original</th><th className="py-1 pr-2 text-right font-semibold">Paid</th>
+              <th className="py-1 pr-2 text-right font-semibold">Open</th><th className="py-1 text-left font-semibold">Where from</th></tr></thead>
             <tbody style={{ color: '#0f172a' }}>
               {shown.map(function (r, i) {
                 return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td className="py-0.5 pr-2 font-semibold">{r.ref}</td><td className="py-0.5 pr-2">{r.who}</td>
-                  <td className="py-0.5 pr-2">{r.date || '—'}</td>
+                  <td className="py-0.5 pr-2 whitespace-nowrap">{r.date || '—'}</td>
+                  <td className="py-0.5 pr-2 whitespace-nowrap" style={{ color: '#7f1d1d' }}>{r.due || '—'}</td>
+                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r.total)}</td>
+                  <td className="py-0.5 pr-2 text-right tabular-nums">{nd(r.paid)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums">${fmt(r.amount)}</td>
                   <td className="py-0.5" style={{ color: '#64748b' }}>{r.source}</td></tr>;
               })}
