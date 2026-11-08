@@ -132,23 +132,46 @@ export default function BankReviewTab(props) {
       var _vr = await fetch('/api/admin/visibility').then(function (r) { return r.json(); }).catch(function () { return null; });
       if (_vr && _vr.value) { setVisCfg(_vr.value); _floor = floorDateFor({ window: _vr.value.window, customDays: _vr.value.customDays, customFrom: _vr.value.customFrom, isSuperAdmin: isSuperAdmin }, new Date()); }
     } catch (eVis) {}
-    var _txQRev = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false });
-    if (_activeBizRev) { _txQRev = _txQRev.eq('wave_business_id', _activeBizRev); }
-    if (_floor) { _txQRev = _txQRev.gte('posted_date', _floor); }
-    _txQRev = _txQRev.limit(1000);
+    // v55.83-QU (Max, Nov 8 11:15: "if I do a manual bank input with csv... it
+    // also needs to show up in the bank matching section... all transactions in
+    // both systems should be matching") — the single limit(1000) cut off older
+    // history (a 2-year CSV import is thousands of rows), so Bank Review showed
+    // FEWER rows than All Transactions. Now paged in 1000-row pages up to 6000,
+    // same silo scope, newest first, with the same tie-breaker for stable pages.
+    function _txPage(fromRow) {
+      var q9 = supabase.from('bank_transactions').select('*').order('posted_date', { ascending: false, nullsFirst: false }).order('id', { ascending: true });
+      if (_activeBizRev) { q9 = q9.eq('wave_business_id', _activeBizRev); }
+      if (_floor) { q9 = q9.gte('posted_date', _floor); }
+      return q9.range(fromRow, fromRow + 999);
+    }
+    var _txQRev = (async function () {
+      var all9 = []; var err9 = null;
+      for (var pg9 = 0; pg9 < 6; pg9++) {
+        var r9 = await _txPage(pg9 * 1000);
+        if (r9 && r9.error) { err9 = r9.error; break; }
+        var d9 = (r9 && r9.data) || [];
+        all9 = all9.concat(d9);
+        if (d9.length < 1000) { break; }
+      }
+      return { data: all9, error: all9.length ? null : err9 };
+    })();
     Promise.all([
       _txQRev,
-      supabase.from('payment_matches').select('*'),
+      // v55.83-RB (gap review, Max Nov 8 12:23: "complete all of the gap review items") — every
+      // side list is PAGED like the transactions: a single select stops at 1,000 rows, so
+      // older payments/matches/splits/parked money silently vanished from the allocation
+      // gate and the Matched badges once the books grew past 1,000 of them.
+      fetchAllRows('payment_matches', '*', 'id', true),
       fetchAllRows('accounting_customers', '*', 'company_name', true),
       fetchAllRows('accounting_invoices', '*', 'created_at', false),
       fetchAllRows('wave_business_registry', '*'),
       supabase.from('plaid_accounts').select('id,connection_id,business_id,plaid_account_id,name,official_name,mask,type,subtype,iso_currency,is_read_only,updated_at,wave_business_id'),
       Promise.resolve({ data: [] }), // v55.83-MS (gap-finder #9) — res[6] retired: the paginated, silo-scoped /api/wave/categories route (reloadCats) is the ONLY category source; this slot stays to preserve res[] indices.
       supabase.from('wave_business_settings').select('wave_business_id, default_plaid_account_id'),
-      supabase.from('accounting_invoice_payments').select('id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id'),
-      supabase.from('bank_transaction_splits').select('bank_transaction_id, split_amount, linked_type'),
-      supabase.from('unapplied_deposits').select('bank_transaction_id, amount, status'),
-      supabase.from('customer_credits').select('source_transaction_id, amount, status'),
+      fetchAllRows('accounting_invoice_payments', 'id, bank_transaction_id, accounting_invoice_id, amount, voided, sync_status, wave_payment_id', 'id', true),
+      fetchAllRows('bank_transaction_splits', 'id, bank_transaction_id, split_amount, linked_type', 'id', true),
+      fetchAllRows('unapplied_deposits', 'id, bank_transaction_id, amount, status', 'id', true),
+      fetchAllRows('customer_credits', 'id, source_transaction_id, amount, status', 'id', true),
     ]).then(function (res) {
       var reg = (res[4] && res[4].data) || []; var t = scopeIfRegistered((res[0] && res[0].data) || [], getActiveWaveBusiness(), reg, true);
       // v55.83-IC (Codex FAIL) — only ACTIVE matches drive the Matched badge / detail panel /
@@ -369,7 +392,10 @@ export default function BankReviewTab(props) {
     if (fStatus === 'duplicate') {
       list = list.filter(function (t) { return (t.review_status || 'unreviewed') === 'duplicate' || duplicateReview.hidden[t.id]; });
     } else if (fStatus === 'all') {
-      list = list.filter(function (t) { return !duplicateReview.hidden[t.id]; });
+      list = list.filter(function (t) { return (t.review_status || 'unreviewed') !== 'duplicate' && !duplicateReview.hidden[t.id]; });
+      // v55.83-QW (Max, Nov 8 11:33: "duplicates should not be displayed by
+      // default") — "All statuses" means all REAL transactions. Rows marked
+      // duplicate are only shown when you pick the Duplicate filter.
     } else {
       list = list.filter(function (t) { return (t.review_status || 'unreviewed') !== 'duplicate' && !duplicateReview.hidden[t.id]; });
       list = list.filter(function (t) { return (t.review_status || 'unreviewed') === fStatus; });

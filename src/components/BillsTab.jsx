@@ -37,6 +37,7 @@ export default function BillsTab(props) {
   var s17 = useState(false); var addingCat = s17[0]; var setAddingCat = s17[1];
   var s18b = useState('14'); var scanDays = s18b[0]; var setScanDays = s18b[1]; // v55.83-QK — how far back the mailbox scan looks
   var s19v = useState(''); var thruVendor = s19v[0]; var setThruVendor = s19v[1]; // v55.83-QR — '' = all vendors
+  var s20p = useState([{ name: 'RTM Capital', kind: 'service_provider' }, { name: 'NextTrade Industries', kind: 'affiliate' }]); var parties = s20p[0]; var setParties = s20p[1]; // v55.83-QY
   var fileInputRef = React.useRef(null);
 
   function api(payload) {
@@ -50,7 +51,7 @@ export default function BillsTab(props) {
       if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load bills.'); }
     }).finally(function () { setBusy(false); });
   }
-  useEffect(function () { if (canView) { load(); loadCats(); } }, []); // eslint-disable-line
+  useEffect(function () { if (canView) { load(); loadCats(); api({ action: 'paid_through_parties' }).then(function (jp) { if (jp && jp.ok && (jp.parties || []).length) { setParties(jp.parties); } }).catch(function () {}); } }, []); // eslint-disable-line
   function loadCats() {
     // v55.83-PJ (Max): "categories for bills should be a dropdown to select
     // with an ability to add a category". Shared list with expenses. Fail-soft:
@@ -453,10 +454,13 @@ export default function BillsTab(props) {
           </span>}
         </span> :
         <input className={inp} style={{ width: 160 }} placeholder="Category (e.g. Freight)" value={editing.category || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { category: e.target.value })); }} />}
-        {/* v55.83-QB (Max): RTM Capital pays some bills for us as a third party */}
-        <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#9d174d' }} title="A third party (RTM Capital) pays this bill for us. It is tracked here but stays OUT of what-we-owe totals and cash forecasts. Cover it from the RTM payment: All Transactions → 🏢 RTM on the money-out transaction.">
-          <input type="checkbox" checked={!!editing.paid_via} onChange={function (e) { setEditing(Object.assign({}, editing, { paid_via: e.target.checked ? 'RTM Capital' : null })); }} />
-          🏢 Paid via RTM Capital</label>
+        {/* v55.83-QB/QY (Max): another company pays this bill for us — RTM Capital (outside service) or NextTrade Industries (Texas warehouse) */}
+        <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#9d174d' }} title="Another company pays this bill for us (RTM Capital, NextTrade Industries). It is tracked here but stays OUT of what-we-owe totals and cash forecasts. Link it to the payment you send that company: All Transactions → 🔗 on the money-out → 🏢 Payment to a paid-through company.">
+          🏢 Paid via
+          <select value={editing.paid_via || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { paid_via: e.target.value || null })); }} className="px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light">
+            <option value="">— we pay it directly —</option>
+            {parties.map(function (p0) { return <option key={p0.name} value={p0.name}>{p0.name}</option>; })}
+          </select></label>
         <input className={inp} style={{ width: 220 }} placeholder="Notes" value={editing.notes || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { notes: e.target.value })); }} />
         <button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setEditing(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
@@ -493,7 +497,7 @@ export default function BillsTab(props) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
             return <React.Fragment key={b.id}>
               <tr style={late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
-                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="A third party pays this — it stays out of what-we-owe and cash forecasts; cover it from the RTM payment in All Transactions (🏢 RTM)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}</td>
+                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}</td>
                 <td className="py-1.5 pr-2">{b.bill_number || '—'}</td>
                 <td className="py-1.5 pr-2">{b.bill_date}</td>
                 <td className="py-1.5 pr-2">{b.due_date || '—'}{late ? ' ⚠' : ''}</td>
@@ -507,6 +511,16 @@ export default function BillsTab(props) {
                   <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : 'View'}</button>
                   {canManage && b.record_status === 'active' && b.open > 0.005 && <button onClick={function () { setPaying({ bill: b, amount: b.open, paid_date: TODAY }); loadOutTxns(); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>Pay</button>}
                   {canManage && b.record_status === 'active' && <button onClick={function () { setEditing(Object.assign({}, b)); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>Edit</button>}
+                  {/* v55.83-QZ (Max, Nov 8 11:51): duplicate a bill, then edit anything — a NEW pending-validation bill;
+                      bill number left blank (never a duplicate), today's date with the same terms, no payments/document/validation copied */}
+                  {canManage && <button onClick={function () {
+                    var span0 = (b.bill_date && b.due_date) ? Math.round((Date.parse(b.due_date) - Date.parse(b.bill_date)) / 86400000) : null;
+                    setEditing({ vendor_name: b.vendor_name, bill_number: '', bill_date: TODAY,
+                      due_date: (span0 != null && span0 >= 0) ? new Date(Date.parse(TODAY) + span0 * 86400000).toISOString().substring(0, 10) : '',
+                      total_amount: b.total_amount, category: b.category || '', notes: b.notes || '', paid_via: b.paid_via || null, currency: b.currency || 'USD' });
+                    toast.success('Copy opened as a NEW bill — give it its own bill number, change anything, then Save.');
+                    setTimeout(function () { try { var ed2 = document.getElementById('nt-bill-editor'); if (ed2) { ed2.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS2) {} }, 60);
+                  }} title="Duplicate — opens a NEW bill prefilled from this one; edit anything before saving" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#ccfbf1', color: '#115e59' }}>⧉ Duplicate</button>}
                   {canManage && b.record_status === 'active' && b.disputed !== true && <button onClick={function () { setDisputing({ bill: b }); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#ede9fe', color: '#5b21b6' }}>Dispute</button>}
                   {canManage && b.disputed === true && <button onClick={function () { var res = (typeof window !== 'undefined' && window.prompt) ? window.prompt('How was this dispute resolved? (goes on the audit trail)') : ''; if (res && res.length >= 10) { setBusy(true); api({ action: 'resolve_dispute', id: b.id, resolution: res }).then(function (j) { if (j && j.ok) { toast.success('Dispute resolved.'); load(); } else { toast.error((j && j.error) || 'Failed.'); } }).finally(function () { setBusy(false); }); } else if (res !== null) { toast.error('Write how it was resolved (a sentence).'); } }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#d1fae5', color: '#065f46' }}>Resolve</button>}
                   {canManage && b.record_status === 'active' && <button onClick={function () { if (window.confirm('Void this bill? It stays on record as VOID.')) { setBusy(true); api({ action: 'void_bill', id: b.id }).then(function (j) { if (j && j.ok) { load(); } else { toast.error((j && j.error) || 'Failed.'); } }).finally(function () { setBusy(false); }); } }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Void</button>}

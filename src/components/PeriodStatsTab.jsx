@@ -15,7 +15,7 @@ var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expe
 function rtmAdjust(cats0, rtm) {
   var r2a = function (x) { return Math.round((Number(x) || 0) * 100) / 100; };
   var map = {};
-  (cats0 || []).forEach(function (c) { map[c.key] = { key: c.key, label: c.label, kind: c.kind, count: c.count, total: c.total }; });
+  (cats0 || []).forEach(function (c) { map[c.key] = Object.assign({}, c); }); // v55.83-QY — keep earlier companies' markers when several are applied in turn
   ((rtm && rtm.payments_by_cat) || []).forEach(function (p) {
     if (!map[p.key]) { map[p.key] = { key: p.key, label: p.label || p.key, kind: 'expense', count: 0, total: 0 }; }
     map[p.key].total = r2a(map[p.key].total - p.total); map[p.key].rtm_out = p.total;
@@ -25,7 +25,15 @@ function rtmAdjust(cats0, rtm) {
     map[a.key].total = r2a(map[a.key].total + a.total); map[a.key].via_rtm = r2a((map[a.key].via_rtm || 0) + a.total); map[a.key].count += a.count || 0;
   });
   var fee = r2a((rtm && rtm.service_fee) || 0);
-  if (Math.abs(fee) > 0.005) { map.__rtm_fee = { key: '__rtm_fee', label: 'RTM service fee (payments − covered bills)', kind: 'expense', count: (rtm && rtm.payments_count) || 0, total: fee }; }
+  // v55.83-QY — the unlinked remainder is labeled by the company's kind:
+  // RTM (service provider) → its service fee; NextTrade (affiliate) → an
+  // advance awaiting its costs. Same money either way, so totals never move.
+  var feeKey = '__pt_' + String((rtm && rtm.payer) || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  // v55.83-RB (gap review): a RELATED company's unlinked remainder is an
+  // ADVANCE (balance sheet, "Due from NextTrade") — never an expense; a
+  // service provider's (RTM) is its fee. The ClickBooks ledger books it the same way.
+  var feeKind = (rtm && rtm.kind === 'affiliate') ? 'not_pnl' : 'expense';
+  if (Math.abs(fee) > 0.005) { map[feeKey] = { key: feeKey, label: (rtm && rtm.remainder_label) || 'RTM service fee (payments − covered bills)', kind: feeKind, count: (rtm && rtm.payments_count) || 0, total: fee }; }
   return Object.keys(map).map(function (k) { return map[k]; })
     .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out; })
     .sort(function (x, y) { return y.total - x.total; });
@@ -44,7 +52,18 @@ export default function PeriodStatsTab(props) {
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
   var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
-  var sRt = useState(false); var rtmOn = sRt[0]; var setRtmOn = sRt[1]; // v55.83-QB — DEFAULT false = tax view (one professional-fee line)
+  // v55.83-QY — one tax/real-cost switch PER paid-through company (RTM
+  // Capital, NextTrade Industries, …). DEFAULT {} = tax view for all.
+  var sRt = useState({}); var ptOn = sRt[0]; var setPtOn = sRt[1];
+  function ptBlocks() { return (data && data.spending && (data.spending.paid_through || (data.spending.rtm ? [data.spending.rtm] : []))) || []; }
+  // v55.83-RB — a RELATED company (NextTrade) defaults to the real-cost view:
+  // money sent ahead of its costs is an advance, not spending. RTM stays on the
+  // one-line tax view by default (Max's decision). Either can be switched.
+  function ptIsOn(b) { return ptOn[b.payer] === undefined ? b.kind === 'affiliate' : ptOn[b.payer] === true; }
+  function ptAdjust(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (ptIsOn(b0)) { out = rtmAdjust(out, b0); } }); return out; }
+  // the accountant pack: related companies ALWAYS real-cost (advances are not deductible), RTM always one line
+  function taxCats(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (b0.kind === 'affiliate') { out = rtmAdjust(out, b0); } }); return out; }
+  var ptOnNames = ptBlocks().filter(function (b1) { return ptIsOn(b1); }).map(function (b2) { return b2.payer; });
   var sIn = useState(null); var inCat = sIn[0]; var setInCat = sIn[1]; // v55.83-PV — income-by-category drill
   var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
@@ -129,9 +148,13 @@ export default function PeriodStatsTab(props) {
     dl('tax-pack-6-open-payables-' + tag + '.csv', rowsCsv(d.open_bills));
     if (data.spending) {
       var sp = ['category,type,transactions,total_usd'];
-      (data.spending.categories || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + (KIND_LABELS[c.kind] || c.kind || 'Expense') + ',' + c.count + ',' + Number(c.total).toFixed(2)); });
+      (taxCats(data.spending.categories) || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + (KIND_LABELS[c.kind] || c.kind || 'Expense') + ',' + c.count + ',' + Number(c.total).toFixed(2)); });
       if (data.spending.not_pnl_out && data.spending.not_pnl_out.count > 0) { sp.push('"NOT P&L - loan principal / owner (NOT deductible)",,' + data.spending.not_pnl_out.count + ',' + Number(data.spending.not_pnl_out.total).toFixed(2)); }
-      if (data.spending.deductible_spending !== undefined) { sp.push('"DEDUCTIBLE SPENDING (P&L categories only)",,,' + Number(data.spending.deductible_spending).toFixed(2)); }
+      if (data.spending.deductible_spending !== undefined) {
+        // v55.83-RB — recomputed after related-company advances are taken out of spending
+        var dedP = 0; (taxCats(data.spending.categories) || []).forEach(function (c) { if (c.kind !== 'not_pnl' && c.key !== 'transfer' && c.key !== 'uncategorized') { dedP += Number(c.total) || 0; } });
+        sp.push('"DEDUCTIBLE SPENDING (P&L categories only; advances to related companies excluded)",,,' + dedP.toFixed(2));
+      }
       if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + Number(data.spending.uncategorized.total).toFixed(2)); }
       if (data.spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + data.spending.transfers.count + ',' + Number(data.spending.transfers.total).toFixed(2)); }
       sp.push('"REAL SPENDING (transfers excluded)",,' + Number(data.spending.real_spending).toFixed(2));
@@ -156,7 +179,7 @@ export default function PeriodStatsTab(props) {
     if (data.spending && data.spending.in_categories) {
       var revP = 0, cogsP = 0, expP = 0, oinP = 0, oexP = 0;
       (data.spending.in_categories || []).forEach(function (c) { if (c.kind === 'income') { revP += c.total; } else if (c.kind === 'other_income') { oinP += c.total; } });
-      (data.spending.categories || []).forEach(function (c) { if (c.kind === 'cogs') { cogsP += c.total; } else if (c.kind === 'other_expense') { oexP += c.total; } else if (c.kind !== 'not_pnl') { expP += c.total; } });
+      (taxCats(data.spending.categories) || []).forEach(function (c) { if (c.kind === 'cogs') { cogsP += c.total; } else if (c.kind === 'other_expense') { oexP += c.total; } else if (c.kind !== 'not_pnl') { expP += c.total; } });
       var isCsv = ['line,amount_usd'];
       isCsv.push('"Revenue (cash received)",' + revP.toFixed(2));
       isCsv.push('"Cost of goods sold",-' + cogsP.toFixed(2));
@@ -296,18 +319,22 @@ export default function PeriodStatsTab(props) {
       {/* v55.83-PQ (Max): "categorizing etc should affect the underlying reports" */}
       {data.spending && <div className="mt-3 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
         <div className="text-xs font-extrabold mb-1" style={{ color: '#0f172a' }}>💸 Spending by category — {from} → {to}</div>
-        {data.spending.rtm && <div className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: '#fdf2f8', border: '1px solid #fbcfe8' }}>
-          <span className="text-[10px] font-extrabold" style={{ color: '#9d174d' }}>🏢 RTM Capital (third-party payer):</span>
-          <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!rtmOn} onChange={function () { setRtmOn(false); }} /> Tax view — RTM payments stay ONE line (${fmt(data.spending.rtm.payments_total)})</label>
-          <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={rtmOn} onChange={function () { setRtmOn(true); }} /> Real-cost view — covered bills in their ACTUAL categories (${fmt(data.spending.rtm.allocations_total)} + ${fmt(data.spending.rtm.service_fee)} service fee)</label>
-          {rtmOn && <span className="text-[9px]" style={{ color: '#9d174d' }}>Totals identical in both views. The accountant tax pack ALWAYS uses the tax view. Row drills show direct bank rows only.</span>}
-        </div>}
+        {ptBlocks().map(function (pb) {
+          var onP = ptIsOn(pb);
+          var isAff = pb.kind === 'affiliate';
+          return <div key={pb.payer} className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: isAff ? '#f0fdfa' : '#fdf2f8', border: '1px solid ' + (isAff ? '#99f6e4' : '#fbcfe8') }}>
+            <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer} ({isAff ? 'related company — pays costs for us' : 'third-party payer'}):</span>
+            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
+            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : 'service fee'})</label>
+            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'Money sent ahead of its costs is an ADVANCE (balance sheet), not spending, until NextTrade\'s bills are linked — the accountant pack and the ClickBooks books use this view.' : 'Totals identical in both views. The accountant tax pack uses the one-line tax view.'} Row drills show direct bank rows only.</span>}
+          </div>;
+        })}
         <table className="w-full text-[11px]">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1 pr-2 text-left font-semibold">Category</th><th className="py-1 pr-2 text-right font-semibold">Txns</th>
             <th className="py-1 pr-2 text-right font-semibold">Total</th><th className="py-1 text-right font-semibold">% of spending</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
-            {((rtmOn && data.spending.rtm) ? rtmAdjust(data.spending.categories, data.spending.rtm) : (data.spending.categories || [])).map(function (c) {
+            {ptAdjust(data.spending.categories).map(function (c) {
               var pct = data.spending.real_spending > 0 ? Math.round(c.total / data.spending.real_spending * 1000) / 10 : 0;
               return <tr key={c.key} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={function () { setSpCat(spCat === c.key ? null : c.key); }}>
                 <td className="py-1 pr-2 font-bold">{c.label} {c.kind && <span className="px-1 py-0.5 rounded text-[8px] font-extrabold" style={c.kind === 'not_pnl' ? { background: '#f3e8ff', color: '#6b21a8' } : { background: '#f1f5f9', color: '#475569' }}>{KIND_LABELS[c.kind] || c.kind}</span>} <span className="text-[9px]" style={{ color: '#64748b' }}>(click for rows)</span></td>
@@ -402,7 +429,7 @@ export default function PeriodStatsTab(props) {
           });
           // v55.83-QB — the RTM radio applies to the income statement too:
           // same totals, real-category breakdown.
-          ((rtmOn && data.spending.rtm) ? rtmAdjust(data.spending.categories, data.spending.rtm) : (data.spending.categories || [])).forEach(function (c) {
+          ptAdjust(data.spending.categories).forEach(function (c) {
             if (c.kind === 'cogs') { cogs2 += c.total; } else if (c.kind === 'other_expense') { oex += c.total; } else if (c.kind !== 'not_pnl') { exp2 += c.total; }
           });
           var r2x = function (x) { return Math.round(x * 100) / 100; };
@@ -417,7 +444,7 @@ export default function PeriodStatsTab(props) {
               <span className="flex-1">{lbl}</span><span className="tabular-nums">{(val < 0 ? '−$' : '$') + fmt(Math.abs(val))}</span></div>;
           }
           return <div className="mt-3 rounded-lg p-3" style={{ background: '#ffffff', border: '2px solid #312e81', maxWidth: 560 }}>
-            <div className="text-xs font-extrabold mb-1" style={{ color: '#312e81' }}>📊 INCOME STATEMENT (cash basis, from the bank record) — {from} → {to}{rtmOn && data.spending.rtm ? ' — RTM BREAKDOWN ON' : ''}</div>
+            <div className="text-xs font-extrabold mb-1" style={{ color: '#312e81' }}>📊 INCOME STATEMENT (cash basis, from the bank record) — {from} → {to}{ptOnNames.length ? ' — BREAKDOWN ON: ' + ptOnNames.join(', ') : ''}</div>
             {line('Revenue (money received, income categories)', rev)}
             {line('− Cost of goods sold', -cogs2)}
             {line('GROSS PROFIT', gross, true)}

@@ -130,6 +130,14 @@ export async function POST(req) {
     var client = new ImapFlow({ host: host, port: 993, secure: true, auth: { user: email, pass: pass }, logger: false });
     var scanned = 0; var created = []; var skipped = []; var matchedMsgs = 0; var remainingNew = 0;
     var NEW_PER_PASS = 8; // extraction is an AI read per attachment — budget per pass, repeat passes walk the backlog
+    // v55.83-QZ2 (review fix) — the scanner remembers processed emails in the
+    // audit log (QI SQL). Without that memory every pass would re-read the
+    // same emails and create the same bill drafts again (and spend AI reads),
+    // so it refuses to run until the memory exists.
+    var memProbe = await db.from('hub_audit_log').select('id').limit(1);
+    if (memProbe.error) {
+      return NextResponse.json({ ok: false, error: 'The email scanner needs its memory table first — run sql/v55-83-QI-audit-log.sql in Supabase (it records which emails were already read, so the same bill is never imported twice). Nothing was scanned.' }, { status: 503 });
+    }
     await client.connect();
     try {
       await client.mailboxOpen('INBOX', { readOnly: true }); // read-only — the mailbox is never changed

@@ -171,6 +171,14 @@ export default function AccountingInvoicesTab(props) {
         return supabase.from('bank_transactions')
           .update({ matched_invoice_id: null, review_status: 'unreviewed' })
           .eq('matched_invoice_id', invoiceId)
+          .then(function () {
+            // v55.83-QZ2 (review fix) — a deposit SPLIT across several invoices
+            // points its matched_invoice_id at only one of them; every deposit
+            // that just lost a payment re-opens (it is no longer fully placed).
+            if (!txIds.length) { return null; }
+            return supabase.from('bank_transactions').update({ review_status: 'unreviewed' })
+              .in('id', txIds).in('review_status', ['reviewed', 'approved']);
+          })
           .then(function () { return txIds.length; });
       }).catch(function () { return 0; });
   }
@@ -363,6 +371,30 @@ export default function AccountingInvoicesTab(props) {
       var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '', wave_product_id: it.wave_product_id || '', wave_product_name: it.wave_product_name || '' }; });
       setItems(its.length ? its : [blankItem()]);
     });
+  }
+  // v55.83-QZ (Max, Nov 8 11:51: "need to be able to duplicate bills or
+  // invoices with the ability to edit the fields"). Opens the editor as a NEW
+  // document prefilled from this one — customer, lines (fresh, no ids),
+  // release, notes, terms; today's date with the same payment terms; NUMBER
+  // left blank on purpose (never a duplicate invoice number). Saves as a
+  // brand-new DRAFT — nothing about the original (payments, Wave link,
+  // approval) is copied.
+  function startDuplicate(row) {
+    var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
+    var key = isInvoice() ? 'invoice_id' : 'proforma_id';
+    var today = new Date().toISOString().substring(0, 10);
+    var d0 = isInvoice() ? row.invoice_date : row.proforma_date;
+    var e0 = isInvoice() ? row.due_date : row.valid_until;
+    var span = (d0 && e0) ? Math.round((Date.parse(e0) - Date.parse(d0)) / 86400000) : null;
+    var newEnd = (span != null && span >= 0) ? new Date(Date.parse(today) + span * 86400000).toISOString().substring(0, 10) : '';
+    if (isInvoice()) { setHdr({ invoice_number: '', release_number: row.release_number || '', accounting_customer_id: row.accounting_customer_id || '', invoice_date: today, due_date: newEnd, notes: row.notes || '', terms: row.terms || '' }); }
+    else { setHdr({ proforma_number: '', accounting_customer_id: row.accounting_customer_id || '', proforma_date: today, valid_until: newEnd, notes: row.notes || '', terms: row.terms || '' }); }
+    setEditing('new'); setItems([blankItem()]);
+    supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
+      var its = ((r && r.data) || []).map(function (it) { return { description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '', wave_product_id: it.wave_product_id || '', wave_product_name: it.wave_product_name || '' }; });
+      setItems(its.length ? its : [blankItem()]);
+    });
+    toast.success('Copy opened as a NEW draft — give it its own number, change anything, then Save.');
   }
   function openView(row) {
     setViewing(row); setViewItems([]); setViewPayments([]); setViewLoading(true);
@@ -784,6 +816,7 @@ export default function AccountingInvoicesTab(props) {
                   <div className="px-2 py-1.5 flex gap-1 flex-wrap">
                     <button onClick={function () { openView(row); }} className="text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded px-1.5 py-0.5 font-bold">View</button>
                     <button onClick={function () { printDoc(row); }} className="text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold" title="Print / Save PDF">Print</button>
+                    {mayEdit && <button onClick={function () { startDuplicate(row); }} className="text-[10px] bg-teal-700 hover:bg-teal-600 text-white rounded px-1.5 py-0.5 font-bold" title="Duplicate — opens a NEW draft with the same customer and lines; give it its own number and edit anything">⧉ Duplicate</button>}
                     {isInvoice() && invActions(row).canSubmit && <button onClick={function () { setApproval(row, 'internal_review'); }} disabled={busy} className="text-[10px] bg-amber-600 text-white rounded px-1.5 py-0.5 font-bold">Submit</button>}
                     {isInvoice() && invActions(row).canApprove && <button onClick={function () { setApproval(row, 'approved'); }} disabled={busy} className="text-[10px] bg-blue-700 text-white rounded px-1.5 py-0.5 font-bold">Approve</button>}
                     {isInvoice() && invActions(row).canReopen && <button onClick={function () { reopenInvoice(row); }} disabled={busy} className="text-[10px] bg-slate-700 text-white rounded px-1.5 py-0.5 font-bold">Reopen</button>}
@@ -813,6 +846,7 @@ export default function AccountingInvoicesTab(props) {
                   {isInvoice() && mayApprove && viewing.approval_status === 'approved' && <button onClick={function () { var row = viewing; reopenInvoice(row); }} disabled={busy} className="text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded px-2 py-1 font-bold">Reopen</button>}
                   {isInvoice() && invActions(viewing).canUpdateWave && <button onClick={function () { var row = viewing; updateInWave(row); }} disabled={busy} className="text-[11px] bg-violet-700 hover:bg-violet-600 text-white rounded px-2 py-1 font-bold" title="Wave has no edit — deletes the old Wave copy and recreates it from this amended invoice">🔁 Update in Wave</button>}
                   {editable && mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startEdit(row); }} className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 font-bold">Edit</button>}
+                  {mayEdit && <button onClick={function () { var row = viewing; setViewing(null); startDuplicate(row); }} className="text-[11px] bg-teal-700 hover:bg-teal-600 text-white rounded px-2 py-1 font-bold">⧉ Duplicate</button>}
                   <button onClick={function () { setViewing(null); }} className="text-slate-300 hover:text-white text-sm px-2">✕</button>
                 </div>
               </div>

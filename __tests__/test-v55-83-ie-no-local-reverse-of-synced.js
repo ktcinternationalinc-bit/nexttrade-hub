@@ -40,7 +40,8 @@ var src = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'BankR
 ok('2a: unmatch checks wave_payment_id / synced / manual_done before voiding',
   /wave_payment_id \|\| p\.sync_status === 'synced' \|\| p\.sync_status === 'manual_done'/.test(src));
 ok('2b: payment load includes wave_payment_id',
-  /accounting_invoice_payments'\)\.select\('[^']*wave_payment_id/.test(src));
+  // RB (Max Nov 8 12:23, gap review) moved these loads to fetchAllRows (paged past 1,000) — same columns, same intent; realigned.
+  /fetchAllRows\('accounting_invoice_payments', '[^']*wave_payment_id/.test(src));
 ok('2c: the guard returns early (blocks) with a Wave message',
   /already pushed to Wave[\s\S]{0,200}return;/.test(src));
 

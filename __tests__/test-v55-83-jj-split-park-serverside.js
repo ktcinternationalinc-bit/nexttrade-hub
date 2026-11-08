@@ -75,7 +75,8 @@ ok('JK6: save_splits pre-fetches + validates ALL invoices before the write loop'
 ok('JK7: save_splits rolls back created split/match/payment rows on a mid-loop write failure',
   /async function rollbackSplits\(\)/.test(route) && /await rollbackSplits\(\); return NextResponse\.json\(\{ ok: false/.test(route));
 ok('JK8: client allocByTxn ALSO excludes invoice-linked splits (UI matches server, no double-count)',
-  /bank_transaction_splits'\)\.select\('bank_transaction_id, split_amount, linked_type'\)/.test(br) &&
+  // RB (Max Nov 8 12:23, gap review) moved these loads to fetchAllRows (paged past 1,000) — same columns, same intent; realigned.
+  /fetchAllRows\('bank_transaction_splits', 'id, bank_transaction_id, split_amount, linked_type', 'id', true\)/.test(br) &&
   /if \(String\(s\.linked_type \|\| ''\) === 'invoice'\) \{ return; \}/.test(br));
 
 console.log('');

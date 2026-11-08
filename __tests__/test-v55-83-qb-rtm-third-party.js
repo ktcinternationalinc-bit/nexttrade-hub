@@ -36,8 +36,8 @@ ok('2b: covering a bill from the RTM payment is a NORMAL record_payment with met
   /if \(action === 'rtm_flag'\)/.test(bills) && /if \(action === 'rtm_open_bills'\)/.test(bills) &&
   !/from\('vendor_bill_payments'\)\.insert[\s\S]{0,200}method: 'rtm'/.test(bills) &&
   /WRITE_ACTIONS = \{[^\n]*rtm_flag: 1/.test(bills)); // (pin made append-proof — QF/QG kept adding WRITE actions to the same line)
-ok('2c: rtm_flag stamps MONEY-OUT only and names the QB SQL when the column is missing',
-  /An RTM payment is MONEY OUT/.test(bills) &&
+ok('2c (QY generalized RTM to every paid-through company): the flag stamps MONEY-OUT only and names the QB SQL when the column is missing',
+  /A payment to a paid-through company is MONEY OUT/.test(bills) &&
   /run sql\/v55-83-QB-rtm-third-party\.sql first\./.test(bills));
 ok('2d: save_bill stores the via-RTM flag and SAYS when it could not (pre-SQL), on create and edit',
   /fields\.paid_via = String\(bl\.paid_via \|\| ''\)\.trim\(\)\.substring\(0, 60\) \|\| null;/.test(bills) &&
@@ -46,7 +46,7 @@ ok('2e: period_stats rtm block — payments from stamped out-txns, covered bills
   /\.not\('third_party_payer', 'is', null\)\.neq\('pending', true\)/.test(bills) &&
   /if \(p9\.method !== 'rtm' \|\| p9\.voided === true\) \{ return; \}/.test(bills) &&
   /service_fee: r2\(rtmPayTotal - rtmAllocTotal\)/.test(bills) &&
-  /spend = \{ rtm: rtmBlk, categories: catRows/.test(bills));
+  /spend = \{ rtm: rtmBlk, paid_through: ptBlocks, categories: catRows/.test(bills)); // (QY: the RTM block is now one of the per-company blocks; rtm kept for back-compat)
 
 var at = R('src/components/AllTransactionsTab.jsx');
 ok('3a (QF realigned — Max 12:13: "not crazy that you put everything... with rtm symbol"): RTM entry lives in the 🔗 match popup as a RADIO; only flagged rows keep the 🏢 RTM ✓ chip',
@@ -60,22 +60,26 @@ ok('3c: a mid-save failure is SAID with exactly how many bills stayed covered �
   /ARE covered and stay covered/.test(at));
 
 var ps = R('src/components/PeriodStatsTab.jssx'.replace('jssx','jsx'));
-ok('4a: the RADIO — default TAX view (one line); real-cost view re-buckets covered bills into their ACTUAL categories',
-  /var sRt = useState\(false\); var rtmOn = sRt\[0\]/.test(ps) &&
-  /Tax view — RTM payments stay ONE line/.test(ps) &&
-  /Real-cost view — covered bills in their ACTUAL categories/.test(ps));
+ok('4a (QY: one switch PER company): default TAX view (one line); real-cost view re-buckets covered bills into their ACTUAL categories',
+  /var sRt = useState\(\{\}\); var ptOn = sRt\[0\]/.test(ps) &&
+  /Tax view — payments to \{pb\.payer\} stay ONE line/.test(ps) &&
+  /Real-cost view — covered costs in their ACTUAL categories/.test(ps));
 ok('4b: rtmAdjust conserves every total by construction: −payments + covered bills + service fee = 0',
   /map\[p\.key\]\.total = r2a\(map\[p\.key\]\.total - p\.total\); map\[p\.key\]\.rtm_out = p\.total;/.test(ps) &&
   /map\[a\.key\]\.total = r2a\(map\[a\.key\]\.total \+ a\.total\);/.test(ps) &&
   /RTM service fee \(payments − covered bills\)/.test(ps));
-ok('4c: radio applies to the spending table AND the income statement; the accountant TAX PACK always stays in tax view',
-  ps.split('rtmOn && data.spending.rtm) ? rtmAdjust(').length === 3 &&
-  /RTM BREAKDOWN ON/.test(ps) &&
-  /\(data\.spending\.categories \|\| \[\]\)\.forEach\(function \(c\) \{ if \(c\.kind === 'cogs'\) \{ cogsP \+= c\.total; \}/.test(ps));
+// RB (Max Nov 8 12:23, gap review) superseded "pack always tax view" for RELATED companies only:
+// NextTrade's unspent advance is not deductible, so the pack runs taxCats() (affiliates real-cost,
+// RTM still one line). Realigned, not dropped.
+ok('4c (QY→RB): the switches apply to the spending table AND the income statement; the accountant TAX PACK keeps RTM one line and takes NextTrade advances out',
+  ps.split('ptAdjust(data.spending.categories)').length === 3 && // (QY)
+  /' — BREAKDOWN ON: ' \+ ptOnNames\.join/.test(ps) &&
+  /\(taxCats\(data\.spending\.categories\) \|\| \[\]\)\.forEach\(function \(c\) \{ if \(c\.kind === 'cogs'\) \{ cogsP \+= c\.total; \}/.test(ps) &&
+  /if \(b0\.kind === 'affiliate'\) \{ out = rtmAdjust\(out, b0\); \}/.test(ps));
 
 var bt = R('src/components/BillsTab.jsx');
-ok('5: Bills — 🏢 Paid via RTM Capital checkbox in the editor + via-RTM badge on the row',
-  /paid_via: e\.target\.checked \? 'RTM Capital' : null/.test(bt) &&
+ok('5 (QY: checkbox became a company dropdown): Bills — 🏢 Paid via in the editor + via-company badge on the row',
+  /paid_via: e\.target\.value \|\| null/.test(bt) &&
   /🏢 via \{b\.paid_via\}/.test(bt));
 
 // ── connections permission (Max 11:45) ──

@@ -20,6 +20,7 @@ import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64 } from '../../../../lib/bill-extract-server';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 
 // v55.83-QO (Max 15:53: "attempted to add bill from document and nothing
 // happened") — the AI read of a multi-page PDF outlives Vercel's DEFAULT
@@ -90,6 +91,45 @@ function decorate(bills, pays) {
     return Object.assign({}, b, { paid: bal.paid, open: bal.open, status: st });
   });
 }
+// v55.83-QZ2 (review fix) — see record_payment. Returns { category, reviewed } or null.
+async function carryBillCategory(db, bankId, userId) {
+  var tq = await db.from('bank_transactions').select('id, classification, third_party_payer, transfer_group_id, review_status, amount_abs').eq('id', bankId).maybeSingle();
+  var t0 = tq && tq.data;
+  if (!t0 || t0.classification || t0.third_party_payer || t0.transfer_group_id || t0.review_status === 'duplicate') { return null; }
+  var pq = await db.from('vendor_bill_payments').select('bill_id, amount, voided, method').eq('bank_transaction_id', bankId);
+  var live = ((pq && pq.data) || []).filter(function (p) { return p.voided !== true; });
+  if (!live.length || live.some(function (p) { return p.method === 'rtm'; })) { return null; }
+  var bq = await db.from('vendor_bills').select('id, category').in('id', live.map(function (p) { return p.bill_id; }));
+  var cats = {}; var missing = false;
+  ((bq && bq.data) || []).forEach(function (b) { if (b.category) { cats[b.category] = true; } else { missing = true; } });
+  var keys = Object.keys(cats);
+  if (missing || keys.length !== 1) { return null; } // mixed or blank → the person picks (or splits)
+  var ck = await db.from('expense_categories').select('key').eq('key', keys[0]).limit(1);
+  if (ck.error || !ck.data || !ck.data.length) { return null; }
+  var up = await db.from('bank_transactions').update({ classification: keys[0], category_source: 'classification', updated_by: userId || null })
+    .eq('id', bankId).is('classification', null).select('id');
+  if (up.error || !up.data || !up.data.length) { return null; }
+  var paid = 0; live.forEach(function (p) { paid += Number(p.amount) || 0; });
+  var reviewed = false;
+  if (Math.abs(r2(paid) - r2(t0.amount_abs)) <= 0.01) { reviewed = (await autoReviewIfComplete(db, [bankId], userId)).length > 0; }
+  return { category: keys[0], reviewed: reviewed };
+}
+
+// v55.83-QY — paid-through companies (RTM Capital, NextTrade Industries).
+// Read from paid_through_parties; if the QY SQL is not run yet, the two
+// known parties are used so nothing breaks.
+var PARTY_DEFAULTS = [
+  { name: 'RTM Capital', kind: 'service_provider', remainder_label: 'RTM service fee (payments − covered bills)', active: true, sort: 10 },
+  { name: 'NextTrade Industries', kind: 'affiliate', remainder_label: 'Advance with NextTrade — awaiting its costs (not an expense yet)', active: true, sort: 20 },
+];
+async function loadParties(db) {
+  try {
+    var pr = await db.from('paid_through_parties').select('name, kind, remainder_label, active, sort').eq('active', true).order('sort');
+    if (!pr.error && pr.data && pr.data.length) { return pr.data; }
+  } catch (eP) {}
+  return PARTY_DEFAULTS;
+}
+function partyKey(x) { return String(x || '').trim().toLowerCase(); }
 // Payable = active, open, and NOT disputed (Max: disputed bills are excluded
 // from what-we-owe totals until the dispute resolves).
 // v55.83-QB: via-RTM bills are paid by the third party, never from our bank —
@@ -227,7 +267,15 @@ export async function POST(req) {
       // v55.83-QB — "Paid via RTM Capital": a third party pays this bill, so it
       // stays OUT of what-we-owe and cash forecasts; it is covered from the RTM
       // payment (All Transactions → 🏢 RTM), never paid from our bank directly.
-      if (Object.prototype.hasOwnProperty.call(bl, 'paid_via')) { fields.paid_via = String(bl.paid_via || '').trim().substring(0, 60) || null; }
+      if (Object.prototype.hasOwnProperty.call(bl, 'paid_via')) {
+        fields.paid_via = String(bl.paid_via || '').trim().substring(0, 60) || null;
+        if (fields.paid_via) { // v55.83-QY — only a registered paid-through company
+          var partiesS = await loadParties(db); var hitS = null;
+          partiesS.forEach(function (ps) { if (partyKey(ps.name) === partyKey(fields.paid_via)) { hitS = ps.name; } });
+          if (!hitS) { return NextResponse.json({ error: 'Unknown "paid via" company "' + fields.paid_via + '".' }, { status: 400 }); }
+          fields.paid_via = hitS;
+        }
+      }
       if (bl.id) {
         var cur = await db.from('vendor_bills').select('id, record_status, total_amount').eq('id', bl.id).maybeSingle();
         if (cur.error || !cur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
@@ -320,8 +368,20 @@ export async function POST(req) {
         bank_transaction_id: bankId, method: String(body.method || '').trim() || null, created_by: userId,
       }).select('id').maybeSingle();
       if (pIns.error) { throw new Error(pIns.error.message); }
-      await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', billId, { amount: pAmt, paid_date: body.paid_date, bank_transaction_id: bankId, method: String(body.method || '').trim() || null }); // v55.83-QI
-      return NextResponse.json({ ok: true, payment_id: pIns.data && pIns.data.id });
+      // v55.83-QZ2 (review fix) — a bank payment matched to bills used to stay
+      // UNCATEGORIZED: the P&L showed it as uncategorized and it never reached
+      // the ClickBooks ledger. When the bank row has NO category yet and every
+      // bill it pays carries the SAME category, that category rides onto the
+      // row (never overwrites a person's pick); when the bills cover the whole
+      // payment, the row is finished (reviewed) and reaches the ledger. Never
+      // for RTM/NextTrade (paid-through) payments — those stay ONE line in the
+      // tax view by design — nor transfers or duplicate copies. Fail-soft.
+      var carried = null;
+      if (bankId && String(body.method || '').trim() !== 'rtm') {
+        try { carried = await carryBillCategory(db, bankId, userId); } catch (eCB) { carried = null; }
+      }
+      await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', billId, { amount: pAmt, paid_date: body.paid_date, bank_transaction_id: bankId, method: String(body.method || '').trim() || null, category_carried: carried }); // v55.83-QI
+      return NextResponse.json({ ok: true, payment_id: pIns.data && pIns.data.id, category_carried: carried });
     }
 
     // ── void_payment
@@ -656,10 +716,14 @@ export async function POST(req) {
     //    The per-bill MONEY writes go through record_payment with
     //    method='rtm' — the same overpay + over-allocation guards as every
     //    bill payment; money math is never duplicated here. ──
+    if (action === 'paid_through_parties') { // v55.83-QY
+      return NextResponse.json({ ok: true, parties: await loadParties(db) });
+    }
     if (action === 'rtm_open_bills') {
       var LR = await loadBills(db);
+      var payerQ = partyKey(body.payer); // v55.83-QY — only THAT company's bills
       var rowsR = decorate(LR.bills, LR.pays).filter(function (b) {
-        return b.record_status === 'active' && b.paid_via && b.open > 0.005;
+        return b.record_status === 'active' && b.paid_via && b.open > 0.005 && (!payerQ || partyKey(b.paid_via) === payerQ);
       }).map(function (b) {
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date,
           due_date: b.due_date, category: b.category, total_amount: r2(b.total_amount), paid: b.paid, open: b.open, paid_via: b.paid_via };
@@ -682,13 +746,25 @@ export async function POST(req) {
     if (action === 'rtm_flag') {
       var txR = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
       if (txR.error || !txR.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
-      if (txR.data.direction !== 'out') { return NextResponse.json({ error: 'An RTM payment is MONEY OUT — that transaction is money in.' }, { status: 409 }); }
+      if (txR.data.direction !== 'out') { return NextResponse.json({ error: 'A payment to a paid-through company is MONEY OUT — that transaction is money in.' }, { status: 409 }); }
+      // v55.83-QY — the payer must be a registered paid-through company
+      var partiesF = await loadParties(db);
+      var payerF = null;
+      partiesF.forEach(function (pf) { if (partyKey(pf.name) === partyKey(body.payer || 'RTM Capital')) { payerF = pf.name; } });
+      if (!payerF && body.clear !== true) { return NextResponse.json({ error: 'Unknown paid-through company "' + (body.payer || '') + '".' }, { status: 400 }); }
       var upR = await db.from('bank_transactions')
-        .update({ third_party_payer: body.clear === true ? null : String(body.payer || 'RTM Capital').substring(0, 60) })
+        .update({ third_party_payer: body.clear === true ? null : payerF })
         .eq('id', body.bank_transaction_id).select('id');
       if (upR.error) { return NextResponse.json({ error: upR.error.message + (/third_party_payer/.test(upR.error.message || '') ? ' — run sql/v55-83-QB-rtm-third-party.sql first.' : '') }, { status: 400 }); }
-      await audit(db, userId, body.clear === true ? 'rtm_flag_cleared' : 'rtm_payment_flagged', 'bank_transaction', body.bank_transaction_id, null); // v55.83-QI
-      return NextResponse.json({ ok: true, flagged: body.clear !== true });
+      // v55.83-RB (gap review) — money sent to a RELATED company (NextTrade) is
+      // an advance: marking it is the person's decision, so the row is finished
+      // (reviewed, when fully accounted for) and the ClickBooks books record it
+      // as "Due from NextTrade Industries" — never as an expense by itself.
+      var reviewedF = false;
+      var kindF = null; partiesF.forEach(function (pk) { if (pk.name === payerF) { kindF = pk.kind; } });
+      if (body.clear !== true && kindF === 'affiliate') { reviewedF = (await autoReviewIfComplete(db, [body.bank_transaction_id], userId)).length > 0; }
+      await audit(db, userId, body.clear === true ? 'rtm_flag_cleared' : 'rtm_payment_flagged', 'bank_transaction', body.bank_transaction_id, { payer: payerF, reviewed: reviewedF }); // v55.83-QI
+      return NextResponse.json({ ok: true, flagged: body.clear !== true, reviewed: reviewedF });
     }
 
     // ── v55.83-QM (Max 15:33: "add the matching and category features on
@@ -1122,44 +1198,59 @@ export async function POST(req) {
         // the payment under its own category (ONE professional-fee line for
         // tax); the Stats radio re-buckets into the bills' REAL categories
         // client-side — both views total identically by construction.
-        var rtmBlk = null;
+        // v55.83-QY — the same block, PER paid-through company (RTM Capital,
+        // NextTrade Industries, …). Payments are attributed by the company
+        // stamped on the bank transaction; covered bills by the company the
+        // bill is "paid via". The unlinked remainder is labeled by the
+        // company's kind: service_provider → its FEE; affiliate → an ADVANCE
+        // awaiting its costs (NextTrade: never a fee by default).
+        var rtmBlk = null; var ptBlocks = [];
         try {
+          var partiesP = await loadParties(db);
           var rtmTx = await db.from('bank_transactions')
             .select('id, date, posted_date, amount_abs, classification, third_party_payer')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out')
-            .not('third_party_payer', 'is', null).neq('pending', true)
+            .not('third_party_payer', 'is', null).neq('pending', true).neq('review_status', 'duplicate')
             .gte('date', pFrom).lte('date', pTo).limit(2000);
           if (!rtmTx.error) {
-            var rtmPayTotal = 0; var rtmPayByCat = {}; var rtmPayCount = 0;
-            (rtmTx.data || []).forEach(function (t9) {
-              var d9 = t9.posted_date || t9.date;
-              if (!(d9 >= pFrom && d9 <= pTo)) { return; }
-              var a9 = r2(t9.amount_abs); rtmPayTotal = r2(rtmPayTotal + a9); rtmPayCount++;
-              var k9 = t9.classification || 'uncategorized';
-              if (!rtmPayByCat[k9]) { rtmPayByCat[k9] = { key: k9, label: catLabels[k9] || k9, total: 0 }; }
-              rtmPayByCat[k9].total = r2(rtmPayByCat[k9].total + a9);
+            partiesP.forEach(function (party) {
+              var pk = partyKey(party.name);
+              var rtmPayTotal = 0; var rtmPayByCat = {}; var rtmPayCount = 0;
+              (rtmTx.data || []).forEach(function (t9) {
+                if (partyKey(t9.third_party_payer) !== pk) { return; }
+                var d9 = t9.posted_date || t9.date;
+                if (!(d9 >= pFrom && d9 <= pTo)) { return; }
+                var a9 = r2(t9.amount_abs); rtmPayTotal = r2(rtmPayTotal + a9); rtmPayCount++;
+                var k9 = t9.classification || 'uncategorized';
+                if (!rtmPayByCat[k9]) { rtmPayByCat[k9] = { key: k9, label: catLabels[k9] || k9, total: 0 }; }
+                rtmPayByCat[k9].total = r2(rtmPayByCat[k9].total + a9);
+              });
+              var rtmAllocByCat = {}; var rtmAllocTotal = 0; var rtmRows = [];
+              (LS.pays || []).forEach(function (p9) {
+                if (p9.method !== 'rtm' || p9.voided === true) { return; }
+                if (!(p9.paid_date >= pFrom && p9.paid_date <= pTo)) { return; }
+                var b9 = billNameById[p9.bill_id];
+                if (!b9 || partyKey(b9.paid_via || 'RTM Capital') !== pk) { return; }
+                var k10 = b9.category || 'uncategorized';
+                var am9 = r2(p9.amount);
+                if (!rtmAllocByCat[k10]) { rtmAllocByCat[k10] = { key: k10, label: catLabels[k10] || k10, kind: kindOf(k10), count: 0, total: 0 }; }
+                rtmAllocByCat[k10].count++; rtmAllocByCat[k10].total = r2(rtmAllocByCat[k10].total + am9);
+                rtmAllocTotal = r2(rtmAllocTotal + am9);
+                if (rtmRows.length < 300) { rtmRows.push({ date: p9.paid_date, who: b9.vendor_name || '(bill)', ref: b9.bill_number || '—', category: k10, amount: am9 }); }
+              });
+              if (rtmPayCount > 0 || rtmAllocTotal > 0) {
+                var blk = { payer: party.name, kind: party.kind, remainder_label: party.remainder_label,
+                  payments_total: rtmPayTotal, payments_count: rtmPayCount,
+                  payments_by_cat: Object.keys(rtmPayByCat).map(function (k) { return rtmPayByCat[k]; }),
+                  allocations_by_cat: Object.keys(rtmAllocByCat).map(function (k) { return rtmAllocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
+                  allocations_total: rtmAllocTotal, service_fee: r2(rtmPayTotal - rtmAllocTotal), rows: rtmRows };
+                ptBlocks.push(blk);
+                if (pk === 'rtm capital') { rtmBlk = blk; }
+              }
             });
-            var rtmAllocByCat = {}; var rtmAllocTotal = 0; var rtmRows = [];
-            (LS.pays || []).forEach(function (p9) {
-              if (p9.method !== 'rtm' || p9.voided === true) { return; }
-              if (!(p9.paid_date >= pFrom && p9.paid_date <= pTo)) { return; }
-              var b9 = billNameById[p9.bill_id];
-              var k10 = (b9 && b9.category) || 'uncategorized';
-              var am9 = r2(p9.amount);
-              if (!rtmAllocByCat[k10]) { rtmAllocByCat[k10] = { key: k10, label: catLabels[k10] || k10, kind: kindOf(k10), count: 0, total: 0 }; }
-              rtmAllocByCat[k10].count++; rtmAllocByCat[k10].total = r2(rtmAllocByCat[k10].total + am9);
-              rtmAllocTotal = r2(rtmAllocTotal + am9);
-              if (rtmRows.length < 300) { rtmRows.push({ date: p9.paid_date, who: (b9 && b9.vendor_name) || '(bill)', ref: (b9 && b9.bill_number) || '—', category: k10, amount: am9 }); }
-            });
-            if (rtmPayCount > 0 || rtmAllocTotal > 0) {
-              rtmBlk = { payer: 'RTM Capital', payments_total: rtmPayTotal, payments_count: rtmPayCount,
-                payments_by_cat: Object.keys(rtmPayByCat).map(function (k) { return rtmPayByCat[k]; }),
-                allocations_by_cat: Object.keys(rtmAllocByCat).map(function (k) { return rtmAllocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
-                allocations_total: rtmAllocTotal, service_fee: r2(rtmPayTotal - rtmAllocTotal), rows: rtmRows };
-            }
           }
-        } catch (eR9) { rtmBlk = null; }
-        spend = { rtm: rtmBlk, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
+        } catch (eR9) { rtmBlk = null; ptBlocks = []; }
+        spend = { rtm: rtmBlk, paid_through: ptBlocks, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
           real_spending: r2(totOut - trf.total), rows: spRows,
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,

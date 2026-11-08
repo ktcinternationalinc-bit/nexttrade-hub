@@ -16,7 +16,9 @@ import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { applyExpenseRules, waveAccountForCategory } from '../../../../lib/expense-rules-server';
+import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 
 var API_BUILD_MARKER = 'v55.83-PI-expense-rules';
@@ -119,6 +121,64 @@ export async function POST(req) {
     }
 
     // ── apply_rules: run the background matcher NOW ──
+    // ── v55.83-QV (Max, Nov 8 11:16: "are the category rules working?? I tried
+    //    adding Public Service yet it still shows 0 hits.. I should also be
+    //    able to edit or delete a rule"). Rules only FILL BLANKS (never a human
+    //    pick) and Hits counts only rows a rule actually filled — so a rule
+    //    whose text never appears on a bank line, or whose lines are already
+    //    categorized, honestly shows 0. rule_preview SHOWS which lines match
+    //    and why each one would or would not be touched; apply_rule_now runs
+    //    ONE rule immediately. Same ruleMatches() as the background job. ──
+    if (action === 'rule_preview' || action === 'apply_rule_now') {
+      var pv = body.payload || {};
+      var ruleRow = null;
+      if (pv.id) {
+        var rq = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active').eq('id', pv.id).maybeSingle();
+        ruleRow = rq && rq.data;
+      }
+      var mtxt = String((ruleRow && ruleRow.match_text) || pv.match_text || '').trim().toLowerCase();
+      if (mtxt.length < 3) { return NextResponse.json({ ok: false, error: 'Type at least 3 characters to test.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var pvRows = [];
+      for (var pgv = 0; pgv < 5; pgv++) {
+        var pq = await db.from('bank_transactions')
+          .select('id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status, matched_invoice_id, transfer_group_id, pending')
+          .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true).neq('review_status', 'duplicate')
+          .order('date', { ascending: false }).order('id', { ascending: true }).range(pgv * 1000, pgv * 1000 + 999);
+        if (pq.error) { return NextResponse.json({ ok: false, error: pq.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        pvRows = pvRows.concat(pq.data || []);
+        if (!pq.data || pq.data.length < 1000) { break; }
+      }
+      var probe = { match_text: mtxt };
+      var hitsP = pvRows.filter(function (t) { return ruleMatches(probe, (t.merchant_name || '') + ' ' + (t.name || '')); });
+      var fillable = []; var ruleFilled = []; var human = []; var verified = [];
+      hitsP.forEach(function (t) {
+        if (t.category_verified === true) { verified.push(t); }
+        else if (!t.classification && t.review_status === 'unreviewed') { fillable.push(t); }
+        else if (t.classification && t.category_source === 'rule') { ruleFilled.push(t); }
+        else { human.push(t); }
+      });
+      if (action === 'rule_preview') {
+        return NextResponse.json({ ok: true, match_text: mtxt, scanned: pvRows.length, matches: hitsP.length,
+          fillable: fillable.length, rule_filled: ruleFilled.length, human_picked: human.length, verified: verified.length,
+          sample: hitsP.slice(0, 12).map(function (t) { return { date: t.posted_date || t.date, text: ((t.merchant_name || '') + ' ' + (t.name || '')).trim().substring(0, 90), amount: t.amount_abs, category: t.classification || null, how: t.category_verified ? 'verified' : (!t.classification ? 'blank' : (t.category_source === 'rule' ? 'rule' : 'human')) }; }),
+          api_build_marker: API_BUILD_MARKER });
+      }
+      // apply_rule_now — needs a SAVED rule; never touches human picks or verified rows
+      if (!ruleRow) { return NextResponse.json({ ok: false, error: 'Save the rule first, then apply it.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var targets = fillable.concat(pv.include_rule_filled === true ? ruleFilled.filter(function (t) { return t.classification !== ruleRow.classification; }) : []);
+      var doneN = 0;
+      for (var ti2 = 0; ti2 < targets.length && ti2 < 1000; ti2++) {
+        var tg = targets[ti2];
+        var uq = db.from('bank_transactions').update({ classification: ruleRow.classification, category_source: 'rule' }).eq('id', tg.id).neq('category_verified', true);
+        uq = tg.classification ? uq.eq('category_source', 'rule') : uq.is('classification', null).eq('review_status', 'unreviewed'); // re-check: never race a human
+        var ur = await uq.select('id');
+        if (!ur.error && ur.data && ur.data.length) { doneN++; }
+      }
+      if (doneN > 0) { await db.from('us_expense_rules').update({ hit_count: (Number(ruleRow.hit_count) || 0) + doneN, last_hit_at: new Date().toISOString() }).eq('id', ruleRow.id); }
+      await audit(db, by, 'rule_applied_now', 'us_expense_rule', ruleRow.id, { match_text: mtxt, classification: ruleRow.classification, applied: doneN, include_rule_filled: pv.include_rule_filled === true });
+      return NextResponse.json({ ok: true, applied: doneN, skipped_human: human.length, skipped_verified: verified.length, api_build_marker: API_BUILD_MARKER });
+    }
+
     if (action === 'apply_rules') {
       var resA = await applyExpenseRules(db, 500);
       if (resA.error) { return NextResponse.json({ ok: false, error: resA.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
@@ -252,6 +312,15 @@ export async function POST(req) {
       if (!clsB) { return NextResponse.json({ ok: false, error: 'Pick the category to apply.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var catOkB = await db.from('expense_categories').select('key').eq('key', clsB).limit(1);
       if (!catOkB.error && (!catOkB.data || !catOkB.data.length)) { return NextResponse.json({ ok: false, error: 'Unknown category "' + clsB + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // v55.83-QZ2 (review fix) — a leg of a PAIRED transfer cannot quietly
+      // become an expense: the hub would show the new category while the
+      // ledger still books it as a transfer. Unpair first (↔), then categorize.
+      if (clsB !== 'transfer') {
+        var prB = await db.from('bank_transactions').select('id').in('id', idsB).not('transfer_group_id', 'is', null);
+        if (!prB.error && prB.data && prB.data.length) {
+          return NextResponse.json({ ok: false, error: (prB.data.length === 1 && idsB.length === 1 ? 'This transaction is' : prB.data.length + ' of these are') + ' one side of a PAIRED transfer between your own accounts. Unpair it first (↔ Transfer → Unpair), then pick the category — otherwise the books would still count it as a transfer.', paired_ids: prB.data.map(function (r) { return r.id; }), api_build_marker: API_BUILD_MARKER }, { status: 409 });
+        }
+      }
       var updB = await db.from('bank_transactions')
         .update({ classification: clsB, category_source: 'classification' })
         .in('id', idsB).select('id, direction, merchant_name, name');
@@ -285,8 +354,13 @@ export async function POST(req) {
           if (!wUpd.error) { waveSet = (wUpd.data || []).length; }
         }
       } catch (eWv) { waveSet = 0; }
-      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, wave_updated: waveSet }); // v55.83-QI
-      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, wave_updated: waveSet, wave_how: waveHow, api_build_marker: API_BUILD_MARKER });
+      // v55.83-QZ2 (review fix) — ONE row picked by a person finishes it exactly
+      // like Bank Review does (reviewed when every dollar is accounted for), so
+      // it reaches the ClickBooks ledger. Bulk picks never change review status.
+      var reviewedB = [];
+      if (idsB.length === 1 && body.payload && body.payload.single_pick === true) { reviewedB = await autoReviewIfComplete(db, idsB, by); }
+      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, wave_updated: waveSet, reviewed: reviewedB.length }); // v55.83-QI
+      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── all_transactions: every account, one table — sort/filter server-side
@@ -381,22 +455,50 @@ export async function POST(req) {
     // 7 days, settled, not already paired. Suggestions only — a human pairs.
     if (action === 'transfer_candidates') {
       var txq = await db.from('bank_transactions')
-        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, transfer_group_id')
+        .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, transfer_group_id, wave_business_id')
         .eq('id', body.payload && body.payload.bank_transaction_id).maybeSingle();
       if (txq.error || !txq.data) { return NextResponse.json({ ok: false, error: 'Transaction not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       var t0 = txq.data;
       var d0 = t0.posted_date || t0.date;
-      var lo = new Date(Date.parse(d0) - 7 * 86400000).toISOString().substring(0, 10);
-      var hi = new Date(Date.parse(d0) + 7 * 86400000).toISOString().substring(0, 10);
-      var cand = await db.from('bank_transactions')
+      // v55.83-QX (Max, Nov 8 11:39: "when we click on transfer it looks for
+      // other transactions from other accounts... and if not allows the user
+      // to manually select one"). AUTO: same cents, opposite direction, ANOTHER
+      // account in the SAME books, ±10 days. MANUAL (payload.manual): ±90
+      // days, any amount, optional search text — so a leg posted late, on an
+      // odd date, or under a different bank wording is still findable.
+      // Duplicates and already-paired legs are never offered.
+      var manualT = body.payload && body.payload.manual === true;
+      var spanT = manualT ? 90 : 10;
+      var lo = new Date(Date.parse(d0) - spanT * 86400000).toISOString().substring(0, 10);
+      var hi = new Date(Date.parse(d0) + spanT * 86400000).toISOString().substring(0, 10);
+      var candQ = db.from('bank_transactions')
         .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, transfer_group_id')
         .eq('direction', t0.direction === 'out' ? 'in' : 'out')
-        .gte('amount_abs', (Number(t0.amount_abs) || 0) - 0.005).lte('amount_abs', (Number(t0.amount_abs) || 0) + 0.005)
         .gte('date', lo).lte('date', hi)
-        .neq('pending', true).is('transfer_group_id', null)
-        .neq('account_id', t0.account_id || '').limit(20);
+        .neq('pending', true).is('transfer_group_id', null).neq('review_status', 'duplicate')
+        .neq('account_id', t0.account_id || '');
+      if (t0.wave_business_id) { candQ = candQ.eq('wave_business_id', t0.wave_business_id); }
+      if (!manualT) { candQ = candQ.gte('amount_abs', (Number(t0.amount_abs) || 0) - 0.005).lte('amount_abs', (Number(t0.amount_abs) || 0) + 0.005); }
+      var cand = await candQ.order('date', { ascending: false }).limit(manualT ? 400 : 20);
       if (cand.error) { return NextResponse.json({ ok: false, error: cand.error.message + (/transfer_group_id/.test(cand.error.message) ? ' — run sql/v55-83-PQ-category-wave-link.sql first.' : ''), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      return NextResponse.json({ ok: true, txn: t0, candidates: cand.data || [], api_build_marker: API_BUILD_MARKER });
+      var outC = cand.data || [];
+      if (manualT) {
+        var qT = String((body.payload && body.payload.q) || '').trim().toLowerCase();
+        if (qT) { outC = outC.filter(function (c) { return (String(c.merchant_name || '') + ' ' + String(c.name || '') + ' ' + Number(c.amount_abs).toFixed(2) + ' ' + String(c.posted_date || c.date)).toLowerCase().indexOf(qT) >= 0; }); }
+        var amtT = Number(t0.amount_abs) || 0;
+        outC.sort(function (a, b) { return Math.abs((Number(a.amount_abs) || 0) - amtT) - Math.abs((Number(b.amount_abs) || 0) - amtT); });
+        outC = outC.slice(0, 40);
+      }
+      var acctNames = {};
+      try {
+        var accIds = {}; outC.forEach(function (c) { if (c.account_id) { accIds[c.account_id] = true; } });
+        if (Object.keys(accIds).length) {
+          var accR = await db.from('plaid_accounts').select('plaid_account_id, name, mask').in('plaid_account_id', Object.keys(accIds));
+          ((accR && accR.data) || []).forEach(function (a) { acctNames[a.plaid_account_id] = (a.name || 'account') + (a.mask ? ' •' + a.mask : ''); });
+        }
+      } catch (eAN) {}
+      outC = outC.map(function (c) { return Object.assign({}, c, { account_label: acctNames[c.account_id] || null, same_amount: Math.abs((Number(c.amount_abs) || 0) - (Number(t0.amount_abs) || 0)) <= 0.005 }); });
+      return NextResponse.json({ ok: true, txn: t0, manual: manualT, candidates: outC, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── pair_transfer: both legs become ONE transfer (classification=transfer,
@@ -404,20 +506,27 @@ export async function POST(req) {
     if (action === 'pair_transfer') {
       var idA = body.payload && body.payload.a; var idB = body.payload && body.payload.b;
       if (!idA || !idB || idA === idB) { return NextResponse.json({ ok: false, error: 'Two different transactions required.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var both = await db.from('bank_transactions').select('id, direction, amount_abs, account_id, transfer_group_id').in('id', [idA, idB]);
+      var both = await db.from('bank_transactions').select('id, direction, amount_abs, account_id, transfer_group_id, wave_business_id, review_status').in('id', [idA, idB]);
       if (both.error || !both.data || both.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Transactions not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       var A = both.data[0]; var B = both.data[1];
       if (A.transfer_group_id || B.transfer_group_id) { return NextResponse.json({ ok: false, error: 'One of them is already paired to another transfer.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
       if (A.direction === B.direction) { return NextResponse.json({ ok: false, error: 'A transfer pair needs one money-out and one money-in leg.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      if (Math.abs((Number(A.amount_abs) || 0) - (Number(B.amount_abs) || 0)) > 0.005) { return NextResponse.json({ ok: false, error: 'Amounts differ — a transfer\'s two legs must match to the cent.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (Math.abs((Number(A.amount_abs) || 0) - (Number(B.amount_abs) || 0)) > 0.005) { return NextResponse.json({ ok: false, error: 'Amounts differ ($' + Number(A.amount_abs).toFixed(2) + ' vs $' + Number(B.amount_abs).toFixed(2) + ') — the two legs of one transfer are the same money, so they must match to the cent. A bank/wire fee is its own separate line: categorize it as Bank fees.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // v55.83-QX — one set of books only: money moving to another COMPANY is intercompany (due to / due from), not an internal transfer
+      if (A.wave_business_id && B.wave_business_id && A.wave_business_id !== B.wave_business_id) { return NextResponse.json({ ok: false, error: 'These two accounts belong to DIFFERENT companies — that is an intercompany payment (loan to / owed by the other company), not a transfer between your own accounts. Categorize each side on its own.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (A.review_status === 'duplicate' || B.review_status === 'duplicate') { return NextResponse.json({ ok: false, error: 'One of these is a marked DUPLICATE copy — pair the original instead.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var gid = (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : require('crypto').randomUUID();
       var updP = await db.from('bank_transactions')
         .update({ transfer_group_id: gid, classification: 'transfer', category_source: 'classification', updated_by: by })
         .in('id', [idA, idB]).is('transfer_group_id', null).select('id');
       if (updP.error) { return NextResponse.json({ ok: false, error: updP.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!updP.data || updP.data.length !== 2) { return NextResponse.json({ ok: false, error: 'Pairing raced another change — nothing saved, try again.', api_build_marker: API_BUILD_MARKER }, { status: 409 }); }
-      await audit(db, by, 'transfer_paired', 'bank_transaction', idA + '+' + idB, { transfer_group_id: gid }); // v55.83-QI
-      return NextResponse.json({ ok: true, transfer_group_id: gid, paired: [idA, idB], api_build_marker: API_BUILD_MARKER });
+      // v55.83-QZ2 (review fix) — a person confirmed both legs, so both are
+      // finished (reviewed when fully accounted for) and reach the ledger as a
+      // transfer through 1090 clearing — never income, never expense.
+      var reviewedP = await autoReviewIfComplete(db, [idA, idB], by);
+      await audit(db, by, 'transfer_paired', 'bank_transaction', idA + '+' + idB, { transfer_group_id: gid, reviewed: reviewedP.length }); // v55.83-QI
+      return NextResponse.json({ ok: true, transfer_group_id: gid, paired: [idA, idB], reviewed: reviewedP.length, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── unpair_transfer ──

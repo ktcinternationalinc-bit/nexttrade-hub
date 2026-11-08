@@ -257,7 +257,7 @@ ok('17c: single classify uses the SAME resolver (matching already flows to Wave 
 var attZ4 = R('src/components/AllTransactionsTab.jsx');
 ok('18a: every unpaired row in 📑 All Transactions has ↔ — opens the SAME transfer_candidates/pair_transfer engine as the 🏷 tab, in a centered modal',
   /openTransfer\(t\); \}\} title="This is a transfer between our own accounts/.test(attZ4) &&
-  /api\('transfer_candidates', \{ bank_transaction_id: t\.id \}\)/.test(attZ4) &&
+  /api\('transfer_candidates', \{ bank_transaction_id: t\.id, manual: manual === true, q: q \|\| '' \}\)/.test(attZ4) && // (QX added the manual pick mode to the same call)
   /api\('pair_transfer', \{ a: a2, b: b2 \}\)/.test(attZ4) &&
   /\{tPanel && <div onClick=\{function \(\) \{ setTPanel\(null\); \}\} style=\{\{ position: 'fixed', inset: 0/.test(attZ4));
 ok('18b: candidates are OTHER accounts only, opposite direction, cent-equal, ±7 days (server enforces; never already-paired rows)',

@@ -35,8 +35,9 @@ ok('B2: approve has the same money-conservation gate', /!allocA\.complete/.test(
 ok('B3: txnAllocation uses the loaded allocation map + bankAllocationStatus',
   /function txnAllocation\(t\)/.test(br) && /bankAllocationStatus\(\{ txnAmount: total, paid: a\.paid, split: a\.split, unapplied: a\.unapplied \}\)/.test(br));
 ok('B4: allocation map is built from payments + splits + open unapplied deposits in load()',
-  /from\('bank_transaction_splits'\)\.select\('bank_transaction_id, split_amount, linked_type'\)/.test(br) &&
-  /from\('unapplied_deposits'\)\.select\('bank_transaction_id, amount, status'\)/.test(br) &&
+  // RB (Max Nov 8 12:23, gap review) moved these loads to fetchAllRows (paged past 1,000) — same columns, same intent; realigned.
+  /fetchAllRows\('bank_transaction_splits', 'id, bank_transaction_id, split_amount, linked_type', 'id', true\)/.test(br) &&
+  /fetchAllRows\('unapplied_deposits', 'id, bank_transaction_id, amount, status', 'id', true\)/.test(br) &&
   /bucket\(p\.bank_transaction_id\)\.paid/.test(br) && /setAllocByTxn\(allocBy\)/.test(br));
 
 // --- C. saveSplits requires exact allocation before marking reviewed ---
@@ -92,7 +93,8 @@ ok('H2: classify/set_wave_category whitelist patch fields (no arbitrary columns)
 ok('H3: categorize actions can never write approved (approval is a separate higher-permission action)',
   /if \(cPatch\.review_status === 'approved'\) \{ delete cPatch\.review_status; \}/.test(route));
 ok('H4: BankReviewTab loads customer_credits and folds OPEN credits into allocation (schema-safe, status-only)',
-  /from\('customer_credits'\)\.select\('source_transaction_id, amount, status'\)/.test(br) &&
+  // RB (Max Nov 8 12:23, gap review) moved these loads to fetchAllRows (paged past 1,000) — same columns, same intent; realigned.
+  /fetchAllRows\('customer_credits', 'id, source_transaction_id, amount, status', 'id', true\)/.test(br) &&
   /if \(c\.status && c\.status !== 'open'\) \{ return; \}/.test(br) &&
   /bucket\(c\.source_transaction_id\)\.unapplied \+= Number\(c\.amount\) \|\| 0/.test(br));
 ok('H6: no schema-fragile customer_credits.voided dependency remains (server or client)',

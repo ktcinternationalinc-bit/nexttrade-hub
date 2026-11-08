@@ -34,6 +34,10 @@ export default function ExpenseRulesTab(props) {
   var s7 = useState({ match_text: '', classification: '' }); var nr = s7[0]; var setNr = s7[1];
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
+  // v55.83-QV (Max, Nov 8 11:16) — test / edit / remove rules
+  var sQ1 = useState(null); var preview = sQ1[0]; var setPreview = sQ1[1];   // {rule|null, match_text, ...counts, sample}
+  var sQ2 = useState(null); var editRule = sQ2[0]; var setEditRule = sQ2[1]; // {id, match_text, classification}
+  var sQ3 = useState(false); var showRemoved = sQ3[0]; var setShowRemoved = sQ3[1];
   var sW = useState(null); var waveAccts = sW[0]; var setWaveAccts = sW[1]; // v55.83-PQ — Wave chart for the link editor
   var sW2 = useState(false); var showWave = sW2[0]; var setShowWave = sW2[1];
   var sPr = useState(null); var pairPanel = sPr[0]; var setPairPanel = sPr[1]; // v55.83-PQ — {txn, candidates} transfer pairing
@@ -102,6 +106,34 @@ export default function ExpenseRulesTab(props) {
     call.then(function (j) {
       if (j && j.ok) { loadAll(); } else { toast.error((j && j.error) || 'Could not update the rule.'); }
     }).finally(function () { setBusy(false); });
+  }
+  function testRule(r, text) {
+    setBusy(true);
+    api('rule_preview', r ? { id: r.id } : { match_text: text }).then(function (j) {
+      if (j && j.ok) { setPreview(Object.assign({ rule: r || null }, j)); }
+      else { toast.error((j && j.error) || 'Could not test the rule.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function applyOne(r, includeRuleFilled) {
+    setBusy(true);
+    api('apply_rule_now', { id: r.id, include_rule_filled: includeRuleFilled === true }).then(function (j) {
+      if (j && j.ok) {
+        toast.success('Applied to ' + j.applied + ' transaction(s)' + (j.skipped_human ? ' · ' + j.skipped_human + ' left alone (a human picked their category)' : '') + (j.skipped_verified ? ' · ' + j.skipped_verified + ' verified, untouched' : '') + '.');
+        setPreview(null); loadAll();
+      } else { toast.error((j && j.error) || 'Could not apply the rule.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function saveEdit() {
+    if (!editRule) { return; }
+    setBusy(true);
+    api('save_rule', { id: editRule.id, match_text: editRule.match_text, classification: editRule.classification, auto_apply: true, active: true }).then(function (j) {
+      if (j && j.ok) { toast.success('Rule updated — it now applies on every 15-minute run. Use 🔍 test to see what it catches.'); setEditRule(null); loadAll(); }
+      else { toast.error((j && j.error) || 'Could not save the rule.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function removeRule(r) {
+    if (!window.confirm('Remove the rule "' + r.match_text + '"?\n\nIt stops applying immediately and disappears from this list. Transactions it already categorized KEEP their category. (Kept in history — "show removed" brings it back.)')) { return; }
+    ruleActive(r, false);
   }
   function applyNow() {
     setBusy(true);
@@ -270,21 +302,59 @@ export default function ExpenseRulesTab(props) {
           {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
         </select>
         <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || !nr.classification} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || !nr.classification) ? 0.5 : 1 }}>+ new rule</button>
+        <button onClick={function () { testRule(null, nr.match_text); }} disabled={busy || nr.match_text.trim().length < 3} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || nr.match_text.trim().length < 3) ? 0.5 : 1 }}>🔍 test first</button>
+        <label className="flex items-center gap-1 text-[10px] font-bold ml-2" style={{ color: '#64748b' }}><input type="checkbox" checked={showRemoved} onChange={function (e) { setShowRemoved(e.target.checked); }} /> show removed rules</label>
       </div>
+      {preview && <div className="rounded-lg p-2 mb-2" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
+        <div className="flex gap-2 items-center flex-wrap mb-1">
+          <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔍 "{preview.match_text}" appears on {preview.matches} of the last {preview.scanned} money-out bank lines</span>
+          <div className="flex-1" />
+          <button onClick={function () { setPreview(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>✕</button>
+        </div>
+        <div className="flex gap-1.5 flex-wrap text-[10px] font-extrabold mb-1">
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#d1fae5', color: '#065f46' }}>{preview.fillable} uncategorized — the rule WILL fill these</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#f1f5f9', color: '#334155' }}>{preview.rule_filled} categorized earlier by a rule</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#fef3c7', color: '#92400e' }}>{preview.human_picked} picked by a human — never touched</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#ecfdf5', color: '#064e3b' }}>{preview.verified} verified — never touched</span>
+        </div>
+        {preview.matches === 0 && <div className="text-[10px] font-bold mb-1" style={{ color: '#7f1d1d' }}>No bank line contains this text — that is why Hits stays at 0. Rules match the words AS THE BANK WRITES THEM (e.g. PSE&G shows as "Pse&g", not "Public Service"). Copy a word from the actual bank line.</div>}
+        {(preview.sample || []).map(function (s0, si) {
+          return <div key={si} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: '1px solid #e0e7ff', color: '#0f172a' }}>
+            <span style={{ color: '#64748b' }}>{s0.date}</span><span className="font-semibold flex-1">{s0.text}</span>
+            <span className="tabular-nums">−${Number(s0.amount || 0).toFixed(2)}</span>
+            <span className="font-bold" style={{ color: s0.how === 'blank' ? '#065f46' : '#64748b' }}>{s0.how === 'blank' ? '→ will fill' : (labelOf[s0.category] || s0.category) + ' (' + s0.how + ')'}</span>
+          </div>;
+        })}
+        {preview.rule && <div className="flex gap-2 mt-1.5 flex-wrap">
+          <button onClick={function () { applyOne(preview.rule, false); }} disabled={busy || preview.fillable === 0} className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || preview.fillable === 0) ? 0.5 : 1 }}>▶ Apply now to the {preview.fillable} uncategorized</button>
+          {preview.rule_filled > 0 && <button onClick={function () { applyOne(preview.rule, true); }} disabled={busy} title="Also re-point lines a RULE categorized before (never human picks, never verified)" className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply + re-point the {preview.rule_filled} rule-categorized</button>}
+        </div>}
+      </div>}
       {rules.length === 0 ? <div className="text-[11px]" style={{ color: '#64748b' }}>No rules yet — they appear here automatically the first time you categorize an expense, or add one above.</div> :
         <div className="overflow-x-auto"><table className="w-full text-xs">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1.5 pr-2 text-left font-semibold">When the line contains</th><th className="py-1.5 pr-2 text-left font-semibold">Category</th>
             <th className="py-1.5 pr-2 text-left font-semibold">From</th><th className="py-1.5 pr-2 text-right font-semibold">Hits</th><th className="py-1.5 text-left font-semibold">&nbsp;</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
-            {rules.map(function (r) {
+            {rules.filter(function (r0) { return showRemoved || r0.active !== false; }).map(function (r) {
               var on = r.active !== false;
+              var ed = editRule && editRule.id === r.id;
               return <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9', opacity: on ? 1 : 0.45 }}>
-                <td className="py-1.5 pr-2 font-semibold">"{r.match_text}"</td>
-                <td className="py-1.5 pr-2">{labelOf[r.classification] || r.classification}</td>
+                <td className="py-1.5 pr-2 font-semibold">{ed ? <input value={editRule.match_text} onChange={function (e) { setEditRule(Object.assign({}, editRule, { match_text: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light" style={{ width: 180 }} /> : '"' + r.match_text + '"'}</td>
+                <td className="py-1.5 pr-2">{ed ? <select value={editRule.classification} onChange={function (e) { setEditRule(Object.assign({}, editRule, { classification: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light">
+                  {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select> : (labelOf[r.classification] || r.classification)}</td>
                 <td className="py-1.5 pr-2"><span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={r.source === 'learned' ? { background: '#e0e7ff', color: '#312e81' } : { background: '#f1f5f9', color: '#334155' }}>{r.source === 'learned' ? '🧠 learned' : '✍ manual'}</span></td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{r.hit_count || 0}</td>
-                <td className="py-1.5"><button onClick={function () { ruleActive(r, !on); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={on ? { background: '#fee2e2', color: '#7f1d1d' } : { background: '#d1fae5', color: '#065f46' }}>{on ? 'turn off' : 'turn on'}</button></td></tr>;
+                <td className="py-1.5 whitespace-nowrap">
+                  {ed ? <span>
+                    <button onClick={saveEdit} disabled={busy || String(editRule.match_text || '').trim().length < 3} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>✓ save</button>
+                    <button onClick={function () { setEditRule(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>cancel</button>
+                  </span> : <span>
+                    <button onClick={function () { testRule(r); }} disabled={busy} title="See which bank lines this rule catches, and apply it now" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#e0e7ff', color: '#312e81' }}>🔍 test</button>
+                    {on && <button onClick={function () { setEditRule({ id: r.id, match_text: r.match_text, classification: r.classification }); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>✏ edit</button>}
+                    {on ? <button onClick={function () { removeRule(r); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>🗑 remove</button>
+                      : <button onClick={function () { ruleActive(r, true); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#d1fae5', color: '#065f46' }}>↺ restore</button>}
+                  </span>}</td></tr>;
             })}
           </tbody>
         </table></div>}

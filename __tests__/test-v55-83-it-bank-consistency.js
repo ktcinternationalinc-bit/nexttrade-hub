@@ -15,13 +15,13 @@ var br = rd('src/components/BankReviewTab.jsx');
 var bt = rd('src/components/BankTab.jsx');
 
 // 1. Bank Review scopes by active silo BEFORE the limit (no global-limit-before-scope)
-ok('1a: Bank Review scopes bank_transactions by active wave_business_id at the query',
-  /_txQRev = _txQRev\.eq\('wave_business_id', _activeBizRev\)/.test(br) && /_txQRev = _txQRev\.limit\(1000\)/.test(br));
+ok('1a (QU paged the query — scope now lives in _txPage): Bank Review scopes bank_transactions by active wave_business_id at the query',
+  /if \(_activeBizRev\) \{ q9 = q9\.eq\('wave_business_id', _activeBizRev\); \}/.test(br));
 ok('1b: Bank Review no longer uses a bare global limit(1000) before scoping',
   br.indexOf(".select('*').order('posted_date', { ascending: false, nullsFirst: false }).limit(1000)") === -1);
 
 // 2. Both screens order by the SAME canonical date (posted_date)
-ok('2a: Bank Review orders by posted_date', /_txQRev = supabase\.from\('bank_transactions'\)\.select\('\*'\)\.order\('posted_date'/.test(br));
+ok('2a (QU): Bank Review orders by posted_date (then id for stable pages)', /var q9 = supabase\.from\('bank_transactions'\)\.select\('\*'\)\.order\('posted_date'/.test(br));
 ok('2b: Bank Tab orders by posted_date (matches Bank Review)', /_txq = supabase\.from\('bank_transactions'\)\.select\('\*'\)\.order\('posted_date'/.test(bt));
 ok('2c: Bank Tab still scopes by active silo before its limit', /_txq = _txq\.eq\('wave_business_id', _activeBizScope\)/.test(bt));
 

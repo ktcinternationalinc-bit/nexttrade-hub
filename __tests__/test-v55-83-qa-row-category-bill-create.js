@@ -18,7 +18,10 @@ console.log('QA — row category dropdown + bill-from-transaction');
 var at = R('src/components/AllTransactionsTab.jsx');
 
 ok('1a: the Category column is a DROPDOWN on every row — one pick runs the same engine as bulk (whitelist, rule learned, Wave ride-along)',
-  /api\('bulk_classify', \{ ids: \[t\.id\], classification: key \}\)/.test(at) &&
+  // QZ2 (review, Max Nov 8 12:00) superseded the exact call: the same engine, plus
+  // single_pick:true so ONE person-picked row is finished like Bank Review and
+  // reaches the ClickBooks ledger. Same intent — realigned, not dropped.
+  /api\('bulk_classify', \{ ids: \[t\.id\], classification: key, single_pick: true \}\)/.test(at) &&
   /onChange=\{function \(e\) \{ setCatOne\(t, e\.target\.value\); \}\}/.test(at));
 ok('1b: picking Transfer on a row immediately offers the other leg (openTransfer), and says it never counts as income/spending',
   /if \(key === 'transfer'\) \{ toast\.success\('Marked as a TRANSFER — never income, never spending in any report\.'\); openTransfer\(t\); \}/.test(at));

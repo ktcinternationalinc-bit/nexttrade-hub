@@ -47,7 +47,7 @@ ok('B5: GET matches the row by key OR setting_key and parses setting_value when 
 // --- C. Wiring: Bank Review + BankTab clamp the query and show the window ---
 var br = rd('src/components/BankReviewTab.jsx');
 ok('C1: BankReviewTab fetches the policy + clamps posted_date for non-super-admins',
-  /fetch\('\/api\/admin\/visibility'\)/.test(br) && /if \(_floor\) \{ _txQRev = _txQRev\.gte\('posted_date', _floor\)/.test(br));
+  /fetch\('\/api\/admin\/visibility'\)/.test(br) && /if \(_floor\) \{ q9 = q9\.gte\('posted_date', _floor\); \}/.test(br)); // (QU paged the query — the floor clamp moved into _txPage, still on every page)
 ok('C2: BankReviewTab shows a Visibility chip + newest-loaded date',
   /Newest loaded:/.test(br) && /Visibility:/.test(br) && /labelForWindow\(visCfg\.window, visCfg\.customDays\)/.test(br));
 var bt = rd('src/components/BankTab.jsx');

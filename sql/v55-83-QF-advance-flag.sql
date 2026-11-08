@@ -84,7 +84,7 @@ begin
         from public.expense_categories ec where ec.key = cls_key;
       -- (2) EXACT normalized-name match, single hit only
       if cat_label is not null then
-        select count(*), min(a.id) into hit_n, hit_id
+        select count(*), (array_agg(a.id order by a.id::text))[1] into hit_n, hit_id
           from clickbooks_us.accounts a
          where a.book_id = b.id and a.is_active and not a.is_bank_sensitive
            and lower(regexp_replace(a.name, '[^a-z0-9]+', ' ', 'gi')) = lower(regexp_replace(cat_label, '[^a-z0-9]+', ' ', 'gi'));
