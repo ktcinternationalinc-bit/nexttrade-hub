@@ -39,12 +39,16 @@ ok('4a: 🧹 Find duplicates — groups identical lines (account|date|amount|dir
   /if \(\(t1\.matched \|\| t1\.verified \|\| t1\.classification\) && !\(keep\.matched \|\| keep\.verified \|\| keep\.classification\)\) \{ keep = t1; \}/.test(at) &&
   /action: 'mark_review_duplicates', duplicate_transaction_ids: ids/.test(at));
 ok('4b: marked duplicates vanish from EVERY list and EVERY total — all_transactions (all 3 schema tiers), verification, period_stats spending, cashflow',
-  er.split("neq('review_status', 'duplicate')").length >= 5 &&
+  // RC: all_transactions keeps rows with NO status too (or(review_status null | neq duplicate)) — realigned
+  // (the 3 schema tiers now share ONE paged reader, pageTx, called three times)
+  (er.split("neq('review_status', 'duplicate')").length + er.split("review_status.neq.duplicate").length - 2) >= 3 &&
+  er.split('await pageTx(').length === 4 &&
   /\.neq\('review_status', 'duplicate'\) \/\/ v55\.83-QM — duplicates never count in spending\/income/.test(bills) &&
   /\.neq\('review_status', 'duplicate'\) \/\/ v55\.83-QM — duplicates never count\n/.test(bills));
 ok('5: search looks at ANY data on the line — description, full text, date, account, amount, category label, status words (matched/transfer/advance/rtm/verified)',
-  /var hayQ = \(String\(t\.who\) \+ ' ' \+ String\(t\.who_full \|\| ''\) \+ ' ' \+ String\(t\.date \|\| ''\) \+ ' ' \+ String\(t\.account \|\| ''\)/.test(at) &&
-  /\(t\.third_party \? 'rtm ' : ''\)/.test(at));
+  // RC widened the haystack (US dates, comma amounts, every word) — realigned
+  /var hayQ = \(String\(t\.who\) \+ ' ' \+ String\(t\.who_full \|\| ''\) \+ ' ' \+ String\(t\.date \|\| ''\) \+ ' ' \+ usD \+ ' ' \+ String\(t\.account \|\| ''\)/.test(at) &&
+  /\(t\.third_party \? 'rtm paid through '/.test(at));
 
 var ai = R('src/components/AccountingInvoicesTab.jsx');
 ok('6: deleting an invoice RELEASES its bank matches on BOTH delete paths — payments voided (never hard-deleted), deposits reopen unmatched, said in the confirm and the toast',

@@ -164,9 +164,10 @@ ok('10c: names shown TOGETHER (joined with +) in the list and header, ⛓ merged
 var erT = R('src/app/api/accounting/expense-rules/route.js');
 var attT = R('src/components/AllTransactionsTab.jsx');
 var atW = R('src/components/AccountingTab.jsx');
-ok('11a: all_transactions = every account in the window with account names, flags (matched/transfer/verified/pending), 5000-row cap REPORTED',
+// RC (Max Nov 8 13:59 — the old .limit(5000) silently returned 1,000) now pages to 30,000 and reports that cap — realigned
+ok('11a: all_transactions = every account in the window with account names, flags (matched/transfer/verified/pending), row cap REPORTED',
   /action === 'all_transactions'/.test(erT) && /acMap\[t7\.account_id\] \|\| '\(account\)'/.test(erT) &&
-  /capped: \(txA\.data \|\| \[\]\)\.length >= 5000/.test(erT));
+  /capped: txA\.capped === true/.test(erT));
 ok('11b: bulk_classify — explicit ids only (max 500), whitelisted category, NEVER touches review/verified/matches, learns per distinct merchant (cap 50)',
   /action === 'bulk_classify'/.test(erT) && /Max 500 transactions per bulk update/.test(erT) &&
   !/review_status/.test(erT.substring(erT.indexOf("action === 'bulk_classify'"), erT.indexOf("action === 'all_transactions'"))) &&

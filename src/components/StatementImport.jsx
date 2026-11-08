@@ -65,11 +65,16 @@ export function parseMoney(x) {
   return neg ? -Math.abs(n) : n;
 }
 
-function guessCol(headers, cands) {
-  for (var i = 0; i < headers.length; i++) {
-    var h = String(headers[i] || '').toLowerCase();
-    for (var j = 0; j < cands.length; j++) { if (h.indexOf(cands[j]) >= 0) { return i; } }
-  }
+// v55.83-RC (Max, Nov 8 13:59: "when you do an import for a bank you need to
+// include the transaction description") — the CANDIDATE order decides, not the
+// column order: a Chase file starts with "Details" (DEBIT/CREDIT) before
+// "Description", and the old loop took "Details". An exact header name wins
+// first, then the first header containing the best candidate.
+function guessCol(headers, cands, avoid) {
+  var hs = headers.map(function (h0) { return String(h0 || '').toLowerCase().trim(); });
+  var skip = function (i0) { return (avoid || []).indexOf(i0) >= 0; };
+  for (var j = 0; j < cands.length; j++) { for (var i = 0; i < hs.length; i++) { if (!skip(i) && hs[i] === cands[j]) { return i; } } }
+  for (var j2 = 0; j2 < cands.length; j2++) { for (var i2 = 0; i2 < hs.length; i2++) { if (!skip(i2) && hs[i2].indexOf(cands[j2]) >= 0) { return i2; } } }
   return -1;
 }
 
@@ -126,15 +131,17 @@ export default function StatementImport(props) {
       var rows = parseCsv(String(rd.result || ''));
       if (rows.length < 2) { setErr('That file has no data rows.'); return; }
       var headers = rows[0];
-      var dateCol = guessCol(headers, ['date']);
-      var descCol = guessCol(headers, ['description', 'memo', 'payee', 'detail', 'name', 'transaction']);
+      // date: the FIRST date column, exactly as before — a re-import must land on the same dates or it would not recognise its own lines
+      var dateCol = -1; headers.forEach(function (h1, i1) { if (dateCol < 0 && String(h1 || '').toLowerCase().indexOf('date') >= 0) { dateCol = i1; } });
+      var descCol = guessCol(headers, ['description', 'transaction description', 'payee', 'merchant', 'narrative', 'name', 'memo', 'transaction details', 'details', 'detail', 'transaction']);
+      var memoCol = guessCol(headers, ['memo', 'notes', 'note', 'additional info', 'reference'], [descCol]);
       var amountCol = guessCol(headers, ['amount']);
       var debitCol = guessCol(headers, ['debit', 'withdrawal', 'money out']);
       var creditCol = guessCol(headers, ['credit', 'deposit', 'money in']);
       var checkCol = guessCol(headers, ['check', 'cheque']);
       var mode = (debitCol >= 0 && creditCol >= 0 && amountCol < 0) ? 'debitcredit' : 'single';
       setParsed({ headers: headers, rows: rows.slice(1) });
-      setMap({ dateCol: dateCol, descCol: descCol, mode: mode, amountCol: amountCol, debitCol: debitCol, creditCol: creditCol, checkCol: checkCol, negIsOut: true });
+      setMap({ dateCol: dateCol, descCol: descCol, memoCol: memoCol, mode: mode, amountCol: amountCol, debitCol: debitCol, creditCol: creditCol, checkCol: checkCol, negIsOut: true });
     };
     rd.readAsText(f);
   }
@@ -144,6 +151,9 @@ export default function StatementImport(props) {
     var dt = parseUsDate(r0[map.dateCol]);
     if (!dt) { return null; }
     var nm = String(r0[map.descCol] || '').trim();
+    // v55.83-RC — a separate memo column rides along ("PSEG · Bill pay 1234")
+    var memo = map.memoCol >= 0 && map.memoCol !== map.descCol ? String(r0[map.memoCol] || '').trim() : '';
+    if (memo && nm.toLowerCase().indexOf(memo.toLowerCase()) < 0) { nm = nm ? nm + ' · ' + memo : memo; }
     var dir = null; var amt = null;
     if (map.mode === 'debitcredit') {
       var dn = parseMoney(r0[map.debitCol]); var cn = parseMoney(r0[map.creditCol]);
@@ -157,7 +167,12 @@ export default function StatementImport(props) {
       amt = Math.abs(n);
     }
     if (!dir || !(amt > 0)) { return null; }
-    return { date: dt, name: nm || '(no description)', direction: dir, amount_abs: Math.round(amt * 100) / 100,
+    // alts = the line's OTHER text cells: on a re-import the server repairs a
+    // line an earlier import stored with one of these (e.g. "DEBIT") instead of
+    // its description — same line only, never a different payee.
+    var alts = [];
+    r0.forEach(function (c0, ci) { if (ci !== map.descCol && ci !== map.dateCol && ci !== map.amountCol && ci !== map.debitCol && ci !== map.creditCol) { var v0 = String(c0 || '').trim(); if (v0 && v0.length <= 120) { alts.push(v0); } } });
+    return { date: dt, name: nm || '(no description)', direction: dir, amount_abs: Math.round(amt * 100) / 100, alts: alts,
       check_number: map.checkCol >= 0 ? String(r0[map.checkCol] || '').trim() : '' };
   }
   function normalizedAll() {
@@ -172,14 +187,14 @@ export default function StatementImport(props) {
     setBusy(true); setErr(''); setResult(null);
     var chunks = [];
     for (var i = 0; i < all.rows.length; i += 1000) { chunks.push(all.rows.slice(i, i + 1000)); }
-    var agg = { imported: 0, skipped_existing: 0, skipped_bad: all.bad, from: null, to: null };
+    var agg = { imported: 0, skipped_existing: 0, descriptions_updated: 0, skipped_bad: all.bad, from: null, to: null };
     var chain = Promise.resolve(true);
     chunks.forEach(function (ch) {
       chain = chain.then(function (okSoFar) {
         if (!okSoFar) { return false; }
         return api({ action: 'import_rows', target_plaid_account_id: target, rows: ch }).then(function (j) {
           if (!j || !j.ok) { setErr((j && j.error) || 'Import failed part-way — what already imported stays (re-running is safe: nothing duplicates).'); return false; }
-          agg.imported += j.imported || 0; agg.skipped_existing += j.skipped_existing || 0; agg.skipped_bad += j.skipped_bad || 0;
+          agg.imported += j.imported || 0; agg.skipped_existing += j.skipped_existing || 0; agg.descriptions_updated += j.descriptions_updated || 0; if (j.us_books === false) { agg.not_us = true; } agg.skipped_bad += j.skipped_bad || 0;
           if (j.window) { if (!agg.from || j.window.from < agg.from) { agg.from = j.window.from; } if (!agg.to || j.window.to > agg.to) { agg.to = j.window.to; } }
           return true;
         });
@@ -234,6 +249,7 @@ export default function StatementImport(props) {
     {parsed && map && <div className="flex gap-3 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
       {colSel('Date', 'dateCol')}
       {colSel('Description', 'descCol')}
+      {colSel('+ Memo (optional)', 'memoCol')}
       <label className="text-[10px] font-bold" style={{ color: '#334155' }}>Amounts
         <select value={map.mode} onChange={function (e) { setMap(Object.assign({}, map, { mode: e.target.value })); }} className="ml-1 px-1 py-0.5 rounded border border-slate-300 text-[10px] nt-light" style={selStyle}>
           <option value="single">one amount column</option>
@@ -264,7 +280,9 @@ export default function StatementImport(props) {
     </div>}
     {err && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#fef2f2', color: '#7f1d1d' }}>{err}</div>}
     {result && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#ecfdf5', color: '#064e3b' }}>
-      ✅ Imported {result.imported} transaction(s) ({result.from} → {result.to}) · {result.skipped_existing} already stored (skipped) · {result.skipped_bad} unreadable line(s). They now behave like any bank transaction — categorize in 📑 All Transactions (rules + bulk make it fast), match deposits to invoices, pair transfers. The 15-minute sync also runs your rules on them automatically.</div>}
+      ✅ Imported {result.imported} transaction(s) ({result.from} → {result.to}) · {result.skipped_existing} already stored (no duplicate made){result.descriptions_updated ? ' · ' + result.descriptions_updated + ' stored line(s) got their real description' : ''} · {result.skipped_bad} unreadable line(s). They now behave like any bank transaction — categorize in 📑 All Transactions (rules + bulk make it fast), match deposits to invoices, pair transfers. The 15-minute sync also runs your rules on them automatically.
+        {result.window_hint !== false && result.from && result.from < '2026-01-01' ? ' Lines before Jan 1, 2026: in 📑 All Transactions press "All dates" to see them.' : ''}
+        {result.not_us ? ' ⚠ This account is assigned to a NON-US silo, so ClickBooks (USA) screens do not list it — move it to the USA silo in the Bank tab if it is a US account.' : ''}</div>}
     {parsed && <button onClick={doImport} disabled={busy || !target || all.rows.length === 0}
       className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff', opacity: (busy || !target || all.rows.length === 0) ? 0.5 : 1 }}>
       {busy ? 'Importing…' : 'Import ' + all.rows.length + ' row(s) ✓'}</button>}

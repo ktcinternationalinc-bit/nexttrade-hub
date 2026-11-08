@@ -49,7 +49,8 @@ ok('2b: imported rows are SHAPED like Plaid rows — same columns, Plaid sign co
   /bank_source: '\[CSV\] '/.test(rt) && /channel: 'statement_import'/.test(rt) &&
   /posted_date: g\.date/.test(rt) && /pending: false/.test(rt));
 ok('2c (QD superseded the single-tier check): DEFICIT DEDUPE still holds — re-imports and Plaid overlap add NOTHING, legit same-day duplicates survive (now two tiers: exact vs earlier imports, nameless vs Plaid)',
-  /\(usedManual\[k\] \|\| 0\) < \(manualCount\[k\] \|\| 0\)/.test(rt) &&
+  // RC: exact tier now consumes specific earlier rows (so the description-repair tier can use the rest) — realigned
+  /var hit = \(manualByKey\[k\] \|\| \[\]\)\.filter\(function \(t1\) \{ return !usedRow\[t1\.id\]; \}\)\[0\];/.test(rt) &&
   /\(usedPlaid\[nk\] \|\| 0\) < \(plaidCount\[nk\] \|\| 0\)/.test(rt) &&
   /skippedExisting\+\+; return;/.test(rt));
 ok('2d: deterministic ids — manual-sha1(account|key|occurrence) + upsert onConflict plaid_transaction_id (idempotent twice over)',

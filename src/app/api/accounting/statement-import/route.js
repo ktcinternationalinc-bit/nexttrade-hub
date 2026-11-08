@@ -29,6 +29,9 @@ function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
+// v55.83-RC — words a statement uses for the line TYPE, not the payee: an
+// earlier import that stored one of these lost the real description.
+var GENERIC_DESC = /^(|no description|debit|credit|dslip|check|cheque|deposit|withdrawal|transfer|fee|misc|pos|atm|ach|ach debit|ach credit|debit card|credit card|debit card purchase|card|payment|wire|wire in|wire out|incoming wire|outgoing wire|loan pmt|interest|dividend|[0-9 ]+)$/;
 function normDesc(x) { return String(x || '').toLowerCase().replace(/\s+/g, ' ').trim().substring(0, 120); }
 function isDate(x) { return /^\d{4}-\d{2}-\d{2}$/.test(String(x || '')); }
 
@@ -122,7 +125,8 @@ export async function POST(req) {
         else if (!(amt > 0) || amt > 100000000) { why = 'row ' + (i0 + 1) + ': amount must be a positive number'; }
         else if (!nm) { why = 'row ' + (i0 + 1) + ': empty description'; }
         if (why) { bad++; if (badWhy.length < 5) { badWhy.push(why); } return; }
-        good.push({ date: dt, direction: dir, amount_abs: amt, name: nm, check_number: String(r0.check_number || '').trim() || null });
+        var altsIn = Array.isArray(r0.alts) ? r0.alts.slice(0, 20).map(function (a0) { return normDesc(String(a0 || '').substring(0, 120)); }).filter(Boolean) : [];
+        good.push({ date: dt, direction: dir, amount_abs: amt, name: nm, alts: altsIn, check_number: String(r0.check_number || '').trim() || null });
       });
       if (!good.length) { return NextResponse.json({ ok: false, error: 'Every row failed validation. ' + badWhy.join(' · ') }, { status: 400 }); }
 
@@ -144,21 +148,70 @@ export async function POST(req) {
       // v55.83-QS — look across TWIN accounts (manual PNC •1234 ⇄ Plaid PNC
       // •1234): whichever door a transaction came through, it counts once.
       var twinsI = await accountTwins(d, [target]);
-      var ex = await d.from('bank_transactions')
-        .select('id, date, posted_date, amount_abs, direction, name, plaid_transaction_id')
-        .in('account_id', twinsI[target] || [target]).neq('review_status', 'duplicate').gte('date', minD).lte('date', maxD).limit(20000);
-      if (ex.error) { return NextResponse.json({ ok: false, error: ex.error.message }, { status: 400 }); }
+      // v55.83-RC — PAGED (a single request stops at 1,000 rows, so a big
+      // re-import used to miss earlier lines and create duplicates), and rows
+      // with no review status are no longer dropped from the comparison.
+      var exRows = [];
+      for (var pgE = 0; pgE < 40; pgE++) {
+        var exP = await d.from('bank_transactions')
+          .select('id, date, posted_date, amount_abs, direction, name, plaid_transaction_id, review_status')
+          .in('account_id', twinsI[target] || [target]).gte('date', minD).lte('date', maxD)
+          .order('id', { ascending: true }).range(pgE * 1000, pgE * 1000 + 999);
+        if (exP.error) { return NextResponse.json({ ok: false, error: exP.error.message }, { status: 400 }); }
+        exRows = exRows.concat(exP.data || []);
+        if (!exP.data || exP.data.length < 1000) { break; }
+      }
+      exRows = exRows.filter(function (t0) { return t0.review_status !== 'duplicate'; });
       var manualCount = {}; var plaidCount = {};
-      (ex.data || []).forEach(function (t0) {
+      var manualByBase = {}; // v55.83-RC — earlier imports by date|amount|direction (for description repair)
+      exRows.forEach(function (t0) {
         var base0 = (t0.posted_date || t0.date) + '|' + r2(t0.amount_abs).toFixed(2) + '|' + t0.direction;
-        if (/^manual-/.test(String(t0.plaid_transaction_id || ''))) { var k0 = base0 + '|' + normDesc(t0.name); manualCount[k0] = (manualCount[k0] || 0) + 1; }
+        if (/^manual-/.test(String(t0.plaid_transaction_id || ''))) {
+          var k0 = base0 + '|' + normDesc(t0.name); manualCount[k0] = (manualCount[k0] || 0) + 1;
+          (manualByBase[base0] = manualByBase[base0] || []).push(t0);
+        }
         else { plaidCount[base0] = (plaidCount[base0] || 0) + 1; }
       });
-      var usedManual = {}; var usedPlaid = {}; var insCount = {}; var toInsert = []; var skippedExisting = 0;
-      good.forEach(function (g) {
+      // v55.83-RC (Max, Nov 8 13:59: "when you do an import for a bank you need
+      // to include the transaction description. if i import the same file
+      // again, you need to update it to include the description without
+      // creating duplicates"). Pass 1 — the SAME line already imported with the
+      // same words: kept as is. Pass 2 — the same line (date + amount +
+      // direction) imported earlier WITHOUT its real description: its
+      // description is repaired in place (one stored line per file line, its
+      // category, matches and review untouched). Pass 3 — Plaid already
+      // pulled it: kept. Only what is left is new.
+      var usedPlaid = {}; var insCount = {}; var toInsert = []; var skippedExisting = 0;
+      var manualByKey = {}; var usedRow = {};
+      Object.keys(manualByBase).forEach(function (b0) { manualByBase[b0].forEach(function (t1) { var k1 = b0 + '|' + normDesc(t1.name); (manualByKey[k1] = manualByKey[k1] || []).push(t1); }); });
+      var leftover = [];
+      good.forEach(function (g) { // pass 1 — same line, same words
+        var k = g.date + '|' + g.amount_abs.toFixed(2) + '|' + g.direction + '|' + normDesc(g.name);
+        var hit = (manualByKey[k] || []).filter(function (t1) { return !usedRow[t1.id]; })[0];
+        if (hit) { usedRow[hit.id] = true; skippedExisting++; return; }
+        leftover.push(g);
+      });
+      var toRename = []; var leftover2 = [];
+      leftover.forEach(function (g) { // pass 2 — same line imported earlier with other (or no) words → repair the description
+        var nk = g.date + '|' + g.amount_abs.toFixed(2) + '|' + g.direction;
+        // the SAME file line only: the earlier import stored another column of
+        // this very line (e.g. "DEBIT" from a Details/Type column) or a blank /
+        // generic word — never a different real merchant on the same day+amount.
+        var t2 = (manualByBase[nk] || []).filter(function (t1) {
+          if (usedRow[t1.id]) { return false; }
+          var nd = normDesc(t1.name);
+          return GENERIC_DESC.test(nd.replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()) || (g.alts || []).indexOf(nd) >= 0;
+        })[0];
+        if (t2) {
+          usedRow[t2.id] = true; skippedExisting++;
+          if (g.name && g.name !== '(no description)' && normDesc(g.name) !== normDesc(t2.name)) { toRename.push({ id: t2.id, name: g.name }); }
+          return;
+        }
+        leftover2.push(g);
+      });
+      leftover2.forEach(function (g) {
         var nk = g.date + '|' + g.amount_abs.toFixed(2) + '|' + g.direction;
         var k = nk + '|' + normDesc(g.name);
-        if ((usedManual[k] || 0) < (manualCount[k] || 0)) { usedManual[k] = (usedManual[k] || 0) + 1; skippedExisting++; return; } // an earlier import already has it
         if ((usedPlaid[nk] || 0) < (plaidCount[nk] || 0)) { usedPlaid[nk] = (usedPlaid[nk] || 0) + 1; skippedExisting++; return; } // Plaid already pulled it (wording differs, money matches)
         insCount[k] = (insCount[k] || 0) + 1;
         var occ = (manualCount[k] || 0) + insCount[k]; // deterministic + collision-free vs existing manual ids
@@ -189,6 +242,12 @@ export async function POST(req) {
           updated_at: new Date().toISOString(),
         });
       });
+      var renamed = 0;
+      for (var rn = 0; rn < toRename.length; rn++) {
+        var rU = await d.from('bank_transactions').update({ name: toRename[rn].name, updated_at: new Date().toISOString() })
+          .eq('id', toRename[rn].id).like('plaid_transaction_id', 'manual-%').select('id'); // only lines an IMPORT created
+        if (!rU.error && rU.data && rU.data.length) { renamed++; }
+      }
       var inserted = 0;
       if (toInsert.length) {
         // Idempotent on plaid_transaction_id, same as the Plaid sync; a
@@ -198,9 +257,10 @@ export async function POST(req) {
         if (up.error) { return NextResponse.json({ ok: false, error: up.error.message }, { status: 500 }); }
         inserted = toInsert.length;
       }
-      await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
-      return NextResponse.json({ ok: true, imported: inserted, skipped_existing: skippedExisting, skipped_bad: bad,
+      await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
+      return NextResponse.json({ ok: true, imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad,
         bad_examples: badWhy, window: { from: minD, to: maxD },
+        us_books: silo === US_WAVE_BUSINESS_ID, // v55.83-RC — ClickBooks (USA) screens list US-silo accounts only
         account: { name: acc.data.name, mask: acc.data.mask } });
     }
 

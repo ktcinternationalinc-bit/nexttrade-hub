@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RC',
+    date: '2026-11-08',
+    label: "\ud83d\udd0e Search + rules that apply + imports with descriptions",
+    items: [
+      "All Transactions shows EVERY line again \u2014 it was quietly stopping at the newest 1,000, which is why search missed things and the money-market import did not show. Lines outside the dates on screen are listed per account, and \u201cAll dates\u201d shows everything.",
+      "Search finds a line by any words in any order, by amount (1,250 \u00b7 $1250.00 \u00b7 1250) or date (03/04/2026).",
+      "Category rules work the moment you save them, on money in and out, every date \u2014 and keep working automatically. \u25b6 Apply always answers, and \u201cApply to ALL matches\u201d can replace earlier picks when you want (verified lines are never changed). Spacing and punctuation no longer stop a rule from matching.",
+      "Bank statement import uses the real Description column (plus a Memo column if there is one). Importing the same file again fills in the missing descriptions on lines already stored \u2014 no duplicates.",
+      { superAdminOnly: true, text: "v55.83-RC \u2014 no SQL. all_transactions: pageTx 30\u00d71000 with .or(review_status null|neq duplicate), payments/bill payments/unapplied via pageAny, outside_dates per account (single or() per request), capped flag at 30k; client: load(f,t) + All dates, multi-word/amount/US-date search, 1,000 on screen note. Rules: normMatchText in ruleMatches; expense-rules-server pageBankRows (in+out, not pending, not duplicate), previewRule/applyRuleToAll/batchSet (200/call, never category_verified), applyExpenseRules = all blanks paged; save_rule applies immediately; apply_rule_now overwrite_people flag; route maxDuration 60. Import: guessCol candidate-priority (Chase Details vs Description), memo column, alts cells, paged dedupe (40\u00d71000), pass1 exact / pass2 same line with GENERIC_DESC or one of its own cells \u2192 rename in place (manual-% only) / pass3 Plaid / insert; us_books flag. Tests: rc (17); runner green." },
+    ],
+  },
+  {
     version: 'v55.83-RB',
     date: '2026-11-08',
     label: "\ud83d\udcd2 Books complete: split money \u00b7 every bank account \u00b7 NextTrade advances",

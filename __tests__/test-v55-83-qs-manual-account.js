@@ -53,7 +53,9 @@ mod.exports.accountTwins(fakeDb(), ['plaid-pnc']).then(function (res) {
     /'manual_account_created'/.test(si));
   ok('3: CSV import dedupes across TWINS (and ignores rows already marked duplicate) — re-uploads and Plaid copies both skipped',
     /var twinsI = await accountTwins\(d, \[target\]\);/.test(si) &&
-    /\.in\('account_id', twinsI\[target\] \|\| \[target\]\)\.neq\('review_status', 'duplicate'\)/.test(si));
+    // RC: the comparison read is PAGED and duplicates are filtered after reading (rows with no status kept) — realigned
+    /\.in\('account_id', twinsI\[target\] \|\| \[target\]\)\.gte\('date', minD\)/.test(si) &&
+    /exRows = exRows\.filter\(function \(t0\) \{ return t0\.review_status !== 'duplicate'; \}\);/.test(si));
   ok('4: Plaid sync skips what a CSV brought in on a TWIN manual account, keyed as the Plaid account',
     /var twinsMD = await accountTwins\(supabase, Object\.keys\(mdAccts\)\);/.test(tr) &&
     /\(asPlaid\[m0\.account_id\] \|\| m0\.account_id\)/.test(tr));

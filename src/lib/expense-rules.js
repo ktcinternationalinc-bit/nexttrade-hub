@@ -24,9 +24,18 @@ export function merchantKey(name) {
 }
 
 // A rule matches when the transaction's text CONTAINS the rule's match_text.
+// v55.83-RC (Max, Nov 8 13:59: "the category testing and applying is not
+// working") — both sides are normalized first: case, punctuation and spacing
+// never decide a match ("Public Service" catches "PUBLIC  SERVICE",
+// "PUBLIC-SERVICE ELEC", "Public Service*Pymt"), and "&" stays a letter.
+export function normMatchText(x) {
+  return String(x || '').toLowerCase().replace(/[^a-z0-9&]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
 export function ruleMatches(rule, txnText) {
   if (!rule || !rule.match_text || !txnText) { return false; }
-  return String(txnText).toLowerCase().indexOf(String(rule.match_text).toLowerCase()) >= 0;
+  var want = normMatchText(rule.match_text);
+  if (want.length < 3) { return false; }
+  return (' ' + normMatchText(txnText) + ' ').indexOf(want) >= 0;
 }
 
 // Best rule = the most specific (longest match_text) ACTIVE rule that matches.

@@ -75,14 +75,17 @@ ok('3c: bank-write classify LEARNS on every human expense categorization, fail-s
   /learnRule\(db, \(cRes\.data\[0\]\.merchant_name \|\| ''\) \+ ' ' \+ \(cRes\.data\[0\]\.name \|\| ''\), cPatch\.classification, by\)/.test(bw));
 
 // ── 4. Applying: rules only ever FILL BLANKS ──
-ok('4a: applyExpenseRules targets unreviewed + classification IS NULL + settled + out + US only',
-  /eq\('review_status', 'unreviewed'\)\.is\('classification', null\)/.test(srv) &&
-  /eq\('direction', 'out'\)/.test(srv) && /neq\('pending', true\)/.test(srv));
-ok('4b: the update RE-CHECKS unreviewed+unclassified (never races a human) and marks category_source rule',
-  /\.eq\('id', t\.id\)\.eq\('review_status', 'unreviewed'\)\.is\('classification', null\)/.test(srv) &&
+// RC (Max, Nov 8 13:59: "it should automatically apply regardless") superseded 4a/4b/4c's
+// exact shape: rules now fill EVERY blank (any review status, money in AND out, paged),
+// writes are batched with the same never-race re-check. The intent stands — realigned:
+ok('4a (PI→RC): applyExpenseRules targets classification IS NULL + settled + not duplicate + US — every page, in and out',
+  /q\.is\('classification', null\)/.test(srv) && /\.eq\('wave_business_id', US_WAVE_BUSINESS_ID\)/.test(srv) &&
+  /\.not\('pending', 'is', true\)/.test(srv) && /review_status\.neq\.duplicate/.test(srv));
+ok('4b (PI→RC): the update RE-CHECKS the line is still blank (never races a human) and marks category_source rule',
+  /if \(mode === 'blank'\) \{ q = q\.is\('classification', null\); \}/.test(srv) &&
   /category_source: 'rule'/.test(srv));
-ok('4c: applying a rule NEVER reviews or verifies for the human',
-  !/review_status: 'reviewed'/.test(srv) && !/category_verified/.test(srv));
+ok('4c: applying a rule NEVER reviews or verifies for the human (and never touches a verified line)',
+  !/review_status: 'reviewed'/.test(srv) && !/category_verified: true/.test(srv) && /\.not\('category_verified', 'is', true\)/.test(srv));
 var job = R('src/app/api/accounting/clickbooks-us/shadow-job/route.js');
 ok('4d: the 15-minute tick runs hub rules too, failing soft until the PI SQL is run',
   /applyExpenseRules\(db, 500\)/.test(job) && /hub_rules: hubRules/.test(job) && /hubRules = \{ error:/.test(job));

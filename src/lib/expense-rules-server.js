@@ -10,7 +10,7 @@
 //   from the most specific ACTIVE auto-apply rule. It only ever fills blanks:
 //   it never overwrites a human's pick, never reviews, never verifies.
 //   Fails soft everywhere (tables may not exist until the PI SQL runs).
-import { merchantKey, bestRule } from './expense-rules';
+import { merchantKey, bestRule, ruleMatches } from './expense-rules';
 import { US_WAVE_BUSINESS_ID } from './business-of';
 
 export async function learnRule(db, txnText, classification, by) {
@@ -79,39 +79,103 @@ export async function waveAccountForCategory(db, clsKey) {
   } catch (e) { return null; }
 }
 
+// v55.83-RC (Max, Nov 8 13:59: "it should automatically apply regardless..
+// but clicking on apply is not working"). One engine for the 15-minute job,
+// "apply now" and saving a rule:
+//   • money IN and OUT (a rule has no direction), every date, paged past the
+//     1,000-row cap, settled rows only, never a marked duplicate;
+//   • fills every row with NO category (any review status);
+//   • re-targets rows a rule filled earlier when the rule now says otherwise;
+//   • with overwrite_people=true (explicit button) also replaces categories a
+//     PERSON picked — a VERIFIED row is never touched, in any mode;
+//   • batched updates (one call per 200 rows), so a big apply finishes
+//     inside the server time limit instead of silently timing out.
+async function pageBankRows(db, cols, extra) {
+  var out = [];
+  for (var pg = 0; pg < 40; pg++) {
+    var q = db.from('bank_transactions').select(cols)
+      .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+      .not('pending', 'is', true)                                  // settled (NULL counts as settled)
+      .or('review_status.is.null,review_status.neq.duplicate');   // never a marked duplicate copy
+    if (extra) { q = extra(q); }
+    var r = await q.order('id', { ascending: true }).range(pg * 1000, pg * 1000 + 999);
+    if (r.error) { return { error: r.error.message }; }
+    out = out.concat(r.data || []);
+    if (!r.data || r.data.length < 1000) { break; }
+  }
+  return { rows: out };
+}
+export function rowText(t) { return ((t.merchant_name || '') + ' ' + (t.name || '')).trim(); }
+export function ruleBucket(t, ruleCls) {
+  if (t.category_verified === true) { return 'verified'; }
+  if (!t.classification) { return 'blank'; }
+  if (t.category_source === 'rule') { return t.classification === ruleCls ? 'same' : 'rule'; }
+  return t.classification === ruleCls ? 'same' : 'human';
+}
+async function batchSet(db, ids, cls, mode) {
+  var n = 0;
+  for (var i = 0; i < ids.length; i += 200) {
+    var chunk = ids.slice(i, i + 200);
+    var q = db.from('bank_transactions').update({ classification: cls, category_source: 'rule' }).in('id', chunk)
+      .not('category_verified', 'is', true); // a verified row is never touched
+    if (mode === 'blank') { q = q.is('classification', null); }           // re-check: never race a person
+    else if (mode === 'rule') { q = q.eq('category_source', 'rule'); }
+    var r = await q.select('id');
+    if (!r.error && r.data) { n += r.data.length; }
+  }
+  return n;
+}
+export async function previewRule(db, matchText, ruleCls) {
+  var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status');
+  if (got.error) { return { error: got.error }; }
+  var probe = { match_text: matchText };
+  var hits = got.rows.filter(function (t) { return ruleMatches(probe, rowText(t)); });
+  var b = { blank: [], rule: [], human: [], verified: [], same: [] };
+  hits.forEach(function (t) { b[ruleBucket(t, ruleCls)].push(t); });
+  return { scanned: got.rows.length, hits: hits, buckets: b };
+}
+export async function applyRuleToAll(db, rule, opts) {
+  var o = opts || {};
+  var pv = await previewRule(db, rule.match_text, rule.classification);
+  if (pv.error) { return { error: pv.error }; }
+  var ids = function (arr) { return arr.map(function (t) { return t.id; }); };
+  var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank');
+  var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule');
+  var a3 = o.overwrite_people === true ? await batchSet(db, ids(pv.buckets.human), rule.classification, 'any') : 0;
+  var applied = a1 + a2 + a3;
+  if (applied > 0 && rule.id) {
+    await db.from('us_expense_rules').update({ hit_count: (Number(rule.hit_count) || 0) + applied, last_hit_at: new Date().toISOString() }).eq('id', rule.id);
+  }
+  return { applied: applied, filled_blank: a1, retargeted: a2, overwrote_people: a3, matches: pv.hits.length,
+    already_right: pv.buckets.same.length, left_people: o.overwrite_people === true ? 0 : pv.buckets.human.length,
+    verified_untouched: pv.buckets.verified.length, scanned: pv.scanned };
+}
+
 export async function applyExpenseRules(db, limit) {
   try {
     var rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count').eq('active', true).eq('auto_apply', true).limit(1000);
     if (rulesRes.error) { return { error: rulesRes.error.message }; }
     var rules = rulesRes.data || [];
     if (!rules.length) { return { applied: 0, scanned: 0, rules: 0 }; }
-    // Only fill blanks: unreviewed + no classification yet + settled + money out + US.
-    var txRes = await db.from('bank_transactions')
-      .select('id, name, merchant_name, classification, review_status, direction, pending')
-      .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out')
-      .eq('review_status', 'unreviewed').is('classification', null)
-      .neq('pending', true).limit(limit || 500);
-    if (txRes.error) { return { error: txRes.error.message }; }
-    var txns = txRes.data || [];
-    var applied = 0; var hits = {};
-    for (var i = 0; i < txns.length; i++) {
-      var t = txns[i];
-      var r = bestRule(rules, (t.merchant_name || '') + ' ' + (t.name || ''));
-      if (!r) { continue; }
-      var upd = await db.from('bank_transactions')
-        .update({ classification: r.classification, category_source: 'rule' })
-        .eq('id', t.id).eq('review_status', 'unreviewed').is('classification', null) // re-check: never race a human
-        .select('id');
-      if (!upd.error && upd.data && upd.data.length) { applied++; hits[r.id] = (hits[r.id] || 0) + 1; }
-    }
-    var rid;
-    for (rid in hits) {
-      if (Object.prototype.hasOwnProperty.call(hits, rid)) {
+    // every row with NO category (any review status, money in and out) — blanks only on the automatic run
+    var got = await pageBankRows(db, 'id, name, merchant_name, classification, category_verified', function (q) { return q.is('classification', null); });
+    if (got.error) { return { error: got.error }; }
+    var byRule = {};
+    got.rows.forEach(function (t) {
+      if (t.category_verified === true) { return; }
+      var r = bestRule(rules, rowText(t));
+      if (r) { (byRule[r.id] = byRule[r.id] || []).push(t.id); }
+    });
+    var applied = 0; var rid;
+    for (rid in byRule) {
+      if (Object.prototype.hasOwnProperty.call(byRule, rid)) {
         var cur = null;
         for (var k = 0; k < rules.length; k++) { if (rules[k].id === rid) { cur = rules[k]; } }
-        await db.from('us_expense_rules').update({ hit_count: ((cur && cur.hit_count) || 0) + hits[rid], last_hit_at: new Date().toISOString() }).eq('id', rid);
+        var n = await batchSet(db, byRule[rid], cur.classification, 'blank');
+        applied += n;
+        if (n > 0) { await db.from('us_expense_rules').update({ hit_count: (Number(cur.hit_count) || 0) + n, last_hit_at: new Date().toISOString() }).eq('id', rid); }
       }
     }
-    return { applied: applied, scanned: txns.length, rules: rules.length };
+    return { applied: applied, scanned: got.rows.length, rules: rules.length };
   } catch (e) { return { error: (e && e.message) || 'apply failed' }; }
 }

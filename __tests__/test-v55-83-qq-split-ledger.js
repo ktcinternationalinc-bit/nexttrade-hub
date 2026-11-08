@@ -29,7 +29,8 @@ ok('3: ✓ done AUTO-PARKS the remainder as uncategorized (create_unapplied, sam
   /it stays as ◐ partial/.test(at));
 ok('4: parked money COUNTS as placed everywhere — candidates remaining includes open unapplied_deposits, and the row chips do too (no false ◐ partial after a park)',
   /from\('unapplied_deposits'\)\.select\('amount, status'\)\.eq\('bank_transaction_id', txDm\.data\.id\)\.eq\('status', 'open'\)/.test(bills) &&
-  /from\('unapplied_deposits'\)\.select\('bank_transaction_id, amount, status'\)\.eq\('status', 'open'\)/.test(er));
+  // RC paged this read (past 1,000 rows) — same columns + open filter; realigned
+  /from\('unapplied_deposits'\)\.select\('id, bank_transaction_id, amount, status'\)\.eq\('status', 'open'\)/.test(er));
 ok('5: cleaner rows — aligned grid (text | amount | apply), zebra striping, a "Put the REST" header once money is applied',
   /gridTemplateColumns: 'minmax\(0,1fr\) 110px 84px'/.test(at) &&
   /➡ Put the REST \(or ✓ done parks it as UNCATEGORIZED\):/.test(at));

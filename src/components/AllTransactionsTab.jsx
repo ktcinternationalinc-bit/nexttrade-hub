@@ -49,9 +49,10 @@ export default function AllTransactionsTab(props) {
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); });
   }
-  function load() {
+  function load(fOv, tOv) {
+    var fUse = typeof fOv === 'string' ? fOv : from; var tUse = typeof tOv === 'string' ? tOv : to; // v55.83-RC — "All dates" passes its own window
     setBusy(true);
-    Promise.all([api('all_transactions', { from: from, to: to }), api('list')]).then(function (rs) {
+    Promise.all([api('all_transactions', { from: fUse, to: tUse }), api('list')]).then(function (rs) {
       var j = rs[0];
       if (j && j.ok) { setData(j); setSel({}); } else { toast.error((j && j.error) || 'Could not load.'); }
       if (rs[1] && rs[1].ok) { setCats((rs[1].categories || []).filter(function (c) { return c.active !== false; })); }
@@ -81,11 +82,24 @@ export default function AllTransactionsTab(props) {
     if (q.trim()) {
       // v55.83-QM (Max 15:03): "the search should be able to look at description
       // or ANY other data on the line... including the customer or date etc"
-      var hayQ = (String(t.who) + ' ' + String(t.who_full || '') + ' ' + String(t.date || '') + ' ' + String(t.account || '') + ' ' +
-        String(t.amount) + ' ' + Number(t.amount).toFixed(2) + ' ' + String(labelOf[t.classification] || t.classification || '') + ' ' +
-        (t.matched ? 'matched ' : '') + (t.transfer ? 'transfer ' : '') + (t.advance ? 'advance ' : '') + (t.third_party ? 'rtm ' : '') +
-        (t.verified ? 'verified ' : '') + String(t.review_status || '')).toLowerCase();
-      if (hayQ.indexOf(q.trim().toLowerCase()) < 0) { return false; }
+      // v55.83-RC (Max, Nov 8 13:59: "the search in all transactions is not
+      // working"): EVERY word must appear, in any order, spacing/punctuation
+      // ignored; amounts match with or without "$" and thousands commas
+      // ("1,250", "$1250.00", "1250"); dates as 2026-03-04, 03/04/2026 or 3/4.
+      var amt2 = Number(t.amount).toFixed(2);
+      var dParts = String(t.date || '').split('-');
+      var usD = dParts.length === 3 ? (dParts[1] + '/' + dParts[2] + '/' + dParts[0] + ' ' + Number(dParts[1]) + '/' + Number(dParts[2])) : '';
+      var hayQ = (String(t.who) + ' ' + String(t.who_full || '') + ' ' + String(t.date || '') + ' ' + usD + ' ' + String(t.account || '') + ' ' +
+        amt2 + ' ' + amt2.replace(/\.00$/, '') + ' ' + Number(t.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' ' + String(labelOf[t.classification] || t.classification || '') + ' ' +
+        (t.direction === 'in' ? 'deposit money in ' : 'payment money out ') +
+        (t.matched ? 'matched ' : '') + (t.transfer ? 'transfer ' : '') + (t.advance ? 'advance ' : '') + (t.third_party ? 'rtm paid through ' + String(t.third_party) + ' ' : '') +
+        (t.verified ? 'verified ' : '') + String(t.review_status || '')).toLowerCase().replace(/\s+/g, ' ');
+      var words = q.trim().toLowerCase().replace(/[$]/g, '').split(/\s+/).filter(Boolean);
+      for (var wi = 0; wi < words.length; wi++) {
+        var w0 = /^[0-9,.]+$/.test(words[wi]) ? words[wi].replace(/,/g, '') : words[wi];
+        var hayN = /^[0-9.]+$/.test(w0) ? hayQ.replace(/,/g, '') : hayQ;
+        if (hayN.indexOf(w0) < 0) { return false; }
+      }
     }
     return true;
   });
@@ -409,6 +423,7 @@ export default function AllTransactionsTab(props) {
         <span className="text-[10px]" style={{ color: '#64748b' }}>→</span>
         <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }} />
         <button onClick={load} disabled={busy} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Load</button>
+        <button onClick={function () { setFrom('2000-01-01'); setTo(new Date().toISOString().substring(0, 10)); load('2000-01-01', new Date().toISOString().substring(0, 10)); }} disabled={busy} title="Every line ever imported or pulled — older statement imports included" className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: busy ? 0.5 : 1 }}>All dates</button>
         <button onClick={scanDuplicates} title="Find identical copies left by a bank reconnect (same account, date, amount, direction, text) — keep the one carrying work, hide the extras from every list and total. Nothing is deleted." className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>🧹 Find duplicates</button>
         <button onClick={csv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>
       </div>
@@ -428,8 +443,13 @@ export default function AllTransactionsTab(props) {
         })}
         <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="search description…"
           className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 170 }} />
-        <span className="text-[10px] font-bold" style={{ color: '#64748b' }}>{rows.length} of {txns.length} shown{data && data.capped ? ' · ⚠ 5000-row cap — narrow the dates' : ''}</span>
+        <span className="text-[10px] font-bold" style={{ color: '#64748b' }}>{rows.length} of {txns.length} shown{rows.length > 1000 ? ' (first 1,000 on screen — search or filter to narrow)' : ''}{data && data.capped ? ' · ⚠ 30,000-line cap — narrow the dates' : ''}</span>
       </div>
+      {/* v55.83-RC — lines that exist but sit outside the dates shown (e.g. a money-market statement import) */}
+      {data && data.outside_dates && data.outside_dates.length > 0 && <div className="rounded-lg p-2 mb-2 text-[10px] font-bold" style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#78350f' }}>
+        Not in these dates: {data.outside_dates.map(function (o) { return o.account + ' — ' + o.lines + ' line(s) ' + o.first + ' → ' + o.last; }).join(' · ')}.
+        {data.date_filters_locked ? ' Your access shows the default dates only.' : ' Press "All dates" (or change From) to see them.'}
+      </div>}
 
       {/* bulk bar */}
       <div className="flex gap-1.5 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: selIds.length ? '#eef2ff' : '#f8fafc', border: '1px solid #e2e8f0' }}>

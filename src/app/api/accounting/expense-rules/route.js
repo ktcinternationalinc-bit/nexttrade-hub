@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
-import { applyExpenseRules, waveAccountForCategory } from '../../../../lib/expense-rules-server';
+import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, rowText, ruleBucket } from '../../../../lib/expense-rules-server'; // v55.83-RC
 import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -29,6 +29,9 @@ function admin() {
 function slugify(label) {
   return String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').substring(0, 60);
 }
+
+// v55.83-RC — a big rule apply / all-transactions load must finish, not time out
+export const maxDuration = 60;
 
 export async function POST(req) {
   try {
@@ -105,12 +108,15 @@ export async function POST(req) {
       if (p.id) {
         var updr = await db.from('us_expense_rules').update(patch).eq('id', p.id).select();
         if (updr.error) { return NextResponse.json({ ok: false, error: updr.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-        return NextResponse.json({ ok: true, rule: updr.data && updr.data[0], api_build_marker: API_BUILD_MARKER });
+        // v55.83-RC (Max 13:59 "it should automatically apply regardless") — applied the moment it is saved
+        var apU = (patch.active && patch.auto_apply && updr.data && updr.data[0]) ? await applyRuleToAll(db, updr.data[0], {}) : null;
+        return NextResponse.json({ ok: true, rule: updr.data && updr.data[0], applied_now: apU, api_build_marker: API_BUILD_MARKER });
       }
       patch.created_by = by;
       var insr = await db.from('us_expense_rules').insert(patch).select();
       if (insr.error) { return NextResponse.json({ ok: false, error: /duplicate|unique/i.test(insr.error.message) ? 'A rule for that exact text already exists — edit it instead.' : insr.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      return NextResponse.json({ ok: true, rule: insr.data && insr.data[0], api_build_marker: API_BUILD_MARKER });
+      var apI = (patch.active && patch.auto_apply && insr.data && insr.data[0]) ? await applyRuleToAll(db, insr.data[0], {}) : null; // v55.83-RC
+      return NextResponse.json({ ok: true, rule: insr.data && insr.data[0], applied_now: apI, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── deactivate_rule: rules are turned off, never erased ──
@@ -130,53 +136,32 @@ export async function POST(req) {
     //    and why each one would or would not be touched; apply_rule_now runs
     //    ONE rule immediately. Same ruleMatches() as the background job. ──
     if (action === 'rule_preview' || action === 'apply_rule_now') {
+      // v55.83-RC (Max, Nov 8 13:59: "the category testing and applying is not
+      // working") — test and apply share ONE engine with the 15-minute job:
+      // normalized text, money in AND out, every row (paged), batched writes.
       var pv = body.payload || {};
       var ruleRow = null;
       if (pv.id) {
-        var rq = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active').eq('id', pv.id).maybeSingle();
+        var rq = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply').eq('id', pv.id).maybeSingle();
         ruleRow = rq && rq.data;
       }
       var mtxt = String((ruleRow && ruleRow.match_text) || pv.match_text || '').trim().toLowerCase();
       if (mtxt.length < 3) { return NextResponse.json({ ok: false, error: 'Type at least 3 characters to test.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var pvRows = [];
-      for (var pgv = 0; pgv < 5; pgv++) {
-        var pq = await db.from('bank_transactions')
-          .select('id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status, matched_invoice_id, transfer_group_id, pending')
-          .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true).neq('review_status', 'duplicate')
-          .order('date', { ascending: false }).order('id', { ascending: true }).range(pgv * 1000, pgv * 1000 + 999);
-        if (pq.error) { return NextResponse.json({ ok: false, error: pq.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-        pvRows = pvRows.concat(pq.data || []);
-        if (!pq.data || pq.data.length < 1000) { break; }
-      }
-      var probe = { match_text: mtxt };
-      var hitsP = pvRows.filter(function (t) { return ruleMatches(probe, (t.merchant_name || '') + ' ' + (t.name || '')); });
-      var fillable = []; var ruleFilled = []; var human = []; var verified = [];
-      hitsP.forEach(function (t) {
-        if (t.category_verified === true) { verified.push(t); }
-        else if (!t.classification && t.review_status === 'unreviewed') { fillable.push(t); }
-        else if (t.classification && t.category_source === 'rule') { ruleFilled.push(t); }
-        else { human.push(t); }
-      });
       if (action === 'rule_preview') {
-        return NextResponse.json({ ok: true, match_text: mtxt, scanned: pvRows.length, matches: hitsP.length,
-          fillable: fillable.length, rule_filled: ruleFilled.length, human_picked: human.length, verified: verified.length,
-          sample: hitsP.slice(0, 12).map(function (t) { return { date: t.posted_date || t.date, text: ((t.merchant_name || '') + ' ' + (t.name || '')).trim().substring(0, 90), amount: t.amount_abs, category: t.classification || null, how: t.category_verified ? 'verified' : (!t.classification ? 'blank' : (t.category_source === 'rule' ? 'rule' : 'human')) }; }),
+        var pr = await previewRule(db, mtxt, (ruleRow && ruleRow.classification) || pv.classification || null);
+        if (pr.error) { return NextResponse.json({ ok: false, error: pr.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+        var bk = pr.buckets;
+        return NextResponse.json({ ok: true, match_text: mtxt, scanned: pr.scanned, matches: pr.hits.length,
+          fillable: bk.blank.length + bk.rule.length, rule_filled: bk.rule.length, human_picked: bk.human.length, verified: bk.verified.length, already_right: bk.same.length,
+          sample: pr.hits.slice(0, 12).map(function (t) { var hw = ruleBucket(t, (ruleRow && ruleRow.classification) || null); return { date: t.posted_date || t.date, text: rowText(t).substring(0, 90), amount: t.amount_abs, direction: t.direction, category: t.classification || null, how: hw === 'blank' ? 'blank' : hw === 'verified' ? 'verified' : (t.category_source === 'rule' ? 'rule' : 'human') }; }),
           api_build_marker: API_BUILD_MARKER });
       }
-      // apply_rule_now — needs a SAVED rule; never touches human picks or verified rows
       if (!ruleRow) { return NextResponse.json({ ok: false, error: 'Save the rule first, then apply it.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var targets = fillable.concat(pv.include_rule_filled === true ? ruleFilled.filter(function (t) { return t.classification !== ruleRow.classification; }) : []);
-      var doneN = 0;
-      for (var ti2 = 0; ti2 < targets.length && ti2 < 1000; ti2++) {
-        var tg = targets[ti2];
-        var uq = db.from('bank_transactions').update({ classification: ruleRow.classification, category_source: 'rule' }).eq('id', tg.id).neq('category_verified', true);
-        uq = tg.classification ? uq.eq('category_source', 'rule') : uq.is('classification', null).eq('review_status', 'unreviewed'); // re-check: never race a human
-        var ur = await uq.select('id');
-        if (!ur.error && ur.data && ur.data.length) { doneN++; }
-      }
-      if (doneN > 0) { await db.from('us_expense_rules').update({ hit_count: (Number(ruleRow.hit_count) || 0) + doneN, last_hit_at: new Date().toISOString() }).eq('id', ruleRow.id); }
-      await audit(db, by, 'rule_applied_now', 'us_expense_rule', ruleRow.id, { match_text: mtxt, classification: ruleRow.classification, applied: doneN, include_rule_filled: pv.include_rule_filled === true });
-      return NextResponse.json({ ok: true, applied: doneN, skipped_human: human.length, skipped_verified: verified.length, api_build_marker: API_BUILD_MARKER });
+      var ap = await applyRuleToAll(db, ruleRow, { overwrite_people: pv.overwrite_people === true });
+      if (ap.error) { return NextResponse.json({ ok: false, error: ap.error, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      await audit(db, by, 'rule_applied_now', 'us_expense_rule', ruleRow.id, { match_text: mtxt, classification: ruleRow.classification, applied: ap.applied, overwrote_people: ap.overwrote_people });
+      return NextResponse.json({ ok: true, applied: ap.applied, matches: ap.matches, already_right: ap.already_right,
+        skipped_human: ap.left_people, skipped_verified: ap.verified_untouched, overwrote_people: ap.overwrote_people, api_build_marker: API_BUILD_MARKER });
     }
 
     if (action === 'apply_rules') {
@@ -378,23 +363,30 @@ export async function POST(req) {
         if (tA > atTod) { tA = atTod; atLocked = true; }
       }
       var selColsA = 'id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, category_source, review_status, category_verified, matched_invoice_id, transfer_group_id, pending';
-      var txA = await db.from('bank_transactions')
-        .select(selColsA + ', third_party_payer, advance_flag') // v55.83-QB/QF — RTM + advance flags ride along
-        .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-        .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
-        .order('date', { ascending: false }).limit(5000);
-      if (txA.error && /advance_flag/.test(txA.error.message || '')) { // QF SQL not run yet
-        txA = await db.from('bank_transactions').select(selColsA + ', third_party_payer')
-          .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-          .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
-          .order('date', { ascending: false }).limit(5000);
-      }
-      if (txA.error && /third_party_payer/.test(txA.error.message || '')) { // QB SQL not run yet
-        txA = await db.from('bank_transactions').select(selColsA)
-          .eq('wave_business_id', US_WAVE_BUSINESS_ID)
-          .neq('review_status', 'duplicate').gte('date', fA).lte('date', tA) /* QM: duplicates never listed */
-          .order('date', { ascending: false }).limit(5000);
-      }
+      // v55.83-RC (Max, Nov 8 13:59: "the search in all transactions is not
+      // working ... the imported files for the money market is not showing up")
+      // — the database hands back at most 1,000 rows per request, so ".limit(5000)"
+      // silently stopped at the newest 1,000: older lines (a money-market
+      // statement import, most of the year) never loaded, so search and the
+      // account list could not find them. Now PAGED (up to 30,000 lines), and
+      // rows with no review status are no longer dropped by the duplicate filter.
+      var pageTx = async function (cols) {
+        var acc0 = [];
+        for (var pgT = 0; pgT < 30; pgT++) {
+          var rT = await db.from('bank_transactions').select(cols)
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+            .or('review_status.is.null,review_status.neq.duplicate') /* QM: duplicates never listed */
+            .gte('date', fA).lte('date', tA)
+            .order('date', { ascending: false }).order('id', { ascending: true }).range(pgT * 1000, pgT * 1000 + 999);
+          if (rT.error) { return { error: rT.error, data: null }; }
+          acc0 = acc0.concat(rT.data || []);
+          if (!rT.data || rT.data.length < 1000) { return { error: null, data: acc0, capped: false }; }
+        }
+        return { error: null, data: acc0, capped: true };
+      };
+      var txA = await pageTx(selColsA + ', third_party_payer, advance_flag'); // v55.83-QB/QF — RTM + advance flags ride along
+      if (txA.error && /advance_flag/.test(txA.error.message || '')) { txA = await pageTx(selColsA + ', third_party_payer'); } // QF SQL not run yet
+      if (txA.error && /third_party_payer/.test(txA.error.message || '')) { txA = await pageTx(selColsA); } // QB SQL not run yet
       if (txA.error) { return NextResponse.json({ ok: false, error: txA.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       // v55.83-QF (Max 12:08: "should be signified as partial matched or
       // split full or split partial or unmatched") — how much of each txn is
@@ -404,20 +396,30 @@ export async function POST(req) {
       // simple matched flag.
       var appliedBy = {}; var legsBy = {};
       try {
-        var payWinA = await db.from('accounting_invoice_payments')
-          .select('bank_transaction_id, amount, voided, sync_status')
+        var pageAny = async function (mk) { // v55.83-RC — past the 1,000-row cap
+          var accP = [];
+          for (var pgP = 0; pgP < 30; pgP++) {
+            var rP = await mk().order('id', { ascending: true }).range(pgP * 1000, pgP * 1000 + 999);
+            if (rP.error) { return { data: accP, error: rP.error }; }
+            accP = accP.concat(rP.data || []);
+            if (!rP.data || rP.data.length < 1000) { break; }
+          }
+          return { data: accP, error: null };
+        };
+        var payWinA = await pageAny(function () { return db.from('accounting_invoice_payments')
+          .select('id, bank_transaction_id, amount, voided, sync_status')
           .not('bank_transaction_id', 'is', null)
-          .gte('payment_date', fA).lte('payment_date', tA).limit(20000);
+          .gte('payment_date', fA).lte('payment_date', tA); });
         ((payWinA && payWinA.data) || []).forEach(function (p7) {
           var st7 = String(p7.sync_status || '').toLowerCase();
           if (p7.voided === true || st7 === 'void' || st7 === 'voided' || st7 === 'cancelled' || st7 === 'reversed' || st7 === 'deleted') { return; }
           appliedBy[p7.bank_transaction_id] = Math.round(((appliedBy[p7.bank_transaction_id] || 0) + (Number(p7.amount) || 0)) * 100) / 100;
           legsBy[p7.bank_transaction_id] = (legsBy[p7.bank_transaction_id] || 0) + 1;
         });
-        var billWinA = await db.from('vendor_bill_payments')
-          .select('bank_transaction_id, amount, voided')
+        var billWinA = await pageAny(function () { return db.from('vendor_bill_payments')
+          .select('id, bank_transaction_id, amount, voided')
           .not('bank_transaction_id', 'is', null)
-          .gte('paid_date', fA).lte('paid_date', tA).limit(20000);
+          .gte('paid_date', fA).lte('paid_date', tA); });
         ((billWinA && billWinA.data) || []).forEach(function (p8) {
           if (p8.voided === true) { return; }
           appliedBy[p8.bank_transaction_id] = Math.round(((appliedBy[p8.bank_transaction_id] || 0) + (Number(p8.amount) || 0)) * 100) / 100;
@@ -425,16 +427,37 @@ export async function POST(req) {
         });
         // v55.83-QQ — money PARKED as uncategorized (unapplied_deposits)
         // counts as placed, so an auto-parked remainder never shows ◐ partial.
-        var unWinA = await db.from('unapplied_deposits').select('bank_transaction_id, amount, status').eq('status', 'open').limit(5000);
+        var unWinA = await pageAny(function () { return db.from('unapplied_deposits').select('id, bank_transaction_id, amount, status').eq('status', 'open'); });
         ((unWinA && unWinA.data) || []).forEach(function (u7) {
           if (!u7.bank_transaction_id) { return; }
           appliedBy[u7.bank_transaction_id] = Math.round(((appliedBy[u7.bank_transaction_id] || 0) + (Number(u7.amount) || 0)) * 100) / 100;
           legsBy[u7.bank_transaction_id] = (legsBy[u7.bank_transaction_id] || 0) + 1;
         });
       } catch (eApW) { appliedBy = {}; legsBy = {}; }
-      var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
+      var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id');
       var acMap = {};
       (accA.data || []).forEach(function (a6) { acMap[a6.plaid_account_id] = (a6.name || 'account') + (a6.mask ? ' •' + a6.mask : ''); });
+      // v55.83-RC — accounts with lines OUTSIDE the dates shown, so an import
+      // dated earlier (e.g. a money-market statement) is never invisible:
+      // the screen says "N older lines — widen the dates".
+      var outsideBy = {};
+      try {
+        for (var pgO = 0; pgO < 30; pgO++) {
+          var rO = await db.from('bank_transactions').select('id, account_id, date, review_status')
+            .eq('wave_business_id', US_WAVE_BUSINESS_ID)
+            .or('date.lt.' + fA + ',date.gt.' + tA) // one or() per request; duplicates skipped below
+            .order('id', { ascending: true }).range(pgO * 1000, pgO * 1000 + 999);
+          if (rO.error) { break; }
+          (rO.data || []).forEach(function (o7) {
+            if (o7.review_status === 'duplicate') { return; }
+            var lab = acMap[o7.account_id] || '(account)';
+            var cur7 = outsideBy[lab] || { account: lab, lines: 0, first: o7.date, last: o7.date };
+            cur7.lines++; if (o7.date < cur7.first) { cur7.first = o7.date; } if (o7.date > cur7.last) { cur7.last = o7.date; }
+            outsideBy[lab] = cur7;
+          });
+          if (!rO.data || rO.data.length < 1000) { break; }
+        }
+      } catch (eO) { outsideBy = {}; }
       var outA = (txA.data || []).map(function (t7) {
         var wfull = [];
         if (t7.merchant_name) { wfull.push(t7.merchant_name); }
@@ -447,7 +470,8 @@ export async function POST(req) {
           third_party: t7.third_party_payer || null, advance: t7.advance_flag === true,
           applied: appliedBy[t7.id] || 0, applied_legs: legsBy[t7.id] || 0 };
       });
-      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: (txA.data || []).length >= 5000, date_filters_locked: atLocked, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: txA.capped === true, date_filters_locked: atLocked,
+        outside_dates: Object.keys(outsideBy).map(function (k8) { return outsideBy[k8]; }), api_build_marker: API_BUILD_MARKER });
     }
 
     // ── transfer_candidates: the other leg of a transfer (incl. credit cards) ──

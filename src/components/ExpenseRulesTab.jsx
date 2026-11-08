@@ -96,7 +96,7 @@ export default function ExpenseRulesTab(props) {
   function addRule() {
     setBusy(true);
     api('save_rule', { match_text: nr.match_text, classification: nr.classification }).then(function (j) {
-      if (j && j.ok) { toast.success('Rule saved — it will categorize matching expenses automatically.'); setNr({ match_text: '', classification: '' }); loadAll(); }
+      if (j && j.ok) { toast.success('Rule saved and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' matching line(s)' + (j.applied_now && j.applied_now.left_people ? ' · ' + j.applied_now.left_people + ' kept a person\'s pick (use 🔍 test → apply to all to replace them)' : '') + '. It keeps applying automatically.'); setNr({ match_text: '', classification: '' }); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -114,20 +114,27 @@ export default function ExpenseRulesTab(props) {
       else { toast.error((j && j.error) || 'Could not test the rule.'); }
     }).finally(function () { setBusy(false); });
   }
-  function applyOne(r, includeRuleFilled) {
+  // v55.83-RC (Max 13:59: "clicking on apply is not working") — the button was
+  // DISABLED whenever every match already had a person's category, and a
+  // server timeout gave no message at all. Now: always clickable, a clear
+  // result every time (including "0 — all already right"), and an explicit
+  // "replace people's picks" choice. Verified rows are never changed.
+  function applyOne(r, overwritePeople) {
+    if (overwritePeople === true && !window.confirm('Apply "' + r.match_text + '" to EVERY matching line, replacing categories people picked?\n\nVerified lines are never changed.')) { return; }
     setBusy(true);
-    api('apply_rule_now', { id: r.id, include_rule_filled: includeRuleFilled === true }).then(function (j) {
+    api('apply_rule_now', { id: r.id, overwrite_people: overwritePeople === true }).then(function (j) {
       if (j && j.ok) {
-        toast.success('Applied to ' + j.applied + ' transaction(s)' + (j.skipped_human ? ' · ' + j.skipped_human + ' left alone (a human picked their category)' : '') + (j.skipped_verified ? ' · ' + j.skipped_verified + ' verified, untouched' : '') + '.');
+        toast.success('Applied to ' + j.applied + ' of ' + (j.matches || 0) + ' matching line(s)' + (j.already_right ? ' · ' + j.already_right + ' already had this category' : '') + (j.skipped_human ? ' · ' + j.skipped_human + ' kept a person\'s pick' : '') + (j.skipped_verified ? ' · ' + j.skipped_verified + ' verified, untouched' : '') + '.');
         setPreview(null); loadAll();
       } else { toast.error((j && j.error) || 'Could not apply the rule.'); }
-    }).finally(function () { setBusy(false); });
+    }).catch(function () { toast.error('The apply did not answer — try again; nothing half-done is left behind (each line is only set once).'); })
+      .finally(function () { setBusy(false); });
   }
   function saveEdit() {
     if (!editRule) { return; }
     setBusy(true);
     api('save_rule', { id: editRule.id, match_text: editRule.match_text, classification: editRule.classification, auto_apply: true, active: true }).then(function (j) {
-      if (j && j.ok) { toast.success('Rule updated — it now applies on every 15-minute run. Use 🔍 test to see what it catches.'); setEditRule(null); loadAll(); }
+      if (j && j.ok) { toast.success('Rule updated and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' line(s); it keeps applying automatically.'); setEditRule(null); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -307,27 +314,27 @@ export default function ExpenseRulesTab(props) {
       </div>
       {preview && <div className="rounded-lg p-2 mb-2" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
         <div className="flex gap-2 items-center flex-wrap mb-1">
-          <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔍 "{preview.match_text}" appears on {preview.matches} of the last {preview.scanned} money-out bank lines</span>
+          <span className="text-[11px] font-extrabold" style={{ color: '#312e81' }}>🔍 "{preview.match_text}" appears on {preview.matches} of {preview.scanned} bank lines (money in and out, all dates)</span>
           <div className="flex-1" />
           <button onClick={function () { setPreview(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>✕</button>
         </div>
         <div className="flex gap-1.5 flex-wrap text-[10px] font-extrabold mb-1">
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#d1fae5', color: '#065f46' }}>{preview.fillable} uncategorized — the rule WILL fill these</span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#f1f5f9', color: '#334155' }}>{preview.rule_filled} categorized earlier by a rule</span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#fef3c7', color: '#92400e' }}>{preview.human_picked} picked by a human — never touched</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#d1fae5', color: '#065f46' }}>{preview.fillable} the rule fills automatically (blank, or an older rule)</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#f1f5f9', color: '#334155' }}>{preview.already_right || 0} already have this category</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: '#fef3c7', color: '#92400e' }}>{preview.human_picked} picked by a person — kept unless you apply to all</span>
           <span className="px-1.5 py-0.5 rounded" style={{ background: '#ecfdf5', color: '#064e3b' }}>{preview.verified} verified — never touched</span>
         </div>
         {preview.matches === 0 && <div className="text-[10px] font-bold mb-1" style={{ color: '#7f1d1d' }}>No bank line contains this text — that is why Hits stays at 0. Rules match the words AS THE BANK WRITES THEM (e.g. PSE&G shows as "Pse&g", not "Public Service"). Copy a word from the actual bank line.</div>}
         {(preview.sample || []).map(function (s0, si) {
           return <div key={si} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: '1px solid #e0e7ff', color: '#0f172a' }}>
             <span style={{ color: '#64748b' }}>{s0.date}</span><span className="font-semibold flex-1">{s0.text}</span>
-            <span className="tabular-nums">−${Number(s0.amount || 0).toFixed(2)}</span>
+            <span className="tabular-nums">{s0.direction === 'in' ? '+' : '−'}${Number(s0.amount || 0).toFixed(2)}</span>
             <span className="font-bold" style={{ color: s0.how === 'blank' ? '#065f46' : '#64748b' }}>{s0.how === 'blank' ? '→ will fill' : (labelOf[s0.category] || s0.category) + ' (' + s0.how + ')'}</span>
           </div>;
         })}
         {preview.rule && <div className="flex gap-2 mt-1.5 flex-wrap">
-          <button onClick={function () { applyOne(preview.rule, false); }} disabled={busy || preview.fillable === 0} className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || preview.fillable === 0) ? 0.5 : 1 }}>▶ Apply now to the {preview.fillable} uncategorized</button>
-          {preview.rule_filled > 0 && <button onClick={function () { applyOne(preview.rule, true); }} disabled={busy} title="Also re-point lines a RULE categorized before (never human picks, never verified)" className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply + re-point the {preview.rule_filled} rule-categorized</button>}
+          <button onClick={function () { applyOne(preview.rule, false); }} disabled={busy} className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply now ({preview.fillable} to fill)</button>
+          {preview.human_picked > 0 && <button onClick={function () { applyOne(preview.rule, true); }} disabled={busy} title="Replace the categories people picked on these lines too (verified lines are never changed)" className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#b45309', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply to ALL {preview.fillable + preview.human_picked} matches (replace people's picks)</button>}
         </div>}
       </div>}
       {rules.length === 0 ? <div className="text-[11px]" style={{ color: '#64748b' }}>No rules yet — they appear here automatically the first time you categorize an expense, or add one above.</div> :
