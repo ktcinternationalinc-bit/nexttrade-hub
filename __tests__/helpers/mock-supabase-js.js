@@ -1,0 +1,1 @@
+module.exports={createClient:function(){return global.__db;}};

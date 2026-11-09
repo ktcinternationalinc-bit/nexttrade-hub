@@ -33,6 +33,31 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RK',
+    date: '2026-11-09',
+    label: "\ud83d\udd0d Wire duplicates by release + date / reference + date",
+    items: [
+      "Wires: duplicates are now judged the way you described \u2014 the same release number AND the same bill date, or the same reference AND the same date, means a duplicate and stops the wire. The same release on a different date is treated as a separate charge (shown for information).",
+      "Wires: the check also tells you when the matching bill was ALREADY PAID, and the AI review is given every other bill sharing a release or reference (with its date and what was paid) and told the same rule, before anyone signs.",
+      { superAdminOnly: true, text: "v55.83-RK \u2014 no SQL. wire-audit: release/reference duplicate rule by bill_date (sameDay true=block, null=warn, false=info SAME_RELEASE_OTHER_DATE / SAME_REF_OTHER_DATE; missing other-bill date key = conservative block); paid_total on other bills (packageContext pays lookup) shown in messages; wires route sameRelease/sameNumber + bill_date; aiReviewPackage(pkg, lines, rules, ctx) gets other_bills_sharing_a_release_or_reference + explicit rule text; panel FIX hints updated. Pins realigned rg 1e, rh 3b, rj-wire 5b/5c. Test rk 16." },
+    ],
+  },
+  {
+    version: 'v55.83-RJ',
+    date: '2026-11-09',
+    label: "\ud83d\uddd3 CRM added & updated by period + wire workflow fixes",
+    items: [
+      "CRM: every client now shows the date it was added and who added it \u2014 on each client card and on the client's page.",
+      "CRM: a new \u201c\ud83d\uddd3 Clients added & updated\u201d box at the top of the CRM (open by default): pick Last 7 days, 30 days, 3 months, 6 months or 12 months to see who was added (with date and who added them) and every update (date, who, and what changed). Filter by person; click a line to open the client.",
+      "CRM: each client's page shows its full history \u2014 when it was added, and every change with its date and who made it. New sort options: Newest added and Recently updated.",
+      "Wires: you can now pick ANY open bill for an RTM or NextTrade wire \u2014 no setup on the bills first. A bill picked for RTM becomes \u201cpaid through RTM\u201d only when the wire is actually sent.",
+      "Wires: fixed every gap from a full review of the wire workflow \u2014 bills on a sent wire can't be changed, voided or paid twice; changing a wire shows bills that can no longer be paid so you can untick them; NextTrade bills don't need a release # or proof; two different charges on one release are allowed (signers confirm), the same charge twice is blocked; amounts like 1,250.00 work; errors always show a message.",
+      "Wires: a \u201cBefore your first wire\u201d box tells you what's missing (fewer than two signers, unknown paid-through names, AI review off).",
+      "\ud83d\udcb8 Bills: the release # now shows on each bill and when editing it.",
+      { superAdminOnly: true, text: "v55.83-RJ \u2014 SQL: v55-83-RJ-crm-added-updated.sql (customers created_at/created_by/updated_at/updated_by; customer_history append-only via SECURITY DEFINER trigger; BEFORE trigger stamps auth.uid(), keeps creation facts, bumps updated_* only on real change; backfill creators + past edits from audit_log, no invented dates; PG16 twice + live insert/no-op/real/server/delete cases) and, if not yet run, v55-83-RI-wire-simple.sql. CRM: lib/crm-history (periods, addedIn, describeChange w/ contact masking, visibleUpdates), CrmActivityPanel + CrmClientHistory, CRMTab wiring (sorts, card line, histKey), created_by on CRM + Quotes inserts. Wires (independent review, 15 gaps): bills openWireOf guards (edit when sent, void any open wire), void_payment refuses wire payments, record_payment refuses bank line matching a sent wire total, release_number in bills select + editor + chip; wire-audit samePayee, releaseOptional for affiliate, dup-release same-amount=block else warn, will_mark accepted; wire-package-server inChunks throws, sameRelease totals, will_mark, AI 20s abort; wire-packages save_draft column check, add\u2192update\u2192remove, empty-draft cleanup, mark paid_via at mark_sent, comma amounts, proof only service_provider, owner may accept amount diff, setup unknown_paid_via + RI column; panel: api never throws, payee race guard, stale-picks untick section, amount validation, setup banner, release change on draft. Pins realigned: rg 1e, rh 3b/5e/5g/5h, ri 1a/1c/1d/1f/1g. Tests rj-crm 22, rj-wire 23. Not done: vendor-direct wire attach does not carry the bill category to the bank line; no super-admin 'resolve stuck sent wire' action (guards now prevent the known causes)." },
+    ],
+  },
+  {
     version: 'v55.83-RI',
     date: '2026-11-09',
     label: "\ud83c\udfe6 Banking permissions in one box + simple wires",

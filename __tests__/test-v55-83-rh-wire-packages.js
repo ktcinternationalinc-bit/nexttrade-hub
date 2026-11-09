@@ -65,7 +65,12 @@ ok('2e: the same bill already on another open wire BLOCKS (one bill, one wire)',
 var r3 = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(bill('b5', 'Fast Trucking', 'T-100', '', 1200, { paid_via: 'RTM Capital' }), 1200, [{ amount: 1200, paid_date: '2026-10-02' }])] });
 ok('3a: not paid before + release required + no duplicates — all still enforced per bill on a package', !r3.pass && codes(r3).indexOf('PAID_BEFORE') >= 0 && codes(r3).indexOf('RELEASE_MISSING') >= 0);
 var r3b = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(truck, 1200), line(bill('b6', 'fast trucking', 'T-200', '1003-021', 900, { paid_via: 'RTM Capital' }), 900)] });
-ok('3b: the same vendor billing the same release twice on one RTM wire BLOCKS', !r3b.pass && codes(r3b).indexOf('DUP_RELEASE_IN_WIRE') >= 0);
+// superseded pin (v55.83-RJ, independent review gap 5): different amounts on the same release = warning; the same amount = block
+// superseded again (v55.83-RK, Max 11:38 "unique release number and date"): same date = block, different date = fine, missing date = warning
+var d1 = Object.assign({}, truck, { bill_date: '2026-11-01' });
+var r3c = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(d1, 1200), line(bill('b7', 'fast trucking', 'T-201', '1003-021', 900, { paid_via: 'RTM Capital', bill_date: '2026-11-01' }), 900)] });
+var r3d = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(d1, 1200), line(bill('b8', 'fast trucking', 'T-202', '1003-021', 900, { paid_via: 'RTM Capital', bill_date: '2026-11-04' }), 900)] });
+ok('3b: the same vendor on the same release twice on one RTM wire: same DATE blocks, a different date passes, no date warns', !r3c.pass && r3d.pass && r3b.pass && r3b.warns > 0);
 
 // ── 4. fingerprint + status walk (prepare → audit → 2 signers → ready → sent → attached → proof → complete)
 var L = [line(truck, 1200), line(customs, 800)];
@@ -94,13 +99,16 @@ ok('5c: "attach a wire proof ... as part of the approval" — marking sent REQUI
 ok('5d: "then later when the wire is sent ... attach that whole audit to that wire" — the bank line is attached and the bills are recorded paid THEN (not before), with the overpay guard; failures roll back',
   S.indexOf("action === 'attach'") > 0 && S.indexOf("db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id") > 0 && S.indexOf('would overpay it. Nothing was recorded.') > 0 && S.indexOf('were voided again; nothing changed') > 0);
 ok('5e: a bank amount different from the approved wire is refused — only a super admin, with the reason, may accept it',
-  S.indexOf('Only a super admin can accept a different amount') > 0 && S.indexOf('g1.ctx.isSuperAdmin') > 0);
+  // superseded pin (v55.83-RJ, independent review gap 14): the owner may accept it too
+  S.indexOf('Only a super admin or the owner can accept a different amount') > 0 && S.indexOf("g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'") > 0);
 ok('5f: RTM / NextTrade wires book exactly like the 🏦 paid-through flow (method rtm + the company on the bank line; NextTrade = advance, auto-reviewed)',
   S.indexOf("pkg.payee_kind === 'vendor' ? 'wire' : 'rtm'") > 0 && S.indexOf('third_party_payer: pkg.payee_name') > 0 && S.indexOf("pkg.payee_kind === 'affiliate'") > 0);
 ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with the date and reference; only for paid-through wires, after sending',
-  S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && S.indexOf('RTM proof is for wires paid through RTM / NextTrade.') > 0);
+  // superseded pin (v55.83-RJ, independent review gap 6 / Max 16:14 "nextrade ... only with bills"): proof is asked from RTM-type companies only
+  S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && S.indexOf('Proof of vendor payments is for wires through RTM (NextTrade wires have no proof step).') > 0);
 ok('5h: a NextTrade or vendor wire with a fee is refused at save; amounts never above a bill\'s open balance; one bill one open wire checked before writing',
-  S.indexOf("NextTrade wires are bills only — no fee.") > 0 && S.indexOf('is more than its open balance') > 0 && S.indexOf('one bill, one wire. Remove it there') > 0);
+  // superseded pin (v55.83-RJ): plainer words ("what is still owed", "untick it")
+  S.indexOf("NextTrade wires are bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('one bill, one wire. Untick it here') > 0);
 ok('5i: only a wire not yet sent can be cancelled (the money is gone otherwise)', S.indexOf("Only a wire that was not sent yet can be cancelled.") > 0);
 ok('5j: every step in the append-only audit trail', ['wire_package_prepared', 'wire_package_audit_run', 'wire_package_signoff_1', 'wire_package_signoff_2', 'wire_package_sent', 'wire_package_attached', 'wire_package_rtm_proof', 'wire_package_cancelled'].every(function (k) { return S.indexOf("'" + k + "'") > 0; }));
 var BR = R('src/app/api/accounting/bills/route.js');

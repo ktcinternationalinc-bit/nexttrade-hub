@@ -498,7 +498,7 @@ export default function BillsTab(props) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
             return <React.Fragment key={b.id}>
               <tr style={late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
-                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}</td>
+                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}{b.release_number && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Release this bill belongs to" style={{ background: '#e0e7ff', color: '#312e81' }}>REL {b.release_number}</span>}</td>
                 <td className="py-1.5 pr-2">{b.bill_number || '—'}</td>
                 <td className="py-1.5 pr-2">{b.bill_date}</td>
                 <td className="py-1.5 pr-2">{b.due_date || '—'}{late ? ' ⚠' : ''}</td>
@@ -518,7 +518,7 @@ export default function BillsTab(props) {
                     var span0 = (b.bill_date && b.due_date) ? Math.round((Date.parse(b.due_date) - Date.parse(b.bill_date)) / 86400000) : null;
                     setEditing({ vendor_name: b.vendor_name, bill_number: '', bill_date: TODAY,
                       due_date: (span0 != null && span0 >= 0) ? new Date(Date.parse(TODAY) + span0 * 86400000).toISOString().substring(0, 10) : '',
-                      total_amount: b.total_amount, category: b.category || '', notes: b.notes || '', paid_via: b.paid_via || null, currency: b.currency || 'USD' });
+                      total_amount: b.total_amount, category: b.category || '', notes: b.notes || '', paid_via: b.paid_via || null, currency: b.currency || 'USD', release_number: b.release_number || '' }); // v55.83-RJ — the release shows when editing (it used to open blank)
                     toast.success('Copy opened as a NEW bill — give it its own bill number, change anything, then Save.');
                     setTimeout(function () { try { var ed2 = document.getElementById('nt-bill-editor'); if (ed2) { ed2.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } catch (eS2) {} }, 60);
                   }} title="Duplicate — opens a NEW bill prefilled from this one; edit anything before saving" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#ccfbf1', color: '#115e59' }}>⧉ Duplicate</button>}

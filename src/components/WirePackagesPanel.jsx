@@ -35,10 +35,10 @@ var FIX = {
   OVERPAID: '✏ Change the wire and lower the amount.',
   PAYEE_MISMATCH: '✏ Change the wire and untick it (it belongs on another wire).',
   IN_OTHER_PACKAGE: 'It is on another wire — untick it here, or cancel that wire.',
-  DUP_RELEASE: 'Same vendor billed this release twice — check in 💸 Bills and void the duplicate.',
-  DUP_RELEASE_IN_WIRE: 'Same vendor, same release, twice on this wire — untick one.',
-  DUP_REF: 'Same bill number on another bill — check in 💸 Bills.',
-  DUP_REF_IN_WIRE: 'Same bill number twice on this wire — untick one.',
+  DUP_RELEASE: 'Same vendor, same release AND same date as another bill — a duplicate: check in 💸 Bills and void it (or fix the date if it is a different charge).',
+  DUP_RELEASE_IN_WIRE: 'Same vendor, same release, same date twice on this wire — untick one (or fix the bill date if they are different charges).',
+  DUP_REF: 'Same reference AND date as another bill — check in 💸 Bills and void the duplicate.',
+  DUP_REF_IN_WIRE: 'Same reference and date twice on this wire — untick one.',
   BILL_VOID: 'The bill is void — untick it.', BILL_DISPUTED: 'The bill is disputed — untick it until it is resolved.',
   FEE_NOT_ALLOWED: 'Only RTM wires can carry a fee — remove it.', NO_BILLS: '✏ Change the wire and tick its bills.',
 };
@@ -66,10 +66,14 @@ export default function WirePackagesPanel(props) {
   var a12 = useState(''); var q = a12[0]; var setQ = a12[1];
   var a13 = useState({}); var relDraft = a13[0]; var setRelDraft = a13[1];
   var a14 = useState(false); var showMore = a14[0]; var setShowMore = a14[1];
+  var a15 = useState(null); var setup = a15[0]; var setSetup = a15[1];
 
+  // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
   function api(payload) {
     return fetch('/api/accounting/wire-packages', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) }).then(function (r) { return r.json(); });
+      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + '). Reload and check the wire list before trying again.' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
   function load() { api({ action: 'list' }).then(function (j) { if (j && j.ok) { setList(j.packages || []); } else { setList([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setList([]); }); }
   function open(id) {
@@ -103,15 +107,16 @@ export default function WirePackagesPanel(props) {
   // ── step 1 + 2: the new / change form
   function withPayees(fn) {
     if (payees) { fn(payees); return; }
-    api({ action: 'payees' }).then(function (j) { if (j && j.ok) { setPayees(j); fn(j); } else { toast.error((j && j.error) || 'Could not load.'); } });
+    setBusy(true);
+    api({ action: 'payees' }).then(function (j) { if (j && j.ok) { setPayees(j); fn(j); } else { toast.error((j && j.error) || 'Could not load who wires can go to.'); } }).finally(function () { setBusy(false); });
   }
   function startNew() { withPayees(function () { setDet(null); setQ(''); setEd({ id: null, kind: null, payee: '', fee: '', fee_note: '', memo: '', picks: {}, bills: null }); }); }
   function startChange(existing) {
     withPayees(function () {
-      var p = existing.package; var picks = {};
-      existing.lines.forEach(function (l) { picks[l.bill_id] = String(l.amount); });
+      var p = existing.package; var picks = {}; var info = {};
+      existing.lines.forEach(function (l) { picks[l.bill_id] = String(l.amount); info[l.bill_id] = l; });
       setQ('');
-      setEd({ id: p.id, kind: p.payee_kind, payee: p.payee_kind === 'vendor' ? '' : p.payee_name, fee: p.fee_amount ? String(p.fee_amount) : '', fee_note: p.fee_note || '', memo: p.memo || '', picks: picks, bills: null });
+      setEd({ id: p.id, kind: p.payee_kind, payee: p.payee_kind === 'vendor' ? '' : p.payee_name, fee: p.fee_amount ? String(p.fee_amount) : '', fee_note: p.fee_note || '', memo: p.memo || '', picks: picks, bills: null, lineInfo: info });
       loadBills(p.payee_kind, p.payee_kind === 'vendor' ? '' : p.payee_name, p.id);
     });
   }
@@ -121,8 +126,12 @@ export default function WirePackagesPanel(props) {
   }
   function loadBills(kind, payee, pkgId) {
     api({ action: 'open_bills', payee_kind: kind, payee_name: payee, package_id: pkgId }).then(function (j) {
-      setEd(function (e) { return e ? Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [] }) : e; });
-      if (!(j && j.ok)) { toast.error((j && j.error) || 'Could not load the bills.'); }
+      var current = true;
+      setEd(function (e) {
+        if (!e || e.kind !== kind || String(e.payee || '') !== String(payee || '')) { current = false; return e; } // review gap 10
+        return Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [] });
+      });
+      if (current && !(j && j.ok)) { toast.error((j && j.error) || 'Could not load the bills.'); }
     });
   }
   function togglePick(b) {
@@ -143,8 +152,18 @@ export default function WirePackagesPanel(props) {
     }).finally(function () { setBusy(false); });
   }
   function saveWire() {
-    var lines = []; Object.keys(ed.picks).forEach(function (k) { var a = Number(ed.picks[k]); if (a > 0) { lines.push({ bill_id: k, amount: Math.round(a * 100) / 100 }); } });
-    act({ action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind === 'service_provider' ? (Number(ed.fee) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines },
+    var lines = []; var bad = null;
+    Object.keys(ed.picks).forEach(function (k) {
+      var typed = String(ed.picks[k] == null ? '' : ed.picks[k]).trim();
+      var a = Number(typed.replace(/,/g, ''));
+      var shapeOk = /^\d+(\.\d+)?$/.test(typed) || /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(typed); // "1,250.00" yes, "1,00.00" no
+      if (!(a > 0) || !shapeOk) { var bb0 = (ed.bills || []).filter(function (x) { return x.id === k; })[0]; bad = bad || ((bb0 && (bb0.vendor_name + ' ' + (bb0.bill_number || ''))) || 'a ticked bill'); return; }
+      lines.push({ bill_id: k, amount: Math.round(a * 100) / 100 });
+    });
+    if (bad) { toast.error('The amount for ' + bad + ' is not a number — type it like 1250.00 (or untick the bill).'); return; }
+    var feeV = String(ed.fee || '').replace(/,/g, '').trim();
+    if (ed.kind === 'service_provider' && feeV && !(Number(feeV) >= 0)) { toast.error('The fee is not a number — type it like 250.00, or leave it empty.'); return; }
+    act({ action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind === 'service_provider' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines },
       function (j) { return j.audit ? (j.audit.pass ? '✅ Saved and checked — it is ready for the 1st signature.' : '⛔ Saved — the check found ' + j.audit.blocks + ' problem(s) to fix. See the red box.') : 'Saved.'; },
       function (j) { setEd(null); open(j.id); });
   }
@@ -170,7 +189,7 @@ export default function WirePackagesPanel(props) {
       return act({ action: 'rtm_proof', id: det.package.id, line_ids: ids, paid_date: proofF.date, reference: proofF.ref, proof_path: u.path, proof_name: u.name }, function (j) { return '📎 Proof saved for ' + j.confirmed + ' bill(s).'; });
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
   }
-  useEffect(function () { load(); }, []); // eslint-disable-line
+  useEffect(function () { load(); api({ action: 'setup' }).then(function (j) { if (j && j.ok) { setSetup(j); } }); }, []); // eslint-disable-line
 
   var OPEN_ST = { needs_check: 1, flagged: 1, awaiting_1st: 1, awaiting_2nd: 1, ready_to_send: 1, sent: 1, awaiting_proof: 1 };
   var rows = (list || []).filter(function (p) { return fSt === 'all' || (fSt === 'open' ? OPEN_ST[p.status] : p.status === fSt); });
@@ -178,8 +197,11 @@ export default function WirePackagesPanel(props) {
   // ═════════ the NEW / CHANGE form ═════════
   if (ed && payees) {
     var picksN = Object.keys(ed.picks).length;
-    var billsSum = 0; Object.keys(ed.picks).forEach(function (k) { billsSum += Number(ed.picks[k]) || 0; });
-    var feeN = ed.kind === 'service_provider' ? (Number(ed.fee) || 0) : 0;
+    var billsSum = 0; Object.keys(ed.picks).forEach(function (k) { billsSum += Number(String(ed.picks[k] || '').replace(/,/g, '')) || 0; });
+    // review gap 4 — ticked bills that are no longer payable (paid, void, other company) are listed so they can be unticked
+    var listedIds = {}; (ed.bills || []).forEach(function (b) { listedIds[b.id] = true; });
+    var staleIds = ed.bills ? Object.keys(ed.picks).filter(function (k) { return !listedIds[k]; }) : [];
+    var feeN = ed.kind === 'service_provider' ? (Number(String(ed.fee || '').replace(/,/g, '')) || 0) : 0;
     var pickedVendor = null;
     if (ed.kind === 'vendor' && ed.bills) { ed.bills.forEach(function (b) { if (ed.picks[b.id] != null && !pickedVendor) { pickedVendor = b.vendor_name; } }); }
     var qq = q.trim().toLowerCase();
@@ -194,7 +216,7 @@ export default function WirePackagesPanel(props) {
           <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · already on ' + b.on_package : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
         <td className="px-2 py-2" onClick={function (e) { e.stopPropagation(); }}>
           {b.release_number ? <span className="text-[12px] font-bold" style={{ color: INK }}>{b.release_number}</span>
-            : <span className="flex gap-1 items-center"><input value={relDraft[b.id] || ''} onChange={function (e) { var d2 = Object.assign({}, relDraft); d2[b.id] = e.target.value; setRelDraft(d2); }} placeholder="release # needed"
+            : <span className="flex gap-1 items-center"><input value={relDraft[b.id] || ''} onChange={function (e) { var d2 = Object.assign({}, relDraft); d2[b.id] = e.target.value; setRelDraft(d2); }} placeholder={b.release_optional ? 'release # (optional)' : 'release # needed'}
               className="px-1.5 py-1 rounded border text-[11px] nt-light" style={{ width: 120, color: INK, background: '#ffffff', borderColor: '#fca5a5' }} />
               <button onClick={function () { saveRelease(b.id, function (j) { setEd(function (e) { return e ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { release_number: j.release_number }) : x; }) }) : e; }); }); }}
                 disabled={busy} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>save</button></span>}
@@ -228,6 +250,14 @@ export default function WirePackagesPanel(props) {
           <div className="text-[13px] font-extrabold" style={{ color: INK }}>2 · Tick the bills this wire pays</div>
           <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="🔎 search vendor, bill # or release #" className={inp} style={Object.assign({ flex: '1 1 260px' }, inpS)} />
         </div>
+        {staleIds.length > 0 && <div className="rounded-lg p-2 mb-2" style={{ background: '#fee2e2', border: '1px solid #fca5a5' }}>
+          <div className="text-[12px] font-extrabold mb-1" style={{ color: '#7f1d1d' }}>{'⚠ ' + staleIds.length + ' bill(s) on this wire can no longer be paid by it (already paid, void, or paid through another company) — untick them:'}</div>
+          {staleIds.map(function (k) {
+            var li = (ed.lineInfo || {})[k] || {}; var bb1 = li.bill || {};
+            return <label key={k} className="flex items-center gap-2 text-[12px] py-0.5" style={{ color: '#7f1d1d', cursor: 'pointer' }}>
+              <input type="checkbox" checked={true} onChange={function () { var pk = Object.assign({}, ed.picks); delete pk[k]; setEd(Object.assign({}, ed, { picks: pk })); }} style={{ width: 16, height: 16 }} />
+              <b>{bb1.vendor_name || 'Bill'}</b>{' ' + (bb1.bill_number || '') + ' · $' + fmt(ed.picks[k]) + (bb1.record_status && bb1.record_status !== 'active' ? ' · VOID' : '') + (bb1.paid_via && ed.kind !== 'vendor' && bb1.paid_via !== ed.payee ? ' · paid through ' + bb1.paid_via : '')}</label>;
+          })}</div>}
         {!ed.bills ? <div className="text-[12px] py-3" style={{ color: MUTED }}>Loading the open bills…</div> : <div className="rounded-lg overflow-auto mb-3" style={{ maxHeight: 420, border: '1px solid #e2e8f0' }}>
           <table className="w-full">
             {ed.kind !== 'vendor' && mineB.length > 0 && <tbody><tr><td colSpan={5} className="px-2 py-1.5 text-[11px] font-extrabold" style={{ background: '#ecfeff', color: '#155e75' }}>{'Bills already marked “paid through ' + ed.payee + '” (' + mineB.length + ')'}</td></tr></tbody>}
@@ -339,8 +369,8 @@ export default function WirePackagesPanel(props) {
             var b = l.bill || {}; var before = l.other_payments || [];
             return <tr key={l.line_id} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
-              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
-              <td className="px-2 py-1.5">{b.release_number ? <b>{b.release_number}</b> : (P.raw_status === 'draft' && perms.prepare) ? <span className="flex gap-1">
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
+              <td className="px-2 py-1.5">{(b.release_number && relDraft[l.bill_id] == null) ? <span><b>{b.release_number}</b>{P.raw_status === 'draft' && perms.prepare ? <button onClick={function () { var d3 = Object.assign({}, relDraft); d3[l.bill_id] = b.release_number; setRelDraft(d3); }} className="ml-1 text-[10px] font-bold underline" style={{ color: '#1d4ed8' }}>change</button> : null}</span> : (P.raw_status === 'draft' && perms.prepare) ? <span className="flex gap-1">
                 <input value={relDraft[l.bill_id] || ''} onChange={function (e) { var d2 = Object.assign({}, relDraft); d2[l.bill_id] = e.target.value; setRelDraft(d2); }} placeholder="type release #"
                   className="px-1.5 py-1 rounded border text-[11px] nt-light" style={{ width: 110, color: INK, background: '#ffffff', borderColor: '#fca5a5' }} />
                 <button onClick={function () { saveRelease(l.bill_id, function () { recheck(); }); }} disabled={busy} className="px-2 rounded text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>save</button></span>
@@ -383,6 +413,20 @@ export default function WirePackagesPanel(props) {
       {perms.prepare && <Btn big color="#0f766e" onClick={startNew} disabled={busy}>＋ New wire</Btn>}
     </div>
     <div className="text-[12px] mb-3" style={{ color: SUB }}>New wire → pick who gets the money → tick the bills → it checks itself → 2 people sign → send it at the bank → attach the bank line → RTM proof.</div>
+    {/* v55.83-RJ (review gaps 7, 15) — anything that would stop a wire, said up front */}
+    {setup && (function () {
+      var warnsS = [];
+      if (!setup.sql_ok) { warnsS.push('The database is not ready for wires: ' + (setup.sql_error || 'run the wire SQL files') + '.'); }
+      if (!(setup.parties || []).length) { warnsS.push('No paid-through companies (RTM Capital / NextTrade Industries) are set up.'); }
+      Object.keys(setup.unknown_paid_via || {}).forEach(function (k) { warnsS.push(setup.unknown_paid_via[k] + ' open bill(s) say “paid through ' + k + '”, which is not a registered company — fix it on those bills in 💸 Bills, or they cannot go on a wire.'); });
+      var signers = (setup.people && setup.people['wires.signoff']) || [];
+      if (signers.filter(function (x) { return !x.broken; }).length < 2) { warnsS.push('Only ' + signers.filter(function (x) { return !x.broken; }).length + ' person can sign wires — two DIFFERENT people must sign. Turn on “Sign wires” for someone else in Settings → 🏦 Banking & Accounting Access.'); }
+      if (!setup.ai_key_set) { warnsS.push('The AI review is not switched on (no AI key on the server) — signers will be asked to write what they checked.'); }
+      if (!warnsS.length) { return null; }
+      return <div className="rounded-lg p-2 mb-3" style={{ background: '#fef3c7', border: '1px solid #fcd34d' }}>
+        <div className="text-[12px] font-extrabold mb-1" style={{ color: '#78350f' }}>Before your first wire:</div>
+        {warnsS.map(function (w, i) { return <div key={i} className="text-[12px]" style={{ color: '#78350f' }}>• {w}</div>; })}</div>;
+    })()}
     <div className="flex gap-1.5 flex-wrap mb-2">
       {[['open', 'In progress'], ['all', 'All'], ['complete', 'Done'], ['cancelled', 'Cancelled']].map(function (k) {
         var n = (list || []).filter(function (p) { return k[0] === 'all' || (k[0] === 'open' ? OPEN_ST[p.status] : p.status === k[0]); }).length;

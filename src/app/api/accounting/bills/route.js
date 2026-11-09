@@ -56,7 +56,7 @@ async function loadBills(db) {
     // v55.83-QB — paid_via: which third party (RTM Capital) pays this bill.
     bills = await fetchAll(function () {
       return db.from('vendor_bills')
-        .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via')
+        .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number')
         .order('due_date', { ascending: true, nullsFirst: false });
     });
   } catch (eQB) {
@@ -135,6 +135,16 @@ function partyKey(x) { return String(x || '').trim().toLowerCase(); }
 // from what-we-owe totals until the dispute resolves).
 // v55.83-QB: via-RTM bills are paid by the third party, never from our bank —
 // they stay OUT of what-we-owe totals, cash forecasts and shortage math.
+// v55.83-RJ (wire review gaps 1–3) — the prepared wire a bill sits on (open line), or null. Fail-soft before the RH SQL.
+async function openWireOf(db, billId) {
+  try {
+    var ol = await db.from('wire_package_lines').select('package_id').eq('bill_id', billId).eq('is_open', true).limit(1);
+    if (ol.error || !ol.data || !ol.data.length) { return null; }
+    var wp = await db.from('wire_packages').select('seq, status').eq('id', ol.data[0].package_id).maybeSingle();
+    if (!wp || !wp.data || wp.data.status === 'cancelled') { return null; }
+    return { label: 'WP-' + String(wp.data.seq || 0).padStart(4, '0'), status: wp.data.status };
+  } catch (eW) { return null; }
+}
 function isPayable(b) { return b.record_status === 'active' && b.disputed !== true && !b.paid_via && b.open > 0.005; }
 
 // Canonical open AR per invoice (same formula as the dashboard/Open Balances),
@@ -287,6 +297,8 @@ export async function POST(req) {
         var cur = await db.from('vendor_bills').select('id, record_status, total_amount').eq('id', bl.id).maybeSingle();
         if (cur.error || !cur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
         if (cur.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void — it cannot be edited.' }, { status: 409 }); }
+        var wOn = await openWireOf(db, bl.id);
+        if (wOn && wOn.status === 'sent') { return NextResponse.json({ error: 'This bill is on wire ' + wOn.label + ', which was already SENT — it cannot change until that wire is attached to its bank line (🏦 Wires).' }, { status: 409 }); }
         var payR = await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').eq('bill_id', bl.id);
         var paidSoFar = 0; (payR.data || []).forEach(function (p) { if (p.voided !== true) { paidSoFar += Number(p.amount) || 0; } });
         if (amt + 0.005 < paidSoFar) { return NextResponse.json({ error: 'Amount cannot be below what is already paid (' + r2(paidSoFar).toFixed(2) + '). Void the payments first.' }, { status: 409 }); }
@@ -338,6 +350,8 @@ export async function POST(req) {
     // ── void_bill (reversible record_status; nothing is deleted)
     if (action === 'void_bill') {
       if (!body.id) { return NextResponse.json({ error: 'id required.' }, { status: 400 }); }
+      var wOnV = await openWireOf(db, body.id);
+      if (wOnV) { return NextResponse.json({ error: 'This bill is on wire ' + wOnV.label + ' (' + wOnV.status + ') — ' + (wOnV.status === 'sent' ? 'it was already sent, so it cannot be voided.' : 'untick it on that wire (or cancel the wire) first.') }, { status: 409 }); }
       var vb = await db.from('vendor_bills').update({ record_status: 'void', updated_at: new Date().toISOString() }).eq('id', body.id).select('id').maybeSingle();
       if (vb.error) { throw new Error(vb.error.message); }
       if (!vb.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
@@ -376,6 +390,11 @@ export async function POST(req) {
         if (tx.data.direction !== 'out') { return NextResponse.json({ error: 'A bill is paid by MONEY OUT — that bank transaction is money in.' }, { status: 409 }); }
         if (tx.data.pending === true) { return NextResponse.json({ error: 'That bank transaction is still pending — link it once it settles.' }, { status: 409 }); }
         if (pAmt > (Number(tx.data.amount_abs) || 0) + 0.005) { return NextResponse.json({ error: 'Payment is larger than the bank transaction (' + r2(tx.data.amount_abs).toFixed(2) + ').' }, { status: 409 }); }
+        try {
+          var sw = await db.from('wire_packages').select('seq, approved_total, payee_name').eq('status', 'sent');
+          var hitW = ((sw && sw.data) || []).filter(function (w) { return Math.abs(r2(w.approved_total) - r2(tx.data.amount_abs)) <= 0.005; })[0];
+          if (hitW) { return NextResponse.json({ error: 'This bank line (' + r2(tx.data.amount_abs).toFixed(2) + ') looks like prepared wire WP-' + String(hitW.seq || 0).padStart(4, '0') + ' to ' + hitW.payee_name + ', which is waiting for it — attach it in 🏦 Wires instead.' }, { status: 409 }); }
+        } catch (eSw) { /* RH SQL not run yet */ }
         var already = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bank_transaction_id', bankId);
         var used = 0; (already.data || []).forEach(function (p) { if (p.voided !== true) { used += Number(p.amount) || 0; } });
         if (used + pAmt > (Number(tx.data.amount_abs) || 0) + 0.005) {
@@ -406,6 +425,10 @@ export async function POST(req) {
     // ── void_payment
     if (action === 'void_payment') {
       if (!body.id) { return NextResponse.json({ error: 'id required.' }, { status: 400 }); }
+      try {
+        var wl = await db.from('wire_package_lines').select('package_id').eq('payment_id', body.id).limit(1);
+        if (!wl.error && wl.data && wl.data.length) { return NextResponse.json({ error: 'This payment was recorded by an approved wire (🏦 Wires) — it cannot be voided here.' }, { status: 409 }); }
+      } catch (eWl) { /* RH SQL not run yet */ }
       var vp = await db.from('vendor_bill_payments').update({ voided: true }).eq('id', body.id).select('id').maybeSingle();
       if (vp.error) { throw new Error(vp.error.message); }
       if (!vp.data) { return NextResponse.json({ error: 'Payment not found.' }, { status: 404 }); }

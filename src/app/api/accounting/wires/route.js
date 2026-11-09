@@ -67,12 +67,12 @@ async function gather(db, txIds) {
   });
   var sameRelease = {}; var sameNumber = {};
   if (rels.length) {
-    var rb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, release_number, record_status', 'release_number', rels);
-    rb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.release_number); (sameRelease[k] = sameRelease[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number }); });
+    var rb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, release_number, record_status, bill_date', 'release_number', rels); // RK: + date
+    rb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.release_number); (sameRelease[k] = sameRelease[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null }); });
   }
   if (nums.length) {
-    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status', 'bill_number', nums);
-    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name }); });
+    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date', 'bill_number', nums); // RK: + date
+    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null }); });
   }
   // releases known to the business (warehouse orders + invoices)
   var known = [];

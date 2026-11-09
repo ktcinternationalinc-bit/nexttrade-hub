@@ -46,8 +46,11 @@ var part = W.auditWire({ wire: { id: 'tx1', amount: 11000, direction: 'out' }, l
 ok('1c: a partly-paid bill whose balance this wire pays = WARN (signers see the earlier payment), not a block', part.pass && codes(part).indexOf('PART_PAID_BEFORE') >= 0 && codes(part).indexOf('OVERPAID') < 0);
 var norel = W.auditWire({ wire: WIRE, lines: [line('p1', bill('b1', 'Acme', 'INV-1', '', 10000), 10000), line('p2', b2, 5000)] });
 ok('1d: "they all belong to a release number" — a bill with NO release BLOCKS', !norel.pass && codes(norel).indexOf('RELEASE_MISSING') >= 0);
-var dupRelWire = W.auditWire({ wire: WIRE, lines: [line('p1', bill('b1', 'Acme', 'INV-1', '1003-021', 10000), 10000), line('p2', bill('b2', 'ACME ', 'INV-2', ' 1003-021', 5000), 5000)] });
-ok('1e: "no duplicated release numbers" — same vendor billing the same release twice on one wire BLOCKS (case/space-insensitive)', !dupRelWire.pass && codes(dupRelWire).indexOf('DUP_RELEASE_IN_WIRE') >= 0);
+// superseded pin (v55.83-RJ, independent review gap 5): same vendor + same release + SAME amount = duplicate (block); a different amount (two trucks) = warning the signers confirm
+// superseded again (v55.83-RK, Max Nov 9 11:38 "a unique release number and date"): duplicate = same vendor + same release + SAME DATE
+var dupRelWire = W.auditWire({ wire: WIRE, lines: [line('p1', bill('b1', 'Acme', 'INV-1', '1003-021', 10000, { bill_date: '2026-11-01' }), 10000), line('p2', bill('b2', 'ACME ', 'INV-2', ' 1003-021', 5000, { bill_date: '2026-11-01' }), 5000)] });
+var twoDays = W.auditWire({ wire: WIRE, lines: [line('p1', bill('b1', 'Acme', 'INV-1', '1003-021', 10000, { bill_date: '2026-11-01' }), 10000), line('p2', bill('b2', 'ACME ', 'INV-2', ' 1003-021', 5000, { bill_date: '2026-11-05' }), 5000)] });
+ok('1e: "no duplicated release numbers" — same vendor, same release, same DATE twice on one wire BLOCKS (case/space-insensitive); different dates pass', !dupRelWire.pass && codes(dupRelWire).indexOf('DUP_RELEASE_IN_WIRE') >= 0 && twoDays.pass && codes(twoDays).indexOf('SAME_RELEASE_OTHER_DATE') >= 0);
 var dupRelElse = W.auditWire({ wire: { id: 'tx1', amount: 10000, direction: 'out' }, lines: [line('p1', b1, 10000)], sameRelease: { '1003-021': [{ bill_id: 'b1', vendor_name: 'Acme' }, { bill_id: 'b9', vendor_name: 'Acme', bill_number: 'INV-OLD' }] } });
 ok('1f: the same vendor billed this release on ANOTHER bill → BLOCK (possible double charge)', !dupRelElse.pass && codes(dupRelElse).indexOf('DUP_RELEASE') >= 0);
 var relOtherVendor = W.auditWire({ wire: { id: 'tx1', amount: 10000, direction: 'out' }, lines: [line('p1', b1, 10000)], sameRelease: { '1003-021': [{ bill_id: 'b7', vendor_name: 'Trucking Co' }] } });

@@ -20,19 +20,20 @@ var S = R('src/app/api/accounting/wire-packages/route.js');
 var U = R('src/components/WirePackagesPanel.jsx');
 // ── 1. "how to even choose a freaking bill" — no hidden setup before a bill can be picked
 ok('1a: an RTM / NextTrade wire lists ITS bills first AND every other open bill nobody else pays (no "mark paid via first" dead end)',
-  S.indexOf('return normRef(b.paid_via) === payeeO || !b.paid_via;') > 0 && S.indexOf("needs_mark: kindO !== 'vendor' && !b.paid_via") > 0);
+  // superseded pin (v55.83-RJ, review gap 15): older spellings ("RTM") count as the same company
+  S.indexOf('return samePayee(b.paid_via, payeeO) || !b.paid_via;') > 0 && S.indexOf("needs_mark: kindO !== 'vendor' && !b.paid_via") > 0);
 ok('1b: "A vendor directly" lists every open direct bill; the first bill ticked decides the vendor; mixing vendors is refused in plain words',
   S.indexOf("if (!payeeO && kindO !== 'vendor')") > 0 && S.indexOf("if (vks.length === 1) { payeeS = vset[vks[0]]; }") > 0 && S.indexOf('A wire straight to a vendor pays ONE vendor') > 0 && U.indexOf("b.vendor_name !== pickedVendor") > 0);
-ok('1c: ticking another open bill for an RTM wire marks it "paid through RTM" on save — remembered on the line, audited',
-  S.indexOf("db.from('vendor_bills').update({ paid_via: payeeS }).in('id', toMark)") > 0 && S.indexOf("marked_paid_via: keepMarked.indexOf(c.bill_id) >= 0") > 0 && S.indexOf("'bill_paid_via_set'") > 0);
-ok('1d: untick it, or cancel the wire → the bill goes back to "we pay it directly" (only if still marked for that company)',
-  S.indexOf("var unmark = prevMarked.filter(") > 0 && S.indexOf(".update({ paid_via: null }).in('id', unmark).eq('paid_via', prevPayee)") > 0 &&
-  S.indexOf(".update({ paid_via: null }).in('id', unC).eq('paid_via', pkg.payee_name)") > 0 && S.indexOf("'bill_paid_via_cleared'") > 0);
+// superseded pins 1c/1d (v55.83-RJ, review gap 8): the bill is marked "paid through" only when the wire is SENT, so a draft never hides it from what-we-owe and an untick / cancel has nothing to undo
+ok('1c: ticking another open bill for an RTM wire remembers it on the line and marks it "paid through RTM" when the wire is SENT (audited)',
+  S.indexOf("marked_paid_via: willMark[c.bill_id] === true") > 0 && S.indexOf(".update({ paid_via: pkg.payee_name }).in('id', toMarkT).is('paid_via', null)") > 0 && S.indexOf("'bill_paid_via_set'") > 0);
+ok('1d: before sending nothing is marked — untick or cancel leaves the bill exactly as it was; the audit accepts a ticked bill that will be marked',
+  S.indexOf('a cancelled draft changed nothing on them') > 0 && R('src/lib/wire-audit.js').indexOf("!(l.will_mark === true && !b.paid_via)") > 0);
 ok('1e: a bill paid through a DIFFERENT company still cannot be put on this wire', S.indexOf("it goes on THAT company") > 0);
 ok('1f: a missing release # is typed right on the bill row (picking list AND the wire) — open to the preparer, upper-cased, audited, locked once sent',
   S.indexOf("action === 'set_bill_release'") > 0 && S.indexOf("perm(db, userId, ['wires.prepare', 'bills.manage'], req)") > 0 && S.indexOf("toUpperCase().substring(0, 40)") > 0 &&
-  S.indexOf("already SENT — its release cannot change now") > 0 && U.indexOf("action: 'set_bill_release'") > 0 && U.indexOf('placeholder="release # needed"') > 0);
-ok('1g: the 🤖 check runs BY ITSELF on every save (rules + AI) — nobody has to remember a button', S.indexOf('the 🤖 audit runs by itself on every save') > 0 && S.indexOf('auto: true') > 0 && S.indexOf('audit: autoA') > 0);
+  S.indexOf("already SENT — its release cannot change now") > 0 && U.indexOf("action: 'set_bill_release'") > 0 && U.indexOf("'release # needed'") > 0); // (RJ: optional for NextTrade bills)
+ok('1g: the 🤖 check runs BY ITSELF on every save (rules + AI) — nobody has to remember a button', S.indexOf('the 🤖 check runs by itself on every save') > 0 && S.indexOf('auto: true') > 0 && S.indexOf('audit: autoA') > 0);
 
 // ── 2. "make it simple and user friendly" — one guided screen
 ok('2a: new wire = 3 numbered steps: who receives the money (big buttons) → tick the bills (search) → total + Save & check',
