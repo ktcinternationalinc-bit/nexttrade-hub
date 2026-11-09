@@ -37,8 +37,9 @@ ok('OQ8 (OV): paid = wave_imported_paid + non-void Hub payments; Hub drafts coun
   /rowCur === activeCur && !isWaveDraft\) \{ tInvoiced/.test(bk) && /entered, not approved yet/.test(bk));
 ok('OQ9: period defaults June 1 2026 → with presets + custom; CSV includes status, source and in-Wave',
   /useState\('2026-06-01'\)/.test(bk) && /'All history'/.test(bk) && /in_wave \? 'yes' : 'no'/.test(bk));
-ok('OQ10: permission-gated via the proven AR invoice-balances helper',
-  /canViewArInvoiceBalances\(isSuperAdmin, modulePerms/.test(bk) && /Restricted — needs "AR: View Invoice Balances"/.test(bk));
+// RE (Max, Nov 8 15:12): All Invoices = the P3 Invoicing & Collections group (with P1) — realigned
+ok('OQ10 (OQ→RE): permission-gated via the unified accounting model (P1 + P3)',
+  /var mayView = acctAccess\(isSuperAdmin, modulePerms, userProfile && userProfile\.role, 'wave'\)\.inv;/.test(bk) && /Restricted — needs "P3 · Invoicing & Collections"/.test(bk));
 
 if (failed.length) { console.log('FAILED (' + failed.length + '):'); failed.forEach(function (x) { console.log('  - ' + x); }); process.exit(1); }
 else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }

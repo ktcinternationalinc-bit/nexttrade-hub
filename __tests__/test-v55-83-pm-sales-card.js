@@ -27,7 +27,8 @@ ok('1c: drill + card figures from the same sum; each row says WHY it counts as s
 
 var bh = R('src/components/BooksHomeTab.jsx');
 ok('2 (PP): sales card rendered inside BANK REALITY group as "of which SALES", clickable, own drill key',
-  /of which SALES \(/.test(bh) && /keys: \[\{ key: 'sales_in', sign: 1 \}\]/.test(bh) &&
+  // RE (Max Nov 8 15:12, unified permissions) moved the count into the label only when the card's group is allowed — realigned
+  /of which SALES' \+ \(V\.fin \? ' \(/.test(bh) && /keys: \[\{ key: 'sales_in', sign: 1 \}\]/.test(bh) &&
   /deposits matched to invoices \/ customer payments/.test(bh));
 
 console.log('');

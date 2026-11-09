@@ -7,7 +7,7 @@ import { useBankVisibility, refreshBankVisibility } from '../lib/use-bank-visibi
 
 var SPECIAL_PERMISSIONS = [
   { key: 'canViewFullDashboard', label: 'Full dashboard access' },
-  { key: 'canViewBankBalances', label: 'Banking information access' },
+  { key: 'canViewBankBalances', label: 'Bank Balances (banking information) — super admin grants only' }, // v55.83-RF (Max 15:25 "yes in settings bank balances")
 ];
 
 export default function BankBalancePermissions() {

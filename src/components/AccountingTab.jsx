@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import WaveBusinessFilter from './WaveBusinessFilter';
 import AccountingDashboard from './AccountingDashboard';
+import { acctAccess, screenHub } from '../lib/accounting-access'; // v55.83-RE / RF
 import CompanyProfileTab from './CompanyProfileTab';
 import AccountingCustomerHistory from './AccountingCustomerHistory';
 import CustomerLedger from './CustomerLedger';
@@ -29,6 +30,7 @@ import ClickBooksUSWorkflows from './ClickBooksUSWorkflows';
 import ClickBooksUSReports from './ClickBooksUSReports';
 import ClickBooksUSCutover from './ClickBooksUSCutover';
 import AuditTrailTab from './AuditTrailTab'; // v55.83-QI
+import WiresTab from './WiresTab'; // v55.83-RG
 import { useBankVisibility } from '../lib/use-bank-visibility';
 
 export default function AccountingTab(props) {
@@ -49,6 +51,7 @@ export default function AccountingTab(props) {
     ['dashboard', '📊 Dashboard'],
     ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
     ['bills', '💸 Bills'], // v55.83-PB — vendor bills (AP): what we owe, pay from the bank feed
+    ['wires', '🏦 Wires'], // v55.83-RG — wires sent: audit + AI + two-person sign-off, click → every bill paid
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
     ['period_stats', '📉 Stats'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
     ['categories', '🏷 Categories & Rules'], // v55.83-PI — own categories, learned rules, verified stamp
@@ -77,6 +80,7 @@ export default function AccountingTab(props) {
   // wave.sync.view sees the tab and can mount the screen. (Server routes already enforce the
   // specific push/import/settings permissions; this controls the screen itself.)
   var mp = props.modulePerms || {};
+  var userProfile = props.userProfile; // v55.83-RG — was referenced (Audit Trail tab, wires gate) but never declared
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
   // v55.83-PW (Max): LEVEL 1 — "permission to see accounting in general".
   // The umbrella accounting.view opens the area; so does ANY specific
@@ -88,17 +92,20 @@ export default function AccountingTab(props) {
   var TAB_GROUPS = [
     ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
     ['🧾 SELLING — customers & what they owe', ['invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
-    ['🛒 BUYING — vendors & what we owe', ['bills', 'purchaseorders']],
+    ['🛒 BUYING — vendors & what we owe', ['bills', 'wires', 'purchaseorders']],
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast']],
     ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports']],
     ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
   ];
-  var hasAnyAccounting = isSuper || mp['accounting.view'] === true || mp['accounting.view_totals'] === true ||
-    mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true ||
-    mp['bank.classify'] === true || mp['bank.view'] === true || mp['payments.match'] === true ||
-    mp['invoice.view'] === true || mp['invoice.create'] === true ||
-    mp['accounting.customers.view'] === true || mp['accounting.company_profile.view'] === true;
+  // v55.83-RE (Max, Nov 8 15:12) — P1 "Accounting Access" is REQUIRED before
+  // any other accounting permission takes effect (both hubs, one definition).
+  var acctV = acctAccess(isSuper, mp, props.userProfile && props.userProfile.role);
+  var hasAnyAccounting = acctV.access;
+  // v55.83-RF (Max, Nov 8 15:25: "2 switches with same permissioning for both")
+  // — each screen belongs to ONE hub and shows only with that hub's switch;
+  // P2/P3 rules are identical inside both. The audit trail serves either hub.
+  function hubAllows(k) { var h = screenHub(k); return h === 'ktc' ? acctV.ktc : h === 'wave' ? acctV.wave : acctV.access; }
 
   var canWaveSync = isSuper || mp['wave.sync.view'] === true;
   var clickbooksEnabled = process.env.NEXT_PUBLIC_CLICKBOOKS_US_ENABLED === 'true';
@@ -109,14 +116,16 @@ export default function AccountingTab(props) {
   var canLedgerly = financialAccess.canViewFullDashboard === true || financialAccess.canViewBankBalances === true;
   if (!hasAnyAccounting) {
     return <div className="p-6"><div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155', maxWidth: 560 }}>
-      <b>Accounting is locked for your account.</b> Ask an admin for <b>ACCT-000 — Accounting: View</b> (or a specific permission like Bills, Invoices or Bank: Categorize) in Settings → Permissions.</div></div>;
+      <b>Accounting is locked for your account.</b> Ask an admin for <b>P1a · ClickBooks (KTC Hub) Access</b> and/or <b>P1b · Wave Hub Access</b> in Settings → Permissions — every other accounting permission takes effect only with one of them.</div></div>;
   }
+  // v55.83-RF — never render a screen of a hub this user has no switch for (deep links, card jumps)
+  if (!hubAllows(sub)) { sub = acctV.ktc ? 'books_home' : 'dashboard'; }
   return (
     <div>
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'forecast' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'period_stats' || isSuper || mp['accounting.view_totals'] === true || mp['bills.view'] === true || mp['bills.manage'] === true || mp['ar.view_invoice_balances'] === true) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'audit' || isSuper || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'audit' || isSuper || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">
@@ -132,12 +141,13 @@ export default function AccountingTab(props) {
           </div>;
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'bills' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'bills' && sub !== 'wires' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
       {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
+      {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
       {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}
       {sub === 'period_stats' && <div className="p-3"><PeriodStatsTab {...props} onGo={setSub} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}

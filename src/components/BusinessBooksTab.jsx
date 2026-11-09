@@ -10,7 +10,8 @@ import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client'; // v55.83-QM — match deposits from here too
 import InvoicePeek from './InvoicePeek'; // v55.83-QN — click an invoice number → details + ✏ Edit
 import { isPaymentVoid } from '../lib/payment-matching';
-import { canViewArInvoiceBalances } from '../lib/bank-permissions';
+import { canViewArInvoiceBalances } from '../lib/bank-permissions'; // eslint-disable-line no-unused-vars
+import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { businessOfInvoice } from '../lib/business-of';
 
@@ -21,7 +22,9 @@ export default function BusinessBooksTab(props) {
   var userProfile = props.userProfile || null;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var mayView = canViewArInvoiceBalances(isSuperAdmin, modulePerms, userProfile && userProfile.role);
+  // v55.83-RE (Max, Nov 8 15:12): All Invoices = Invoiced / Paid / Still Open
+  // and their invoices — the P3 Invoicing & Collections group (P1 required).
+  var mayView = acctAccess(isSuperAdmin, modulePerms, userProfile && userProfile.role, 'wave').inv; // RF — Wave Hub screen
 
   var [biz, setBiz] = useState('US');
   var [from, setFrom] = useState('2026-06-01');
@@ -63,7 +66,7 @@ export default function BusinessBooksTab(props) {
   }
   useEffect(function () { load(); }, []); // eslint-disable-line
 
-  if (!mayView) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — needs "AR: View Invoice Balances" (Settings → Permissions).</div>; }
+  if (!mayView) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — needs "P3 · Invoicing & Collections" (with P1 · Accounting Access) in Settings → Permissions.</div>; }
   if (loading || !raw) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-500">Loading all invoices…</div>; }
 
   var activeCur = biz === 'EG' ? 'EGP' : 'USD';

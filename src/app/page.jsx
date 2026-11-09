@@ -1988,12 +1988,13 @@ export default function App() {
       // entry is driven by the accounting grants themselves (same OR-list as
       // inside the tab), never by the generic Bank module.
       if (t.id === 'accounting') {
-        return modulePerms['accounting.view'] === true || modulePerms['accounting.view_totals'] === true ||
-          modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true ||
-          modulePerms['ar.view_invoice_balances'] === true || modulePerms['bank.classify'] === true ||
-          modulePerms['bank.view'] === true || modulePerms['payments.match'] === true ||
-          modulePerms['invoice.view'] === true || modulePerms['invoice.create'] === true ||
-          modulePerms['accounting.customers.view'] === true || modulePerms['accounting.company_profile.view'] === true;
+        // v55.83-RE (Max, Nov 8 15:12 — Unified Accounting Permissions): P1
+        // "Accounting Access" ONLY. Other accounting permissions take effect
+        // inside, never open the module on their own. Owner/admin roles and
+        // super admin keep everything (same as the server).
+        // v55.83-RF (Max 15:25) — two switches: ClickBooks (KTC Hub) Access or Wave Hub Access opens the menu
+        return modulePerms['accounting.clickbooks.access'] === true || modulePerms['accounting.wavehub.access'] === true ||
+          modulePerms['accounting.view'] === true || userProfile?.role === 'owner' || userProfile?.role === 'admin';
       }
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
@@ -5544,7 +5545,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-RC</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-RH</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"

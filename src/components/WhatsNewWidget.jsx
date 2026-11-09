@@ -33,6 +33,68 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RH',
+    date: '2026-11-08',
+    label: "\ud83d\udce4 Wires approved before they are sent",
+    items: [
+      "Wires are now approved BEFORE they are sent. In \ud83c\udfe6 Wires \u2192 \ud83d\udce4 Prepared wires, prepare the wire first: who it goes to (RTM Capital, NextTrade Industries, or a vendor directly), the bills it pays \u2014 any number of vendors \u2014 and RTM's fee if there is one.",
+      "The \ud83e\udd16 audit and AI review run on the whole wire: no bill paid before, every bill has a release number, no duplicated release or reference numbers, and every bill belongs on that wire (RTM bills on the RTM wire, NextTrade wires are bills only).",
+      "Two different people sign it. Change anything after that and both signatures stop counting.",
+      "Whoever sends it at the bank marks it sent with the bank's wire confirmation attached \u2014 the confirmation is part of the approval record.",
+      "When the money-out appears in the bank feed, attach it to the wire: the bills are recorded paid at that moment, and the bank line carries the whole approval. A different amount can only be accepted by a super admin with the reason.",
+      "\ud83d\udcce RTM proof: upload RTM's proof that it paid the vendors and tick the bills it covers. The wire is complete when every bill has its proof.",
+      "A bill sitting on a prepared wire can't be paid any other way. Bank lines that went out without an approved wire are flagged in \ud83c\udfe6 Wires in the bank.",
+      "New switches in Settings \u2192 Permissions: Wires: Prepare and Wires: Send.",
+      { superAdminOnly: true, text: "v55.83-RH \u2014 SQL AFTER RG, BEFORE the zip: v55-83-RH-wire-packages.sql (wire_packages seq WP-####, payee_kind service_provider|affiliate|vendor, fee only for service_provider (CHECK), status draft|sent|attached|cancelled, audit+2 signoffs bound to fingerprint (CHECK 2nd<>1st), sent needs both signers+sender+approved_total (CHECK), bank_transaction_id UNIQUE; wire_package_lines with partial unique index bill_id WHERE is_open; wire_package_files; triggers lock everything approved once sent, block cancel/delete after sent and bill add/remove/amount change; RLS read-only, writes service role; tested PG16 twice with 15 violation cases). Code: lib/wire-audit auditPackage/packageFingerprint (now sorts by payment_id||bill_id)/packageStatus/PKG_STATUS_LABEL; lib/wire-package-server packageContext/loadPayParties/aiReviewPackage; api/accounting/wire-packages payees/open_bills/list/save_draft/get/cancel/run_check/signoff/mark_sent (proof required, pv/wire- path)/bank_candidates/attach (overpay recheck, inserts vendor_bill_payments method rtm|wire, rollback by voiding, third_party_payer, affiliate autoReview, super-admin override note for amount diff)/rtm_proof; bills record_payment refuses bills on an open package; wires list shows package or 'sent without an approved wire'. Vendor-direct wires do not auto-carry the bill category onto the bank line yet. Test rh 36." },
+    ],
+  },
+  {
+    version: 'v55.83-RG',
+    date: '2026-11-08',
+    label: "\ud83c\udfe6 Wires portal + saved order reconciliations",
+    items: [
+      "New \ud83c\udfe6 Wires tab (Accounting \u2192 Buying): every wire sent to vendors with the bills it paid. Click a wire to see every bill with all its data \u2014 vendor, bill #, release #, dates, category, total, what this wire paid, earlier payments, validation and notes (CSV too).",
+      "Each wire gets a \ud83e\udd16 audit before anyone signs: no bill paid before, every bill has a release number, no duplicated release or reference numbers, and the bills explain the whole wire \u2014 plus an AI review that flags anything else odd.",
+      "Then TWO different people sign it off. If a bill on the wire changes afterwards, the audit and both signatures stop counting and it must be checked again.",
+      "Bills now have a Release # field. A missing one can be filled right inside the wire.",
+      "Order reconciliation: \ud83d\udcbe Save each run so it stays on record. Resolve every exception line with a note, one person marks it reconciled, a different person approves it (or sends it back). Approved runs are locked.",
+      "New switches in Settings \u2192 Permissions: Wires: View, Wires: Sign Off, Order Recon: Reconcile & Approve.",
+      { superAdminOnly: true, text: "v55.83-RG \u2014 SQL BEFORE the zip: v55-83-RG-wires-recon.sql (vendor_bills.release_number + index; wire_audits unique per bank txn with CHECK 2nd signer <> 1st; order_reconciliations status open/reconciled/approved with CHECK approver <> reconciler + trigger locking approved rows against UPDATE/DELETE; RLS read-only for authenticated, writes via service role; tested PG16 twice incl. constraint/trigger violations). Code: lib/wire-audit.js (auditWire block/warn rules, wireFingerprint, wireStatus), api/accounting/wires (list/detail/run_check/signoff/set_release; P1a + wires.view|wires.signoff; sign-offs bound to fingerprint; optimistic updated_at; AI via ANTHROPIC_API_KEY server-side, sonnet\u2192haiku fallback, unavailable stated plainly, note >=10 chars required when AI not OK); lib/order-recon.js + reconcile route save_run/list_runs/get_run/resolve_line/mark_reconciled/approve_run/send_back (recon.signoff; status-conditional updates; audit trail). AccountingTab: wires tab + fixed undeclared userProfile (Audit Trail tab). Test rg 38." },
+    ],
+  },
+  {
+    version: 'v55.83-RF',
+    date: '2026-11-08',
+    label: "\ud83d\udd10 Two accounting switches: ClickBooks + Wave Hub",
+    items: [
+      "Accounting access is now TWO switches \u2014 \u201cP1a \u00b7 ClickBooks (KTC Hub) Access\u201d and \u201cP1b \u00b7 Wave Hub Access\u201d. Each opens only its own screens; the Accounting menu shows with either. P2 (Bank & Financial Summary) and P3 (Invoicing & Collections) work the same way in both.",
+      "Bank Balance shows only with P2 AND the Bank Balances switch at the top of Settings \u2192 Permissions (only a super admin can tick it).",
+      "Nobody loses access on the day: everyone who worked in Accounting gets the matching switch automatically \u2014 then trim in Settings.",
+      { superAdminOnly: true, text: "v55.83-RF \u2014 SQL BEFORE the zip: v55-83-RF-accounting-switches.sql (grants P1a to ClickBooks-type holders, P1b to Wave-Hub-type holders, both to RE accounting.view holders, P3 to invoice-money holders; never P2; skips super/owner/admin; idempotent; tested PG16 twice; prints who has what). Code: accounting-access.js acctAccess(..., hub) with ktc/wave + KTC_SCREENS/WAVE_SCREENS/screenHub; server-permissions alias accounting.view = either switch (all P1 gates accept both); AccountingTab hubAllows + subShown fallback; menu = either switch; BooksHome/Stats/Forecast ask 'ktc', Dashboard/All Invoices ask 'wave'; forecast balance = P2 && (env super admin || financial_visibility can_view_bank_balances); BankBalancePermissions label. accounting.view retired (still = both). Test re now 28." },
+    ],
+  },
+  {
+    version: 'v55.83-RE',
+    date: '2026-11-08',
+    label: "\ud83d\udd10 Unified accounting permissions (P1 / P2 / P3)",
+    items: [
+      "Accounting permissions are now three clear switches, the same in KTC Hub and Wave Hub: P1 \u00b7 Accounting Access (needed first \u2014 without it Accounting does not show at all), P2 \u00b7 Bank & Financial Summary (Bank Balance, Came In, Went Out, Sales, Net Moved, Projected Net), P3 \u00b7 Invoicing & Collections (Invoiced, Paid, Still Open, Collected).",
+      "With P1 alone you always see Expected (next 30 / 30\u201360 / 61\u201390 / 90+ days), Bills Due, Late and Total Overdue \u2014 and can click them to the invoices and bills behind them.",
+      "Cards you are not allowed to see say \u201cRestricted\u201d. Every other card still opens its records \u2014 missing P2 never blocks invoices, payments or collections.",
+      { superAdminOnly: true, text: "v55.83-RE \u2014 src/lib/accounting-access.js (acctAccess P1/P2/P3 + owner/admin/super all; CARD_GROUP; maskCashflow / maskPeriodStats / maskForecast) used by bills route (P1 read gate; writes P1+bills.manage; list P1+bills.view/manage; per-group masking replaces maskVis; bank balance = P2), expense-rules + audit (P1 first), page.jsx menu (P1 only), AccountingTab (P1 area gate; Forecast/Stats open with P1), BooksHomeTab (gv/go per card; Position row P2), PeriodStatsTab (locked cards), CashForecastTab (net/running Restricted), AccountingDashboard (Wave Hub: AV.inv for Open AR/Paid/credits/customer balances, AV.ops due windows + overdue incl. total, payments-received amount P2), BusinessBooksTab (P3). Settings: P1/P2 relabeled, new accounting.view_invoicing (P3), view_underlying RETIRED. SQL (optional, not schema): v55-83-RE-1-who-needs-P1.sql (read-only list), v55-83-RE-2-grant-P1-P3-OPTIONAL.sql (tested on PG16, idempotent). Tests: re (21) incl. Max's required validation P1+P3 without P2; 7 superseded pins realigned with notes." },
+    ],
+  },
+  {
+    version: 'v55.83-RD',
+    date: '2026-11-08',
+    label: "\ud83d\udcdd Descriptions where the money went",
+    items: [
+      "\u201cWhere this money went\u201d now shows descriptions: the bank line itself, and for each match what it was for \u2014 the customer and the invoice\u2019s line items, or the vendor, category and notes of the bill.",
+      "Bank imports where the description came in as a date (an older PNC file) get their real description back when you import the same file again \u2014 no duplicates.",
+      { superAdminOnly: true, text: "v55.83-RD \u2014 no SQL. deposit_match_candidates applied_detail += party (accounting_customers company_name/contact_name) + desc (accounting_invoice_items description/wave_product_name, up to 3); bill_match_candidates += party/desc (vendor_bills category + notes). AllTransactionsTab box: Bank line + \ud83d\udcdd per piece. Root cause of the date-as-description: pre-RC guessCol took the first header containing 'transaction' (Transaction Date); RC picks 'transaction description'; GENERIC_DESC digit rule repairs dated names on re-import. Test rd (5)." },
+    ],
+  },
+  {
     version: 'v55.83-RC',
     date: '2026-11-08',
     label: "\ud83d\udd0e Search + rules that apply + imports with descriptions",

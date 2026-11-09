@@ -35,13 +35,16 @@ ok('2a: four labeled groups, each answering one question',
   /3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date/.test(bh) &&
   /4 · WHAT'S AHEAD — falling due in the NEXT 30 DAYS/.test(bh)); // (PS made group 4 forward-looking)
 ok('2b: cohort group = INVOICED / PAID ON THESE / STILL OPEN, with the cohort drill wired',
-  /PAID ON THESE \(/.test(bh) && /received in period, on THESE invoices only/.test(bh) &&
+  // RE (Max Nov 8 15:12, unified permissions) moved the count into the label only when the card's group is allowed — realigned
+  /PAID ON THESE' \+ \(V\.inv \? ' \(/.test(bh) && /received in period, on THESE invoices only/.test(bh) &&
   /keys: \[\{ key: 'collected_on_period', sign: 1 \}\]/.test(bh) &&
   /collected_on_period: \{ count: inv2\.collected_on_period_count \|\| 0, sum: inv2\.collected_on_period \|\| 0/.test(bh));
 ok('2c: all-collections card explains itself (old invoices included, rows say which)',
-  /COLLECTED — ALL INVOICES \(/.test(bh) && /each row says if its invoice is from this period or older/.test(bh));
+  // RE (Max Nov 8 15:12, unified permissions) moved the count into the label only when the card's group is allowed — realigned
+  /COLLECTED — ALL INVOICES' \+ \(V\.inv \? ' \(/.test(bh) && /each row says if its invoice is from this period or older/.test(bh));
 ok('2d: bank cards say transfers are included, SALES is "of which"',
-  /ALL settled deposits \(incl\. transfers\)/.test(bh) && /of which SALES \(/.test(bh));
+  // RE (Max Nov 8 15:12, unified permissions) moved the count into the label only when the card's group is allowed — realigned
+  /ALL settled deposits \(incl\. transfers\)/.test(bh) && /of which SALES' \+ \(V\.fin \? ' \(/.test(bh));
 
 ok('3 (PQ): Books-home drill has a BALANCE column (open) between Paid and Amount, carried through merged rows',
   />Balance</.test(bh) && /nd\(r6\.open\)/.test(bh) && /open: r5\.open, amount: r5\.amount, sign: k\.sign/.test(bh));

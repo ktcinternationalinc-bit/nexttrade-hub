@@ -6,6 +6,7 @@
 // coming from... invoices or expenses that have not been flagged yet."
 // OVERDUE gets its own column: money already late is never sold as
 // "coming in the next 30 days". Every drill-down sums to its card.
+import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 
@@ -17,7 +18,10 @@ export default function CashForecastTab(props) {
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var canView = isSuperAdmin || modulePerms['accounting.view_totals'] === true || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true; // v55.83-PW — accounting.view_totals is the explicit totals level
+  // v55.83-RE (Max, Nov 8 15:12) — P1 Accounting Access opens the forecast:
+  // expected, late and bills due are always visible with P1; the net / running
+  // position (Projected Net) is a P2 value and shows only with P2.
+  var canView = acctAccess(isSuperAdmin, modulePerms, userProfile && userProfile.role, 'ktc').access; // RF — ClickBooks (KTC Hub) screen
   var toast = props.toast || { success: function () {}, error: function () {} };
   var onGo = props.onGo || function () {};
 
@@ -110,6 +114,7 @@ export default function CashForecastTab(props) {
               <td className="py-2 pr-2 font-bold" style={{ color: '#312e81' }}>Net this window</td>
               {order.map(function (b) {
                 var pos = B[b].net >= 0;
+                if (B[b].net == null) { return <td key={b} className="py-2 px-2 text-right font-bold" style={{ color: '#64748b' }}>Restricted</td>; }
                 return <td key={b} className="py-2 px-2 text-right font-extrabold tabular-nums" style={{ color: pos ? '#065f46' : '#7f1d1d' }}>
                   {(pos ? '+$' : '−$') + fmt(Math.abs(B[b].net))}</td>;
               })}
@@ -118,6 +123,7 @@ export default function CashForecastTab(props) {
               <td className="py-2 pr-2 font-bold" style={{ color: '#334155' }}>Running position<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>can we pay the bills as they come due?</div></td>
               {order.map(function (b) {
                 var pos = B[b].running >= 0;
+                if (B[b].running == null) { return <td key={b} className="py-2 px-2 text-right font-bold" style={{ color: '#64748b' }}>Restricted</td>; }
                 return <td key={b} className="py-2 px-2 text-right font-extrabold tabular-nums" style={{ color: pos ? '#065f46' : '#7f1d1d', background: pos ? '#f0fdf4' : '#fff1f2' }}>
                   {(pos ? '+$' : '−$') + fmt(Math.abs(B[b].running))}</td>;
               })}

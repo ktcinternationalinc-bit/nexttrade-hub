@@ -562,13 +562,18 @@ export default function AllTransactionsTab(props) {
         {/* v55.83-QQ — WHERE THE MONEY WENT: every applied piece, named */}
         {(mPanel.txn.applied_detail || []).length > 0 && <div className="mb-1 rounded-lg p-2" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
           <div className="text-[10px] font-extrabold mb-0.5" style={{ color: '#064e3b' }}>💰 Where this money went so far:</div>
+          {/* v55.83-RD (Max, Nov 8 14:24: "description should also be displayed in this area when seeing where it was matched") */}
+          <div className="text-[10px] mb-1" style={{ color: '#064e3b' }}><span className="font-extrabold">Bank line:</span> {[mPanel.txn.merchant_name, mPanel.txn.name].filter(function (x8, i8, a8) { return x8 && a8.indexOf(x8) === i8; }).join(' · ') || '(no description from the bank)'}</div>
           {(mPanel.txn.applied_detail || []).map(function (d5, di) {
-            return <div key={di} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: di < mPanel.txn.applied_detail.length - 1 ? '1px solid #d1fae5' : 'none', color: '#064e3b' }}>
-              <span className="font-extrabold tabular-nums">${fmt(d5.amount)}</span>
-              <span>→</span>
-              <span className="font-bold">{d5.kind === 'unapplied' ? '📥 UNCATEGORIZED (parked — place later from Bank Review)' : (d5.kind === 'rtm_bill' ? '🏢 RTM-covered bill: ' : '') + (d5.ref || d5.invoice_id || d5.bill_id)}{d5.rel ? ' · Release ' + d5.rel : ''}</span>
-              <div className="flex-1" />
-              <span style={{ color: '#047857' }}>{d5.date || ''}</span>
+            return <div key={di} className="py-0.5" style={{ borderBottom: di < mPanel.txn.applied_detail.length - 1 ? '1px solid #d1fae5' : 'none', color: '#064e3b' }}>
+              <div className="flex gap-2 text-[10px]">
+                <span className="font-extrabold tabular-nums">${fmt(d5.amount)}</span>
+                <span>→</span>
+                <span className="font-bold">{d5.kind === 'unapplied' ? '📥 UNCATEGORIZED (parked — place later from Bank Review)' : (d5.kind === 'rtm_bill' ? '🏢 RTM-covered bill: ' : '') + (d5.ref || d5.invoice_id || d5.bill_id)}{d5.rel ? ' · Release ' + d5.rel : ''}{d5.kind === 'invoice' && d5.party ? ' · ' + d5.party : ''}</span>
+                <div className="flex-1" />
+                <span style={{ color: '#047857' }}>{d5.date || ''}</span>
+              </div>
+              {d5.desc && <div className="text-[10px] pl-4" style={{ color: '#065f46', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>📝 {d5.desc}</div>}
             </div>;
           })}
         </div>}

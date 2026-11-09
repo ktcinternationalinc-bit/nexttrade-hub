@@ -4,6 +4,7 @@
 // invoices and bills side by side; month-by-month table; CSV.
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
+import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' }; // v55.83-PW
 
@@ -46,7 +47,10 @@ export default function PeriodStatsTab(props) {
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var canView = isSuperAdmin || modulePerms['accounting.view_totals'] === true || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true || modulePerms['ar.view_invoice_balances'] === true; // v55.83-PW — accounting.view_totals is the explicit totals level
+  // v55.83-RE (Max, Nov 8 15:12) — Accounting Access (P1) opens Stats; each
+  // card then follows its own group (P3 invoices, P2 bank/financial, P1 bills owed).
+  var VS = acctAccess(isSuperAdmin, modulePerms, userProfile && userProfile.role, 'ktc'); // RF — a ClickBooks (KTC Hub) screen
+  var canView = VS.access;
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
@@ -98,6 +102,13 @@ export default function PeriodStatsTab(props) {
   }
 
   function Card(p2) {
+    if (p2.locked) { // v55.83-RE — restricted card: no number, no click
+      return <div className="rounded-xl p-3 text-left" style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', minWidth: 160, flex: '1 1 160px' }}>
+        <div className="text-[10px] font-extrabold uppercase" style={{ color: '#475569' }}>{p2.label}</div>
+        <div className="text-lg font-extrabold" style={{ color: '#475569' }}>Restricted</div>
+        <div className="text-[9px] font-bold mt-0.5" style={{ color: '#64748b' }}>{p2.why}</div>
+      </div>;
+    }
     return <button onClick={p2.onClick} className="rounded-xl p-3 text-left" style={{ background: p2.bg, border: '1px solid ' + p2.border, minWidth: 160, flex: '1 1 160px', cursor: 'pointer' }}>
       <div className="text-[10px] font-extrabold uppercase" style={{ color: p2.fg, opacity: 0.75 }}>{p2.label}</div>
       <div className="text-lg font-extrabold tabular-nums" style={{ color: p2.fg }}>{p2.value}</div>
@@ -200,6 +211,7 @@ export default function PeriodStatsTab(props) {
   }
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
+  var dV = (data && data.vis) || VS; // v55.83-RE — the server's decision wins
   return <div className="bg-white rounded-xl border border-slate-200 p-3">
     <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
@@ -234,14 +246,14 @@ export default function PeriodStatsTab(props) {
      <div>
       <div className="text-[10px] font-extrabold uppercase mb-1" style={{ color: '#065f46' }}>Invoices (money we earn) · {data.from} → {data.to}</div>
       <div className="flex gap-2 flex-wrap mb-3">
-        <Card onClick={function () { openDrill('invoiced', 'Invoiced in period', 'Customer'); }} label={'Invoiced (' + inv.count + ')'} value={'$' + fmt(inv.invoiced)} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="invoices dated in period" />
-        <Card onClick={function () { openDrill('collected', 'Collected in period', 'Customer'); }} label={'Collected (' + inv.collected_count + ' payments)'} value={'$' + fmt(inv.collected)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="payments received in period" />
-        <Card onClick={function () { openDrill('open_invoices', 'Still open — period invoices', 'Customer'); }} label="Still open from these" value={'$' + fmt(inv.still_open_from_period)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub="unpaid balance of period invoices" />
+        <Card locked={!dV.inv} why="needs P3 · Invoicing & Collections" onClick={function () { openDrill('invoiced', 'Invoiced in period', 'Customer'); }} label={'Invoiced' + (dV.inv ? ' (' + inv.count + ')' : '')} value={'$' + fmt(inv.invoiced)} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="invoices dated in period" />
+        <Card locked={!dV.inv} why="needs P3 · Invoicing & Collections" onClick={function () { openDrill('collected', 'Collected in period', 'Customer'); }} label={'Collected' + (dV.inv ? ' (' + inv.collected_count + ' payments)' : '')} value={'$' + fmt(inv.collected)} bg="#ecfeff" border="#a5f3fc" fg="#155e75" sub="payments received in period" />
+        <Card locked={!dV.inv} why="needs P3 · Invoicing & Collections" onClick={function () { openDrill('open_invoices', 'Still open — period invoices', 'Customer'); }} label="Still open from these" value={'$' + fmt(inv.still_open_from_period)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub="unpaid balance of period invoices" />
       </div>
       <div className="text-[10px] font-extrabold uppercase mb-1" style={{ color: '#7f1d1d' }}>Bills (money we owe)</div>
       <div className="flex gap-2 flex-wrap mb-3">
         <Card onClick={function () { openDrill('billed', 'Bills entered in period', 'Vendor'); }} label={'Bills entered (' + bl.count + ')'} value={'$' + fmt(bl.billed)} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="bills dated in period" />
-        <Card onClick={function () { openDrill('bills_paid', 'Bill payments in period', 'Vendor'); }} label={'Bills paid (' + bl.paid_count + ')'} value={'$' + fmt(bl.paid)} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="bill payments in period" />
+        <Card locked={!dV.fin} why="needs P2 · Bank & Financial Summary" onClick={function () { openDrill('bills_paid', 'Bill payments in period', 'Vendor'); }} label={'Bills paid' + (dV.fin ? ' (' + bl.paid_count + ')' : '')} value={'$' + fmt(bl.paid)} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="bill payments in period" />
         <Card onClick={function () { openDrill('open_bills', 'Still open — period bills', 'Vendor'); }} label="Still open from these" value={'$' + fmt(bl.still_open_from_period)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub={bl.disputed_open > 0.005 ? ('+ $' + fmt(bl.disputed_open) + ' disputed (excluded)') : 'disputed excluded'} />
       </div>
 
@@ -298,11 +310,11 @@ export default function PeriodStatsTab(props) {
             {(data.months || []).map(function (m) {
               return <tr key={m.month} style={{ borderBottom: '1px solid #f1f5f9' }}>
                 <td className="py-1.5 pr-2 font-bold">{m.month}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums">${fmt(m.invoiced)} <span className="text-[9px] text-slate-400">({m.invoiced_count})</span></td>
-                <td className="py-1.5 px-2 text-right tabular-nums" style={{ color: '#065f46' }}>${fmt(m.collected)}</td>
+                <td className="py-1.5 px-2 text-right tabular-nums">{m.invoiced == null ? 'Restricted' : <span>${fmt(m.invoiced)} <span className="text-[9px] text-slate-400">({m.invoiced_count})</span></span>}</td>
+                <td className="py-1.5 px-2 text-right tabular-nums" style={{ color: '#065f46' }}>{m.collected == null ? 'Restricted' : '$' + fmt(m.collected)}</td>
                 <td className="py-1.5 px-2 text-right tabular-nums">${fmt(m.billed)} <span className="text-[9px] text-slate-400">({m.billed_count})</span></td>
-                <td className="py-1.5 px-2 text-right tabular-nums" style={{ color: '#7f1d1d' }}>${fmt(m.bills_paid)}</td>
-                <td className="py-1.5 px-2 text-right font-extrabold tabular-nums" style={{ color: m.net >= 0 ? '#065f46' : '#7f1d1d' }}>{(m.net >= 0 ? '+$' : '−$') + fmt(Math.abs(m.net))}</td>
+                <td className="py-1.5 px-2 text-right tabular-nums" style={{ color: '#7f1d1d' }}>{m.bills_paid == null ? 'Restricted' : '$' + fmt(m.bills_paid)}</td>
+                <td className="py-1.5 px-2 text-right font-extrabold tabular-nums" style={{ color: m.net >= 0 ? '#065f46' : '#7f1d1d' }}>{m.net == null ? 'Restricted' : (m.net >= 0 ? '+$' : '−$') + fmt(Math.abs(m.net))}</td>
               </tr>;
             })}
             {(data.months || []).length === 0 && <tr><td colSpan={6} className="py-3 text-center text-slate-500 text-[11px]">Nothing in this period.</td></tr>}

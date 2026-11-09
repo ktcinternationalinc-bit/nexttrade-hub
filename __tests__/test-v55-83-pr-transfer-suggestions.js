@@ -184,18 +184,21 @@ ok('11d: wired under Accounting behind bank.classify',
 var stP = R('src/components/SettingsTab.jsx');
 var atP = R('src/components/AccountingTab.jsx');
 var brP = R('src/app/api/accounting/bills/route.js');
-ok('12a: the two switches exist in Settings — ACCT-000 general view (umbrella) + ACCT-008 money totals; balances stay the protected SQL grant',
-  /ACCT-000 - Accounting: View \(general\)/.test(stP) && /ACCT-008 - Accounting: See Money Totals/.test(stP) &&
-  /Bank BALANCES stay a separate protected grant/.test(stP));
-ok('12b: LEVEL 1 umbrella — any accounting permission opens the area (backward compatible), none → a plain locked message; computed AFTER mp/isSuper exist',
-  /var hasAnyAccounting = isSuper \|\| mp\['accounting\.view'\] === true/.test(atP) &&
+// RE (Max, Nov 8 15:12 — Unified Accounting Permissions) superseded PW's levels: P1 Accounting
+// Access is now REQUIRED first (no more "any permission opens it"), P2 = Bank & Financial
+// Summary (incl. Bank Balance), P3 = Invoicing & Collections. Realigned:
+// RF (Max, Nov 8 15:25: "2 switches with same permissioning for both") — realigned:
+ok('12a (PW→RE→RF): the switches exist in Settings — P1a ClickBooks + P1b Wave Hub access, P2 · Bank & Financial Summary, P3 · Invoicing & Collections',
+  /P1a · ClickBooks \(KTC Hub\) Access/.test(stP) && /P1b · Wave Hub Access/.test(stP) && /P2 · Bank & Financial Summary/.test(stP) && /P3 · Invoicing & Collections/.test(stP));
+ok('12b (PW→RE): P1 opens the area (strict), none → a plain locked message; computed AFTER mp/isSuper exist',
+  /var hasAnyAccounting = acctV\.access;/.test(atP) &&
   /Accounting is locked for your account\./.test(atP) &&
   atP.indexOf('var mp = props.modulePerms') < atP.indexOf('var hasAnyAccounting'));
-ok('12c: LEVEL 3 totals — server READ gate accepts bills.view/manage, accounting.view_totals or AR balances; WRITES still need Bills: Manage; totals tabs + canView widened',
-  /READ_KEYS = \['bills\.view', 'bills\.manage', 'accounting\.view_totals', 'ar\.view_invoice_balances'\]/.test(brP) &&
-  /WRITE_ACTIONS\[action\]\) \{\n      gate = await assertPermission\(db, userId, 'bills\.manage', req\);/.test(brP) &&
-  /accounting\.view_totals'\] === true \|\| modulePerms\['bills\.view'\]/.test(R('src/components/CashForecastTab.jsx')) &&
-  /accounting\.view_totals'\] === true \|\| modulePerms\['bills\.view'\]/.test(R('src/components/PeriodStatsTab.jsx')));
+ok('12c (PW→RE): server READ gate = P1; WRITES need P1 + Bills: Manage; Forecast/Stats open with P1 and mask per group',
+  /var gate = await assertPermission\(db, userId, 'accounting\.view', req\);/.test(brP) &&
+  /var gate2 = await assertPermission\(db, userId, 'bills\.manage', req\);/.test(brP) &&
+  /var canView = acctAccess\(isSuperAdmin, modulePerms, userProfile && userProfile\.role, 'ktc'\)\.access;/.test(R('src/components/CashForecastTab.jsx')) &&
+  /var canView = VS\.access;/.test(R('src/components/PeriodStatsTab.jsx')));
 ok('12d: workers keep working — bank.classify/payments.match routes unchanged (expense-rules gate untouched by the totals level)',
   /assertPermission\(db, userId, 'bank\.classify', req\)/.test(R('src/app/api/accounting/expense-rules/route.js')));
 
@@ -232,7 +235,8 @@ var atZ = R('src/components/AccountingTab.jsx');
 ok('16: tabs grouped by activity — DAILY WORK / SELLING (Order Reconciliation here, per Max) / BUYING / three REPORTS rows split by subject / SYSTEM; same tabs, same permission filter',
   /📥 DAILY WORK — handle the money/.test(atZ) &&
   /'🧾 SELLING — customers & what they owe', \['invoices', 'all_invoices', 'proformas', 'recon'/.test(atZ) &&
-  /'🛒 BUYING — vendors & what we owe', \['bills', 'purchaseorders'\]/.test(atZ) &&
+  // superseded pin (v55.83-RG, Max 15:32 "a separate portal for wires sent"): 🏦 Wires sits between Bills and Purchase Orders in BUYING
+  /'🛒 BUYING — vendors & what we owe', \['bills', 'wires', 'purchaseorders'\]/.test(atZ) &&
   /REPORTS · SALES & CUSTOMERS/.test(atZ) && /REPORTS · MONEY & CASH/.test(atZ) && /REPORTS · LEDGER \(ClickBooks\)/.test(atZ) &&
   /⚙️ SYSTEM — rarely touched/.test(atZ) && /TAB_GROUPS\.map\(function \(g\)/.test(atZ));
 

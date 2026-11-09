@@ -10,6 +10,133 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { ToastContext } from '../lib/toast-context';
 import { supabase } from '../lib/supabase';
+import { RECON_STATUS_LABEL } from '../lib/order-recon'; // v55.83-RG
+
+// v55.83-RG (Max 15:32): "for order reconciliation needs to keep record of each
+// one completed.. save it and it needs to be manually reconciled and approved."
+// Every saved run is kept: resolve each exception line with a note → one person
+// marks it RECONCILED → a DIFFERENT person APPROVES (or sends it back) → locked.
+var RSTYLE = { open: { background: '#fef3c7', color: '#78350f' }, reconciled: { background: '#dbeafe', color: '#1e3a8a' }, approved: { background: '#d1fae5', color: '#065f46' } };
+export function SavedReconciliations(props) {
+  var userProfile = props.userProfile; var toast = props.toast;
+  var a1 = useState(null); var runs = a1[0]; var setRuns = a1[1];
+  var a2 = useState(null); var run = a2[0]; var setRun = a2[1];
+  var a3 = useState(false); var busy = a3[0]; var setBusy = a3[1];
+  var a4 = useState({}); var notes = a4[0]; var setNotes = a4[1];
+  var a5 = useState(''); var signNote = a5[0]; var setSignNote = a5[1];
+  var a6 = useState(false); var onlyOpen = a6[0]; var setOnlyOpen = a6[1];
+  function api(payload) {
+    return fetch('/api/reconcile/nexttrade', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) }).then(function (r) { return r.json(); });
+  }
+  function loadRuns() { api({ action: 'list_runs' }).then(function (j) { if (j && j.ok) { setRuns(j.runs || []); } else { setRuns([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setRuns([]); }); }
+  function openRun(id) {
+    setBusy(true);
+    api({ action: 'get_run', run_id: id }).then(function (j) {
+      if (j && j.ok) { setRun(j.run); var n = {}; (j.run.lines || []).forEach(function (l) { n[l.key] = l.note || ''; }); setNotes(n); setSignNote(''); }
+      else { toast.error((j && j.error) || 'Could not open it.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function saveRun() {
+    setBusy(true);
+    api({ action: 'save_run', date_from: props.from || null, date_to: props.to || null }).then(function (j) {
+      if (j && j.ok) { toast.success('Saved — ' + j.lines + ' line(s) to resolve. It is now on record.'); loadRuns(); openRun(j.id); }
+      else { toast.error((j && j.error) || 'Could not save it.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function resolve(l, val) {
+    setBusy(true);
+    api({ action: 'resolve_line', run_id: run.id, key: l.key, resolved: val, note: notes[l.key] || '' }).then(function (j) {
+      if (j && j.ok) { openRun(run.id); loadRuns(); } else { toast.error((j && j.error) || 'Could not save the line.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function step(action, okMsg) {
+    setBusy(true);
+    api({ action: action, run_id: run.id, note: signNote }).then(function (j) {
+      if (j && j.ok) { toast.success(okMsg); openRun(run.id); loadRuns(); } else { toast.error((j && j.error) || 'Could not do that.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  useEffect(function () { loadRuns(); }, []); // eslint-disable-line
+  var nx = run && run.next; var pg = run && run.progress;
+  var shown = (runs || []).filter(function (r) { return !onlyOpen || r.status !== 'approved'; });
+  return <div className="bg-white rounded-xl border border-slate-200 p-3 mb-3">
+    <div className="flex gap-2 items-center flex-wrap mb-2">
+      <div className="text-sm font-extrabold text-slate-900">💾 Saved reconciliations — kept on record, reconciled by one person, approved by another</div>
+      <div className="flex-1" />
+      <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#334155' }}><input type="checkbox" checked={onlyOpen} onChange={function (e) { setOnlyOpen(e.target.checked); }} /> hide approved</label>
+      {props.canSave && <button onClick={saveRun} disabled={busy} className="px-3 py-1.5 rounded-lg text-xs font-extrabold disabled:opacity-50" style={{ background: '#0f766e', color: '#ffffff' }}>
+        💾 Save this reconciliation{props.from || props.to ? ' (' + (props.from || 'start') + ' → ' + (props.to || 'today') + ')' : ' (all dates)'}</button>}
+    </div>
+    {!runs ? <div className="text-[11px] text-slate-500">Loading…</div> : <div className="overflow-x-auto"><table className="w-full text-[11px]">
+      <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
+        <th className="py-1 pr-2 text-left font-semibold">Saved</th><th className="py-1 pr-2 text-left font-semibold">Period</th>
+        <th className="py-1 pr-2 text-right font-semibold">Orders</th><th className="py-1 pr-2 text-right font-semibold">Lines resolved</th>
+        <th className="py-1 pr-2 text-left font-semibold">Status</th><th className="py-1 text-left font-semibold">Reconciled · Approved</th></tr></thead>
+      <tbody style={{ color: '#0f172a' }}>
+        {shown.map(function (r) {
+          return <tr key={r.id} onClick={function () { openRun(r.id); }} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: run && run.id === r.id ? '#eef2ff' : undefined }}>
+            <td className="py-1 pr-2 whitespace-nowrap">{String(r.created_at || '').substring(0, 16).replace('T', ' ')}{r.created_by ? ' · ' + r.created_by : ''}</td>
+            <td className="py-1 pr-2">{(r.period_from || 'all') + ' → ' + (r.period_to || 'all')}</td>
+            <td className="py-1 pr-2 text-right">{r.summary ? r.summary.orders_in_scope : '—'}</td>
+            <td className="py-1 pr-2 text-right font-bold">{r.progress.resolved + ' / ' + r.progress.total}</td>
+            <td className="py-1 pr-2"><span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={RSTYLE[r.status]}>{RECON_STATUS_LABEL[r.status]}</span></td>
+            <td className="py-1 text-[10px]" style={{ color: '#334155' }}>{(r.reconciled_by || '—') + ' · ' + (r.approved_by || '—')}</td>
+          </tr>;
+        })}
+        {shown.length === 0 && <tr><td colSpan={6} className="py-2 text-center text-[11px]" style={{ color: '#64748b' }}>Nothing saved yet — run the reconciliation, then 💾 Save it.</td></tr>}
+      </tbody></table></div>}
+
+    {run && <div className="mt-3 rounded-lg p-2" style={{ border: '2px solid #6366f1' }}>
+      <div className="flex gap-2 items-center flex-wrap mb-1">
+        <div className="text-[12px] font-extrabold" style={{ color: '#0f172a' }}>{'Reconciliation ' + (run.period_from || 'all') + ' → ' + (run.period_to || 'all') + ' · saved ' + String(run.created_at || '').substring(0, 16).replace('T', ' ') + (run.created_by ? ' by ' + run.created_by : '')}</div>
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={RSTYLE[run.status]}>{RECON_STATUS_LABEL[run.status]}</span>
+        <div className="flex-1" />
+        <button onClick={function () { setRun(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
+      </div>
+      {run.snapshot && run.snapshot.summary && <div className="text-[11px] mb-1" style={{ color: '#334155' }}>
+        {'Snapshot: ' + run.snapshot.summary.orders_in_scope + ' orders · ' + run.snapshot.summary.matched + ' matched · ' + run.snapshot.summary.orders_without_invoice + ' without invoice · ' + run.snapshot.summary.invoices_without_order + ' invoices without order · ' + run.snapshot.summary.invoices_with_open_balance + ' open balances (kept for the record; they stay flagged on the AR side until paid)'}</div>}
+      <div className="text-[11px] font-extrabold mb-1" style={{ color: '#0f172a' }}>{'① Resolve every exception line (' + pg.resolved + ' of ' + pg.total + ' done)'}</div>
+      <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 360 }}><table className="w-full text-[11px]">
+        <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>
+          <th className="px-1.5 py-1 text-left font-bold">Exception</th><th className="px-1.5 py-1 text-left font-bold">Release / ref</th>
+          <th className="px-1.5 py-1 text-left font-bold">Customer</th><th className="px-1.5 py-1 text-left font-bold">Date</th>
+          <th className="px-1.5 py-1 text-left font-bold">What was done / found</th><th className="px-1.5 py-1 text-left font-bold">Resolved</th></tr></thead>
+        <tbody style={{ color: '#0f172a' }}>
+          {(run.lines || []).map(function (l) {
+            return <tr key={l.key} className="border-t border-slate-100" style={{ background: l.resolved ? '#f0fdf4' : undefined, verticalAlign: 'top' }}>
+              <td className="px-1.5 py-1 whitespace-nowrap" style={{ color: l.kind === 'order_without_invoice' ? '#7f1d1d' : '#78350f', fontWeight: 700 }}>{l.kind === 'order_without_invoice' ? '🚨 order, no invoice' : '🧐 invoice, no order'}</td>
+              <td className="px-1.5 py-1 font-bold">{l.ref}</td>
+              <td className="px-1.5 py-1">{l.who}</td>
+              <td className="px-1.5 py-1 whitespace-nowrap">{l.date || ''}</td>
+              <td className="px-1.5 py-1">{nx.can_edit ? <input value={notes[l.key] || ''} onChange={function (e) { var n2 = Object.assign({}, notes); n2[l.key] = e.target.value; setNotes(n2); }}
+                placeholder="e.g. invoiced as INV-2231 / order cancelled / sample, no invoice" className="w-full px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', minWidth: 220 }} />
+                : <span>{l.note}</span>}{l.by ? <div className="text-[9px]" style={{ color: '#64748b' }}>{l.by + ' · ' + String(l.at || '').substring(0, 16).replace('T', ' ')}</div> : null}</td>
+              <td className="px-1.5 py-1 whitespace-nowrap">{nx.can_edit ? (l.resolved
+                ? <button onClick={function () { resolve(l, false); }} disabled={busy} className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#d1fae5', color: '#065f46' }}>✓ resolved (undo)</button>
+                : <button onClick={function () { resolve(l, true); }} disabled={busy || String(notes[l.key] || '').trim().length < 3} className="px-1.5 py-0.5 rounded text-[10px] font-extrabold disabled:opacity-50" style={{ background: '#1e293b', color: '#ffffff' }}>mark resolved</button>)
+                : (l.resolved ? '✓' : '—')}</td>
+            </tr>;
+          })}
+          {(run.lines || []).length === 0 && <tr><td colSpan={6} className="px-2 py-2 text-[11px]" style={{ color: '#065f46' }}>No exceptions in this run 🎉 — it can be reconciled straight away.</td></tr>}
+        </tbody></table></div>
+      <div className="mt-2 text-[11px] font-extrabold" style={{ color: '#0f172a' }}>②③ Reconciled by one person · approved by a DIFFERENT person</div>
+      <div className="text-[11px] mb-1" style={{ color: '#334155' }}>
+        {'Reconciled: ' + (run.reconciled_by ? run.reconciled_by + ' · ' + String(run.reconciled_at || '').substring(0, 16).replace('T', ' ') + (run.reconciled_note ? ' — “' + run.reconciled_note + '”' : '') : '—')}
+        {' · Approved: ' + (run.approved_by ? run.approved_by + ' · ' + String(run.approved_at || '').substring(0, 16).replace('T', ' ') + (run.approved_note ? ' — “' + run.approved_note + '”' : '') : '—')}</div>
+      {run.status !== 'approved' && <div className="flex gap-2 items-center flex-wrap">
+        <input value={signNote} onChange={function (e) { setSignNote(e.target.value); }} placeholder={run.status === 'reconciled' ? 'approval note (required to send back)' : 'note (optional)'}
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', flex: '1 1 240px' }} />
+        {run.status === 'open' && <button onClick={function () { step('mark_reconciled', 'Marked RECONCILED — a different person must approve it.'); }} disabled={busy || !nx.can_reconcile}
+          className="px-3 py-1 rounded-lg text-[11px] font-extrabold disabled:opacity-50" style={{ background: '#1d4ed8', color: '#ffffff' }}>✍ Mark reconciled</button>}
+        {run.status === 'reconciled' && <button onClick={function () { step('approve_run', 'APPROVED — this reconciliation is now locked on record.'); }} disabled={busy || !nx.can_approve}
+          className="px-3 py-1 rounded-lg text-[11px] font-extrabold disabled:opacity-50" style={{ background: '#047857', color: '#ffffff' }}>✅ Approve</button>}
+        {run.status === 'reconciled' && <button onClick={function () { step('send_back', 'Sent back to open — the reconciler fixes it and marks it again.'); }} disabled={busy || !nx.can_approve}
+          className="px-3 py-1 rounded-lg text-[11px] font-extrabold disabled:opacity-50" style={{ background: '#fee2e2', color: '#7f1d1d' }}>↩ Send back</button>}
+        {nx.why ? <span className="text-[10px] font-bold" style={{ color: '#7f1d1d' }}>{nx.why}</span> : null}
+      </div>}
+    </div>}
+  </div>;
+}
 
 var WAREHOUSES = ['Non-Bonded USA', 'CANADA', 'USA', 'Other']; // longest first — 'Non-Bonded USA' contains 'USA'
 var STATUSES = ['Post Loading Documentation', 'End Stage', 'Shipped', 'Pending', 'Cancelled', 'Closed', 'Delivered', 'Completed'];
@@ -169,6 +296,9 @@ export default function NexttradeReconciliation(props) {
   }
 
   var isAdm = userProfile && (userProfile.role === 'super_admin' || userProfile.role === 'admin');
+  // v55.83-RG — "Order Recon: Reconcile & Approve" alone shows the saved runs (resolve / reconcile / approve)
+  var mpR = props.modulePerms || {};
+  if (!isAdm && mpR['recon.signoff'] === true) { return <div className="p-3"><SavedReconciliations userProfile={userProfile} toast={toast} canSave={false} /></div>; }
   if (!isAdm) { return <div className="p-3 text-xs rounded" style={{ background: '#fef3c7', color: '#1c1917' }}>Order reconciliation is for Owners/Admins.</div>; }
 
   var sm = report && report.summary;
@@ -347,6 +477,7 @@ export default function NexttradeReconciliation(props) {
           </div>
         )}
       </div>
+      <SavedReconciliations userProfile={userProfile} toast={toast} canSave={true} from={from} to={to} />
     </div>
   );
 }

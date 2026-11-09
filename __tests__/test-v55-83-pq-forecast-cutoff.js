@@ -35,10 +35,12 @@ ok('2: both the strip and the Forecast tab SAY what was excluded and why ("payme
 
 // ── Max 04:55/04:56: "see how our balances will be" + "click on those
 //    forecasted cards to see underlying data" ──
-ok('3a: bank balance only joins the forecast for holders of the PROTECTED balance grant (super admin env or financial_visibility), fail-soft otherwise',
-  /HUB_SUPER_ADMIN_AUTH_USER_IDS/.test(br) && /can_view_bank_balances/.test(br) &&
-  /bank_visibility_identity_map/.test(br) && /catch \(eBal\) \{ balF = null; \}/.test(br) &&
-  /fcPayload\.bank_balance = balF;/.test(br)); // (QI superseded: the balance attaches AFTER totals-masking, still under its own protected grant)
+// RE (Max, Nov 8 15:12 — Unified Accounting Permissions) superseded the protected-grant rule
+// FOR THE ACCOUNTING SCREENS: "Permission 2 — Bank & Financial Summary — restricts Bank Balance".
+// Same intent (balance only for those allowed), now decided by P2 — realigned:
+ok('3a (PQ→RE): bank balance only joins the forecast for holders of P2 · Bank & Financial Summary (super admin always), fail-soft otherwise',
+  /if \(vis\.fin === true\) \{/.test(br) && /catch \(eBal\) \{ balF = null; \}/.test(br) &&
+  /fcPayload\.bank_balance = vis\.fin \? balF : null;/.test(br));
 ok('3b: alias plaid rows deduped per mask (freshest wins) and the as-of date is reported, never hidden',
   /one row per mask \(reconnects leave alias rows\)/.test(br) && /as_of: asOf\.substring\(0, 10\)/.test(br));
 ok('3c: Projected balance row = real bank total + running position, labeled with the as-of date',

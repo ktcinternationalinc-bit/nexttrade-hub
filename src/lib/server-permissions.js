@@ -49,7 +49,12 @@ var PERMISSION_ALIASES = {
   'wave.categories.pull': ['Wave: Pull Categories', 'wave.categories.pull', 'categories.sync_from_wave'],
   'wave.import.run': ['Wave: Import', 'wave.import.run', 'wave.import'],
   'wave.settings.manage': ['Wave: Settings Manage', 'wave.settings.manage'],
-  'wave.production.push': ['Wave: Production Push', 'wave.production.push']
+  'wave.production.push': ['Wave: Production Push', 'wave.production.push'],
+  // ----- v55.83-RF (Max, Nov 8 15:25: "2 switches with same permissioning for both") -----
+  // 'accounting.view' = "may enter Accounting at all" = EITHER hub switch (or the retired RE key).
+  'accounting.view': ['accounting.view', 'accounting.clickbooks.access', 'accounting.wavehub.access'],
+  'accounting.clickbooks.access': ['accounting.clickbooks.access', 'accounting.view'],
+  'accounting.wavehub.access': ['accounting.wavehub.access', 'accounting.view']
 };
 
 // TEMPORARY role->permission map (emergency launch). Lets us grant whole roles a sensible

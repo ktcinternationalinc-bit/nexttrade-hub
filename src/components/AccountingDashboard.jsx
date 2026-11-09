@@ -10,6 +10,7 @@ import { supabase, dbUpdate, logActivity } from '../lib/supabase';
 import { isPaymentVoid } from '../lib/payment-matching';
 import { canViewBank, canSeeAmounts, canViewCompanyTotals, canViewArSummary, canViewArCustomerBalances, canViewArOverdue, canViewArUpcomingDue, canViewArInvoiceBalances, canManageOverdueDashboard } from '../lib/bank-permissions';
 import { isArEligible } from '../lib/ar-eligibility';
+import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
 import { fetchAllRows } from '../lib/fetch-all-rows';
 import { getActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import { businessOfInvoice } from '../lib/business-of';
@@ -37,9 +38,19 @@ export default function AccountingDashboard(props) {
   var seeOverdue = canViewArOverdue(isSuperAdmin, modulePerms, _role);
   var seeInvoiceBal = canViewArInvoiceBalances(isSuperAdmin, modulePerms, _role);
   var seeWaveSync = isSuperAdmin || (modulePerms['wave.sync.view'] === true);
-  var anyAccess = mayView || seeTotals || seeUpcoming || seeOverdue || seeInvoiceBal || seeCustBalances || seeWaveSync;
+  // v55.83-RE (Max, Nov 8 15:12 — Unified Accounting Permissions, IDENTICAL in
+  // KTC Hub and Wave Hub): P1 Accounting Access opens this dashboard and shows
+  // Expected (due windows), Late and Total Overdue with their invoices; P3
+  // Invoicing & Collections shows Still Open (Open AR), Paid, credits and
+  // customer balances with their records; P2 Bank & Financial Summary shows
+  // money that came in (payments received today). Card navigation follows each
+  // card's own group — never blanket-blocked.
+  var AV = acctAccess(isSuperAdmin, modulePerms, _role, 'wave'); // RF — a Wave Hub screen
+  seeTotals = AV.inv; seeCustBalances = AV.inv;
+  seeUpcoming = AV.ops; seeOverdue = AV.ops; seeInvoiceBal = AV.access;
+  var anyAccess = AV.access;
   function csym() { return d && d.activeCur === 'EGP' ? 'EGP ' : '$'; }
-  function money(n) { return seeAmounts ? (csym() + fmt(n)) : '•••••'; }
+  function money(n) { return (seeAmounts && AV.fin) ? (csym() + fmt(n)) : (AV.fin ? '•••••' : 'Restricted'); } // v55.83-RE — money received is a P2 value
   function tmoney(n) { return seeTotals ? (csym() + fmt(n)) : 'Restricted'; }
   function tdue(n) { return seeUpcoming ? (csym() + fmt(n)) : 'Restricted'; }
   function tover(n) { return seeOverdue ? (csym() + fmt(n)) : 'Restricted'; }
@@ -413,12 +424,12 @@ export default function AccountingDashboard(props) {
             onClick={seeTotals ? function () { openDrill('Open AR', d.currentRows.concat(d.overdueRows), 'Every invoice in the period with money still owed TODAY (current + overdue). A zero-balance row is impossible here by construction — fully-collected invoices that received money this period live in the Paid-in-period card instead.'); } : null} />
           <Stat title={'Paid in period (' + (d.activeCur || 'USD') + ')'} big={tmoney(d.paidPeriodTotal)} sub={seeTotals ? (d.paidPeriodRows.length + ' invoice(s) · ' + (d.paidPayCount || 0) + ' payment(s)') : ''} tone={d.paidPeriodTotal ? 'bg-emerald-900' : 'bg-slate-800'}
             onClick={seeTotals ? function () { openDrill('Paid in period', d.paidPeriodRows, 'One row per INVOICE that RECEIVED money this period: Paid = everything received in the period (installments summed), Inv date = latest payment date, Balance = remaining balance TODAY. Balance 0.00 here is GOOD — fully collected. Still-owing rows also appear in Open AR; that overlap is correct. Negative violet = overpaid. Wave-imported lifetime paid amounts carry no per-payment dates and cannot appear here.', 'invoice(s)'); } : null} />
-          <Stat title="Overdue AR (USD)" big={tmoney(overdueTotal)} sub={seeTotals ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
-            onClick={seeTotals ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
+          <Stat title="Overdue AR (USD)" big={tover(overdueTotal)} sub={seeOverdue ? (shownOverdue.length + ' overdue' + (showSmall ? '' : ' (≥ $200)')) : ''} tone={shownOverdue.length ? 'bg-rose-900' : 'bg-slate-800'}
+            onClick={seeOverdue ? function () { openDrill('Overdue AR', shownOverdue, 'Invoices past their due date with a balance' + (showSmall ? '.' : ' (≥ $200 — tick the toggle below to include small/ignored).')); } : null} />
           <Stat title="Customer credits (USD)" big={tmoney(d.creditTotal)} sub={seeTotals ? 'overpaid / not AR' : ''} tone={d.creditTotal ? 'bg-violet-900' : 'bg-slate-800'}
             onClick={seeTotals ? function () { openDrill('Customer credits', d.creditRows || [], 'Invoices where the customer PAID MORE than the invoice total — money owed back to them or applied to their next invoice. Negative balance = the credit amount.'); } : null} />
-          <Stat title="Approvals pending" big={seeTotals ? d.pendingApproval : 'Restricted'} sub={seeTotals ? 'invoices in review (all time)' : ''} tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'}
-            onClick={seeTotals ? function () { openDrill('Approvals pending', d.approvalRows || [], 'Hub invoices sitting in internal review, waiting to be approved and pushed. Not period-scoped.'); } : null} />
+          <Stat title="Approvals pending" big={AV.access ? d.pendingApproval : 'Restricted'} sub={AV.access ? 'invoices in review (all time)' : ''} tone={d.pendingApproval ? 'bg-blue-900' : 'bg-slate-800'}
+            onClick={AV.access ? function () { openDrill('Approvals pending', d.approvalRows || [], 'Hub invoices sitting in internal review, waiting to be approved and pushed. Not period-scoped.'); } : null} />
         </div>
         <DrillPanel />
         {d.nonUsd && d.nonUsd.length > 0 && (

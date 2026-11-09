@@ -12,6 +12,7 @@ import { CLASSIFICATIONS } from '../lib/bank-permissions';
 import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import { acctAccess } from '../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
@@ -184,6 +185,15 @@ export default function BooksHomeTab(props) {
   }
 
   var sum = (cf && cf.summary) || null;
+  // v55.83-RE (Max, Nov 8 15:12) — each card follows ITS OWN group: P2 Bank &
+  // Financial Summary (Came In, Went Out, Sales, Net Moved, Projected Net), P3
+  // Invoicing & Collections (Invoiced, Paid, Still Open, Collected), P1
+  // operational (Expected, Bills Due, Late, Total Overdue). Navigation is never
+  // blanket-blocked: a card opens whenever its own group is allowed.
+  var V = (cf && cf.vis) || (ps && ps.vis) || acctAccess(isSuperAdmin, modulePerms, userProfile && userProfile.role, 'ktc');
+  var RESTRICTED = 'Restricted';
+  function gv(ok, text) { return ok ? text : RESTRICTED; }
+  function go(ok, fn) { return ok ? fn : null; }
   function Card(p2) {
     // v55.83-PL — cards are buttons: the rows that support the number open below
     var inner = <React.Fragment>
@@ -214,8 +224,8 @@ export default function BooksHomeTab(props) {
         <span className="text-[10px] text-slate-500">→</span>
         <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { applyPeriod(from, e.target.value, 'custom'); }} />
       </div>
-      {cf && cf.totals_masked && <div className="mb-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
-        🔒 Totals show as ••• for your account ("Accounting: See Money Totals" not granted).{cf.rows_visible ? ' You CAN still click any card and work with the underlying rows.' : ' Underlying rows are hidden too.'}{cf.date_filters_locked ? ' · Date range locked to the default.' : ''}</div>}
+      {(!V.fin || !V.inv) && <div className="mb-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+        🔒 {!V.fin ? 'Bank & Financial Summary (P2) not granted — Bank Balance, Came In, Went Out, Sales, Net Moved and Projected Net show "Restricted". ' : ''}{!V.inv ? 'Invoicing & Collections (P3) not granted — Invoiced, Paid, Still Open and Collected show "Restricted". ' : ''}Every other card opens its records as usual.{cf && cf.date_filters_locked ? ' · Date range locked to the default.' : ''}</div>}
       {cf && cf.denied ? <div className="text-[11px]" style={{ color: '#92400e' }}>{cf.error || 'The money view needs the Bills: View permission — ask an admin in Settings → Permissions.'}</div> :
        !sum ? <div className="text-[11px] text-slate-500">Loading cash flow…</div> :
         <div className="flex flex-col gap-2.5">
@@ -225,32 +235,32 @@ export default function BooksHomeTab(props) {
           <div>
             <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🏦 1 · BANK REALITY — money that actually moved in this period (from the bank feed)</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'CAME IN (' + sum.actual_in_count + ' bank txns)'} value={'$' + fmt(sum.actual_in)} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="ALL settled deposits (incl. transfers)"
-                onClick={function () { setCfDrill({ title: 'Came in — settled bank deposits', keys: [{ key: 'came_in', sign: 1 }] }); }} />
-              <Card label={'of which SALES (' + (cf.sales_in_count || 0) + ')'} value={'$' + fmt(cf.sales_in || 0)} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="deposits matched to invoices / customer payments"
-                onClick={function () { setCfDrill({ title: 'Sales received — deposits matched to invoices or categorized customer payment', keys: [{ key: 'sales_in', sign: 1 }] }); }} />
-              <Card label={'WENT OUT (' + sum.actual_out_count + ')'} value={'$' + fmt(sum.actual_out)} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="ALL settled spending (incl. transfers)"
-                onClick={function () { setCfDrill({ title: 'Went out — settled bank spending', keys: [{ key: 'went_out', sign: -1 }] }); }} />
-              <Card label="NET MOVED" value={(sum.actual_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.actual_net))} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="in − out, bank reality"
-                onClick={function () { setCfDrill({ title: 'Net moved — every settled bank transaction (in +, out −)', keys: [{ key: 'came_in', sign: 1 }, { key: 'went_out', sign: -1 }] }); }} />
+              <Card label={'CAME IN' + (V.fin ? ' (' + sum.actual_in_count + ' bank txns)' : '')} value={gv(V.fin, '$' + fmt(sum.actual_in))} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="ALL settled deposits (incl. transfers)"
+                onClick={go(V.fin, function () { setCfDrill({ title: 'Came in — settled bank deposits', keys: [{ key: 'came_in', sign: 1 }] }); })} />
+              <Card label={'of which SALES' + (V.fin ? ' (' + (cf.sales_in_count || 0) + ')' : '')} value={gv(V.fin, '$' + fmt(cf.sales_in || 0))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="deposits matched to invoices / customer payments"
+                onClick={go(V.fin, function () { setCfDrill({ title: 'Sales received — deposits matched to invoices or categorized customer payment', keys: [{ key: 'sales_in', sign: 1 }] }); })} />
+              <Card label={'WENT OUT' + (V.fin ? ' (' + sum.actual_out_count + ')' : '')} value={gv(V.fin, '$' + fmt(sum.actual_out))} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="ALL settled spending (incl. transfers)"
+                onClick={go(V.fin, function () { setCfDrill({ title: 'Went out — settled bank spending', keys: [{ key: 'went_out', sign: -1 }] }); })} />
+              <Card label="NET MOVED" value={gv(V.fin, (sum.actual_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.actual_net)))} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="in − out, bank reality"
+                onClick={go(V.fin, function () { setCfDrill({ title: 'Net moved — every settled bank transaction (in +, out −)', keys: [{ key: 'came_in', sign: 1 }, { key: 'went_out', sign: -1 }] }); })} />
             </div>
           </div>
           {ps && ps.invoices && <div>
             <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🧾 2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'INVOICED (' + (ps.invoices.count || 0) + ' invoices)'} value={'$' + fmt(ps.invoices.invoiced)} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
-                onClick={function () { setCfDrill({ src: 'ps', title: 'Invoiced — actual invoices issued in this period', keys: [{ key: 'invoiced', sign: 1 }] }); }} />
-              <Card label={'PAID ON THESE (' + (ps.invoices.collected_on_period_count || 0) + ' payments)'} value={'$' + fmt(ps.invoices.collected_on_period || 0)} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="received in period, on THESE invoices only"
-                onClick={function () { setCfDrill({ src: 'ps', title: 'Paid in this period on invoices created in this period', keys: [{ key: 'collected_on_period', sign: 1 }] }); }} />
-              <Card label="STILL OPEN (from these)" value={'$' + fmt(ps.invoices.still_open_from_period)} bg="#fffbeb" border="#fcd34d" fg="#78350f" sub="invoiced in period, not yet paid (any date)"
-                onClick={function () { setCfDrill({ src: 'ps', title: 'Still open — invoiced in this period, not yet paid', keys: [{ key: 'open_invoices', sign: 1 }] }); }} />
+              <Card label={'INVOICED' + (V.inv ? ' (' + (ps.invoices.count || 0) + ' invoices)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.invoiced))} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
+                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Invoiced — actual invoices issued in this period', keys: [{ key: 'invoiced', sign: 1 }] }); })} />
+              <Card label={'PAID ON THESE' + (V.inv ? ' (' + (ps.invoices.collected_on_period_count || 0) + ' payments)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.collected_on_period || 0))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="received in period, on THESE invoices only"
+                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Paid in this period on invoices created in this period', keys: [{ key: 'collected_on_period', sign: 1 }] }); })} />
+              <Card label="STILL OPEN (from these)" value={gv(V.inv, '$' + fmt(ps.invoices.still_open_from_period))} bg="#fffbeb" border="#fcd34d" fg="#78350f" sub="invoiced in period, not yet paid (any date)"
+                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Still open — invoiced in this period, not yet paid', keys: [{ key: 'open_invoices', sign: 1 }] }); })} />
             </div>
           </div>}
           {ps && ps.invoices && <div>
             <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>💰 3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date (old invoices included)</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'COLLECTED — ALL INVOICES (' + (ps.invoices.collected_count || 0) + ' payments)'} value={'$' + fmt(ps.invoices.collected)} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="each row says if its invoice is from this period or older"
-                onClick={function () { setCfDrill({ src: 'ps', title: 'Collected — every invoice payment received in this period (old invoices included)', keys: [{ key: 'collected', sign: 1 }] }); }} />
+              <Card label={'COLLECTED — ALL INVOICES' + (V.inv ? ' (' + (ps.invoices.collected_count || 0) + ' payments)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.collected))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="each row says if its invoice is from this period or older"
+                onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Collected — every invoice payment received in this period (old invoices included)', keys: [{ key: 'collected', sign: 1 }] }); })} />
             </div>
           </div>}
           {cf.ahead && <div>
@@ -271,8 +281,8 @@ export default function BooksHomeTab(props) {
                 onClick={function () { setCfDrill({ title: 'Expected in — open invoices due in the next 30 days', keys: [{ key: 'expected_in', sign: 1 }] }); }} />}
               <Card label={'BILLS DUE (' + cf.ahead.due_out_count + ')'} value={'$' + fmt(cf.ahead.due_out)} bg="#ffedd5" border="#fed7aa" fg="#431407" sub="open bills due in the next 30 days"
                 onClick={function () { setCfDrill({ title: 'Bills due in the next 30 days', keys: [{ key: 'bills_due', sign: -1 }] }); }} />
-              <Card label="PROJECTED NET (30d)" value={(cf.ahead.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(cf.ahead.projected_net))} bg={cf.ahead.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={cf.ahead.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={cf.ahead.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due, next 30 days"
-                onClick={function () { setCfDrill({ title: 'Projected net, next 30 days — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); }} />
+              <Card label="PROJECTED NET (30d)" value={gv(V.fin, (cf.ahead.projected_net >= 0 ? '+$' : '−$') + fmt(Math.abs(cf.ahead.projected_net)))} bg={cf.ahead.projected_net >= 0 ? '#d1fae5' : '#fee2e2'} border={cf.ahead.projected_net >= 0 ? '#a7f3d0' : '#fecaca'} fg={cf.ahead.projected_net >= 0 ? '#065f46' : '#7f1d1d'} sub="expected in − bills due, next 30 days"
+                onClick={go(V.fin, function () { setCfDrill({ title: 'Projected net, next 30 days — expected in (+) vs bills due (−)', keys: [{ key: 'expected_in', sign: 1 }, { key: 'bills_due', sign: -1 }] }); })} />
             </div>
           </div>}
           {fc && fc.buckets && <div>
@@ -400,14 +410,14 @@ export default function BooksHomeTab(props) {
                   className="w-full rounded px-1 py-0.5 text-right tabular-nums font-semibold"
                   style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fecaca' }}>${fmt(fc.buckets[b].ap)}<div className="text-[8px] font-bold" style={{ opacity: 0.75 }}>{fc.buckets[b].ap_count} bill(s)</div></button></td>;
             })}</tr>
-          <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>running in − out</div></td>
+          {V.fin && <tr style={{ borderTop: '1px solid #e2e8f0' }}><td className="py-1 pr-2 font-bold" style={{ color: '#334155' }}>Position<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>running in − out</div></td>
             {(fc.bucket_order || []).map(function (b) {
               var pos = fc.buckets[b].running >= 0;
               return <td key={b} className="py-0.5 px-0.5 text-right">
                 <button onClick={function () { setFcDrill({ bucket: b, kind: 'cum' }); }} title="Show every invoice/bill making up this running number"
                   className="w-full rounded px-1 py-1 text-right font-extrabold tabular-nums"
                   style={{ color: pos ? '#065f46' : '#7f1d1d', background: pos ? '#f0fdf4' : '#fff1f2', border: '1px solid ' + (pos ? '#bbf7d0' : '#fecdd3') }}>{(pos ? '+' : '−') + '$' + fmt(Math.abs(fc.buckets[b].running))}</button></td>;
-            })}</tr>
+            })}</tr>}
           {fc.bank_balance && <tr style={{ borderTop: '1px solid #e2e8f0' }}>
             <td className="py-1 pr-2 font-bold whitespace-nowrap" style={{ color: '#1d4ed8' }}>💰 Projected balance<div className="text-[9px] font-semibold" style={{ color: '#64748b' }}>bank ${fmt(fc.bank_balance.total)} (as of {fc.bank_balance.as_of}) + position</div></td>
             {(fc.bucket_order || []).map(function (b) {

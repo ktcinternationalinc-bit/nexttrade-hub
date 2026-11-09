@@ -32,6 +32,8 @@ import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { businessOfInvoice } from '../../../../lib/business-of';
 import { createClient } from '@supabase/supabase-js';
+import { audit } from '../../../../lib/audit-server';
+import { reconLines, reconProgress, reconNext } from '../../../../lib/order-recon'; // v55.83-RG
 
 var API_BUILD_MARKER = 'v55.83-NM-nexttrade-reconcile';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -148,12 +150,21 @@ export async function POST(req) {
     // v55.83-OI (Max): entering a release number is quick data entry — ANY team
     // member does it. Only the heavier actions stay Owner/Admin.
     var OPEN_ACTIONS = { set_release: true, list_missing: true };
+    // v55.83-RG (Max 15:32): "for order reconciliation needs to keep record of
+    // each one completed.. save it and it needs to be manually reconciled and
+    // approved."
+    var RUN_ACTIONS = { save_run: true, list_runs: true, get_run: true, resolve_line: true, mark_reconciled: true, approve_run: true, send_back: true };
     // v55.83-OK — Open Balances is money data: gated by the SAME grant that
     // governs invoice balances everywhere (AI Reports, checks): Settings →
     // Permissions → "AR: View Invoice Balances". Super admin passes always.
     if (action === 'open_balances') {
       var pr2 = await assertPermission(db, userId, 'ar.view_invoice_balances', req);
       if (!pr2 || pr2.ok !== true) { return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+    } else if (RUN_ACTIONS[action] === true) {
+      // v55.83-RG — saved reconciliations: Owner/Admin, or anyone granted
+      // "Order Recon: Reconcile & Approve" (recon.signoff).
+      var prRun = await assertPermission(db, userId, 'recon.signoff', req);
+      if (!prRun || prRun.ok !== true) { return NextResponse.json({ error: 'This needs the "Order Recon: Reconcile & Approve" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
     } else if (OPEN_ACTIONS[action] === true) {
       var uRes = await db.from('users').select('id').eq('id', userId || '').limit(1);
       var isUser = !!(uRes && uRes.data && uRes.data[0]);
@@ -375,6 +386,106 @@ export async function POST(req) {
     if (action === 'report') {
       var rep = await buildReport(body.date_from || null, body.date_to || null);
       return NextResponse.json(rep);
+    }
+
+    // ── v55.83-RG — saved reconciliations: save → resolve every line → reconciled (person 1) → approved (person 2)
+    if (RUN_ACTIONS[action] === true) {
+      var RSQL = 'Run sql/v55-83-RG-wires-recon.sql in Supabase first (saved reconciliations table).';
+      function rErr(e) { var m = (e && e.message) || 'failed'; return NextResponse.json({ error: m.indexOf('order_reconciliations') > -1 ? RSQL : m }, { status: 400 }); }
+      async function nameMap(ids) {
+        var u = ids.filter(function (x, i) { return x && ids.indexOf(x) === i; }); var m = {};
+        if (!u.length) { return m; }
+        var ur = await db.from('users').select('id, name, email').in('id', u);
+        ((ur && ur.data) || []).forEach(function (x) { m[x.id] = x.name || x.email || 'someone'; });
+        return m;
+      }
+      if (action === 'save_run') {
+        var repS = await buildReport(body.date_from || null, body.date_to || null);
+        if (!repS || repS.ok !== true) { return NextResponse.json({ error: 'The report could not be built.' }, { status: 500 }); }
+        delete repS.api_build_marker;
+        var insS = await db.from('order_reconciliations').insert({ period_from: body.date_from || null, period_to: body.date_to || null, created_by: userId, snapshot: repS, lines: {}, status: 'open' }).select('id').single();
+        if (insS.error) { return rErr(insS.error); }
+        var pS = reconProgress(repS, {});
+        await audit(db, userId, 'recon_run_saved', 'order_reconciliation', insS.data.id, { from: body.date_from || null, to: body.date_to || null, lines: pS.total, summary: repS.summary });
+        return NextResponse.json({ ok: true, id: insS.data.id, lines: pS.total });
+      }
+      if (action === 'list_runs') {
+        var lr = await db.from('order_reconciliations').select('*').order('created_at', { ascending: false }).limit(60);
+        if (lr.error) { return rErr(lr.error); }
+        var rowsL = lr.data || []; var idsL = [];
+        rowsL.forEach(function (r) { idsL.push(r.created_by, r.reconciled_by, r.approved_by); });
+        var nmL = await nameMap(idsL);
+        return NextResponse.json({ ok: true, runs: rowsL.map(function (r) {
+          var pg = reconProgress(r.snapshot, r.lines);
+          return { id: r.id, period_from: r.period_from, period_to: r.period_to, created_at: r.created_at, created_by: nmL[r.created_by] || null, status: r.status,
+            reconciled_by: nmL[r.reconciled_by] || null, reconciled_at: r.reconciled_at, approved_by: nmL[r.approved_by] || null, approved_at: r.approved_at,
+            summary: (r.snapshot && r.snapshot.summary) || null, progress: pg };
+        }) });
+      }
+      var runId = body.run_id;
+      if (!runId) { return NextResponse.json({ error: 'run_id required' }, { status: 400 }); }
+      var gr = await db.from('order_reconciliations').select('*').eq('id', runId).maybeSingle();
+      if (gr.error) { return rErr(gr.error); }
+      var run = gr.data;
+      if (!run) { return NextResponse.json({ error: 'Saved reconciliation not found.' }, { status: 404 }); }
+      if (action === 'get_run') {
+        var resG = run.lines || {}; var idsG = [run.created_by, run.reconciled_by, run.approved_by];
+        Object.keys(resG).forEach(function (k) { idsG.push(resG[k] && resG[k].by); });
+        var nmG = await nameMap(idsG);
+        var linesG = reconLines(run.snapshot).map(function (l) {
+          var r0 = resG[l.key] || null;
+          return Object.assign({}, l, { resolved: !!(r0 && r0.resolved), note: (r0 && r0.note) || '', by: r0 && r0.by ? (nmG[r0.by] || 'someone') : null, at: (r0 && r0.at) || null });
+        });
+        return NextResponse.json({ ok: true, run: { id: run.id, period_from: run.period_from, period_to: run.period_to, created_at: run.created_at, created_by: nmG[run.created_by] || null, status: run.status,
+          reconciled_by: nmG[run.reconciled_by] || null, reconciled_at: run.reconciled_at, reconciled_note: run.reconciled_note,
+          approved_by: nmG[run.approved_by] || null, approved_at: run.approved_at, approved_note: run.approved_note,
+          snapshot: run.snapshot, lines: linesG, progress: reconProgress(run.snapshot, run.lines), next: reconNext(run, userId) } });
+      }
+      var nx = reconNext(run, userId);
+      var noteIn = String(body.note || '').trim().substring(0, 1000);
+      if (action === 'resolve_line') {
+        if (!nx.can_edit) { return NextResponse.json({ error: 'This reconciliation is ' + run.status + ' — its lines are locked.' }, { status: 409 }); }
+        var key = String(body.key || '');
+        var okKey = reconLines(run.snapshot).some(function (l) { return l.key === key; });
+        if (!okKey) { return NextResponse.json({ error: 'That line is not part of this saved reconciliation.' }, { status: 400 }); }
+        var want = body.resolved === true;
+        if (want && noteIn.length < 3) { return NextResponse.json({ error: 'Write what was done / found (a short note) to resolve the line.' }, { status: 400 }); }
+        var newLines = Object.assign({}, run.lines || {});
+        newLines[key] = { resolved: want, note: noteIn, by: userId, at: new Date().toISOString() };
+        var upR = await db.from('order_reconciliations').update({ lines: newLines, updated_at: new Date().toISOString() }).eq('id', run.id).eq('status', 'open').select('id');
+        if (upR.error) { return rErr(upR.error); }
+        if (!upR.data || !upR.data.length) { return NextResponse.json({ error: 'Someone changed this reconciliation meanwhile — reload it.' }, { status: 409 }); }
+        await audit(db, userId, 'recon_line_resolved', 'order_reconciliation', run.id, { key: key, resolved: want, note: noteIn });
+        return NextResponse.json({ ok: true, progress: reconProgress(run.snapshot, newLines) });
+      }
+      if (action === 'mark_reconciled') {
+        if (run.status !== 'open') { return NextResponse.json({ error: 'Already ' + run.status + '.' }, { status: 409 }); }
+        if (!nx.can_reconcile) { return NextResponse.json({ error: nx.why || 'Not every line is resolved yet.' }, { status: 409 }); }
+        var upM = await db.from('order_reconciliations').update({ status: 'reconciled', reconciled_by: userId, reconciled_at: new Date().toISOString(), reconciled_note: noteIn || null, updated_at: new Date().toISOString() }).eq('id', run.id).eq('status', 'open').select('id');
+        if (upM.error) { return rErr(upM.error); }
+        if (!upM.data || !upM.data.length) { return NextResponse.json({ error: 'Someone changed this reconciliation meanwhile — reload it.' }, { status: 409 }); }
+        await audit(db, userId, 'recon_reconciled', 'order_reconciliation', run.id, { note: noteIn || null });
+        return NextResponse.json({ ok: true, status: 'reconciled' });
+      }
+      if (action === 'approve_run') {
+        if (run.status !== 'reconciled') { return NextResponse.json({ error: run.status === 'approved' ? 'Already approved.' : 'Reconcile it first (every line resolved), then a different person approves.' }, { status: 409 }); }
+        if (!nx.can_approve) { return NextResponse.json({ error: nx.why || 'A different person must approve.' }, { status: 403 }); }
+        var upA = await db.from('order_reconciliations').update({ status: 'approved', approved_by: userId, approved_at: new Date().toISOString(), approved_note: noteIn || null, updated_at: new Date().toISOString() }).eq('id', run.id).eq('status', 'reconciled').select('id');
+        if (upA.error) { return rErr(upA.error); }
+        if (!upA.data || !upA.data.length) { return NextResponse.json({ error: 'Someone changed this reconciliation meanwhile — reload it.' }, { status: 409 }); }
+        await audit(db, userId, 'recon_approved', 'order_reconciliation', run.id, { note: noteIn || null });
+        return NextResponse.json({ ok: true, status: 'approved' });
+      }
+      if (action === 'send_back') {
+        // the approver disagrees: back to open, with the reason, for the reconciler to fix
+        if (run.status !== 'reconciled') { return NextResponse.json({ error: 'Only a reconciled (not yet approved) run can be sent back.' }, { status: 409 }); }
+        if (!nx.can_approve) { return NextResponse.json({ error: nx.why || 'A different person must review it.' }, { status: 403 }); }
+        if (noteIn.length < 5) { return NextResponse.json({ error: 'Say why it is sent back.' }, { status: 400 }); }
+        var upB = await db.from('order_reconciliations').update({ status: 'open', reconciled_by: null, reconciled_at: null, reconciled_note: null, updated_at: new Date().toISOString() }).eq('id', run.id).eq('status', 'reconciled').select('id');
+        if (upB.error) { return rErr(upB.error); }
+        await audit(db, userId, 'recon_sent_back', 'order_reconciliation', run.id, { note: noteIn });
+        return NextResponse.json({ ok: true, status: 'open' });
+      }
     }
 
     if (action === 'flag') {

@@ -22,31 +22,31 @@ function ok(name, cond) {
 console.log('QI — permission tiers + audit trail + email scanner');
 
 var pg = R('src/app/page.jsx');
-ok('1: no accounting grant → the Accounting entry does NOT even show in the sidebar (driven by the accounting OR-list, not the generic Bank module)',
-  /if \(t\.id === 'accounting'\) \{\n        return modulePerms\['accounting\.view'\] === true/.test(pg) &&
-  /modulePerms\['accounting\.company_profile\.view'\] === true;\n      \}/.test(pg));
+// RE (Max, Nov 8 15:12 — Unified Accounting Permissions) superseded QI's tiers. Max's own
+// words still hold — "if not permissioned does not even show up for the user" — now via P1
+// only. The rows-only tier is retired: card navigation follows each card's group. Realigned:
+// RF (Max, Nov 8 15:25: "2 switches with same permissioning for both") — realigned:
+ok('1 (QI→RE→RF): no hub switch (ClickBooks / Wave Hub) → the Accounting entry does NOT even show in the sidebar',
+  /if \(t\.id === 'accounting'\) \{[\s\S]{0,500}return modulePerms\['accounting\.clickbooks\.access'\] === true \|\| modulePerms\['accounting\.wavehub\.access'\] === true/.test(pg));
 
 var bills = R('src/app/api/accounting/bills/route.js');
-ok('2a: THREE visibility tiers resolved once server-side — canTotals (see numbers), canRows (••• but rows), canDates (move the time filters); super admin passes all',
-  /var canTotals = !!visT\.ok;/.test(bills) && /'accounting\.view_underlying', req\)/.test(bills) &&
+ok('2a (QI→RE): visibility resolved once server-side — P2 (canTotals), P3 (view_invoicing), canDates; super admin passes all',
+  /var canTotals = !!visT\.ok;/.test(bills) && /'accounting\.view_invoicing', req\)/.test(bills) &&
   /'accounting\.change_dates', req\)/.test(bills));
-ok('2b: period_stats, cashflow AND forecast are MASKED server-side when totals are not granted — numbers become null (rendered •••), row arrays survive only with the underlying grant',
-  /if \(!canTotals\) \{ psPayload = maskVis\(psPayload, false\); \}/.test(bills) &&
-  /if \(!canTotals\) \{ cfPayload = maskVis\(cfPayload, false\); \}/.test(bills) &&
-  /if \(!canTotals\) \{ fcPayload = maskVis\(fcPayload, false\); \}/.test(bills) &&
-  /if \(!inRows && !canRows\) \{ return \[\]; \}/.test(bills));
-ok('2c: the protected bank-balance grant is UNTOUCHED by the tier system (balance decided by its own gate, attached after masking)',
-  /fcPayload\.bank_balance = balF; \/\/ its own PROTECTED grant decided this above/.test(bills));
+ok('2b (QI→RE): period_stats, cashflow AND forecast are MASKED server-side per card group (the shared library)',
+  /psPayload = maskPeriodStats\(psPayload, vis\);/.test(bills) && /cfPayload = maskCashflow\(cfPayload, vis\);/.test(bills) &&
+  /fcPayload = maskForecast\(fcPayload, vis\);/.test(bills));
+ok('2c (QI→RE): bank balance attaches after masking, only with P2 (Bank & Financial Summary)',
+  /fcPayload\.bank_balance = vis\.fin \? balF : null;/.test(bills));
 ok('2d: date clamps server-side without accounting.change_dates — period_stats/cashflow floor 2026-06-01, All Transactions floor 2026-01-01, all capped at today, flagged date_filters_locked',
   /if \(pFrom < '2026-06-01'\) \{ pFrom = '2026-06-01'; pLocked = true; \}/.test(bills) &&
   /if \(fromD < '2026-06-01'\) \{ fromD = '2026-06-01'; cfLocked = true; \}/.test(bills) &&
   /if \(fA < '2026-01-01'\) \{ fA = '2026-01-01'; atLocked = true; \}/.test(R('src/app/api/accounting/expense-rules/route.js')));
-ok('2e: the client SAYS when it is masked/locked instead of showing zeros — fmt(null) renders ••• in Stats, Books and Forecast; banners explain which permission unlocks; tax pack refuses when masked',
-  /return '•••'/.test(R('src/components/PeriodStatsTab.jsx')) &&
-  /return '•••'/.test(R('src/components/BooksHomeTab.jsx')) &&
-  /return '•••'/.test(R('src/components/CashForecastTab.jsx')) &&
-  /Accounting: See Money Totals" permission — totals are hidden/.test(R('src/components/PeriodStatsTab.jsx')) &&
-  /You CAN still click any card and work with the underlying rows\./.test(R('src/components/BooksHomeTab.jsx')));
+ok('2e (QI→RE): the client SAYS when something is restricted instead of showing zeros — "Restricted" cards, a banner naming P2/P3',
+  /Restricted/.test(R('src/components/PeriodStatsTab.jsx')) &&
+  /var RESTRICTED = 'Restricted';/.test(R('src/components/BooksHomeTab.jsx')) &&
+  /Restricted<\/td>/.test(R('src/components/CashForecastTab.jsx')) &&
+  /Bank & Financial Summary \(P2\) not granted/.test(R('src/components/BooksHomeTab.jsx')));
 
 var sqlQ = R('sql/v55-83-QI-audit-log.sql');
 ok('3a: the audit table is APPEND-ONLY by construction — insert policy only, no update/delete policy anywhere in the SQL',
