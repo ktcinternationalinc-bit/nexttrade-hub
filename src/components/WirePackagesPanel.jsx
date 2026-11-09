@@ -8,10 +8,11 @@
 //    # is typed right on the row) 3) Save — the check runs by itself. Each wire
 //    then shows ONE "next step" box with the one thing to do now, and a
 //    progress bar of the steps.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
+import { PriceCheckBox } from './BillLinesPanel';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -100,40 +101,73 @@ function ValidateInline(p) {
   var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
   var s6 = useState(p.dir === 'inbound' || p.dir === 'outbound' ? p.dir : ''); var dir = s6[0]; var setDir = s6[1]; // Max 20:54: in / out marked during validation
   var s7 = useState(BILL_TYPE_LABEL[p.btype] ? p.btype : ''); var btype = s7[0]; var setBtype = s7[1]; // Max 21:04: the TYPE too
+  // v55.83-RV (review #3) — the same rules as 💸 Bills: the price check is shown, a flagged bill needs a written resolution,
+  // and every entry is saved as it is made (type / direction on the bill, ticks / notes as a draft)
+  var s8 = useState(null); var pc = s8[0]; var setPc = s8[1];
+  var s9 = useState(''); var res = s9[0]; var setRes = s9[1];
+  var s10 = useState(''); var savedTxt = s10[0]; var setSavedTxt = s10[1];
+  var tRef = useRef(null);
+  function post(body) {
+    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, body)) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
+  }
+  function begin() {
+    setOpen(true);
+    post({ action: 'bill_lines', id: p.billId }).then(function (j) {
+      if (!(j && j.ok)) { return; }
+      setPc({ check: j.price_check, status: j.price_check_status, resolved: j.price_resolved_note });
+      var dr = j.validation_draft || {};
+      if (dr.checks) { setCk({ matches_records: dr.checks.matches_records === true, goods_received: dr.checks.goods_received === true, charges_accurate: dr.checks.charges_accurate === true }); }
+      if (dr.notes) { setHow(dr.notes); } if (dr.price_resolution) { setRes(dr.price_resolution); }
+      if (dr.at) { setSavedTxt('Picked up where ' + (dr.by_name || 'someone') + ' left off'); }
+    });
+  }
   if (!open) {
     return <div onClick={function (e) { e.stopPropagation(); }}><span className="text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>⛔ not validated</span>
-      {p.canValidate && <button onClick={function () { setOpen(true); }} className="ml-1 px-2 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>✓ Validate now</button>}</div>;
+      {p.canValidate ? <button onClick={begin} className="ml-1 px-2 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>✓ Validate now</button>
+        : <span className="ml-1 text-[10px]" style={{ color: '#64748b' }}>— validated in 💸 Bills by someone with “Add / change bills”</span>}</div>;
   }
   var all3 = ck.matches_records && ck.goods_received && ck.charges_accurate;
-  var missing = !btype ? 'pick the TYPE of bill' : !dir ? 'mark it Inbound or Outbound' : !all3 ? 'tick all three checks' : (how.trim().length < 10 ? 'write HOW you verified it (10+ characters)' : '');
+  var flagged = !!(pc && pc.status === 'flagged' && !pc.resolved);
+  function keep(patch, now) {
+    var body = Object.assign({ action: 'save_validation_progress', id: p.billId, draft: { checks: patch.ck || ck, notes: patch.how != null ? patch.how : how, price_resolution: patch.res != null ? patch.res : res } }, patch.fields || {});
+    if (tRef.current) { clearTimeout(tRef.current); }
+    var go = function () { setSavedTxt('Saving…'); post(body).then(function (j) { setSavedTxt(j && j.ok ? '✓ Saved' : '⛔ Not saved: ' + ((j && j.error) || 'error')); }); };
+    if (now) { go(); } else { tRef.current = setTimeout(go, 700); }
+  }
+  var missing = !btype ? 'pick the TYPE of bill' : !dir ? 'mark it Inbound or Outbound' : !all3 ? 'tick all three checks' : (how.trim().length < 10 ? 'write HOW you verified it (10+ characters)' : (flagged && res.trim().length < 10 ? 'write how the price issue was resolved (10+ characters)' : ''));
   function box(k, label) {
     return <label key={k} className="flex items-center gap-1.5 text-[11px] py-0.5" style={{ color: '#0f172a', cursor: 'pointer' }}>
-      <input type="checkbox" checked={!!ck[k]} onChange={function (e) { var n = Object.assign({}, ck); n[k] = e.target.checked; setCk(n); setErr(''); }} style={{ width: 15, height: 15 }} />{label}</label>;
+      <input type="checkbox" checked={!!ck[k]} onChange={function (e) { var n = Object.assign({}, ck); n[k] = e.target.checked; setCk(n); setErr(''); keep({ ck: n }, true); }} style={{ width: 15, height: 15 }} />{label}</label>;
   }
   function save() {
     if (missing) { setErr('To validate: ' + missing + '.'); return; }
+    if (tRef.current) { clearTimeout(tRef.current); }
     setBusy(true);
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'validate_bill', id: p.billId, checks: ck, notes: how, shipment_direction: dir, bill_type: btype, user_id: p.userId }) })
-      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
-      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; })
-      .then(function (j) { if (j && j.ok) { setOpen(false); if (p.onDone) { p.onDone(dir, btype); } } else { setErr((j && j.error) || 'Validation refused.'); } })
-      .finally(function () { setBusy(false); });
+    post({ action: 'validate_bill', id: p.billId, checks: ck, notes: how, shipment_direction: dir, bill_type: btype, price_resolution: res })
+      .then(function (j) {
+        if (j && j.ok) { setOpen(false); if (p.onDone) { p.onDone(dir, btype); } }
+        else { setErr((j && j.error) || 'Validation refused.'); if (j && j.price_flags) { setPc({ check: { status: 'flagged', flags: j.price_flags }, status: 'flagged' }); } }
+      }).finally(function () { setBusy(false); });
   }
-  return <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-2 mt-1" style={{ background: '#fffbeb', border: '1px solid #fcd34d', minWidth: 280 }}>
-    <div className="text-[11px] font-extrabold mb-0.5" style={{ color: '#78350f' }}>Validate — only what you actually checked (audited with your name)</div>
+  return <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-2 mt-1" style={{ background: '#fffbeb', border: '1px solid #fcd34d', minWidth: 300 }}>
+    <div className="text-[11px] font-extrabold mb-0.5" style={{ color: '#78350f' }}>Validate — only what you actually checked (audited with your name; saved as you go)</div>
     <div className="flex gap-1 my-1 flex-wrap">
-      {BILL_TYPES.map(function (t) { var on = btype === t; return <button key={t} onClick={function () { setBtype(t); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#7c2d12' : '#ffffff', color: on ? '#ffffff' : '#7c2d12', border: '1px solid ' + (on ? '#7c2d12' : (btype ? '#cbd5e1' : '#f87171')) }}>{BILL_TYPE_LABEL[t]}</button>; })}
+      {BILL_TYPES.map(function (t) { var on = btype === t; return <button key={t} onClick={function () { setBtype(t); setErr(''); keep({ fields: { bill_type: t } }, true); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#7c2d12' : '#ffffff', color: on ? '#ffffff' : '#7c2d12', border: '1px solid ' + (on ? '#7c2d12' : (btype ? '#cbd5e1' : '#f87171')) }}>{BILL_TYPE_LABEL[t]}</button>; })}
     </div>
     <div className="flex gap-1 my-1">
-      {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = dir === o[0]; return <button key={o[0]} onClick={function () { setDir(o[0]); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
+      {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = dir === o[0]; return <button key={o[0]} onClick={function () { setDir(o[0]); setErr(''); keep({ fields: { shipment_direction: o[0] } }, true); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
       <span className="text-[10px] self-center" style={{ color: '#78350f' }}>(required)</span>
     </div>
     {box('matches_records', 'Matches our records (PO / shipment / order)')}{box('goods_received', 'Goods or services were received')}{box('charges_accurate', 'Charges are accurate and legitimate')}
-    <input value={how} onChange={function (e) { setHow(e.target.value); setErr(''); }} placeholder="HOW did you verify it? (required)" className="w-full mt-1 px-1.5 py-1 rounded border text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', borderColor: how.trim().length < 10 ? '#f87171' : '#cbd5e1' }} />
-    <div className="flex gap-1 mt-1">
+    <input value={how} onChange={function (e) { setHow(e.target.value); setErr(''); keep({ how: e.target.value }); }} placeholder="HOW did you verify it? (required)" className="w-full mt-1 px-1.5 py-1 rounded border text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', borderColor: how.trim().length < 10 ? '#f87171' : '#cbd5e1' }} />
+    {pc && pc.status === 'flagged' && <div style={{ maxWidth: 900 }}><PriceCheckBox check={pc.check} status="flagged" resolved={pc.resolved} />
+      {!pc.resolved && <input value={res} onChange={function (e) { setRes(e.target.value); setErr(''); keep({ res: e.target.value }); }} placeholder="How was the price issue resolved? (required)" className="w-full px-1.5 py-1 rounded border text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', borderColor: res.trim().length < 10 ? '#f87171' : '#cbd5e1' }} />}</div>}
+    <div className="flex gap-1 mt-1 items-center">
       <button onClick={save} disabled={busy} title={missing ? 'Still needed: ' + missing : ''} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: missing ? '#94a3b8' : '#047857', color: '#ffffff' }}>{busy ? 'Saving…' : '✓ Mark validated'}</button>
-      <button onClick={function () { setOpen(false); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>cancel</button>
+      <button onClick={function () { setOpen(false); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>close — finish later</button>
+      {savedTxt && <span className="text-[10px] font-bold" style={{ color: /^⛔/.test(savedTxt) ? '#b91c1c' : '#065f46' }}>{savedTxt}</span>}
     </div>
     {err && <div className="mt-1 text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>⛔ {err}</div>}
   </div>;
@@ -197,8 +231,9 @@ export default function WirePackagesPanel(props) {
     });
   }
   function openFile(path) {
+    var w = null; try { w = window.open('', '_blank'); } catch (eW) { w = null; } // RV (review #10) — opened inside the click
     supabase.storage.from('bills-private').createSignedUrl(path, 3600).then(function (r) {
-      var u = r && r.data && r.data.signedUrl; if (u) { window.open(u, '_blank'); } else { toast.error('Could not open the file.'); }
+      var u = r && r.data && r.data.signedUrl; if (u) { if (w) { w.location.href = u; } else { window.location.assign(u); } } else { if (w) { w.close(); } toast.error('Could not open the file.'); }
     });
   }
   // ── step 1 + 2: the new / change form
@@ -326,7 +361,7 @@ export default function WirePackagesPanel(props) {
       return <tr key={b.id} onClick={function () { if (!off) { togglePick(b); } }} style={{ borderTop: '1px solid #e2e8f0', background: on ? '#ecfdf5' : '#ffffff', cursor: off ? 'not-allowed' : 'pointer', opacity: off ? 0.45 : 1 }}>
         <td className="px-2 py-2" style={{ width: 28 }}><input type="checkbox" readOnly checked={on} disabled={off} style={{ width: 18, height: 18 }} /></td>
         <td className="px-2 py-2"><div className="text-[13px] font-extrabold" style={{ color: INK }}>{b.vendor_name}</div>
-          {notValid ? <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function (d, t) {
+          {notValid ? <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function (d, t) {
             toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — you can tick it now.');
             setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { validation_status: 'validated', shipment_direction: d || x.shipment_direction, bill_type: t || x.bill_type }) : x; }) }) : e; });
           }} /> : <div className="text-[10px] font-extrabold" style={{ color: '#065f46' }}>✓ validated</div>}
@@ -364,7 +399,7 @@ export default function WirePackagesPanel(props) {
           {ed.waiting.map(function (b) {
             return <div key={b.id} className="rounded px-2 py-1.5 flex gap-2 items-start flex-wrap" style={{ background: '#ffffff', border: '1px solid #fde68a' }}>
               <div className="text-[12px]" style={{ color: INK, minWidth: 220 }}><b>{b.vendor_name}</b>{' · Bill ' + (b.bill_number || '—') + (b.bill_date ? ' · ' + b.bill_date : '') + ' · $' + fmt(b.open)}</div>
-              <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function (d, t) {
+              <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function (d, t) {
                 toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — it is in the list now.');
                 setEd(function (e) { if (!e) { return e; } var nb = Object.assign({}, b, { validation_status: 'validated', shipment_direction: d || b.shipment_direction, bill_type: t || b.bill_type });
                   return Object.assign({}, e, { bills: (e.bills || []).concat([nb]), waiting: (e.waiting || []).filter(function (x) { return x.id !== b.id; }) }); });
@@ -433,8 +468,9 @@ export default function WirePackagesPanel(props) {
               ? <button onClick={function () { var d = Object.assign({}, ovrDraft); d[c.key] = ''; setOvrDraft(d); }} className="mt-1 px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#ffffff', color: '#9a3412', border: '1px solid #fdba74' }}>↷ Override…</button>
               : <div className="flex gap-1 items-center mt-1 flex-wrap">
                 <input value={od} onChange={function (e) { var d = Object.assign({}, ovrDraft); d[c.key] = e.target.value; setOvrDraft(d); }} placeholder="why it is OK to pay anyway (kept with your name)" className={inp} style={Object.assign({ flex: '1 1 300px' }, inpS)} />
-                <Btn color="#9a3412" disabled={busy || String(od).trim().length < 10} onClick={function () { act({ action: 'override_check', id: P.id, check_key: c.key, reason: od }, function (j) { return j.pass ? '↷ Overridden — the wire can be signed now.' : '↷ Overridden — ' + j.blocks + ' problem(s) left.'; }).then(function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }); }}>↷ Override</Btn>
-                <Btn light onClick={function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }}>cancel</Btn></div>)
+                <Btn color="#9a3412" disabled={busy} onClick={function () { if (String(od).trim().length < 10) { toast.error('Write why it is OK to pay anyway — at least 10 characters (kept with your name).'); var d0 = Object.assign({}, ovrDraft); d0[c.key + '__err'] = true; setOvrDraft(d0); return; } act({ action: 'override_check', id: P.id, check_key: c.key, reason: od }, function (j) { return j.pass ? '↷ Overridden — the wire can be signed now.' : '↷ Overridden — ' + j.blocks + ' problem(s) left.'; }).then(function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }); }}>↷ Override</Btn>
+                <Btn light onClick={function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }}>cancel</Btn>
+                {ovrDraft[c.key + '__err'] && String(od).trim().length < 10 && <div className="w-full text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>⛔ Write why it is OK to pay anyway — at least 10 characters (review #13: the button no longer greys out silently).</div>}</div>)
               : <div className="text-[11px] mt-1" style={{ color: '#9a3412' }}>Can be overridden by someone with “Override wire checks”.</div>)
               : (c.why_not ? <div className="text-[11px] mt-1" style={{ color: '#7f1d1d' }}>{'Cannot be overridden: ' + c.why_not + '.'}</div> : null)}
           </div>;
@@ -498,13 +534,20 @@ export default function WirePackagesPanel(props) {
       {delAsk && <div className="rounded-xl p-3 mb-3" style={{ background: '#fee2e2', border: '2px solid #b91c1c' }}>
         <div className="text-[13px] font-extrabold mb-1" style={{ color: '#7f1d1d' }}>{delAsk.mode === 'erase' ? '🗑 Delete this wire? Its bills go back to how they were (nothing was paid). The history keeps a copy.' : '↩ Undo this SENT wire? The bill payments it recorded are voided, the bills go back to how they were, the bank line is freed. The wire stays on record as undone.'}</div>
         <div className="flex gap-2 items-center flex-wrap">
-          <input autoFocus value={delAsk.reason} onChange={function (e) { setDelAsk(Object.assign({}, delAsk, { reason: e.target.value })); }} placeholder={delAsk.mode === 'erase' ? 'why (required)' : 'why — at least 10 characters (required)'} className={inp} style={Object.assign({ flex: '1 1 320px' }, inpS)} />
-          <Btn big color="#b91c1c" disabled={busy || delAsk.reason.trim().length < (delAsk.mode === 'erase' ? 3 : 10)} onClick={function () {
-            act({ action: 'delete_wire', id: P.id, reason: delAsk.reason }, delAsk.mode === 'erase' ? '🗑 Wire deleted — everything is back to how it was.' : '↩ Wire undone — everything is back to how it was before it.',
-              function () { var wasErase = delAsk.mode === 'erase'; setDelAsk(null); if (wasErase) { setDet(null); } else { open(P.id); } });
-          }}>{delAsk.mode === 'erase' ? '🗑 Delete it' : '↩ Undo it'}</Btn>
+          {/* v55.83-RV (Max 22:47: "i cannot delete..it doesn't work") — the button was greyed out until a reason was typed and said
+              nothing; now it always answers: what is missing, or the server's own reason, right here in the box */}
+          <input autoFocus value={delAsk.reason} onChange={function (e) { setDelAsk(Object.assign({}, delAsk, { reason: e.target.value, err: '' })); }} placeholder={delAsk.mode === 'erase' ? 'Why is it being deleted? (required — e.g. made by mistake)' : 'Why is it being undone? (required — at least 10 characters)'} className={inp} style={Object.assign({ flex: '1 1 320px', borderColor: delAsk.err ? '#dc2626' : '#cbd5e1' }, inpS)} />
+          <Btn big color="#b91c1c" disabled={busy} onClick={function () {
+            var need = delAsk.mode === 'erase' ? 3 : 10;
+            if (delAsk.reason.trim().length < need) { setDelAsk(Object.assign({}, delAsk, { err: 'Type why first (at least ' + need + ' characters) — it is kept with the wire’s history.' })); return; }
+            var wasErase = delAsk.mode === 'erase'; var idD = P.id;
+            act({ action: 'delete_wire', id: idD, reason: delAsk.reason }, wasErase ? '🗑 Wire deleted — everything is back to how it was.' : '↩ Wire undone — everything is back to how it was before it.',
+              function () { setDelAsk(null); if (wasErase) { setDet(null); } else { open(idD); } })
+              .then(function (j) { if (!(j && j.ok)) { setDelAsk(function (d0) { return d0 ? Object.assign({}, d0, { err: (j && j.error) || 'The wire was not deleted — the server did not say why.' }) : d0; }); } });
+          }}>{busy ? 'Working…' : (delAsk.mode === 'erase' ? '🗑 Delete it' : '↩ Undo it')}</Btn>
           <Btn light onClick={function () { setDelAsk(null); }}>Keep it</Btn>
         </div>
+        {delAsk.err && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#b91c1c', border: '1px solid #fca5a5' }}>{'⛔ ' + delAsk.err}</div>}
       </div>}
       {/* progress */}
       <div className="flex gap-1 flex-wrap mb-3">
@@ -531,7 +574,7 @@ export default function WirePackagesPanel(props) {
             var b = l.bill || {}; var before = l.other_payments || [];
             return <tr key={l.line_id} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
-              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
               <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
               <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
               <td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>

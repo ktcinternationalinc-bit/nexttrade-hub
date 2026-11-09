@@ -30,7 +30,7 @@ export var BILL_EXTRACT_PROMPT = [
   '  If it is not clear, use null — NEVER guess.',
   '- lines = EVERY priced row of the bill, top to bottom, exactly as printed (description, quantity, unit, rate/price per unit, line amount).',
   '    line_kind "item" = goods/products; "charge" = a service or fee (line haul, fuel, rail swing, demurrage, customs entry…); "commission" = a commission row.',
-  '    Numbers are plain numbers without $ or thousands commas (12,153.50 → 12153.5). Do not add subtotal / total / tax-summary rows as lines. Empty list if there are no priced rows.',
+  '    Numbers are plain numbers without $ or thousands commas (12,153.50 → 12153.5). Do not add subtotal / total rows as lines; a TAX / GST / HST amount that is added to the total IS a line (line_kind "charge"). Empty list if there are no priced rows.',
   'Layouts we receive (learned from real bills):',
   '- NexPac Corporation (Cambridge ON, supplier): rows "Cambridge Seconds (LBS)  Exempt  12,153.50  0.26  3,159.91" = description, tax, QTY in LBS, RATE, AMOUNT → line_kind "item", unit "LBS".',
   '    Its last row "Commission 12.5% … 1  483.83125  483.83" → line_kind "commission", amount 483.83. The "DO/ORDER/QUOTE NO." (also printed "CGT Reference#") → other_reference. bill_type "supplier". There is no release number.',
@@ -97,7 +97,8 @@ export function cleanLines(arr) {
     var desc = cleanStr(l.description, 300);
     var amount = lnum(l.amount); var qty = lnum(l.qty); var price = lnum(l.unit_price);
     if (!desc && amount == null) { return; }
-    if (/^(sub\s*total|total|total due|balance due|tax)\b/i.test(desc || '')) { return; }
+    if (/^(sub\s*total|total|total due|balance due|amount due|grand total)\b/i.test(desc || '')) { return; } // review #12 — a TAX row is kept (it is part of the total)
+    if (/^(tax|gst|hst|pst|vat|sales tax)\b/i.test(desc || '')) { l = Object.assign({}, l, { line_kind: 'charge' }); }
     var kind = ['item', 'charge', 'commission'].indexOf(l.line_kind) >= 0 ? l.line_kind : (/commission/i.test(desc || '') ? 'commission' : 'item');
     out.push({ description: desc || '(no description)', qty: qty, unit: cleanStr(l.unit, 20), unit_price: price, amount: amount != null ? Math.round(amount * 100) / 100 : null, line_kind: kind });
   });

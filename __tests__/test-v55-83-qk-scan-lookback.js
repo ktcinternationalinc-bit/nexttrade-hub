@@ -18,8 +18,9 @@ ok('1: lookback selectable per scan (body.days), env default BILLS_EMAIL_LOOKBAC
   /if \(days > 120\) \{ days = 120; \}/.test(es) &&
   /new Date\(Date\.now\(\) - days \* 86400000\)/.test(es));
 ok('2: per-pass budget — 8 NEW emails per pass (an AI read per attachment, so no timeouts); the rest are COUNTED and reported, and repeat passes walk the whole backlog because processed messages are remembered',
-  /var NEW_PER_PASS = 8;/.test(es) &&
-  /if \(scanned >= NEW_PER_PASS\) \{ remainingNew\+\+; continue; \}/.test(es) &&
+  /var NEW_PER_PASS = 5;/.test(es) && // superseded (v55.83-RV, review #11): 5 per pass + a 40 s time budget, each attachment remembered
+
+  /if \(scanned >= NEW_PER_PASS \|\| outOfTime\) \{ remainingNew\+\+; continue; \}/.test(es) && // RV: + out of time
   /remaining_new: remainingNew/.test(es));
 ok('3: Bills UI — lookback dropdown (2 weeks → 4 months incl. LAST 3 MONTHS) next to 📧 Scan; result names the window and says how many are left with click-again guidance',
   /<option value="90">last 3 months<\/option>/.test(bt) &&

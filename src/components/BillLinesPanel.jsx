@@ -10,16 +10,47 @@ function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFract
 function qtyF(n) { return n == null ? '' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 }); }
 function rateF(n) { return n == null ? '' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 5 }); }
 
+// v55.83-RV (Max, Nov 9 22:47: "make the error message more organized and looking professionally organized") —
+// one header line, then a table: issue · where · billed · expected · difference · effect · rule.
 export function PriceCheckBox(p) {
-  var c = p.check; var st = p.status || (c && c.status) || 'not_checked';
-  var bg = st === 'flagged' ? '#fee2e2' : st === 'ok' ? '#d1fae5' : '#f1f5f9';
-  var fg = st === 'flagged' ? '#7f1d1d' : st === 'ok' ? '#065f46' : '#334155';
-  return <div className="rounded-lg px-3 py-2 my-1" style={{ background: bg, border: '1px solid ' + (st === 'flagged' ? '#fca5a5' : '#e2e8f0') }}>
-    <div className="text-[12px] font-extrabold" style={{ color: fg }}>{'Hub price check: ' + (PRICE_STATUS_LABEL[st] || st)}{c && c.commission_rule ? ' · ' + c.commission_rule.vendor + ' bills cost + ' + (c.commission_rule.rate * 100) + '% commission' : ''}</div>
-    {c && (c.flags || []).map(function (f, i) { return <div key={i} className="text-[12px] font-bold" style={{ color: '#7f1d1d' }}>{'⚠ ' + f.text}</div>; })}
-    {c && (c.notes || []).length > 0 && <div className="text-[11px]" style={{ color: MUTED }}>{c.notes.length + ' line(s) have no price rule yet' + (p.onRules ? ' — ' : '.')}{p.onRules && <button onClick={p.onRules} className="underline font-bold" style={{ color: '#1d4ed8' }}>add price rules</button>}</div>}
-    {st === 'flagged' && p.resolved && <div className="text-[11px] mt-1" style={{ color: '#065f46' }}>{'✓ Resolved: “' + p.resolved + '”'}</div>}
-    {st === 'flagged' && !p.resolved && <div className="text-[11px] mt-1 font-bold" style={{ color: '#7f1d1d' }}>A person must check this. It can be validated only with a written explanation of how it was resolved.</div>}
+  var c = p.check || {}; var st = p.status || c.status || 'not_checked';
+  var flags = c.flags || []; var notes = c.notes || [];
+  var done = st === 'flagged' && !!p.resolved;
+  var tone = done ? { bg: '#fffbeb', bd: '#fcd34d', fg: '#78350f', chipBg: '#fef3c7' } : st === 'flagged' ? { bg: '#fff1f2', bd: '#fda4af', fg: '#881337', chipBg: '#ffe4e6' }
+    : st === 'ok' ? { bg: '#f0fdf4', bd: '#86efac', fg: '#14532d', chipBg: '#dcfce7' } : { bg: '#f8fafc', bd: '#cbd5e1', fg: '#334155', chipBg: '#e2e8f0' };
+  var title = done ? 'Price check — flagged, resolved by a person' : st === 'flagged' ? 'Price check — ' + flags.length + ' issue' + (flags.length === 1 ? '' : 's') + ' need a person'
+    : st === 'ok' ? 'Price check — all prices match the rules' : st === 'no_rules' ? 'Price check — no price rule applies to this bill yet' : 'Price check — not run yet';
+  var th = 'px-2 py-1.5 text-left text-[10px] font-extrabold uppercase tracking-wide';
+  return <div className="rounded-xl my-2 overflow-hidden" style={{ background: tone.bg, border: '1px solid ' + tone.bd }}>
+    <div className="flex gap-2 items-center flex-wrap px-3 py-2" style={{ borderBottom: flags.length || notes.length ? '1px solid ' + tone.bd : 'none' }}>
+      <span className="text-[13px] font-extrabold" style={{ color: tone.fg }}>{(st === 'flagged' ? '⚠ ' : st === 'ok' ? '✓ ' : '') + title}</span>
+      {c.commission_rule && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: tone.chipBg, color: tone.fg }}>{c.commission_rule.vendor + ': cost + ' + (c.commission_rule.rate * 100) + '% commission'}</span>}
+      {c.checked > 0 && <span className="text-[10px]" style={{ color: '#64748b' }}>{c.checked + ' price rule' + (c.checked === 1 ? '' : 's') + ' applied'}</span>}
+    </div>
+    {flags.length > 0 && <div className="overflow-x-auto"><table className="w-full text-[12px]" style={{ background: '#ffffff' }}>
+      <thead><tr style={{ background: '#f8fafc', color: '#475569' }}>
+        <th className={th}>Issue</th><th className={th}>Where</th><th className={th + ' text-right'}>Billed</th><th className={th + ' text-right'}>Expected</th>
+        <th className={th + ' text-right'}>Difference</th><th className={th}>Effect</th><th className={th}>Checked against</th></tr></thead>
+      <tbody style={{ color: '#0f172a' }}>
+        {flags.map(function (f, i) {
+          var k = f.cols || { issue: f.code, where: '', billed: '', expected: '', diff: '', effect: '', rule: f.text };
+          var high = /HIGH|RATE|TOTAL|QTY/.test(f.code || '') && String(k.diff || '').charAt(0) !== '−';
+          return <tr key={i} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
+            <td className="px-2 py-1.5 font-extrabold whitespace-nowrap" style={{ color: tone.fg }}>{k.issue}</td>
+            <td className="px-2 py-1.5">{k.where}</td>
+            <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{k.billed}</td>
+            <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{k.expected}</td>
+            <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap font-extrabold" style={{ color: high ? '#b91c1c' : '#1d4ed8' }}>{k.diff}</td>
+            <td className="px-2 py-1.5">{k.effect}</td>
+            <td className="px-2 py-1.5 text-[11px]" style={{ color: '#475569' }}>{k.rule}</td>
+          </tr>;
+        })}
+      </tbody></table></div>}
+    {notes.length > 0 && <div className="px-3 py-1.5 text-[11px]" style={{ color: '#475569', borderTop: flags.length ? '1px solid ' + tone.bd : 'none' }}>
+      <b>No price rule yet:</b> {notes.map(function (n) { return n.item || ('Line ' + n.line_no); }).join(' · ')}
+      {p.onRules && <button onClick={p.onRules} className="ml-2 underline font-bold" style={{ color: '#1d4ed8' }}>add price rules</button>}</div>}
+    {st === 'flagged' && <div className="px-3 py-1.5 text-[11px] font-bold" style={{ color: done ? '#065f46' : tone.fg, borderTop: '1px solid ' + tone.bd }}>
+      {done ? '✓ Resolved: “' + p.resolved + '”' : 'A person must check this. The bill can be validated only with a written explanation of how it was resolved.'}</div>}
   </div>;
 }
 
@@ -111,10 +142,11 @@ export default function BillLinesPanel(p) {
           <td /><td className="px-2 py-1 font-extrabold">Totals</td><td colSpan={3} className="px-2 py-1 text-right" style={{ color: '#92400e' }}>{'commission $' + fmt(tCom)}</td>
           <td className="px-2 py-1 text-right font-extrabold tabular-nums">${fmt(tCost)}</td><td className="px-2 py-1 text-right font-extrabold tabular-nums">${fmt(tAll)}</td></tr>}
       </tbody></table></div>}
+    {cr && items.length > 0 && <div className="text-[10px] mb-1" style={{ color: MUTED }}>ClickBooks books the commission in “Commission on purchases” and the cost in the bill’s category (paid from our bank, or by NextTrade). Paid through RTM Capital it stays one line.</div>}
     <div className="flex gap-2 items-center">
       {canEdit && <button onClick={function () { setEd(lines.map(function (l) { return { line_kind: l.line_kind, description: l.description, qty: l.qty, unit: l.unit, unit_price: l.unit_price, amount: l.amount }; })); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>{lines.length ? '✏ Edit lines' : '＋ Add lines'}</button>}
-      <button disabled={busy} onClick={recheck} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: SUB }}>↻ Check prices again</button>
-      {d.locked && <span className="text-[10px]" style={{ color: MUTED }}>Validated — the lines are locked (reopen the validation to change them).</span>}
+      {p.canManage && !d.locked && <button disabled={busy} onClick={recheck} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: SUB }}>↻ Check prices again</button>}
+      {d.locked && <span className="text-[10px]" style={{ color: MUTED }}>Validated — the lines are locked. To change them: ✓ VALIDATED → ↩ Reopen (then validate again).</span>}
     </div>
   </div>;
 }

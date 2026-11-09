@@ -69,7 +69,8 @@ function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } con
   check('marked SENT with the confirmation', sent.ok, sent);
   check('NOW the unassigned bill is "paid through RTM Capital"', db.t.vendor_bills[1].paid_via === 'RTM Capital');
   var edit = await call(bills, 'u1', { action: 'save_bill', bill: { id: 'b0000000-0000-0000-0000-000000000002', vendor_name: 'Port Customs', bill_number: 'C-55', total_amount: 900, bill_date: '2026-11-01' } });
-  check('editing a bill on a SENT wire is refused', edit.error && /already SENT/.test(edit.error), edit);
+  // superseded (v55.83-RV, review #1): the bill on a sent wire is also VALIDATED, and that lock now answers first — still refused
+  check('editing a bill on a SENT wire is refused', edit.error && (/already SENT/.test(edit.error) || /VALIDATED — its .* cannot change/.test(edit.error)), edit);
   var vd = await call(bills, 'u1', { action: 'void_bill', id: 'b0000000-0000-0000-0000-000000000001' });
   check('voiding a bill on a wire is refused', vd.error && /on wire WP-/.test(vd.error), vd);
   var other = await call(bills, 'u1', { action: 'record_payment', bill_id: 'b0000000-0000-0000-0000-000000000003', amount: 300, paid_date: '2026-11-10', bank_transaction_id: '70000000-0000-0000-0000-000000000001', method: 'rtm' });

@@ -26,7 +26,12 @@ function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
+// v55.83-RV (review #4) — each attachment is an AI read + lines + price check: give the function the full minute
+// (the default 10–15 s killed it mid-email), and stop before the limit instead of being cut off
+export const maxDuration = 60;
+
 export async function POST(req) {
+  var inStarted = Date.now();
   var token = process.env.BILLS_INBOUND_TOKEN || '';
   if (token.length < 24) { return NextResponse.json({ ok: false, error: 'Inbound bills are not configured on this server (BILLS_INBOUND_TOKEN).' }, { status: 503 }); }
   // v55.83-QH — inbound email services (Mailgun routes, SendGrid Parse)
@@ -72,6 +77,10 @@ export async function POST(req) {
   var created = []; var skipped = [];
   for (var f = 0; f < files.length; f++) {
     var file = files[f];
+    if (Date.now() - inStarted > 42000) { // out of time — say which files were not read (a 200, so the mail service does not resend the whole email)
+      for (var fr = f; fr < files.length; fr++) { skipped.push({ file: files[fr].filename, reason: 'not read — too many attachments in one email; forward this file again on its own' }); }
+      break;
+    }
     var rd = await readBillFromBase64(file.b64, file.content_type);
     if (rd.error) { skipped.push({ file: file.filename, reason: rd.error }); continue; }
     var d = rd.draft;
@@ -103,7 +112,7 @@ export async function POST(req) {
     if (ins.error) { skipped.push({ file: file.filename, reason: ins.error.message }); continue; }
     await db.from('vendor_bill_events').insert({ bill_id: ins.data.id, kind: 'email_ingested',
       details: { from: from, subject: subject, file: file.filename, reader_flags: rd.problems, attachment_stored: !upErr, upload_error: upErr } });
-    created.push({ id: ins.data.id, vendor: d.vendor_name, amount: d.total_amount, flags: rd.problems.length });
+    created.push({ id: ins.data.id, vendor: d.vendor_name, amount: d.total_amount, flags: rd.problems.length, price_check: ins.price_check || null, price_flags: ins.price_flags || [] }); // RU
   }
   return NextResponse.json({ ok: true, created: created.length, skipped: skipped, bills: created,
     note: 'Every emailed bill enters as PENDING VALIDATION — a human must run the three checks before it counts as verified.' });

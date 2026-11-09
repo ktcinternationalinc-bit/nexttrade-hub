@@ -81,7 +81,7 @@ ok('4a: the EMAIL SCANNER — the hub signs into the mailbox itself (IMAP, Googl
 ok('4b (QK superseded the flat 25 cap with an 8-new-per-pass budget): READ-ONLY on the mailbox; processed messages remembered by Message-ID; 4 attachments/message, 10MB cap',
   /mailboxOpen\('INBOX', \{ readOnly: true \}\)/.test(es) &&
   /eq\('action', 'email_scan_message'\)\.eq\('entity_id', mid\)/.test(es) &&
-  /var NEW_PER_PASS = 8;/.test(es) && /pi < parts\.length && pi < 4/.test(es));
+  /var NEW_PER_PASS = 5;/.test(es) && /pi < parts\.length && pi < 4/.test(es)); // superseded (v55.83-RV, review #11): 8 → 5 per pass + time budget
 ok('4c: every bill it creates goes through the SAME doors — extraction that never guesses, the wide duplicate radar, PENDING validation, document stored privately; cron hourly + manual needs bills.manage',
   /billDupVerdict\(db, \{ vendor_name: d\.vendor_name/.test(es) &&
   /validation_status: 'pending'/.test(es) && /'pv\/scan-'/.test(es) &&

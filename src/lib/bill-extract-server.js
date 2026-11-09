@@ -35,13 +35,19 @@ export async function insertImportedBill(db, row, draft) {
     if (!last.error) {
       last.sorted = i === 0 ? srt : null; last.sql_missing = i > 0;
       // v55.83-RQ — the bill's lines (NexPac: cost + its share of the 12.5% commission) and the first price check; fail-soft
-      if (draft && Array.isArray(draft.lines) && draft.lines.length && last.data && last.data.id) {
+      if (last.data && last.data.id) {
         try {
-          var billRow = Object.assign({ id: last.data.id, validation_status: 'pending' }, tries[i]);
-          var sl = await saveBillLines(db, billRow, draft.lines, 'read_from_bill', row.created_by || null);
-          last.lines_saved = sl && sl.ok ? sl.lines.length : 0;
-          if (sl && sl.ok) { var pc = await runPriceCheck(db, last.data.id); last.price_check = pc && pc.check ? pc.check.status : null; }
-        } catch (eL) { last.lines_saved = 0; }
+          if (draft && Array.isArray(draft.lines) && draft.lines.length) {
+            var billRow = Object.assign({ id: last.data.id, validation_status: 'pending' }, tries[i]);
+            var sl = await saveBillLines(db, billRow, draft.lines, 'read_from_bill', row.created_by || null);
+            last.lines_saved = sl && sl.ok ? sl.lines.length : 0;
+          } else { last.lines_saved = 0; }
+          // v55.83-RU (Max 21:49: "the price check should always check based on the rules when importing") — EVERY import,
+          // lines read or not (a whole-bill rule still applies); what is off travels back word for word
+          var pc = await runPriceCheck(db, last.data.id);
+          last.price_check = pc && pc.check ? pc.check.status : null;
+          last.price_flags = pc && pc.check ? pc.check.flags.map(function (f) { return f.text; }) : [];
+        } catch (eL) { last.lines_saved = last.lines_saved || 0; }
       }
       return last;
     }

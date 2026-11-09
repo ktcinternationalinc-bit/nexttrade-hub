@@ -117,7 +117,7 @@ console.log('RP — bill type + direction on import; both required to validate')
   check('6c: the bill form has the type; typing a release # ticks Outbound when nothing is ticked; the list shows the type (or "type?")',
     BT.indexOf('<option value="">type of bill…</option>') > 0 && BT.indexOf("{ shipment_direction: 'outbound', direction_source: 'release_number' }") > 0 && BT.indexOf('>type?</span>') > 0);
   check('6d: validating from the wire screen asks the type too; the wire and the quick view show it',
-    U.indexOf("bill_type: btype, user_id: p.userId") > 0 && U.indexOf("'pick the TYPE of bill'") > 0 && R('src/components/WireQuickView.jsx').indexOf("BILL_TYPE_LABEL[b.bill_type] || '—'") > 0);
+    U.indexOf("shipment_direction: dir, bill_type: btype, price_resolution: res") > 0 /* superseded (RV, review #3) */ && U.indexOf("'pick the TYPE of bill'") > 0 && R('src/components/WireQuickView.jsx').indexOf("BILL_TYPE_LABEL[b.bill_type] || '—'") > 0);
   // ── 7. SQL
   var Q = R('sql/v55-83-RP-bill-type.sql');
   check('7a: bill_type limited to the four; sources recorded; existing bills with a release # (not yet validated) become outbound; the DATABASE refuses a validation without type + direction',

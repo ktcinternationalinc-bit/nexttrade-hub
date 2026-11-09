@@ -129,7 +129,8 @@ export async function POST(req) {
     if (!(days >= 1)) { days = 14; } if (days > 120) { days = 120; }
     var client = new ImapFlow({ host: host, port: 993, secure: true, auth: { user: email, pass: pass }, logger: false });
     var scanned = 0; var created = []; var skipped = []; var matchedMsgs = 0; var remainingNew = 0;
-    var NEW_PER_PASS = 8; // extraction is an AI read per attachment — budget per pass, repeat passes walk the backlog
+    var NEW_PER_PASS = 5; // v55.83-RV (review #11) — fewer per pass + a time budget below; the hourly pass walks the rest
+    var scanStarted = Date.now(); var outOfTime = false; // extraction is an AI read per attachment — budget per pass, repeat passes walk the backlog
     // v55.83-QZ2 (review fix) — the scanner remembers processed emails in the
     // audit log (QI SQL). Without that memory every pass would re-read the
     // same emails and create the same bill drafts again (and spend AI reads),
@@ -151,7 +152,7 @@ export async function POST(req) {
       var uids = Object.keys(uidSet).map(Number).sort(function (a, b) { return b - a; });
       matchedMsgs = uids.length;
       for (var ui = 0; ui < uids.length; ui++) {
-        if (scanned >= NEW_PER_PASS) { remainingNew++; continue; } // budget spent — counted, picked up next pass
+        if (scanned >= NEW_PER_PASS || outOfTime) { remainingNew++; continue; } // budget spent — counted, picked up next pass
         var msg = await client.fetchOne(String(uids[ui]), { envelope: true, bodyStructure: true }, { uid: true });
         if (!msg || !msg.envelope) { continue; }
         var mid = String(msg.envelope.messageId || ('uid-' + uids[ui] + '@' + email)).substring(0, 80);
@@ -173,17 +174,24 @@ export async function POST(req) {
         })(msg.bodyStructure);
         var madeHere = 0;
         for (var pi = 0; pi < parts.length && pi < 4; pi++) {
+          // review #11 — each ATTACHMENT is remembered, and a pass stops before the 60 s limit: an unfinished email is
+          // picked up next pass without re-importing the attachments already done
+          var attKey = mid.substring(0, 74) + '#att' + pi;
+          var attSeen = await db.from('hub_audit_log').select('id').eq('action', 'email_scan_attachment').eq('entity_id', attKey).limit(1);
+          if (!attSeen.error && attSeen.data && attSeen.data.length) { continue; }
+          if (Date.now() - scanStarted > 40000) { outOfTime = true; break; }
+          var attNote = { file: parts[pi].name, from: from, subject: subject }; // recorded AFTER the attachment is handled (never lost)
           var dl = await client.download(String(uids[ui]), parts[pi].part, { uid: true });
-          if (!dl || !dl.content) { continue; }
+          if (!dl || !dl.content) { await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'skipped' }, attNote)); continue; }
           var chunks = []; var sz = 0;
           for await (var ch of dl.content) { sz += ch.length; if (sz > 10 * 1024 * 1024) { break; } chunks.push(ch); }
-          if (sz > 10 * 1024 * 1024) { skipped.push({ file: parts[pi].name, reason: 'over 10 MB' }); continue; }
+          if (sz > 10 * 1024 * 1024) { skipped.push({ file: parts[pi].name, reason: 'over 10 MB' }); await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'skipped' }, attNote)); continue; }
           var b64 = Buffer.concat(chunks).toString('base64');
           var rd = await readBillFromBase64(b64, parts[pi].type);
-          if (rd.error) { skipped.push({ file: parts[pi].name, reason: rd.error }); continue; }
+          if (rd.error) { skipped.push({ file: parts[pi].name, reason: rd.error }); await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'skipped' }, attNote)); continue; }
           var d = rd.draft;
           var verdict = await billDupVerdict(db, { vendor_name: d.vendor_name, bill_number: d.bill_number, bill_date: d.bill_date, total_amount: d.total_amount, notes: (d.notes || '') + ' ' + subject });
-          if (verdict.skip) { skipped.push({ file: parts[pi].name, reason: verdict.skip }); continue; }
+          if (verdict.skip) { skipped.push({ file: parts[pi].name, reason: verdict.skip }); await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'skipped' }, attNote)); continue; }
           var safeName = String(parts[pi].name || 'bill').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 60);
           var path = 'pv/scan-' + Date.now() + '-' + pi + '-' + safeName;
           var upErr = null;
@@ -201,12 +209,14 @@ export async function POST(req) {
             validation_status: 'pending',
             attachment_path: upErr ? null : path,
           }, d); // v55.83-RP — type / release / direction sorted on import
-          if (ins.error) { skipped.push({ file: parts[pi].name, reason: ins.error.message }); continue; }
+          if (ins.error) { skipped.push({ file: parts[pi].name, reason: ins.error.message }); await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'skipped' }, attNote)); continue; }
           madeHere++;
-          created.push({ id: ins.data.id, vendor: d.vendor_name, amount: d.total_amount, warned: !!verdict.warn });
+          created.push({ id: ins.data.id, vendor: d.vendor_name, amount: d.total_amount, warned: !!verdict.warn, price_check: ins.price_check || null, price_flags: ins.price_flags || [] }); // RU — what the price check found
           await audit(db, byId, 'bill_email_scanned_in', 'vendor_bill', ins.data.id, { from: from, subject: subject, file: parts[pi].name, message_id: mid, duplicate_warning: verdict.warn, reader_flags: rd.problems });
+          await audit(db, byId, 'email_scan_attachment', 'email', attKey, Object.assign({ outcome: 'bill created', bill_id: ins.data.id }, attNote));
         }
-        // remember the MESSAGE so it is never re-processed (even if it had no usable attachment)
+        // remember the MESSAGE so it is never re-processed (even if it had no usable attachment) — only once every attachment was done
+        if (outOfTime) { remainingNew++; continue; }
         await audit(db, byId, 'email_scan_message', 'email', mid, { from: from, subject: subject, bills_created: madeHere, attachments_seen: parts.length });
       }
     } finally {

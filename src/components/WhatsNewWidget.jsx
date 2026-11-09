@@ -33,6 +33,58 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RV',
+    date: '2026-11-09',
+    title: 'Bills & wires: clearer price check, panels under the bill, review fixes',
+    items: [
+      'The price check is now a clear table: issue · where · billed · expected · difference · effect · which rule it was checked against.',
+      'Validate, Pay, Dispute, Edit and Void now open right under the bill you clicked — no more scrolling to the top.',
+      'Deleting a wire: the 🗑 Delete it button now always answers — if the reason is missing it says so in red; if the server refuses, it says why.',
+      'A VALIDATED bill can no longer be changed under its validation (amount, vendor, bill #, date, type, direction). Use “↩ Reopen” on the ✓ VALIDATED chip, fix it, and validate again. A missing release # or reference can still be filled in.',
+      '“✓ Validate now” on the wire screen works like 💸 Bills: it shows the price check, asks how a price issue was resolved, and saves as you go.',
+      'Void bill, void payment and resolve dispute are asked on the screen (no browser pop-ups that can be blocked). 📎 files open even with a pop-up blocker.',
+      'Email imports no longer get cut off on emails with several bills; each attachment is remembered so nothing is imported twice or lost.',
+      'Smarter price check: LB = LBS = pounds; a different unit is flagged instead of ignored; tax rows count toward the total; a NexPac bill without lines says “add the lines” instead of a $0 commission flag; a “Commission” row typed as a product is recognised.',
+      { superAdminOnly: true, text: 'No new SQL (run RS + RU if not yet: v55-83-RV-run-this.sql). Independent review: 16 findings fixed — H1 save_bill/set_bill_release refuse changing validated fields (fill-blank release/ref allowed); H2 Reopen from VALIDATED chip (rowAsk reopen → reopen_validation); H3 ValidateInline = bill_lines preload (draft + check), PriceCheckBox + resolution, draft autosave, gated on bills.manage (perms.bills); H4 inbound maxDuration 60 + 42 s budget; M5 no items → NO_LINES note; M6 commission text → commission kind; M7 normUnit + UNIT_MISMATCH flag; M8 recheckOpenBills skips paid/validated, 35 s budget, returns {checked, remaining}; M9 runPriceCheck rewrites stored split; M10 window.open in click; M11 scanner 5/pass, 40 s budget, per-attachment memory after handling; L12 tax rows kept as charges; L13 override not silently disabled; L14 flagSig compare (wording changes keep resolution), clearing audited (bill_price_resolution_cleared), bill_lines readOnly for viewers, recheck button gated; L15 type at validation audited as progress; L16 undo pre-checks reversed columns. UI: PriceCheckBox table (flag.cols), panels as rows under the bill, delete box always answers, no window.prompt/confirm in Bills/Wires. Tests rv-review-fixes 21, rv-organized-inline-delete 10; 5 older pins realigned (annotated).' },
+    ],
+  },
+  {
+    version: 'v55.83-RU',
+    date: '2026-11-09',
+    title: 'Validation saves as you go; price check says exactly what is off',
+    items: [
+      'Validating a bill: everything you enter is saved right away — pick just the type or just the direction and it is kept. Ticks and notes are kept too, so you (or someone else) can finish later. The bill counts as validated only after “✓ Mark validated”.',
+      'A bill with validation started shows “PENDING · started”; opening it picks up where it was left.',
+      'Every imported bill is checked against the price rules — even when no lines could be read (a rule for the whole bill still applies).',
+      '📷 Import shows the price check before you save. File import and the mailbox scan list each problem found.',
+      'Each problem says exactly what is off — e.g. “billed $0.10/LBS, expected $0.09/LBS — $0.01/LBS TOO HIGH (+11.1%); on 3,461 LBS that is $34.61 more than expected” — and which price rule it was checked against.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RU-validation-progress.sql (vendor_bills.validation_draft jsonb). Route save_validation_progress: bill_type/shipment_direction written immediately (source manual, audited bill_validation_progress_saved, price re-check on type change), draft {checks, notes, price_resolution, warehouse_reference, by, by_name, at}; refused on validated/void; draft cleared on validate_bill; list carries validation_draft. BillsTab setV/flushV (click = immediate, typing = 700 ms debounce + onBlur), Close — finish later flushes. insertImportedBill always runs runPriceCheck (lines or not) and returns price_check + price_flags (ingest_bill_file, inbound, email-scan responses + file_ingested event); extract_bill returns price_preview (pure priceCheck). Flag texts: billed vs expected, per-unit diff, %, impact = diff × qty, rule words (vendor, item, type, note, tolerance). Test ru 18.' },
+    ],
+  },
+  {
+    version: 'v55.83-RT',
+    date: '2026-11-09',
+    title: 'Bills readable again',
+    items: [
+      'Fixed: bills that were not overdue showed dark text on a dark background in 💸 Bills. The whole page is now a white panel and every row is readable.',
+      'Price check: a price per unit is now compared exactly when the allowed difference is 0% (e.g. $0.105 vs $0.10 is flagged), and prices show as $0.10 instead of $0.1.',
+      'A price issue a person already resolved now shows as resolved instead of still asking for a person.',
+      { superAdminOnly: true, text: 'Cause: BillsTab root was className bg-white → globals.css dark-skin override paints var(--bg-card) with light text; rows had inline color #0f172a and no background (late rows had #ffedd5). Fix: root .nt-paper + explicit white row background. Verified with Playwright on the built CSS (dark body), rows + expanded lines + price rules. Also off() takes minAllowed: unit-rate comparisons use 5e-7 (was 0.005 = 10% of a $0.05 rate); money() keeps 2 decimals. No SQL. Test rt 8. Same bg-white + dark-inline-text pattern still exists in PeriodStats, NexttradeReconciliation, BooksHome, BusinessBooks, PnL, CashForecast, SalesReport, OpenBalances (not changed in this build).' },
+    ],
+  },
+  {
+    version: 'v55.83-RS',
+    date: '2026-11-09',
+    title: 'ClickBooks books the commission in its own account',
+    items: [
+      'NexPac commission now goes to its own account in ClickBooks: “Commission on purchases”. The cost stays in the bill’s category.',
+      'This works when the bill is paid from our bank (a 💸 Bills payment or a wire straight to the vendor) and when NextTrade pays it for us. A part payment carries its share of the commission; a bank fee on the same payment goes to the payment’s own category.',
+      'Bills paid through RTM Capital stay one line, as decided before.',
+      'Entries already booked the old way are reversed and re-booked automatically at the next sync (recorded), unless their month is closed.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RS-commission-ledger.sql AFTER RB + RQ (the run-this file includes RP + RQ + RS). Adds expense category purchase_commission (kind cogs → expense account via category_account), clickbooks_us.commission_account, bill_commission_cents (payment × Σ item commission_amount ÷ bill total, ≤ payment), pays_commission_bill; extends has_piecewise (money-out paying a commission bill, method ≠ rtm), deposit_lines (bill cost legs + commission leg + remainder → txn classification; waits with a reason when an account is missing) and affbill_lines (cat n−cm + commission cm vs due n). Tested on a PG16 copy of the ClickBooks test ledger: deposit + drift + affiliate syncs, reversal of an old one-line entry, idempotent second run; totals 1,111.50 commission / 8,891.98 cost / 25 fee. Test rs 9.' },
+    ],
+  },
+  {
     version: 'v55.83-RQ',
     date: '2026-11-09',
     title: 'Bill lines, NexPac cost + commission, price rules, bill reports',

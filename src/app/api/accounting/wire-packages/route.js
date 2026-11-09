@@ -354,6 +354,11 @@ export async function POST(req) {
       if (fieldR !== 'shipment_direction' && relR.length < 2) { return fail(fieldR === 'other_reference' ? 'Type the reference.' : 'Type the release number.'); }
       var bR = await db.from('vendor_bills').select('*').eq('id', bidR).maybeSingle();
       if (bR.error || !bR.data) { return fail('Bill not found.', 404); }
+      // review #1 (v55.83-RV) — a VALIDATED bill: a missing release # / reference may be filled in, nothing validated may change
+      if (bR.data.validation_status === 'validated') {
+        if (fieldR === 'shipment_direction' && bR.data.shipment_direction && bR.data.shipment_direction !== relR) { return fail('This bill is VALIDATED as ' + bR.data.shipment_direction + ' — reopen its validation in 💸 Bills to change that.', 409); }
+        if (fieldR !== 'shipment_direction' && String(bR.data[fieldR] || '').trim() && String(bR.data[fieldR]).trim().toUpperCase() !== relR) { return fail('This bill is VALIDATED with ' + (fieldR === 'other_reference' ? 'reference ' : 'release # ') + bR.data[fieldR] + ' — reopen its validation in 💸 Bills to change it.', 409); }
+      }
       var onSent = await db.from('wire_package_lines').select('package_id').eq('bill_id', bidR).eq('is_open', true);
       var sentIds = ((onSent && onSent.data) || []).map(function (x) { return x.package_id; });
       if (sentIds.length) {
@@ -467,6 +472,9 @@ export async function POST(req) {
       var isBoss = !!(g1 && g1.ctx && (g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'));
       if (!isBoss) { return fail('A wire that was already sent can only be undone by a super admin or the owner.', 403); }
       if (reasonD.length < 10) { return fail('Write why this sent wire is being undone (at least 10 characters).'); }
+      // review #16 (v55.83-RV) — never half-undone: the 'reversed' record must be storable BEFORE anything is voided or freed
+      var revChk = await db.from('wire_packages').select('id, reversed_by, reversed_at, reverse_note').eq('id', pkg.id).maybeSingle();
+      if (revChk.error) { return fail('Undo is not set up in the database yet — run sql/v55-83-RL-wire-override-delete-reference.sql first. Nothing was changed.', 400); }
       var undone = { payments_voided: [], bills_unmarked: [], bank_line_restored: false };
       // 1) the payments this wire recorded
       for (var ri = 0; ri < P.rawLines.length; ri++) {

@@ -36,7 +36,8 @@ export default function WireQuickView(props) {
   }, [w && w.kind, w && w.id]); // eslint-disable-line
   if (!w) { return null; }
   function openFile(path) {
-    supabase.storage.from('bills-private').createSignedUrl(path, 3600).then(function (r) { var u = r && r.data && r.data.signedUrl; if (u) { window.open(u, '_blank'); } });
+    var w = null; try { w = window.open('', '_blank'); } catch (eW) { w = null; } // RV (review #10) — opened inside the click; an error is said
+    supabase.storage.from('bills-private').createSignedUrl(path, 3600).then(function (r) { var u = r && r.data && r.data.signedUrl; if (u) { if (w) { w.location.href = u; } else { window.location.assign(u); } } else { if (w) { w.close(); } setErr('Could not open that file (' + ((r && r.error && r.error.message) || 'no link') + ').'); } });
   }
   var isPkg = w.kind === 'package';
   var P = isPkg && d ? d.package : null; var A = d ? d.audit : null;

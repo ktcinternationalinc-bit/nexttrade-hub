@@ -25,7 +25,7 @@ export default function PriceRulesPanel(p) {
     if (r.price_mode === 'unit') { r.expected_amount = ''; } else { r.expected_unit_price = ''; }
     setBusy(true);
     api({ action: 'price_rule_save', rule: r }).then(function (j) {
-      if (j && j.ok) { toast.success('Rule saved — ' + j.rechecked + ' open bill(s) checked again.'); setF(null); load(); if (p.onChanged) { p.onChanged(); } }
+      if (j && j.ok) { toast.success('Rule saved — ' + j.rechecked + ' open bill(s) checked again' + (j.remaining ? ' (' + j.remaining + ' more are checked when opened)' : '') + '.'); setF(null); load(); if (p.onChanged) { p.onChanged(); } }
       else { toast.error((j && j.error) || 'Not saved.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -33,7 +33,7 @@ export default function PriceRulesPanel(p) {
   function saveComm() {
     setBusy(true);
     api({ action: 'commission_rule_save', rule: cf }).then(function (j) {
-      if (j && j.ok) { toast.success('Commission rule saved — open bills checked again.'); setCf(null); load(); if (p.onChanged) { p.onChanged(); } }
+      if (j && j.ok) { toast.success('Commission rule saved — ' + j.rechecked + ' open bill(s) checked again' + (j.remaining ? ' (' + j.remaining + ' more when opened)' : '') + '.'); setCf(null); load(); if (p.onChanged) { p.onChanged(); } }
       else { toast.error((j && j.error) || 'Not saved.'); }
     }).finally(function () { setBusy(false); });
   }

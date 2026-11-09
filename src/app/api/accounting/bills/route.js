@@ -20,7 +20,7 @@ import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64, insertImportedBill, vendorBillType } from '../../../../lib/bill-extract-server';
 import { importSort, BILL_TYPE_LABEL } from '../../../../lib/bill-extract';
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
-import { commissionRuleFor, productInventory, spendReport, periodRange, normText } from '../../../../lib/bill-lines';
+import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -214,7 +214,7 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
-    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, save_lines: 1, price_check: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
+    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -300,6 +300,7 @@ export async function POST(req) {
       // v55.83-RQ — the price check on each bill (nothing breaks before the RQ SQL is run)
       try {
         var pcR = await fetchAll(function () { return db.from('vendor_bills').select('id, price_check_status, price_check, price_resolved_note, price_resolved_by, price_resolved_at'); });
+        try { var drR = await fetchAll(function () { return db.from('vendor_bills').select('id, validation_draft').not('validation_draft', 'is', null); }); var drBy = {}; drR.forEach(function (x) { drBy[x.id] = x.validation_draft; }); rows.forEach(function (b) { if (drBy[b.id]) { b.validation_draft = drBy[b.id]; } }); } catch (eDR) { /* RU SQL not run */ }
         var pcBy = {}; pcR.forEach(function (x) { pcBy[x.id] = x; });
         rows.forEach(function (b) { var x = pcBy[b.id]; if (x) { b.price_check_status = x.price_check_status; b.price_check = x.price_check; b.price_resolved_note = x.price_resolved_note; b.price_resolved_by = x.price_resolved_by; b.price_resolved_at = x.price_resolved_at; } });
       } catch (ePC) { /* RQ SQL not run yet */ }
@@ -362,9 +363,23 @@ export async function POST(req) {
         }
       }
       if (bl.id) {
-        var cur = await db.from('vendor_bills').select('id, record_status, total_amount').eq('id', bl.id).maybeSingle();
+        var cur = await db.from('vendor_bills').select('*').eq('id', bl.id).maybeSingle();
         if (cur.error || !cur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
         if (cur.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void — it cannot be edited.' }, { status: 409 }); }
+        // review #1 (v55.83-RV) — what was VALIDATED cannot change under the validation: vendor, bill #, dates, amount, type,
+        // direction. A missing release # / reference may still be filled in (blank → value); changing one needs a reopen.
+        if (cur.data.validation_status === 'validated') {
+          var vChanged = [];
+          var vDiff = function (label, a, b) { if (String(a == null ? '' : a).trim().toUpperCase() !== String(b == null ? '' : b).trim().toUpperCase()) { vChanged.push(label); } };
+          vDiff('vendor', cur.data.vendor_name, fields.vendor_name); vDiff('bill #', cur.data.bill_number, fields.bill_number); vDiff('bill date', cur.data.bill_date, fields.bill_date);
+          if (r2(cur.data.total_amount) !== r2(fields.total_amount)) { vChanged.push('amount'); }
+          if (Object.prototype.hasOwnProperty.call(fields, 'bill_type')) { vDiff('type', cur.data.bill_type, fields.bill_type); }
+          if (Object.prototype.hasOwnProperty.call(fields, 'shipment_direction')) { vDiff('inbound / outbound', cur.data.shipment_direction, fields.shipment_direction); }
+          if (Object.prototype.hasOwnProperty.call(fields, 'release_number') && String(cur.data.release_number || '').trim()) { vDiff('release #', cur.data.release_number, fields.release_number); }
+          if (Object.prototype.hasOwnProperty.call(fields, 'other_reference') && String(cur.data.other_reference || '').trim()) { vDiff('reference', cur.data.other_reference, fields.other_reference); }
+          if (vChanged.length) { return NextResponse.json({ error: 'This bill is VALIDATED — its ' + vChanged.join(', ') + ' cannot change. Reopen the validation first (✓ VALIDATED → ↩ Reopen), then edit and validate it again.' }, { status: 409 }); }
+          delete fields.direction_source; delete fields.bill_type_source;
+        }
         var wOn = await openWireOf(db, bl.id);
         if (wOn && wOn.status === 'sent') { return NextResponse.json({ error: 'This bill is on wire ' + wOn.label + ', which was already SENT — it cannot change until that wire is attached to its bank line (🏦 Wires).' }, { status: 409 }); }
         var payR = await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').eq('bill_id', bl.id);
@@ -634,8 +649,11 @@ export async function POST(req) {
       // v55.83-RQ (Max 21:18: "if there is an issue that the HUB sees, then it should flag it for manual intervention") —
       // the price check runs NOW (with the type picked here); a flagged bill is validated only with a written resolution
       var vResolution = String(body.price_resolution || '').trim();
-      if (vType !== vb2.data.bill_type) { await db.from('vendor_bills').update({ bill_type: vType, bill_type_source: 'validator' }).eq('id', body.id); }
-      var vPC = await runPriceCheck(db, body.id);
+      if (vType !== vb2.data.bill_type) {
+        await db.from('vendor_bills').update({ bill_type: vType, bill_type_source: 'manual' }).eq('id', body.id);
+        await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, { bill_type: { from: vb2.data.bill_type || null, to: vType } }); // review #15
+      }
+      var vPC = await runPriceCheck(db, body.id, null, { actorId: userId });
       var vFlagged = !!(vPC && vPC.ok && vPC.check && vPC.check.status === 'flagged');
       if (vFlagged && vResolution.length < 10 && String(vPC.bill && vPC.bill.price_resolved_note || '').trim().length < 10) {
         return NextResponse.json({ error: 'The Hub\'s price check flagged this bill — write how you resolved it (at least a sentence) before validating.', price_flags: vPC.check.flags }, { status: 409 });
@@ -653,6 +671,7 @@ export async function POST(req) {
       await db.from('vendor_bill_events').insert({ bill_id: body.id, kind: 'validated', actor_id: userId,
         details: { checks: { matches_records: true, goods_received: true, charges_accurate: true }, notes: vNotes.substring(0, 1000), attachment_path: vPatch.validation_attachment_path || null,
           warehouse_reference: vPatch.warehouse_reference || null, system_match: body.system_match || null } });
+      try { await db.from('vendor_bills').update({ validation_draft: null }).eq('id', body.id); } catch (eVD) { /* RU SQL not run */ } // RU — the draft is done
       await audit(db, userId, 'bill_validated', 'vendor_bill', body.id, { notes: vNotes.substring(0, 200), shipment_direction: vDir, direction_was: vb2.data.shipment_direction || null, bill_type: vType, bill_type_was: vb2.data.bill_type || null, bill_type_source_was: vb2.data.bill_type_source || null, price_check: vPC && vPC.check ? vPC.check.status : null, price_flags: vFlagged ? vPC.check.flags.map(function (f) { return f.text; }) : undefined, price_resolution: vFlagged ? (vResolution || vPC.bill.price_resolved_note) : undefined }); // v55.83-QI / RO
       return NextResponse.json({ ok: true, validated: true });
     }
@@ -798,22 +817,64 @@ export async function POST(req) {
         created_by: userId,
       }, gD); // v55.83-RP — type / release / direction sorted on import
       if (gIns.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gIns.error.message }); }
-      try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr, sorted: gIns.sorted || null } }); } catch (eGE) {}
+      try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr, sorted: gIns.sorted || null, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] } }); } catch (eGE) {}
       await audit(db, userId, 'bill_imported_from_file', 'vendor_bill', gIns.data.id, { file: gName, duplicate_warning: gWarn }); // v55.83-QI
       return NextResponse.json({ ok: true, created: true, id: gIns.data.id, file: gName,
         vendor: gD.vendor_name || null, amount: gD.total_amount || null,
-        duplicate_warning: gWarn, reader_flags: gRead.problems });
+        duplicate_warning: gWarn, reader_flags: gRead.problems, lines_read: gIns.lines_saved || 0, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] });
     }
 
     // ── v55.83-RQ — bill lines, price rules, reports ───────────────────────
     if (action === 'bill_lines') {
+      // RV — refresh the check first (an older check has no organized columns; rules may have changed since)
+      var blMgr = await assertPermission(db, userId, 'bills.manage', req);
+      var blFresh = null;
+      try { blFresh = await runPriceCheck(db, body.id, null, { actorId: userId, readOnly: !(blMgr && blMgr.ok === true) }); } catch (eBP) { blFresh = null; } // review #14 — a viewer only reads
       var blB = await db.from('vendor_bills').select('*').eq('id', body.id).maybeSingle();
       if (blB.error || !blB.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
       var blL = await loadLines(db, body.id);
       if (blL.error) { return NextResponse.json({ ok: true, sql_missing: true, lines: [], note: 'Bill lines need sql/v55-83-RQ-bill-lines-price-rules.sql.' }); }
       var blCR = commissionRuleFor(await loadCommissionRules(db), blB.data.vendor_name);
-      return NextResponse.json({ ok: true, lines: blL.lines, commission_rule: blCR, price_check: blB.data.price_check || null, price_check_status: blB.data.price_check_status || null,
-        price_resolved_note: blB.data.price_resolved_note || null, locked: blB.data.validation_status === 'validated' });
+      var blCheck = blFresh && blFresh.ok && blFresh.unsaved && blB.data.validation_status !== 'validated' ? blFresh.check : (blB.data.price_check || null);
+      return NextResponse.json({ ok: true, can_manage: !!(blMgr && blMgr.ok === true), lines: blL.lines, commission_rule: blCR, price_check: blCheck, price_check_status: blCheck ? blCheck.status : (blB.data.price_check_status || null),
+        price_resolved_note: blB.data.price_resolved_note || null, locked: blB.data.validation_status === 'validated', validation_draft: blB.data.validation_draft || null });
+    }
+    // v55.83-RU (Max, Nov 9 21:48: "please save entries when we validate even if we have not yet fully validated. such as just
+    // entering the type or the direction") — the type and direction are saved on the bill at once (audited); the ticks and
+    // notes are kept as a DRAFT (validation_draft) until "Mark validated" — a draft never counts as validated.
+    if (action === 'save_validation_progress') {
+      var vpB = await db.from('vendor_bills').select('*').eq('id', body.id).maybeSingle();
+      if (vpB.error || !vpB.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      if (vpB.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void.' }, { status: 409 }); }
+      if (vpB.data.validation_status === 'validated') { return NextResponse.json({ error: 'This bill is already validated — reopen its validation to change it.' }, { status: 409 }); }
+      var vpPatch = {}; var vpChanged = {};
+      var vpT = String(body.bill_type || '').toLowerCase();
+      if (vpT && !BILL_TYPE_LABEL[vpT]) { return NextResponse.json({ error: 'Unknown bill type.' }, { status: 400 }); }
+      if (vpT && vpT !== vpB.data.bill_type) { vpPatch.bill_type = vpT; vpPatch.bill_type_source = 'manual'; vpChanged.bill_type = { from: vpB.data.bill_type || null, to: vpT }; }
+      var vpD = String(body.shipment_direction || '').toLowerCase();
+      if (vpD && vpD !== 'inbound' && vpD !== 'outbound') { return NextResponse.json({ error: 'Pick inbound or outbound.' }, { status: 400 }); }
+      if (vpD && vpD !== vpB.data.shipment_direction) { vpPatch.shipment_direction = vpD; vpPatch.direction_source = 'manual'; vpChanged.shipment_direction = { from: vpB.data.shipment_direction || null, to: vpD }; }
+      var vpDr = body.draft && typeof body.draft === 'object' ? body.draft : null;
+      var vpWarn = null;
+      if (vpDr) {
+        var ckD = vpDr.checks || {};
+        vpPatch.validation_draft = { checks: { matches_records: ckD.matches_records === true, goods_received: ckD.goods_received === true, charges_accurate: ckD.charges_accurate === true },
+          notes: String(vpDr.notes || '').substring(0, 1000), price_resolution: String(vpDr.price_resolution || '').substring(0, 1000),
+          warehouse_reference: String(vpDr.warehouse_reference || '').substring(0, 120), by: userId, by_name: null, at: new Date().toISOString() };
+        try { var vpU = await db.from('users').select('name').eq('id', userId).maybeSingle(); vpPatch.validation_draft.by_name = (vpU && vpU.data && vpU.data.name) || null; } catch (eVU) { /* name is a nicety */ }
+      }
+      if (!Object.keys(vpPatch).length) { return NextResponse.json({ ok: true, saved: [] }); }
+      var vpUp = await db.from('vendor_bills').update(vpPatch).eq('id', body.id).select('id').maybeSingle();
+      if (vpUp.error && /validation_draft/.test(vpUp.error.message || '')) {
+        delete vpPatch.validation_draft; vpWarn = 'type and direction saved; the ticks and notes are kept only after sql/v55-83-RU-validation-progress.sql is run';
+        vpUp = Object.keys(vpPatch).length ? await db.from('vendor_bills').update(vpPatch).eq('id', body.id).select('id').maybeSingle() : { data: { id: body.id } };
+      }
+      if (vpUp.error) { return NextResponse.json({ error: vpUp.error.message }, { status: 500 }); }
+      if (Object.keys(vpChanged).length) {
+        await audit(db, userId, 'bill_validation_progress_saved', 'vendor_bill', body.id, vpChanged);
+        if (vpChanged.bill_type) { await runPriceCheck(db, body.id); } // the rules may depend on the type
+      }
+      return NextResponse.json({ ok: true, saved: Object.keys(vpChanged).concat(vpPatch.validation_draft ? ['draft'] : []), warning: vpWarn || undefined });
     }
     if (action === 'save_lines') {
       var slB = await db.from('vendor_bills').select('*').eq('id', body.id).maybeSingle();
@@ -824,11 +885,11 @@ export async function POST(req) {
       var slR = await saveBillLines(db, slB.data, Array.isArray(body.lines) ? body.lines : [], 'manual', userId);
       if (!slR.ok) { return NextResponse.json({ error: slR.error + (slR.sql_missing ? ' — run sql/v55-83-RQ-bill-lines-price-rules.sql.' : '') }, { status: slR.status || 500 }); }
       await audit(db, userId, 'bill_lines_saved', 'vendor_bill', body.id, { lines: slR.lines.length, commission_vendor: slR.commission_rule ? slR.commission_rule.vendor_match : null });
-      var slPC = await runPriceCheck(db, body.id);
+      var slPC = await runPriceCheck(db, body.id, null, { actorId: userId });
       return NextResponse.json({ ok: true, lines: slR.lines, price_check: slPC && slPC.check ? slPC.check : null });
     }
     if (action === 'price_check') {
-      var pcX = await runPriceCheck(db, body.id);
+      var pcX = await runPriceCheck(db, body.id, null, { actorId: userId });
       if (!pcX.ok) { return NextResponse.json({ error: pcX.error + (pcX.sql_missing ? ' — run sql/v55-83-RQ-bill-lines-price-rules.sql.' : '') }, { status: 400 }); }
       return NextResponse.json({ ok: true, price_check: pcX.check });
     }
@@ -867,15 +928,16 @@ export async function POST(req) {
         if (!ruR.error) { await audit(db, userId, 'price_rule_created', 'bill_price_rule', ruR.data && ruR.data.id, ruF); }
       }
       if (ruR.error) { return NextResponse.json({ error: ruR.error.message + (/does not exist/.test(ruR.error.message) ? ' — run sql/v55-83-RQ-bill-lines-price-rules.sql.' : '') }, { status: 400 }); }
-      var reN = await recheckOpenBills(db);
-      return NextResponse.json({ ok: true, rule: ruR.data, rechecked: reN });
+      var reN = await recheckOpenBills(db, { actorId: userId });
+      return NextResponse.json({ ok: true, rule: ruR.data, rechecked: reN.checked, remaining: reN.remaining });
     }
     if (action === 'price_rule_off') {
       if (!(await rulesGate())) { return NextResponse.json({ error: 'Changing price rules needs “Bills: Price rules”.' }, { status: 403 }); }
       var offR = await db.from('bill_price_rules').update({ active: body.active === true, updated_by: userId, updated_at: new Date().toISOString() }).eq('id', body.id).select('id').maybeSingle();
       if (offR.error || !offR.data) { return NextResponse.json({ error: (offR.error && offR.error.message) || 'Rule not found.' }, { status: 400 }); }
       await audit(db, userId, body.active === true ? 'price_rule_turned_on' : 'price_rule_turned_off', 'bill_price_rule', body.id, {});
-      return NextResponse.json({ ok: true, rechecked: await recheckOpenBills(db) });
+      var reN2 = await recheckOpenBills(db, { actorId: userId });
+      return NextResponse.json({ ok: true, rechecked: reN2.checked, remaining: reN2.remaining });
     }
     if (action === 'commission_rule_save') {
       if (!(await rulesGate())) { return NextResponse.json({ error: 'Changing commission rules needs “Bills: Price rules”.' }, { status: 403 }); }
@@ -889,7 +951,8 @@ export async function POST(req) {
       else { crR = await db.from('bill_commission_rules').insert(Object.assign({ created_by: userId }, crF)).select('*').maybeSingle(); }
       if (crR.error) { return NextResponse.json({ error: crR.error.message }, { status: 400 }); }
       await audit(db, userId, cru.id ? 'commission_rule_changed' : 'commission_rule_created', 'bill_commission_rule', crR.data && crR.data.id, crF);
-      return NextResponse.json({ ok: true, rule: crR.data, rechecked: await recheckOpenBills(db) });
+      var reN3 = await recheckOpenBills(db, { actorId: userId });
+      return NextResponse.json({ ok: true, rule: crR.data, rechecked: reN3.checked, remaining: reN3.remaining });
     }
     if (action === 'bill_reports') {
       var rpRange = periodRange(String(body.period || 'since_jun1'), body.today || null, { from: body.from, to: body.to });
@@ -921,7 +984,14 @@ export async function POST(req) {
       if (rd.draft && rd.draft.vendor_name && !rd.draft.category) { sugg = await suggestCategory(db, rd.draft.vendor_name); }
       // v55.83-RP — the bill TYPE (read from the bill, else this vendor's validated history) and direction (release # → outbound)
       var sortX = importSort(rd.draft, rd.draft && !rd.draft.bill_type ? await vendorBillType(db, rd.draft.vendor_name) : null);
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, suggested_category: sugg, sorted: sortX });
+      var pv = null;
+      try {
+        var pvRules = await loadPriceRules(db); var pvCR = commissionRuleFor(await loadCommissionRules(db), rd.draft && rd.draft.vendor_name);
+        var pvLines = ((rd.draft && rd.draft.lines) || []).map(function (l, i) { return shapeLine(Object.assign({}, l, { line_kind: l.line_kind || (sortX.bill_type && sortX.bill_type !== 'supplier' ? 'charge' : 'item') }), i); });
+        var pvC = priceCheckPure({ vendor_name: rd.draft && rd.draft.vendor_name, total_amount: rd.draft && rd.draft.total_amount, bill_type: sortX.bill_type }, pvLines, pvRules, pvCR);
+        pv = { status: pvC.status, flags: pvC.flags, notes: pvC.notes, checked: pvC.checked, commission_rule: pvCR ? { vendor: pvCR.vendor_match, rate: Number(pvCR.rate) } : null };
+      } catch (ePV) { pv = null; }
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, suggested_category: sugg, sorted: sortX, price_preview: pv });
     }
 
     // ── match_reference (PF): the underlying hook for the future warehouse
