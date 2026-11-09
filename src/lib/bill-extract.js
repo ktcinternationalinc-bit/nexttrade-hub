@@ -73,13 +73,14 @@ export function autoDirection(releaseNumber) {
   return r.length >= 2 ? 'outbound' : null;
 }
 // what an import puts on the new bill row (+ where each value came from, shown to the validator)
-export function importSort(draft, vendorHistoryType) {
+export function importSort(draft, vendorHistoryType, vendorDefaultDirection) {
   var d = draft || {};
   var out = { release_number: d.release_number || null, other_reference: d.other_reference || null, bill_type: null, bill_type_source: null, shipment_direction: null, direction_source: null };
   if (d.bill_type && BILL_TYPE_LABEL[d.bill_type]) { out.bill_type = d.bill_type; out.bill_type_source = 'read_from_bill'; }
   else if (vendorHistoryType && BILL_TYPE_LABEL[vendorHistoryType]) { out.bill_type = vendorHistoryType; out.bill_type_source = 'vendor_history'; }
   var dir = autoDirection(out.release_number);
   if (dir) { out.shipment_direction = dir; out.direction_source = 'release_number'; }
+  else if (vendorDefaultDirection === 'inbound' || vendorDefaultDirection === 'outbound') { out.shipment_direction = vendorDefaultDirection; out.direction_source = 'vendor_default'; } // RW — e.g. NexPac → inbound
   return out;
 }
 

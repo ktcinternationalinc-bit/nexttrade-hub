@@ -11,7 +11,7 @@ import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
 import BillReportsPanel from './BillReportsPanel';
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
-var SRC_WORDS = { read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
+var SRC_WORDS = { vendor_default: '🏷 this vendor’s bills are always this way', read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var TODAY = new Date().toISOString().substring(0, 10);
@@ -301,7 +301,7 @@ export default function BillsTab(props) {
     if (b.validation_status === 'validated') {
       return <span><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={'Validated ' + (b.validated_at ? String(b.validated_at).substring(0, 10) : '') + (b.validation_notes ? ' — ' + b.validation_notes : '')} style={{ background: '#d1fae5', color: '#065f46' }}>✓ VALIDATED</span>{canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'reopen', bill: b, text: '' }); }} title="Reopen the validation to fix this bill (it must be validated again before it can be wired)" className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>↩ Reopen</button>}</span>;
     }
-    return <button onClick={function () { if (canManage) { closePanels(); var dr = b.validation_draft || {}; var v0 = { bill: b, checks: dr.checks || {}, notes: dr.notes || '', price_resolution: dr.price_resolution || '', warehouse_reference: dr.warehouse_reference || '', dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : '', btype: BILL_TYPE_LABEL[b.bill_type] ? b.bill_type : '' }; vRef.current = v0; setVSaved(dr.at ? 'Picked up where ' + (dr.by_name || 'someone') + ' left off (' + String(dr.at).substring(0, 16).replace('T', ' ') + ')' : ''); setValidating(v0); } }}
+    return <button onClick={function () { if (canManage) { closePanels(); var dr = b.validation_draft || {}; var v0 = { bill: b, checks: dr.checks || {}, notes: dr.notes || '', price_resolution: dr.price_resolution || '', warehouse_reference: dr.warehouse_reference || '', dir: (b.shipment_direction === 'inbound' || b.shipment_direction === 'outbound') ? b.shipment_direction : (b.default_direction || ''), dirDefault: !b.shipment_direction && !!b.default_direction, btype: BILL_TYPE_LABEL[b.bill_type] ? b.bill_type : '' }; vRef.current = v0; setVSaved(dr.at ? 'Picked up where ' + (dr.by_name || 'someone') + ' left off (' + String(dr.at).substring(0, 16).replace('T', ' ') + ')' : ''); setValidating(v0); } }}
       className="px-2 py-0.5 rounded text-[10px] font-extrabold" title="Click to run the validation checks"
       style={{ background: '#ffedd5', color: '#431407', border: '1px dashed #fdba74' }}>{b.validation_draft && b.validation_draft.at ? 'PENDING · started' : 'PENDING'}</button>;
   }
@@ -589,7 +589,7 @@ export default function BillsTab(props) {
       <div className="flex gap-2 items-center mb-1 flex-wrap">
         <span className="text-[12px] font-extrabold" style={{ color: '#431407' }}>This bill is for:</span>
         {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = validating.dir === o[0]; return <button key={o[0]} onClick={function () { setV({ dir: o[0] }, true); }} className="px-3 py-1 rounded-lg text-[12px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (validating.dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
-        <span className="text-[10px]" style={{ color: '#92400e' }}>{'(required' + (validating.bill.shipment_direction && SRC_WORDS[validating.bill.direction_source] ? ' — pre-picked: ' + SRC_WORDS[validating.bill.direction_source] : '') + ' — inbound needs a reference #, outbound a release # before it is wired)'}</span>
+        <span className="text-[10px]" style={{ color: '#92400e' }}>{'(required' + (validating.dirDefault ? ' — pre-picked: ' + validating.bill.vendor_name + ' bills are always ' + validating.dir + ' — click the other one to change it' : (validating.bill.shipment_direction && SRC_WORDS[validating.bill.direction_source] ? ' — pre-picked: ' + SRC_WORDS[validating.bill.direction_source] : '')) + ' — inbound needs a reference #, outbound a release # before it is wired)'}</span>
       </div>
       {[['matches_records', 'The bill matches our system records (PO/shipment/order)'], ['goods_received', 'The goods or services were actually received'], ['charges_accurate', 'The charges are accurate and legitimate']].map(function (c) {
         return <label key={c[0]} className="flex gap-2 items-center text-[12px] py-0.5" style={{ color: '#431407' }}>

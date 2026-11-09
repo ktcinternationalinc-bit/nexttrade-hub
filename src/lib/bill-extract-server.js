@@ -5,6 +5,7 @@
 // The model PROPOSES, parseBillExtraction DISCIPLINES, a HUMAN validates.
 import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES, importSort, BILL_TYPE_LABEL } from './bill-extract';
 import { saveBillLines, runPriceCheck } from './bill-lines-server';
+import { defaultDirectionFor } from './bill-lines';
 
 // v55.83-RP — the bill TYPE every VALIDATED bill of this vendor carries, when they all agree (else null: never guessed)
 export async function vendorBillType(db, vendorName) {
@@ -24,7 +25,9 @@ export async function vendorBillType(db, vendorName) {
 // without the new columns (and the RL ones), never lost.
 export async function insertImportedBill(db, row, draft) {
   var hist = (draft && !draft.bill_type) ? await vendorBillType(db, draft.vendor_name) : null;
-  var srt = importSort(draft, hist);
+  var defDir = null;
+  try { var crR = await db.from('bill_commission_rules').select('*'); defDir = defaultDirectionFor(((crR && crR.data) || []).filter(function (x) { return x.active !== false; }), draft && draft.vendor_name); } catch (eDD) { defDir = null; }
+  var srt = importSort(draft, hist, defDir);
   var full = Object.assign({}, row, srt);
   var tries = [full,
     Object.assign({}, row, { release_number: srt.release_number, other_reference: srt.other_reference, shipment_direction: srt.shipment_direction }),

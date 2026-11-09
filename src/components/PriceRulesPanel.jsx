@@ -55,16 +55,20 @@ export default function PriceRulesPanel(p) {
       <div className="text-[12px] font-extrabold" style={{ color: '#78350f' }}>Vendors that bill COST + a commission</div>
       {(d.commission_rules || []).map(function (c) {
         return <div key={c.id} className="text-[12px] flex gap-2 items-center" style={{ color: INK }}>
-          <b>{c.vendor_match}</b><span>{'cost + ' + (Number(c.rate) * 100) + '% commission'}</span>{c.active === false && <span style={{ color: MUTED }}>(off)</span>}
+          <b>{c.vendor_match}</b><span>{'cost + ' + (Number(c.rate) * 100) + '% commission'}</span>
+          {(c.default_direction || /^nexpac$/i.test(String(c.vendor_match).trim())) && <span className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#e0e7ff', color: '#312e81' }}>{'bills are ' + (c.default_direction === 'outbound' ? 'Outbound ➡' : '⬅ Inbound') + ' (pre-picked, can be changed per bill)'}</span>}{c.active === false && <span style={{ color: MUTED }}>(off)</span>}
           <span className="text-[11px]" style={{ color: MUTED }}>{c.note || ''}</span>
-          {can && <button onClick={function () { setCf({ id: c.id, vendor_match: c.vendor_match, rate_pct: String(Number(c.rate) * 100), note: c.note || '', active: c.active !== false }); }} className="underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>change</button>}
+          {can && <button onClick={function () { setCf({ id: c.id, vendor_match: c.vendor_match, rate_pct: String(Number(c.rate) * 100), note: c.note || '', active: c.active !== false, default_direction: c.default_direction || (/^nexpac$/i.test(String(c.vendor_match).trim()) ? 'inbound' : '') }); }} className="underline text-[11px] font-bold" style={{ color: '#1d4ed8' }}>change</button>}
         </div>;
       })}
       <div className="text-[11px]" style={{ color: '#92400e' }}>Their bills show each product at cost plus one commission line; the Hub spreads the commission over the products, so each product shows its actual cost and its commission.</div>
-      {can && !cf && <button onClick={function () { setCf({ vendor_match: '', rate_pct: '12.5', note: '', active: true }); }} className="mt-1 px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#ffffff', color: '#78350f', border: '1px solid #fcd34d' }}>＋ another commission vendor</button>}
+      {can && !cf && <button onClick={function () { setCf({ vendor_match: '', rate_pct: '12.5', note: '', active: true, default_direction: '' }); }} className="mt-1 px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#ffffff', color: '#78350f', border: '1px solid #fcd34d' }}>＋ another commission vendor</button>}
       {cf && <div className="flex gap-2 items-center mt-1 flex-wrap">
         <input className={inp} style={Object.assign({ width: 180 }, st)} placeholder="vendor name (e.g. NexPac)" value={cf.vendor_match} onChange={function (e) { setCf(Object.assign({}, cf, { vendor_match: e.target.value })); }} />
         <input className={inp} style={Object.assign({ width: 80 }, st)} placeholder="%" value={cf.rate_pct} onChange={function (e) { setCf(Object.assign({}, cf, { rate_pct: e.target.value })); }} /><span className="text-[12px]" style={{ color: SUB }}>% on top of cost</span>
+        <span className="text-[12px]" style={{ color: SUB }}>· their bills are</span>
+        <select className={inp} style={st} value={cf.default_direction || ''} onChange={function (e) { setCf(Object.assign({}, cf, { default_direction: e.target.value })); }}>
+          <option value="">— no default —</option><option value="inbound">⬅ Inbound</option><option value="outbound">Outbound ➡</option></select>
         {cf.id && <label className="text-[12px]" style={{ color: SUB }}><input type="checkbox" checked={cf.active !== false} onChange={function (e) { setCf(Object.assign({}, cf, { active: e.target.checked })); }} /> on</label>}
         <button disabled={busy} onClick={saveComm} className="px-3 py-1 rounded text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setCf(null); }} className="px-2 py-1 rounded text-[12px] font-bold" style={{ background: '#e2e8f0', color: SUB }}>cancel</button>

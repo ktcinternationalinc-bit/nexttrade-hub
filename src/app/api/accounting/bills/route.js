@@ -20,7 +20,7 @@ import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
 import { readBillFromBase64, insertImportedBill, vendorBillType } from '../../../../lib/bill-extract-server';
 import { importSort, BILL_TYPE_LABEL } from '../../../../lib/bill-extract';
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
-import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure } from '../../../../lib/bill-lines';
+import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -304,6 +304,7 @@ export async function POST(req) {
         var pcBy = {}; pcR.forEach(function (x) { pcBy[x.id] = x; });
         rows.forEach(function (b) { var x = pcBy[b.id]; if (x) { b.price_check_status = x.price_check_status; b.price_check = x.price_check; b.price_resolved_note = x.price_resolved_note; b.price_resolved_by = x.price_resolved_by; b.price_resolved_at = x.price_resolved_at; } });
       } catch (ePC) { /* RQ SQL not run yet */ }
+      try { var ddCR = await loadCommissionRules(db); rows.forEach(function (b) { var dd = defaultDirectionFor(ddCR, b.vendor_name); if (dd) { b.default_direction = dd; } }); } catch (eDD) { /* RW */ }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals });
     }
 
@@ -339,14 +340,16 @@ export async function POST(req) {
         if (Object.prototype.hasOwnProperty.call(bl, 'bill_type_source')) { fields.bill_type_source = btB ? (bl.bill_type_source === 'read_from_bill' || bl.bill_type_source === 'vendor_history' ? bl.bill_type_source : 'manual') : null; }
       }
       if (fields.release_number && !String(bl.shipment_direction || '').trim() && !bl.id) { bl.shipment_direction = 'outbound'; fields.direction_source = 'release_number'; }
+      else if (!String(bl.shipment_direction || '').trim() && !bl.id) { var ddN = defaultDirectionFor(await loadCommissionRules(db), vendor); if (ddN) { bl.shipment_direction = ddN; bl.direction_source = 'vendor_default'; } } // RW — e.g. NexPac → inbound
       if (Object.prototype.hasOwnProperty.call(bl, 'shipment_direction')) {
         var dirB = String(bl.shipment_direction || '').toLowerCase();
         if (dirB && dirB !== 'inbound' && dirB !== 'outbound') { return NextResponse.json({ error: 'Pick inbound or outbound.' }, { status: 400 }); }
         fields.shipment_direction = dirB || null;
         if (dirB === 'outbound' && bl.direction_source === 'release_number' && fields.release_number) { fields.direction_source = 'release_number'; } // RP — imported: release # on the bill
         else if (bl.direction_source === 'manual') { fields.direction_source = dirB ? 'manual' : null; }
+        else if (bl.direction_source === 'vendor_default' && dirB) { fields.direction_source = 'vendor_default'; } // RW
         if (dirB === 'outbound' && !fields.release_number && !String(bl.release_number || '').trim()) { return NextResponse.json({ error: 'An OUTBOUND bill needs its release #.' }, { status: 400 }); }
-        if (dirB === 'inbound' && !fields.other_reference) { return NextResponse.json({ error: 'An INBOUND bill needs its reference (BOL / PO / container…).' }, { status: 400 }); }
+        if (dirB === 'inbound' && !fields.other_reference && bl.direction_source !== 'vendor_default') { return NextResponse.json({ error: 'An INBOUND bill needs its reference (BOL / PO / container…).' }, { status: 400 }); } // RW — a pre-picked default never blocks saving (the wire check still asks for the reference)
       }
       // v55.83-PC — the scanned/imported file's storage path travels with the bill.
       if (String(bl.attachment_path || '').trim()) { fields.attachment_path = String(bl.attachment_path).trim().substring(0, 300); }
@@ -837,7 +840,7 @@ export async function POST(req) {
       var blCR = commissionRuleFor(await loadCommissionRules(db), blB.data.vendor_name);
       var blCheck = blFresh && blFresh.ok && blFresh.unsaved && blB.data.validation_status !== 'validated' ? blFresh.check : (blB.data.price_check || null);
       return NextResponse.json({ ok: true, can_manage: !!(blMgr && blMgr.ok === true), lines: blL.lines, commission_rule: blCR, price_check: blCheck, price_check_status: blCheck ? blCheck.status : (blB.data.price_check_status || null),
-        price_resolved_note: blB.data.price_resolved_note || null, locked: blB.data.validation_status === 'validated', validation_draft: blB.data.validation_draft || null });
+        price_resolved_note: blB.data.price_resolved_note || null, locked: blB.data.validation_status === 'validated', validation_draft: blB.data.validation_draft || null, default_direction: defaultDirectionFor(await loadCommissionRules(db), blB.data.vendor_name) });
     }
     // v55.83-RU (Max, Nov 9 21:48: "please save entries when we validate even if we have not yet fully validated. such as just
     // entering the type or the direction") — the type and direction are saved on the bill at once (audited); the ticks and
@@ -944,11 +947,13 @@ export async function POST(req) {
       var cru = body.rule || {};
       var crRate = Number(String(cru.rate_pct == null ? '' : cru.rate_pct).replace('%', '')) / 100;
       var crF = { vendor_match: String(cru.vendor_match || '').trim().substring(0, 120), rate: crRate, active: cru.active !== false, note: String(cru.note || '').trim().substring(0, 300) || null, updated_by: userId, updated_at: new Date().toISOString() };
+      if (Object.prototype.hasOwnProperty.call(cru, 'default_direction')) { crF.default_direction = cru.default_direction === 'inbound' || cru.default_direction === 'outbound' ? cru.default_direction : null; } // RW
       if (!crF.vendor_match) { return NextResponse.json({ error: 'Which vendor bills cost + a commission?' }, { status: 400 }); }
       if (!(crF.rate > 0 && crF.rate < 1)) { return NextResponse.json({ error: 'The commission % must be between 0 and 100 (e.g. 12.5).' }, { status: 400 }); }
       var crR;
       if (cru.id) { crR = await db.from('bill_commission_rules').update(crF).eq('id', cru.id).select('*').maybeSingle(); }
       else { crR = await db.from('bill_commission_rules').insert(Object.assign({ created_by: userId }, crF)).select('*').maybeSingle(); }
+      if (crR.error && /default_direction/.test(crR.error.message || '')) { return NextResponse.json({ error: 'The bills-direction setting needs sql/v55-83-RW-vendor-default-direction.sql — run it in Supabase, then save again.' }, { status: 400 }); }
       if (crR.error) { return NextResponse.json({ error: crR.error.message }, { status: 400 }); }
       await audit(db, userId, cru.id ? 'commission_rule_changed' : 'commission_rule_created', 'bill_commission_rule', crR.data && crR.data.id, crF);
       var reN3 = await recheckOpenBills(db, { actorId: userId });
@@ -983,7 +988,7 @@ export async function POST(req) {
       var sugg = null;
       if (rd.draft && rd.draft.vendor_name && !rd.draft.category) { sugg = await suggestCategory(db, rd.draft.vendor_name); }
       // v55.83-RP — the bill TYPE (read from the bill, else this vendor's validated history) and direction (release # → outbound)
-      var sortX = importSort(rd.draft, rd.draft && !rd.draft.bill_type ? await vendorBillType(db, rd.draft.vendor_name) : null);
+      var sortX = importSort(rd.draft, rd.draft && !rd.draft.bill_type ? await vendorBillType(db, rd.draft.vendor_name) : null, defaultDirectionFor(await loadCommissionRules(db), rd.draft && rd.draft.vendor_name)); // RW
       var pv = null;
       try {
         var pvRules = await loadPriceRules(db); var pvCR = commissionRuleFor(await loadCommissionRules(db), rd.draft && rd.draft.vendor_name);

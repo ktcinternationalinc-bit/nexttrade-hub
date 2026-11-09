@@ -118,12 +118,15 @@ export async function aiReviewPackage(pkg, lines, rules, ctxAll) {
     other_bills_sharing_a_release_or_reference: others.slice(0, 60),
     bills: lines.map(function (l) {
       var b = l.bill || {};
-      return { vendor: b.vendor_name, bill_number: b.bill_number, other_reference: b.other_reference || null, release: b.release_number, bill_date: b.bill_date, due: b.due_date, total: b.total_amount,
+      return { vendor: b.vendor_name, bill_number: b.bill_number, direction: b.shipment_direction || null, bill_type: b.bill_type || null, other_reference: b.other_reference || null, release: b.release_number, bill_date: b.bill_date, due: b.due_date, total: b.total_amount,
         paying_now: l.amount, paid_before: l.other_payments, paid_via: b.paid_via || null, category: b.category, notes: String(b.notes || '').substring(0, 200), validation: b.validation_status };
     }), rule_results: rules.checks };
   var prompt = 'You are the first reviewer of an outgoing WIRE a trading company is ABOUT TO SEND. It goes either to RTM Capital (a service company that then pays the ' +
-    'vendors listed and may charge a fee), to NextTrade Industries (a related company, bills only), or straight to a vendor. The company requires: no bill paid twice, every ' +
-    'bill belongs to a release number, no bill was paid before, and NO DUPLICATES — a duplicate is the same vendor with the same release number AND the same bill date, or the same ' +
+    'vendors listed and may charge a fee), to NextTrade Industries (a related company, bills only), or straight to a vendor. The company requires: no bill paid twice, ' +
+    // v55.83-RX (Max, Nov 9 23:41: "this is not true unless it is for outbound!! otherwise inbound needs a reference and a billing number ... every outbound bill needs a release")
+    'every bill has a bill number and a bill date; an OUTBOUND bill (direction "outbound") must have a release number; an INBOUND bill (direction "inbound") does NOT need a release — ' +
+    'it needs its reference (other_reference) and its bill number instead (release = null on an inbound bill is NORMAL, never mention it); bills paid to NextTrade Industries do not need a release either; ' +
+    'no bill was paid before, and NO DUPLICATES — a duplicate is the same vendor with the same release number AND the same bill date, or the same ' +
     'reference (bill number) AND the same date; the same release on a DIFFERENT date is a normal separate charge. other_bills_sharing_a_release_or_reference lists the other bills ' +
     'in the books that share a release or reference with these bills (with their dates and how much was already paid) — check each one against this rule and say clearly if any ' +
     'bill on this wire looks like a duplicate or was already paid. Automatic rule checks already ran (rule_results). Also look for ' +

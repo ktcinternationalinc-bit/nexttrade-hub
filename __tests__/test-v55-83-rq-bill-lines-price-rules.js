@@ -79,7 +79,8 @@ console.log('RQ — bill lines, NexPac cost + 12.5%, price rules, reports, sort 
   check('2b: Cambridge Seconds: 12,153.50 LBS × $0.26 = $3,159.91 cost + $394.99 commission (12.5% of its cost)', sec.qty === 12153.5 && sec.unit === 'LBS' && sec.cost_amount === 3159.91 && sec.commission_amount === 394.99, sec);
   var sumC = Math.round(items.reduce(function (a, l) { return a + l.commission_amount * 100; }, 0)) / 100;
   check('2c: the product commissions add up EXACTLY to the bill\'s commission line ($483.83) and cost + commission = the bill total ($4,354.48)', sumC === 483.83 && Math.round((items.reduce(function (a, l) { return a + l.cost_amount; }, 0) + sumC) * 100) / 100 === 4354.48, sumC);
-  check('2d: type Supplier, the order # is the reference; no release → direction left for the validator', bill('14350').bill_type === 'supplier' && bill('14350').other_reference === '80210265' && !bill('14350').shipment_direction);
+  // superseded (v55.83-RW, Max 23:26 "nexpac bills are always inbounds"): no release → NexPac's default, INBOUND (changeable)
+  check('2d: type Supplier, the order # is the reference; no release → NexPac bills default to INBOUND', bill('14350').bill_type === 'supplier' && bill('14350').other_reference === '80210265' && bill('14350').shipment_direction === 'inbound' && bill('14350').direction_source === 'vendor_default');
   check('2e: the commission is checked: 12.5% of $3,870.65 = $483.83 ✓ (no flag); no price rules yet → "no rule"', bill('14350').price_check_status === 'no_rules' && bill('14350').price_check.flags.length === 0, bill('14350').price_check);
   var bad = JSON.parse(JSON.stringify(NP14353)); bad.bill_number = '14353-X'; bad.lines[4].amount = 400; bad.total_amount = 3486.01;
   await ingest(bad, 'bad.pdf');

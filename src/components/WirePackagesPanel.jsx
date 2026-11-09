@@ -25,6 +25,18 @@ var PST = {
   reversed: { background: '#e2e8f0', color: '#7f1d1d' },
 };
 // what the list says to do next, in plain words
+// v55.83-RX (Max, Nov 9 23:41: "next step after both signatures...SEND TO RTM (if for RTM). SEND to NEXTRADE (if set up for
+// nextrade) Send to Supplier/Vendor (if being sent directly)")
+function sendWords(p) {
+  if (!p) { return 'Send it'; }
+  if (p.payee_kind === 'service_provider') { return 'Send to ' + (p.payee_name || 'RTM Capital'); }
+  if (p.payee_kind === 'affiliate') { return 'Send to ' + (p.payee_name || 'NextTrade Industries'); }
+  return 'Send to the vendor — ' + (p.payee_name || '?');
+}
+function sentWords(p) {
+  if (!p) { return 'Sent'; }
+  return 'Sent to ' + (p.payee_kind === 'vendor' ? 'the vendor' : (p.payee_name || '?'));
+}
 var NEXT_WORDS = {
   needs_check: 'Check it', flagged: 'Fix the problems', awaiting_1st: '1st person signs', awaiting_2nd: '2nd person signs',
   ready_to_send: 'Send it at the bank', sent: 'Attach the bank line', awaiting_proof: 'Add RTM proof', complete: 'Done', cancelled: '—', reversed: 'Undone',
@@ -117,6 +129,7 @@ function ValidateInline(p) {
     post({ action: 'bill_lines', id: p.billId }).then(function (j) {
       if (!(j && j.ok)) { return; }
       setPc({ check: j.price_check, status: j.price_check_status, resolved: j.price_resolved_note });
+      if (!dir && j.default_direction) { setDir(j.default_direction); setSavedTxt('Pre-picked ' + j.default_direction + ' (this vendor’s bills are always ' + j.default_direction + ') — click the other to change'); } // RW
       var dr = j.validation_draft || {};
       if (dr.checks) { setCk({ matches_records: dr.checks.matches_records === true, goods_received: dr.checks.goods_received === true, charges_accurate: dr.checks.charges_accurate === true }); }
       if (dr.notes) { setHow(dr.notes); } if (dr.price_resolution) { setRes(dr.price_resolution); }
@@ -448,7 +461,7 @@ export default function WirePackagesPanel(props) {
     var blocks = (det.checks.checks || []).filter(function (c) { return c.level === 'block'; });
     var warnsL = (det.checks.checks || []).filter(function (c) { return c.level === 'warn' || c.level === 'info'; });
     var allValid = det.lines.every(function (l) { return (l.bill || {}).validation_status === 'validated'; });
-    var steps = [['Bills validated', allValid], ['Prepared', true], ['Checked', st !== 'needs_check' && st !== 'flagged'], ['1st signature', !!(A.signoff1 && A.signoff1.valid)], ['2nd signature', !!(A.signoff2 && A.signoff2.valid)], ['Sent at the bank', !!P.sent], ['Bank line attached', !!P.attached]];
+    var steps = [['Bills validated', allValid], ['Prepared', true], ['Checked', st !== 'needs_check' && st !== 'flagged'], ['1st signature', !!(A.signoff1 && A.signoff1.valid)], ['2nd signature', !!(A.signoff2 && A.signoff2.valid)], [sentWords(P), !!P.sent], ['Bank line attached', !!P.attached]];
     if (P.paid_through) { steps.push([P.payee_name + ' proof', st === 'complete']); }
     var amountNow = P.approved_total != null ? P.approved_total : P.total;
     var canTick = P.paid_through && (P.raw_status === 'sent' || P.raw_status === 'attached') && P.rtm_pending > 0;
@@ -489,13 +502,14 @@ export default function WirePackagesPanel(props) {
           : <div className="flex gap-2 items-center flex-wrap"><input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder={A.ai_ok === true ? 'what you checked (optional)' : 'what you checked (required)'} className={inp} style={Object.assign({ flex: '1 1 280px' }, inpS)} />
             <Btn big color="#047857" onClick={sign} disabled={busy}>{'✍ I verified it — sign as ' + who}</Btn></div>}</div>;
     } else if (st === 'ready_to_send') {
-      nextBox = <div><div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Send exactly $' + fmt(P.total) + ' to ' + P.payee_name + ' at the bank, then fill this in:'}</div>
+      nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 ' + sendWords(P) + ' — $' + fmt(P.total)}</div>
+        <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Wire exactly $' + fmt(P.total) + ' to ' + P.payee_name + (P.payee_kind === 'vendor' ? ' (the vendor, directly)' : '') + ' from the bank, then fill this in:'}</div>
         {perms.send ? <div className="flex gap-2 items-center flex-wrap">
           <label className="text-[12px] font-bold" style={{ color: SUB }}>Sent on <input type="date" value={sendF.date} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value })); }} className={inp} style={inpS} /></label>
           <input value={sendF.ref} onChange={function (e) { setSendF(Object.assign({}, sendF, { ref: e.target.value })); }} placeholder="bank's wire reference #" className={inp} style={Object.assign({ width: 200 }, inpS)} />
           <label className="text-[12px] font-bold rounded-lg px-2 py-1.5" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer' }}>📎 {sendF.file ? sendF.file.name : 'bank confirmation (PDF / screenshot)'}
             <input type="file" accept="application/pdf,image/*" onChange={function (e) { setSendF(Object.assign({}, sendF, { file: e.target.files && e.target.files[0] })); }} style={{ display: 'none' }} /></label>
-          <Btn big color="#1d4ed8" onClick={sendIt} disabled={busy}>📤 Mark as sent</Btn></div>
+          <Btn big color="#1d4ed8" onClick={sendIt} disabled={busy}>{'📤 Mark as sent to ' + (P.payee_kind === 'vendor' ? 'the vendor' : P.payee_name)}</Btn></div>
           : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}</div>;
     } else if (st === 'sent') {
       nextBox = <div><div className="mb-2" style={{ color: INK }}>{'Sent ' + P.sent.date + ' (ref ' + P.sent.reference + '). When the $' + fmt(amountNow) + ' money-out shows in the bank feed, attach it — that records the bills as paid.'}</div>
@@ -663,7 +677,7 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-2 font-bold">{p.payee_name}</td>
               <td className="px-2 py-2">{p.vendors.join(', ')}<span style={{ color: MUTED }}>{' · ' + p.bills + ' bill(s)'}</span></td>
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>
-              <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{NEXT_WORDS[p.status]}</span></td>
+              <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{p.status === 'ready_to_send' ? sendWords(p) : NEXT_WORDS[p.status]}</span></td>
               <td className="px-2 py-2 text-right font-extrabold whitespace-nowrap" style={{ color: '#1d4ed8' }}>
                 {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}
                 open →</td>

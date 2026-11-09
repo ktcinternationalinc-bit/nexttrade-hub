@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RX',
+    date: '2026-11-09',
+    title: 'Wire AI check knows inbound vs outbound; “Send to …” next step',
+    items: [
+      'The AI review on a wire no longer says every bill needs a release. Only OUTBOUND bills need a release; INBOUND bills need their reference and bill number.',
+      'After both signatures, the next step names who gets the money: “Send to RTM Capital”, “Send to NextTrade Industries”, or “Send to the vendor — name”.',
+      'On a wire that was already checked (like WP-0003), click “Check it now” once so the AI review runs again with the corrected rule.',
+      { superAdminOnly: true, text: 'aiReviewPackage prompt: release required only for direction=outbound; inbound needs other_reference + bill_number (release null = normal); NextTrade no release; bills carry direction + bill_type in the AI data. WirePackagesPanel sendWords/sentWords (service_provider / affiliate / vendor) in list, NEXT STEP box, Mark-as-sent button, progress bar. No SQL. Test rx 5.' },
+    ],
+  },
+  {
+    version: 'v55.83-RW',
+    date: '2026-11-09',
+    title: 'NexPac bills default to Inbound',
+    items: [
+      'NexPac bills are now Inbound by default — when imported, when typed in, and pre-picked when you validate. You can still click Outbound to change it for a bill.',
+      'Open NexPac bills that had no direction yet were set to Inbound. Validated bills were not touched.',
+      'The default is a setting in 📏 Price rules (vendors that bill cost + commission → “their bills are …”).',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RW-vendor-default-direction.sql: bill_commission_rules.default_direction (NexPac = inbound), direction_source + vendor_default, backfill open NexPac bills. defaultDirectionFor (NexPac fallback before SQL), importSort third arg, insertImportedBill/extract_bill/save_bill new use it (a vendor default never blocks save for a missing reference — the wire check still does), list/bill_lines carry default_direction, BillsTab/ValidateInline pre-pick + say so, PriceRulesPanel edits it. Test rw 11.' },
+    ],
+  },
+  {
     version: 'v55.83-RV',
     date: '2026-11-09',
     title: 'Bills & wires: clearer price check, panels under the bill, review fixes',

@@ -16,6 +16,14 @@ function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 export function normText(s) { return String(s == null ? '' : s).toLowerCase().replace(/\(([^)]*)\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim(); }
 
 export var LINE_KINDS = ['item', 'charge', 'commission'];
+
+// v55.83-RW (Max, Nov 9 23:26: "nexpac bills are always inbounds — default validation to that with option to manually change")
+export function defaultDirectionFor(rules, vendorName) {
+  var cr = commissionRuleFor(rules, vendorName);
+  if (!cr) { return null; }
+  if (cr.default_direction === 'inbound' || cr.default_direction === 'outbound') { return cr.default_direction; }
+  return normText(cr.vendor_match) === 'nexpac' ? 'inbound' : null; // before the RW SQL is run
+}
 export var LINE_KIND_LABEL = { item: 'Product', charge: 'Charge / service', commission: 'Commission' };
 export function isCommissionText(desc) { return /\bcommission\b/i.test(String(desc || '')); }
 
