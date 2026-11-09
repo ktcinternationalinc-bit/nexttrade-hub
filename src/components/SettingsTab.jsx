@@ -472,6 +472,7 @@ const ACTION_PERMS = [
   { key: 'ar.send_reminders', label: 'AR: Send reminders', desc: 'Send late-invoice payment reminders to customers by email/WhatsApp.' },
   { key: 'bills.view',    label: 'Bills: View',    desc: 'See vendor bills (what the company owes) and the cash-flow view.' },
   { key: 'bills.manage',  label: 'Bills: Manage',  desc: 'Add/edit/void bills and record bill payments. Implies view.' },
+  { key: 'bills.price_rules', label: 'Bills: Price rules', desc: 'Enter expected prices of products / services and commission rules; the Hub checks every bill against them and flags differences for a person.' },
   { key: 'wires.view',    label: 'Wires: View',    desc: 'Open the 🏦 Wires portal: every wire sent to vendors, its audit, and all the bills it paid. Needs ClickBooks access.' },
   { key: 'wires.prepare', label: 'Wires: Prepare', desc: 'Prepare a wire BEFORE it is sent: pick who it goes to (RTM Capital, NextTrade Industries — bills only — or a vendor), the bills it pays and the optional RTM fee; run the audit; cancel a wire not yet sent.' },
   { key: 'wires.signoff', label: 'Wires: Sign Off', desc: 'Be one of the TWO people who verify a prepared wire after the audit, before it is sent. The same person can never sign both.' },

@@ -21,7 +21,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ImapFlow } from 'imapflow';
-import { readBillFromBase64 } from '../../../../../lib/bill-extract-server';
+import { readBillFromBase64, insertImportedBill } from '../../../../../lib/bill-extract-server';
 import { billDupVerdict } from '../../../../../lib/bill-dup-server';
 import { audit } from '../../../../../lib/audit-server';
 import { assertPermission } from '../../../../../lib/server-permissions';
@@ -191,7 +191,7 @@ export async function POST(req) {
             var up = await db.storage.from('bills-private').upload(path, Buffer.from(b64, 'base64'), { contentType: parts[pi].type, upsert: false });
             if (up.error) { upErr = up.error.message; }
           } catch (eU) { upErr = (eU && eU.message) || 'upload failed'; }
-          var ins = await db.from('vendor_bills').insert({
+          var ins = await insertImportedBill(db, {
             vendor_name: d.vendor_name || ('UNREAD VENDOR (email from ' + (from || '?') + ')'),
             bill_number: d.bill_number, bill_date: d.bill_date || new Date().toISOString().substring(0, 10),
             due_date: d.due_date, total_amount: d.total_amount || 0.01,
@@ -200,7 +200,7 @@ export async function POST(req) {
                     (rd.problems.length ? ' · READER FLAGS: ' + rd.problems.join(' ') : '')).substring(0, 900),
             validation_status: 'pending',
             attachment_path: upErr ? null : path,
-          }).select('id').maybeSingle();
+          }, d); // v55.83-RP — type / release / direction sorted on import
           if (ins.error) { skipped.push({ file: parts[pi].name, reason: ins.error.message }); continue; }
           madeHere++;
           created.push({ id: ins.data.id, vendor: d.vendor_name, amount: d.total_amount, warned: !!verdict.warn });

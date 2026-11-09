@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
+import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -82,9 +83,59 @@ function BillFields(p) {
     </div>;
   }
   return <div onClick={function (e) { e.stopPropagation(); }}>
+    {b.bill_type ? <div className="text-[10px] font-extrabold mb-0.5" style={{ color: '#7c2d12' }}>{BILL_TYPE_LABEL[b.bill_type] || b.bill_type}</div> : null}
     <div className="flex gap-1 items-center">{chip('inbound', '⬅ Inbound')}{chip('outbound', 'Outbound ➡')}{!dir && !p.releaseOptional ? <span className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>tick one</span> : null}</div>
     {field('Release #', b.release_number, relD, setRelD, 'release_number', needRel)}
     {field('Reference', b.other_reference, refD, setRefD, 'other_reference', needRef)}
+  </div>;
+}
+
+// v55.83-RO (Max, Nov 9 20:49: "validation needs to take place first before wiring ... you cannot pay a wire unless it has
+// been validated") — validate a bill right where it is picked: the same 3 checks + HOW, the same audited record as 💸 Bills.
+function ValidateInline(p) {
+  var s1 = useState(false); var open = s1[0]; var setOpen = s1[1];
+  var s2 = useState({ matches_records: false, goods_received: false, charges_accurate: false }); var ck = s2[0]; var setCk = s2[1];
+  var s3 = useState(''); var how = s3[0]; var setHow = s3[1];
+  var s4 = useState(''); var err = s4[0]; var setErr = s4[1];
+  var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
+  var s6 = useState(p.dir === 'inbound' || p.dir === 'outbound' ? p.dir : ''); var dir = s6[0]; var setDir = s6[1]; // Max 20:54: in / out marked during validation
+  var s7 = useState(BILL_TYPE_LABEL[p.btype] ? p.btype : ''); var btype = s7[0]; var setBtype = s7[1]; // Max 21:04: the TYPE too
+  if (!open) {
+    return <div onClick={function (e) { e.stopPropagation(); }}><span className="text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>⛔ not validated</span>
+      {p.canValidate && <button onClick={function () { setOpen(true); }} className="ml-1 px-2 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>✓ Validate now</button>}</div>;
+  }
+  var all3 = ck.matches_records && ck.goods_received && ck.charges_accurate;
+  var missing = !btype ? 'pick the TYPE of bill' : !dir ? 'mark it Inbound or Outbound' : !all3 ? 'tick all three checks' : (how.trim().length < 10 ? 'write HOW you verified it (10+ characters)' : '');
+  function box(k, label) {
+    return <label key={k} className="flex items-center gap-1.5 text-[11px] py-0.5" style={{ color: '#0f172a', cursor: 'pointer' }}>
+      <input type="checkbox" checked={!!ck[k]} onChange={function (e) { var n = Object.assign({}, ck); n[k] = e.target.checked; setCk(n); setErr(''); }} style={{ width: 15, height: 15 }} />{label}</label>;
+  }
+  function save() {
+    if (missing) { setErr('To validate: ' + missing + '.'); return; }
+    setBusy(true);
+    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'validate_bill', id: p.billId, checks: ck, notes: how, shipment_direction: dir, bill_type: btype, user_id: p.userId }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; })
+      .then(function (j) { if (j && j.ok) { setOpen(false); if (p.onDone) { p.onDone(dir, btype); } } else { setErr((j && j.error) || 'Validation refused.'); } })
+      .finally(function () { setBusy(false); });
+  }
+  return <div onClick={function (e) { e.stopPropagation(); }} className="rounded-lg p-2 mt-1" style={{ background: '#fffbeb', border: '1px solid #fcd34d', minWidth: 280 }}>
+    <div className="text-[11px] font-extrabold mb-0.5" style={{ color: '#78350f' }}>Validate — only what you actually checked (audited with your name)</div>
+    <div className="flex gap-1 my-1 flex-wrap">
+      {BILL_TYPES.map(function (t) { var on = btype === t; return <button key={t} onClick={function () { setBtype(t); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#7c2d12' : '#ffffff', color: on ? '#ffffff' : '#7c2d12', border: '1px solid ' + (on ? '#7c2d12' : (btype ? '#cbd5e1' : '#f87171')) }}>{BILL_TYPE_LABEL[t]}</button>; })}
+    </div>
+    <div className="flex gap-1 my-1">
+      {[['inbound', '⬅ Inbound'], ['outbound', 'Outbound ➡']].map(function (o) { var on = dir === o[0]; return <button key={o[0]} onClick={function () { setDir(o[0]); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: on ? '#1d4ed8' : '#ffffff', color: on ? '#ffffff' : '#1e3a8a', border: '1px solid ' + (on ? '#1d4ed8' : (dir ? '#cbd5e1' : '#f87171')) }}>{o[1]}</button>; })}
+      <span className="text-[10px] self-center" style={{ color: '#78350f' }}>(required)</span>
+    </div>
+    {box('matches_records', 'Matches our records (PO / shipment / order)')}{box('goods_received', 'Goods or services were received')}{box('charges_accurate', 'Charges are accurate and legitimate')}
+    <input value={how} onChange={function (e) { setHow(e.target.value); setErr(''); }} placeholder="HOW did you verify it? (required)" className="w-full mt-1 px-1.5 py-1 rounded border text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', borderColor: how.trim().length < 10 ? '#f87171' : '#cbd5e1' }} />
+    <div className="flex gap-1 mt-1">
+      <button onClick={save} disabled={busy} title={missing ? 'Still needed: ' + missing : ''} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: missing ? '#94a3b8' : '#047857', color: '#ffffff' }}>{busy ? 'Saving…' : '✓ Mark validated'}</button>
+      <button onClick={function () { setOpen(false); setErr(''); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>cancel</button>
+    </div>
+    {err && <div className="mt-1 text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>⛔ {err}</div>}
   </div>;
 }
 
@@ -111,7 +162,8 @@ export default function WirePackagesPanel(props) {
   var a13 = useState({}); var relDraft = a13[0]; var setRelDraft = a13[1];
   var a14 = useState(false); var showMore = a14[0]; var setShowMore = a14[1];
   var a15 = useState(null); var setup = a15[0]; var setSetup = a15[1];
-  var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1]; // v55.83-RL — reasons being typed, per check
+  var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1];
+  var a17 = useState(null); var delAsk = a17[0]; var setDelAsk = a17[1]; // v55.83-RO — the delete / undo question, inline // v55.83-RL — reasons being typed, per check
 
   // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
   function api(payload) {
@@ -122,7 +174,7 @@ export default function WirePackagesPanel(props) {
   }
   function load() { api({ action: 'list' }).then(function (j) { if (j && j.ok) { setList(j.packages || []); } else { setList([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setList([]); }); }
   function open(id) {
-    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({});
+    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null);
     api({ action: 'get', id: id }).then(function (j) {
       if (j && j.ok) { setDet(j); setEd(null); setProofF({ ticks: {}, date: '', ref: '', file: null }); if (j.package.raw_status === 'sent') { loadCands(id); } }
       else { toast.error((j && j.error) || 'Could not open the wire.'); }
@@ -174,7 +226,7 @@ export default function WirePackagesPanel(props) {
       var current = true;
       setEd(function (e) {
         if (!e || e.kind !== kind || String(e.payee || '') !== String(payee || '')) { current = false; return e; } // review gap 10
-        return Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [] });
+        return Object.assign({}, e, { bills: (j && j.ok) ? j.bills : [], waiting: (j && j.ok) ? (j.not_validated || []) : [] });
       });
       if (current && !(j && j.ok)) { toast.error((j && j.error) || 'Could not load the bills.'); }
     });
@@ -269,10 +321,15 @@ export default function WirePackagesPanel(props) {
     var mineB = shown.filter(function (b) { return !b.needs_mark; }); var otherB = shown.filter(function (b) { return b.needs_mark; });
     var renderRow = function (b) {
       var on = ed.picks[b.id] != null;
-      var off = !!b.on_package || (ed.kind === 'vendor' && pickedVendor && b.vendor_name !== pickedVendor && !on);
+      var notValid = b.validation_status !== 'validated'; // v55.83-RO — validate first, then wire
+      var off = !!b.on_package || (ed.kind === 'vendor' && pickedVendor && b.vendor_name !== pickedVendor && !on) || (notValid && !on);
       return <tr key={b.id} onClick={function () { if (!off) { togglePick(b); } }} style={{ borderTop: '1px solid #e2e8f0', background: on ? '#ecfdf5' : '#ffffff', cursor: off ? 'not-allowed' : 'pointer', opacity: off ? 0.45 : 1 }}>
         <td className="px-2 py-2" style={{ width: 28 }}><input type="checkbox" readOnly checked={on} disabled={off} style={{ width: 18, height: 18 }} /></td>
         <td className="px-2 py-2"><div className="text-[13px] font-extrabold" style={{ color: INK }}>{b.vendor_name}</div>
+          {notValid ? <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function (d, t) {
+            toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — you can tick it now.');
+            setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { validation_status: 'validated', shipment_direction: d || x.shipment_direction, bill_type: t || x.bill_type }) : x; }) }) : e; });
+          }} /> : <div className="text-[10px] font-extrabold" style={{ color: '#065f46' }}>✓ validated</div>}
           <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · already on ' + b.on_package : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
         <td className="px-2 py-2"><BillFields bill={b} editable={!!perms.prepare} busy={busy} releaseOptional={b.release_optional} onSave={function (field, value, done) { saveField(b.id, field, value, done); }} /></td>
         <td className="px-2 py-2 text-right text-[12px] tabular-nums" style={{ color: SUB }}>${fmt(b.open)}</td>
@@ -299,6 +356,22 @@ export default function WirePackagesPanel(props) {
           <div className="text-[14px] font-extrabold">🧾 A vendor directly</div><div className="text-[11px]" style={{ opacity: 0.85 }}>we wire the vendor ourselves · one vendor</div></button>
       </div>
       {/* step 2 */}
+      {ed.kind && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#78350f' }}>
+        Only VALIDATED bills are listed here — a bill has to be validated (Inbound / Outbound, 3 checks, how you verified it) before it can be wired.
+        {(ed.waiting || []).length > 0 && <span>{' '}<button onClick={function () { setEd(Object.assign({}, ed, { showWaiting: !ed.showWaiting })); }} className="underline font-extrabold" style={{ color: '#1d4ed8' }}>
+          {(ed.showWaiting ? '▾ hide ' : '▸ ') + ed.waiting.length + ' open bill(s) waiting for validation'}</button></span>}
+        {ed.showWaiting && (ed.waiting || []).length > 0 && <div className="mt-2 grid gap-1">
+          {ed.waiting.map(function (b) {
+            return <div key={b.id} className="rounded px-2 py-1.5 flex gap-2 items-start flex-wrap" style={{ background: '#ffffff', border: '1px solid #fde68a' }}>
+              <div className="text-[12px]" style={{ color: INK, minWidth: 220 }}><b>{b.vendor_name}</b>{' · Bill ' + (b.bill_number || '—') + (b.bill_date ? ' · ' + b.bill_date : '') + ' · $' + fmt(b.open)}</div>
+              <ValidateInline billId={b.id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function (d, t) {
+                toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — it is in the list now.');
+                setEd(function (e) { if (!e) { return e; } var nb = Object.assign({}, b, { validation_status: 'validated', shipment_direction: d || b.shipment_direction, bill_type: t || b.bill_type });
+                  return Object.assign({}, e, { bills: (e.bills || []).concat([nb]), waiting: (e.waiting || []).filter(function (x) { return x.id !== b.id; }) }); });
+              }} />
+            </div>;
+          })}
+        </div>}</div>}
       {ed.kind && <div>
         <div className="flex gap-2 items-center flex-wrap mb-2">
           <div className="text-[13px] font-extrabold" style={{ color: INK }}>2 · Tick the bills this wire pays</div>
@@ -339,7 +412,8 @@ export default function WirePackagesPanel(props) {
     var P = det.package; var st = P.status; var A = det.audit;
     var blocks = (det.checks.checks || []).filter(function (c) { return c.level === 'block'; });
     var warnsL = (det.checks.checks || []).filter(function (c) { return c.level === 'warn' || c.level === 'info'; });
-    var steps = [['Prepared', true], ['Checked', st !== 'needs_check' && st !== 'flagged'], ['1st signature', !!(A.signoff1 && A.signoff1.valid)], ['2nd signature', !!(A.signoff2 && A.signoff2.valid)], ['Sent at the bank', !!P.sent], ['Bank line attached', !!P.attached]];
+    var allValid = det.lines.every(function (l) { return (l.bill || {}).validation_status === 'validated'; });
+    var steps = [['Bills validated', allValid], ['Prepared', true], ['Checked', st !== 'needs_check' && st !== 'flagged'], ['1st signature', !!(A.signoff1 && A.signoff1.valid)], ['2nd signature', !!(A.signoff2 && A.signoff2.valid)], ['Sent at the bank', !!P.sent], ['Bank line attached', !!P.attached]];
     if (P.paid_through) { steps.push([P.payee_name + ' proof', st === 'complete']); }
     var amountNow = P.approved_total != null ? P.approved_total : P.total;
     var canTick = P.paid_through && (P.raw_status === 'sent' || P.raw_status === 'attached') && P.rtm_pending > 0;
@@ -416,12 +490,22 @@ export default function WirePackagesPanel(props) {
         <div className="flex-1" />
         {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { startChange(det); }}>✏ Change</Btn>}
         {/* v55.83-RL (Max 12:17: "ability to delete the wire and everything return to previous state") */}
-        {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { var why = window.prompt('Delete this wire? Its bills go back to how they were. Why?'); if (why && why.trim().length >= 3) { act({ action: 'delete_wire', id: P.id, reason: why }, '🗑 Wire deleted — everything is back to how it was (the history keeps a copy).', function () { setDet(null); }); } }}>🗑 Delete wire</Btn>}
-        {perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <Btn light onClick={function () {
-          var why = window.prompt('UNDO this wire? The bill payments it recorded are voided, bills go back to how they were, the bank line is freed. The record is kept. Why (at least 10 characters)?');
-          if (why && why.trim().length >= 10) { act({ action: 'delete_wire', id: P.id, reason: why }, '↩ Wire undone — everything is back to how it was before it.'); } else if (why) { toast.error('Write a longer reason (at least 10 characters).'); }
-        }}>↩ Undo &amp; delete wire</Btn>}
+        {perms.prepare && P.raw_status === 'draft' && <Btn color="#b91c1c" onClick={function () { setDelAsk({ mode: 'erase', reason: '' }); }}>🗑 Delete wire</Btn>}
+        {perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <Btn color="#7f1d1d" onClick={function () { setDelAsk({ mode: 'undo', reason: '' }); }}>↩ Undo &amp; delete wire</Btn>}
+        {!perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <span className="text-[10px]" style={{ color: MUTED }}>A sent wire can be undone by a super admin or the owner.</span>}
       </div>
+      {/* v55.83-RO (Max 20:50: "i need to be able to delete a wire that is in progress") — asked right here, no pop-up */}
+      {delAsk && <div className="rounded-xl p-3 mb-3" style={{ background: '#fee2e2', border: '2px solid #b91c1c' }}>
+        <div className="text-[13px] font-extrabold mb-1" style={{ color: '#7f1d1d' }}>{delAsk.mode === 'erase' ? '🗑 Delete this wire? Its bills go back to how they were (nothing was paid). The history keeps a copy.' : '↩ Undo this SENT wire? The bill payments it recorded are voided, the bills go back to how they were, the bank line is freed. The wire stays on record as undone.'}</div>
+        <div className="flex gap-2 items-center flex-wrap">
+          <input autoFocus value={delAsk.reason} onChange={function (e) { setDelAsk(Object.assign({}, delAsk, { reason: e.target.value })); }} placeholder={delAsk.mode === 'erase' ? 'why (required)' : 'why — at least 10 characters (required)'} className={inp} style={Object.assign({ flex: '1 1 320px' }, inpS)} />
+          <Btn big color="#b91c1c" disabled={busy || delAsk.reason.trim().length < (delAsk.mode === 'erase' ? 3 : 10)} onClick={function () {
+            act({ action: 'delete_wire', id: P.id, reason: delAsk.reason }, delAsk.mode === 'erase' ? '🗑 Wire deleted — everything is back to how it was.' : '↩ Wire undone — everything is back to how it was before it.',
+              function () { var wasErase = delAsk.mode === 'erase'; setDelAsk(null); if (wasErase) { setDet(null); } else { open(P.id); } });
+          }}>{delAsk.mode === 'erase' ? '🗑 Delete it' : '↩ Undo it'}</Btn>
+          <Btn light onClick={function () { setDelAsk(null); }}>Keep it</Btn>
+        </div>
+      </div>}
       {/* progress */}
       <div className="flex gap-1 flex-wrap mb-3">
         {steps.map(function (s0, i) {
@@ -447,7 +531,7 @@ export default function WirePackagesPanel(props) {
             var b = l.bill || {}; var before = l.other_payments || [];
             return <tr key={l.line_id} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
-              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.prepare} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
               <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
               <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
               <td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>
@@ -537,7 +621,9 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-2">{p.vendors.join(', ')}<span style={{ color: MUTED }}>{' · ' + p.bills + ' bill(s)'}</span></td>
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>
               <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{NEXT_WORDS[p.status]}</span></td>
-              <td className="px-2 py-2 text-right font-extrabold" style={{ color: '#1d4ed8' }}>open →</td>
+              <td className="px-2 py-2 text-right font-extrabold whitespace-nowrap" style={{ color: '#1d4ed8' }}>
+                {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}
+                open →</td>
             </tr>;
           })}
         </tbody></table></div>}

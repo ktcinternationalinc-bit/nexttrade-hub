@@ -3,7 +3,52 @@
 // bills that come in and automatically open those bills and put it into the
 // system... make sure it's been human validated").
 // The model PROPOSES, parseBillExtraction DISCIPLINES, a HUMAN validates.
-import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES } from './bill-extract';
+import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES, importSort, BILL_TYPE_LABEL } from './bill-extract';
+import { saveBillLines, runPriceCheck } from './bill-lines-server';
+
+// v55.83-RP — the bill TYPE every VALIDATED bill of this vendor carries, when they all agree (else null: never guessed)
+export async function vendorBillType(db, vendorName) {
+  var v = String(vendorName || '').trim();
+  if (!v) { return null; }
+  try {
+    var r = await db.from('vendor_bills').select('bill_type, validation_status').ilike('vendor_name', v).eq('validation_status', 'validated').limit(50);
+    if (r.error) { return null; }
+    var seen = {}; ((r && r.data) || []).forEach(function (b) { if (b.bill_type && BILL_TYPE_LABEL[b.bill_type]) { seen[b.bill_type] = true; } });
+    var ks = Object.keys(seen);
+    return ks.length === 1 ? ks[0] : null;
+  } catch (e) { return null; }
+}
+
+// v55.83-RP — every import door (📷 Import, bulk file import, email inbound, email scanner) inserts through here:
+// type + release + reference + direction ride on the new bill; if the RP SQL is not run yet the bill is still created
+// without the new columns (and the RL ones), never lost.
+export async function insertImportedBill(db, row, draft) {
+  var hist = (draft && !draft.bill_type) ? await vendorBillType(db, draft.vendor_name) : null;
+  var srt = importSort(draft, hist);
+  var full = Object.assign({}, row, srt);
+  var tries = [full,
+    Object.assign({}, row, { release_number: srt.release_number, other_reference: srt.other_reference, shipment_direction: srt.shipment_direction }),
+    Object.assign({}, row, { release_number: srt.release_number }), row];
+  var last = null;
+  for (var i = 0; i < tries.length; i++) {
+    last = await db.from('vendor_bills').insert(tries[i]).select('id').maybeSingle();
+    if (!last.error) {
+      last.sorted = i === 0 ? srt : null; last.sql_missing = i > 0;
+      // v55.83-RQ — the bill's lines (NexPac: cost + its share of the 12.5% commission) and the first price check; fail-soft
+      if (draft && Array.isArray(draft.lines) && draft.lines.length && last.data && last.data.id) {
+        try {
+          var billRow = Object.assign({ id: last.data.id, validation_status: 'pending' }, tries[i]);
+          var sl = await saveBillLines(db, billRow, draft.lines, 'read_from_bill', row.created_by || null);
+          last.lines_saved = sl && sl.ok ? sl.lines.length : 0;
+          if (sl && sl.ok) { var pc = await runPriceCheck(db, last.data.id); last.price_check = pc && pc.check ? pc.check.status : null; }
+        } catch (eL) { last.lines_saved = 0; }
+      }
+      return last;
+    }
+    if (!/bill_type|direction_source|other_reference|shipment_direction|release_number|column/i.test(last.error.message || '')) { return last; }
+  }
+  return last;
+}
 
 export async function readBillFromBase64(b64, mediaType) {
   var kind = BILL_MEDIA_TYPES[String(mediaType || '')];
@@ -22,7 +67,7 @@ export async function readBillFromBase64(b64, mediaType) {
       var resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': aiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: models[mi], max_tokens: 700,
+        body: JSON.stringify({ model: models[mi], max_tokens: 3000, // v55.83-RQ — the lines need room
           messages: [{ role: 'user', content: [block, { type: 'text', text: BILL_EXTRACT_PROMPT }] }] })
       });
       var aj = await resp.json();

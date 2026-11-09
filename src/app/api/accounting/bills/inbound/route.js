@@ -15,7 +15,7 @@
 // or multipart form-data with File fields (SendGrid style).
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { readBillFromBase64 } from '../../../../../lib/bill-extract-server';
+import { readBillFromBase64, insertImportedBill } from '../../../../../lib/bill-extract-server';
 import { billDupVerdict } from '../../../../../lib/bill-dup-server'; // v55.83-QH — one duplicate radar everywhere
 import { US_WAVE_BUSINESS_ID } from '../../../../../lib/business-of';
 
@@ -90,7 +90,7 @@ export async function POST(req) {
       var up = await db.storage.from('bills-private').upload(path, Buffer.from(file.b64, 'base64'), { contentType: file.content_type, upsert: false });
       if (up.error) { upErr = up.error.message; }
     } catch (eU) { upErr = (eU && eU.message) || 'upload failed'; }
-    var ins = await db.from('vendor_bills').insert({
+    var ins = await insertImportedBill(db, {
       vendor_name: d.vendor_name || ('UNREAD VENDOR (email from ' + (from || '?') + ')'),
       bill_number: d.bill_number, bill_date: d.bill_date || new Date().toISOString().substring(0, 10),
       due_date: d.due_date, total_amount: d.total_amount || 0.01,
@@ -99,7 +99,7 @@ export async function POST(req) {
               (rd.problems.length ? ' · READER FLAGS: ' + rd.problems.join(' ') : '')).substring(0, 900),
       validation_status: 'pending',
       attachment_path: upErr ? null : path,
-    }).select('id').maybeSingle();
+    }, d); // v55.83-RP — type / release / direction sorted on import
     if (ins.error) { skipped.push({ file: file.filename, reason: ins.error.message }); continue; }
     await db.from('vendor_bill_events').insert({ bill_id: ins.data.id, kind: 'email_ingested',
       details: { from: from, subject: subject, file: file.filename, reader_flags: rd.problems, attachment_stored: !upErr, upload_error: upErr } });

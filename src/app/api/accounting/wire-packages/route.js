@@ -125,9 +125,14 @@ export async function POST(req) {
           category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, open: open, disputed: b.disputed === true,
           validation_status: b.validation_status || null, on_package: onPkg[b.id] ? (pkLab[onPkg[b.id]] || 'another wire') : null,
           paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate',
-          other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null };
+          other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null, bill_type: b.bill_type || null };
       }).filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return (a.needs_mark - b.needs_mark) || String(a.due_date || a.bill_date || '').localeCompare(String(b.due_date || b.bill_date || '')); });
-      return NextResponse.json({ ok: true, bills: rowsO });
+      // v55.83-RO (Max 20:54) — only VALIDATED bills are offered for a wire (plus any already on the wire being changed);
+      // the open bills still waiting for validation are counted apart so nobody wonders where they went
+      var keepO = {}; openLines.forEach(function (l) { if (l.is_open && body.package_id && l.package_id === body.package_id) { keepO[l.bill_id] = true; } });
+      var okO = rowsO.filter(function (b) { return b.validation_status === 'validated' || keepO[b.id]; });
+      var waitO = rowsO.filter(function (b) { return b.validation_status !== 'validated' && !keepO[b.id] && !b.on_package; });
+      return NextResponse.json({ ok: true, bills: okO, not_validated: waitO });
     }
 
     // ── list every package
@@ -188,7 +193,11 @@ export async function POST(req) {
         seenB[bid] = true; clean.push({ bill_id: bid, amount: am });
       }
       if (!clean.length) { return fail('Tick at least one bill — a wire is prepared from the bills it pays.'); }
-      var bS = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, total_amount, record_status, paid_via', 'id', clean.map(function (c) { return c.bill_id; }));
+      var bS = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, total_amount, record_status, paid_via, validation_status', 'id', clean.map(function (c) { return c.bill_id; }));
+      // v55.83-RO (Max 20:54: "only validated bills should be displayed for the bills that can be wired") — a bill is
+      // ADDED to a wire only once validated; a bill already on this draft whose validation was reopened stays (the check blocks it)
+      var alreadyOn = {};
+      if (body.id) { var aoR = await db.from('wire_package_lines').select('bill_id, is_open').eq('package_id', body.id); ((aoR && aoR.data) || []).forEach(function (l) { if (l.is_open) { alreadyOn[l.bill_id] = true; } }); }
       var pS = await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', clean.map(function (c) { return c.bill_id; }));
       var bSBy = {}; bS.forEach(function (b) { bSBy[b.id] = b; });
       // a vendor wire: the bills decide the vendor (all must be ONE vendor)
@@ -207,6 +216,7 @@ export async function POST(req) {
         if (!bb) { return fail('A bill on this wire was not found.', 404); }
         var whoB = (bb.vendor_name || 'A bill') + ' ' + (bb.bill_number || '');
         if (bb.record_status !== 'active') { return fail(whoB + ' is void — untick it.', 409); }
+        if (bb.validation_status !== 'validated' && !alreadyOn[bb.id]) { return fail(whoB + ' is not validated yet — only validated bills can go on a wire. Validate it first (type of bill, inbound / outbound, 3 checks, how you verified it).', 409); }
         if (kindS !== 'vendor') {
           if (!bb.paid_via) { willMark[bb.id] = true; }
           else if (!samePayee(bb.paid_via, payeeS)) { return fail(whoB + ' is paid through ' + bb.paid_via + ' — it goes on THAT company\'s wire. Untick it.', 409); }

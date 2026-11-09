@@ -25,13 +25,14 @@ function sameDay(a, b) { if (!a || !b) { return null; } return String(a).substri
 // One fingerprint of exactly what was checked and signed: every payment, its
 // bill, amount, release and reference. Any change → a different fingerprint →
 // earlier checks and sign-offs no longer count.
-export function wireFingerprint(wire, lines) {
+export function wireFingerprint(wire, lines, opts) {
   var parts = [String((wire && wire.id) || ''), r2(wire && wire.amount).toFixed(2)];
   // v55.83-RH — prepared wires have no payment yet: order by line / bill (RG wires keep ordering by payment, unchanged)
   function sk(l) { return String(l.payment_id || l.bill_id || ''); }
   (lines || []).slice().sort(function (a, b) { return sk(a).localeCompare(sk(b)); }).forEach(function (l) {
     var b = l.bill || {};
-    parts.push([l.payment_id, l.bill_id, r2(l.amount).toFixed(2), normRef(b.release_number), normRef(b.bill_number), normRef(b.vendor_name), r2(b.total_amount).toFixed(2), b.record_status || ''].join('|') + (b.other_reference ? '|' + normRef(b.other_reference) : '') + (b.shipment_direction ? '|' + String(b.shipment_direction) : '')); // RL: + other reference (only when set — older fingerprints unchanged)
+    parts.push([l.payment_id, l.bill_id, r2(l.amount).toFixed(2), normRef(b.release_number), normRef(b.bill_number), normRef(b.vendor_name), r2(b.total_amount).toFixed(2), b.record_status || ''].join('|') + (b.other_reference ? '|' + normRef(b.other_reference) : '') + (b.shipment_direction ? '|' + String(b.shipment_direction) : '')
+      + ((opts && opts.validation && b.validation_status !== 'validated') ? '|NOT-VALIDATED' : '')); // RL; RO: a validation reopened after signing voids the signatures (prepared wires only): + other reference (only when set — older fingerprints unchanged)
   });
   var s = parts.join('#'); var h = 5381;
   for (var i = 0; i < s.length; i++) { h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; }
@@ -65,7 +66,12 @@ export function auditWire(input) {
     // ── state of the bill
     if (b.record_status && b.record_status !== 'active') { add('block', 'BILL_VOID', who + ' is VOID — a void bill cannot be paid.'); }
     if (b.disputed === true) { add('block', 'BILL_DISPUTED', who + ' is DISPUTED — resolve the dispute before paying it.'); }
-    if (b.validation_status && b.validation_status !== 'validated') { add('warn', 'BILL_NOT_VALIDATED', who + ' has not been validated by a person yet (' + b.validation_status + ').'); }
+    // v55.83-RO (Max, Nov 9 20:49: "validation needs to take place first before wiring ... you cannot pay a wire unless it has
+    // been validated") — on a prepared wire an unvalidated bill BLOCKS and cannot be overridden; the after-the-fact bank view warns
+    if (b.validation_status !== 'validated' && (b.validation_status || (input && input.directionRules === true))) {
+      if (input && input.directionRules === true) { add('block', 'BILL_NOT_VALIDATED', who + ' is NOT VALIDATED — validate it first (3 checks + how you verified it); a wire cannot pay an unvalidated bill.'); }
+      else { add('warn', 'BILL_NOT_VALIDATED', who + ' has not been validated by a person yet (' + b.validation_status + ').'); }
+    }
     // ── not paid previously
     var other = (l.other_payments || []); var otherSum = 0;
     other.forEach(function (o) { otherSum = r2(otherSum + (Number(o.amount) || 0)); });
@@ -218,7 +224,7 @@ export function packageTotals(pkg, lines) {
 }
 export function packageFingerprint(pkg, lines) {
   var p = pkg || {};
-  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: packageTotals(p, lines).total }, lines);
+  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: packageTotals(p, lines).total }, lines, { validation: true });
 }
 // input = auditWire's input + { pkg: {id, seq, payee_kind, payee_name, fee_amount}, otherOpen: { bill_id: 'WP-0003' } }
 export function auditPackage(input) {
@@ -281,7 +287,7 @@ export var PKG_STATUS_LABEL = {
 // ═══════════════════════════════════════════════════════════════════════════
 export var OVERRIDABLE = { BILL_NUMBER_MISSING: 1, BILL_DATE_MISSING: 1, DIRECTION_MISSING: 1, REFERENCE_MISSING: 1, RELEASE_MISSING: 1, RELEASE_UNKNOWN: 1, DUP_RELEASE: 1, DUP_RELEASE_IN_WIRE: 1, DUP_REF: 1, DUP_REF_IN_WIRE: 1, DUP_OTHER_REF: 1, DUP_OTHER_REF_IN_WIRE: 1, BILL_DISPUTED: 1 };
 export var NOT_OVERRIDABLE_WHY = {
-  BILL_VOID: 'a void bill cannot be paid', OVERPAID: 'the books would be paid more than the bill', PAID_BEFORE: 'the bill is already paid in full',
+  BILL_VOID: 'a void bill cannot be paid', BILL_NOT_VALIDATED: 'a bill must be validated before it can be wired', OVERPAID: 'the books would be paid more than the bill', PAID_BEFORE: 'the bill is already paid in full',
   IN_OTHER_PACKAGE: 'the bill is on another wire', PAYEE_MISMATCH: 'the bill belongs to another company / vendor', FEE_NOT_ALLOWED: 'only RTM wires carry a fee',
   NO_BILLS: 'a wire needs bills', NO_PAYEE: 'pick who the wire goes to', NOT_OUT: 'not money out',
 };

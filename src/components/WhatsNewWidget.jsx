@@ -33,6 +33,48 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RQ',
+    date: '2026-11-09',
+    title: 'Bill lines, NexPac cost + commission, price rules, bill reports',
+    items: [
+      'The bill reader now learned our real bills — NexPac, Trinity Logistics and AMB Logistic — and reads every priced line (product or charge, qty, unit, rate, amount).',
+      'NexPac: each product shows TWO lines — its actual cost and its 12.5% commission. NexPac prints one commission line for the whole bill; the Hub spreads it over the products to the cent, and flags the bill if the commission is not 12.5% of the cost.',
+      '📏 Price rules (in 💸 Bills): enter what each product or service should cost — per unit (e.g. Cambridge Seconds $0.26 per LBS) or a fixed amount (e.g. AMB Line Haul $1,850) — with an allowed difference. Every bill is checked when it comes in.',
+      'If a price is off, the bill is FLAGGED (⚠). Before it can be validated, a person must write how the price issue was resolved — it is kept with their name.',
+      '📊 Reports: products received from NexPac (like items added together — quantity, average cost, cost, commission, billed, paid) and all other charges by type, vendor and service, for since June 1, last week, month, quarter, year, last year or custom dates.',
+      'Bills can be filtered and sorted by type, inbound / outbound and price check.',
+      'New switch: “Set price rules” (🏦 Banking & Accounting Access → Bills).',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RQ-bill-lines-price-rules.sql (after RP): vendor_bill_lines (line_kind item/charge/commission, cost_amount, commission_amount, lock trigger when bill validated), bill_commission_rules (NexPac 0.125 seeded once), bill_price_rules (vendor/type/item words/unit, unit price or amount, tolerance, applies_to cost|billed), vendor_bills.price_check_* + price_resolved_* with a trigger refusing validation of a flagged bill without a note; RLS read-only for authenticated. lib/bill-lines.js: shapeLine, splitBill (largest-remainder spread of the commission line over items, COMMISSION_RATE/MISSING), matchRule (vendor+item > item > type; whole-bill rules), priceCheck (LINES_TOTAL, QTY_X_PRICE, PRICE_HIGH/LOW, NO_UNIT_PRICE), periodRange, productInventory, spendReport. bill-lines-server: save/check/recheck; every import door saves lines + checks. Prompt learned NexPac/Trinity/AMB layouts, max_tokens 3000, cleanLines. Route: bill_lines, save_lines, price_check, price_rules_list, price_rule_save/off, commission_rule_save (bills.price_rules), bill_reports; validate_bill runs the check and needs price_resolution when flagged. Test rq 32 (real route, AI mocked from the sample bills printed numbers). Live AI read NOT run in-session (no API key here).' },
+    ],
+  },
+  {
+    version: 'v55.83-RP',
+    date: '2026-11-09',
+    title: 'Bill type + inbound/outbound sorted on import',
+    items: [
+      'Every imported bill (📷 Import, file import, email) is now sorted: 🚚 Trucking, 🚢 Shipping, 🛃 Bonded / Brokerage or 📦 Supplier — when the bill makes it clear. If it can’t tell, it stays blank.',
+      'If the AI can’t tell the type, it uses this vendor’s past validated bills — only when they all agree.',
+      'A bill with a release # is marked Outbound ➡ automatically. No release # → left blank for the person validating it.',
+      'To VALIDATE a bill you must now pick its type AND Inbound / Outbound. Anything pre-picked says where it came from (read from the bill / vendor history / release #) — confirm or change it.',
+      'The bills list shows the type (or a red “type?” if it still needs one). Typing a release # by hand ticks Outbound for you.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RP-bill-type.sql: vendor_bills.bill_type (CHECK 4 values), bill_type_source, direction_source; backfill outbound where release # and not validated; BEFORE UPDATE OF validation_status trigger refuses validated without type/direction (new validations only). lib/bill-extract: prompt asks release_number/other_reference/bill_type (null if unclear), autoDirection, importSort; bill-extract-server: vendorBillType (validated bills of vendor, unanimous), insertImportedBill with column-missing fallbacks — used by ingest_bill_file, inbound, email-scan; extract_bill returns sorted. validate_bill requires bill_type + direction, sets *_source=validator when changed, audits both. save_bill: bill_type, new bill with release + no direction → outbound. Tests rp 22 (real route, AI mocked), ro realigned.' },
+    ],
+  },
+  {
+    version: 'v55.83-RO',
+    date: '2026-11-09',
+    title: 'Validate first, then wire — and delete a wire in progress',
+    items: [
+      'A bill must be VALIDATED before it can go on a wire. This cannot be overridden.',
+      'Validating a bill now includes marking it ⬅ Inbound or Outbound ➡ (required).',
+      'When you pick bills for a wire, ONLY validated bills are listed. The open bills still waiting for validation are counted apart — click to see them and validate one right there; it then joins the list.',
+      'The wire progress bar now starts with “Bills validated”.',
+      '💸 Bills: “Mark validated” now tells you exactly what is still missing (the 3 checks and HOW you verified it) instead of doing nothing.',
+      'Delete a wire that is still in progress (not sent yet) — from the wire or with the 🗑 in the list. You are asked why, right on the screen. A sent wire can be undone by a super admin or the owner.',
+      { superAdminOnly: true, text: 'open_bills returns validated (+ already-on-this-wire) as bills, the rest as not_validated; save_draft refuses ADDING an unvalidated bill; validate_bill requires shipment_direction (body or existing) and saves it + audit; BILL_NOT_VALIDATED = block for packages (also null status), in NOT_OVERRIDABLE_WHY; package fingerprint adds |NOT-VALIDATED so reopening a validation voids signatures; reopen_validation refused on SENT wire + audited; window.prompt flows replaced by inline delAsk box; test-v55-83-ro (22, real routes).' },
+    ],
+  },
+  {
     version: 'v55.83-RN',
     date: '2026-11-09',
     label: "\ud83c\udff7 Category picks in All Transactions save again",

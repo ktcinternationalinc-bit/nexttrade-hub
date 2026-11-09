@@ -36,6 +36,7 @@ export var BANKING_GROUPS = [
   { title: '4 · Bills (what we owe)', items: [
     { key: 'bills.view', label: 'See bills', desc: 'Vendor bills and what is due.' },
     { key: 'bills.manage', label: 'Add / change bills', desc: 'Add, edit, void bills and record payments.' },
+    { key: 'bills.price_rules', label: 'Set price rules', desc: 'Enter the expected prices of products and services (and the NexPac 12.5% commission) the Hub checks every bill against.' },
   ] },
   { title: '5 · Wires', note: 'Needs ClickBooks (KTC Hub) in group 1.', items: [
     { key: 'wires.view', label: 'See wires', desc: 'See every wire, its checks and the bills it paid.', needsKtc: true },

@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL, WIRE_STATUS_LABEL } from '../lib/wire-audit';
+import { BILL_TYPE_LABEL } from '../lib/bill-extract';
 
 var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -81,7 +82,7 @@ export default function WireQuickView(props) {
         <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills paid by this wire (' + lines.length + ')' + (isPkg && P.fee_amount > 0 ? ' · plus ' + P.payee_name + ' fee $' + fmt(P.fee_amount) : '')}</div>
         <div className="overflow-x-auto rounded-lg mb-3" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
           <thead><tr style={{ background: '#f1f5f9', color: SUB }}>
-            <th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">In / Out</th><th className="px-2 py-1.5 text-left">Release #</th>
+            <th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">Type</th><th className="px-2 py-1.5 text-left">In / Out</th><th className="px-2 py-1.5 text-left">Release #</th>
             <th className="px-2 py-1.5 text-left">Reference</th><th className="px-2 py-1.5 text-left">Bill date</th><th className="px-2 py-1.5 text-left">Category</th>
             <th className="px-2 py-1.5 text-right">Bill total</th><th className="px-2 py-1.5 text-right">This wire</th><th className="px-2 py-1.5 text-left">Notes</th></tr></thead>
           <tbody style={{ color: INK }}>
@@ -89,6 +90,7 @@ export default function WireQuickView(props) {
               var b = l.bill || {};
               return <tr key={i} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                 <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap">{BILL_TYPE_LABEL[b.bill_type] || '—'}</td>
                 <td className="px-2 py-1.5">{b.shipment_direction === 'inbound' ? '⬅ In' : b.shipment_direction === 'outbound' ? 'Out ➡' : '—'}</td>
                 <td className="px-2 py-1.5">{b.release_number || '—'}</td><td className="px-2 py-1.5">{b.other_reference || '—'}</td>
                 <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || '—'}</td><td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>
@@ -96,7 +98,7 @@ export default function WireQuickView(props) {
                 <td className="px-2 py-1.5" style={{ maxWidth: 260, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{b.notes || ''}</td>
               </tr>;
             })}
-            {lines.length === 0 && <tr><td colSpan={10} className="px-3 py-2" style={{ color: MUTED }}>No bills.</td></tr>}
+            {lines.length === 0 && <tr><td colSpan={11} className="px-3 py-2" style={{ color: MUTED }}>No bills.</td></tr>}
           </tbody></table></div>
         {/* history */}
         {isPkg && (d.history || []).length > 0 && <div className="mb-3">
