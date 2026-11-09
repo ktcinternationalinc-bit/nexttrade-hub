@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
+import WireQuickView from './WireQuickView'; // v55.83-RM
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -42,12 +43,25 @@ export default function AllTransactionsTab(props) {
   var s18 = useState(null); var rtmPanel = s18[0]; var setRtmPanel = s18[1]; // v55.83-QB (Max 11:38) — RTM third-party payment {txn, bills, amt}
   var s19 = useState(''); var mQ = s19[0]; var setMQ = s19[1];               // v55.83-QF (Max 12:08) — search inside the match popup
   var s20 = useState(''); var mErr = s20[0]; var setMErr = s20[1];           // v55.83-QM (Max 15:08 "it wont apply") — the REASON shows IN the popup, impossible to miss
-  var s21 = useState(null); var dupPanel = s21[0]; var setDupPanel = s21[1]; // v55.83-QM (Max 13:33/15:03 "there are duplicates.. help") — {groups}
+  var s21 = useState(null); var dupPanel = s21[0]; var setDupPanel = s21[1];
+  var sWire = useState(null); var wireView = sWire[0]; var setWireView = sWire[1];
+  var sRowBusy = useState({}); var rowBusy = sRowBusy[0]; var setRowBusy = sRowBusy[1]; // v55.83-RN — only the row being saved waits
+  // (s21: v55.83-QM duplicates panel {groups}; sWire: v55.83-RM click a wire line → its bills, approvals, history)
 
+  // v55.83-RN (Max, Nov 9 20:18: "I tried selecting a category ... and nothing updated") — every call answers: a timeout or
+  // non-JSON reply becomes a message on screen instead of a silent nothing
   function api(action, payload) {
     return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
-      .then(function (r) { return r.json(); });
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ') — try again in a moment.' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
+  }
+  // the row changes ON SCREEN at once; the full list refreshes quietly behind it
+  function patchRow(id, fields) {
+    setData(function (d0) { if (!d0 || !d0.transactions) { return d0; } return Object.assign({}, d0, { transactions: d0.transactions.map(function (x) { return x.id === id ? Object.assign({}, x, fields) : x; }) }); });
+  }
+  function quietReload() {
+    api('all_transactions', { from: from, to: to }).then(function (j) { if (j && j.ok) { setData(j); } });
   }
   function load(fOv, tOv) {
     var fUse = typeof fOv === 'string' ? fOv : from; var tUse = typeof tOv === 'string' ? tOv : to; // v55.83-RC — "All dates" passes its own window
@@ -222,14 +236,18 @@ export default function AllTransactionsTab(props) {
       }).finally(function () { setBusy(false); });
       return;
     }
-    setBusy(true);
+    var before = t.classification || null;
+    patchRow(t.id, { classification: key, _saving: true }); // v55.83-RN — show the pick immediately
+    setRowBusy(function (m) { var n = Object.assign({}, m); n[t.id] = true; return n; });
     api('bulk_classify', { ids: [t.id], classification: key, single_pick: true }).then(function (j) { // QZ2: one person-picked row is finished like Bank Review (reviewed when fully accounted for)
+      if (j && j.ok && !(j.updated > 0)) { j = { ok: false, error: 'Nothing was saved — this transaction was not found (it may have been merged or removed). Reload the page.' }; }
       if (j && j.ok) {
+        patchRow(t.id, { classification: key, _saving: false, _saved: true });
         if (key === 'transfer') { toast.success('Marked as a TRANSFER — never income, never spending in any report.'); openTransfer(t); }
         else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + ((j.reviewed || 0) > 0 ? ' · marked reviewed → reaches the ClickBooks ledger within 15 min' : '') + '.'); }
-        load();
-      } else { toast.error((j && j.error) || 'Could not save the category.'); }
-    }).finally(function () { setBusy(false); });
+        quietReload();
+      } else { patchRow(t.id, { classification: before, _saving: false }); toast.error((j && j.error) || 'Could not save the category.'); }
+    }).finally(function () { setRowBusy(function (m) { var n = Object.assign({}, m); delete n[t.id]; return n; }); });
   }
   // v55.83-QA (Max 11:32): "...and also attach it to a bill from here" — even
   // when the bill was never entered: ➕ creates the bill FROM the transaction
@@ -244,6 +262,7 @@ export default function AllTransactionsTab(props) {
     fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'save_bill', user_id: userProfile && userProfile.id,
         bill: { vendor_name: vend, bill_date: t.posted_date || t.date, total_amount: t.amount_abs,
+          bill_number: 'BANK-' + String(t.posted_date || t.date || '').replace(/-/g, '') + '-' + String(t.id || '').replace(/-/g, '').substring(0, 6).toUpperCase(), // v55.83-RN — RL made the bill # required; a bill made from a bank line is numbered from it
           category: t.classification || '', notes: 'Created from bank transaction dated ' + (t.posted_date || t.date) + ' in All Transactions.' } }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -415,6 +434,7 @@ export default function AllTransactionsTab(props) {
   }
 
   return <div className="flex flex-col gap-2">
+    {wireView && <WireQuickView wire={wireView} userProfile={userProfile} onClose={function () { setWireView(null); }} />}
     <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>📑 All Transactions — every connected account</div>
@@ -479,17 +499,21 @@ export default function AllTransactionsTab(props) {
               <td className="py-1 pr-2 font-semibold cursor-pointer" title="Click to show the full description"
                 onClick={function () { var e2 = Object.assign({}, expanded); e2[t.id] = !e2[t.id]; setExpanded(e2); }}
                 style={expanded[t.id] ? { whiteSpace: 'normal', wordBreak: 'break-word' } : {}}>
+                {t.wire && <button onClick={function (e) { e.stopPropagation(); setWireView(t.wire); }} title={t.wire.kind === 'package' ? 'Open the wire: the bills it paid, who approved it, its history' : 'Money out that paid bills like a wire, with no wire approved in advance — open the bills'}
+                  className="mr-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={t.wire.kind === 'package' ? (t.wire.status === 'reversed' ? { background: '#e2e8f0', color: '#7f1d1d' } : { background: '#4338ca', color: '#ffffff' }) : { background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>
+                  {t.wire.kind === 'package' ? '📤 ' + t.wire.label + (t.wire.status === 'reversed' ? ' (undone)' : '') : '🏦 wire · no approval'}</button>}
                 {expanded[t.id] ? (t.who_full || t.who) : (String(t.who).substring(0, 46) + (String(t.who_full || t.who).length > 46 ? '…' : ''))}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: t.direction === 'out' ? '#7f1d1d' : '#065f46' }}>{(t.direction === 'out' ? '−$' : '+$') + fmt(t.amount)}</td>
               <td className="py-1 pr-2">
                 {t.transfer ? <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ transfer</span>
-                  : <select value={t.classification || ''} disabled={busy || t.pending} title="Pick a category right here — it learns a rule and updates Wave too"
+                  : <span>{/* v55.83-RN */}<select value={t.classification || ''} disabled={!!rowBusy[t.id] || t.pending} title={t.pending ? 'Pending at the bank — categorize it once it settles' : 'Pick a category right here — it learns a rule and updates Wave too'}
                       onChange={function (e) { setCatOne(t, e.target.value); }}
                       className="px-1 py-0.5 rounded border border-slate-300 text-[9px] font-bold nt-light" style={{ color: t.classification ? '#334155' : '#9a3412', background: '#ffffff', maxWidth: 150 }}>
                       <option value="">— pick…</option>
                       {cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
                       <option value="__new__">➕ new category…</option>
-                    </select>}</td>
+                    </select>{t._saving ? <span className="ml-1 text-[9px] font-bold" style={{ color: '#64748b' }}>saving…</span> : t._saved ? <span className="ml-1 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✓ saved</span> : null}
+                    {t.pending ? <div className="text-[8px]" style={{ color: '#64748b' }}>pending — pick after it settles</div> : null}</span>}</td>
               <td className="py-1 text-[9px]">
                 {t.pending && <span className="mr-1" style={{ color: '#64748b' }}>pending</span>}
                 {/* v55.83-QF (Max 12:08): "signified as partial matched or split full or split partial or unmatched" */}

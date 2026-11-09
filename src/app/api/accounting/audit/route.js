@@ -28,12 +28,18 @@ export async function POST(req) {
     var limit = Math.min(Math.max(Number(body.limit) || 200, 20), 500);
 
     var rows = [];
-    var hub = await d.from('hub_audit_log').select('at, actor_id, action, entity, entity_id, details').order('at', { ascending: false }).limit(limit);
+    // v55.83-RL (Max, Nov 9 12:17: "did we create audit of approvals of wires and approvals of bills ... so we have records of who
+    // checked") — a scope picks the record straight from the database (not only the newest few hundred rows)
+    var scope = String(body.scope || 'all');
+    var hq = d.from('hub_audit_log').select('at, actor_id, action, entity, entity_id, details');
+    if (scope === 'wires') { hq = hq.in('entity', ['wire_package', 'wire_audit', 'bank_transaction']).like('action', '%wire%'); }
+    if (scope === 'bills') { hq = hq.in('entity', ['vendor_bill', 'vendor_bill_payment']); }
+    var hub = await hq.order('at', { ascending: false }).limit(limit);
     if (hub.error && /hub_audit_log/.test(hub.error.message || '')) {
       return NextResponse.json({ ok: false, needs_sql: true, error: 'Run sql/v55-83-QI-audit-log.sql first — the audit table does not exist yet.' }, { status: 503 });
     }
     (hub.data || []).forEach(function (r) { rows.push({ at: r.at, actor_id: r.actor_id, action: r.action, entity: r.entity, entity_id: r.entity_id, details: r.details, source: 'hub' }); });
-    try {
+    if (scope !== 'wires') try {
       var ev = await d.from('vendor_bill_events').select('created_at, actor_id, kind, bill_id, details').order('created_at', { ascending: false }).limit(limit);
       var billIds = {};
       (ev.data || []).forEach(function (e) { if (e.bill_id) { billIds[e.bill_id] = true; } });
@@ -57,8 +63,11 @@ export async function POST(req) {
       var ids = {}; rows.forEach(function (r) { if (r.actor_id) { ids[r.actor_id] = true; } });
       var idl = Object.keys(ids).slice(0, 200);
       if (idl.length) {
+        // the Hub's people live in "users" (same ids as sign-in); "profiles" kept as a fallback
+        var ur = await d.from('users').select('id, name, email').in('id', idl);
+        (ur.data || []).forEach(function (p) { names[p.id] = p.name || p.email || p.id; });
         var pr = await d.from('profiles').select('id, name, email').in('id', idl);
-        (pr.data || []).forEach(function (p) { names[p.id] = p.name || p.email || p.id; });
+        (pr.data || []).forEach(function (p) { if (!names[p.id]) { names[p.id] = p.name || p.email || p.id; } });
       }
     } catch (eN) {}
     rows.forEach(function (r) { r.who = r.actor_id ? (names[r.actor_id] || r.actor_id) : '(system / scheduled job)'; });

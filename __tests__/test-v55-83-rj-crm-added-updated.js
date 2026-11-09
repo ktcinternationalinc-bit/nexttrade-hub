@@ -75,7 +75,7 @@ ok('3f: the client page shows Added (date + by) and Last updated, and its full h
   T.indexOf('<CrmClientHistory client={sel} users={users} canSeeContact={canSeeContact} reloadKey={histKey} />') > 0 && P.indexOf('📅 Added:') > 0 && P.indexOf('✏ Last updated:') > 0 &&
   (T.match(/setHistKey\(k => k \+ 1\)/g) || []).length >= 4);
 ok('3g: sort by "Newest added" / "Recently updated"', T.indexOf('<option value="newest_added">Newest added</option>') > 0 && T.indexOf("sortBy === 'recently_updated'") > 0);
-ok('3h: a new client records who added it (CRM + Quotes)', T.indexOf('created_by: myId || null') > 0 && R('src/components/QuotesTab.jsx').indexOf('created_by: userProfile?.id || null') > 0);
+ok('3h: a new client records who added it (CRM + Quotes)', T.indexOf('created_by: myId || null') > 0 && R('src/components/QuotesTab.jsx').indexOf('created_by: user?.id || null') > 0 /* superseded (v55.83-RN): QuoteBuilder has `user` */);
 ok('3i: readable in the dark skin (white .nt-paper panels, explicit dark text)', P.indexOf('nt-paper') > 0 && P.indexOf("var INK = '#0f172a'") >= 0);
 
 // ── 4. database

@@ -47,7 +47,17 @@ export async function packageContext(db, pkgId, pkgLines) {
     nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null, total_amount: b.total_amount, release_number: b.release_number || null }); });
   }
   // v55.83-RK (Max 11:38 "...no duplicates...previously paid") — how much of each OTHER bill sharing a release / reference was already paid
+  // v55.83-RL — other bills sharing the OTHER reference (BOL / PO / container…), when that column exists
+  var sameOther = {};
+  var orefs = []; bills.forEach(function (b) { var o0 = normRef(b.other_reference); if (o0 && orefs.indexOf(o0) < 0) { orefs.push(o0); } });
+  if (orefs.length) {
+    try {
+      var ob = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, total_amount, other_reference', 'other_reference', orefs);
+      ob.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.other_reference); (sameOther[k] = sameOther[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null, total_amount: b.total_amount }); });
+    } catch (eOr) { sameOther = {}; }
+  }
   var otherIds = [];
+  Object.keys(sameOther).forEach(function (k) { sameOther[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   Object.keys(sameRelease).forEach(function (k) { sameRelease[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   Object.keys(sameNumber).forEach(function (k) { sameNumber[k].forEach(function (o) { if (billIds.indexOf(o.bill_id) < 0 && otherIds.indexOf(o.bill_id) < 0) { otherIds.push(o.bill_id); } }); });
   if (otherIds.length) {
@@ -55,6 +65,7 @@ export async function packageContext(db, pkgId, pkgLines) {
     var opBy = {}; op.forEach(function (p) { if (p.voided !== true) { opBy[p.bill_id] = r2((opBy[p.bill_id] || 0) + (Number(p.amount) || 0)); } });
     Object.keys(sameRelease).forEach(function (k) { sameRelease[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
     Object.keys(sameNumber).forEach(function (k) { sameNumber[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
+    Object.keys(sameOther).forEach(function (k) { sameOther[k].forEach(function (o) { o.paid_total = opBy[o.bill_id] || 0; }); });
   }
   var known = [];
   if (rels.length) {
@@ -78,7 +89,7 @@ export async function packageContext(db, pkgId, pkgLines) {
     return { line_id: l.id, payment_id: l.payment_id || null, bill_id: l.bill_id, amount: r2(l.amount), bill: billBy[l.bill_id] || {}, other_payments: others, will_mark: l.marked_paid_via === true,
       rtm: { paid_date: l.rtm_paid_date || null, reference: l.rtm_reference || null, file_id: l.rtm_file_id || null, confirmed_by: l.rtm_confirmed_by || null, confirmed_at: l.rtm_confirmed_at || null } };
   });
-  return { lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, knownReleases: known, otherOpen: otherOpen, billBy: billBy };
+  return { lines: lines, sameRelease: sameRelease, sameNumber: sameNumber, sameOther: sameOther, knownReleases: known, otherOpen: otherOpen, billBy: billBy };
 }
 
 // Paid-through companies (RTM Capital, NextTrade Industries) — same source as Bills.
@@ -99,15 +110,15 @@ export async function aiReviewPackage(pkg, lines, rules, ctxAll) {
   if (!key) { return { ok: null, text: 'AI review unavailable — ANTHROPIC_API_KEY is not set. The rule checks above still ran.' }; }
   var others = [];
   var oc = ctxAll || {}; // packageContext(): sameRelease / sameNumber with dates + already-paid amounts
-  ['sameRelease', 'sameNumber'].forEach(function (key) { var m = oc[key] || {}; Object.keys(m).forEach(function (k) { m[k].forEach(function (o) {
+  ['sameRelease', 'sameNumber', 'sameOther'].forEach(function (key) { var m = oc[key] || {}; Object.keys(m).forEach(function (k) { m[k].forEach(function (o) {
     if (lines.some(function (l) { return l.bill_id === o.bill_id; })) { return; }
-    others.push({ shares: key === 'sameRelease' ? 'release ' + k : 'reference ' + k, vendor: o.vendor_name, bill_number: o.bill_number || null, bill_date: o.bill_date || null, total: o.total_amount == null ? null : o.total_amount, already_paid: o.paid_total || 0 });
+    others.push({ shares: key === 'sameRelease' ? 'release ' + k : key === 'sameOther' ? 'other reference ' + k : 'reference ' + k, vendor: o.vendor_name, bill_number: o.bill_number || null, bill_date: o.bill_date || null, total: o.total_amount == null ? null : o.total_amount, already_paid: o.paid_total || 0 });
   }); }); });
   var compact = { pay_to: pkg.payee_name, pay_to_kind: pkg.payee_kind, fee: Number(pkg.fee_amount) || 0, fee_note: pkg.fee_note || null, memo: pkg.memo || null,
     other_bills_sharing_a_release_or_reference: others.slice(0, 60),
     bills: lines.map(function (l) {
       var b = l.bill || {};
-      return { vendor: b.vendor_name, bill_number: b.bill_number, release: b.release_number, bill_date: b.bill_date, due: b.due_date, total: b.total_amount,
+      return { vendor: b.vendor_name, bill_number: b.bill_number, other_reference: b.other_reference || null, release: b.release_number, bill_date: b.bill_date, due: b.due_date, total: b.total_amount,
         paying_now: l.amount, paid_before: l.other_payments, paid_via: b.paid_via || null, category: b.category, notes: String(b.notes || '').substring(0, 200), validation: b.validation_status };
     }), rule_results: rules.checks };
   var prompt = 'You are the first reviewer of an outgoing WIRE a trading company is ABOUT TO SEND. It goes either to RTM Capital (a service company that then pays the ' +

@@ -44,6 +44,7 @@ function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0)
 var TODAY = new Date().toISOString().substring(0, 10);
 
 export default function PeriodStatsTab(props) {
+  var onGo = props.onGo || function () {}; // v55.83-RN — the invoice peek's "edit" called onGo, which was never declared (crash on click)
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};

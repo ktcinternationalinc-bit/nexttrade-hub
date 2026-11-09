@@ -31,8 +31,9 @@ ok('1d: before sending nothing is marked — untick or cancel leaves the bill ex
   S.indexOf('a cancelled draft changed nothing on them') > 0 && R('src/lib/wire-audit.js').indexOf("!(l.will_mark === true && !b.paid_via)") > 0);
 ok('1e: a bill paid through a DIFFERENT company still cannot be put on this wire', S.indexOf("it goes on THAT company") > 0);
 ok('1f: a missing release # is typed right on the bill row (picking list AND the wire) — open to the preparer, upper-cased, audited, locked once sent',
-  S.indexOf("action === 'set_bill_release'") > 0 && S.indexOf("perm(db, userId, ['wires.prepare', 'bills.manage'], req)") > 0 && S.indexOf("toUpperCase().substring(0, 40)") > 0 &&
-  S.indexOf("already SENT — its release cannot change now") > 0 && U.indexOf("action: 'set_bill_release'") > 0 && U.indexOf("'release # needed'") > 0); // (RJ: optional for NextTrade bills)
+  // superseded pin (v55.83-RL, Max 12:18 "a reference column"): the same action also fills the other reference (60 chars)
+  S.indexOf("action === 'set_bill_release'") > 0 && S.indexOf("perm(db, userId, ['wires.prepare', 'bills.manage'], req)") > 0 && S.indexOf("toUpperCase().substring(0, 60)") > 0 &&
+  S.indexOf("already SENT — its ' + (fieldR === 'other_reference' ? 'reference' : 'release') + ' cannot change now.") > 0 && U.indexOf("action: 'set_bill_release'") > 0 && U.indexOf("' (needed)' : ' (optional)'") > 0); // (RJ: optional for NextTrade bills; RL: one cell for release # / reference / inbound-outbound)
 ok('1g: the 🤖 check runs BY ITSELF on every save (rules + AI) — nobody has to remember a button', S.indexOf('the 🤖 check runs by itself on every save') > 0 && S.indexOf('auto: true') > 0 && S.indexOf('audit: autoA') > 0);
 
 // ── 2. "make it simple and user friendly" — one guided screen

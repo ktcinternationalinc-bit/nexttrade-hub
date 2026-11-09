@@ -31,7 +31,7 @@ export function wireFingerprint(wire, lines) {
   function sk(l) { return String(l.payment_id || l.bill_id || ''); }
   (lines || []).slice().sort(function (a, b) { return sk(a).localeCompare(sk(b)); }).forEach(function (l) {
     var b = l.bill || {};
-    parts.push([l.payment_id, l.bill_id, r2(l.amount).toFixed(2), normRef(b.release_number), normRef(b.bill_number), normRef(b.vendor_name), r2(b.total_amount).toFixed(2), b.record_status || ''].join('|'));
+    parts.push([l.payment_id, l.bill_id, r2(l.amount).toFixed(2), normRef(b.release_number), normRef(b.bill_number), normRef(b.vendor_name), r2(b.total_amount).toFixed(2), b.record_status || ''].join('|') + (b.other_reference ? '|' + normRef(b.other_reference) : '') + (b.shipment_direction ? '|' + String(b.shipment_direction) : '')); // RL: + other reference (only when set — older fingerprints unchanged)
   });
   var s = parts.join('#'); var h = 5381;
   for (var i = 0; i < s.length; i++) { h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; }
@@ -48,15 +48,18 @@ export function auditWire(input) {
   var lines = (input && input.lines) || [];
   var sameRel = (input && input.sameRelease) || {};
   var sameNum = (input && input.sameNumber) || {};
+  var sameOther = (input && input.sameOther) || {}; var oSeen = {};
   var known = {}; ((input && input.knownReleases) || []).forEach(function (k) { known[normRef(k)] = true; });
   var checks = [];
-  function add(level, code, text) { checks.push({ level: level, code: code, text: text }); }
+  var curBill = null; // v55.83-RL — every check knows its bill (so an override is for THAT check on THAT bill)
+  function add(level, code, text) { checks.push({ level: level, code: code, text: text, bill_id: curBill }); }
 
   if (wire.direction && wire.direction !== 'out') { add('block', 'NOT_OUT', 'This bank line is money IN — a wire to a vendor is money out.'); }
   if (!lines.length) { add('block', 'NO_BILLS', 'No bills are linked to this wire yet — link the bills it paid first.'); }
 
   var placed = 0; var relSeen = {}; var numSeen = {};
   lines.forEach(function (l) {
+    curBill = l.bill_id || null;
     var b = l.bill || {}; var who = (b.vendor_name || '?') + (b.bill_number ? ' #' + b.bill_number : '');
     placed = r2(placed + (Number(l.amount) || 0));
     // ── state of the bill
@@ -76,9 +79,26 @@ export function auditWire(input) {
     // ── belongs to a release number
     var rel = normRef(b.release_number);
     // v55.83-RJ (review gap 5) — NextTrade bills (payroll, rent, utilities) have no release: a WARNING there, a block everywhere else
+    // v55.83-RL (Max, Nov 9 12:20: "check box if outbound or inbound -- if inbound release number not necessary but a
+    // reference number is necessary. if outbound then release number is necessary and reference number is not. Billing
+    // is always necessary and date is always necessary")
+    var dirRules = !!(input && input.directionRules === true);
+    var dir = String(b.shipment_direction || '').toLowerCase();
+    if (dirRules) {
+      if (!normRef(b.bill_number)) { add('block', 'BILL_NUMBER_MISSING', (b.vendor_name || '?') + ' bill has NO bill # — the bill # is always required.'); }
+      if (!b.bill_date) { add('block', 'BILL_DATE_MISSING', who + ' has NO bill date — the date is always required.'); }
+      if (!dir) {
+        if (input.releaseOptional === true) { /* NextTrade overhead (payroll, rent, utilities) is neither */ }
+        else { add('block', 'DIRECTION_MISSING', who + ': tick INBOUND or OUTBOUND (outbound needs the release #, inbound needs the reference).'); }
+      } else if (dir === 'inbound' && !normRef(b.other_reference)) {
+        add('block', 'REFERENCE_MISSING', who + ' is INBOUND and has no reference (BOL / PO / container…) — an inbound bill needs it.');
+      }
+    }
     if (!rel) {
       if (input && input.releaseOptional === true) { add('warn', 'RELEASE_MISSING', who + ' has no release number (fine for warehouse / overhead bills — the signers confirm).'); }
-      else { add('block', 'RELEASE_MISSING', who + ' has NO release number — every bill on a wire must belong to a release.'); }
+      else if (dirRules && dir === 'inbound') { /* inbound: the release # is not needed */ }
+      else if (dirRules && !dir) { /* asked above: inbound or outbound first */ }
+      else { add('block', 'RELEASE_MISSING', who + ' has NO release number' + (dir === 'outbound' ? ' — an OUTBOUND bill needs its release #.' : ' — every bill on a wire must belong to a release.')); }
     }
     else {
       if (input && input.knownReleases && !known[rel]) { add('warn', 'RELEASE_UNKNOWN', who + ': release ' + rel + ' is not found in the orders or invoices.'); }
@@ -108,7 +128,7 @@ export function auditWire(input) {
     }
     // ── duplicated reference: the same reference + the SAME date (v55.83-RK)
     var num = normRef(b.bill_number);
-    if (!num) { add('warn', 'REF_MISSING', (b.vendor_name || '?') + ' bill has no reference / bill number.'); }
+    if (!num) { if (!dirRules) { add('warn', 'REF_MISSING', (b.vendor_name || '?') + ' bill has no reference / bill number.'); } }
     else {
       var seenN = numSeen[num];
       if (seenN) {
@@ -131,7 +151,29 @@ export function auditWire(input) {
         }
       });
     }
+    // ── v55.83-RL (Max 12:18 "a reference column ... besides the bill # and release #") — the other reference
+    // (BOL, PO, container…) follows the same rule: same vendor + same other reference + SAME date = a duplicate
+    var oref = normRef(b.other_reference);
+    if (oref) {
+      var okey = normRef(b.vendor_name) + '|' + oref;
+      var seenO = oSeen[okey];
+      if (seenO) {
+        var sdO = sameDay(seenO.date, b.bill_date);
+        if (sdO === true) { add('block', 'DUP_OTHER_REF_IN_WIRE', who + ' and ' + seenO.who + ' have the same vendor, same reference ' + oref + ' and same date ' + day(b.bill_date) + ' on this wire — a duplicate.'); }
+        else if (sdO === null) { add('warn', 'DUP_OTHER_REF_IN_WIRE', who + ' and ' + seenO.who + ' share reference ' + oref + ' and one has no date — check.'); }
+      }
+      oSeen[okey] = { who: who, date: b.bill_date };
+      (sameOther[oref] || []).forEach(function (o) {
+        if (o.bill_id === l.bill_id || lines.some(function (x) { return x.bill_id === o.bill_id; })) { return; }
+        if (normRef(o.vendor_name) !== normRef(b.vendor_name)) { return; }
+        var sdP = sameDay(o.bill_date, b.bill_date);
+        var pt = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
+        if (sdP === true) { add('block', 'DUP_OTHER_REF', who + ': ' + (o.vendor_name || '?') + (o.bill_number ? ' #' + o.bill_number : '') + ' has the same reference ' + oref + ' and the same date' + pt + ' — a duplicate charge.'); }
+        else if (sdP === null) { add('warn', 'DUP_OTHER_REF', who + ': another bill of ' + (o.vendor_name || '?') + ' has reference ' + oref + ' and one has no date' + pt + ' — check.'); }
+      });
+    }
   });
+  curBill = null;
   // ── the wire is fully explained by its bills
   var amt = r2(wire.amount);
   if (lines.length && Math.abs(placed - amt) > 0.009) {
@@ -183,13 +225,15 @@ export function auditPackage(input) {
   var pkg = (input && input.pkg) || {};
   var lines = (input && input.lines) || [];
   var tot = packageTotals(pkg, lines);
-  var base = auditWire(Object.assign({}, input, { wire: { id: pkg.id, amount: tot.bills, direction: 'out' }, releaseOptional: pkg.payee_kind === 'affiliate' }));
+  var base = auditWire(Object.assign({}, input, { wire: { id: pkg.id, amount: tot.bills, direction: 'out' }, releaseOptional: pkg.payee_kind === 'affiliate', directionRules: true }));
   var checks = base.checks.filter(function (c) { return c.code !== 'ALL_CLEAR'; });
-  function add(level, code, text) { checks.push({ level: level, code: code, text: text }); }
+  var curBill = null;
+  function add(level, code, text) { checks.push({ level: level, code: code, text: text, bill_id: curBill }); }
   var payee = normRef(pkg.payee_name); var kind = pkg.payee_kind;
   if (!payee) { add('block', 'NO_PAYEE', 'Who is this wire going to? Pick RTM Capital, NextTrade Industries or the vendor.'); }
   var other = (input && input.otherOpen) || {};
   lines.forEach(function (l) {
+    curBill = l.bill_id || null;
     var b = l.bill || {}; var who = (b.vendor_name || '?') + (b.bill_number ? ' #' + b.bill_number : '');
     if (kind === 'vendor') {
       if (b.paid_via) { add('block', 'PAYEE_MISMATCH', who + ' is paid THROUGH ' + b.paid_via + ' — it belongs on a wire to ' + b.paid_via + ', not straight to the vendor.'); }
@@ -200,6 +244,7 @@ export function auditPackage(input) {
     }
     if (other[l.bill_id]) { add('block', 'IN_OTHER_PACKAGE', who + ' is already on wire ' + other[l.bill_id] + ' — one bill, one wire.'); }
   });
+  curBill = null;
   if (tot.fee > 0.005) {
     if (kind !== 'service_provider') { add('block', 'FEE_NOT_ALLOWED', (kind === 'affiliate' ? 'NextTrade wires are bills only' : 'A wire straight to a vendor is bills only') + ' — remove the fee.'); }
     else { add('info', 'FEE', pkg.payee_name + ' fee ' + money(tot.fee) + ' on top of the bills (' + money(tot.bills) + ') — not backed by a bill.'); }
@@ -213,6 +258,7 @@ export function auditPackage(input) {
 export function packageStatus(pkg, liveHash, rtmPending) {
   var p = pkg || {};
   if (p.status === 'cancelled') { return 'cancelled'; }
+  if (p.status === 'reversed') { return 'reversed'; }
   if (p.status === 'attached') { return rtmPending > 0 ? 'awaiting_proof' : 'complete'; }
   if (p.status === 'sent') { return 'sent'; }
   var s = wireStatus(p, liveHash);
@@ -221,5 +267,38 @@ export function packageStatus(pkg, liveHash, rtmPending) {
 export var PKG_STATUS_LABEL = {
   needs_check: '🤖 needs audit', flagged: '⛔ flagged — fix first', awaiting_1st: '✍ awaiting 1st sign-off', awaiting_2nd: '✍ awaiting 2nd sign-off',
   ready_to_send: '✅ approved — ready to send', sent: '📤 sent — waiting for the bank line', awaiting_proof: '📎 in the bank — waiting for RTM proof',
-  complete: '🏁 complete', cancelled: '✕ cancelled',
+  complete: '🏁 complete', cancelled: '✕ cancelled', reversed: '↩ reversed (undone)',
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v55.83-RL — OVERRIDES (Max, Nov 9 12:17: "should be override button. with
+// reason and audit of who approved it."). Only checks a person can judge are
+// overridable; the ones the books themselves would refuse are not (a void bill,
+// paying more than is owed, a bill already paid in full, a bill on another
+// wire, a bill that belongs to another company, a fee on a NextTrade wire).
+// An override is for ONE check on ONE bill of THIS exact wire (fingerprint):
+// change the wire and it no longer counts.
+// ═══════════════════════════════════════════════════════════════════════════
+export var OVERRIDABLE = { BILL_NUMBER_MISSING: 1, BILL_DATE_MISSING: 1, DIRECTION_MISSING: 1, REFERENCE_MISSING: 1, RELEASE_MISSING: 1, RELEASE_UNKNOWN: 1, DUP_RELEASE: 1, DUP_RELEASE_IN_WIRE: 1, DUP_REF: 1, DUP_REF_IN_WIRE: 1, DUP_OTHER_REF: 1, DUP_OTHER_REF_IN_WIRE: 1, BILL_DISPUTED: 1 };
+export var NOT_OVERRIDABLE_WHY = {
+  BILL_VOID: 'a void bill cannot be paid', OVERPAID: 'the books would be paid more than the bill', PAID_BEFORE: 'the bill is already paid in full',
+  IN_OTHER_PACKAGE: 'the bill is on another wire', PAYEE_MISMATCH: 'the bill belongs to another company / vendor', FEE_NOT_ALLOWED: 'only RTM wires carry a fee',
+  NO_BILLS: 'a wire needs bills', NO_PAYEE: 'pick who the wire goes to', NOT_OUT: 'not money out',
+};
+export function checkKey(c) { return String(c.code) + '|' + String(c.bill_id || '') + '|' + String(c.text || ''); }
+// result = auditWire / auditPackage output; overrides = rows {check_key, fingerprint, reason, overridden_by, overridden_at}
+export function applyOverrides(result, overrides, liveHash, nameOf) {
+  var byKey = {};
+  (overrides || []).forEach(function (o) { if (o.fingerprint === liveHash) { byKey[o.check_key] = o; } });
+  var used = 0;
+  var checks = (result.checks || []).map(function (c) {
+    if (c.level !== 'block' || !OVERRIDABLE[c.code]) { return c; }
+    var o = byKey[checkKey(c)];
+    if (!o) { return c; }
+    used += 1;
+    return Object.assign({}, c, { level: 'overridden', override: { reason: o.reason, by: o.overridden_by, by_name: nameOf ? nameOf(o.overridden_by) : null, at: o.overridden_at } });
+  });
+  var blocks = checks.filter(function (c) { return c.level === 'block'; }).length;
+  var warns = checks.filter(function (c) { return c.level === 'warn'; }).length;
+  return Object.assign({}, result, { checks: checks, pass: blocks === 0, blocks: blocks, warns: warns, overridden: used });
+}

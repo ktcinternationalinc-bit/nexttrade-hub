@@ -27,7 +27,8 @@ console.log('RK — duplicates = release + date, or reference + date; AI checks 
 var W = loadEsm(R('src/lib/wire-audit.js'));
 function codes(r) { return r.checks.map(function (c) { return c.code; }); }
 function lvl(r, code) { return r.checks.filter(function (c) { return c.code === code; }).map(function (c) { return c.level; }); }
-function bill(id, vendor, num, rel, total, date) { return { id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, bill_date: date, record_status: 'active', validation_status: 'validated', paid_via: 'RTM Capital' }; }
+// fixture realigned (v55.83-RL): OUTBOUND bills (they carry a release #)
+function bill(id, vendor, num, rel, total, date) { return { id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, bill_date: date, record_status: 'active', validation_status: 'validated', paid_via: 'RTM Capital', shipment_direction: 'outbound' }; }
 function line(b) { return { line_id: 'l' + b.id, bill_id: b.id, amount: b.total_amount, bill: b, other_payments: [] }; }
 var RTM = { id: 'p', payee_kind: 'service_provider', payee_name: 'RTM Capital', fee_amount: 0 };
 function run(lines, extra) { return W.auditPackage(Object.assign({ pkg: RTM, lines: lines }, extra || {})); }

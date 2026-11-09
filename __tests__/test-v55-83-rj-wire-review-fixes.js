@@ -30,7 +30,8 @@ var B = R('src/app/api/accounting/bills/route.js');
 var U = R('src/components/WirePackagesPanel.jsx');
 var L = R('src/lib/wire-package-server.js');
 function codes(r) { return r.checks.map(function (c) { return c.code; }); }
-function bill(id, vendor, num, rel, total, extra) { return Object.assign({ id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, record_status: 'active', validation_status: 'validated' }, extra || {}); }
+// fixture realigned (v55.83-RL, Max 12:20: bill # + date always required, inbound/outbound ticked): own date per bill, OUTBOUND by default
+function bill(id, vendor, num, rel, total, extra) { var n = String(id).replace(/[^0-9]/g, '') || '1'; return Object.assign({ id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, record_status: 'active', validation_status: 'validated', bill_date: '2026-10-' + ('0' + n).slice(-2), shipment_direction: 'outbound' }, extra || {}); }
 function line(b, amt, extra) { return Object.assign({ line_id: 'l' + b.id, bill_id: b.id, amount: amt, bill: b, other_payments: [] }, extra || {}); }
 
 // THE complaint: bills can be chosen for RTM / NextTrade wires
@@ -58,7 +59,9 @@ ok('5a: NextTrade: a bill with no release # is a WARNING (payroll / rent / utili
 var twoTrucks = W.auditPackage({ pkg: rtm, lines: [line(bill('t1', 'Fast Trucking', 'T-10', '1003-030', 900, { paid_via: 'RTM Capital' }), 900), line(bill('t2', 'Fast Trucking', 'T-11', '1003-030', 650, { paid_via: 'RTM Capital' }), 650)] });
 var sameTwice = W.auditPackage({ pkg: rtm, lines: [line(bill('t1', 'Fast Trucking', 'T-10', '1003-030', 900, { paid_via: 'RTM Capital' }), 900), line(bill('t3', 'Fast Trucking', 'T-12', '1003-030', 900, { paid_via: 'RTM Capital' }), 900)] });
 // superseded (v55.83-RK, Max 11:38 "a unique release number and date"): the rule is by DATE, not amount — bills without dates can only warn
-ok('5b: two charges from one vendor on one release with no dates: a WARNING the signers check (never a silent pass)', twoTrucks.pass && twoTrucks.warns > 0 && sameTwice.pass && sameTwice.warns > 0);
+// superseded (v55.83-RL — dates are now always present): two charges on one release on DIFFERENT dates pass; on the SAME date they block
+var sameDayTwice = W.auditPackage({ pkg: rtm, lines: [line(bill('t1', 'Fast Trucking', 'T-10', '1003-030', 900, { paid_via: 'RTM Capital' }), 900), line(bill('t9', 'Fast Trucking', 'T-19', '1003-030', 900, { paid_via: 'RTM Capital', bill_date: '2026-10-01' }), 900)] });
+ok('5b: two charges from one vendor on one release: different dates pass (separate charges), the same date BLOCKS', twoTrucks.pass && sameTwice.pass && !sameDayTwice.pass);
 var paidOther = W.auditPackage({ pkg: rtm, lines: [line(bill('t4', 'Fast Trucking', 'T-13', '1003-031', 400, { paid_via: 'RTM Capital' }), 400)], sameRelease: { '1003-031': [{ bill_id: 'old', vendor_name: 'Fast Trucking', bill_number: 'T-1', total_amount: 750, bill_date: null }] } });
 ok('5c: another (older) bill of the same vendor on the release with no date to compare = WARNING, not a permanent block', paidOther.pass && codes(paidOther).indexOf('DUP_RELEASE') >= 0);
 // gap 6 — NextTrade wires do not wait for "proof"

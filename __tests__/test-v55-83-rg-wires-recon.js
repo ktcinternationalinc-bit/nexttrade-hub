@@ -107,7 +107,7 @@ ok('3i: 🏦 Wires is its own tab in BUYING, on the ClickBooks (KTC Hub) side, g
   ["key: 'wires.view'", "key: 'wires.signoff'", "key: 'recon.signoff'"].every(function (k) { return ST.indexOf(k) > 0; }));
 ok('3j: AccountingTab declares userProfile (the Audit Trail tab referenced it undeclared)', AT.indexOf('var userProfile = props.userProfile;') > 0);
 var BT = R('src/components/BillsTab.jsx'); var BR = R('src/app/api/accounting/bills/route.js');
-ok('3k: a bill carries its release number — entered on the bill, saved upper-case', BT.indexOf('Release # (e.g. 1003-021)') > 0 && BR.indexOf('fields.release_number = String(bl.release_number') > 0);
+ok('3k: a bill carries its release number — entered on the bill, saved upper-case', BT.indexOf("placeholder={'Release #' + (editing.shipment_direction === 'outbound' ? ' *' : '')}") > 0 /* superseded (v55.83-RL): required mark for OUTBOUND bills */ && BR.indexOf('fields.release_number = String(bl.release_number') > 0);
 
 // ── 4. saved order reconciliations — lifecycle run for real
 var snap = { summary: { orders_in_scope: 3 }, orders_without_invoice: [{ release_number: '1003-050', customer: 'X' }, { release_number: '1003-050', customer: 'X' }],

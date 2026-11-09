@@ -20,11 +20,19 @@ var PST = {
   awaiting_1st: { background: '#fef3c7', color: '#78350f' }, awaiting_2nd: { background: '#ffedd5', color: '#7c2d12' },
   ready_to_send: { background: '#d1fae5', color: '#065f46' }, sent: { background: '#dbeafe', color: '#1e3a8a' },
   awaiting_proof: { background: '#fae8ff', color: '#701a75' }, complete: { background: '#065f46', color: '#ffffff' }, cancelled: { background: '#e2e8f0', color: '#475569' },
+  reversed: { background: '#e2e8f0', color: '#7f1d1d' },
 };
 // what the list says to do next, in plain words
 var NEXT_WORDS = {
   needs_check: 'Check it', flagged: 'Fix the problems', awaiting_1st: '1st person signs', awaiting_2nd: '2nd person signs',
-  ready_to_send: 'Send it at the bank', sent: 'Attach the bank line', awaiting_proof: 'Add RTM proof', complete: 'Done', cancelled: '—',
+  ready_to_send: 'Send it at the bank', sent: 'Attach the bank line', awaiting_proof: 'Add RTM proof', complete: 'Done', cancelled: '—', reversed: 'Undone',
+};
+// v55.83-RL — the wire's history in plain words (Max 12:18: "audit should include whatever ... was done")
+var HIST_WORDS = {
+  wire_package_prepared: '➕ prepared the wire', wire_package_updated: '✏ changed the wire', wire_package_audit_run: '🤖 check ran',
+  wire_check_overridden: '↷ overrode a check', wire_package_signoff_1: '✍ signed 1st', wire_package_signoff_2: '✍ signed 2nd (approved)',
+  wire_package_sent: '📤 marked it sent', wire_package_attached: '🔗 attached the bank line', wire_package_rtm_proof: '📎 added RTM proof',
+  bill_paid_via_set: '🏢 bills marked “paid through”', wire_package_cancelled: '✕ cancelled', wire_package_reversed: '↩ undid the wire', wire_package_mark_failed: '⚠ marking failed',
 };
 // how to fix each blocking problem
 var FIX = {
@@ -39,11 +47,47 @@ var FIX = {
   DUP_RELEASE_IN_WIRE: 'Same vendor, same release, same date twice on this wire — untick one (or fix the bill date if they are different charges).',
   DUP_REF: 'Same reference AND date as another bill — check in 💸 Bills and void the duplicate.',
   DUP_REF_IN_WIRE: 'Same reference and date twice on this wire — untick one.',
+  BILL_NUMBER_MISSING: 'Type the bill # in 💸 Bills (or override with the reason).', BILL_DATE_MISSING: 'Set the bill date in 💸 Bills (or override with the reason).',
+  DIRECTION_MISSING: 'Tick ⬅ Inbound or Outbound ➡ on that bill in the table below.', REFERENCE_MISSING: 'An inbound bill needs its reference — type it in the table below.',
+  DUP_OTHER_REF: 'Same reference and date as another bill of this vendor — check in 💸 Bills.', DUP_OTHER_REF_IN_WIRE: 'Same reference and date twice on this wire — untick one.',
   BILL_VOID: 'The bill is void — untick it.', BILL_DISPUTED: 'The bill is disputed — untick it until it is resolved.',
   FEE_NOT_ALLOWED: 'Only RTM wires can carry a fee — remove it.', NO_BILLS: '✏ Change the wire and tick its bills.',
 };
 var inp = 'px-2 py-1.5 rounded-lg border border-slate-300 text-[12px] nt-light';
 var inpS = { color: INK, background: '#ffffff' };
+// v55.83-RL (Max 12:18–12:20) — the bill's release #, INBOUND / OUTBOUND tick and other reference, editable in place.
+// outbound → release # required; inbound → reference required; NextTrade overhead → neither.
+function BillFields(p) {
+  var b = p.bill || {}; var edit = p.editable === true;
+  var s1 = useState(null); var relD = s1[0]; var setRelD = s1[1];
+  var s2 = useState(null); var refD = s2[0]; var setRefD = s2[1];
+  var dir = String(b.shipment_direction || '').toLowerCase();
+  var needRel = !p.releaseOptional && dir !== 'inbound';
+  var needRef = dir === 'inbound';
+  function save(field, value, done) { p.onSave(field, value, function (ok) { if (ok && done) { done(); } }); }
+  function chip(v, label) {
+    var on = dir === v;
+    return <button key={v} disabled={!edit || p.busy} onClick={function () { if (!on) { save('shipment_direction', v); } }} className="px-1.5 py-0.5 rounded text-[10px] font-extrabold"
+      style={on ? { background: '#1e293b', color: '#ffffff' } : { background: '#ffffff', color: edit ? '#334155' : '#94a3b8', border: '1px solid ' + (!dir && !p.releaseOptional ? '#f87171' : '#cbd5e1') }}>{label}</button>;
+  }
+  function field(label, val, draft, setDraft, fieldName, need) {
+    if (val && draft == null) {
+      return <div className="text-[11px]" style={{ color: '#0f172a' }}>{label + ': '}<b>{val}</b>{edit ? <button onClick={function () { setDraft(val); }} className="ml-1 text-[10px] font-bold underline" style={{ color: '#1d4ed8' }}>change</button> : null}</div>;
+    }
+    if (!edit) { return need ? <div className="text-[11px] font-extrabold" style={{ color: '#b91c1c' }}>{label + ': missing'}</div> : null; }
+    return <div className="flex gap-1 items-center mt-0.5">
+      <input value={draft || ''} onChange={function (e) { setDraft(e.target.value); }} placeholder={label + (need ? ' (needed)' : ' (optional)')}
+        className="px-1.5 py-0.5 rounded border text-[11px] nt-light" style={{ width: 120, color: '#0f172a', background: '#ffffff', borderColor: need ? '#f87171' : '#cbd5e1' }} />
+      <button disabled={p.busy} onClick={function () { save(fieldName, draft, function () { setDraft(null); }); }} className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>save</button>
+    </div>;
+  }
+  return <div onClick={function (e) { e.stopPropagation(); }}>
+    <div className="flex gap-1 items-center">{chip('inbound', '⬅ Inbound')}{chip('outbound', 'Outbound ➡')}{!dir && !p.releaseOptional ? <span className="text-[10px] font-bold" style={{ color: '#b91c1c' }}>tick one</span> : null}</div>
+    {field('Release #', b.release_number, relD, setRelD, 'release_number', needRel)}
+    {field('Reference', b.other_reference, refD, setRefD, 'other_reference', needRef)}
+  </div>;
+}
+
 function Btn(p) {
   var col = p.color || '#1e293b';
   return <button onClick={p.onClick} disabled={p.disabled} title={p.title} className={'rounded-lg font-extrabold disabled:opacity-40 ' + (p.big ? 'px-4 py-2 text-[13px]' : 'px-3 py-1.5 text-[12px]')}
@@ -67,6 +111,7 @@ export default function WirePackagesPanel(props) {
   var a13 = useState({}); var relDraft = a13[0]; var setRelDraft = a13[1];
   var a14 = useState(false); var showMore = a14[0]; var setShowMore = a14[1];
   var a15 = useState(null); var setup = a15[0]; var setSetup = a15[1];
+  var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1]; // v55.83-RL — reasons being typed, per check
 
   // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
   function api(payload) {
@@ -139,6 +184,21 @@ export default function WirePackagesPanel(props) {
     if (pk[b.id] != null) { delete pk[b.id]; } else { pk[b.id] = String(b.open); }
     setEd(Object.assign({}, ed, { picks: pk }));
   }
+  // v55.83-RL — save the release # / reference / inbound-outbound of a bill, then refresh where it shows
+  function saveField(billId, field, value, done) {
+    var v = String(value == null ? '' : value).trim();
+    if (field !== 'shipment_direction' && v.length < 2) { toast.error(field === 'other_reference' ? 'Type the reference.' : 'Type the release #.'); if (done) { done(false); } return; }
+    var payload = { action: 'set_bill_release', bill_id: billId, field: field }; payload[field] = v;
+    setBusy(true);
+    api(payload).then(function (j) {
+      if (j && j.ok) {
+        toast.success((field === 'shipment_direction' ? (v === 'inbound' ? 'Marked INBOUND' : 'Marked OUTBOUND') : (field === 'other_reference' ? 'Reference ' : 'Release ') + j.value + ' saved') + ' on the bill.');
+        setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { if (x.id !== billId) { return x; } var y = Object.assign({}, x); y[field] = j.value; return y; }) }) : e; });
+        if (det && det.package && det.package.raw_status === 'draft') { recheck(); }
+        if (done) { done(true); }
+      } else { toast.error((j && j.error) || 'Could not save it.'); if (done) { done(false); } }
+    }).finally(function () { setBusy(false); });
+  }
   function saveRelease(billId, after) {
     var v = String(relDraft[billId] || '').trim();
     if (v.length < 2) { toast.error('Type the release #.'); return; }
@@ -192,7 +252,7 @@ export default function WirePackagesPanel(props) {
   useEffect(function () { load(); api({ action: 'setup' }).then(function (j) { if (j && j.ok) { setSetup(j); } }); }, []); // eslint-disable-line
 
   var OPEN_ST = { needs_check: 1, flagged: 1, awaiting_1st: 1, awaiting_2nd: 1, ready_to_send: 1, sent: 1, awaiting_proof: 1 };
-  var rows = (list || []).filter(function (p) { return fSt === 'all' || (fSt === 'open' ? OPEN_ST[p.status] : p.status === fSt); });
+  var rows = (list || []).filter(function (p) { return fSt === 'all' || (fSt === 'open' ? OPEN_ST[p.status] : fSt === 'cancelled' ? (p.status === 'cancelled' || p.status === 'reversed') : p.status === fSt); });
 
   // ═════════ the NEW / CHANGE form ═════════
   if (ed && payees) {
@@ -214,19 +274,13 @@ export default function WirePackagesPanel(props) {
         <td className="px-2 py-2" style={{ width: 28 }}><input type="checkbox" readOnly checked={on} disabled={off} style={{ width: 18, height: 18 }} /></td>
         <td className="px-2 py-2"><div className="text-[13px] font-extrabold" style={{ color: INK }}>{b.vendor_name}</div>
           <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · already on ' + b.on_package : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
-        <td className="px-2 py-2" onClick={function (e) { e.stopPropagation(); }}>
-          {b.release_number ? <span className="text-[12px] font-bold" style={{ color: INK }}>{b.release_number}</span>
-            : <span className="flex gap-1 items-center"><input value={relDraft[b.id] || ''} onChange={function (e) { var d2 = Object.assign({}, relDraft); d2[b.id] = e.target.value; setRelDraft(d2); }} placeholder={b.release_optional ? 'release # (optional)' : 'release # needed'}
-              className="px-1.5 py-1 rounded border text-[11px] nt-light" style={{ width: 120, color: INK, background: '#ffffff', borderColor: '#fca5a5' }} />
-              <button onClick={function () { saveRelease(b.id, function (j) { setEd(function (e) { return e ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { release_number: j.release_number }) : x; }) }) : e; }); }); }}
-                disabled={busy} className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>save</button></span>}
-        </td>
+        <td className="px-2 py-2"><BillFields bill={b} editable={!!perms.prepare} busy={busy} releaseOptional={b.release_optional} onSave={function (field, value, done) { saveField(b.id, field, value, done); }} /></td>
         <td className="px-2 py-2 text-right text-[12px] tabular-nums" style={{ color: SUB }}>${fmt(b.open)}</td>
         <td className="px-2 py-2 text-right" onClick={function (e) { e.stopPropagation(); }}>{on ? <input value={ed.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, ed.picks); pk[b.id] = e.target.value; setEd(Object.assign({}, ed, { picks: pk })); }}
           className="px-1.5 py-1 rounded border text-[12px] text-right nt-light" style={{ width: 100, color: INK, background: '#ffffff', borderColor: '#cbd5e1' }} /> : <span className="text-[11px]" style={{ color: MUTED }}>tick to pay</span>}</td>
       </tr>;
     };
-    var head = <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th></th><th className="px-2 py-1.5 text-left text-[11px]">Vendor · bill</th><th className="px-2 py-1.5 text-left text-[11px]">Release #</th><th className="px-2 py-1.5 text-right text-[11px]">Still owed</th><th className="px-2 py-1.5 text-right text-[11px]">Pay now</th></tr></thead>;
+    var head = <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th></th><th className="px-2 py-1.5 text-left text-[11px]">Vendor · bill</th><th className="px-2 py-1.5 text-left text-[11px]">In / Out · Release # · Reference</th><th className="px-2 py-1.5 text-right text-[11px]">Still owed</th><th className="px-2 py-1.5 text-right text-[11px]">Pay now</th></tr></thead>;
     return <div className="nt-paper rounded-xl p-4" style={{ border: '2px solid #0f766e' }}>
       <div className="flex gap-2 items-center mb-3">
         <div className="text-[16px] font-extrabold" style={{ color: INK }}>{ed.id ? '✏ Change this wire' : '＋ New wire'}</div>
@@ -291,15 +345,34 @@ export default function WirePackagesPanel(props) {
     var canTick = P.paid_through && (P.raw_status === 'sent' || P.raw_status === 'attached') && P.rtm_pending > 0;
     var nextBox = null;
     if (st === 'cancelled') { nextBox = <div style={{ color: SUB }}>{'Cancelled by ' + (P.cancelled && P.cancelled.by) + ': ' + (P.cancelled && P.cancelled.note)}</div>; }
+    else if (st === 'reversed') { nextBox = <div style={{ color: '#7f1d1d' }}>{'↩ Undone by ' + (P.reversed && P.reversed.by) + ' on ' + d16(P.reversed && P.reversed.at) + ': “' + (P.reversed && P.reversed.note) + '”. The bill payments it recorded were voided and the bills are back to how they were. This record is kept.'}</div>; }
     else if (st === 'needs_check') {
       nextBox = <div><div className="mb-2" style={{ color: INK }}>The wire changed since it was checked. Check it again.</div>{(perms.prepare || perms.signoff) ? <Btn big color="#4338ca" onClick={recheck} disabled={busy}>🤖 Check it now</Btn> : null}</div>;
     } else if (st === 'flagged') {
       nextBox = <div><div className="mb-2 font-extrabold" style={{ color: '#7f1d1d' }}>{'Fix ' + blocks.length + ' problem(s) before anyone can sign:'}</div>
-        {blocks.map(function (c, i) { return <div key={i} className="rounded-lg px-3 py-2 mb-1" style={{ background: '#fee2e2', color: '#7f1d1d' }}><div className="font-bold">⛔ {c.text}</div>{FIX[c.code] ? <div className="text-[12px]" style={{ color: '#991b1b' }}>→ {FIX[c.code]}</div> : null}</div>; })}
+        {blocks.map(function (c, i) {
+          var od = ovrDraft[c.key];
+          return <div key={i} className="rounded-lg px-3 py-2 mb-1" style={{ background: '#fee2e2', color: '#7f1d1d' }}><div className="font-bold">⛔ {c.text}</div>
+            {FIX[c.code] ? <div className="text-[12px]" style={{ color: '#991b1b' }}>→ {FIX[c.code]}</div> : null}
+            {/* v55.83-RL (Max 12:17: "should be override button. with reason and audit of who approved it") */}
+            {c.overridable ? (perms.override ? (od == null
+              ? <button onClick={function () { var d = Object.assign({}, ovrDraft); d[c.key] = ''; setOvrDraft(d); }} className="mt-1 px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#ffffff', color: '#9a3412', border: '1px solid #fdba74' }}>↷ Override…</button>
+              : <div className="flex gap-1 items-center mt-1 flex-wrap">
+                <input value={od} onChange={function (e) { var d = Object.assign({}, ovrDraft); d[c.key] = e.target.value; setOvrDraft(d); }} placeholder="why it is OK to pay anyway (kept with your name)" className={inp} style={Object.assign({ flex: '1 1 300px' }, inpS)} />
+                <Btn color="#9a3412" disabled={busy || String(od).trim().length < 10} onClick={function () { act({ action: 'override_check', id: P.id, check_key: c.key, reason: od }, function (j) { return j.pass ? '↷ Overridden — the wire can be signed now.' : '↷ Overridden — ' + j.blocks + ' problem(s) left.'; }).then(function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }); }}>↷ Override</Btn>
+                <Btn light onClick={function () { var d = Object.assign({}, ovrDraft); delete d[c.key]; setOvrDraft(d); }}>cancel</Btn></div>)
+              : <div className="text-[11px] mt-1" style={{ color: '#9a3412' }}>Can be overridden by someone with “Override wire checks”.</div>)
+              : (c.why_not ? <div className="text-[11px] mt-1" style={{ color: '#7f1d1d' }}>{'Cannot be overridden: ' + c.why_not + '.'}</div> : null)}
+          </div>;
+        })}
         <div className="flex gap-2 mt-2">{perms.prepare && <Btn color="#0f766e" onClick={function () { startChange(det); }}>✏ Change the wire</Btn>}{(perms.prepare || perms.signoff) && <Btn color="#4338ca" onClick={recheck} disabled={busy}>🤖 Check again</Btn>}</div></div>;
     } else if (st === 'awaiting_1st' || st === 'awaiting_2nd') {
       var who = st === 'awaiting_1st' ? '1st' : '2nd';
+      var ovrd = (det.checks.checks || []).filter(function (c) { return c.level === 'overridden'; });
       nextBox = <div><div className="mb-2" style={{ color: INK }}>{st === 'awaiting_1st' ? 'The check passed. Someone who verified the bills below signs first.' : 'Signed by ' + A.signoff1.name + '. Now a DIFFERENT person verifies and signs.'}</div>
+        {ovrd.length > 0 && <div className="rounded-lg p-2 mb-2" style={{ background: '#fff7ed', border: '1px solid #fdba74' }}>
+          <div className="text-[12px] font-extrabold mb-1" style={{ color: '#9a3412' }}>{'↷ ' + ovrd.length + ' problem(s) were OVERRIDDEN — read before signing:'}</div>
+          {ovrd.map(function (c, i) { return <div key={i} className="text-[12px]" style={{ color: '#7c2d12' }}>{'• ' + c.text + ' — overridden by ' + ((c.override && c.override.by_name) || 'someone') + ': “' + ((c.override && c.override.reason) || '') + '”'}</div>; })}</div>}
         {A.ai_ok !== true && <div className="text-[12px] mb-2" style={{ color: '#9a3412' }}>{A.ai_ok === false ? 'The AI review raised concerns (see below) — write what you checked.' : 'The AI review did not run — write what you checked.'}</div>}
         {!perms.signoff ? <div style={{ color: SUB }}>Waiting for someone with “Wires: Sign Off”.</div>
           : (st === 'awaiting_2nd' && A.i_signed_first) ? <div className="font-bold" style={{ color: '#9a3412' }}>You signed first — the 2nd signature must be someone else.</div>
@@ -342,7 +415,12 @@ export default function WirePackagesPanel(props) {
         <span className="px-2 py-1 rounded text-[11px] font-extrabold" style={PST[st]}>{PKG_STATUS_LABEL[st]}</span>
         <div className="flex-1" />
         {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { startChange(det); }}>✏ Change</Btn>}
-        {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { var why = window.prompt('Why cancel this wire?'); if (why) { act({ action: 'cancel', id: P.id, note: why }, 'Wire cancelled — its bills are free again.'); } }}>✕ Cancel wire</Btn>}
+        {/* v55.83-RL (Max 12:17: "ability to delete the wire and everything return to previous state") */}
+        {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { var why = window.prompt('Delete this wire? Its bills go back to how they were. Why?'); if (why && why.trim().length >= 3) { act({ action: 'delete_wire', id: P.id, reason: why }, '🗑 Wire deleted — everything is back to how it was (the history keeps a copy).', function () { setDet(null); }); } }}>🗑 Delete wire</Btn>}
+        {perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <Btn light onClick={function () {
+          var why = window.prompt('UNDO this wire? The bill payments it recorded are voided, bills go back to how they were, the bank line is freed. The record is kept. Why (at least 10 characters)?');
+          if (why && why.trim().length >= 10) { act({ action: 'delete_wire', id: P.id, reason: why }, '↩ Wire undone — everything is back to how it was before it.'); } else if (why) { toast.error('Write a longer reason (at least 10 characters).'); }
+        }}>↩ Undo &amp; delete wire</Btn>}
       </div>
       {/* progress */}
       <div className="flex gap-1 flex-wrap mb-3">
@@ -360,7 +438,7 @@ export default function WirePackagesPanel(props) {
       <div className="overflow-x-auto rounded-lg mb-3" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
         <thead><tr style={{ background: '#f1f5f9', color: SUB }}>
           {canTick ? <th className="px-2 py-1.5"></th> : null}
-          <th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">Release #</th>
+          <th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">In / Out · Release # · Reference</th>
           <th className="px-2 py-1.5 text-left">Bill date</th><th className="px-2 py-1.5 text-left">Due</th><th className="px-2 py-1.5 text-left">Category</th>
           <th className="px-2 py-1.5 text-right">Bill total</th><th className="px-2 py-1.5 text-right">This wire</th><th className="px-2 py-1.5 text-left">Paid before</th>
           <th className="px-2 py-1.5 text-left">Notes</th>{P.paid_through ? <th className="px-2 py-1.5 text-left">{P.payee_name} proof</th> : null}</tr></thead>
@@ -370,12 +448,8 @@ export default function WirePackagesPanel(props) {
             return <tr key={l.line_id} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
               <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
-              <td className="px-2 py-1.5">{(b.release_number && relDraft[l.bill_id] == null) ? <span><b>{b.release_number}</b>{P.raw_status === 'draft' && perms.prepare ? <button onClick={function () { var d3 = Object.assign({}, relDraft); d3[l.bill_id] = b.release_number; setRelDraft(d3); }} className="ml-1 text-[10px] font-bold underline" style={{ color: '#1d4ed8' }}>change</button> : null}</span> : (P.raw_status === 'draft' && perms.prepare) ? <span className="flex gap-1">
-                <input value={relDraft[l.bill_id] || ''} onChange={function (e) { var d2 = Object.assign({}, relDraft); d2[l.bill_id] = e.target.value; setRelDraft(d2); }} placeholder="type release #"
-                  className="px-1.5 py-1 rounded border text-[11px] nt-light" style={{ width: 110, color: INK, background: '#ffffff', borderColor: '#fca5a5' }} />
-                <button onClick={function () { saveRelease(l.bill_id, function () { recheck(); }); }} disabled={busy} className="px-2 rounded text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>save</button></span>
-                : <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td>
-              <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || '—'}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
+              <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
+              <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
               <td className="px-2 py-1.5">{b.category ? String(b.category).replace(/_/g, ' ') : '—'}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">${fmt(b.total_amount)}</td><td className="px-2 py-1.5 text-right tabular-nums font-extrabold">${fmt(l.amount)}</td>
               <td className="px-2 py-1.5" style={{ color: before.length ? '#b45309' : MUTED }}>{before.length ? before.map(function (o) { return '$' + fmt(o.amount) + ' ' + (o.paid_date || '') + ' (' + o.label + ')'; }).join('; ') : 'none'}</td>
@@ -390,14 +464,28 @@ export default function WirePackagesPanel(props) {
       {showMore && <div className="rounded-xl p-3" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
         <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>{'🤖 Checks' + (det.frozen_checks ? ' (as signed)' : '') + (A.checked_at ? ' · ' + d16(A.checked_at) + (A.checked_by ? ' by ' + A.checked_by : '') : '')}</div>
         {(det.checks.checks || []).map(function (c, i) {
-          var s = c.level === 'block' ? { bg: '#fee2e2', fg: '#7f1d1d', ic: '⛔' } : c.level === 'warn' ? { bg: '#fef3c7', fg: '#78350f', ic: '⚠' } : c.level === 'info' ? { bg: '#e0f2fe', fg: '#0c4a6e', ic: 'ℹ' } : { bg: '#d1fae5', fg: '#065f46', ic: '✅' };
-          return <div key={i} className="text-[12px] font-bold rounded px-2 py-1 mb-0.5" style={{ background: s.bg, color: s.fg }}>{s.ic} {c.text}</div>;
+          var s = c.level === 'block' ? { bg: '#fee2e2', fg: '#7f1d1d', ic: '⛔' } : c.level === 'overridden' ? { bg: '#ffedd5', fg: '#7c2d12', ic: '↷' } : c.level === 'warn' ? { bg: '#fef3c7', fg: '#78350f', ic: '⚠' } : c.level === 'info' ? { bg: '#e0f2fe', fg: '#0c4a6e', ic: 'ℹ' } : { bg: '#d1fae5', fg: '#065f46', ic: '✅' };
+          return <div key={i} className="text-[12px] font-bold rounded px-2 py-1 mb-0.5" style={{ background: s.bg, color: s.fg }}>{s.ic} {c.text}{c.level === 'overridden' && c.override ? ' — overridden by ' + (c.override.by_name || 'someone') + ' ' + d16(c.override.at) + ': “' + c.override.reason + '”' : ''}</div>;
         })}
         {A.ai_summary && <div className="mt-2 rounded p-2 text-[12px]" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: INK, whiteSpace: 'pre-wrap' }}><b>AI review:</b>{'\n'}{A.ai_summary}</div>}
         <div className="text-[12px] mt-2" style={{ color: INK }}>{'✍ 1st: ' + (A.signoff1 ? A.signoff1.name + ' ' + d16(A.signoff1.at) + (A.signoff1.valid ? '' : ' (no longer counts — the wire changed)') + (A.signoff1.note ? ' — “' + A.signoff1.note + '”' : '') : '—')}</div>
         <div className="text-[12px]" style={{ color: INK }}>{'✍ 2nd: ' + (A.signoff2 ? A.signoff2.name + ' ' + d16(A.signoff2.at) + (A.signoff2.valid ? '' : ' (no longer counts)') + (A.signoff2.note ? ' — “' + A.signoff2.note + '”' : '') : '—')}</div>
         {P.sent && <div className="text-[12px]" style={{ color: INK }}>{'📤 Sent ' + P.sent.date + ' · ref ' + P.sent.reference + ' · by ' + P.sent.by}</div>}
         {P.attached && <div className="text-[12px]" style={{ color: INK }}>{'🔗 Bank line ' + (P.attached.bank ? P.attached.bank.date + ' −$' + fmt(P.attached.bank.amount) + ' ' + P.attached.bank.name : '') + ' · attached by ' + P.attached.by + (P.attached.note ? ' · amount difference accepted: “' + P.attached.note + '”' : '')}</div>}
+        {(det.overrides || []).length > 0 && <div className="mt-2">
+          <div className="text-[12px] font-extrabold" style={{ color: '#9a3412' }}>↷ Overrides (who approved, why)</div>
+          {det.overrides.map(function (o, i) { return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(o.at) + ' · ' + o.by + ' · ' + (o.text || o.code) + ' — “' + o.reason + '”' + (o.counts ? '' : ' (no longer counts — the wire changed after it)')}</div>; })}</div>}
+        {(det.history || []).length > 0 && <div className="mt-2">
+          <div className="text-[12px] font-extrabold" style={{ color: INK }}>🧾 History — every step, who and when</div>
+          {det.history.map(function (h, i) {
+            var d0 = h.details || {}; var extra = '';
+            if (h.action === 'wire_package_updated' && d0.changes) { var c0 = d0.changes; extra = [c0.payee ? 'pay to ' + c0.payee.from + ' → ' + c0.payee.to : '', c0.fee ? 'fee ' + c0.fee.from + ' → ' + c0.fee.to : '', (c0.bills_added || []).length ? '+' + c0.bills_added.length + ' bill(s)' : '', (c0.bills_removed || []).length ? '−' + c0.bills_removed.length + ' bill(s)' : '', (c0.amounts_changed || []).length ? (c0.amounts_changed.length + ' amount(s) changed') : ''].filter(Boolean).join(', '); }
+            if (h.action === 'wire_package_audit_run') { extra = d0.pass ? 'passed' : (d0.blocks + ' problem(s)'); }
+            if (h.action === 'wire_check_overridden') { extra = (d0.check || d0.code) + ' — “' + d0.reason + '”'; }
+            if (h.action === 'wire_package_reversed' || h.action === 'wire_package_cancelled') { extra = '“' + (d0.reason || d0.note || '') + '”'; }
+            if (h.action === 'wire_package_sent') { extra = 'ref ' + (d0.bank_reference || ''); }
+            return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(h.at) + ' · ' + h.by + ' · ' + (HIST_WORDS[h.action] || h.action) + (extra ? ' · ' + extra : '')}</div>;
+          })}</div>}
         {(det.files || []).map(function (f) {
           return <div key={f.id} className="text-[12px]" style={{ color: INK }}>{(f.kind === 'bank_confirmation' ? '🏦 Bank confirmation' : f.kind === 'rtm_proof' ? '📎 ' + P.payee_name + ' proof' : '📄 File') + ' · '}<button onClick={function () { openFile(f.path); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>{f.file_name || 'open'}</button>{' · ' + (f.by || '') + ' ' + d16(f.at)}</div>;
         })}
@@ -428,8 +516,8 @@ export default function WirePackagesPanel(props) {
         {warnsS.map(function (w, i) { return <div key={i} className="text-[12px]" style={{ color: '#78350f' }}>• {w}</div>; })}</div>;
     })()}
     <div className="flex gap-1.5 flex-wrap mb-2">
-      {[['open', 'In progress'], ['all', 'All'], ['complete', 'Done'], ['cancelled', 'Cancelled']].map(function (k) {
-        var n = (list || []).filter(function (p) { return k[0] === 'all' || (k[0] === 'open' ? OPEN_ST[p.status] : p.status === k[0]); }).length;
+      {[['open', 'In progress'], ['all', 'All'], ['complete', 'Done'], ['cancelled', 'Cancelled / undone']].map(function (k) {
+        var n = (list || []).filter(function (p) { return k[0] === 'all' || (k[0] === 'open' ? OPEN_ST[p.status] : k[0] === 'cancelled' ? (p.status === 'cancelled' || p.status === 'reversed') : p.status === k[0]); }).length;
         return <button key={k[0]} onClick={function () { setFSt(k[0]); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold"
           style={fSt === k[0] ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: SUB }}>{k[1] + ' (' + n + ')'}</button>;
       })}

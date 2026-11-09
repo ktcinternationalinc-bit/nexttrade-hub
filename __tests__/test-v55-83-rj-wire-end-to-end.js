@@ -20,10 +20,11 @@ var db = new MemDB({
   module_permissions: [].concat(
     ['accounting.clickbooks.access', 'wires.prepare', 'wires.signoff', 'wires.send', 'bills.manage'].map(function (k) { return { user_id: 'u1', module_name: k, has_access: true }; }),
     ['accounting.clickbooks.access', 'wires.signoff'].map(function (k) { return { user_id: 'u2', module_name: k, has_access: true }; })),
+  // fixture realigned (v55.83-RL, Max 12:20): bills carry their date and inbound / outbound; the NextTrade overhead bill has neither release nor direction
   vendor_bills: [
-    { id: 'b0000000-0000-0000-0000-000000000001', vendor_name: 'Fast Trucking', bill_number: 'T-100', release_number: '1003-021', total_amount: 1200, record_status: 'active', paid_via: 'RTM', validation_status: 'validated' },
-    { id: 'b0000000-0000-0000-0000-000000000002', vendor_name: 'Port Customs', bill_number: 'C-55', release_number: '1003-021', total_amount: 800, record_status: 'active', paid_via: null, validation_status: 'validated' },
-    { id: 'b0000000-0000-0000-0000-000000000003', vendor_name: 'TX Electric', bill_number: 'E-9', release_number: null, total_amount: 300, record_status: 'active', paid_via: 'NextTrade Industries', validation_status: 'validated' },
+    { id: 'b0000000-0000-0000-0000-000000000001', vendor_name: 'Fast Trucking', bill_number: 'T-100', release_number: '1003-021', total_amount: 1200, record_status: 'active', paid_via: 'RTM', validation_status: 'validated', bill_date: '2026-10-01', shipment_direction: 'outbound' },
+    { id: 'b0000000-0000-0000-0000-000000000002', vendor_name: 'Port Customs', bill_number: 'C-55', release_number: '1003-021', total_amount: 800, record_status: 'active', paid_via: null, validation_status: 'validated', bill_date: '2026-10-02', shipment_direction: 'outbound' },
+    { id: 'b0000000-0000-0000-0000-000000000003', vendor_name: 'TX Electric', bill_number: 'E-9', release_number: null, total_amount: 300, record_status: 'active', paid_via: 'NextTrade Industries', validation_status: 'validated', bill_date: '2026-10-03' },
   ],
   vendor_bill_payments: [], wire_packages: [], wire_package_lines: [], wire_package_files: [], hub_audit_log: [], paid_through_parties: [],
   bank_transactions: [{ id: '70000000-0000-0000-0000-000000000001', date: '2026-11-10', amount_abs: 2250, direction: 'out', pending: false, name: 'WIRE TO RTM CAPITAL', wave_business_id: 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk', review_status: 'needs_review' }],

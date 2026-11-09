@@ -20,7 +20,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server';
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee } from '../../../../lib/wire-audit';
+import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY } from '../../../../lib/wire-audit';
 import { packageContext, inChunks, loadPayParties, aiReviewPackage } from '../../../../lib/wire-package-server';
 
 export const dynamic = 'force-dynamic';
@@ -65,14 +65,17 @@ async function loadPackage(db, id) {
   if (lr.error) { return { error: lr.error }; }
   var ctx = await packageContext(db, id, lr.data || []);
   var pkg = pr.data;
-  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen };
-  // once attached, the bills ARE paid by this wire — judge the frozen audit, not "paid before" by itself
-  var live = auditPackage(input);
+  var input = { pkg: pkg, lines: ctx.lines, sameRelease: ctx.sameRelease, sameNumber: ctx.sameNumber, sameOther: ctx.sameOther, knownReleases: ctx.knownReleases, otherOpen: ctx.otherOpen };
   var hash = packageFingerprint(pkg, ctx.lines);
+  // v55.83-RL — approved overrides (who + why) for THIS exact wire turn their ⛔ into ↷; the rest still block
+  var ovr = [];
+  try { var orq = await db.from('wire_package_overrides').select('*').eq('package_id', id).order('overridden_at', { ascending: true }); if (!orq.error) { ovr = orq.data || []; } } catch (eOv) { ovr = []; }
+  // once attached, the bills ARE paid by this wire — judge the frozen audit, not "paid before" by itself
+  var live = applyOverrides(auditPackage(input), ovr, hash);
   // v55.83-RJ (review gap 6) — proof that the vendors were paid is asked from RTM-type companies only (NextTrade: bills only, no proof step)
   var paidThrough = pkg.payee_kind === 'service_provider';
   var rtmPending = paidThrough ? ctx.lines.filter(function (l) { return !l.rtm.confirmed_at; }).length : 0;
-  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, status: packageStatus(pkg, hash, rtmPending), rtmPending: rtmPending, paidThrough: paidThrough };
+  return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: packageStatus(pkg, hash, rtmPending), rtmPending: rtmPending, paidThrough: paidThrough };
 }
 
 export async function POST(req) {
@@ -121,7 +124,8 @@ export async function POST(req) {
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, release_number: b.release_number || null, bill_date: b.bill_date, due_date: b.due_date,
           category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, open: open, disputed: b.disputed === true,
           validation_status: b.validation_status || null, on_package: onPkg[b.id] ? (pkLab[onPkg[b.id]] || 'another wire') : null,
-          paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate' };
+          paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate',
+          other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null };
       }).filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return (a.needs_mark - b.needs_mark) || String(a.due_date || a.bill_date || '').localeCompare(String(b.due_date || b.bill_date || '')); });
       return NextResponse.json({ ok: true, bills: rowsO });
     }
@@ -147,7 +151,7 @@ export async function POST(req) {
         var t = packageTotals(p, ls);
         return { id: p.id, label: packageLabel(p), payee_name: p.payee_name, payee_kind: p.payee_kind, created_at: p.created_at, created_by: nm[p.created_by] || null,
           bills: ls.length, vendors: vend, bills_total: t.bills, fee: t.fee, total: p.approved_total != null ? r2(p.approved_total) : t.total,
-          status: packageStatus(p, h, pend), rtm_pending: pend, sent_date: p.sent_date, bank_reference: p.bank_reference,
+          status: packageStatus(p, h, pend), rtm_pending: pend, overridden: 0, sent_date: p.sent_date, bank_reference: p.bank_reference,
           signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), bank_transaction_id: p.bank_transaction_id };
       });
       return NextResponse.json({ ok: true, packages: out });
@@ -211,7 +215,7 @@ export async function POST(req) {
         var openS = r2((Number(bb.total_amount) || 0) - paidS);
         if (clean[ci].amount > openS + 0.005) { return fail(whoB + ': $' + clean[ci].amount.toFixed(2) + ' is more than what is still owed ($' + openS.toFixed(2) + ').' + (openS <= 0.005 ? ' It is already paid — untick it.' : ''), 409); }
       }
-      var pkgId = body.id || null;
+      var pkgId = body.id || null; var editDiff = null;
       // one bill, one open wire — checked BEFORE anything is written (the database enforces it too)
       var onOther = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, is_open', 'bill_id', clean.map(function (c) { return c.bill_id; }));
       var clash = onOther.filter(function (l) { return l.is_open && l.package_id !== pkgId; });
@@ -231,6 +235,14 @@ export async function POST(req) {
         var oldL = await db.from('wire_package_lines').select('id, bill_id, amount, marked_paid_via').eq('package_id', pkgId);
         if (oldL.error) { return dbErr(oldL.error); }
         var oldBy = {}; (oldL.data || []).forEach(function (l) { oldBy[l.bill_id] = l; });
+        var oldHead = await db.from('wire_packages').select('payee_name, payee_kind, fee_amount, memo').eq('id', pkgId).maybeSingle();
+        var oh = (oldHead && oldHead.data) || {};
+        editDiff = { bills_added: [], bills_removed: [], amounts_changed: [] };
+        if (oh.payee_name !== payeeS) { editDiff.payee = { from: oh.payee_name, to: payeeS }; }
+        if (r2(oh.fee_amount) !== feeS) { editDiff.fee = { from: r2(oh.fee_amount), to: feeS }; }
+        clean.forEach(function (c) { var o1 = oldBy[c.bill_id]; var bx = bSBy[c.bill_id] || {}; var lab = (bx.vendor_name || '') + ' ' + (bx.bill_number || '');
+          if (!o1) { editDiff.bills_added.push({ bill: lab, amount: c.amount }); } else if (r2(o1.amount) !== c.amount) { editDiff.amounts_changed.push({ bill: lab, from: r2(o1.amount), to: c.amount }); } });
+        (oldL.data || []).forEach(function (l) { if (!seenB[l.bill_id]) { editDiff.bills_removed.push({ bill_id: l.bill_id, amount: r2(l.amount) }); } });
         var adds = clean.filter(function (c) { return !oldBy[c.bill_id]; });
         if (adds.length) {
           var insA = await db.from('wire_package_lines').insert(adds.map(function (c) { return { package_id: pkgId, bill_id: c.bill_id, amount: c.amount, marked_paid_via: willMark[c.bill_id] === true }; }));
@@ -271,7 +283,7 @@ export async function POST(req) {
           autoA = { pass: PA.live.pass, blocks: PA.live.blocks, warns: PA.live.warns, ai_ok: aiA.ok };
         }
       } catch (eAA) { autoA = null; }
-      await audit(db, userId, body.id ? 'wire_package_updated' : 'wire_package_prepared', 'wire_package', pkgId, { payee: payeeS, kind: kindS, bills: clean.length, bills_total: totS.bills, fee: feeS, total: totS.total, will_mark_paid_via: Object.keys(willMark) });
+      await audit(db, userId, body.id ? 'wire_package_updated' : 'wire_package_prepared', 'wire_package', pkgId, { payee: payeeS, kind: kindS, bills: clean.length, bills_total: totS.bills, fee: feeS, total: totS.total, will_mark_paid_via: Object.keys(willMark), changes: editDiff });
       return NextResponse.json({ ok: true, id: pkgId, total: totS.total, audit: autoA, will_mark: Object.keys(willMark).length });
     }
 
@@ -321,20 +333,28 @@ export async function POST(req) {
     if (action === 'set_bill_release') {
       var gRl = await perm(db, userId, ['wires.prepare', 'bills.manage'], req);
       if (!gRl) { return fail('Adding a release # here needs "Wires: Prepare" or "Bills: Manage".', 403); }
-      var bidR = String(body.bill_id || ''); var relR = String(body.release_number || '').trim().toUpperCase().substring(0, 40);
-      if (!isUuid(bidR) || relR.length < 2) { return fail('Type the release number.'); }
-      var bR = await db.from('vendor_bills').select('id, release_number, record_status').eq('id', bidR).maybeSingle();
+      // v55.83-RL — the same path also fills the bill's OTHER reference (BOL / PO / container…)
+      // (Max 12:20) …and the INBOUND / OUTBOUND tick
+      var fieldR = body.field === 'other_reference' ? 'other_reference' : body.field === 'shipment_direction' ? 'shipment_direction' : 'release_number';
+      var bidR = String(body.bill_id || '');
+      var relR = fieldR === 'shipment_direction' ? String(body.shipment_direction || '').toLowerCase()
+        : String((fieldR === 'other_reference' ? body.other_reference : body.release_number) || '').trim().toUpperCase().substring(0, 60);
+      if (!isUuid(bidR)) { return fail('Bill not recognised — reload.'); }
+      if (fieldR === 'shipment_direction' && relR !== 'inbound' && relR !== 'outbound') { return fail('Pick inbound or outbound.'); }
+      if (fieldR !== 'shipment_direction' && relR.length < 2) { return fail(fieldR === 'other_reference' ? 'Type the reference.' : 'Type the release number.'); }
+      var bR = await db.from('vendor_bills').select('*').eq('id', bidR).maybeSingle();
       if (bR.error || !bR.data) { return fail('Bill not found.', 404); }
       var onSent = await db.from('wire_package_lines').select('package_id').eq('bill_id', bidR).eq('is_open', true);
       var sentIds = ((onSent && onSent.data) || []).map(function (x) { return x.package_id; });
       if (sentIds.length) {
         var sp = await db.from('wire_packages').select('status').in('id', sentIds);
-        if (((sp && sp.data) || []).some(function (x) { return x.status === 'sent'; })) { return fail('This bill is on a wire that was already SENT — its release cannot change now.', 409); }
+        if (((sp && sp.data) || []).some(function (x) { return x.status === 'sent'; })) { return fail('This bill is on a wire that was already SENT — its ' + (fieldR === 'other_reference' ? 'reference' : 'release') + ' cannot change now.', 409); }
       }
-      var uR = await db.from('vendor_bills').update({ release_number: relR }).eq('id', bidR);
-      if (uR.error) { return dbErr(uR.error); }
-      await audit(db, userId, 'bill_release_set', 'vendor_bill', bidR, { from: bR.data.release_number || null, to: relR, via: 'wires' });
-      return NextResponse.json({ ok: true, release_number: relR });
+      var updR = {}; updR[fieldR] = relR;
+      var uR = await db.from('vendor_bills').update(updR).eq('id', bidR);
+      if (uR.error) { return fail(/other_reference|shipment_direction/.test(uR.error.message || '') ? 'Run sql/v55-83-RL-wire-override-delete-reference.sql first (reference / inbound-outbound columns).' : uR.error.message); }
+      await audit(db, userId, fieldR === 'other_reference' ? 'bill_reference_set' : fieldR === 'shipment_direction' ? 'bill_direction_set' : 'bill_release_set', 'vendor_bill', bidR, { from: bR.data[fieldR] || null, to: relR, via: 'wires', vendor: bR.data.vendor_name, bill_number: bR.data.bill_number });
+      return NextResponse.json({ ok: true, release_number: fieldR === 'release_number' ? relR : undefined, other_reference: fieldR === 'other_reference' ? relR : undefined, field: fieldR, value: relR });
     }
 
     if (!isUuid(body.id)) { return fail('id required.'); }
@@ -347,8 +367,11 @@ export async function POST(req) {
     if (action === 'get') {
       var fr = await db.from('wire_package_files').select('*').eq('package_id', pkg.id).order('uploaded_at', { ascending: true });
       var files = (fr && fr.data) || [];
-      var nmG = await userNames(db, [pkg.created_by, pkg.checked_by, pkg.signoff1_by, pkg.signoff2_by, pkg.sent_by, pkg.attached_by, pkg.cancelled_by]
-        .concat(files.map(function (f) { return f.uploaded_by; })).concat(P.ctx.lines.map(function (l) { return l.rtm.confirmed_by; })));
+      var hist = [];
+      try { var hq = await db.from('hub_audit_log').select('at, actor_id, action, details').eq('entity', 'wire_package').eq('entity_id', String(pkg.id)).order('at', { ascending: true }).limit(500); if (!hq.error) { hist = hq.data || []; } } catch (eH) { hist = []; }
+      var nmG = await userNames(db, [pkg.created_by, pkg.checked_by, pkg.signoff1_by, pkg.signoff2_by, pkg.sent_by, pkg.attached_by, pkg.cancelled_by, pkg.reversed_by]
+        .concat(files.map(function (f) { return f.uploaded_by; })).concat(P.ctx.lines.map(function (l) { return l.rtm.confirmed_by; }))
+        .concat((P.overrides || []).map(function (o) { return o.overridden_by; })).concat(hist.map(function (h) { return h.actor_id; })));
       var bank = null;
       if (pkg.bank_transaction_id) {
         var bt = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, account_id').eq('id', pkg.bank_transaction_id).maybeSingle();
@@ -363,15 +386,102 @@ export async function POST(req) {
         sent: pkg.sent_by ? { by: nmG[pkg.sent_by] || 'user', at: pkg.sent_at, date: pkg.sent_date, reference: pkg.bank_reference } : null,
         attached: pkg.attached_by ? { by: nmG[pkg.attached_by] || 'user', at: pkg.attached_at, note: pkg.attach_note, bank: bank } : null,
         cancelled: pkg.cancelled_by ? { by: nmG[pkg.cancelled_by] || 'user', at: pkg.cancelled_at, note: pkg.cancel_note } : null,
+        reversed: pkg.reversed_by ? { by: nmG[pkg.reversed_by] || 'user', at: pkg.reversed_at, note: pkg.reverse_note } : null,
         rtm_pending: P.rtmPending, paid_through: P.paidThrough },
         lines: P.ctx.lines.map(function (l) { return Object.assign({}, l, { rtm: Object.assign({}, l.rtm, { confirmed_by: l.rtm.confirmed_by ? (nmG[l.rtm.confirmed_by] || 'user') : null }) }); }),
         // after it is sent the checks shown are the ones the two people signed (frozen) — live re-checks would call its own payments "paid before"
-        checks: frozen && pkg.check_result ? pkg.check_result : P.live, frozen_checks: !!(frozen && pkg.check_result),
+        checks: (function (res) {
+          var named = Object.assign({}, res, { checks: (res.checks || []).map(function (c) {
+            var c2 = Object.assign({}, c, { key: checkKey(c), overridable: OVERRIDABLE[c.code] === 1, why_not: NOT_OVERRIDABLE_WHY[c.code] || null });
+            if (c2.override) { c2.override = Object.assign({}, c2.override, { by_name: nmG[c2.override.by] || 'user' }); }
+            return c2;
+          }) });
+          return named;
+        })(frozen && pkg.check_result ? pkg.check_result : P.live), frozen_checks: !!(frozen && pkg.check_result),
+        overrides: (P.overrides || []).map(function (o) { return { code: o.code, bill_id: o.bill_id, text: o.check_text, reason: o.reason, by: nmG[o.overridden_by] || 'user', at: o.overridden_at, counts: o.fingerprint === P.hash || frozen }; }),
+        history: hist.map(function (h) { return { at: h.at, by: nmG[h.actor_id] || (h.actor_id ? 'user' : 'system'), action: h.action, details: h.details }; }),
         audit: { checked_at: pkg.checked_at, checked_by: nmG[pkg.checked_by] || null, stale: !frozen && !!pkg.check_hash && pkg.check_hash !== P.hash, ai_ok: pkg.ai_ok, ai_summary: pkg.ai_summary,
           i_signed_first: !!(pkg.signoff1_by && pkg.signoff1_by === userId && pkg.signoff1_hash === P.hash),
           signoff1: pkg.signoff1_by ? { name: nmG[pkg.signoff1_by] || 'user', at: pkg.signoff1_at, note: pkg.signoff1_note, valid: frozen || pkg.signoff1_hash === P.hash } : null,
           signoff2: pkg.signoff2_by ? { name: nmG[pkg.signoff2_by] || 'user', at: pkg.signoff2_at, note: pkg.signoff2_note, valid: frozen || (pkg.signoff2_hash === P.hash && pkg.signoff1_hash === P.hash) } : null },
         files: files.map(function (f) { return { id: f.id, kind: f.kind, path: f.path, file_name: f.file_name, by: nmG[f.uploaded_by] || null, at: f.uploaded_at }; }) });
+    }
+
+    // ── v55.83-RL — OVERRIDE one ⛔ check (Max 12:17: "override button. with reason and audit of who approved it")
+    if (action === 'override_check') {
+      var gO = await perm(db, userId, ['wires.override'], req);
+      if (!gO) { return fail('Overriding a check needs “Override wire checks” — Settings → 🏦 Banking & Accounting Access.', 403); }
+      if (pkg.status !== 'draft') { return fail('This wire is ' + pkg.status + ' — its checks are frozen as signed.', 409); }
+      var reasonO = String(body.reason || '').trim().substring(0, 1000);
+      if (reasonO.length < 10) { return fail('Write the reason for the override (at least 10 characters) — it is kept with your name.'); }
+      // the check must exist NOW on THIS wire, still blocking, and be one a person may judge
+      var raw = auditPackage(P.input);
+      var target = (raw.checks || []).filter(function (c) { return c.level === 'block' && checkKey(c) === String(body.check_key || ''); })[0];
+      if (!target) { return fail('That problem is no longer on this wire (it changed) — reload it.', 409); }
+      if (!OVERRIDABLE[target.code]) { return fail('This one cannot be overridden: ' + (NOT_OVERRIDABLE_WHY[target.code] || 'the books would refuse it') + '.', 409); }
+      var insO = await db.from('wire_package_overrides').insert({ package_id: pkg.id, check_key: checkKey(target), code: target.code, bill_id: target.bill_id || null, check_text: target.text,
+        reason: reasonO, overridden_by: userId, fingerprint: P.hash });
+      if (insO.error) { return fail(/wire_package_overrides/.test(insO.error.message || '') ? 'Run sql/v55-83-RL-wire-override-delete-reference.sql first.' : insO.error.message); }
+      // the stored check result follows (same fingerprint — signatures already given still count only if they were on this wire)
+      var PO = await loadPackage(db, pkg.id);
+      await db.from('wire_packages').update({ check_hash: PO.hash, checked_at: nowIso(), checked_by: userId, check_result: PO.live, check_pass: PO.live.pass, updated_at: nowIso() }).eq('id', pkg.id).eq('status', 'draft');
+      await audit(db, userId, 'wire_check_overridden', 'wire_package', pkg.id, { code: target.code, bill_id: target.bill_id || null, check: target.text, reason: reasonO, fingerprint: P.hash, wire: packageLabel(pkg) });
+      return NextResponse.json({ ok: true, pass: PO.live.pass, blocks: PO.live.blocks });
+    }
+
+    // ── v55.83-RL — DELETE a wire and put everything back (Max 12:17: "ability to delete the wire and everything return
+    // to previous state"; 12:18: "audit should include ... deleted wire included or edited wire")
+    //  • a DRAFT (never sent): erased; the audit log keeps a full snapshot of what it was.
+    //  • a SENT / ATTACHED wire: super admin or owner, with the reason — the bill payments it recorded are voided, bills it
+    //    marked "paid through" go back, the bank line gets its old label back and is free again; the wire is kept as
+    //    "↩ reversed" (who sent it, who signed, who reversed it and why stay on record).
+    if (action === 'delete_wire') {
+      var reasonD = String(body.reason || '').trim().substring(0, 1000);
+      var snap = { wire: packageLabel(pkg), status: pkg.status, payee: pkg.payee_name, kind: pkg.payee_kind, fee: r2(pkg.fee_amount), total: P.live.total, approved_total: pkg.approved_total,
+        bills: P.ctx.lines.map(function (l) { return { bill_id: l.bill_id, vendor: l.bill.vendor_name, bill_number: l.bill.bill_number, release: l.bill.release_number || null, amount: l.amount }; }),
+        signed_by: [pkg.signoff1_by, pkg.signoff2_by].filter(Boolean), sent: pkg.sent_by ? { by: pkg.sent_by, date: pkg.sent_date, reference: pkg.bank_reference } : null,
+        bank_transaction_id: pkg.bank_transaction_id || null, overrides: (P.overrides || []).map(function (o) { return { code: o.code, reason: o.reason, by: o.overridden_by }; }) };
+      if (pkg.status === 'draft' || pkg.status === 'cancelled') {
+        var gD = await perm(db, userId, ['wires.prepare'], req);
+        if (!gD) { return fail('Deleting a wire needs “Prepare wires”.', 403); }
+        if (reasonD.length < 3) { return fail('Say why it is deleted.'); }
+        if (pkg.status === 'cancelled') { return fail('A cancelled wire stays on record — nothing to put back.', 409); }
+        await audit(db, userId, 'wire_package_deleted', 'wire_package', pkg.id, Object.assign({ reason: reasonD }, snap)); // the record survives the erase
+        var dl = await db.from('wire_package_lines').delete().eq('package_id', pkg.id);
+        if (dl.error) { return dbErr(dl.error); }
+        var dp = await db.from('wire_packages').delete().eq('id', pkg.id).eq('status', 'draft');
+        if (dp.error) { return dbErr(dp.error); }
+        return NextResponse.json({ ok: true, erased: true });
+      }
+      if (pkg.status === 'reversed') { return fail('Already reversed.', 409); }
+      var isBoss = !!(g1 && g1.ctx && (g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'));
+      if (!isBoss) { return fail('A wire that was already sent can only be undone by a super admin or the owner.', 403); }
+      if (reasonD.length < 10) { return fail('Write why this sent wire is being undone (at least 10 characters).'); }
+      var undone = { payments_voided: [], bills_unmarked: [], bank_line_restored: false };
+      // 1) the payments this wire recorded
+      for (var ri = 0; ri < P.rawLines.length; ri++) {
+        var rl = P.rawLines[ri];
+        if (rl.payment_id) {
+          var vpR = await db.from('vendor_bill_payments').update({ voided: true }).eq('id', rl.payment_id);
+          if (vpR.error) { return fail('Could not void a payment (' + vpR.error.message + ') — nothing else was changed after it; try again.', 500); }
+          undone.payments_voided.push(rl.payment_id);
+        }
+      }
+      // 2) bills this wire marked "paid through" go back (only if still marked for this company)
+      var toUnmark = P.rawLines.filter(function (l) { return l.marked_paid_via === true; }).map(function (l) { return l.bill_id; });
+      if (toUnmark.length) { await db.from('vendor_bills').update({ paid_via: null }).in('id', toUnmark).eq('paid_via', pkg.payee_name); undone.bills_unmarked = toUnmark; }
+      // 3) the bank line: back to its old label, free for another match
+      if (pkg.bank_transaction_id && pkg.payee_kind !== 'vendor') {
+        await db.from('bank_transactions').update({ third_party_payer: pkg.prev_third_party_payer || null }).eq('id', pkg.bank_transaction_id).eq('third_party_payer', pkg.payee_name);
+        undone.bank_line_restored = true;
+      }
+      // 4) lines closed, the wire kept on record as reversed
+      await db.from('wire_package_lines').update({ is_open: false }).eq('package_id', pkg.id);
+      var upR = await db.from('wire_packages').update({ status: 'reversed', reversed_by: userId, reversed_at: nowIso(), reverse_note: reasonD, bank_transaction_id: null, updated_at: nowIso() }).eq('id', pkg.id).in('status', ['sent', 'attached']).select('id');
+      if (upR.error) { return fail(/reverse|status_check/.test(upR.error.message || '') ? 'Run sql/v55-83-RL-wire-override-delete-reference.sql first — ' + upR.error.message : upR.error.message, 400); }
+      await audit(db, userId, 'wire_package_reversed', 'wire_package', pkg.id, Object.assign({ reason: reasonD, undone: undone }, snap));
+      if (pkg.bank_transaction_id) { await audit(db, userId, 'bill_payments_voided_by_wire_undo', 'bank_transaction', pkg.bank_transaction_id, { wire: packageLabel(pkg), payments: undone.payments_voided, reason: reasonD }); }
+      return NextResponse.json({ ok: true, reversed: true, undone: undone });
     }
 
     // ── cancel a draft (never a sent wire — the money is gone)
@@ -536,6 +646,7 @@ export async function POST(req) {
       // paid through RTM / NextTrade: the bank line is marked as that company's payment (books: one line; NextTrade = due-from, never an expense)
       var reviewed = false;
       if (pkg.payee_kind !== 'vendor') {
+        try { await db.from('wire_packages').update({ prev_third_party_payer: t0.third_party_payer || null }).eq('id', pkg.id); } catch (ePv) { /* RL SQL not run — undo then leaves the bank line as is */ }
         await db.from('bank_transactions').update({ third_party_payer: pkg.payee_name }).eq('id', txA);
         if (pkg.payee_kind === 'affiliate') { try { reviewed = (await autoReviewIfComplete(db, [txA], userId)).length > 0; } catch (eR) { reviewed = false; } }
       }

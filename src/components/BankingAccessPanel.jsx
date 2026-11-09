@@ -42,6 +42,7 @@ export var BANKING_GROUPS = [
     { key: 'wires.prepare', label: 'Prepare wires', desc: 'Make a wire: who gets the money and which bills it pays.', needsKtc: true },
     { key: 'wires.signoff', label: 'Sign wires (one of the 2)', desc: 'Verify and sign before it is sent. Nobody can sign the same wire twice.', needsKtc: true },
     { key: 'wires.send', label: 'Send wires', desc: 'Mark it sent with the bank confirmation, attach the bank line, add RTM proof.', needsKtc: true },
+    { key: 'wires.override', label: 'Override wire checks', desc: 'Let a wire go ahead despite a problem a person can judge (e.g. a missing release on an overhead bill) — the reason is kept with this person\'s name.', needsKtc: true },
   ] },
   { title: '6 · Order reconciliation', items: [
     { key: 'recon.signoff', label: 'Reconcile & approve', desc: 'Resolve saved reconciliation lines, mark reconciled, or approve (a different person approves).' },

@@ -31,7 +31,9 @@ function loadEsm(src) {
 console.log('RH — wires prepared and approved BEFORE they are sent (RTM / NextTrade / vendor)');
 var W = loadEsm(R('src/lib/wire-audit.js'));
 function codes(r) { return r.checks.map(function (c) { return c.code; }); }
-function bill(id, vendor, num, rel, total, extra) { return Object.assign({ id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, record_status: 'active', validation_status: 'validated' }, extra || {}); }
+// fixture realigned (v55.83-RL, Max Nov 9 12:20 "Billing is always necessary and date is always necessary" + inbound/outbound tick):
+// every test bill now has its own bill date and is OUTBOUND unless a test says otherwise
+function bill(id, vendor, num, rel, total, extra) { var n = String(id).replace(/[^0-9]/g, '') || '1'; return Object.assign({ id: id, vendor_name: vendor, bill_number: num, release_number: rel, total_amount: total, record_status: 'active', validation_status: 'validated', bill_date: '2026-10-' + ('0' + n).slice(-2), shipment_direction: 'outbound' }, extra || {}); }
 function line(b, amt, others) { return { line_id: 'l' + b.id, bill_id: b.id, amount: amt, bill: b, other_payments: others || [] }; }
 var RTM = { id: 'p1', seq: 7, payee_kind: 'service_provider', payee_name: 'RTM Capital', fee_amount: 250 };
 var truck = bill('b1', 'Fast Trucking', 'T-100', '1003-021', 1200, { paid_via: 'RTM Capital' });
@@ -64,13 +66,14 @@ ok('2e: the same bill already on another open wire BLOCKS (one bill, one wire)',
 // ── 3. the RG rules still run on every bill of the package
 var r3 = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(bill('b5', 'Fast Trucking', 'T-100', '', 1200, { paid_via: 'RTM Capital' }), 1200, [{ amount: 1200, paid_date: '2026-10-02' }])] });
 ok('3a: not paid before + release required + no duplicates — all still enforced per bill on a package', !r3.pass && codes(r3).indexOf('PAID_BEFORE') >= 0 && codes(r3).indexOf('RELEASE_MISSING') >= 0);
-var r3b = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(truck, 1200), line(bill('b6', 'fast trucking', 'T-200', '1003-021', 900, { paid_via: 'RTM Capital' }), 900)] });
+var r3b = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(truck, 1200), line(bill('b6', 'fast trucking', 'T-200', '1003-021', 900, { paid_via: 'RTM Capital', bill_date: null }), 900)] });
 // superseded pin (v55.83-RJ, independent review gap 5): different amounts on the same release = warning; the same amount = block
 // superseded again (v55.83-RK, Max 11:38 "unique release number and date"): same date = block, different date = fine, missing date = warning
 var d1 = Object.assign({}, truck, { bill_date: '2026-11-01' });
 var r3c = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(d1, 1200), line(bill('b7', 'fast trucking', 'T-201', '1003-021', 900, { paid_via: 'RTM Capital', bill_date: '2026-11-01' }), 900)] });
 var r3d = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(d1, 1200), line(bill('b8', 'fast trucking', 'T-202', '1003-021', 900, { paid_via: 'RTM Capital', bill_date: '2026-11-04' }), 900)] });
-ok('3b: the same vendor on the same release twice on one RTM wire: same DATE blocks, a different date passes, no date warns', !r3c.pass && r3d.pass && r3b.pass && r3b.warns > 0);
+// (RL: a bill with no date can no longer pass at all — the date is always required)
+ok('3b: the same vendor on the same release twice on one RTM wire: same DATE blocks, a different date passes, no date blocks (date required)', !r3c.pass && r3d.pass && !r3b.pass && codes(r3b).indexOf('BILL_DATE_MISSING') >= 0);
 
 // ── 4. fingerprint + status walk (prepare → audit → 2 signers → ready → sent → attached → proof → complete)
 var L = [line(truck, 1200), line(customs, 800)];

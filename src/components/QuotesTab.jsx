@@ -259,7 +259,7 @@ function QuoteBuilder({ quote, companies, customers, user, onCustomerCreated, on
         contact_person: newCust.contact_person || '',
         group_name: newCust.group_name || '',
         created_at: new Date().toISOString(),
-        created_by: userProfile?.id || null, // v55.83-RJ — who added the client
+        created_by: user?.id || null, // v55.83-RJ — who added the client (v55.83-RN: QuoteBuilder receives `user`, not `userProfile` — the RJ line would have crashed adding a customer from Quotes)
       }).select().single();
       if (error) throw error;
       // Auto-select the brand-new customer

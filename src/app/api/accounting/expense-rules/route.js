@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
-import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, rowText, ruleBucket } from '../../../../lib/expense-rules-server'; // v55.83-RC
+import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, rowText, ruleBucket, learnRule } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
 import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -397,7 +397,7 @@ export async function POST(req) {
       // deposits, bill payments for spending incl. RTM), fetched by the same
       // date window; fail-soft: on any error the chips fall back to the
       // simple matched flag.
-      var appliedBy = {}; var legsBy = {};
+      var appliedBy = {}; var legsBy = {}; var billLegsBy = {}; // v55.83-RM — bill payments per bank line
       try {
         var pageAny = async function (mk) { // v55.83-RC — past the 1,000-row cap
           var accP = [];
@@ -425,6 +425,7 @@ export async function POST(req) {
           .gte('paid_date', fA).lte('paid_date', tA); });
         ((billWinA && billWinA.data) || []).forEach(function (p8) {
           if (p8.voided === true) { return; }
+          billLegsBy[p8.bank_transaction_id] = (billLegsBy[p8.bank_transaction_id] || 0) + 1; // v55.83-RM
           appliedBy[p8.bank_transaction_id] = Math.round(((appliedBy[p8.bank_transaction_id] || 0) + (Number(p8.amount) || 0)) * 100) / 100;
           legsBy[p8.bank_transaction_id] = (legsBy[p8.bank_transaction_id] || 0) + 1;
         });
@@ -437,6 +438,17 @@ export async function POST(req) {
           legsBy[u7.bank_transaction_id] = (legsBy[u7.bank_transaction_id] || 0) + 1;
         });
       } catch (eApW) { appliedBy = {}; legsBy = {}; }
+      // v55.83-RM (Max, Nov 9 12:49: "We should always click on the wire transactions ... and see the bills associated to it and
+      // history") — which bank lines ARE a prepared wire (WP-…), and which paid bills as a wire without one
+      var wireBy = {};
+      try {
+        var txIdsW = (txA.data || []).map(function (t9) { return t9.id; });
+        for (var wi = 0; wi < txIdsW.length; wi += 200) {
+          var wq = await db.from('wire_packages').select('id, seq, status, payee_name, bank_transaction_id').in('bank_transaction_id', txIdsW.slice(wi, wi + 200));
+          if (wq.error) { break; }
+          (wq.data || []).forEach(function (w9) { wireBy[w9.bank_transaction_id] = { kind: 'package', id: w9.id, label: 'WP-' + String(w9.seq || 0).padStart(4, '0'), status: w9.status, payee: w9.payee_name }; });
+        }
+      } catch (eWb) { wireBy = {}; }
       var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id');
       var acMap = {};
       (accA.data || []).forEach(function (a6) { acMap[a6.plaid_account_id] = (a6.name || 'account') + (a6.mask ? ' •' + a6.mask : ''); });
@@ -471,7 +483,9 @@ export async function POST(req) {
           classification: t7.classification, verified: t7.category_verified === true,
           matched: !!t7.matched_invoice_id, transfer: !!t7.transfer_group_id, pending: t7.pending === true, review_status: t7.review_status,
           third_party: t7.third_party_payer || null, advance: t7.advance_flag === true,
-          applied: appliedBy[t7.id] || 0, applied_legs: legsBy[t7.id] || 0 };
+          applied: appliedBy[t7.id] || 0, applied_legs: legsBy[t7.id] || 0,
+          // v55.83-RM — the wire this line is (or: a money-out that paid bills like a wire, with no approved wire)
+          wire: wireBy[t7.id] || ((t7.direction === 'out' && billLegsBy[t7.id] > 0 && /\bWIRE\b|\bWT\b|FEDWIRE|SWIFT|WIRE TRANSFER/i.test(wfull.join(' '))) ? { kind: 'bank', id: t7.id } : null) };
       });
       return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: txA.capped === true, date_filters_locked: atLocked,
         outside_dates: Object.keys(outsideBy).map(function (k8) { return outsideBy[k8]; }), api_build_marker: API_BUILD_MARKER });

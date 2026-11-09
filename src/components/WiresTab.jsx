@@ -10,6 +10,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { ToastContext } from '../lib/toast-context';
 import { WIRE_STATUS_LABEL } from '../lib/wire-audit';
 import WirePackagesPanel from './WirePackagesPanel'; // v55.83-RH
+import WireQuickView from './WireQuickView'; // v55.83-RM
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var STATUS_STYLE = {
@@ -39,6 +40,7 @@ function BankWiresView(props) {
   var s8 = useState(''); var note = s8[0]; var setNote = s8[1];
   var s9 = useState({}); var relDraft = s9[0]; var setRelDraft = s9[1];
   var s10 = useState(''); var err = s10[0]; var setErr = s10[1];
+  var s11 = useState(null); var quick = s11[0]; var setQuick = s11[1]; // v55.83-RM — a line that IS an approved wire opens that wire
 
   function api(payload) {
     return fetch('/api/accounting/wires', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -99,6 +101,7 @@ function BankWiresView(props) {
   var rows = (list || []).filter(function (w) { return (fStatus === 'all' || w.status === fStatus) && (!onlyWire || w.looks_like_wire); });
 
   return <div className="flex flex-col gap-3">
+    {quick && <WireQuickView wire={quick} userProfile={userProfile} onClose={function () { setQuick(null); }} />}
     <div className="nt-paper rounded-xl p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold text-slate-900 mr-1">🏦 Wires in the bank — every money-out line with bills linked</div>
@@ -126,7 +129,7 @@ function BankWiresView(props) {
             <th className="py-1.5 text-left font-semibold">Signed by</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
             {rows.map(function (w) {
-              return <tr key={w.id} onClick={function () { open(w.id); }} title="Open — every bill this wire paid, with all its data" style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: det && det.wire.id === w.id ? '#eef2ff' : undefined }}>
+              return <tr key={w.id} onClick={function () { if (w.package) { setQuick({ kind: 'package', id: w.package.id, label: w.package.label }); } else { open(w.id); } }} title="Open — every bill this wire paid, with all its data" style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: det && det.wire.id === w.id ? '#eef2ff' : undefined }}>
                 <td className="py-1.5 pr-2 whitespace-nowrap">{w.date}</td>
                 <td className="py-1.5 pr-2">{w.looks_like_wire ? '🏦 ' : ''}{w.name}</td>
                 <td className="py-1.5 pr-2">{w.vendors.join(', ')}</td>
@@ -239,7 +242,9 @@ export default function WiresTab(props) {
   var ctxToast = useContext(ToastContext);
   var toast = props.toast || ctxToast || { success: function (m) { try { window.alert(m); } catch (e) {} }, error: function (m) { try { window.alert(m); } catch (e) {} } };
   var boss = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
-  var perms = { view: boss || mp['wires.view'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true };
+  var perms = { view: boss || mp['wires.view'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true,
+    override: boss || mp['wires.override'] === true, // v55.83-RL
+    undo: isSuperAdmin || (userProfile && userProfile.role === 'owner') }; // v55.83-RL — undoing a SENT wire: super admin / owner only
   var m0 = useState('prepared'); var mode = m0[0]; var setMode = m0[1];
   if (!(perms.view || perms.prepare || perms.signoff || perms.send)) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>

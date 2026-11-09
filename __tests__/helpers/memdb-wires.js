@@ -6,6 +6,10 @@ function Q(db, name) { this.db = db; this.name = name; this.filters = []; this.o
 ['eq', 'neq', 'gte', 'lte', 'in', 'is'].forEach(function (k) {
   Q.prototype[k] = function (col, val) { this.filters.push([k, col, val]); return this; };
 });
+Q.prototype.not = function (col, op, val) { this.filters.push(['not_' + op, col, val]); return this; };
+Q.prototype.or = function (expr) { this.filters.push(['or', expr, null]); return this; };
+Q.prototype.like = function (col, pat) { this.filters.push(['like', col, pat]); return this; };
+Q.prototype.ilike = function (col, pat) { this.filters.push(['ilike', col, pat]); return this; };
 Q.prototype.select = function () { if (this.op !== 'select') { this.wantRows = true; } return this; };
 Q.prototype.order = function () { return this; };
 Q.prototype.limit = function (n) { this.lim = n; return this; };
@@ -22,6 +26,19 @@ function match(r, f) {
   if (f[0] === 'gte') { return v != null && String(v) >= String(f[2]); }
   if (f[0] === 'lte') { return v != null && String(v) <= String(f[2]); }
   if (f[0] === 'in') { return f[2].map(String).indexOf(String(v)) >= 0; }
+  if (f[0] === 'not_is') { return f[2] === null ? !(v === null || v === undefined) : v !== f[2]; }
+  if (f[0] === 'like' || f[0] === 'ilike') { var re = new RegExp('^' + String(f[2]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', f[0] === 'ilike' ? 'i' : ''); return re.test(String(v == null ? '' : v)); }
+  if (f[0] === 'or') {
+    return String(f[1]).split(',').some(function (part) {
+      var bits = part.split('.'); var c = bits[0]; var op = bits[1]; var val = bits.slice(2).join('.'); var x = r[c];
+      if (op === 'is') { return val === 'null' ? (x === null || x === undefined) : String(x) === val; }
+      if (op === 'eq') { return String(x) === val; }
+      if (op === 'neq') { return x !== null && x !== undefined && String(x) !== val; }
+      if (op === 'lt') { return x != null && String(x) < val; }
+      if (op === 'gt') { return x != null && String(x) > val; }
+      return false;
+    });
+  }
   if (f[0] === 'is') { return f[2] === null ? (v === null || v === undefined) : v === f[2]; }
   return true;
 }

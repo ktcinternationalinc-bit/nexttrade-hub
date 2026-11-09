@@ -54,11 +54,20 @@ async function loadBills(db) {
   var bills;
   try {
     // v55.83-QB — paid_via: which third party (RTM Capital) pays this bill.
-    bills = await fetchAll(function () {
-      return db.from('vendor_bills')
-        .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number')
-        .order('due_date', { ascending: true, nullsFirst: false });
-    });
+    // v55.83-RL — + the other reference and inbound / outbound (falls back to the RK set until the RL SQL is run)
+    try {
+      bills = await fetchAll(function () {
+        return db.from('vendor_bills')
+          .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number, other_reference, shipment_direction')
+          .order('due_date', { ascending: true, nullsFirst: false });
+      });
+    } catch (eRL) {
+      bills = await fetchAll(function () {
+        return db.from('vendor_bills')
+          .select('id, vendor_name, bill_number, bill_date, due_date, currency, total_amount, category, notes, record_status, created_at, attachment_path, validation_status, validated_by, validated_at, validation_notes, disputed, dispute_ticket_id, dispute_reason, paid_via, release_number')
+          .order('due_date', { ascending: true, nullsFirst: false });
+      });
+    }
   } catch (eQB) {
     try {
       // QB column not migrated yet — everything else still works.
@@ -268,6 +277,8 @@ export async function POST(req) {
       if (!vendor) { return NextResponse.json({ error: 'Vendor name is required.' }, { status: 400 }); }
       if (!(amt > 0)) { return NextResponse.json({ error: 'Amount must be above zero.' }, { status: 400 }); }
       if (!isDate(bl.bill_date)) { return NextResponse.json({ error: 'Bill date is required (YYYY-MM-DD).' }, { status: 400 }); }
+      // v55.83-RL (Max, Nov 9 12:20: "Billing is always necessary and date is always necessary")
+      if (!String(bl.bill_number || '').trim()) { return NextResponse.json({ error: 'The bill # is required.' }, { status: 400 }); }
       if (bl.due_date && !isDate(bl.due_date)) { return NextResponse.json({ error: 'Due date must be YYYY-MM-DD.' }, { status: 400 }); }
       var fields = {
         vendor_name: vendor, bill_number: String(bl.bill_number || '').trim() || null,
@@ -279,6 +290,16 @@ export async function POST(req) {
       // v55.83-RG (Max, Nov 8 15:32: "they all belong to a release number") — the
       // bill's release number, its own field (the wire audit checks it).
       if (Object.prototype.hasOwnProperty.call(bl, 'release_number')) { fields.release_number = String(bl.release_number || '').trim().toUpperCase().substring(0, 40) || null; }
+      // v55.83-RL (Max 12:18–12:20) — another reference (BOL / PO / container…) and the INBOUND / OUTBOUND tick:
+      // outbound needs the release #, inbound needs the reference (the wire check enforces it)
+      if (Object.prototype.hasOwnProperty.call(bl, 'other_reference')) { fields.other_reference = String(bl.other_reference || '').trim().toUpperCase().substring(0, 60) || null; }
+      if (Object.prototype.hasOwnProperty.call(bl, 'shipment_direction')) {
+        var dirB = String(bl.shipment_direction || '').toLowerCase();
+        if (dirB && dirB !== 'inbound' && dirB !== 'outbound') { return NextResponse.json({ error: 'Pick inbound or outbound.' }, { status: 400 }); }
+        fields.shipment_direction = dirB || null;
+        if (dirB === 'outbound' && !fields.release_number && !String(bl.release_number || '').trim()) { return NextResponse.json({ error: 'An OUTBOUND bill needs its release #.' }, { status: 400 }); }
+        if (dirB === 'inbound' && !fields.other_reference) { return NextResponse.json({ error: 'An INBOUND bill needs its reference (BOL / PO / container…).' }, { status: 400 }); }
+      }
       // v55.83-PC — the scanned/imported file's storage path travels with the bill.
       if (String(bl.attachment_path || '').trim()) { fields.attachment_path = String(bl.attachment_path).trim().substring(0, 300); }
       // v55.83-QB — "Paid via RTM Capital": a third party pays this bill, so it
@@ -304,6 +325,7 @@ export async function POST(req) {
         if (amt + 0.005 < paidSoFar) { return NextResponse.json({ error: 'Amount cannot be below what is already paid (' + r2(paidSoFar).toFixed(2) + '). Void the payments first.' }, { status: 409 }); }
         var up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle();
         var qbWarnU = null;
+        if (up.error && /other_reference|shipment_direction/.test(up.error.message || '')) { delete fields.other_reference; delete fields.shipment_direction; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the reference / inbound-outbound — run sql/v55-83-RL-wire-override-delete-reference.sql to store them.'; } } // RL SQL not run yet
         if (up.error && /release_number/.test(up.error.message || '')) { delete fields.release_number; up = await db.from('vendor_bills').update(fields).eq('id', bl.id).select('id').maybeSingle(); if (!up.error) { qbWarnU = 'Saved WITHOUT the release number — run sql/v55-83-RG-wires-recon.sql to store it.'; } } // RG SQL not run yet
         if (up.error && /paid_via/.test(up.error.message || '')) { // QB SQL not run yet — save the rest and SAY so
           delete fields.paid_via;
@@ -326,6 +348,7 @@ export async function POST(req) {
       }
       fields.created_by = userId;
       var ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle();
+      if (ins.error && /other_reference|shipment_direction/.test(ins.error.message || '')) { delete fields.other_reference; delete fields.shipment_direction; ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle(); } // RL SQL not run yet
       if (ins.error && /release_number/.test(ins.error.message || '')) { delete fields.release_number; ins = await db.from('vendor_bills').insert(fields).select('id').maybeSingle(); } // RG SQL not run yet — save the rest
       if (ins.error && fields.paid_via && /paid_via/.test(ins.error.message || '')) { // QB SQL not run yet
         delete fields.paid_via;
@@ -355,6 +378,7 @@ export async function POST(req) {
       var vb = await db.from('vendor_bills').update({ record_status: 'void', updated_at: new Date().toISOString() }).eq('id', body.id).select('id').maybeSingle();
       if (vb.error) { throw new Error(vb.error.message); }
       if (!vb.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      await audit(db, userId, 'bill_voided', 'vendor_bill', body.id, { reason: String(body.reason || '').substring(0, 500) || null }); // v55.83-RL
       return NextResponse.json({ ok: true, voided: true });
     }
 
@@ -432,6 +456,7 @@ export async function POST(req) {
       var vp = await db.from('vendor_bill_payments').update({ voided: true }).eq('id', body.id).select('id').maybeSingle();
       if (vp.error) { throw new Error(vp.error.message); }
       if (!vp.data) { return NextResponse.json({ error: 'Payment not found.' }, { status: 404 }); }
+      await audit(db, userId, 'bill_payment_voided', 'vendor_bill_payment', body.id, {}); // v55.83-RL
       return NextResponse.json({ ok: true, voided: true });
     }
 

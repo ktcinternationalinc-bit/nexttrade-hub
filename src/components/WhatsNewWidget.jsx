@@ -33,6 +33,42 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RN',
+    date: '2026-11-09',
+    label: "\ud83c\udff7 Category picks in All Transactions save again",
+    items: [
+      "Fixed: picking a category in All Transactions failed after saving (an internal piece was missing since Nov 8), so the screen kept showing the old category. Picks now save and show at once \u2014 \u201csaving\u2026\u201d then \u201c\u2713 saved\u201d \u2014 and only that row waits.",
+      "If a pick ever fails, the old category comes back and the reason is shown \u2014 never a silent nothing.",
+      "Fixed: \u201c\u2795 create the bill from this transaction\u201d works again now that a bill # is required (the bill is numbered from the bank line).",
+      "Fixed two hidden crashes: adding a new customer from Quotes, and \u201cedit\u201d from the invoice preview in Stats.",
+      { superAdminOnly: true, text: "v55.83-RN \u2014 no SQL. ROOT CAUSE: expense-rules route lost the learnRule import in RC (import line rewritten), so bulk_classify threw ReferenceError AFTER updating bank_transactions \u2192 client error path, no reload \u2192 old value shown. Fixed import. AllTransactionsTab: api() never throws (HTTP/non-JSON/network \u2192 message), optimistic patchRow + per-row busy + quietReload, revert on failure, updated:0 guard, pending hint, createBillFromTxn sends bill_number BANK-yyyymmdd-xxxxxx (RL required it). eslint no-undef sweep (eslint 8 in scratchpad) over src/app/api, src/lib and all accounting/CRM/wire components: fixed QuotesTab userProfile\u2192user (my RJ line), PeriodStatsTab onGo undeclared. Still flagged outside accounting (not changed): AIGreeter fmtET/fireStop, DailyLogTab setFormData, InventoryOverview stats, InventoryReceiving load, EgyptBankTab rules modal (73 refs), page.jsx profile. memdb helper gained not/or/like/ilike. Test rn 10 (real route on in-memory DB)." },
+    ],
+  },
+  {
+    version: 'v55.83-RM',
+    date: '2026-11-09',
+    label: "\ud83d\udce4 Click a wire in All Transactions \u2192 its bills, approvals and history",
+    items: [
+      "All Transactions: a bank line that is an approved wire now shows a \u201c\ud83d\udce4 WP-0001\u201d button. Click it to see every bill the wire paid (vendor, bill #, in/out, release #, reference, date, amount, notes), who prepared, signed, sent and attached it, any overrides with their reasons, the proofs and the full history.",
+      "A money-out that paid bills like a wire but had NO wire approved in advance shows \u201c\ud83c\udfe6 wire \u00b7 no approval\u201d \u2014 click it to see its bills.",
+      "\ud83c\udfe6 Wires \u2192 \u201cAlready in the bank\u201d: clicking a line that came from an approved wire opens that wire the same way.",
+      { superAdminOnly: true, text: "v55.83-RM \u2014 no SQL. expense-rules all_transactions: wireBy (wire_packages by bank_transaction_id, chunked 200) + billLegsBy \u2192 t.wire {kind:'package',id,label,status,payee} | {kind:'bank',id} (out + bill payments + WIRE/WT/FEDWIRE/SWIFT in description). New WireQuickView (read-only modal; package \u2192 wire-packages get; bank \u2192 wires detail). AllTransactionsTab chip + modal; WiresTab bank view opens the package. Test rm 8; modal clicked through in jsdom in-session." },
+    ],
+  },
+  {
+    version: 'v55.83-RL',
+    date: '2026-11-09',
+    label: "\u21b7 Wire overrides, delete / undo, inbound-outbound + reference, approval audit",
+    items: [
+      "Wires: an \u201c\u21b7 Override\u2026\u201d button on each problem a person can judge (missing release #, duplicates, missing reference\u2026). You must write the reason; your name, the reason and the time are kept, and both signers see every override before they sign. Changing the wire afterwards cancels the override.",
+      "Problems the books would refuse anyway (void bill, already paid in full, paying more than owed, bill on another wire or of another company) cannot be overridden.",
+      "Wires: \u201c\ud83d\uddd1 Delete wire\u201d for a wire not yet sent \u2014 everything goes back to how it was. A wire already sent can be undone by a super admin or the owner with the reason: its bill payments are voided, the bills go back to how they were, the bank line is freed. The undone wire stays on record.",
+      "Bills: new \u201c\u2b05 Inbound / Outbound \u27a1\u201d tick and a Reference field (BOL / PO / container\u2026). Outbound needs the release #; inbound needs the reference; the bill # and the date are always required. All three can also be filled right on the wire.",
+      "Audit Trail: new \u201c\ud83d\udce4 Wire approvals\u201d and \u201c\ud83e\uddfe Bill approvals\u201d views \u2014 who prepared, changed, checked, overrode, signed, sent, attached, deleted or undid each wire, and who validated, edited, voided or paid each bill. Each wire also shows its own full history.",
+      { superAdminOnly: true, text: "v55.83-RL \u2014 SQL: v55-83-RL-wire-override-delete-reference.sql (vendor_bills.other_reference + shipment_direction CHECK in/out; wire_package_overrides append-only, reason>=10, cascade on draft erase; wire_package_files FK cascade; wire_packages reversed_by/at/note + prev_third_party_payer, status adds 'reversed' with CHECK who+why, wpkg_lock rewritten: sent/attached \u2192 only 'reversed', approved fields frozen; PG16 x2 + 8 violation cases). Code: wire-audit checks carry bill_id; directionRules (BILL_NUMBER/BILL_DATE/DIRECTION/REFERENCE_MISSING, release only for outbound), other-reference duplicates by date; OVERRIDABLE / NOT_OVERRIDABLE_WHY / checkKey / applyOverrides (fingerprint-bound); fingerprint adds other_reference + direction only when set. Route: override_check (wires.override), delete_wire (draft erase w/ snapshot; sent/attached reverse by super admin/owner: void payments, unmark paid_via, restore third_party_payer, lines closed, status reversed), set_bill_release field=release_number|other_reference|shipment_direction, get returns overrides+history+check keys, edit diff in wire_package_updated. Bills: bill # required, in/out rules, other_reference/shipment_direction saved with RL fallback, loadBills select RL\u2192RK fallback, bill_voided/bill_payment_voided audits. Audit route scope wires|bills + names from users. Tests: rl 30 (real routes on in-memory DB) + fixtures realigned rh/rj-wire/rk/rj-e2e/ri 1f." },
+    ],
+  },
+  {
     version: 'v55.83-RK',
     date: '2026-11-09',
     label: "\ud83d\udd0d Wire duplicates by release + date / reference + date",
