@@ -159,12 +159,12 @@ export async function POST(req) {
     // Permissions → "AR: View Invoice Balances". Super admin passes always.
     if (action === 'open_balances') {
       var pr2 = await assertPermission(db, userId, 'ar.view_invoice_balances', req);
-      if (!pr2 || pr2.ok !== true) { return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+      if (!pr2 || pr2.ok !== true) { return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Module Access.' }, { status: 403 }); }
     } else if (RUN_ACTIONS[action] === true) {
       // v55.83-RG — saved reconciliations: Owner/Admin, or anyone granted
       // "Order Recon: Reconcile & Approve" (recon.signoff).
       var prRun = await assertPermission(db, userId, 'recon.signoff', req);
-      if (!prRun || prRun.ok !== true) { return NextResponse.json({ error: 'This needs the "Order Recon: Reconcile & Approve" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+      if (!prRun || prRun.ok !== true) { return NextResponse.json({ error: 'This needs the "Order Recon: Reconcile & Approve" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: 403 }); }
     } else if (OPEN_ACTIONS[action] === true) {
       var uRes = await db.from('users').select('id').eq('id', userId || '').limit(1);
       var isUser = !!(uRes && uRes.data && uRes.data[0]);

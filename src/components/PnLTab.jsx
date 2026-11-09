@@ -76,7 +76,7 @@ export default function PnLTab(props) {
   }
 
   if (!canView && !canEditCosts) {
-    return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — the P&L needs the "P&L: View" permission (Settings → Permissions).</div>;
+    return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — the P&L needs the "P&L: View" permission (Settings → Module Access).</div>;
   }
   var tt = rep && rep.totals;
   var th = { background: '#0f172a', color: '#fff' };

@@ -153,12 +153,12 @@ export async function POST(req) {
     var db = admin();
     var userId = body.user_id || null;
     var g1 = await assertPermission(db, userId, 'accounting.clickbooks.access', req);
-    if (!g1.ok) { return NextResponse.json({ ok: false, error: 'This needs "P1a · ClickBooks (KTC Hub) Access" — Settings → Permissions.' }, { status: g1.status || 403 }); }
+    if (!g1.ok) { return NextResponse.json({ ok: false, error: 'This needs "P1a · ClickBooks (KTC Hub) Access" — Settings → 🏦 Banking & Accounting Access.' }, { status: g1.status || 403 }); }
     var g2 = await assertPermission(db, userId, 'wires.view', req);
     if (!g2.ok) { g2 = await assertPermission(db, userId, 'wires.signoff', req); } // a signer can always see what they sign
     if (!g2.ok) { g2 = await assertPermission(db, userId, 'wires.prepare', req); } // v55.83-RH
     if (!g2.ok) { g2 = await assertPermission(db, userId, 'wires.send', req); } // v55.83-RH
-    if (!g2.ok) { return NextResponse.json({ ok: false, error: 'This needs "Wires: View" — Settings → Permissions.' }, { status: g2.status || 403 }); }
+    if (!g2.ok) { return NextResponse.json({ ok: false, error: 'This needs "Wires: View" — Settings → 🏦 Banking & Accounting Access.' }, { status: g2.status || 403 }); }
 
     // ── list: every outgoing bank payment with bills linked
     if (action === 'list') {
@@ -235,7 +235,7 @@ export async function POST(req) {
     // ── signoff: 1st, then 2nd by a DIFFERENT person — on the exact checked fingerprint
     if (action === 'signoff') {
       var g3 = await assertPermission(db, userId, 'wires.signoff', req);
-      if (!g3.ok) { return NextResponse.json({ ok: false, error: 'Signing off needs "Wires: Sign Off" — Settings → Permissions.' }, { status: g3.status || 403 }); }
+      if (!g3.ok) { return NextResponse.json({ ok: false, error: 'Signing off needs "Wires: Sign Off" — Settings → 🏦 Banking & Accounting Access.' }, { status: g3.status || 403 }); }
       var note = String(body.note || '').trim().substring(0, 1000);
       var Gs = await gather(db, [txId]);
       var inps = Gs.build(txId);

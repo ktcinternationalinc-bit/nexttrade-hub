@@ -94,7 +94,7 @@ export async function POST(req) {
     var permKey = action === 'send' ? 'ar.send_reminders' : 'ar.view_invoice_balances';
     var gate = await assertPermission(db, userId, permKey, req);
     if (!gate || gate.ok !== true) {
-      return NextResponse.json({ error: 'This needs the "' + (permKey === 'ar.send_reminders' ? 'AR: Send reminders' : 'AR: View invoice balances') + '" permission — Settings → Permissions.' }, { status: gate && gate.status ? gate.status : 403 });
+      return NextResponse.json({ error: 'This needs the "' + (permKey === 'ar.send_reminders' ? 'AR: Send reminders' : 'AR: View invoice balances') + '" permission — Settings → Module Access.' }, { status: gate && gate.status ? gate.status : 403 });
     }
 
     if (action === 'suggest') {

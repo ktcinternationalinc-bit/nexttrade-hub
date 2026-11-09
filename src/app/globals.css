@@ -594,3 +594,18 @@ input.nt-light:focus, select.nt-light:focus, textarea.nt-light:focus {
   border-color: #1d4ed8 !important;
   box-shadow: 0 0 0 2px rgba(29,78,216,0.15) !important;
 }
+
+/* ═══ v55.83-RI (Max, Nov 9 10:37 — the wire screens were unreadable in the
+   dark skin: dark text on a dark card). .nt-paper = a WHITE panel the dark
+   skin must not repaint: white background, dark text, and the slate text
+   classes inside it stay dark. ═══ */
+.nt-paper, .nt-paper.bg-white {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #e2e8f0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.nt-paper .text-slate-900, .nt-paper .text-slate-800, .nt-paper .text-slate-700 { color: #0f172a !important; }
+.nt-paper .text-slate-600 { color: #334155 !important; }
+.nt-paper .text-slate-500, .nt-paper .text-slate-400 { color: #475569 !important; }

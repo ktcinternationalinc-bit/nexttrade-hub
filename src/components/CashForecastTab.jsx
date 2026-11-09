@@ -42,7 +42,7 @@ export default function CashForecastTab(props) {
 
   if (!canView) {
     return <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
-      The forecast needs the <b>Bills: View</b> or <b>AR balances</b> permission — ask an admin in Settings → Permissions.</div>;
+      The forecast needs the <b>Bills: View</b> or <b>AR balances</b> permission — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
   }
   if (!data) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-600">{busy ? 'Building the forecast…' : 'No data yet.'}</div>; }
 

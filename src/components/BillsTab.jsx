@@ -210,7 +210,7 @@ export default function BillsTab(props) {
 
   if (!canView) {
     return <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
-      Bills need the <b>Bills: View</b> permission — ask an admin to grant it in Settings → Permissions.</div>;
+      Bills need the <b>Bills: View</b> permission — ask an admin to grant it in Settings → 🏦 Banking & Accounting Access.</div>;
   }
 
   var catLabelOf = {}; (cats || []).forEach(function (c) { catLabelOf[c.key] = c.label; }); // v55.83-PJ

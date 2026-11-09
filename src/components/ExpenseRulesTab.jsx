@@ -69,7 +69,7 @@ export default function ExpenseRulesTab(props) {
 
   if (!canUse) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
-      Categories &amp; Rules needs the <b>Bank: Categorize Transactions</b> permission — ask an admin in Settings → Permissions.</div>;
+      Categories &amp; Rules needs the <b>Bank: Categorize Transactions</b> permission — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
   }
 
   function addCategory() {

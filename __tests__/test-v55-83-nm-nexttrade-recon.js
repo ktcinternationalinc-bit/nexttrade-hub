@@ -614,7 +614,8 @@ if (failures.length) {
     /assertPermission\(db, userId, 'ar\.view_invoice_balances', req\)/.test(rk) &&
     /import \{ assertPermission \} from '\.\.\/\.\.\/\.\.\/\.\.\/lib\/server-permissions';/.test(rk));
   okK('OK2: a refusal names the exact grant and where to set it',
-    /"AR: View Invoice Balances" permission — grant it in Settings → Permissions\./.test(rk));
+    // superseded pin (v55.83-RI, Max Nov 9 10:34 "where the hell are all of the permisssioning"): the tab is called Module Access — the message now names it
+    /"AR: View Invoice Balances" permission — grant it in Settings → Module Access\./.test(rk));
   okK('OK3: set_release/list_missing stay open to any team member; the rest stays Owner/Admin',
     /OPEN_ACTIONS = \{ set_release: true, list_missing: true \}/.test(rk) &&
     /Owner\/Admin only\./.test(rk));

@@ -226,7 +226,7 @@ export default function BooksHomeTab(props) {
       </div>
       {(!V.fin || !V.inv) && <div className="mb-2 rounded-lg p-2 text-[10px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
         🔒 {!V.fin ? 'Bank & Financial Summary (P2) not granted — Bank Balance, Came In, Went Out, Sales, Net Moved and Projected Net show "Restricted". ' : ''}{!V.inv ? 'Invoicing & Collections (P3) not granted — Invoiced, Paid, Still Open and Collected show "Restricted". ' : ''}Every other card opens its records as usual.{cf && cf.date_filters_locked ? ' · Date range locked to the default.' : ''}</div>}
-      {cf && cf.denied ? <div className="text-[11px]" style={{ color: '#92400e' }}>{cf.error || 'The money view needs the Bills: View permission — ask an admin in Settings → Permissions.'}</div> :
+      {cf && cf.denied ? <div className="text-[11px]" style={{ color: '#92400e' }}>{cf.error || 'The money view needs the Bills: View permission — ask an admin in Settings → 🏦 Banking & Accounting Access.'}</div> :
        !sum ? <div className="text-[11px] text-slate-500">Loading cash flow…</div> :
         <div className="flex flex-col gap-2.5">
           {/* v55.83-PP (Max, 04:35): "organize these datas in a way to easily

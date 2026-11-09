@@ -62,7 +62,7 @@ export default function AllTransactionsTab(props) {
 
   if (!canUse) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
-      All Transactions needs the <b>Bank: Categorize Transactions</b> permission — ask an admin in Settings → Permissions.</div>;
+      All Transactions needs the <b>Bank: Categorize Transactions</b> permission — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
   }
 
   var txns = (data && data.transactions) || [];

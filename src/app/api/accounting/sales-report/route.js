@@ -53,7 +53,7 @@ export async function POST(req) {
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
     var perm = await assertPermission(db, userId, 'ar.view_invoice_balances', req);
     if (!perm || perm.ok !== true) {
-      return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Permissions.' }, { status: 403 });
+      return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Module Access.' }, { status: 403 });
     }
     var df = body.date_from || null; var dt = body.date_to || null;
 

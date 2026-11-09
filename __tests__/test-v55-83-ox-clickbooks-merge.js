@@ -102,7 +102,9 @@ var st = R('src/components/SettingsTab.jsx');
 ok('8a: pnl.view / pnl.edit_costs still grantable in Settings',
   st.indexOf('pnl.view') >= 0 && st.indexOf('pnl.edit_costs') >= 0);
 ok('8b: protected financial grants managed only via BankBalancePermissions panel (legacy toggle blocked)',
-  /<BankBalancePermissions \/>/.test(st) && /Use Financial data access to change these permissions/.test(st));
+  // superseded pin (v55.83-RI, Max Nov 9 10:38 "i need all of the banking permissions in one box"): the two protected grants
+  // are now switched inside BankingAccessPanel (same /api/bank-visibility PUT, super admin only); the legacy toggle stays blocked
+  /<BankingAccessPanel users=\{nonSuperUsers\}/.test(st) && /bank-visibility/.test(R('src/components/BankingAccessPanel.jsx')) && /Use Settings → 🏦 Banking & Accounting Access to change these permissions/.test(st));
 
 // ── 9. OZ addendum — contrast. Max (Nov 5): "fix font color or background as
 // notes are invicsible in next build". The hub's dark skin overrides tailwind

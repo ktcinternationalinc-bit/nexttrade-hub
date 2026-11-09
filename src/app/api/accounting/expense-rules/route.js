@@ -42,7 +42,7 @@ export async function POST(req) {
 
     // v55.83-RE — Accounting Access (P1) first: no other accounting permission takes effect without it
     var gateP1 = await assertPermission(db, userId, 'accounting.view', req);
-    if (!gateP1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" (P1) — grant it in Settings → Permissions.', denied: true, api_build_marker: API_BUILD_MARKER }, { status: gateP1.status || 403 }); }
+    if (!gateP1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.', denied: true, api_build_marker: API_BUILD_MARKER }, { status: gateP1.status || 403 }); }
     var gate = await assertPermission(db, userId, 'bank.classify', req);
     if (!gate.ok && (action === 'list' || action === 'save_category')) {
       // v55.83-PJ — the Bills screen shares the SAME category list and can add

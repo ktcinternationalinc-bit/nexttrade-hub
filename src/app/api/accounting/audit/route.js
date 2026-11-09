@@ -20,9 +20,9 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ ok: false, error: 'user_id required.' }, { status: 401 }); }
     var gateP1 = await assertPermission(d, userId, 'accounting.view', req); // v55.83-RE — P1 first
-    if (!gateP1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" (P1) — grant it in Settings → Permissions.' }, { status: gateP1.status || 403 }); }
+    if (!gateP1.ok) { return NextResponse.json({ ok: false, error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gateP1.status || 403 }); }
     var gate = await assertPermission(d, userId, 'audit.view', req);
-    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'The Audit Trail needs the "Audit: View Trail" permission — grant it in Settings → Permissions.' }, { status: gate.status || 403 }); }
+    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'The Audit Trail needs the "Audit: View Trail" permission — grant it in Settings → Module Access.' }, { status: gate.status || 403 }); }
 
     if (body.action !== 'list') { return NextResponse.json({ ok: false, error: 'Unknown action.' }, { status: 400 }); }
     var limit = Math.min(Math.max(Number(body.limit) || 200, 20), 500);

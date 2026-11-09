@@ -116,7 +116,7 @@ export default function AccountingTab(props) {
   var canLedgerly = financialAccess.canViewFullDashboard === true || financialAccess.canViewBankBalances === true;
   if (!hasAnyAccounting) {
     return <div className="p-6"><div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155', maxWidth: 560 }}>
-      <b>Accounting is locked for your account.</b> Ask an admin for <b>P1a · ClickBooks (KTC Hub) Access</b> and/or <b>P1b · Wave Hub Access</b> in Settings → Permissions — every other accounting permission takes effect only with one of them.</div></div>;
+      <b>Accounting is locked for your account.</b> Ask an admin for <b>P1a · ClickBooks (KTC Hub) Access</b> and/or <b>P1b · Wave Hub Access</b> in Settings → 🏦 Banking & Accounting Access — every other accounting permission takes effect only with one of them.</div></div>;
   }
   // v55.83-RF — never render a screen of a hub this user has no switch for (deep links, card jumps)
   if (!hubAllows(sub)) { sub = acctV.ktc ? 'books_home' : 'dashboard'; }

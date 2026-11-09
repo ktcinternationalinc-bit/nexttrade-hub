@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-RI',
+    date: '2026-11-09',
+    label: "\ud83c\udfe6 Banking permissions in one box + simple wires",
+    items: [
+      "\ud83c\udfe6 Every banking & accounting permission is now in ONE place: Settings \u2192 \ud83c\udfe6 Banking & Accounting Access. Pick a person, switch what they need. Six plain groups: which books they open, which money they see (totals, invoices, bank balances), bank work, bills, wires, order reconciliation \u2014 each says what it unlocks, and it warns you when a switch can't work yet.",
+      "Wires are now a simple guided screen: \u201c\uff0b New wire\u201d \u2192 pick who gets the money (RTM, NextTrade or a vendor) \u2192 tick the bills (every open bill is listed, with search) \u2192 Save. The check runs by itself.",
+      "No setup needed before picking a bill: ticking any open bill for an RTM wire marks it \u201cpaid through RTM\u201d automatically (and un-marks it if you untick it or cancel the wire). A missing release # is typed right on the bill's row.",
+      "Each wire shows a progress bar and ONE \u201cNext step\u201d box telling you exactly what to do now \u2014 and every problem says how to fix it.",
+      "The wire screens are now readable in the dark theme.",
+      "Permission messages across Accounting now point to the right place (the Settings tab is called Module Access; banking switches are in \ud83c\udfe6 Banking & Accounting Access).",
+      { superAdminOnly: true, text: "v55.83-RI \u2014 SQL: v55-83-RI-wire-simple.sql (wire_package_lines.marked_paid_via; PG16 twice). open_bills: RTM/NT = own bills + unassigned direct bills (needs_mark), vendor = all direct bills (vendor derived from picked bills, one-vendor rule). save_draft marks paid_via on save, remembers marked_paid_via, reverts on untick/cancel (guarded eq paid_via), auto-runs rules+AI audit, returns audit. New action set_bill_release (wires.prepare|bills.manage; blocked when on a SENT wire; audited) and setup (readiness). get adds i_signed_first. WirePackagesPanel rewritten as guided flow (steps, NEXT STEP box, FIX hints, progress). globals.css .nt-paper white-panel class. BankingAccessPanel (person picker + 6 groups, module_permissions via togglePermission, canViewBankBalances/canViewFullDashboard via /api/bank-visibility PUT, warnings) in new Settings section 'banking'; Module Access table filters BANKING_KEYS and links there; BankBalancePermissions no longer rendered. All 'Settings \u2192 Permissions' strings fixed. Pins realigned: ox 8b, rh 6a-6c, nm OK2. Test ri 25." },
+    ],
+  },
+  {
     version: 'v55.83-RH',
     date: '2026-11-08',
     label: "\ud83d\udce4 Wires approved before they are sent",

@@ -113,11 +113,12 @@ ok('5m: AI review runs BEFORE sending with the server-side key only; unavailable
 
 // ── 6. screen + settings
 var U = R('src/components/WirePackagesPanel.jsx'); var T = R('src/components/WiresTab.jsx'); var ST = R('src/components/SettingsTab.jsx');
-ok('6a: 🏦 Wires opens on "Prepared wires — approve before sending"; the bank view is the second switch', T.indexOf("useState('prepared')") > 0 && T.indexOf('📤 Prepared wires — approve before sending') > 0 && T.indexOf('<WirePackagesPanel') > 0);
+// superseded pins 6a–6c (v55.83-RI, Max Nov 9 10:37 "very USER UNFRIENDLY ... make it simple"): the screen became a guided flow — wording realigned, same steps
+ok('6a: 🏦 Wires opens on the prepared wires ("📤 Wires"); the after-the-fact bank view is the second switch', T.indexOf("useState('prepared')") > 0 && T.indexOf("['prepared', '📤 Wires']") > 0 && T.indexOf('<WirePackagesPanel') > 0);
 ok('6b: prepare form: pay to RTM / NextTrade (bills only) / a vendor, tick bills of any vendor, optional fee, live total',
-  U.indexOf('Paid through a company') > 0 && U.indexOf('Straight to the vendor') > 0 && U.indexOf('fee (optional) $') > 0 && U.indexOf('Wire total $') > 0);
+  U.indexOf('1 · Who receives the money?') > 0 && U.indexOf('🧾 A vendor directly') > 0 && U.indexOf('fee (optional) $') > 0 && U.indexOf('Total to wire: $') > 0);
 ok('6c: the wire page: audit, two signers, send with confirmation, attach bank line, RTM proof, every bill with all its data, the proofs',
-  ['🤖 Audit + AI', '② ③ ✍ Two different people', '📤 Mark sent + attach confirmation', '🔗 Attach the bank line', "proof that it paid the vendors", 'Paid before', 'Attached proofs'].every(function (k) { return U.indexOf(k) > 0; }));
+  ["'🤖 Checks'", '✍ I verified it — sign as ', '📤 Mark as sent', '🔗 This is it', "proof that it paid the vendors", 'Paid before', "'🏦 Bank confirmation'"].every(function (k) { return U.indexOf(k) > 0; }));
 ok('6d: Settings lists Wires: Prepare and Wires: Send', ST.indexOf("key: 'wires.prepare'") > 0 && ST.indexOf("key: 'wires.send'") > 0);
 ok('6e: proofs live in the PRIVATE bucket and open by signed link only', U.indexOf("from('bills-private').upload(path") > 0 && U.indexOf('createSignedUrl(path, 3600)') > 0 && U.indexOf('getPublicUrl') < 0);
 

@@ -55,7 +55,7 @@ export async function POST(req) {
     // ── set_cost / delete_cost: the cost-entry permission
     if (action === 'set_cost' || action === 'delete_cost') {
       var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);
-      if (!pe || pe.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: Edit Product Costs" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+      if (!pe || pe.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: Edit Product Costs" permission — grant it in Settings → Module Access.' }, { status: 403 }); }
       if (action === 'delete_cost') {
         if (!body.id) { return NextResponse.json({ error: 'id required.' }, { status: 400 }); }
         var delR = await db.from('product_costs').delete().eq('id', body.id).select('id');
@@ -76,7 +76,7 @@ export async function POST(req) {
 
     // ── everything below is P&L viewing
     var pv = await assertPermission(db, userId, 'pnl.view', req);
-    if (!pv || pv.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: View" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+    if (!pv || pv.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: View" permission — grant it in Settings → Module Access.' }, { status: 403 }); }
 
     var costRowsAll = await fetchAll(function () { return db.from('product_costs').select('id, product_key, product_label, cost_per_unit, effective_from, notes, created_at').order('effective_from', { ascending: false }); });
     var costsByKey = groupCosts(costRowsAll);

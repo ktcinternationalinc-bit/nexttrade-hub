@@ -66,7 +66,7 @@ export default function BusinessBooksTab(props) {
   }
   useEffect(function () { load(); }, []); // eslint-disable-line
 
-  if (!mayView) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — needs "P3 · Invoicing & Collections" (with P1 · Accounting Access) in Settings → Permissions.</div>; }
+  if (!mayView) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — needs "P3 · Invoicing & Collections" (with P1 · Accounting Access) in Settings → 🏦 Banking & Accounting Access.</div>; }
   if (loading || !raw) { return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-500">Loading all invoices…</div>; }
 
   var activeCur = biz === 'EG' ? 'EGP' : 'USD';

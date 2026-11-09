@@ -8,7 +8,8 @@ import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
 import BusinessEntitiesPanel from './BusinessEntitiesPanel';
 import AccountingVisibilityPanel from './AccountingVisibilityPanel';
-import BankBalancePermissions from './BankBalancePermissions';
+import BankBalancePermissions from './BankBalancePermissions'; // eslint-disable-line no-unused-vars -- v55.83-RI: its two grants now live in BankingAccessPanel
+import BankingAccessPanel, { BANKING_KEYS } from './BankingAccessPanel'; // v55.83-RI
 import ClickBooksOperatorPermissions from './ClickBooksOperatorPermissions';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
@@ -1097,7 +1098,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const togglePermission = async (userId, module, displayedHasAccess) => {
     // These grants use the verified-super-admin API, never the legacy map.
     if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
-      if (toast) toast.error('Use Financial data access to change these permissions.');
+      if (toast) toast.error('Use Settings → 🏦 Banking & Accounting Access to change these permissions.');
       return;
     }
     // v55.83-IG (Codex) — flip EXACTLY the state the user sees. The caller passes the displayed
@@ -1251,7 +1252,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities'], ['accountingvis', '📅 Accounting Visibility']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['banking', '🏦 Banking & Accounting Access'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities'], ['accountingvis', '📅 Accounting Visibility']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -1566,10 +1567,19 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       )}
 
             {/* ===== MODULE ACCESS ===== */}
+      {/* v55.83-RI (Max, Nov 9 10:38: "i need all of the banking permissions in one box and easy to understand and use") */}
+      {section === 'banking' && (
+        <div>
+          <BankingAccessPanel users={nonSuperUsers} permissions={permissions} togglePermission={togglePermission} />
+          <div className="text-[12px] font-extrabold mb-2" style={{ color: '#334155' }}>Advanced — ClickBooks admin tools (super admin)</div>
+          <ClickBooksOperatorPermissions />
+        </div>
+      )}
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4">
-          <BankBalancePermissions />
-          <ClickBooksOperatorPermissions />
+          <div className="rounded-lg p-3 mb-4 text-[12px] font-bold" style={{ background: '#e0f2fe', border: '1px solid #7dd3fc', color: '#0c4a6e' }}>
+            🏦 Every banking & accounting switch (ClickBooks, Wave Hub, money totals, bank balances, bank work, bills, wires, order reconciliation) is now in ONE place: <button onClick={() => setSection('banking')} className="underline font-extrabold" style={{ color: '#075985' }}>Settings → 🏦 Banking & Accounting Access</button>. This table holds everything else.
+          </div>
           {/* v55.83-A.6.27.NEXT (Issues 4, 5, 6) — Permissions table rebuild:
               - Heading + controls live ABOVE the scroll container so they stay
                 visible while scrolling.
@@ -1612,7 +1622,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               return label.toLowerCase().includes(fLow) || (desc || '').toLowerCase().includes(fLow);
             };
             const visibleTabs = TAB_PERMS.filter(p => matches(p.label, p.desc));
-            const visibleActions = ACTION_PERMS.filter(p => matches(p.label, p.desc));
+            const visibleActions = ACTION_PERMS.filter(p => BANKING_KEYS.indexOf(p.key) < 0 && matches(p.label, p.desc)); // v55.83-RI — banking switches live in their own box
             const colCount = nonSuperUsers.length + 1;
 
             // v55.83-A.6.27.NEXT (Issue 4 back-compat) — for "Edit Open Accounts"

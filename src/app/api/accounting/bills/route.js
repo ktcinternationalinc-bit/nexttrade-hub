@@ -195,13 +195,13 @@ export async function POST(req) {
     // list itself also needs Bills: View/Manage.
     var gate = await assertPermission(db, userId, 'accounting.view', req);
     if (!gate || gate.ok !== true) {
-      return NextResponse.json({ error: 'This needs "Accounting Access" (P1) — grant it in Settings → Permissions.' }, { status: gate && gate.status ? gate.status : 403 });
+      return NextResponse.json({ error: 'This needs "Accounting Access" (P1) — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate && gate.status ? gate.status : 403 });
     }
     if (WRITE_ACTIONS[action] || action === 'list') {
       var gate2 = await assertPermission(db, userId, 'bills.manage', req);
       if ((!gate2 || gate2.ok !== true) && !WRITE_ACTIONS[action]) { gate2 = await assertPermission(db, userId, 'bills.view', req); }
       if (!gate2 || gate2.ok !== true) {
-        return NextResponse.json({ error: 'This needs the "' + (WRITE_ACTIONS[action] ? 'Bills: Manage' : 'Bills: View') + '" permission — grant it in Settings → Permissions.' }, { status: gate2 && gate2.status ? gate2.status : 403 });
+        return NextResponse.json({ error: 'This needs the "' + (WRITE_ACTIONS[action] ? 'Bills: Manage' : 'Bills: View') + '" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate2 && gate2.status ? gate2.status : 403 });
       }
     }
     // v55.83-QI (Max 12:33/12:35) — three visibility levels, resolved ONCE:
@@ -1027,7 +1027,7 @@ export async function POST(req) {
       var balF = null;
       // v55.83-RE/RF (Max, Nov 8 15:12 + 15:25 "yes in settings bank balances"):
       // Bank Balance is a P2 value AND needs the Bank Balances switch in
-      // Settings → Permissions (granted only by a super admin; the verified
+      // Settings → 🏦 Banking & Accounting Access (granted only by a super admin; the verified
       // super admin always passes). Both, or no balance.
       try {
         var okBal = false;

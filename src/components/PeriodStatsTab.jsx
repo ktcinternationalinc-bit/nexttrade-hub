@@ -86,7 +86,7 @@ export default function PeriodStatsTab(props) {
 
   if (!canView) {
     return <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
-      Stats need the <b>Bills: View</b> or <b>AR balances</b> permission — Settings → Permissions.</div>;
+      Stats need the <b>Bills: View</b> or <b>AR balances</b> permission — Settings → 🏦 Banking & Accounting Access.</div>;
   }
 
   function csv() {

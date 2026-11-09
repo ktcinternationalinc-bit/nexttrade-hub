@@ -44,7 +44,7 @@ export async function POST(req) {
     if (!userId) { return NextResponse.json({ ok: false, error: 'user_id required.' }, { status: 401 }); }
     // v55.83-QB permission: importing statements is connection management.
     var gate = await assertPermission(d, userId, 'bank.connections', req);
-    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'CSV import needs the "Bank: Manage Connections" permission — grant it in Settings → Permissions.' }, { status: gate.status || 403 }); }
+    if (!gate.ok) { return NextResponse.json({ ok: false, error: 'CSV import needs the "Bank: Manage Connections" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: gate.status || 403 }); }
 
     if (action === 'targets') {
       var accs = await d.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id, connection_id');

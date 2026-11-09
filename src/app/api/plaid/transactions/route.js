@@ -24,7 +24,7 @@ export async function POST(req) {
     // normal incremental sync is unchanged.
     if (body && body.start_date && access && access.via !== 'cron' && access.isVerifiedSuperAdmin !== true) {
       try { await authorizePlaidOperation(req, 'bank.connections', false); }
-      catch (eQB2) { return plaidJson({ error: 'Deep re-pull history needs the "Bank: Manage Connections" permission — grant it in Settings → Permissions.' }, { status: 403 }); }
+      catch (eQB2) { return plaidJson({ error: 'Deep re-pull history needs the "Bank: Manage Connections" permission — grant it in Settings → 🏦 Banking & Accounting Access.' }, { status: 403 }); }
     }
     var end_date = body.end_date;
     var env = process.env.PLAID_ENV || 'sandbox';

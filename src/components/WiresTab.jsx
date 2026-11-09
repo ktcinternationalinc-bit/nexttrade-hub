@@ -94,12 +94,12 @@ function BankWiresView(props) {
 
   if (!canView) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
-      The Wires portal needs <b>Wires: View</b> (with ClickBooks access) — ask an admin in Settings → Permissions.</div>;
+      The Wires portal needs <b>Wires: View</b> (with ClickBooks access) — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
   }
   var rows = (list || []).filter(function (w) { return (fStatus === 'all' || w.status === fStatus) && (!onlyWire || w.looks_like_wire); });
 
   return <div className="flex flex-col gap-3">
-    <div className="bg-white rounded-xl border border-slate-200 p-3">
+    <div className="nt-paper rounded-xl p-3">
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold text-slate-900 mr-1">🏦 Wires in the bank — every money-out line with bills linked</div>
         <div className="flex-1" />
@@ -143,7 +143,7 @@ function BankWiresView(props) {
           </tbody></table></div>}
     </div>
 
-    {det && <div className="bg-white rounded-xl border-2 p-3" style={{ borderColor: '#6366f1' }}>
+    {det && <div className="nt-paper rounded-xl p-3" style={{ border: '2px solid #6366f1' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>🏦 −${fmt(det.wire.amount)} · {det.wire.date} · {det.wire.name}{det.account ? ' · ' + det.account : ''}</div>
         <span className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={STATUS_STYLE[det.status]}>{WIRE_STATUS_LABEL[det.status]}</span>
@@ -243,11 +243,11 @@ export default function WiresTab(props) {
   var m0 = useState('prepared'); var mode = m0[0]; var setMode = m0[1];
   if (!(perms.view || perms.prepare || perms.signoff || perms.send)) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>
-      The Wires portal needs <b>Wires: View</b> (or Prepare / Sign Off / Send), with ClickBooks access — ask an admin in Settings → Permissions.</div>;
+      The Wires portal needs <b>Wires: View</b> (or Prepare / Sign Off / Send), with ClickBooks access — ask an admin in Settings → 🏦 Banking & Accounting Access.</div>;
   }
   return <div className="flex flex-col gap-2">
     <div className="flex gap-1.5">
-      {[['prepared', '📤 Prepared wires — approve before sending'], ['bank', '🏦 Wires in the bank']].map(function (m) {
+      {[['prepared', '📤 Wires'], ['bank', '🏦 Already in the bank — check after the fact']].map(function (m) {
         return <button key={m[0]} onClick={function () { setMode(m[0]); }} className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold"
           style={mode === m[0] ? { background: '#1e293b', color: '#ffffff' } : { background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>{m[1]}</button>;
       })}
