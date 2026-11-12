@@ -41,7 +41,16 @@ require('fs').writeFileSync(mockPath, 'module.exports={createClient:function(){r
 global.__db = db;
 var route = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
 var bills = require(path.join(root, 'src/app/api/accounting/bills/route.js'));
-async function call(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); var j = await res.json(); return j; }
+// superseded (v55.83-RY, Max Nov 10 00:11: "view each bill and close the bill as you check before you approve it and sign it"):
+// a signer must open + check every bill of the wire first — the sign-off calls below do that, like a person would
+async function call(r, user, body) {
+  if (body && body.action === 'signoff' && r.POST) {
+    var gq = await callRaw(r, user, { action: 'get', id: body.id });
+    if (gq && gq.ok) { for (var qi = 0; qi < gq.lines.length; qi++) { await callRaw(r, user, { action: 'review_bill', id: body.id, bill_id: gq.lines[qi].bill_id }); } }
+  }
+  return callRaw(r, user, body);
+}
+async function callRaw(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); var j = await res.json(); return j; }
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra || '').substring(0, 400))); if (!cond) { process.exitCode = 1; } }
 (async function () {

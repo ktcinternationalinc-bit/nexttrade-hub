@@ -33,6 +33,56 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SB',
+    date: '2026-11-12',
+    title: 'Wire matching: only when the Hub can be sure',
+    items: [
+      '🏦 Wires: the Hub now marks a wire’s bills PAID by itself only when the bank line reads like a wire (or is exact to the cent), is at most $100 over, and no other sent wire could be the same line. Before, any payment of the right amount could be taken as the wire.',
+      'Anything else is listed on the wire with the reason it was not matched — and you can always pick the bank line yourself.',
+      'The bank is now read every 2 hours (was every 12), so SENT wires turn PAID sooner.',
+      'Undoing a wire that was already sent: the super admin only.',
+      'Recording a past wire: a future date is refused, and a bill paid through one party cannot go on another party’s wire.',
+      { superAdminOnly: true, text: 'Run the updated sql/v55-83-RZ-wire-ready-sent-paid.sql again (bank_fee range 0–100). lib/wire-auto-match.js: AUTO_FEE_MAX 100; autoMatchSentWires builds candidates for ALL sent wires first (cross-claims → ambiguous), skips category_verified lines, needs exact or looks_like_wire; attachWire claims wire_packages.bank_transaction_id (UNIQUE) before writing payments and releases on failure (stale claims cleared after 3 min). vercel.json plaid/sync 0 */2 * * *. bills list wire overlay paged.' },
+    ],
+  },
+  {
+    version: 'v55.83-SA',
+    date: '2026-11-12',
+    title: 'People with the Bills switch see Bills',
+    items: [
+      'Fixed: a switch turned ON for someone did nothing until they signed out and in again — the Hub read a person’s switches only once, at sign-in. Now a change reaches them within about 2 minutes, or as soon as they come back to the Hub.',
+      'If the bills list cannot load, the reason now stays on the Bills screen with “Try again” — before, it flashed a message and showed an empty list that looked like “no bills”.',
+      'Fixed: people with the admin or owner role (the permissions box shows “always (admin)”) could not see Bills — the screen only let in the super admin or someone with the switch set one by one. Same fix for All Transactions, Categories & Rules and the Audit Trail.',
+      'Settings → 🏦 Banking & Accounting Access: Bills now says it needs ClickBooks (KTC Hub) in group 1, and each Bills switch warns “Not working yet” when ClickBooks is off — before, the switches showed ON but did nothing.',
+      { superAdminOnly: true, text: 'v55.83-SA — NO SQL. Client gates aligned with the server (ROLE_DEFAULTS owner/admin = *): BillsTab canView/canManage, AccountingTab tab filter (bills, categories, all_txns, audit), AllTransactionsTab/ExpenseRulesTab canUse, WiresTab perms.bills. BankingAccessPanel group 4 needsKtc + note. page.jsx re-reads module_permissions on focus / visibility / every 120 s. BillsTab loadErr inline.' },
+    ],
+  },
+  {
+    version: 'v55.83-RZ',
+    date: '2026-11-10',
+    title: 'Bills go OPEN → READY → SENT → PAID by themselves',
+    items: [
+      '💸 Bills: a bill on a wire now shows where the wire is — OPEN (being signed), READY (both signatures in, with who it goes to), SENT (waiting for the bank line). A part payment shows as “$2,000 of $2,830”.',
+      'When the wire’s money-out shows up in the bank (bank sync, statement import, or opening Wires), the Hub matches it by itself and the bills become PAID — or PARTIAL for a part payment. If two bank lines could fit, it never guesses: it lists them for you to pick.',
+      'A bank line up to $50 more than the wire still matches. The extra is not a bank fee: on a wire straight to a vendor ClickBooks books it with the bill it paid (that bill’s category — cost of goods by default); on an RTM Capital / NextTrade wire the whole bank line is filed under professional fees. More than $50: only the super admin, with the reason.',
+      'Wrong sent date? “📅 Change the sent date” — the Hub looks again around the new date. Plus “🔎 Look in the bank now”.',
+      'After both signatures, only the super admin can delete or cancel a wire.',
+      'Super admin: “🕘 Record a past wire” — for bills paid before the Hub had wires: tick the bills (part amounts allowed), the rough date and why; the Hub finds the real bank line and marks them PAID.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RZ-wire-ready-sent-paid.sql (after RL, and RS for the extra-charge booking): wire_packages.after_the_fact (+note ≥10, relaxes wpkg_sent_complete), bank_fee (0–50, frozen once attached), matched_auto; wpkg_lock lets sent_date change only while status = sent. ClickBooks: wire_fee_cents(); has_piecewise/deposit_lines book a vendor wire with an extra charge as bills + the extra to the (largest) bill’s category (Max 16:37 — not Bank fee). RTM/NextTrade: on match, lib/wire-auto-match fileAsProfessionalFees() sets the bank line’s category when empty and exactly one category is named “professional…” (never overwrites, never guesses; audited bank_line_filed_professional_fees). Matcher lib/wire-auto-match.js runs in wires list (8 s), plaid/transactions + statement-import (10 s, fail-soft). ' },
+    ],
+  },
+  {
+    version: 'v55.83-RY',
+    date: '2026-11-10',
+    title: 'Delete a bill; open and check every bill before signing a wire',
+    items: [
+      '💸 Bills: new 🗑 Delete — for a bill that should never have been in the Hub (e.g. imported twice). It disappears from lists, reports, wires and duplicate checks; who deleted it, when and why are kept. A bill with money recorded on it, or on a wire, cannot be deleted. Void stays for a real bill that was cancelled.',
+      'Wires: every bill now has “👁 Open & check”. It opens the bill itself — the document, every detail, its lines (cost + commission), its price check and who validated it — and “✓ I checked this bill — close”.',
+      'Each signer must open and check every bill before signing. The sign box shows “You checked 1 of 2 bills”. If the wire changes, the bills must be checked again.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-RY-delete-bill.sql: record_status + deleted (CHECK), deleted_by/at/delete_reason (reason ≥5 enforced), trigger: a deleted row cannot change. delete_bill (refused with live payments or on an open wire; audit bill_deleted with snapshot + lines; vendor_bill_events kept — append-only), loadBills drops deleted (+ their payments), vendorBillType ignores deleted. Wire: review_bill (wires.signoff, draft, bill on the wire) → hub_audit_log wire_bill_reviewed {bill_id, fingerprint}; signoff requires the SIGNER to have reviewed every line for the current fingerprint; get returns my_reviewed + reviews (names). BillReviewModal: signed-URL document (iframe/img, no public links), facts, BillLinesPanel read-only. Older tests sign via a review helper (annotated). Test ry 19.' },
+    ],
+  },
+  {
     version: 'v55.83-RX',
     date: '2026-11-09',
     title: 'Wire AI check knows inbound vs outbound; “Send to …” next step',

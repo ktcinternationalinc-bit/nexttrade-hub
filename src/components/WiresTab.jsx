@@ -244,8 +244,9 @@ export default function WiresTab(props) {
   var boss = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
   var perms = { view: boss || mp['wires.view'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true,
     override: boss || mp['wires.override'] === true, // v55.83-RL
-    undo: isSuperAdmin || (userProfile && userProfile.role === 'owner'), // v55.83-RL — undoing a SENT wire: super admin / owner only
-    bills: isSuperAdmin || mp['bills.manage'] === true }; // v55.83-RV (review #3) — validating a bill from the wire screen = Bills: Manage, like the server
+    undo: isSuperAdmin === true, /* v55.83-SB — the super admin only (Max Nov 12) */ // v55.83-RL — undoing a SENT wire: super admin / owner only
+    bills: boss || mp['bills.manage'] === true, // v55.83-SA — owner / admin too ("always (admin)")
+    superAdmin: isSuperAdmin }; // v55.83-RZ — after both signatures only the super admin deletes / cancels; recording a past wire // v55.83-RV (review #3) — validating a bill from the wire screen = Bills: Manage, like the server
   var m0 = useState('prepared'); var mode = m0[0]; var setMode = m0[1];
   if (!(perms.view || perms.prepare || perms.signoff || perms.send)) {
     return <div className="rounded-xl p-4 text-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#334155' }}>

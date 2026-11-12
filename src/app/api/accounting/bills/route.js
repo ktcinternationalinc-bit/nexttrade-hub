@@ -23,6 +23,7 @@ import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommission
 import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
+import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 
@@ -102,6 +103,9 @@ async function loadBills(db) {
       .select('id, bill_id, amount, paid_date, bank_transaction_id, method, voided, created_at')
       .order('paid_date', { ascending: false });
   });
+  // v55.83-RY — a DELETED bill is gone from the Hub (its row + audit trail stay in the database)
+  var delIds = {}; bills = (bills || []).filter(function (b) { if (b.record_status === 'deleted') { delIds[b.id] = true; return false; } return true; });
+  pays = (pays || []).filter(function (p) { return !delIds[p.bill_id]; });
   return { bills: bills, pays: pays };
 }
 function decorate(bills, pays) {
@@ -214,7 +218,7 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
-    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
+    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -305,6 +309,18 @@ export async function POST(req) {
         rows.forEach(function (b) { var x = pcBy[b.id]; if (x) { b.price_check_status = x.price_check_status; b.price_check = x.price_check; b.price_resolved_note = x.price_resolved_note; b.price_resolved_by = x.price_resolved_by; b.price_resolved_at = x.price_resolved_at; } });
       } catch (ePC) { /* RQ SQL not run yet */ }
       try { var ddCR = await loadCommissionRules(db); rows.forEach(function (b) { var dd = defaultDirectionFor(ddCR, b.vendor_name); if (dd) { b.default_direction = dd; } }); } catch (eDD) { /* RW */ }
+      // v55.83-RZ — each bill's wire step: OPEN (on a wire being signed) → READY (both signatures) → SENT → PAID once the bank line is matched
+      try {
+        var wlRows = await fetchAll(function () { return db.from('wire_package_lines').select('*').eq('is_open', true); }); // v55.83-SB (bug review 7) — paged
+        var wpIds = []; wlRows.forEach(function (l) { if (wpIds.indexOf(l.package_id) < 0) { wpIds.push(l.package_id); } });
+        if (wpIds.length) {
+          var wpR = await db.from('wire_packages').select('*').in('id', wpIds);
+          var allWL = await db.from('wire_package_lines').select('*').in('package_id', wpIds);
+          var billById = {}; rows.forEach(function (b) { billById[b.id] = b; });
+          var wsBy = billWireStates((wpR && wpR.data) || [], (allWL && allWL.data) || [], billById);
+          rows.forEach(function (b) { var ws = wsBy[b.id]; if (ws) { b.wire_state = ws; b.wire_state_words = wireStateWords(ws, b.open); } });
+        }
+      } catch (eWS) { /* wires SQL not run */ }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals });
     }
 
@@ -368,7 +384,7 @@ export async function POST(req) {
       if (bl.id) {
         var cur = await db.from('vendor_bills').select('*').eq('id', bl.id).maybeSingle();
         if (cur.error || !cur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
-        if (cur.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void — it cannot be edited.' }, { status: 409 }); }
+        if (cur.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is ' + (cur.data.record_status === 'deleted' ? 'deleted' : 'void') + ' — it cannot be edited.' }, { status: 409 }); }
         // review #1 (v55.83-RV) — what was VALIDATED cannot change under the validation: vendor, bill #, dates, amount, type,
         // direction. A missing release # / reference may still be filled in (blank → value); changing one needs a reopen.
         if (cur.data.validation_status === 'validated') {
@@ -440,6 +456,30 @@ export async function POST(req) {
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)
+    // v55.83-RY (Max, Nov 10 00:11: "add delete bill") — for a bill that should never have been in the Hub (an imported
+    // duplicate, a wrong upload). Refused when money was recorded on it or it is on a wire; the row and its audit trail
+    // stay (append-only) — it just disappears from every list, report, wire and duplicate check. Void = a real bill cancelled.
+    if (action === 'delete_bill') {
+      var dReasonB = String(body.reason || '').trim();
+      if (dReasonB.length < 5) { return NextResponse.json({ error: 'Say why the bill is deleted (e.g. imported twice) — it goes on the audit trail.' }, { status: 400 }); }
+      var dB = await db.from('vendor_bills').select('*').eq('id', body.id).maybeSingle();
+      if (dB.error || !dB.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      if (dB.data.record_status === 'deleted') { return NextResponse.json({ error: 'Already deleted.' }, { status: 409 }); }
+      var dPays = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bill_id', body.id);
+      var livePays = ((dPays && dPays.data) || []).filter(function (p) { return p.voided !== true; });
+      if (livePays.length) { return NextResponse.json({ error: 'Money is recorded on this bill (' + livePays.length + ' payment' + (livePays.length === 1 ? '' : 's') + ') — it cannot be deleted. Void the payments first, or Void the bill instead.' }, { status: 409 }); }
+      var dWire = await openWireOf(db, body.id);
+      if (dWire) { return NextResponse.json({ error: 'This bill is on wire ' + dWire.label + ' — take it off that wire (or delete the wire) first.' }, { status: 409 }); }
+      var dLines = []; try { var dl0 = await db.from('vendor_bill_lines').select('line_no, line_kind, description, qty, unit, unit_price, amount').eq('bill_id', body.id); dLines = (dl0 && dl0.data) || []; } catch (eDL) { dLines = []; }
+      var dUp = await db.from('vendor_bills').update({ record_status: 'deleted', deleted_by: userId, deleted_at: new Date().toISOString(), delete_reason: dReasonB.substring(0, 500), updated_at: new Date().toISOString() }).eq('id', body.id).neq('record_status', 'deleted').select('id').maybeSingle();
+      if (dUp.error && /record_status|deleted_|delete_reason/.test(dUp.error.message || '')) { return NextResponse.json({ error: 'Deleting bills needs sql/v55-83-RY-delete-bill.sql — run it in Supabase first. Nothing was changed.' }, { status: 400 }); }
+      if (dUp.error) { throw new Error(dUp.error.message); }
+      try { await db.from('vendor_bill_events').insert({ bill_id: body.id, kind: 'deleted', actor_id: userId, details: { reason: dReasonB.substring(0, 500) } }); } catch (eDE) { /* the audit log below is the record */ }
+      var dSnap = {}; ['vendor_name', 'bill_number', 'bill_date', 'due_date', 'total_amount', 'category', 'bill_type', 'shipment_direction', 'release_number', 'other_reference', 'validation_status', 'validated_by', 'paid_via', 'attachment_path', 'record_status'].forEach(function (k) { dSnap[k] = dB.data[k] == null ? null : dB.data[k]; });
+      await audit(db, userId, 'bill_deleted', 'vendor_bill', body.id, { reason: dReasonB.substring(0, 500), bill: dSnap, lines: dLines, voided_payments: ((dPays && dPays.data) || []).length });
+      return NextResponse.json({ ok: true, deleted: true });
+    }
+
     if (action === 'void_bill') {
       if (!body.id) { return NextResponse.json({ error: 'id required.' }, { status: 400 }); }
       var wOnV = await openWireOf(db, body.id);
@@ -838,7 +878,7 @@ export async function POST(req) {
       var blL = await loadLines(db, body.id);
       if (blL.error) { return NextResponse.json({ ok: true, sql_missing: true, lines: [], note: 'Bill lines need sql/v55-83-RQ-bill-lines-price-rules.sql.' }); }
       var blCR = commissionRuleFor(await loadCommissionRules(db), blB.data.vendor_name);
-      var blCheck = blFresh && blFresh.ok && blFresh.unsaved && blB.data.validation_status !== 'validated' ? blFresh.check : (blB.data.price_check || null);
+      var blCheck = blFresh && blFresh.ok && blFresh.unsaved && (blB.data.validation_status !== 'validated' || !blB.data.price_check) ? blFresh.check : (blB.data.price_check || null); // RY — a bill validated before price checks existed shows today's check (not saved)
       return NextResponse.json({ ok: true, can_manage: !!(blMgr && blMgr.ok === true), lines: blL.lines, commission_rule: blCR, price_check: blCheck, price_check_status: blCheck ? blCheck.status : (blB.data.price_check_status || null),
         price_resolved_note: blB.data.price_resolved_note || null, locked: blB.data.validation_status === 'validated', validation_draft: blB.data.validation_draft || null, default_direction: defaultDirectionFor(await loadCommissionRules(db), blB.data.vendor_name) });
     }

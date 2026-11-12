@@ -55,7 +55,7 @@ console.log('RV — the 16 review findings, fixed');
   var WP = R('src/components/WirePackagesPanel.jsx');
   check('H3: wire "Validate now" shows the price check, asks the price-issue resolution, saves ticks / notes as a draft, and only shows for Bills: Manage',
     WP.indexOf("post({ action: 'bill_lines', id: p.billId })") > 0 && WP.indexOf('<PriceCheckBox check={pc.check} status="flagged" resolved={pc.resolved} />') > 0 && WP.indexOf('price_resolution: res })') > 0 &&
-    WP.indexOf("keep({ ck: n }, true)") > 0 && WP.indexOf('canValidate={!!perms.bills}') > 0 && R('src/components/WiresTab.jsx').indexOf("bills: isSuperAdmin || mp['bills.manage'] === true") > 0);
+    WP.indexOf("keep({ ck: n }, true)") > 0 && WP.indexOf('canValidate={!!perms.bills}') > 0 && R('src/components/WiresTab.jsx').indexOf("bills: boss || mp['bills.manage'] === true") > 0); // superseded pin (v55.83-SA): owner / admin count too — "always (admin)"
   // HIGH #4 + MEDIUM #11 — email imports never cut off
   var IN = R('src/app/api/accounting/bills/inbound/route.js'); var ES = R('src/app/api/accounting/bills/email-scan/route.js');
   check('H4: email inbound gets the full 60 s and stops before the limit, naming the files not read', IN.indexOf('export const maxDuration = 60;') > 0 && IN.indexOf('if (Date.now() - inStarted > 42000)') > 0 && IN.indexOf('forward this file again on its own') > 0);

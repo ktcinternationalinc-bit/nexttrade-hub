@@ -13,7 +13,7 @@ var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
 var HIST = {
-  wire_package_prepared: '➕ prepared the wire', wire_package_updated: '✏ changed the wire', wire_package_audit_run: '🤖 check ran',
+  wire_bill_reviewed: '👁 opened and checked a bill', wire_package_prepared: '➕ prepared the wire', wire_package_updated: '✏ changed the wire', wire_package_audit_run: '🤖 check ran',
   wire_check_overridden: '↷ overrode a check', wire_package_signoff_1: '✍ signed 1st', wire_package_signoff_2: '✍ signed 2nd (approved)',
   wire_package_sent: '📤 marked it sent', wire_package_attached: '🔗 attached this bank line', wire_package_rtm_proof: '📎 added RTM proof',
   bill_paid_via_set: '🏢 bills marked “paid through”', wire_package_cancelled: '✕ cancelled', wire_package_reversed: '↩ undid the wire',

@@ -481,6 +481,26 @@ export default function App() {
   const [userProfile, setUserProfile] = useState(null);
   const profileIdRef = useRef(null);
   const [modulePerms, setModulePerms] = useState({});
+  // v55.83-SA (Max, Nov 12 07:29: "Not just admin." — people with Bills ON still did not see bills) — a person's switches
+  // were read ONCE at sign-in, so anything granted afterwards did nothing until they signed out and in again. Re-read
+  // them when the Hub comes back to the front and every 2 minutes (one small query; same table, same shape).
+  useEffect(() => {
+    const uid = userProfile && userProfile.id;
+    if (!uid) return undefined;
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const { data, error } = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', uid);
+        if (!alive || error || !Array.isArray(data)) return;
+        const m = {}; data.forEach(p => { m[p.module_name] = p.has_access; });
+        setModulePerms(prev => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m));
+      } catch (e) { /* keep what we have */ }
+    };
+    const onFront = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', onFront);
+    const iv = setInterval(refresh, 120000);
+    return () => { alive = false; window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', onFront); clearInterval(iv); };
+  }, [userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [lang, setLang] = useState('ar'); // 'ar' or 'en'
   const [categoriesList, setCategoriesList] = useState([]);  // from `categories` table (bilingual)
 
@@ -5545,7 +5565,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-RX</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-SB</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"

@@ -178,7 +178,8 @@ ok('11c: 📑 tab — column-click sorting, account/direction/state/text/date fi
   /onGo\('review'\)/.test(attT) && /all-transactions-/.test(attT));
 ok('11d: wired under Accounting behind bank.classify',
   atW.indexOf("['all_txns', '📑 All Transactions']") >= 0 &&
-  /t\[0\] !== 'all_txns' \|\| isSuper \|\| mp\['bank\.classify'\] === true/.test(atW));
+  // superseded pin (v55.83-SA, Max Nov 12): owner / admin count too — the box says "always (admin)" and the server agrees
+  /t\[0\] !== 'all_txns' \|\| bossA \|\| mp\['bank\.classify'\] === true/.test(atW));
 
 // ── PW part 5 (Max 10:56 + 10:59 "build the permissioning"): three levels ──
 var stP = R('src/components/SettingsTab.jsx');

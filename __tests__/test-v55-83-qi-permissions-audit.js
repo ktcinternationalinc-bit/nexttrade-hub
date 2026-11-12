@@ -67,7 +67,8 @@ ok('3c: the 🧾 Audit Trail tab — own permission audit.view, merges the hub l
   /source: 'bill_events'/.test(R('src/app/api/accounting/audit/route.js')) &&
   !/\.insert\(|\.update\(|\.delete\(/.test(R('src/app/api/accounting/audit/route.js').split('// resolve actor names')[0].split("if (body.action !== 'list')")[1] || '') &&
   /\['audit', '🧾 Audit Trail'\]/.test(R('src/components/AccountingTab.jsx')) &&
-  /t\[0\] !== 'audit' \|\| isSuper \|\| mp\['audit\.view'\] === true/.test(R('src/components/AccountingTab.jsx')));
+  // superseded pin (v55.83-SA, Max Nov 12): owner / admin count too — the box says "always (admin)" and the server agrees
+  /t\[0\] !== 'audit' \|\| bossA \|\| mp\['audit\.view'\] === true/.test(R('src/components/AccountingTab.jsx')));
 ok('3d: new catalog keys exist — Open Cards (rows only), Audit: View Trail, Change Date Filters',
   /key: 'accounting\.view_underlying'/.test(R('src/components/SettingsTab.jsx')) &&
   /key: 'audit\.view'/.test(R('src/components/SettingsTab.jsx')) &&

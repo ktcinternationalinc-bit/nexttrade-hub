@@ -12,7 +12,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
-import { PriceCheckBox } from './BillLinesPanel';
+import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function d16(x) { return String(x || '').substring(0, 16).replace('T', ' '); }
@@ -43,10 +43,12 @@ var NEXT_WORDS = {
 };
 // v55.83-RL — the wire's history in plain words (Max 12:18: "audit should include whatever ... was done")
 var HIST_WORDS = {
-  wire_package_prepared: '➕ prepared the wire', wire_package_updated: '✏ changed the wire', wire_package_audit_run: '🤖 check ran',
+  wire_bill_reviewed: '👁 opened and checked a bill', wire_package_deleted: '🗑 deleted the wire', wire_package_prepared: '➕ prepared the wire',
+   wire_package_updated: '✏ changed the wire', wire_package_audit_run: '🤖 check ran',
   wire_check_overridden: '↷ overrode a check', wire_package_signoff_1: '✍ signed 1st', wire_package_signoff_2: '✍ signed 2nd (approved)',
   wire_package_sent: '📤 marked it sent', wire_package_attached: '🔗 attached the bank line', wire_package_rtm_proof: '📎 added RTM proof',
   bill_paid_via_set: '🏢 bills marked “paid through”', wire_package_cancelled: '✕ cancelled', wire_package_reversed: '↩ undid the wire', wire_package_mark_failed: '⚠ marking failed',
+  wire_recorded_after_the_fact: '🕘 recorded a wire sent before the Hub had wires', wire_sent_date_changed: '📅 corrected the sent date', bank_line_filed_professional_fees: '🗂 bank line filed under professional fees', // v55.83-RZ
 };
 // how to fix each blocking problem
 var FIX = {
@@ -186,10 +188,113 @@ function ValidateInline(p) {
   </div>;
 }
 
+// v55.83-RY (Max, Nov 10 00:11: "should be able to view when you are signing off on a wire. you should be able to view each bill
+// and close the bill as you check before you approve it and sign it") — the bill itself, opened from the wire: the document,
+// every fact, its lines (cost + commission), its price check and who validated it; "✓ Checked — close" records it.
+function BillReviewModal(p) {
+  var l = p.line || {}; var b = l.bill || {};
+  var s1 = useState(null); var docUrl = s1[0]; var setDocUrl = s1[1];
+  var s2 = useState(''); var docErr = s2[0]; var setDocErr = s2[1];
+  var s3 = useState(false); var busy = s3[0]; var setBusy = s3[1];
+  useEffect(function () {
+    if (!b.attachment_path) { return undefined; }
+    var alive = true; var path = String(b.attachment_path); var priv = path.indexOf('pv/') === 0;
+    supabase.storage.from(priv ? 'bills-private' : 'attachments').createSignedUrl(path, 3600).then(function (r) {
+      if (!alive) { return; }
+      var u = r && r.data && r.data.signedUrl;
+      if (u) { setDocUrl(u); } // signed (private, 1 hour) links only — never a public link to a bill else { setDocErr('The bill document could not be opened (' + ((r && r.error && r.error.message) || 'no link') + ').'); }
+    }).catch(function (e) { if (alive) { setDocErr('The bill document could not be opened (' + ((e && e.message) || 'error') + ').'); } });
+    return function () { alive = false; };
+  }, [b.attachment_path]); // eslint-disable-line
+  function billsApi(payload) {
+    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: p.userId }, payload)) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
+  }
+  var isPdf = /\.pdf($|\?)/i.test(String(b.attachment_path || ''));
+  var before = l.other_payments || [];
+  function fact(k, v, warn) { return <div className="flex gap-2 text-[12px] py-0.5" style={{ borderBottom: '1px solid #f1f5f9' }}><span className="w-36 shrink-0" style={{ color: MUTED }}>{k}</span><span className="font-bold" style={{ color: warn ? '#b91c1c' : INK }}>{v}</span></div>; }
+  return <div onClick={p.onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 12px', overflowY: 'auto' }}>
+    <div onClick={function (e) { e.stopPropagation(); }} className="nt-paper rounded-2xl p-4" style={{ width: 'min(1250px, 100%)', border: '2px solid #4f46e5' }}>
+      <div className="flex gap-2 items-center flex-wrap mb-3">
+        <div className="text-[16px] font-extrabold" style={{ color: INK }}>{(b.vendor_name || '?') + ' · bill ' + (b.bill_number || '—') + ' · $' + fmt(l.amount) + ' on this wire'}</div>
+        {p.reviewedByMe && <span className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#dcfce7', color: '#14532d' }}>✓ you checked it</span>}
+        <div className="flex-1" />
+        {p.canReview && !p.reviewedByMe && <button disabled={busy} onClick={function () { setBusy(true); Promise.resolve(p.onReviewed()).finally(function () { setBusy(false); }); }} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>{busy ? 'Saving…' : '✓ I checked this bill — close'}</button>}
+        <button onClick={p.onClose} className="px-3 py-2 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: SUB, border: '1px solid #cbd5e1' }}>✕ Close</button>
+      </div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1fr)' }}>
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #e2e8f0', background: '#f8fafc', minHeight: 420 }}>
+          {!b.attachment_path ? <div className="p-6 text-[13px] font-bold" style={{ color: '#b45309' }}>⚠ No document is attached to this bill — check it against the vendor’s bill outside the Hub, or attach it in 💸 Bills.</div>
+            : docErr ? <div className="p-6 text-[13px] font-bold" style={{ color: '#b91c1c' }}>{docErr}</div>
+            : !docUrl ? <div className="p-6 text-[12px]" style={{ color: MUTED }}>Loading the bill…</div>
+            : isPdf ? <iframe title="bill" src={docUrl} style={{ width: '100%', height: 720, border: 0, background: '#ffffff' }} />
+            : <img alt="bill" src={docUrl} style={{ width: '100%', display: 'block', background: '#ffffff' }} />}
+          {docUrl && <div className="px-3 py-1.5 text-[11px]" style={{ borderTop: '1px solid #e2e8f0' }}><a href={docUrl} target="_blank" rel="noreferrer" className="underline font-bold" style={{ color: '#1d4ed8' }}>open the document in a new tab</a></div>}
+        </div>
+        <div>
+          <div className="rounded-xl p-3 mb-2" style={{ border: '1px solid #e2e8f0', background: '#ffffff' }}>
+            {fact('Vendor', b.vendor_name || '—')}{fact('Bill #', b.bill_number || 'missing', !b.bill_number)}{fact('Bill date', b.bill_date || 'missing', !b.bill_date)}{fact('Due', b.due_date || '—')}
+            {fact('Type', BILL_TYPE_LABEL[b.bill_type] || 'not set', !b.bill_type)}{fact('In / Out', b.shipment_direction === 'inbound' ? '⬅ Inbound' : b.shipment_direction === 'outbound' ? 'Outbound ➡' : 'not set', !b.shipment_direction)}
+            {fact('Release #', b.release_number || (b.shipment_direction === 'outbound' ? 'MISSING (outbound needs one)' : '—'), b.shipment_direction === 'outbound' && !b.release_number)}
+            {fact('Reference', b.other_reference || (b.shipment_direction === 'inbound' ? 'MISSING (inbound needs one)' : '—'), b.shipment_direction === 'inbound' && !b.other_reference)}
+            {fact('Bill total', '$' + fmt(b.total_amount))}{fact('Paid before', before.length ? before.map(function (o) { return '$' + fmt(o.amount) + ' ' + (o.paid_date || '') + ' (' + o.label + ')'; }).join('; ') : 'nothing', before.length > 0)}
+            {fact('On this wire', '$' + fmt(l.amount))}{fact('Category', b.category ? String(b.category).replace(/_/g, ' ') : '—')}
+            {fact('Validated', b.validation_status === 'validated' ? '✓ ' + String(b.validated_at || '').substring(0, 10) + (b.validation_notes ? ' — “' + b.validation_notes + '”' : '') : 'NOT validated', b.validation_status !== 'validated')}
+            {b.notes ? fact('Notes', b.notes) : null}
+          </div>
+          <BillLinesPanel bill={b} api={billsApi} toast={p.toast} canManage={false} />
+        </div>
+      </div>
+      {p.canReview && !p.reviewedByMe && <div className="mt-3 text-[11px]" style={{ color: MUTED }}>“✓ I checked this bill” is recorded with your name for this exact wire. If the wire changes, the bills must be checked again before signing.</div>}
+    </div>
+  </div>;
+}
+
 function Btn(p) {
   var col = p.color || '#1e293b';
   return <button onClick={p.onClick} disabled={p.disabled} title={p.title} className={'rounded-lg font-extrabold disabled:opacity-40 ' + (p.big ? 'px-4 py-2 text-[13px]' : 'px-3 py-1.5 text-[12px]')}
     style={p.light ? { background: '#ffffff', color: SUB, border: '1px solid #cbd5e1' } : { background: col, color: '#ffffff' }}>{p.children}</button>;
+}
+
+// v55.83-RZ (Max 00:20: "for those bills paid prior to this function — retroactively — we should be able to update the date of the
+// wire and you will look for the actual wire that was sent for that set of bills ... and match them") — super admin only
+function PastWireForm(p) {
+  var past = p.past; var setPast = p.setPast; var payees = p.payees;
+  function set(k, v) { var o = {}; o[k] = v; o.err = ''; setPast(Object.assign({}, past, o)); }
+  var picksN = Object.keys(past.picks).length; var sum = 0; Object.keys(past.picks).forEach(function (k) { sum += Number(String(past.picks[k] || '').replace(/,/g, '')) || 0; });
+  var vendorPicked = null; if (past.kind === 'vendor' && past.bills) { past.bills.forEach(function (b) { if (past.picks[b.id] != null && !vendorPicked) { vendorPicked = b.vendor_name; } }); }
+  return <div className="rounded-xl p-3 mb-3" style={{ background: '#f8fafc', border: '2px solid #0f766e' }}>
+    <div className="flex items-center gap-2 mb-1"><div className="text-[14px] font-extrabold" style={{ color: INK }}>🕘 Record a wire that was sent before the Hub had wires</div><div className="flex-1" /><Btn light onClick={function () { setPast(null); }}>Close</Btn></div>
+    <div className="text-[12px] mb-2" style={{ color: SUB }}>Tick the bills it paid and roughly when it was sent. The Hub then finds the real money-out in the bank (a week either side; up to $100 more is accepted as an extra charge on the bill) and records those bills PAID. No signatures — it is kept in the history with your reason.</div>
+    <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>1 · Who got the money?</div>
+    <div className="flex gap-2 flex-wrap mb-2">
+      {(payees.parties || []).map(function (x) { var k = x.kind === 'affiliate' ? 'affiliate' : 'service_provider'; var on = past.kind === k && past.payee === x.name;
+        return <button key={x.name} onClick={function () { p.onPick(k, x.name); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: on ? '#0f766e' : '#ffffff', color: on ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>{'🏢 ' + x.name}</button>; })}
+      <button onClick={function () { p.onPick('vendor', ''); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: past.kind === 'vendor' ? '#0f766e' : '#ffffff', color: past.kind === 'vendor' ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>🧾 A vendor directly</button>
+    </div>
+    {past.kind && <div>
+      <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>2 · The bills that wire paid (change the amount for a part payment)</div>
+      {!past.bills ? <div className="text-[12px]" style={{ color: MUTED }}>Loading the open bills…</div> : past.bills.length === 0 ? <div className="text-[12px]" style={{ color: SUB }}>No open bills for this choice.</div>
+        : <div className="overflow-x-auto rounded-lg mb-2" style={{ border: '1px solid #e2e8f0', maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[12px]"><tbody style={{ color: INK }}>
+          {past.bills.map(function (b) {
+            var on = past.picks[b.id] != null; var off = !!b.on_package || (past.kind === 'vendor' && vendorPicked && b.vendor_name !== vendorPicked && !on);
+            return <tr key={b.id} style={{ borderTop: '1px solid #f1f5f9', background: on ? '#ecfdf5' : '#ffffff', opacity: off ? 0.45 : 1 }}>
+              <td className="px-2 py-1.5"><input type="checkbox" checked={on} disabled={off} onChange={function () { var pk = Object.assign({}, past.picks); if (on) { delete pk[b.id]; } else { pk[b.id] = String(b.open); } set('picks', pk); }} style={{ width: 16, height: 16 }} /></td>
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name}<div className="text-[10px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + ' · ' + (b.bill_date || '') + (b.release_number ? ' · rel ' + b.release_number : '') + (b.on_package ? ' · already on ' + b.on_package : '')}</div></td>
+              <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: SUB }}>{'open $' + fmt(b.open)}</td>
+              <td className="px-2 py-1.5 text-right">{on ? <input value={past.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, past.picks); pk[b.id] = e.target.value; set('picks', pk); }} className={inp} style={Object.assign({ width: 110, textAlign: 'right' }, inpS)} /> : null}</td></tr>;
+          })}</tbody></table></div>}
+      <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>{'3 · When and why' + (picksN ? ' — ' + picksN + ' bill(s), $' + fmt(sum) : '')}</div>
+      <div className="flex gap-2 items-center flex-wrap">
+        <label className="text-[12px] font-bold" style={{ color: SUB }}>Sent about <input type="date" value={past.date} onChange={function (e) { set('date', e.target.value); }} className={inp} style={inpS} /></label>
+        <input value={past.ref} onChange={function (e) { set('ref', e.target.value); }} placeholder="bank wire reference (optional)" className={inp} style={Object.assign({ width: 200 }, inpS)} />
+        <input value={past.reason} onChange={function (e) { set('reason', e.target.value); }} placeholder="what this was (e.g. June wire to RTM for these NexPac bills)" className={inp} style={Object.assign({ flex: '1 1 280px' }, inpS)} />
+        <Btn big color="#0f766e" onClick={p.onSave} disabled={p.busy}>{p.busy ? 'Working…' : '🕘 Record it & find it in the bank'}</Btn>
+      </div>
+    </div>}
+    {past.err && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#b91c1c', border: '1px solid #fca5a5' }}>{'⛔ ' + past.err}</div>}
+  </div>;
 }
 
 export default function WirePackagesPanel(props) {
@@ -210,7 +315,10 @@ export default function WirePackagesPanel(props) {
   var a14 = useState(false); var showMore = a14[0]; var setShowMore = a14[1];
   var a15 = useState(null); var setup = a15[0]; var setSetup = a15[1];
   var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1];
-  var a17 = useState(null); var delAsk = a17[0]; var setDelAsk = a17[1]; // v55.83-RO — the delete / undo question, inline // v55.83-RL — reasons being typed, per check
+  var a17 = useState(null); var delAsk = a17[0]; var setDelAsk = a17[1];
+  var a19 = useState(null); var dateAsk = a19[0]; var setDateAsk = a19[1]; // RZ — correcting the sent date
+  var a20 = useState(null); var past = a20[0]; var setPast = a20[1];         // RZ — recording a wire sent before the Hub had wires
+  var a18 = useState(null); var viewLine = a18[0]; var setViewLine = a18[1]; // RY — the bill opened from the wire // v55.83-RO — the delete / undo question, inline // v55.83-RL — reasons being typed, per check
 
   // v55.83-RJ (review gap 9) — every call returns an answer object; a timeout / non-JSON reply becomes a readable error, never a frozen screen
   function api(payload) {
@@ -219,9 +327,9 @@ export default function WirePackagesPanel(props) {
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + '). Reload and check the wire list before trying again.' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
-  function load() { api({ action: 'list' }).then(function (j) { if (j && j.ok) { setList(j.packages || []); } else { setList([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setList([]); }); }
+  function load() { api({ action: 'list' }).then(function (j) { if (j && j.ok) { setList(j.packages || []); (j.auto_matched || []).forEach(function (m) { toast.success('🔗 ' + m.label + ' found in the bank — ' + m.bills_paid + ' bill(s) now PAID' + (m.bank_fee ? ' (extra charge $' + fmt(m.bank_fee) + ')' : '') + '.'); }); } else { setList([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setList([]); }); }
   function open(id) {
-    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null);
+    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null); setDateAsk(null);
     api({ action: 'get', id: id }).then(function (j) {
       if (j && j.ok) { setDet(j); setEd(null); setProofF({ ticks: {}, date: '', ref: '', file: null }); if (j.package.raw_status === 'sent') { loadCands(id); } }
       else { toast.error((j && j.error) || 'Could not open the wire.'); }
@@ -329,7 +437,16 @@ export default function WirePackagesPanel(props) {
   }
   // ── wire actions
   function recheck() { return act({ action: 'run_check', id: det.package.id }, function (j) { return j.pass ? '✅ Check passed.' : '⛔ Still ' + j.blocks + ' problem(s).'; }); }
-  function sign() { act({ action: 'signoff', id: det.package.id, note: note }, function (j) { return j.approved ? '✅ 2nd signature — APPROVED. It can be sent now.' : '✍ 1st signature recorded — now a DIFFERENT person signs.'; }).then(function () { setNote(''); }); }
+  function reviewBill(l) { // RY — "close the bill as you check"
+    return api({ action: 'review_bill', id: det.package.id, bill_id: l.bill_id }).then(function (j) {
+      if (j && j.ok) { toast.success('✓ Checked — ' + (j.left ? j.left + ' bill(s) left to check before you can sign.' : 'all bills checked. You can sign now.')); setViewLine(null); open(det.package.id); }
+      else { toast.error((j && j.error) || 'Not recorded.'); }
+    });
+  }
+  function sign() {
+    var mine = (det.audit && det.audit.my_reviewed) || []; var left = det.lines.filter(function (l) { return mine.indexOf(l.bill_id) < 0; });
+    if (left.length) { toast.error('Open and check every bill before you sign — ' + left.length + ' not checked yet (👁 Open & check, in the bills list below).'); return; }
+    act({ action: 'signoff', id: det.package.id, note: note }, function (j) { return j.approved ? '✅ 2nd signature — APPROVED. It can be sent now.' : '✍ 1st signature recorded — now a DIFFERENT person signs.'; }).then(function () { setNote(''); }); }
   function sendIt() {
     if (!sendF.ref || sendF.ref.trim().length < 3) { toast.error("Type the bank's wire reference / confirmation #."); return; }
     if (!sendF.file) { toast.error("Attach the bank's wire confirmation (PDF or screenshot)."); return; }
@@ -337,6 +454,37 @@ export default function WirePackagesPanel(props) {
     upload(sendF.file, det.package.id).then(function (u) {
       return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
+  }
+  // v55.83-RZ — look in the bank feed now (the Hub also does this on every bank sync / statement import / opening Wires)
+  function matchNow() {
+    return act({ action: 'match_now', id: det.package.id }, function (j) {
+      var r = j.result || {}; if (j.matched) { return '🔗 Found it in the bank — the bills are now PAID.'; }
+      return (r.ambiguous || []).length ? 'Not matched by itself: ' + (r.ambiguous[0].why || 'more than one bank line fits') + '. Pick the right line below.' : 'Not in the bank feed yet. It is checked again on every bank sync (every 2 hours).';
+    }, function () { open(det.package.id); });
+  }
+  function saveSentDate() {
+    if (!dateAsk || !dateAsk.date) { setDateAsk(Object.assign({}, dateAsk, { err: 'Pick the date it was really sent.' })); return; }
+    if (String(dateAsk.reason || '').trim().length < 5) { setDateAsk(Object.assign({}, dateAsk, { err: 'Say why the date changes (at least 5 characters).' })); return; }
+    act({ action: 'set_sent_date', id: det.package.id, sent_date: dateAsk.date, reason: dateAsk.reason }, function (j) { return j.matched ? '📅 Date corrected — and the bank line was found: the bills are now PAID.' : '📅 Date corrected — looking around the new date.'; },
+      function () { setDateAsk(null); open(det.package.id); }).then(function (j) { if (!(j && j.ok)) { setDateAsk(function (d0) { return d0 ? Object.assign({}, d0, { err: (j && j.error) || 'Not saved.' }) : d0; }); } });
+  }
+  function startPast() { withPayees(function () { setDet(null); setEd(null); setPast({ kind: null, payee: '', bills: null, picks: {}, date: '', ref: '', reason: '', err: '' }); }); }
+  function pastPick(kind, name) {
+    var nx = Object.assign({}, past, { kind: kind, payee: name, bills: null, picks: {}, err: '' }); setPast(nx);
+    api({ action: 'open_bills', payee_kind: kind, payee_name: name, past: true }).then(function (j) {
+      setPast(function (p0) { return p0 && p0.kind === kind && p0.payee === name ? Object.assign({}, p0, { bills: (j && j.ok) ? (j.bills || []) : [], err: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bills.') }) : p0; });
+    });
+  }
+  function savePast() {
+    var lines = []; var bad = null;
+    Object.keys(past.picks).forEach(function (k) { var a = Number(String(past.picks[k] || '').replace(/,/g, '')); if (!(a > 0)) { bad = true; } else { lines.push({ bill_id: k, amount: Math.round(a * 100) / 100 }); } });
+    var err = !lines.length ? 'Tick the bills that wire paid.' : bad ? 'Every ticked bill needs the amount the wire paid (a number like 1250.00).' : !past.date ? 'Pick the date the wire was sent (roughly is fine — the Hub looks a week either side).' : String(past.reason || '').trim().length < 10 ? 'Say what this wire was (at least 10 characters) — it is kept with the wire.' : '';
+    if (err) { setPast(Object.assign({}, past, { err: err })); return; }
+    setBusy(true);
+    api({ action: 'record_past_wire', payee_kind: past.kind, payee_name: past.payee, lines: lines, sent_date: past.date, bank_reference: past.ref, reason: past.reason }).then(function (j) {
+      if (j && j.ok) { toast.success(j.matched ? '🔗 ' + j.label + ' recorded and FOUND in the bank — the bills are now PAID.' : '🕘 ' + j.label + ' recorded as sent on ' + past.date + '. Not found in the bank feed yet — open it to pick the bank line or correct the date.'); setPast(null); load(); open(j.id); }
+      else { setPast(function (p0) { return p0 ? Object.assign({}, p0, { err: (j && j.error) || 'Not recorded.' }) : p0; }); }
+    }).finally(function () { setBusy(false); });
   }
   function loadCands(id) { api({ action: 'bank_candidates', id: id }).then(function (j) { setCands(j && j.ok ? j : { candidates: [], error: j && j.error }); }); }
   function addProof() {
@@ -500,7 +648,8 @@ export default function WirePackagesPanel(props) {
         {!perms.signoff ? <div style={{ color: SUB }}>Waiting for someone with “Wires: Sign Off”.</div>
           : (st === 'awaiting_2nd' && A.i_signed_first) ? <div className="font-bold" style={{ color: '#9a3412' }}>You signed first — the 2nd signature must be someone else.</div>
           : <div className="flex gap-2 items-center flex-wrap"><input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder={A.ai_ok === true ? 'what you checked (optional)' : 'what you checked (required)'} className={inp} style={Object.assign({ flex: '1 1 280px' }, inpS)} />
-            <Btn big color="#047857" onClick={sign} disabled={busy}>{'✍ I verified it — sign as ' + who}</Btn></div>}</div>;
+            <Btn big color="#047857" onClick={sign} disabled={busy}>{'✍ I verified it — sign as ' + who}</Btn>
+            {(function () { var mine = A.my_reviewed || []; var n = det.lines.filter(function (l) { return mine.indexOf(l.bill_id) >= 0; }).length; return <span className="text-[12px] font-extrabold" style={{ color: n === det.lines.length ? '#065f46' : '#b45309' }}>{n === det.lines.length ? '✓ You checked all ' + n + ' bill(s)' : '👁 You checked ' + n + ' of ' + det.lines.length + ' bills — open and check each one below before signing'}</span>; })()}</div>}</div>;
     } else if (st === 'ready_to_send') {
       nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 ' + sendWords(P) + ' — $' + fmt(P.total)}</div>
         <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Wire exactly $' + fmt(P.total) + ' to ' + P.payee_name + (P.payee_kind === 'vendor' ? ' (the vendor, directly)' : '') + ' from the bank, then fill this in:'}</div>
@@ -512,16 +661,28 @@ export default function WirePackagesPanel(props) {
           <Btn big color="#1d4ed8" onClick={sendIt} disabled={busy}>{'📤 Mark as sent to ' + (P.payee_kind === 'vendor' ? 'the vendor' : P.payee_name)}</Btn></div>
           : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}</div>;
     } else if (st === 'sent') {
-      nextBox = <div><div className="mb-2" style={{ color: INK }}>{'Sent ' + P.sent.date + ' (ref ' + P.sent.reference + '). When the $' + fmt(amountNow) + ' money-out shows in the bank feed, attach it — that records the bills as paid.'}</div>
+      nextBox = <div><div className="mb-1" style={{ color: INK }}>{(P.sent.after_the_fact ? '🕘 Recorded after the fact — sent about ' : 'Sent ') + P.sent.date + ' (ref ' + P.sent.reference + '). The Hub looks for the $' + fmt(amountNow) + ' money-out in the bank feed by itself (every bank sync / statement import) — when exactly one wire-looking line fits, the bills become PAID automatically. You can always pick the line yourself below. A line up to $' + ((cands && cands.auto_fee_max) || 100) + ' more is accepted — the extra is ' + (P.payee_kind === 'vendor' ? 'booked with the bill it paid (that bill’s category — cost of goods by default).' : 'part of the ' + P.payee_name + ' line, filed under professional fees.')}</div>
+        {P.sent.after_the_fact && P.sent.after_the_fact_note && <div className="text-[11px] mb-1" style={{ color: SUB }}>{'Why: “' + P.sent.after_the_fact_note + '”'}</div>}
+        <div className="flex gap-2 items-center flex-wrap mb-2">
+          {perms.send && <Btn color="#0f766e" onClick={matchNow} disabled={busy}>🔎 Look in the bank now</Btn>}
+          {perms.send && !dateAsk && <Btn light onClick={function () { setDateAsk({ date: P.sent.date || '', reason: '', err: '' }); }}>📅 Wrong date? Change the sent date</Btn>}
+        </div>
+        {dateAsk && <div className="rounded-lg p-2 mb-2" style={{ background: '#eff6ff', border: '1px solid #93c5fd' }}>
+          <div className="flex gap-2 items-center flex-wrap">
+            <label className="text-[12px] font-bold" style={{ color: SUB }}>Really sent on <input type="date" value={dateAsk.date} onChange={function (e) { setDateAsk(Object.assign({}, dateAsk, { date: e.target.value, err: '' })); }} className={inp} style={inpS} /></label>
+            <input value={dateAsk.reason} onChange={function (e) { setDateAsk(Object.assign({}, dateAsk, { reason: e.target.value, err: '' })); }} placeholder="why (e.g. the bank sent it on the 12th)" className={inp} style={Object.assign({ flex: '1 1 240px' }, inpS)} />
+            <Btn color="#1d4ed8" onClick={saveSentDate} disabled={busy}>📅 Save date &amp; look again</Btn><Btn light onClick={function () { setDateAsk(null); }}>Cancel</Btn></div>
+          {dateAsk.err && <div className="mt-1 text-[12px] font-extrabold" style={{ color: '#b91c1c' }}>{'⛔ ' + dateAsk.err}</div>}</div>}
+        {cands && (cands.candidates || []).length > 1 && <div className="text-[12px] font-extrabold mb-1" style={{ color: '#9a3412' }}>{cands.candidates.length + ' bank lines could be this wire — the Hub never guesses. Pick the right one:'}</div>}
         {!cands ? <div style={{ color: MUTED }}>Looking in the bank feed…</div> : (cands.candidates || []).length === 0
-          ? <div style={{ color: SUB }}>{cands.error || 'Not in the bank feed yet.'} <button onClick={function () { loadCands(P.id); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>look again</button></div>
+          ? <div style={{ color: SUB }}>{cands.error || 'Not in the bank feed yet (searched 3 days before to 2 weeks after ' + P.sent.date + ').'} <button onClick={function () { loadCands(P.id); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>look again</button></div>
           : <div>{cands.candidates.map(function (c) {
             return <div key={c.id} className="flex gap-2 items-center flex-wrap rounded-lg px-3 py-2 mb-1" style={{ background: c.exact ? '#ecfdf5' : '#fff7ed', border: '1px solid ' + (c.exact ? '#a7f3d0' : '#fed7aa'), color: INK }}>
               <span className="font-bold">{c.date}</span><span className="font-extrabold tabular-nums">−${fmt(c.amount)}</span><span className="flex-1">{c.name}</span>
-              <span className="text-[11px] font-bold" style={{ color: c.exact ? '#065f46' : '#9a3412' }}>{c.exact ? 'exact amount' : (c.amount - amountNow > 0 ? '+' : '') + fmt(c.amount - amountNow) + ' different'}</span>
+              <span className="text-[11px] font-bold" style={{ color: c.exact ? '#065f46' : (c.amount - amountNow > 0 && c.amount - amountNow <= ((cands && cands.auto_fee_max) || 100) + 0.005) ? '#0e7490' : '#9a3412' }}>{c.exact ? 'exact amount' : (c.amount - amountNow > 0 && c.amount - amountNow <= ((cands && cands.auto_fee_max) || 100) + 0.005) ? '+$' + fmt(c.amount - amountNow) + ' extra charge (accepted)' : (c.amount - amountNow > 0 ? '+' : '') + fmt(c.amount - amountNow) + ' different — super admin only'}</span>
               {perms.send && <Btn color="#1d4ed8" onClick={function () { act({ action: 'attach', id: P.id, bank_transaction_id: c.id, override_note: c.exact ? '' : ovr }, function (j) { return '🔗 Attached — ' + j.bills_paid + ' bill(s) now recorded paid.'; }); }} disabled={busy}>🔗 This is it</Btn>}
             </div>;
-          })}{cands.candidates.some(function (c) { return !c.exact; }) && <input value={ovr} onChange={function (e) { setOvr(e.target.value); }} placeholder="if the amount is different — super admin only: why (bank fee, FX…)" className={inp} style={Object.assign({ width: '100%' }, inpS)} />}</div>}</div>;
+          })}{cands.candidates.some(function (c) { return !c.exact && !(c.amount - amountNow > 0 && c.amount - amountNow <= ((cands && cands.auto_fee_max) || 100) + 0.005); }) && <input value={ovr} onChange={function (e) { setOvr(e.target.value); }} placeholder="if the amount is different — super admin only: why (bank fee, FX…)" className={inp} style={Object.assign({ width: '100%' }, inpS)} />}</div>}</div>;
     } else if (st === 'awaiting_proof') {
       nextBox = <div><div className="mb-2" style={{ color: INK }}>{'In the bank. Now add ' + P.payee_name + '’s proof that it paid the vendors: tick the bills it covers in the table below (' + P.rtm_pending + ' still without proof), then:'}</div>
         {(perms.send || perms.prepare) ? <div className="flex gap-2 items-center flex-wrap">
@@ -540,9 +701,11 @@ export default function WirePackagesPanel(props) {
         <div className="flex-1" />
         {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { startChange(det); }}>✏ Change</Btn>}
         {/* v55.83-RL (Max 12:17: "ability to delete the wire and everything return to previous state") */}
-        {perms.prepare && P.raw_status === 'draft' && <Btn color="#b91c1c" onClick={function () { setDelAsk({ mode: 'erase', reason: '' }); }}>🗑 Delete wire</Btn>}
+        {perms.prepare && P.raw_status === 'draft' && (st !== 'ready_to_send' || perms.superAdmin) && <Btn color="#b91c1c" onClick={function () { setDelAsk({ mode: 'erase', reason: '' }); }}>{st === 'ready_to_send' ? '🗑 Delete / cancel (super admin)' : '🗑 Delete wire'}</Btn>}
+        {/* v55.83-RZ (Max 00:18 + "1 yes") — after both signatures only the super admin can delete or cancel it */}
+        {P.raw_status === 'draft' && st === 'ready_to_send' && !perms.superAdmin && <span className="text-[10px] font-bold" style={{ color: MUTED }}>Both signatures are in — only the super admin can delete or cancel it now.</span>}
         {perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <Btn color="#7f1d1d" onClick={function () { setDelAsk({ mode: 'undo', reason: '' }); }}>↩ Undo &amp; delete wire</Btn>}
-        {!perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <span className="text-[10px]" style={{ color: MUTED }}>A sent wire can be undone by a super admin or the owner.</span>}
+        {!perms.undo && (P.raw_status === 'sent' || P.raw_status === 'attached') && <span className="text-[10px]" style={{ color: MUTED }}>A sent wire can be undone only by the super admin.</span>}
       </div>
       {/* v55.83-RO (Max 20:50: "i need to be able to delete a wire that is in progress") — asked right here, no pop-up */}
       {delAsk && <div className="rounded-xl p-3 mb-3" style={{ background: '#fee2e2', border: '2px solid #b91c1c' }}>
@@ -563,6 +726,9 @@ export default function WirePackagesPanel(props) {
         </div>
         {delAsk.err && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#b91c1c', border: '1px solid #fca5a5' }}>{'⛔ ' + delAsk.err}</div>}
       </div>}
+      {viewLine && <BillReviewModal line={viewLine} userId={userProfile && userProfile.id} toast={toast}
+        canReview={!!perms.signoff && P.raw_status === 'draft'} reviewedByMe={((A && A.my_reviewed) || []).indexOf(viewLine.bill_id) >= 0}
+        onReviewed={function () { return reviewBill(viewLine); }} onClose={function () { setViewLine(null); }} />}
       {/* progress */}
       <div className="flex gap-1 flex-wrap mb-3">
         {steps.map(function (s0, i) {
@@ -579,15 +745,18 @@ export default function WirePackagesPanel(props) {
       <div className="overflow-x-auto rounded-lg mb-3" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
         <thead><tr style={{ background: '#f1f5f9', color: SUB }}>
           {canTick ? <th className="px-2 py-1.5"></th> : null}
-          <th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">In / Out · Release # · Reference</th>
+          <th className="px-2 py-1.5 text-left">Bill</th><th className="px-2 py-1.5 text-left">Vendor</th><th className="px-2 py-1.5 text-left">Bill #</th><th className="px-2 py-1.5 text-left">In / Out · Release # · Reference</th>
           <th className="px-2 py-1.5 text-left">Bill date</th><th className="px-2 py-1.5 text-left">Due</th><th className="px-2 py-1.5 text-left">Category</th>
           <th className="px-2 py-1.5 text-right">Bill total</th><th className="px-2 py-1.5 text-right">This wire</th><th className="px-2 py-1.5 text-left">Paid before</th>
           <th className="px-2 py-1.5 text-left">Notes</th>{P.paid_through ? <th className="px-2 py-1.5 text-left">{P.payee_name} proof</th> : null}</tr></thead>
         <tbody style={{ color: INK }}>
           {det.lines.map(function (l) {
             var b = l.bill || {}; var before = l.other_payments || [];
+            var revs = ((A && A.reviews) || []).filter(function (r) { return r.bill_id === l.bill_id; }); var mineRv = revs.some(function (r) { return r.me; });
             return <tr key={l.line_id} style={{ borderTop: '1px solid #f1f5f9', verticalAlign: 'top' }}>
               {canTick ? <td className="px-2 py-1.5">{!l.rtm.confirmed_at ? <input type="checkbox" style={{ width: 16, height: 16 }} checked={!!proofF.ticks[l.line_id]} onChange={function (e) { var t2 = Object.assign({}, proofF.ticks); t2[l.line_id] = e.target.checked; setProofF(Object.assign({}, proofF, { ticks: t2 })); }} /> : '✓'}</td> : null}
+              <td className="px-2 py-1.5 whitespace-nowrap"><button onClick={function () { setViewLine(l); }} className="px-2 py-1 rounded-lg text-[11px] font-extrabold" style={mineRv ? { background: '#dcfce7', color: '#14532d', border: '1px solid #86efac' } : { background: '#4f46e5', color: '#ffffff' }}>{mineRv ? '✓ Checked · view' : '👁 Open & check'}</button>
+                {revs.length > 0 && <div className="text-[10px] mt-0.5" style={{ color: MUTED }}>{'checked by ' + revs.map(function (r) { return r.by; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ')}</div>}</td>
               <td className="px-2 py-1.5 font-bold">{b.vendor_name || '?'}{b.validation_status !== 'validated' && P.raw_status === 'draft' ? <ValidateInline billId={l.bill_id} dir={b.shipment_direction} btype={b.bill_type} userId={userProfile && userProfile.id} canValidate={!!perms.bills} onDone={function () { toast.success('✓ Validated.'); recheck(); }} /> : null}{l.will_mark && P.raw_status === 'draft' ? <div className="text-[10px] font-bold" style={{ color: '#0e7490' }}>{'becomes “paid through ' + P.payee_name + '” when sent'}</div> : null}</td><td className="px-2 py-1.5">{b.bill_number || '—'}</td>
               <td className="px-2 py-1.5"><BillFields bill={b} editable={P.raw_status === 'draft' && !!perms.prepare} busy={busy} releaseOptional={P.payee_kind === 'affiliate'} onSave={function (field, value, done) { saveField(l.bill_id, field, value, done); }} /></td>
               <td className="px-2 py-1.5 whitespace-nowrap">{b.bill_date || <span style={{ color: '#b91c1c', fontWeight: 800 }}>missing</span>}</td><td className="px-2 py-1.5 whitespace-nowrap">{b.due_date || '—'}</td>
@@ -612,7 +781,7 @@ export default function WirePackagesPanel(props) {
         <div className="text-[12px] mt-2" style={{ color: INK }}>{'✍ 1st: ' + (A.signoff1 ? A.signoff1.name + ' ' + d16(A.signoff1.at) + (A.signoff1.valid ? '' : ' (no longer counts — the wire changed)') + (A.signoff1.note ? ' — “' + A.signoff1.note + '”' : '') : '—')}</div>
         <div className="text-[12px]" style={{ color: INK }}>{'✍ 2nd: ' + (A.signoff2 ? A.signoff2.name + ' ' + d16(A.signoff2.at) + (A.signoff2.valid ? '' : ' (no longer counts)') + (A.signoff2.note ? ' — “' + A.signoff2.note + '”' : '') : '—')}</div>
         {P.sent && <div className="text-[12px]" style={{ color: INK }}>{'📤 Sent ' + P.sent.date + ' · ref ' + P.sent.reference + ' · by ' + P.sent.by}</div>}
-        {P.attached && <div className="text-[12px]" style={{ color: INK }}>{'🔗 Bank line ' + (P.attached.bank ? P.attached.bank.date + ' −$' + fmt(P.attached.bank.amount) + ' ' + P.attached.bank.name : '') + ' · attached by ' + P.attached.by + (P.attached.note ? ' · amount difference accepted: “' + P.attached.note + '”' : '')}</div>}
+        {P.attached && <div className="text-[12px]" style={{ color: INK }}>{'🔗 Bank line ' + (P.attached.bank ? P.attached.bank.date + ' −$' + fmt(P.attached.bank.amount) + ' ' + P.attached.bank.name : '') + (P.attached.auto ? ' · matched automatically by the Hub' : ' · attached by ' + P.attached.by) + (P.attached.bank_fee > 0 ? ' · extra charge $' + fmt(P.attached.bank_fee) + (P.payee_kind === 'vendor' ? ' (booked with the bill)' : ' (in the professional-fees line)') : P.attached.note ? ' · amount difference accepted: “' + P.attached.note + '”' : '')}</div>}
         {(det.overrides || []).length > 0 && <div className="mt-2">
           <div className="text-[12px] font-extrabold" style={{ color: '#9a3412' }}>↷ Overrides (who approved, why)</div>
           {det.overrides.map(function (o, i) { return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(o.at) + ' · ' + o.by + ' · ' + (o.text || o.code) + ' — “' + o.reason + '”' + (o.counts ? '' : ' (no longer counts — the wire changed after it)')}</div>; })}</div>}
@@ -625,6 +794,8 @@ export default function WirePackagesPanel(props) {
             if (h.action === 'wire_check_overridden') { extra = (d0.check || d0.code) + ' — “' + d0.reason + '”'; }
             if (h.action === 'wire_package_reversed' || h.action === 'wire_package_cancelled') { extra = '“' + (d0.reason || d0.note || '') + '”'; }
             if (h.action === 'wire_package_sent') { extra = 'ref ' + (d0.bank_reference || ''); }
+            if (h.action === 'wire_sent_date_changed') { extra = (d0.from || '?') + ' → ' + d0.to + ' — “' + (d0.reason || '') + '”'; } // RZ
+            if (h.action === 'wire_package_attached' && d0.matched) { extra = d0.matched + (d0.bank_fee ? ' · extra charge $' + fmt(d0.bank_fee) : ''); } // RZ
             return <div key={i} className="text-[12px]" style={{ color: INK }}>{d16(h.at) + ' · ' + h.by + ' · ' + (HIST_WORDS[h.action] || h.action) + (extra ? ' · ' + extra : '')}</div>;
           })}</div>}
         {(det.files || []).map(function (f) {
@@ -639,8 +810,10 @@ export default function WirePackagesPanel(props) {
     <div className="flex gap-2 items-center flex-wrap mb-1">
       <div className="text-[16px] font-extrabold" style={{ color: INK }}>📤 Wires — approved before the money leaves</div>
       <div className="flex-1" />
+      {perms.superAdmin && <Btn light onClick={startPast} disabled={busy}>🕘 Record a past wire</Btn>}
       {perms.prepare && <Btn big color="#0f766e" onClick={startNew} disabled={busy}>＋ New wire</Btn>}
     </div>
+    {past && payees && <PastWireForm past={past} setPast={setPast} payees={payees} busy={busy} onPick={pastPick} onSave={savePast} />}
     <div className="text-[12px] mb-3" style={{ color: SUB }}>New wire → pick who gets the money → tick the bills → it checks itself → 2 people sign → send it at the bank → attach the bank line → RTM proof.</div>
     {/* v55.83-RJ (review gaps 7, 15) — anything that would stop a wire, said up front */}
     {setup && (function () {
@@ -679,7 +852,7 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>
               <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{p.status === 'ready_to_send' ? sendWords(p) : NEXT_WORDS[p.status]}</span></td>
               <td className="px-2 py-2 text-right font-extrabold whitespace-nowrap" style={{ color: '#1d4ed8' }}>
-                {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}
+                {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' && (p.status !== 'ready_to_send' || perms.superAdmin) ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}
                 open →</td>
             </tr>;
           })}

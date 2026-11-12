@@ -20,11 +20,15 @@ export default function BillsTab(props) {
   var userProfile = props.userProfile;
   var isSuperAdmin = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
   var modulePerms = props.modulePerms || {};
-  var canView = isSuperAdmin || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true;
-  var canManage = isSuperAdmin || modulePerms['bills.manage'] === true;
+// v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
+  // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
+  var bossB = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
+  var canView = bossB || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true;
+  var canManage = bossB || modulePerms['bills.manage'] === true;
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
+  var sE = useState(''); var loadErr = sE[0]; var setLoadErr = sE[1]; // v55.83-SA — why the list did not load, ON the screen (a toast is missed; an empty list looks like "no bills")
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
   var s3 = useState(null); var editing = s3[0]; var setEditing = s3[1]; // bill draft or null
   var s4 = useState(null); var paying = s4[0]; var setPaying = s4[1];   // {bill, amount, paid_date, bank_transaction_id}
@@ -87,7 +91,7 @@ export default function BillsTab(props) {
   function load() {
     setBusy(true);
     api({ action: 'list' }).then(function (j) {
-      if (j && j.ok) { setData(j); } else { toast.error((j && j.error) || 'Could not load bills.'); }
+      if (j && j.ok) { setData(j); setLoadErr(''); } else { setLoadErr((j && j.error) || 'Could not load bills.'); toast.error((j && j.error) || 'Could not load bills.'); }
     }).finally(function () { setBusy(false); });
   }
   useEffect(function () { if (canView) { load(); loadCats(); api({ action: 'paid_through_parties' }).then(function (jp) { if (jp && jp.ok && (jp.parties || []).length) { setParties(jp.parties); } }).catch(function () {}); } }, []); // eslint-disable-line
@@ -292,6 +296,14 @@ export default function BillsTab(props) {
     });
   }
   function paysOf(id) { return payments.filter(function (p) { return p.bill_id === id; }); }
+  // v55.83-RZ (Max 00:17: "it goes from OPEN to READY ... and then ... the status of the bills become PAID") — a bill on a wire shows
+  // where the wire is: OPEN (being signed) → READY (both signatures) → SENT (waiting for the bank line) → PAID (matched)
+  function wireChip(b) {
+    if (!b.wire_state || (b.status !== 'OPEN' && b.status !== 'PARTIAL')) { return null; }
+    var w = b.wire_state; var c = w.state === 'ready' ? ['#dbeafe', '#1e3a8a'] : w.state === 'sent' ? ['#e0e7ff', '#3730a3'] : ['#f1f5f9', '#334155'];
+    return <div className="mt-0.5"><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={b.wire_state_words || ''} style={{ background: c[0], color: c[1] }}>{w.label + ' · ' + w.wire}</span>
+      <div className="text-[10px] font-bold" style={{ color: '#475569', maxWidth: 220 }}>{w.state === 'ready' ? 'approved → ' + (w.payee || '?') : w.state === 'sent' ? 'sent' + (w.sent_date ? ' ' + w.sent_date : '') + ' — waiting for the bank line' : 'on a wire being signed'}{w.amount < (Number(b.open) || 0) - 0.005 ? ' · part: $' + fmt(w.amount) + ' of $' + fmt(b.open) : ''}</div></div>;
+  }
   function chip(st) {
     var map = { OPEN: ['#fee2e2', '#7f1d1d'], PARTIAL: ['#ffedd5', '#431407'], PAID: ['#d1fae5', '#065f46'], VOID: ['#e2e8f0', '#334155'], DISPUTED: ['#ede9fe', '#5b21b6'] };
     var c = map[st] || map.VOID;
@@ -351,6 +363,9 @@ export default function BillsTab(props) {
 
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white nt-light';
   return <div className="nt-paper rounded-xl border border-slate-200 p-3" style={{ background: '#ffffff', color: '#0f172a' }}>
+    {loadErr && <div className="rounded-lg px-3 py-2 mb-2 text-[13px] font-extrabold flex gap-2 items-center flex-wrap" style={{ background: '#fef2f2', color: '#991b1b', border: '2px solid #fca5a5' }}>
+      <span>{'⛔ The bills did not load: ' + loadErr}</span>
+      <button onClick={load} className="px-2 py-1 rounded text-[12px] font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Try again</button></div>}
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900 mr-1">💸 Bills — what we owe</div>
       <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Open: ${fmt(totals.open)} ({totals.open_count})</span>
@@ -552,7 +567,7 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
                 <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}</td>
-                <td className="py-1.5 pr-2">{chip(b.status)}{b.attachment_path && <button className="ml-1" title="View the imported bill file (private link, 1 hour)" onClick={function () { openDoc(b.attachment_path); }}>📎</button>}</td>
+                <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{b.attachment_path && <button className="ml-1" title="View the imported bill file (private link, 1 hour)" onClick={function () { openDoc(b.attachment_path); }}>📎</button>}{wireChip(b)}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">
                   <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : 'View'}</button>
@@ -571,6 +586,7 @@ export default function BillsTab(props) {
                   {canManage && b.record_status === 'active' && b.disputed !== true && <button onClick={function () { closePanels(); setDisputing({ bill: b }); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#ede9fe', color: '#5b21b6' }}>Dispute</button>}
                   {canManage && b.disputed === true && <button onClick={function () { closePanels(); setRowAsk({ kind: 'resolve', bill: b, text: '' }); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#d1fae5', color: '#065f46' }}>Resolve</button>}
                   {canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'void_bill', bill: b }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Void</button>}
+                  {canManage && b.record_status !== 'deleted' && <button onClick={function () { closePanels(); setRowAsk({ kind: 'delete', bill: b, text: '' }); }} title="Delete — for a bill that should never have been in the Hub (e.g. imported twice). Its history is kept." className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#7f1d1d', color: '#ffffff' }}>🗑 Delete</button>}
                 </td>
               </tr>
               {/* v55.83-RV (Max 22:47: "the validation section should go BELOW the actual bill ... so we are not scrolling all the way up")
@@ -741,19 +757,20 @@ export default function BillsTab(props) {
               </td></tr>}
               {rowAsk && rowAsk.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
                 <div className="rounded-xl p-3" style={{ background: rowAsk.kind === 'resolve' ? '#ecfdf5' : '#fee2e2', border: '2px solid ' + (rowAsk.kind === 'resolve' ? '#10b981' : '#dc2626') }}>
-                  <div className="text-[13px] font-extrabold mb-1" style={{ color: rowAsk.kind === 'resolve' ? '#065f46' : '#7f1d1d' }}>{rowAsk.kind === 'reopen' ? '↩ Reopen the validation of this bill? It goes back to PENDING (audited) — fix it, then validate it again before it can be wired.' : rowAsk.kind === 'void_bill' ? '🗑 Void this bill? It stays on record as VOID (audited) and leaves what we owe.' : rowAsk.kind === 'void_payment' ? '🗑 Void this payment of $' + fmt(rowAsk.payment.amount) + ' (' + rowAsk.payment.paid_date + ')? The bill becomes open again by that amount.' : '✓ Resolve the dispute — how was it resolved? (goes on the audit trail)'}</div>
+                  <div className="text-[13px] font-extrabold mb-1" style={{ color: rowAsk.kind === 'resolve' ? '#065f46' : '#7f1d1d' }}>{rowAsk.kind === 'delete' ? '🗑 Delete ' + rowAsk.bill.vendor_name + ' · ' + (rowAsk.bill.bill_number || '—') + ' ($' + fmt(rowAsk.bill.total_amount) + ')? It disappears from the Hub — lists, reports, wires, duplicate checks. Use this for a bill that should never have been here (e.g. imported twice). For a real bill that was cancelled, use Void instead (it stays visible as VOID). Its history stays on the audit trail.' : rowAsk.kind === 'reopen' ? '↩ Reopen the validation of this bill? It goes back to PENDING (audited) — fix it, then validate it again before it can be wired.' : rowAsk.kind === 'void_bill' ? '🗑 Void this bill? It stays on record as VOID (audited) and leaves what we owe.' : rowAsk.kind === 'void_payment' ? '🗑 Void this payment of $' + fmt(rowAsk.payment.amount) + ' (' + rowAsk.payment.paid_date + ')? The bill becomes open again by that amount.' : '✓ Resolve the dispute — how was it resolved? (goes on the audit trail)'}</div>
                   <div className="flex gap-2 items-center flex-wrap">
-                    {(rowAsk.kind === 'resolve' || rowAsk.kind === 'reopen') && <input autoFocus className={inp} style={{ flex: '1 1 360px' }} placeholder={rowAsk.kind === 'reopen' ? 'Why is it reopened? (required — e.g. wrong amount on line 3)' : 'How was it resolved? (at least a sentence)'} value={rowAsk.text || ''} onChange={function (e) { setRowAsk(Object.assign({}, rowAsk, { text: e.target.value, err: '' })); }} />}
+                    {(rowAsk.kind === 'resolve' || rowAsk.kind === 'reopen' || rowAsk.kind === 'delete') && <input autoFocus className={inp} style={{ flex: '1 1 360px' }} placeholder={rowAsk.kind === 'delete' ? 'Why is it deleted? (required — e.g. imported twice)' : rowAsk.kind === 'reopen' ? 'Why is it reopened? (required — e.g. wrong amount on line 3)' : 'How was it resolved? (at least a sentence)'} value={rowAsk.text || ''} onChange={function (e) { setRowAsk(Object.assign({}, rowAsk, { text: e.target.value, err: '' })); }} />}
                     <button disabled={busy} onClick={function () {
-                      var ra = rowAsk; var req = ra.kind === 'reopen' ? { action: 'reopen_validation', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'void_bill' ? { action: 'void_bill', id: ra.bill.id } : ra.kind === 'void_payment' ? { action: 'void_payment', id: ra.payment.id } : { action: 'resolve_dispute', id: ra.bill.id, resolution: ra.text || '' };
+                      var ra = rowAsk; var req = ra.kind === 'delete' ? { action: 'delete_bill', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'reopen' ? { action: 'reopen_validation', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'void_bill' ? { action: 'void_bill', id: ra.bill.id } : ra.kind === 'void_payment' ? { action: 'void_payment', id: ra.payment.id } : { action: 'resolve_dispute', id: ra.bill.id, resolution: ra.text || '' };
                       if (ra.kind === 'resolve' && String(ra.text || '').trim().length < 10) { setRowAsk(Object.assign({}, ra, { err: 'Write how it was resolved — at least a sentence.' })); return; }
+                      if (ra.kind === 'delete' && String(ra.text || '').trim().length < 5) { setRowAsk(Object.assign({}, ra, { err: 'Write why it is deleted (at least 5 characters) — it goes on the audit trail.' })); return; }
                       if (ra.kind === 'reopen' && String(ra.text || '').trim().length < 5) { setRowAsk(Object.assign({}, ra, { err: 'Write why it is reopened — it goes on the audit trail.' })); return; }
                       setBusy(true);
                       api(req).then(function (j) {
-                        if (j && j.ok) { toast.success(ra.kind === 'reopen' ? '↩ Validation reopened — the bill is PENDING again.' : ra.kind === 'void_bill' ? 'Bill voided.' : ra.kind === 'void_payment' ? 'Payment voided.' : 'Dispute resolved.'); setRowAsk(null); load(); }
+                        if (j && j.ok) { toast.success(ra.kind === 'delete' ? '🗑 Bill deleted — it is gone from the Hub (its history is kept).' : ra.kind === 'reopen' ? '↩ Validation reopened — the bill is PENDING again.' : ra.kind === 'void_bill' ? 'Bill voided.' : ra.kind === 'void_payment' ? 'Payment voided.' : 'Dispute resolved.'); setRowAsk(null); load(); }
                         else { setRowAsk(function (r0) { return r0 ? Object.assign({}, r0, { err: (j && j.error) || 'It did not go through — the server did not say why.' }) : r0; }); }
                       }).finally(function () { setBusy(false); });
-                    }} className="px-4 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: rowAsk.kind === 'resolve' ? '#047857' : rowAsk.kind === 'reopen' ? '#1e293b' : '#b91c1c', color: '#ffffff' }}>{busy ? 'Working…' : rowAsk.kind === 'resolve' ? '✓ Resolve' : rowAsk.kind === 'reopen' ? '↩ Reopen it' : '🗑 Void it'}</button>
+                    }} className="px-4 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: rowAsk.kind === 'resolve' ? '#047857' : rowAsk.kind === 'reopen' ? '#1e293b' : '#b91c1c', color: '#ffffff' }}>{busy ? 'Working…' : rowAsk.kind === 'resolve' ? '✓ Resolve' : rowAsk.kind === 'reopen' ? '↩ Reopen it' : rowAsk.kind === 'delete' ? '🗑 Delete it' : '🗑 Void it'}</button>
                     <button onClick={function () { setRowAsk(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>Keep it</button>
                   </div>
                   {rowAsk.err && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#b91c1c', border: '1px solid #fca5a5' }}>{'⛔ ' + rowAsk.err}</div>}

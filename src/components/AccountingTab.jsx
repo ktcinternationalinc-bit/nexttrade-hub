@@ -82,6 +82,9 @@ export default function AccountingTab(props) {
   var mp = props.modulePerms || {};
   var userProfile = props.userProfile; // v55.83-RG — was referenced (Audit Trail tab, wires gate) but never declared
   var isSuper = props.isSuperAdmin === true || (props.userProfile && props.userProfile.role === 'super_admin');
+  // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
+  // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
+  var bossA = isSuper || (props.userProfile && (props.userProfile.role === 'owner' || props.userProfile.role === 'admin'));
   // v55.83-PW (Max): LEVEL 1 — "permission to see accounting in general".
   // The umbrella accounting.view opens the area; so does ANY specific
   // accounting permission (backward compatible). Super admin always.
@@ -125,7 +128,7 @@ export default function AccountingTab(props) {
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || isSuper || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || isSuper || mp['bank.classify'] === true) && (t[0] !== 'audit' || isSuper || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">

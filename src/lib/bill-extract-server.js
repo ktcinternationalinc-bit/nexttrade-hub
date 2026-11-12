@@ -12,7 +12,7 @@ export async function vendorBillType(db, vendorName) {
   var v = String(vendorName || '').trim();
   if (!v) { return null; }
   try {
-    var r = await db.from('vendor_bills').select('bill_type, validation_status').ilike('vendor_name', v).eq('validation_status', 'validated').limit(50);
+    var r = await db.from('vendor_bills').select('bill_type, validation_status').ilike('vendor_name', v).eq('validation_status', 'validated').eq('record_status', 'active').limit(50); // RY — deleted bills do not count
     if (r.error) { return null; }
     var seen = {}; ((r && r.data) || []).forEach(function (b) { if (b.bill_type && BILL_TYPE_LABEL[b.bill_type]) { seen[b.bill_type] = true; } });
     var ks = Object.keys(seen);

@@ -45,7 +45,16 @@ Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') 
 global.__db = db;
 var route = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
 var bills = require(path.join(root, 'src/app/api/accounting/bills/route.js'));
-async function call(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }
+// superseded (v55.83-RY, Max Nov 10 00:11: "view each bill and close the bill as you check before you approve it and sign it"):
+// a signer must open + check every bill of the wire first — the sign-off calls below do that, like a person would
+async function call(r, user, body) {
+  if (body && body.action === 'signoff' && r.POST) {
+    var gq = await callRaw(r, user, { action: 'get', id: body.id });
+    if (gq && gq.ok) { for (var qi = 0; qi < gq.lines.length; qi++) { await callRaw(r, user, { action: 'review_bill', id: body.id, bill_id: gq.lines[qi].bill_id }); } }
+  }
+  return callRaw(r, user, body);
+}
+async function callRaw(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra || '').substring(0, 500))); }
 function hist(action) { return db.t.hub_audit_log.filter(function (h) { return h.action === action; }); }
@@ -100,7 +109,7 @@ console.log('RL — override with reason, delete / undo a wire, reference + inbo
   var at = await call(route, 'u1', { action: 'attach', id: sv.id, bank_transaction_id: TX });
   check('4a: (setup) the wire went through: signed by two, sent, attached — B1 was marked "paid through RTM" when sent', sent.ok && at.ok && db.t.vendor_bills[0].paid_via === 'RTM Capital' && db.t.bank_transactions[0].third_party_payer === 'RTM Capital', { sent: sent, at: at });
   var notBoss = await call(route, 'u1', { action: 'delete_wire', id: sv.id, reason: 'sent to the wrong account by mistake' });
-  check('4b: undoing a SENT wire: only a super admin or the owner', !notBoss.ok && /super admin or the owner/.test(notBoss.error), notBoss);
+  check('4b: undoing a SENT wire: only a super admin or the owner', !notBoss.ok && /* superseded pin (v55.83-SB, Max Nov 12 09:31 "Number 2 is yes"): the super admin only, no longer the owner */ /only be undone by the super admin/.test(notBoss.error), notBoss);
   var shortU = await call(route, 'u9', { action: 'delete_wire', id: sv.id, reason: 'oops' });
   check('4c: …and only with a real reason (10+ characters)', !shortU.ok, shortU);
   var undo = await call(route, 'u9', { action: 'delete_wire', id: sv.id, reason: 'bank rejected the wire, money came back' });

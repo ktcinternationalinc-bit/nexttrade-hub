@@ -92,7 +92,9 @@ ok('4c: sent → waiting for the bank line; attached → waiting for RTM proof u
   W.packageStatus({ status: 'attached' }, h, 0) === 'complete' && W.packageStatus({ status: 'cancelled' }, h, 0) === 'cancelled');
 
 // ── 5. server
-var S = R('src/app/api/accounting/wire-packages/route.js');
+// realigned v55.83-RZ: attaching a bank line moved to ONE engine (src/lib/wire-auto-match.js) shared by the screen, the bank sync
+// and the statement import — the attach pins read the route + that engine together (same guards, same audit rows)
+var S = R('src/app/api/accounting/wire-packages/route.js') + '\n' + R('src/lib/wire-auto-match.js');
 ok('5a: "wire preparation is a permissioning" — Wires: Prepare to prepare/cancel, Sign Off to sign, Send to mark sent + attach; all behind ClickBooks access',
   S.indexOf("perm(db, userId, ['wires.prepare'], req)") > 0 && S.indexOf("perm(db, userId, ['wires.signoff'], req)") > 0 && S.indexOf("perm(db, userId, ['wires.send'], req)") > 0 && S.indexOf("'accounting.clickbooks.access'") > 0);
 ok('5b: two DIFFERENT people sign the exact audited wire; simultaneous clicks cannot both win',
@@ -103,7 +105,8 @@ ok('5d: "then later when the wire is sent ... attach that whole audit to that wi
   S.indexOf("action === 'attach'") > 0 && S.indexOf("db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id") > 0 && S.indexOf('would overpay it. Nothing was recorded.') > 0 && S.indexOf('were voided again; nothing changed') > 0);
 ok('5e: a bank amount different from the approved wire is refused — only a super admin, with the reason, may accept it',
   // superseded pin (v55.83-RJ, independent review gap 14): the owner may accept it too
-  S.indexOf('Only a super admin or the owner can accept a different amount') > 0 && S.indexOf("g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'") > 0);
+  // superseded pin (v55.83-RZ, Max 00:22 "2 yes"): up to $50 more = an extra charge, accepted (Max 16:37: it goes with the bill, not a bank fee); MORE than that still only a super admin / the owner, with the reason
+  S.indexOf('More than a $' + "' + AUTO_FEE_MAX + '" + ' extra charge — only a super admin or the owner can accept it, with the reason.') > 0 && S.indexOf("g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'") > 0);
 ok('5f: RTM / NextTrade wires book exactly like the 🏦 paid-through flow (method rtm + the company on the bank line; NextTrade = advance, auto-reviewed)',
   S.indexOf("pkg.payee_kind === 'vendor' ? 'wire' : 'rtm'") > 0 && S.indexOf('third_party_payer: pkg.payee_name') > 0 && S.indexOf("pkg.payee_kind === 'affiliate'") > 0);
 ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with the date and reference; only for paid-through wires, after sending',

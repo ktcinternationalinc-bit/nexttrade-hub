@@ -24,6 +24,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
+import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ
 
 function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -258,7 +259,10 @@ export async function POST(req) {
         inserted = toInsert.length;
       }
       await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
+      var wireM = null; // v55.83-RZ — imported lines may be the wires we sent: match them (fail-soft)
+      if (inserted > 0 && silo === US_WAVE_BUSINESS_ID) { try { wireM = await autoMatchSentWires(d, { actorId: userId, budgetMs: 10000 }); } catch (eWM) { wireM = null; } }
       return NextResponse.json({ ok: true, imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad,
+        wires_matched: wireM ? wireM.matched.length : 0,
         bad_examples: badWhy, window: { from: minD, to: maxD },
         us_books: silo === US_WAVE_BUSINESS_ID, // v55.83-RC — ClickBooks (USA) screens list US-silo accounts only
         account: { name: acc.data.name, mask: acc.data.mask } });

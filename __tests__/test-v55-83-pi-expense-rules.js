@@ -132,7 +132,8 @@ ok('7c: recategorizing from the tab goes through the SAME classify action (so th
 var at = R('src/components/AccountingTab.jsx');
 ok('7d: 🏷 Categories & Rules wired into Accounting behind bank.classify',
   at.indexOf("['categories', '🏷 Categories & Rules']") >= 0 &&
-  /t\[0\] !== 'categories' \|\| isSuper \|\| mp\['bank\.classify'\] === true/.test(at) &&
+  // superseded pin (v55.83-SA, Max Nov 12): owner / admin count too — the box says "always (admin)" and the server agrees
+  /t\[0\] !== 'categories' \|\| bossA \|\| mp\['bank\.classify'\] === true/.test(at) &&
   /sub === 'categories' && <div className="p-3"><ExpenseRulesTab/.test(at));
 var bh = R('src/components/BooksHomeTab.jsx');
 ok('7e: Books-home dropdown uses YOUR categories (fallback to built-ins) and PREFILLS the rule suggestion',

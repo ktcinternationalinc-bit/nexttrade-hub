@@ -2,6 +2,7 @@ import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
 import { mapPlaidTransaction, supersededPendingIds } from '../../../../lib/bank-ingest';
 import { readBankJson, projectPlaidAccountMetadata } from '../../../../lib/bank-visibility';
 import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
+import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ — new bank lines → sent wires matched, bills PAID
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -199,6 +200,11 @@ export async function POST(req) {
       catch (e) { console.warn('[plaid] supersede cleanup failed:', (e && e.message) || e); }
     }
 
+    // v55.83-RZ (Max: "when the wire is actually sent and you see a transaction for that amount ... automatically match") —
+    // fail-soft: a matcher problem never fails the bank sync.
+    var wireMatch = null;
+    if (synced > 0) { try { wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 10000 }); } catch (eWM) { wireMatch = null; } }
+
     // v55.83-JR — compute the newest posted date overall + per account, and STORE the incremental
     // markers so the next sync pulls forward from here (the cursor for /transactions/get). Stored only
     // AFTER the upsert succeeded above (so a failed write never advances the marker → no gaps).
@@ -236,7 +242,8 @@ export async function POST(req) {
       newest_by_account: newestByAccount,
       markers_persisted: markersPersisted,
       marker_error: markerError,
-      manual_deduped: manualDeduped // v55.83-QD — flagged + ignored CSV twins
+      manual_deduped: manualDeduped, // v55.83-QD — flagged + ignored CSV twins
+      wires_matched: wireMatch ? wireMatch.matched.length : 0 // v55.83-RZ
     });
   } catch (e) {
     return plaidError(e);

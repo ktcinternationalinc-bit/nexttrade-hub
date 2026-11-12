@@ -33,10 +33,10 @@ export var BANKING_GROUPS = [
     { key: 'bank.classify', label: 'Categorize transactions', desc: 'Needed for ClickBooks → All Transactions and Categories & Rules.' },
     { key: 'bank.connections', label: 'Connect / reconnect banks', desc: 'Plaid connections, re-pull history, archive duplicates.' },
   ] },
-  { title: '4 · Bills (what we owe)', items: [
-    { key: 'bills.view', label: 'See bills', desc: 'Vendor bills and what is due.' },
-    { key: 'bills.manage', label: 'Add / change bills', desc: 'Add, edit, void bills and record payments.' },
-    { key: 'bills.price_rules', label: 'Set price rules', desc: 'Enter the expected prices of products and services (and the NexPac 12.5% commission) the Hub checks every bill against.' },
+  { title: '4 · Bills (what we owe)', note: 'Needs ClickBooks (KTC Hub) in group 1.', items: [ // v55.83-SA — Bills is a ClickBooks screen
+    { key: 'bills.view', label: 'See bills', desc: 'Vendor bills and what is due.', needsKtc: true },
+    { key: 'bills.manage', label: 'Add / change bills', desc: 'Add, edit, void bills and record payments.', needsKtc: true },
+    { key: 'bills.price_rules', label: 'Set price rules', desc: 'Enter the expected prices of products and services (and the NexPac 12.5% commission) the Hub checks every bill against.', needsKtc: true },
   ] },
   { title: '5 · Wires', note: 'Needs ClickBooks (KTC Hub) in group 1.', items: [
     { key: 'wires.view', label: 'See wires', desc: 'See every wire, its checks and the bills it paid.', needsKtc: true },
@@ -123,7 +123,7 @@ export default function BankingAccessPanel(props) {
 
   return <section className="nt-paper rounded-xl p-4 mb-5" style={{ border: '2px solid #1e293b' }} aria-label="Banking and accounting access">
     <div className="text-[17px] font-extrabold" style={{ color: INK }}>🏦 Banking & Accounting Access — everything in one place</div>
-    <div className="text-[12px] mt-1 mb-3" style={{ color: SUB }}>Pick a person on the left, switch what they need on the right. Owners, admins and super admins always have everything.</div>
+    <div className="text-[12px] mt-1 mb-3" style={{ color: SUB }}>Pick a person on the left, switch what they need on the right. Owners, admins and super admins always have everything. A change reaches the person within about 2 minutes (or as soon as they come back to the Hub) — no sign-out needed.</div>
     {users.length === 0 ? <div style={{ color: MUTED }}>No team members yet.</div> :
     <div className="flex gap-4 flex-wrap items-start">
       {/* people */}

@@ -38,7 +38,16 @@ global.__db = db;
 var route = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
 var bills = require(path.join(root, 'src/app/api/accounting/bills/route.js'));
 var W = require(path.join(root, 'src/lib/wire-audit.js'));
-async function call(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }
+// superseded (v55.83-RY, Max Nov 10 00:11: "view each bill and close the bill as you check before you approve it and sign it"):
+// a signer must open + check every bill of the wire first — the sign-off calls below do that, like a person would
+async function call(r, user, body) {
+  if (body && body.action === 'signoff' && r.POST) {
+    var gq = await callRaw(r, user, { action: 'get', id: body.id });
+    if (gq && gq.ok) { for (var qi = 0; qi < gq.lines.length; qi++) { await callRaw(r, user, { action: 'review_bill', id: body.id, bill_id: gq.lines[qi].bill_id }); } }
+  }
+  return callRaw(r, user, body);
+}
+async function callRaw(r, user, body) { var res = await r.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra || '').substring(0, 500))); }
 function hist(a) { return db.t.hub_audit_log.filter(function (h) { return h.action === a; }); }
@@ -104,7 +113,7 @@ console.log('RO — validate first, then wire; delete a wire in progress');
   var d2 = await call(route, 'u1', { action: 'save_draft', payee_kind: 'vendor', lines: [{ bill_id: B3, amount: 80 }] });
   check('4b: …and the same bill can go on a new wire right away', d2.ok, d2);
   var undoNo = await call(route, 'u1', { action: 'delete_wire', id: sv.id, reason: 'sent to the wrong account by mistake' });
-  check('4c: a SENT wire is undone only by a super admin or the owner (the screen says so)', !undoNo.ok && /super admin or the owner/.test(undoNo.error), undoNo);
+  check('4c: a SENT wire is undone only by a super admin or the owner (the screen says so)', !undoNo.ok && /* superseded pin (v55.83-SB, Max Nov 12 09:31 "Number 2 is yes"): the super admin only, no longer the owner */ /only be undone by the super admin/.test(undoNo.error), undoNo);
 
   // ── 5. on screen
   var U = R('src/components/WirePackagesPanel.jsx'); var BT = R('src/components/BillsTab.jsx');
