@@ -11,7 +11,8 @@ Q.prototype.or = function (expr) { this.filters.push(['or', expr, null]); return
 Q.prototype.like = function (col, pat) { this.filters.push(['like', col, pat]); return this; };
 Q.prototype.ilike = function (col, pat) { this.filters.push(['ilike', col, pat]); return this; };
 Q.prototype.select = function () { if (this.op !== 'select') { this.wantRows = true; } return this; };
-Q.prototype.order = function () { return this; };
+// v55.83-SH — order(col, { ascending }) is honoured when a column is given (older tests call it for display order only)
+Q.prototype.order = function (col, o) { if (col) { this._order = { col: col, asc: !(o && o.ascending === false) }; } return this; };
 Q.prototype.limit = function (n) { this.lim = n; return this; };
 Q.prototype.range = function (a, b) { this.rng = [a, b]; return this; };
 Q.prototype.maybeSingle = function () { this.sgl = 1; return this; };
@@ -75,6 +76,7 @@ Q.prototype.run = function () {
   }
   if (this.op === 'delete') { db.t[this.name] = tbl.filter(function (r) { return rows.indexOf(r) < 0; }); return { data: null, error: null }; }
   if (this.rng) { rows = rows.slice(this.rng[0], this.rng[1] + 1); }
+  if (this._order) { var oc = this._order.col; var oa = this._order.asc; rows = rows.slice().sort(function (x, y) { var a1 = x[oc]; var b1 = y[oc]; if (a1 === b1) { return 0; } if (a1 == null) { return 1; } if (b1 == null) { return -1; } return (a1 < b1 ? -1 : 1) * (oa ? 1 : -1); }); }
   if (this.lim != null) { rows = rows.slice(0, this.lim); }
   return this.shape(rows.map(function (r) { return Object.assign({}, r); }));
 };

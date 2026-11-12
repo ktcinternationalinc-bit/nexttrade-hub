@@ -26,16 +26,21 @@ console.log('SC — build a wire for an amount; a service fee on RTM or NextTrad
   var f1 = F.fillToAmount(bills, '8,000');
   check('1a: $8,000 → oldest due first: A in full, B in full, C in part — exactly $8,000', f1.ok && f1.picks.a === '3471.76' && f1.picks.b === '2830.04' && f1.picks.c === '1698.20' && f1.total === 8000 && f1.short === 0, f1);
   check('1b: it says which bill is paid in part ($1,698.20 of $4,000)', f1.partial && f1.partial.id === 'c' && f1.partial.paid === 1698.2 && f1.partial.of === 4000, f1.partial);
-  check('1c: bills that are not validated, already on another wire, or not marked for this party are never chosen', !f1.picks.x && !f1.picks.y && !f1.picks.z);
+  // realigned v55.83-SE (Max Nov 12 09:56 screenshot): a validated bill not yet marked "paid through" the party IS chosen (ticking marks it) — z is used in a later case
+  check('1c: bills that are not validated or already on another wire are never chosen', !f1.picks.x && !f1.picks.y);
   var f2 = F.fillToAmount(bills, 8000, { fee: 500 });
   check('2a: the service fee counts toward the amount: $7,500 of bills + $500 fee = $8,000', f2.ok && f2.bills_total === 7500 && f2.fee === 500 && f2.total === 8000 && f2.picks.c === '1198.20', f2);
   var f3 = F.fillToAmount(bills, 50000);
-  check('3a: not enough validated bills → every one chosen in full and it says how much short', f3.ok && f3.count === 3 && f3.bills_total === 10301.8 && f3.short === 39698.2 && !f3.partial, f3);
+  check('3a: not enough validated bills → every one chosen in full (incl. the one not yet marked for this party) and it says how much short', f3.ok && f3.count === 4 && f3.picks.z === '9000.00' && f3.bills_total === 19301.8 && f3.short === 30698.2 && !f3.partial, f3);
+  var fV = F.fillToAmount(bills, 5000, { vendors: ['NexPac', 'Trinity'] });
+  check('3b: SE — only the vendors chosen: NexPac + Trinity for $5,000 → A in full, B in part; AMB never', fV.ok && fV.picks.a === '3471.76' && fV.picks.b === '1528.24' && !fV.picks.z && !fV.picks.c, fV);
+  check('3c: SE — the vendor buttons list each vendor with validated open bills and what is open', JSON.stringify(F.fillVendors(bills)) === JSON.stringify([{ vendor: 'AMB', open: 9000 }, { vendor: 'NexPac', open: 7471.76 }, { vendor: 'Trinity', open: 2830.04 }]), F.fillVendors(bills));
+  check('3d: SE — a vendor with nothing validated → a plain message', /for the vendor\(s\) you chose/.test(F.fillToAmount(bills, 100, { vendors: ['Nobody'] }).error));
   var f4 = F.fillToAmount(bills, 3471.76);
   check('4a: an amount that lands exactly on a bill → no part payment', f4.ok && f4.count === 1 && f4.picks.a === '3471.76' && !f4.partial, f4);
   var f5 = F.fillToAmount(bills, 5000, { vendor: 'NexPac' });
   check('5a: a wire straight to a vendor chooses only that vendor’s bills', f5.ok && f5.picks.a === '3471.76' && f5.picks.c === '1528.24' && !f5.picks.b, f5);
-  check('6a: no amount / fee bigger than the wire / nothing to choose → a plain message, nothing ticked', !F.fillToAmount(bills, '').ok && /Type the amount/.test(F.fillToAmount(bills, 'abc').error) && /nothing is left for bills/.test(F.fillToAmount(bills, 100, { fee: 100 }).error) && /No validated open bills/.test(F.fillToAmount([bills[3]], 100).error));
+  check('6a: no amount / fee bigger than the wire / nothing to choose → a plain message, nothing ticked', !F.fillToAmount(bills, '').ok && /Type the amount/.test(F.fillToAmount(bills, 'abc').error) && /nothing is left for bills/.test(F.fillToAmount(bills, 100, { fee: 100 }).error) && /validate the bills first/.test(F.fillToAmount([bills[3]], 100).error));
   var f7 = F.fillToAmount([b('p', 'V', 0.1, '2026-01-01'), b('q', 'V', 0.2, '2026-01-02'), b('r', 'V', 5, '2026-01-03')], 0.35);
   check('7a: cents are exact (no floating-point drift): 0.10 + 0.20 + 0.05 = 0.35', f7.ok && f7.picks.r === '0.05' && f7.total === 0.35, f7);
   // ── the service fee on a NextTrade wire, through the real route

@@ -106,7 +106,7 @@ console.log('SB — the matcher only takes a line it can be sure of; everything 
   var pw = await call('u9', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: id(7), amount: 900 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac B7' });
   check('7b: a bill paid through NextTrade cannot go on an RTM Capital wire', !pw.ok && /is paid through NextTrade, not RTM Capital/.test(pw.error) && !db.t.wire_packages.some(function (p) { return p.after_the_fact; }), pw);
   // ── 8. the rest
-  check('8a: the bank is read every 2 hours (Max: "Number 3 is 2 hours")', /"path": "\/api\/plaid\/sync",\s*"schedule": "0 \*\/2 \* \* \*"/.test(R('vercel.json')));
+  check('8a: the bank is read every 2 hours (Max: "Number 3 is 2 hours")', /* SH: the scheduled sync now includes the production books */ /"path": "\/api\/plaid\/sync\?includeProduction=true",\s*"schedule": "0 \*\/2 \* \* \*"/.test(R('vercel.json')));
   check('8b: the extra charge may be up to $100 in the database too', R('sql/v55-83-RZ-wire-ready-sent-paid.sql').indexOf('CHECK (bank_fee >= 0 AND bank_fee <= 100)') > 0 && WA.AUTO_FEE_MAX === 100);
   check('8c: the READY / SENT status on the bills list reads every open wire line (paged)', R('src/app/api/accounting/bills/route.js').indexOf("var wlRows = await fetchAll(function () { return db.from('wire_package_lines').select('*').eq('is_open', true); });") > 0);
   var U = R('src/components/WirePackagesPanel.jsx');

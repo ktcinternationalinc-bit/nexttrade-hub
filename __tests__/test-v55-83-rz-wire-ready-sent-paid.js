@@ -67,7 +67,7 @@ console.log('RZ — bills go OPEN → READY → SENT → PAID; the Hub finds the
   // ── 1. OPEN → READY → SENT → PAID, with a PART payment of 14354
   var W1 = await wireFor('service_provider', 'RTM Capital', [{ bill_id: A1, amount: 3471.76 }, { bill_id: A2, amount: 2000 }]);
   var r0 = await billRow(A1);
-  check('1a: on a wire still being signed, the bill says OPEN · on WP-…', r0.status === 'OPEN' && r0.wire_state && r0.wire_state.state === 'on_wire' && /^OPEN · on WP-/.test(r0.wire_state_words), r0.wire_state_words);
+  check('1a: on a wire still being signed, the bill says OPEN · on WP-…', r0.status === 'OPEN' && r0.wire_state && r0.wire_state.state === 'on_wire' && /^OPEN · on WP-/.test(r0.wire_state_words) /* SD: the words now end "(pre-wire — can still change)" */, r0.wire_state_words);
   var ok1 = await approve(W1);
   var r1 = await billRow(A1); var r2b = await billRow(A2);
   check('1b: both signatures in → READY · WP-… → RTM Capital', ok1 && r1.wire_state.state === 'ready' && /^READY · WP-\d+ → RTM Capital$/.test(r1.wire_state_words), r1.wire_state_words);
@@ -152,7 +152,7 @@ console.log('RZ — bills go OPEN → READY → SENT → PAID; the Hub finds the
   check('9a: helper: a sent wire → SENT; closed lines show nothing', st.b && st.b.state === 'sent' && /^SENT · WP-0007/.test(WS.wireStateWords(st.b, 10)) && !WS.billWireStates([{ id: 'p', seq: 7, status: 'sent' }], [{ id: 'l', package_id: 'p', bill_id: 'b', amount: 10, is_open: false }], {}).b, WS.wireStateWords(st.b, 10));
   // ── 10. the bank feeds run the matcher; the screens; the SQL
   var PT = R('src/app/api/plaid/transactions/route.js'); var SI = R('src/app/api/accounting/statement-import/route.js');
-  check('10a: every bank sync and every statement import runs the matcher (fail-soft — never breaks the import)', PT.indexOf("wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 10000 })") > 0 && PT.indexOf('catch (eWM)') > 0 &&
+  check('10a: every bank sync and every statement import runs the matcher (fail-soft — never breaks the import)', /* SF: 4 s budget + maxDuration 60 on the bank sync */ PT.indexOf("wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 4000 })") > 0 && PT.indexOf('export var maxDuration = 60;') > 0 && PT.indexOf('catch (eWM)') > 0 &&
     SI.indexOf("wireM = await autoMatchSentWires(d, { actorId: userId, budgetMs: 10000 })") > 0);
   var U = R('src/components/WirePackagesPanel.jsx'); var BT = R('src/components/BillsTab.jsx');
   check('10b: wire screen: 🔎 Look in the bank now, 📅 change the sent date, 🕘 Record a past wire (super admin), the extra shown as "extra charge (accepted)"',

@@ -21,6 +21,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // v55.83-SG (Max Nov 12 10:09, screenshot: clicked Sync, saw nothing) — the answer was printed at the TOP of the page, far above
+  // the button. It is now shown on the bank that was synced, right under the button.
+  const [syncConn, setSyncConn] = useState(null);
   const [view, setView] = useState('all'); // all | unmatched | matched
   const [acctFilter, setAcctFilter] = useState('all');
   const [viewRange, setViewRange] = useState('all');
@@ -272,7 +275,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // Sync transactions from Plaid
   const syncTransactions = async (connId, attempt, deepPull) => {
     attempt = attempt || 0;
-    setSyncing(true);
+    setSyncing(true); setSyncConn(connId);
     setError('');
     setNotice('');
     try {
@@ -290,7 +293,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
         headers: await bankSessionHeaders(supabase, true),
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      let data;
+      try { data = await res.json(); }
+      catch (eJson) { data = { error: 'the server did not answer properly (HTTP ' + res.status + ')' + (res.status === 504 ? ' — it ran out of time' : '') + '. Try again; if it repeats, tell the admin' }; }
       if (data.pending) {
         // First-connect: Plaid is still preparing history. Soft message + auto-retry.
         setSyncing(false);
@@ -322,8 +327,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       var win = data.window || {};
       var msg = '✅ Sync done — ' + procN + ' transaction(s) processed' + (totalN != null ? (' (Plaid total in window: ' + totalN + ')') : '') + (data.pages > 1 ? (' across ' + data.pages + ' pages') : '') + '.';
       if (win.start) { msg += ' Pulled ' + (win.incremental ? 'forward from ' : 'from ') + win.start + ' → ' + (win.end || 'today') + '.'; }
+      if (data.continued_from) { msg += ' Continued from the last transaction already on the Hub (' + data.continued_from + ') — the full history was NOT pulled again. Use “Re-pull history” only if you want it all.'; }
       if (data.newest_posted_date) { msg += ' Newest posted: ' + data.newest_posted_date + '.'; }
-      if (Number(data.manual_deduped) > 0) { msg += ' 🚩 ' + data.manual_deduped + ' duplicate(s) already in from a CSV import — flagged and ignored, nothing doubled.'; }
+      if (Number(data.manual_deduped) > 0) { msg += ' 🚩 ' + data.manual_deduped + ' duplicate(s) already on the Hub (CSV import or the earlier bank link) — ignored, nothing doubled.'; }
       // v55.83-QB (Max, Nov 7 11:40: "where is the rest of the history... something
       // is not right") — a DEEP re-pull that comes back with Plaid total 0 for the
       // whole window is NOT "no recent activity": right after a connect/reconnect
@@ -601,6 +607,17 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                       <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.status}</span>
                     </div>
                   </div>
+                  {/* v55.83-SG — why this bank is not updating, ON the bank */}
+                  {c.last_sync_status === 'error' && c.last_sync_error && !(syncConn === c.id && (error || syncing)) && (
+                    <div className="w-full rounded-lg px-3 py-2 text-[12px] font-bold" style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5', order: 3 }}>
+                      ⛔ The last sync of this bank failed: {c.last_sync_error}{/login|expir|credential/i.test(c.last_sync_error) ? ' — click “+ Connect Bank” and sign in to this bank again (your transactions and matches are kept).' : ''}</div>
+                  )}
+                  {syncConn === c.id && !syncing && error && (
+                    <div className="w-full rounded-lg px-3 py-2 text-[12px] font-bold" style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5', order: 3 }}>⛔ {error}</div>
+                  )}
+                  {syncConn === c.id && !syncing && !error && notice && (
+                    <div className="w-full rounded-lg px-3 py-2 text-[12px] font-bold" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7', order: 3 }}>{notice}</div>
+                  )}
                   <div className="flex items-center gap-1">
                     <button onClick={() => syncTransactions(c.id)} disabled={syncing} title="Pull new transactions for this bank (forward from the last synced date). The list date filter does not affect this." className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">
                       {syncing ? '⏳ Syncing…' : '🔄 Sync new transactions'}

@@ -9,7 +9,7 @@
 //    then shows ONE "next step" box with the one thing to do now, and a
 //    progress bar of the steps.
 import React, { useState, useEffect, useRef } from 'react';
-import { fillToAmount } from '../lib/wire-fill'; // v55.83-SC — build a wire for an amount
+import { fillToAmount, fillVendors } from '../lib/wire-fill'; // v55.83-SC — build a wire for an amount
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
@@ -38,6 +38,7 @@ function sentWords(p) {
   if (!p) { return 'Sent'; }
   return 'Sent to ' + (p.payee_kind === 'vendor' ? 'the vendor' : (p.payee_name || '?'));
 }
+var PRE_WIRE = { needs_check: 1, flagged: 1, awaiting_1st: 1, awaiting_2nd: 1 }; // v55.83-SD — a wire nobody has fully approved yet: still the preparer's to change or delete
 var NEXT_WORDS = {
   needs_check: 'Check it', flagged: 'Fix the problems', awaiting_1st: '1st person signs', awaiting_2nd: '2nd person signs',
   ready_to_send: 'Send it at the bank', sent: 'Attach the bank line', awaiting_proof: 'Add RTM proof', complete: 'Done', cancelled: '—', reversed: 'Undone',
@@ -68,7 +69,7 @@ var FIX = {
   DIRECTION_MISSING: 'Tick ⬅ Inbound or Outbound ➡ on that bill in the table below.', REFERENCE_MISSING: 'An inbound bill needs its reference — type it in the table below.',
   DUP_OTHER_REF: 'Same reference and date as another bill of this vendor — check in 💸 Bills.', DUP_OTHER_REF_IN_WIRE: 'Same reference and date twice on this wire — untick one.',
   BILL_VOID: 'The bill is void — untick it.', BILL_DISPUTED: 'The bill is disputed — untick it until it is resolved.',
-  FEE_NOT_ALLOWED: 'Only RTM wires can carry a fee — remove it.', NO_BILLS: '✏ Change the wire and tick its bills.',
+  FEE_NOT_ALLOWED: 'A wire straight to a vendor cannot carry a fee — remove it.', NO_BILLS: '✏ Change the wire and tick its bills.',
 };
 var inp = 'px-2 py-1.5 rounded-lg border border-slate-300 text-[12px] nt-light';
 var inpS = { color: INK, background: '#ffffff' };
@@ -375,7 +376,7 @@ export default function WirePackagesPanel(props) {
     });
   }
   function pickPayee(kind, name) {
-    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null }));
+    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [] }));
     loadBills(kind, name, ed.id);
   }
   function loadBills(kind, payee, pkgId) {
@@ -390,9 +391,9 @@ export default function WirePackagesPanel(props) {
   }
   // v55.83-SC — "build a wire for a certain amount": the Hub ticks validated bills (oldest due first) and pays the last one in part
   function fillWire() {
-    var pv = null; if (ed.kind === 'vendor') { (ed.bills || []).forEach(function (b) { if (ed.picks[b.id] != null && !pv) { pv = b.vendor_name; } }); }
-    if (ed.kind === 'vendor' && !pv) { setEd(Object.assign({}, ed, { fillMsg: { bad: true, text: 'A wire straight to a vendor pays one vendor — tick one of that vendor’s bills first, then build to the amount.' } })); return; }
-    var f = fillToAmount(ed.bills || [], ed.target, { fee: ed.kind !== 'vendor' ? ed.fee : 0, vendor: pv });
+    var fv = ed.fillVendors || [];
+    if (ed.kind === 'vendor' && fv.length !== 1) { setEd(Object.assign({}, ed, { fillMsg: { bad: true, text: 'A wire straight to a vendor pays one vendor — choose exactly one vendor above.' } })); return; }
+    var f = fillToAmount(ed.bills || [], ed.target, { fee: ed.kind !== 'vendor' ? ed.fee : 0, vendors: fv });
     if (!f.ok) { setEd(Object.assign({}, ed, { fillMsg: { bad: true, text: f.error } })); return; }
     var text = f.count + ' bill(s) chosen, oldest due first — bills $' + fmt(f.bills_total) + (f.fee > 0 ? ' + service fee $' + fmt(f.fee) : '') + ' = $' + fmt(f.total) + '.'
       + (f.partial ? ' ' + f.partial.vendor_name + ' ' + (f.partial.bill_number || '') + ' is paid in part: $' + fmt(f.partial.paid) + ' of $' + fmt(f.partial.of) + '.' : '')
@@ -572,6 +573,20 @@ export default function WirePackagesPanel(props) {
           <Btn color="#0f766e" onClick={fillWire} disabled={busy}>Choose the bills for me</Btn>
           <span className="text-[11px]" style={{ color: SUB }}>Validated bills, oldest due first; the last one is paid in part to land on the amount{ed.kind !== 'vendor' ? ' (the service fee below counts toward it)' : ''}.</span>
         </div>
+        {/* v55.83-SE (Max Nov 12 09:56: "we should choose the vendor or vendors in which we need to send the wire to") */}
+        <div className="flex gap-2 items-center flex-wrap mt-2">
+          <span className="text-[12px] font-bold" style={{ color: SUB }}>{ed.kind === 'vendor' ? 'For which vendor?' : 'For which vendors?'}</span>
+          {ed.kind !== 'vendor' && <button onClick={function () { setEd(Object.assign({}, ed, { fillVendors: [], fillMsg: null })); }} className="rounded-full px-3 py-1 text-[12px] font-extrabold" style={!(ed.fillVendors || []).length ? { background: '#0f172a', color: '#ffffff', border: '1px solid #0f172a' } : { background: '#ffffff', color: INK, border: '1px solid #94a3b8' }}>All vendors</button>}
+          {fillVendors(ed.bills).map(function (v) {
+            var on = (ed.fillVendors || []).indexOf(v.vendor) >= 0;
+            return <button key={v.vendor} onClick={function () {
+              var cur = (ed.fillVendors || []).slice(); var ix = cur.indexOf(v.vendor);
+              if (ed.kind === 'vendor') { cur = ix >= 0 ? [] : [v.vendor]; } else if (ix >= 0) { cur.splice(ix, 1); } else { cur.push(v.vendor); }
+              setEd(Object.assign({}, ed, { fillVendors: cur, fillMsg: null }));
+            }} className="rounded-full px-3 py-1 text-[12px] font-extrabold" style={on ? { background: '#0f766e', color: '#ffffff', border: '1px solid #0f766e' } : { background: '#ffffff', color: INK, border: '1px solid #94a3b8' }}>{(on ? '✓ ' : '') + v.vendor + ' · $' + fmt(v.open)}</button>;
+          })}
+          {fillVendors(ed.bills).length === 0 && <span className="text-[12px] font-bold" style={{ color: '#9a3412' }}>No validated open bills yet — validate them first (the list below shows what is waiting).</span>}
+        </div>
         {ed.fillMsg && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-bold" style={ed.fillMsg.bad ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7' }}>{(ed.fillMsg.bad ? '⚠ ' : '✓ ') + ed.fillMsg.text}</div>}
       </div>}
       {ed.kind && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#78350f' }}>
@@ -716,9 +731,13 @@ export default function WirePackagesPanel(props) {
     } else if (st === 'complete') { nextBox = <div className="font-bold" style={{ color: '#065f46' }}>🏁 Done — approved, sent, in the bank{P.paid_through ? ', and every bill has ' + P.payee_name + '’s proof' : ''}.</div>; }
 
     return <div className="nt-paper rounded-xl p-4" style={{ border: '2px solid #6366f1' }}>
+      {PRE_WIRE[st] && <div className="rounded-lg px-3 py-2 mb-3 text-[12px] font-bold" style={{ background: '#f1f5f9', color: '#0f172a', border: '1px solid #cbd5e1' }}>
+        📝 This is a PRE-WIRE — nothing has been approved or sent. {perms.prepare ? 'You can ✏ Change it (bills, amounts, fee, who gets it) or 🗑 Delete it; the bills go back to open.' : 'The preparer can still change or delete it.'} Changing it after a signature clears that signature.</div>}
       <div className="flex gap-2 items-center flex-wrap mb-3">
         <Btn light onClick={function () { setDet(null); }}>← All wires</Btn>
         <div className="text-[16px] font-extrabold" style={{ color: INK }}><span className="font-mono">{P.label}</span>{' · $' + fmt(amountNow) + ' to ' + P.payee_name}</div>
+        {/* v55.83-SD (Max Nov 12 09:44: "after creating the wire from bills it is seen as a prewire status that can be cancelled or modified by the user") */}
+        {PRE_WIRE[st] && <span className="px-2 py-1 rounded text-[11px] font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>PRE-WIRE</span>}
         <span className="px-2 py-1 rounded text-[11px] font-extrabold" style={PST[st]}>{PKG_STATUS_LABEL[st]}</span>
         <div className="flex-1" />
         {perms.prepare && P.raw_status === 'draft' && <Btn light onClick={function () { startChange(det); }}>✏ Change</Btn>}
@@ -872,7 +891,7 @@ export default function WirePackagesPanel(props) {
               <td className="px-2 py-2 font-bold">{p.payee_name}</td>
               <td className="px-2 py-2">{p.vendors.join(', ')}<span style={{ color: MUTED }}>{' · ' + p.bills + ' bill(s)'}</span></td>
               <td className="px-2 py-2 text-right tabular-nums font-extrabold">${fmt(p.total)}</td>
-              <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{p.status === 'ready_to_send' ? sendWords(p) : NEXT_WORDS[p.status]}</span></td>
+              <td className="px-2 py-2"><span className="px-2 py-1 rounded text-[11px] font-extrabold whitespace-nowrap" style={PST[p.status]}>{(PRE_WIRE[p.status] ? 'PRE-WIRE · ' : '') + (p.status === 'ready_to_send' ? sendWords(p) : NEXT_WORDS[p.status])}</span></td>
               <td className="px-2 py-2 text-right font-extrabold whitespace-nowrap" style={{ color: '#1d4ed8' }}>
                 {perms.prepare && OPEN_ST[p.status] && p.status !== 'sent' && p.status !== 'awaiting_proof' && (p.status !== 'ready_to_send' || perms.superAdmin) ? <button onClick={function (e) { e.stopPropagation(); open(p.id); setDelAsk({ mode: 'erase', reason: '' }); }} title="Delete this wire (not sent yet)" className="mr-2 px-1.5 py-0.5 rounded text-[11px] font-extrabold" style={{ background: '#fee2e2', color: '#b91c1c' }}>🗑</button> : null}
                 open →</td>

@@ -33,6 +33,57 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SH',
+    date: '2026-11-12',
+    title: 'Bank sync: reconnect continues where the Hub left off',
+    items: [
+      '🏦 Bank: after you reconnect a bank, “Sync new transactions” now continues from the last transaction already on the Hub for that account. It no longer pulls the whole history again — that big pull was running out of time, so nothing came in.',
+      'Want everything again? “⏬ Re-pull history” still does that, on purpose.',
+      'Lines from the days that overlap are not doubled.',
+      'The automatic bank sync (every 2 hours) now covers the real books. It was only running for test books.',
+      { superAdminOnly: true, text: 'v55.83-SH — NO SQL. lib/bank-continue.js hubNewestForConnection (same institution + mask, non-archived links); plaid/transactions: continue-from when no start_date and no last_successful_posted_date, dedupe vs live twin-link rows, continued_from in the answer; vercel.json plaid/sync?includeProduction=true. Cause of the Nov 6–12 stall is inferred (first sync after reconnect = full backfill with no maxDuration), not observed in logs.' },
+    ],
+  },
+  {
+    version: 'v55.83-SG',
+    date: '2026-11-12',
+    title: 'Bank sync tells you what happened, on the bank',
+    items: [
+      '🏦 Bank: after “Sync new transactions”, the answer now appears right on that bank — “Sync done — N transactions” or why it failed. Before, it was printed at the top of the page where you could not see it.',
+      'A bank whose last sync failed now says so on its own card with the reason. If the bank login expired, it tells you to reconnect (your transactions and matches are kept).',
+      { superAdminOnly: true, text: 'v55.83-SG — NO SQL. BankTab: syncConn state; per-connection error / notice; bank_connections.last_sync_error shown when last_sync_status = error; non-JSON (504) answers handled.' },
+    ],
+  },
+  {
+    version: 'v55.83-SF',
+    date: '2026-11-12',
+    title: 'Bank sync: more time to finish',
+    items: [
+      '🏦 Bank → Sync: the sync now has a full minute to finish (it had no time limit set of its own), and the wire-matching step that runs after it is kept to a few seconds.',
+      { superAdminOnly: true, text: 'v55.83-SF — NO SQL. api/plaid/transactions: maxDuration = 60; matcher budget 10 s → 4 s. Precaution: not confirmed as the cause of the Nov 12 "no new transactions" report.' },
+    ],
+  },
+  {
+    version: 'v55.83-SE',
+    date: '2026-11-12',
+    title: 'Build a wire: choose the vendors',
+    items: [
+      '🏦 Wires → “⚡ Build this wire for an amount”: choose which vendor or vendors the wire is for (or All vendors). Each button shows what is open for that vendor.',
+      'Fixed: it said “No validated open bills” while validated bills were listed under “Other open bills”. Those bills (not yet marked as paid through RTM / NextTrade) are now chosen too — exactly like ticking them by hand. Bills already marked for that party are used first.',
+      { superAdminOnly: true, text: 'v55.83-SE — NO SQL. lib/wire-fill.js: needs_mark bills included (sorted after marked ones), opts.vendors, fillVendors(). Deleting a wire puts back the paid-through mark it set — that is why those bills had moved to “Other open bills”.' },
+    ],
+  },
+  {
+    version: 'v55.83-SD',
+    date: '2026-11-12',
+    title: 'A new wire is a PRE-WIRE',
+    items: [
+      '🏦 Wires: until both signatures are in, a wire is shown as a PRE-WIRE. The person who prepared it can ✏ Change it (bills, amounts, fee, who gets it) or 🗑 Delete it, and the bills go back to open. Changing it after a signature clears that signature.',
+      '💸 Bills: a bill on a pre-wire says “on a pre-wire (can still change)”.',
+      { superAdminOnly: true, text: 'v55.83-SD — NO SQL beyond the SC run-this. Labels only: PRE_WIRE = needs_check / flagged / awaiting_1st / awaiting_2nd (raw status stays draft). Server rules unchanged: preparer edits/deletes a draft; after both signatures only the super admin.' },
+    ],
+  },
+  {
     version: 'v55.83-SC',
     date: '2026-11-12',
     title: 'Build a wire for an amount',

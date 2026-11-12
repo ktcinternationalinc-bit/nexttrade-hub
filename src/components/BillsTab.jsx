@@ -302,7 +302,7 @@ export default function BillsTab(props) {
     if (!b.wire_state || (b.status !== 'OPEN' && b.status !== 'PARTIAL')) { return null; }
     var w = b.wire_state; var c = w.state === 'ready' ? ['#dbeafe', '#1e3a8a'] : w.state === 'sent' ? ['#e0e7ff', '#3730a3'] : ['#f1f5f9', '#334155'];
     return <div className="mt-0.5"><span className="px-2 py-0.5 rounded text-[10px] font-extrabold" title={b.wire_state_words || ''} style={{ background: c[0], color: c[1] }}>{w.label + ' · ' + w.wire}</span>
-      <div className="text-[10px] font-bold" style={{ color: '#475569', maxWidth: 220 }}>{w.state === 'ready' ? 'approved → ' + (w.payee || '?') : w.state === 'sent' ? 'sent' + (w.sent_date ? ' ' + w.sent_date : '') + ' — waiting for the bank line' : 'on a wire being signed'}{w.amount < (Number(b.open) || 0) - 0.005 ? ' · part: $' + fmt(w.amount) + ' of $' + fmt(b.open) : ''}</div></div>;
+      <div className="text-[10px] font-bold" style={{ color: '#475569', maxWidth: 220 }}>{w.state === 'ready' ? 'approved → ' + (w.payee || '?') : w.state === 'sent' ? 'sent' + (w.sent_date ? ' ' + w.sent_date : '') + ' — waiting for the bank line' : 'on a pre-wire (can still change)'}{w.amount < (Number(b.open) || 0) - 0.005 ? ' · part: $' + fmt(w.amount) + ' of $' + fmt(b.open) : ''}</div></div>;
   }
   function chip(st) {
     var map = { OPEN: ['#fee2e2', '#7f1d1d'], PARTIAL: ['#ffedd5', '#431407'], PAID: ['#d1fae5', '#065f46'], VOID: ['#e2e8f0', '#334155'], DISPUTED: ['#ede9fe', '#5b21b6'] };

@@ -24,7 +24,7 @@ ok('1b: counting keeps legitimate same-day twins (two slots, two survivors) and 
   /catch \(eMD\) \{ manualDeduped = 0; \}/.test(tr));
 ok('1c: FLAGGED, not silent — manual_deduped rides the sync response and the banner says how many were ignored',
   /manual_deduped: manualDeduped/.test(tr) &&
-  /duplicate\(s\) already in from a CSV import — flagged and ignored, nothing doubled/.test(R('src/components/BankTab.jsx')));
+  /* superseded wording (v55.83-SH): also covers the earlier bank link */ /duplicate\(s\) already on the Hub \(CSV import or the earlier bank link\) — ignored, nothing doubled/.test(R('src/components/BankTab.jsx')));
 
 var si = R('src/app/api/accounting/statement-import/route.js');
 ok('2a: direction 2 — the IMPORTER dedupes in two tiers: exact key vs earlier imports (re-import = no-op), NAMELESS key vs Plaid rows (wording differs, money matches)',

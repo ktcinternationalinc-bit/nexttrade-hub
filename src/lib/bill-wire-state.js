@@ -10,7 +10,7 @@ import { packageFingerprint, packageStatus, packageLabel } from './wire-audit';
 
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 
-export var WIRE_STATE_LABEL = { on_wire: 'OPEN', ready: 'READY', sent: 'SENT' };
+export var WIRE_STATE_LABEL = { on_wire: 'OPEN', ready: 'READY', sent: 'SENT' }; // on_wire = on a PRE-WIRE (v55.83-SD)
 
 // packages: wire_packages rows; lines: ALL lines of those packages (wire_package_lines rows); bills: { id → bill } (optional)
 export function billWireStates(packages, lines, bills) {
@@ -36,5 +36,5 @@ export function wireStateWords(ws, billOpen) {
   var part = billOpen != null && ws.amount < r2(billOpen) - 0.005 ? ' ($' + ws.amount.toFixed(2) + ' of $' + r2(billOpen).toFixed(2) + ')' : '';
   if (ws.state === 'ready') { return 'READY · ' + ws.wire + ' → ' + (ws.payee || '?') + part; }
   if (ws.state === 'sent') { return 'SENT · ' + ws.wire + (ws.sent_date ? ' on ' + ws.sent_date : '') + ' — waiting for the bank line' + part; }
-  return 'OPEN · on ' + ws.wire + ' (being signed)' + part;
+  return 'OPEN · on ' + ws.wire + ' (pre-wire — can still change)' + part;
 }

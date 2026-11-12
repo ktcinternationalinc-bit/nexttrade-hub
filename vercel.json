@@ -21,7 +21,7 @@
       "schedule": "0 */6 * * *"
     },
     {
-      "path": "/api/plaid/sync",
+      "path": "/api/plaid/sync?includeProduction=true",
       "schedule": "0 */2 * * *"
     },
     {

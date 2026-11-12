@@ -2,6 +2,7 @@ import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
 import { mapPlaidTransaction, supersededPendingIds } from '../../../../lib/bank-ingest';
 import { readBankJson, projectPlaidAccountMetadata } from '../../../../lib/bank-visibility';
 import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
+import { hubNewestForConnection } from '../../../../lib/bank-continue'; // v55.83-SH
 import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ — new bank lines → sent wires matched, bills PAID
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
@@ -12,6 +13,10 @@ var PLAID_BASE = {
 };
 
 // POST — pull from Plaid (read-only) and upsert into bank_transactions.
+// v55.83-SF (Max Nov 12 09:57: "i synced new transactions ... not getting new transactions") — this route had NO time limit set,
+// and since RZ it also runs the wire matcher after saving the bank lines. Give it a full minute, and keep the matcher short.
+export var maxDuration = 60;
+
 export async function POST(req) {
   try {
     var access = await authorizePlaidOperation(req, 'bank_transactions.view', true);
@@ -57,6 +62,11 @@ export async function POST(req) {
     if (!effStart && conn.last_successful_posted_date) {
       effStart = new Date(new Date(conn.last_successful_posted_date).getTime() - OVERLAP_DAYS * 86400000).toISOString().split('T')[0];
     }
+    // v55.83-SH (Max Nov 12 10:30: "only sync from last date if i reconnect ... not bring all of it again") — a link that has
+    // never finished a sync (a reconnect) continues from the newest transaction the Hub already shows for the same real
+    // accounts (minus the overlap). The whole history is pulled only when asked: ⏬ Re-pull history (an explicit start_date).
+    var continuedFrom = null; var otherTwinAccts = [];
+    try { var hn = await hubNewestForConnection(supabase, conn); otherTwinAccts = hn.others || []; if (!effStart && hn.date) { continuedFrom = hn.date; effStart = new Date(new Date(hn.date).getTime() - OVERLAP_DAYS * 86400000).toISOString().split('T')[0]; } } catch (eHN) { continuedFrom = null; }
     if (!effStart && conn.initial_backfill_start_date) { effStart = String(conn.initial_backfill_start_date).split('T')[0]; }
     if (!effStart) { effStart = thirtyAgo; }
     var effEnd = end_date || today;
@@ -165,9 +175,20 @@ export async function POST(req) {
           .like('plaid_transaction_id', 'manual-%')
           .in('account_id', lookIds)
           .gte('date', mdMin).lte('date', mdMax).limit(20000);
-        if (!manQ.error && manQ.data && manQ.data.length) {
+        // v55.83-SH — the SAME real account on an older (still shown) link: its rows are already on the Hub under other Plaid
+        // ids — the overlap days would otherwise come in twice after a reconnect.
+        var oldRows = [];
+        try {
+          var otherIds = otherTwinAccts.filter(function (x) { return !mdAccts[x]; });
+          if (otherIds.length) {
+            var oq = await supabase.from('bank_transactions').select('id, account_id, date, posted_date, amount_abs, direction, plaid_transaction_id').in('account_id', otherIds).gte('date', mdMin).lte('date', mdMax).limit(20000);
+            if (!oq.error && oq.data) { oldRows = oq.data.filter(function (x) { return !/^manual-/.test(String(x.plaid_transaction_id || '')); }); }
+          }
+        } catch (eOld) { oldRows = []; }
+        var seenRows = ((!manQ.error && manQ.data) || []).concat(oldRows);
+        if (seenRows.length) {
           var manCount = {};
-          manQ.data.forEach(function (m0) {
+          seenRows.forEach(function (m0) {
             var k0 = (asPlaid[m0.account_id] || m0.account_id) + '|' + (m0.posted_date || m0.date) + '|' + (Math.round((Number(m0.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + m0.direction;
             manCount[k0] = (manCount[k0] || 0) + 1;
           });
@@ -203,7 +224,7 @@ export async function POST(req) {
     // v55.83-RZ (Max: "when the wire is actually sent and you see a transaction for that amount ... automatically match") —
     // fail-soft: a matcher problem never fails the bank sync.
     var wireMatch = null;
-    if (synced > 0) { try { wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 10000 }); } catch (eWM) { wireMatch = null; } }
+    if (synced > 0) { try { wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 4000 }); } catch (eWM) { wireMatch = null; } }
 
     // v55.83-JR — compute the newest posted date overall + per account, and STORE the incremental
     // markers so the next sync pulls forward from here (the cursor for /transactions/get). Stored only
@@ -242,7 +263,8 @@ export async function POST(req) {
       newest_by_account: newestByAccount,
       markers_persisted: markersPersisted,
       marker_error: markerError,
-      manual_deduped: manualDeduped, // v55.83-QD — flagged + ignored CSV twins
+      manual_deduped: manualDeduped, // v55.83-QD — flagged + ignored CSV twins (SH: + lines already on the Hub from the older link)
+      continued_from: continuedFrom, // v55.83-SH
       wires_matched: wireMatch ? wireMatch.matched.length : 0 // v55.83-RZ
     });
   } catch (e) {
