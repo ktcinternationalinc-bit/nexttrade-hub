@@ -252,7 +252,7 @@ export function auditPackage(input) {
   });
   curBill = null;
   if (tot.fee > 0.005) {
-    if (kind !== 'service_provider') { add('block', 'FEE_NOT_ALLOWED', (kind === 'affiliate' ? 'NextTrade wires are bills only' : 'A wire straight to a vendor is bills only') + ' — remove the fee.'); }
+    if (kind === 'vendor') { add('block', 'FEE_NOT_ALLOWED', 'A wire straight to a vendor is bills only — remove the fee.'); } // v55.83-SC — RTM and NextTrade may both carry a service fee
     else { add('info', 'FEE', pkg.payee_name + ' fee ' + money(tot.fee) + ' on top of the bills (' + money(tot.bills) + ') — not backed by a bill.'); }
   }
   var blocks = checks.filter(function (c) { return c.level === 'block'; }).length;

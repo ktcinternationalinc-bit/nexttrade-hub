@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SC',
+    date: '2026-11-12',
+    title: 'Build a wire for an amount',
+    items: [
+      '🏦 Wires → New wire: “⚡ Build this wire for an amount”. Type the amount you want to send; the Hub ticks validated bills for you, oldest due first, and pays the last one in part so the wire lands exactly on your amount. It tells you what it chose — change any tick or amount before saving. The wire still needs the check and both signatures.',
+      'A service fee can now be listed on a wire to NextTrade as well as RTM Capital (not on a wire straight to a vendor). The fee counts toward the amount when the Hub builds the wire for you.',
+      { superAdminOnly: true, text: 'Run the updated sql/v55-83-RZ-wire-ready-sent-paid.sql again: wpkg_affiliate_bills_only now allows fee_amount for service_provider AND affiliate. lib/wire-fill.js fillToAmount (pure, cents). save_draft + wire-audit FEE_NOT_ALLOWED: vendor only.' },
+    ],
+  },
+  {
     version: 'v55.83-SB',
     date: '2026-11-12',
     title: 'Wire matching: only when the Hub can be sure',

@@ -59,7 +59,9 @@ ok('2c: a direct vendor wire only carries THAT vendor\'s bills', !r2c.pass && co
 var nt = bill('b4', 'Texas Electric', 'E-9', '1003-030', 300, { paid_via: 'NextTrade Industries' });
 var r2d = W.auditPackage({ pkg: { id: 'p3', payee_kind: 'affiliate', payee_name: 'NextTrade Industries', fee_amount: 0 }, lines: [line(nt, 300)] });
 var r2e = W.auditPackage({ pkg: { id: 'p3', payee_kind: 'affiliate', payee_name: 'NextTrade Industries', fee_amount: 50 }, lines: [line(nt, 300)] });
-ok('2d: "nextrade -- can be only with bills" — a NextTrade wire of its bills passes; any fee on it BLOCKS', r2d.pass && !r2e.pass && codes(r2e).indexOf('FEE_NOT_ALLOWED') >= 0);
+// superseded pin (v55.83-SC, Max Nov 12 09:40: "user can put additional funds to pay a service fee for RTM or nextrade") — a NextTrade wire MAY carry a listed fee now; only a wire straight to a vendor may not
+var r2f = W.auditPackage({ pkg: { id: 'p3', payee_kind: 'vendor', payee_name: 'Texas Electric', fee_amount: 50 }, lines: [line(Object.assign({}, nt, { paid_via: null }), 300)] });
+ok('2d: a NextTrade wire of its bills passes, with or without a listed service fee; a fee on a wire straight to a vendor BLOCKS', r2d.pass && r2e.pass && codes(r2e).indexOf('FEE') >= 0 && codes(r2f).indexOf('FEE_NOT_ALLOWED') >= 0);
 var r2f = W.auditPackage({ pkg: Object.assign({}, RTM, { fee_amount: 0 }), lines: [line(truck, 1200)], otherOpen: { b1: 'WP-0003' } });
 ok('2e: the same bill already on another open wire BLOCKS (one bill, one wire)', !r2f.pass && codes(r2f).indexOf('IN_OTHER_PACKAGE') >= 0);
 
@@ -114,7 +116,7 @@ ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with t
   S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && S.indexOf('Proof of vendor payments is for wires through RTM (NextTrade wires have no proof step).') > 0);
 ok('5h: a NextTrade or vendor wire with a fee is refused at save; amounts never above a bill\'s open balance; one bill one open wire checked before writing',
   // superseded pin (v55.83-RJ): plainer words ("what is still owed", "untick it")
-  S.indexOf("NextTrade wires are bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('one bill, one wire. Untick it here') > 0);
+  /* superseded (SC): vendor wires only */ S.indexOf("A wire straight to a vendor is bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('one bill, one wire. Untick it here') > 0);
 ok('5i: only a wire not yet sent can be cancelled (the money is gone otherwise)', S.indexOf("Only a wire that was not sent yet can be cancelled.") > 0);
 ok('5j: every step in the append-only audit trail', ['wire_package_prepared', 'wire_package_audit_run', 'wire_package_signoff_1', 'wire_package_signoff_2', 'wire_package_sent', 'wire_package_attached', 'wire_package_rtm_proof', 'wire_package_cancelled'].every(function (k) { return S.indexOf("'" + k + "'") > 0; }));
 var BR = R('src/app/api/accounting/bills/route.js');
@@ -139,7 +141,7 @@ ok('6e: proofs live in the PRIVATE bucket and open by signed link only', U.index
 // ── 7. database locks (run on PG16 in the session; pinned here)
 var Q = R('sql/v55-83-RH-wire-packages.sql');
 ok('7a: one bill, one OPEN wire — a unique index', Q.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS uq_wpkg_line_open_bill ON public.wire_package_lines (bill_id) WHERE is_open') > 0);
-ok('7b: 2nd signer ≠ 1st; NextTrade/vendor = no fee; cannot be SENT without both signatures and a sender', Q.indexOf('wpkg_two_different_people') > 0 && Q.indexOf("CHECK (payee_kind = 'service_provider' OR fee_amount = 0)") > 0 && Q.indexOf('wpkg_sent_complete') > 0);
+ok('7b: 2nd signer ≠ 1st; NextTrade/vendor = no fee; cannot be SENT without both signatures and a sender', Q.indexOf('wpkg_two_different_people') > 0 && /* RH file keeps the first rule; the RZ file replaces it (SC): RTM or NextTrade may carry a fee */ Q.indexOf("CHECK (payee_kind = 'service_provider' OR fee_amount = 0)") > 0 && R('sql/v55-83-RZ-wire-ready-sent-paid.sql').indexOf("CHECK (payee_kind IN ('service_provider', 'affiliate') OR fee_amount = 0)") > 0 && Q.indexOf('wpkg_sent_complete') > 0);
 ok('7c: once SENT nothing that was approved can change, no bills added/removed, no cancel, no delete; the bank line attaches once',
   Q.indexOf('WIRE_PACKAGE_LOCKED: a sent wire cannot be changed') > 0 && Q.indexOf('bills can only be added to a draft package') > 0 && Q.indexOf('a sent wire cannot be cancelled or reopened') > 0 &&
   Q.indexOf('only a draft package can be deleted') > 0 && /bank_transaction_id uuid UNIQUE/.test(Q));

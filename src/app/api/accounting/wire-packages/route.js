@@ -199,7 +199,8 @@ export async function POST(req) {
       }
       var feeS = r2(String(body.fee_amount == null ? '' : body.fee_amount).replace(/,/g, ''));
       if (feeS < 0) { return fail('The fee cannot be negative.'); }
-      if (feeS > 0 && kindS !== 'service_provider') { return fail(kindS === 'affiliate' ? 'NextTrade wires are bills only — no fee.' : 'A wire straight to a vendor is bills only — no fee.'); }
+      // v55.83-SC (Max Nov 12 09:40: "user can put additional funds to pay a service fee for RTM or nextrade and they can list that while building the wire")
+      if (feeS > 0 && kindS === 'vendor') { return fail('A wire straight to a vendor is bills only — no fee.'); }
       var linesIn = Array.isArray(body.lines) ? body.lines : [];
       var seenB = {}; var clean = [];
       for (var li = 0; li < linesIn.length; li++) {

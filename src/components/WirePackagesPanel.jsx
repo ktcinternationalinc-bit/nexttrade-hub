@@ -9,6 +9,7 @@
 //    then shows ONE "next step" box with the one thing to do now, and a
 //    progress bar of the steps.
 import React, { useState, useEffect, useRef } from 'react';
+import { fillToAmount } from '../lib/wire-fill'; // v55.83-SC — build a wire for an amount
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
@@ -374,7 +375,7 @@ export default function WirePackagesPanel(props) {
     });
   }
   function pickPayee(kind, name) {
-    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind === 'service_provider' ? ed.fee : '' }));
+    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null }));
     loadBills(kind, name, ed.id);
   }
   function loadBills(kind, payee, pkgId) {
@@ -386,6 +387,17 @@ export default function WirePackagesPanel(props) {
       });
       if (current && !(j && j.ok)) { toast.error((j && j.error) || 'Could not load the bills.'); }
     });
+  }
+  // v55.83-SC — "build a wire for a certain amount": the Hub ticks validated bills (oldest due first) and pays the last one in part
+  function fillWire() {
+    var pv = null; if (ed.kind === 'vendor') { (ed.bills || []).forEach(function (b) { if (ed.picks[b.id] != null && !pv) { pv = b.vendor_name; } }); }
+    if (ed.kind === 'vendor' && !pv) { setEd(Object.assign({}, ed, { fillMsg: { bad: true, text: 'A wire straight to a vendor pays one vendor — tick one of that vendor’s bills first, then build to the amount.' } })); return; }
+    var f = fillToAmount(ed.bills || [], ed.target, { fee: ed.kind !== 'vendor' ? ed.fee : 0, vendor: pv });
+    if (!f.ok) { setEd(Object.assign({}, ed, { fillMsg: { bad: true, text: f.error } })); return; }
+    var text = f.count + ' bill(s) chosen, oldest due first — bills $' + fmt(f.bills_total) + (f.fee > 0 ? ' + service fee $' + fmt(f.fee) : '') + ' = $' + fmt(f.total) + '.'
+      + (f.partial ? ' ' + f.partial.vendor_name + ' ' + (f.partial.bill_number || '') + ' is paid in part: $' + fmt(f.partial.paid) + ' of $' + fmt(f.partial.of) + '.' : '')
+      + (f.short > 0.005 ? ' There are not enough validated bills: $' + fmt(f.short) + ' short of the amount.' : '') + ' Change any tick or amount below before saving.';
+    setEd(Object.assign({}, ed, { picks: f.picks, fillMsg: { bad: f.short > 0.005, text: text } }));
   }
   function togglePick(b) {
     var pk = Object.assign({}, ed.picks);
@@ -431,7 +443,7 @@ export default function WirePackagesPanel(props) {
     if (bad) { toast.error('The amount for ' + bad + ' is not a number — type it like 1250.00 (or untick the bill).'); return; }
     var feeV = String(ed.fee || '').replace(/,/g, '').trim();
     if (ed.kind === 'service_provider' && feeV && !(Number(feeV) >= 0)) { toast.error('The fee is not a number — type it like 250.00, or leave it empty.'); return; }
-    act({ action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind === 'service_provider' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines },
+    act({ action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind !== 'vendor' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines },
       function (j) { return j.audit ? (j.audit.pass ? '✅ Saved and checked — it is ready for the 1st signature.' : '⛔ Saved — the check found ' + j.audit.blocks + ' problem(s) to fix. See the red box.') : 'Saved.'; },
       function (j) { setEd(null); open(j.id); });
   }
@@ -509,7 +521,7 @@ export default function WirePackagesPanel(props) {
     // review gap 4 — ticked bills that are no longer payable (paid, void, other company) are listed so they can be unticked
     var listedIds = {}; (ed.bills || []).forEach(function (b) { listedIds[b.id] = true; });
     var staleIds = ed.bills ? Object.keys(ed.picks).filter(function (k) { return !listedIds[k]; }) : [];
-    var feeN = ed.kind === 'service_provider' ? (Number(String(ed.fee || '').replace(/,/g, '')) || 0) : 0;
+    var feeN = ed.kind !== 'vendor' ? (Number(String(ed.fee || '').replace(/,/g, '')) || 0) : 0; // v55.83-SC — RTM or NextTrade (Max Nov 12 09:40)
     var pickedVendor = null;
     if (ed.kind === 'vendor' && ed.bills) { ed.bills.forEach(function (b) { if (ed.picks[b.id] != null && !pickedVendor) { pickedVendor = b.vendor_name; } }); }
     var qq = q.trim().toLowerCase();
@@ -546,12 +558,22 @@ export default function WirePackagesPanel(props) {
         {(payees.parties || []).map(function (p) {
           var k = p.kind === 'affiliate' ? 'affiliate' : 'service_provider'; var on = ed.kind === k && ed.payee === p.name;
           return <button key={p.name} onClick={function () { pickPayee(k, p.name); }} className="rounded-xl px-4 py-3 text-left" style={{ minWidth: 200, background: on ? '#0f766e' : '#ffffff', color: on ? '#ffffff' : INK, border: '2px solid ' + (on ? '#0f766e' : '#cbd5e1') }}>
-            <div className="text-[14px] font-extrabold">🏢 {p.name}</div><div className="text-[11px]" style={{ opacity: 0.85 }}>{k === 'affiliate' ? 'bills only — no fee' : 'pays the vendors for us · optional fee'}</div></button>;
+            <div className="text-[14px] font-extrabold">🏢 {p.name}</div><div className="text-[11px]" style={{ opacity: 0.85 }}>{k === 'affiliate' ? 'our affiliate · optional service fee' : 'pays the vendors for us · optional service fee'}</div></button>;
         })}
         <button onClick={function () { pickPayee('vendor', ''); }} className="rounded-xl px-4 py-3 text-left" style={{ minWidth: 200, background: ed.kind === 'vendor' ? '#0f766e' : '#ffffff', color: ed.kind === 'vendor' ? '#ffffff' : INK, border: '2px solid ' + (ed.kind === 'vendor' ? '#0f766e' : '#cbd5e1') }}>
           <div className="text-[14px] font-extrabold">🧾 A vendor directly</div><div className="text-[11px]" style={{ opacity: 0.85 }}>we wire the vendor ourselves · one vendor</div></button>
       </div>
       {/* step 2 */}
+      {ed.kind && ed.bills && <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
+        <div className="flex gap-2 items-center flex-wrap">
+          <div className="text-[13px] font-extrabold" style={{ color: INK }}>⚡ Build this wire for an amount</div>
+          <span className="text-[13px] font-bold" style={{ color: SUB }}>$</span>
+          <input value={ed.target || ''} onChange={function (e) { setEd(Object.assign({}, ed, { target: e.target.value, fillMsg: null })); }} placeholder="e.g. 25000" inputMode="decimal" className={inp} style={Object.assign({ width: 130 }, inpS)} />
+          <Btn color="#0f766e" onClick={fillWire} disabled={busy}>Choose the bills for me</Btn>
+          <span className="text-[11px]" style={{ color: SUB }}>Validated bills, oldest due first; the last one is paid in part to land on the amount{ed.kind !== 'vendor' ? ' (the service fee below counts toward it)' : ''}.</span>
+        </div>
+        {ed.fillMsg && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-bold" style={ed.fillMsg.bad ? { background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5' } : { background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7' }}>{(ed.fillMsg.bad ? '⚠ ' : '✓ ') + ed.fillMsg.text}</div>}
+      </div>}
       {ed.kind && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#78350f' }}>
         Only VALIDATED bills are listed here — a bill has to be validated (Inbound / Outbound, 3 checks, how you verified it) before it can be wired.
         {(ed.waiting || []).length > 0 && <span>{' '}<button onClick={function () { setEd(Object.assign({}, ed, { showWaiting: !ed.showWaiting })); }} className="underline font-extrabold" style={{ color: '#1d4ed8' }}>
@@ -592,7 +614,7 @@ export default function WirePackagesPanel(props) {
         {/* step 3 */}
         <div className="rounded-xl p-3 flex gap-3 items-center flex-wrap" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
           <div className="text-[13px] font-extrabold" style={{ color: INK }}>3 · {picksN} bill(s) · ${fmt(billsSum)}</div>
-          {ed.kind === 'service_provider' && <span className="flex gap-1 items-center"><span className="text-[12px] font-bold" style={{ color: SUB }}>+ {ed.payee} fee (optional) $</span>
+          {ed.kind !== 'vendor' && <span className="flex gap-1 items-center"><span className="text-[12px] font-bold" style={{ color: SUB }}>+ {ed.payee} service fee (optional) $</span>
             <input value={ed.fee} onChange={function (e) { setEd(Object.assign({}, ed, { fee: e.target.value })); }} placeholder="0" className={inp} style={Object.assign({ width: 90 }, inpS)} />
             {feeN > 0 && <input value={ed.fee_note} onChange={function (e) { setEd(Object.assign({}, ed, { fee_note: e.target.value })); }} placeholder="what the fee is for" className={inp} style={Object.assign({ width: 170 }, inpS)} />}</span>}
           <div className="flex-1" />

@@ -122,7 +122,7 @@ export async function aiReviewPackage(pkg, lines, rules, ctxAll) {
         paying_now: l.amount, paid_before: l.other_payments, paid_via: b.paid_via || null, category: b.category, notes: String(b.notes || '').substring(0, 200), validation: b.validation_status };
     }), rule_results: rules.checks };
   var prompt = 'You are the first reviewer of an outgoing WIRE a trading company is ABOUT TO SEND. It goes either to RTM Capital (a service company that then pays the ' +
-    'vendors listed and may charge a fee), to NextTrade Industries (a related company, bills only), or straight to a vendor. The company requires: no bill paid twice, ' +
+    'vendors listed and may charge a fee), to NextTrade Industries (a related company, which may also be paid a listed service fee), or straight to a vendor. The company requires: no bill paid twice, ' +
     // v55.83-RX (Max, Nov 9 23:41: "this is not true unless it is for outbound!! otherwise inbound needs a reference and a billing number ... every outbound bill needs a release")
     'every bill has a bill number and a bill date; an OUTBOUND bill (direction "outbound") must have a release number; an INBOUND bill (direction "inbound") does NOT need a release — ' +
     'it needs its reference (other_reference) and its bill number instead (release = null on an inbound bill is NORMAL, never mention it); bills paid to NextTrade Industries do not need a release either; ' +

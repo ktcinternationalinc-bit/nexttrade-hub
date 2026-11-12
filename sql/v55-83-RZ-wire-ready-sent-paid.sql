@@ -21,6 +21,9 @@ ALTER TABLE public.wire_packages ADD CONSTRAINT wpkg_sent_complete CHECK (status
   sent_by IS NOT NULL AND approved_total IS NOT NULL AND (
     (signoff1_by IS NOT NULL AND signoff2_by IS NOT NULL)
     OR (after_the_fact AND length(btrim(COALESCE(after_the_fact_note, ''))) >= 10))));
+-- v55.83-SC (Max Nov 12 09:40): a service fee may be added on a wire to RTM Capital OR NextTrade (never straight to a vendor)
+ALTER TABLE public.wire_packages DROP CONSTRAINT IF EXISTS wpkg_affiliate_bills_only;
+ALTER TABLE public.wire_packages ADD CONSTRAINT wpkg_affiliate_bills_only CHECK (payee_kind IN ('service_provider', 'affiliate') OR fee_amount = 0);
 ALTER TABLE public.wire_packages DROP CONSTRAINT IF EXISTS wpkg_bank_fee_range;
 ALTER TABLE public.wire_packages ADD CONSTRAINT wpkg_bank_fee_range CHECK (bank_fee >= 0 AND bank_fee <= 100); -- v55.83-SB: Max Nov 12 — up to $100
 

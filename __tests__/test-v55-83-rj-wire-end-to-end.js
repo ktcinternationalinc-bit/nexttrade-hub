@@ -96,8 +96,9 @@ function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } con
   var g3 = await call(route, 'u1', { action: 'get', id: id });
   check('RTM proof for both bills → complete', pr.ok && g3.package.status === 'complete', g3.package);
   // NextTrade: bills only, no release needed, no proof step
-  var sv2 = await call(route, 'u1', { action: 'save_draft', payee_kind: 'affiliate', payee_name: 'NextTrade Industries', fee_amount: '50', lines: [{ bill_id: 'b0000000-0000-0000-0000-000000000003', amount: 300 }] });
-  check('NextTrade wire with a fee is refused', !sv2.ok && /bills only/.test(sv2.error), sv2);
+  // superseded pin (v55.83-SC, Max Nov 12 09:40: "user can put additional funds to pay a service fee for RTM or nextrade") — a NextTrade wire MAY carry a listed fee now; only a wire straight to a vendor may not
+  var sv2 = await call(route, 'u1', { action: 'save_draft', payee_kind: 'vendor', payee_name: 'x', fee_amount: '50', lines: [{ bill_id: 'b0000000-0000-0000-0000-000000000003', amount: 300 }] });
+  check('a wire straight to a vendor with a fee is refused', !sv2.ok && /bills only/.test(sv2.error), sv2);
   var sv3 = await call(route, 'u1', { action: 'save_draft', payee_kind: 'affiliate', payee_name: 'NextTrade Industries', lines: [{ bill_id: 'b0000000-0000-0000-0000-000000000003', amount: '300' }] });
   check('NextTrade wire of a bill WITHOUT a release passes the check (warning only)', sv3.ok && sv3.audit && sv3.audit.pass === true, sv3);
   var g4 = await call(route, 'u1', { action: 'get', id: sv3.id });
