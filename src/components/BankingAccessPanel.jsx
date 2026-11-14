@@ -45,6 +45,10 @@ export var BANKING_GROUPS = [
     { key: 'wires.send', label: 'Send wires', desc: 'Mark it sent with the bank confirmation, attach the bank line, add RTM proof.', needsKtc: true },
     { key: 'wires.override', label: 'Override wire checks', desc: 'Let a wire go ahead despite a problem a person can judge (e.g. a missing release on an overhead bill) — the reason is kept with this person\'s name.', needsKtc: true },
   ] },
+  { title: '5b · Journal entries', note: 'Needs ClickBooks (KTC Hub) in group 1. Two different people: one writes, one approves.', items: [ // v55.83-SL
+    { key: 'journals.prepare', label: 'Write journal entries', desc: 'Write an adjusting entry (accrual, correction, re-class) and send it for approval.', needsKtc: true },
+    { key: 'journals.approve', label: 'Approve journal entries', desc: 'Approve or reject an entry someone else wrote. Approving posts it to the ledger.', needsKtc: true },
+  ] },
   { title: '6 · Order reconciliation', items: [
     { key: 'recon.signoff', label: 'Reconcile & approve', desc: 'Resolve saved reconciliation lines, mark reconciled, or approve (a different person approves).' },
   ] },

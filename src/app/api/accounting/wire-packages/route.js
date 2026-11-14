@@ -178,7 +178,7 @@ export async function POST(req) {
         return { id: p.id, label: packageLabel(p), payee_name: p.payee_name, payee_kind: p.payee_kind, created_at: p.created_at, created_by: nm[p.created_by] || null,
           bills: ls.length, vendors: vend, bills_total: t.bills, fee: t.fee, total: p.approved_total != null ? r2(p.approved_total) : t.total,
           status: packageStatus(p, h, pend), rtm_pending: pend, overridden: 0, sent_date: p.sent_date, bank_reference: p.bank_reference,
-          signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), bank_transaction_id: p.bank_transaction_id };
+          signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), signer_ids: [p.signoff1_by, p.signoff2_by].filter(Boolean) /* v55.83-SI — for the “Waiting for me” list */, bank_transaction_id: p.bank_transaction_id };
       });
       return NextResponse.json({ ok: true, packages: out, auto_matched: autoL.matched, auto_ambiguous: autoL.ambiguous });
     }

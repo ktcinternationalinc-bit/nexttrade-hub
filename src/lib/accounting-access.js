@@ -33,7 +33,7 @@ export var P1_KTC = 'accounting.clickbooks.access';
 export var P1_WAVE = 'accounting.wavehub.access';
 export var P2 = 'accounting.view_totals';
 export var P3 = 'accounting.view_invoicing';
-export var KTC_SCREENS = ['books_home', 'all_txns', 'categories', 'bills', 'wires', 'period_stats', 'forecast', 'clickbooks_reports', 'clickbooks_admin'];
+export var KTC_SCREENS = ['books_home', 'all_txns', 'categories', 'bills', 'wires', 'waiting', /* v55.83-SI */ 'monthend', /* v55.83-SK */ 'journals', /* v55.83-SL */ 'period_stats', 'forecast', 'clickbooks_reports', 'clickbooks_admin'];
 export var WAVE_SCREENS = ['dashboard', 'review', 'invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances', 'sales_report', 'pnl', 'purchaseorders', 'wavehub', 'company'];
 
 // hub: 'ktc' | 'wave' | undefined (= either hub)

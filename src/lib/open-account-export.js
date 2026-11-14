@@ -30,6 +30,9 @@ import * as XLSX from 'xlsx';
 // (unchanged behavior for existing call sites).
 
 import { T as t18n, stackedH } from './open-account-i18n.js';
+// v55.83-SM — the statement people see is now built by statement-view.js (one model for print
+// and Excel). The older layouts below stay only as a fallback behind opts.legacy === true.
+import { buildStatement, statementHtml, statementSheet } from './statement-view.js';
 
 function fmtMoney(n) {
   if (n == null || isNaN(Number(n))) return '';
@@ -94,6 +97,20 @@ function escapeHtml(s) {
 export function printAccountLedger(account, entity, entries, summary, opts) {
   if (!account) return;
   opts = opts || {};
+  if (opts.legacy !== true) {
+    var smModel = buildStatement(account, entity, entries, {
+      perspective: opts.perspective, bilingual: opts.bilingual === true, layout: opts.layout,
+      currency: opts.currency, today: opts.today,
+      applications: (opts.simulation && opts.simulation.applications) || null,
+    });
+    var smWin = null;
+    try { smWin = window.open('', '_blank', 'width=1150,height=780'); } catch (smErr) { smWin = null; }
+    if (!smWin) return { ok: false, reason: 'popup_blocked' };
+    smWin.document.open();
+    smWin.document.write(statementHtml(smModel));
+    smWin.document.close();
+    return { ok: true };
+  }
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var bilingual = opts.bilingual === true;
   // v55.83-A.6.27.72 HOTFIX 33 (Max v2 feedback) — layout option:
@@ -762,6 +779,25 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var bilingual = opts.bilingual === true;
   if (!account) return;
+  if (opts.legacy !== true) {
+    var smModel = buildStatement(account, entity, entries, {
+      perspective: opts.perspective, bilingual: bilingual, layout: 'combined',
+      currency: opts.currency, today: opts.today,
+      applications: (opts.simulation && opts.simulation.applications) || null,
+    });
+    var smSheet = statementSheet(smModel);
+    var smWs = XLSX.utils.aoa_to_sheet(smSheet.rows);
+    smWs['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 44 }, { wch: 16 }, { wch: 9 }, { wch: 16 }, { wch: 16 }, { wch: 14 }]
+      .concat(smModel.currencies.map(function () { return { wch: 34 }; }));
+    var smWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(smWb, smWs, 'Statement');
+    var smName = 'Statement-' + sanitizeFilename(account.account_name)
+      + (smModel.filtered ? '-' + smModel.currencies.join('-') : '')
+      + (perspective === 'customer' ? '-customer' : '-internal')
+      + '-' + new Date().toISOString().substring(0, 10) + '.xlsx';
+    XLSX.writeFile(smWb, smName);
+    return { ok: true, filename: smName };
+  }
   // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from Excel export to match screen view.
   entries = (entries || []).filter(function (e) { return e.transaction_type !== 'offset'; });
 

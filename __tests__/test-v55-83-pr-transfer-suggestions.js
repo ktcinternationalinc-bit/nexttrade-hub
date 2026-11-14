@@ -237,7 +237,7 @@ ok('16: tabs grouped by activity — DAILY WORK / SELLING (Order Reconciliation 
   /📥 DAILY WORK — handle the money/.test(atZ) &&
   /'🧾 SELLING — customers & what they owe', \['invoices', 'all_invoices', 'proformas', 'recon'/.test(atZ) &&
   // superseded pin (v55.83-RG, Max 15:32 "a separate portal for wires sent"): 🏦 Wires sits between Bills and Purchase Orders in BUYING
-  /'🛒 BUYING — vendors & what we owe', \['bills', 'wires', 'purchaseorders'\]/.test(atZ) &&
+  /* superseded pin (v55.83-SI): 🔔 Waiting for me added in front */ /'🛒 BUYING — vendors & what we owe', \['waiting', 'bills', 'wires', 'purchaseorders'\]/.test(atZ) &&
   /REPORTS · SALES & CUSTOMERS/.test(atZ) && /REPORTS · MONEY & CASH/.test(atZ) && /REPORTS · LEDGER \(ClickBooks\)/.test(atZ) &&
   /⚙️ SYSTEM — rarely touched/.test(atZ) && /TAB_GROUPS\.map\(function \(g\)/.test(atZ));
 

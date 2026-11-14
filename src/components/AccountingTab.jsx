@@ -20,6 +20,9 @@ import PurchaseOrdersTab from './PurchaseOrdersTab';
 // v55.83-PB — LedgerlyHub hidden per Max ('i don't know what ledgerly is so hide it');
 // the component file stays on disk but is no longer imported or routed.
 import BooksHomeTab from './BooksHomeTab';
+import JournalEntriesTab from './JournalEntriesTab'; // v55.83-SL
+import MonthEndTab from './MonthEndTab'; // v55.83-SK
+import WaitingTab from './WaitingTab'; // v55.83-SI
 import BillsTab from './BillsTab';
 import CashForecastTab from './CashForecastTab';
 import PeriodStatsTab from './PeriodStatsTab';
@@ -50,9 +53,12 @@ export default function AccountingTab(props) {
   var tabs = [
     ['dashboard', '📊 Dashboard'],
     ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
+    ['waiting', '🔔 Waiting for me'], // v55.83-SI — master plan build 2: what needs this person in Bills and Wires, and what is stuck
     ['bills', '💸 Bills'], // v55.83-PB — vendor bills (AP): what we owe, pay from the bank feed
     ['wires', '🏦 Wires'], // v55.83-RG — wires sent: audit + AI + two-person sign-off, click → every bill paid
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
+    ['journals', '✍️ Journal entries'], // v55.83-SL — written by one person, approved by another, then in the ledger
+    ['monthend', '📅 Month-end'], // v55.83-SK — reconcile each bank account to its statement, then close the month
     ['period_stats', '📉 Stats'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
     ['categories', '🏷 Categories & Rules'], // v55.83-PI — own categories, learned rules, verified stamp
     ['all_txns', '📑 All Transactions'], // v55.83-PW — every account, sort/filter/bulk-categorize
@@ -95,10 +101,10 @@ export default function AccountingTab(props) {
   var TAB_GROUPS = [
     ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
     ['🧾 SELLING — customers & what they owe', ['invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
-    ['🛒 BUYING — vendors & what we owe', ['bills', 'wires', 'purchaseorders']],
+    ['🛒 BUYING — vendors & what we owe', ['waiting', 'bills', 'wires', 'purchaseorders']],
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'pnl']],
-    ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast']],
-    ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports']],
+    ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
+    ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports', 'journals']],
     ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
   ];
   // v55.83-RE (Max, Nov 8 15:12) — P1 "Accounting Access" is REQUIRED before
@@ -128,7 +134,7 @@ export default function AccountingTab(props) {
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'journals' || bossA || mp['journals.prepare'] === true || mp['journals.approve'] === true) && (t[0] !== 'waiting' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">
@@ -144,11 +150,14 @@ export default function AccountingTab(props) {
           </div>;
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'bills' && sub !== 'wires' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
       {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
+      {sub === 'waiting' && <div className="p-3"><WaitingTab {...props} onGo={setSub} /></div>}
+      {sub === 'monthend' && <div className="p-3"><MonthEndTab /></div>}
+      {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
       {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}

@@ -568,12 +568,15 @@ export default function OpenAccountsTab(props) {
     var rows = entriesByAccount[account.id] || [];
     var s = summaryFor(account.id);
     var sim = simulate(rows);
-    printAccountLedger(account, ent, rows, s, {
+    // v55.83-SM — the printed statement follows the currency tab you are on.
+    var res = printAccountLedger(account, ent, rows, s, {
       perspective: perspective || 'internal',
       simulation: sim,
       bilingual: bilingual === true,
       layout: layout === 'combined' ? 'combined' : 'per_currency',
+      currency: ledgerCurFilter[account.id] || 'ALL',
     });
+    if (res && res.ok === false) toast.error('The statement window was blocked. Allow pop-up windows for this site, then press the button again.');
   }
   function handleExportExcel(account, bilingual, perspective) {
     try {
@@ -583,6 +586,8 @@ export default function OpenAccountsTab(props) {
       exportAccountLedgerToExcel(account, ent, rows, s, {
         bilingual: bilingual === true,  // HOTFIX 30 — bilingual mode
         perspective: perspective || 'internal',
+        simulation: simulate(rows),
+        currency: ledgerCurFilter[account.id] || 'ALL',
       });
       toast.success('Excel exported: ' + account.account_name + (bilingual ? ' (EN+AR)' : ''));
     } catch (e) {
@@ -1701,7 +1706,7 @@ export default function OpenAccountsTab(props) {
                     Each currency in the account gets its own strip. */}
                 {simResult.currencies.length > 0 && (
                   <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 space-y-2">
-                    {simResult.currencies.map(function (cur) {
+                    {simResult.currencies.filter(function (cur) { var f = ledgerCurFilter[a.id] || 'ALL'; return f === 'ALL' || f === cur; }).map(function (cur) {
                       var b = simResult.byCurrency[cur];
                       return (
                         <div key={cur} className="flex flex-wrap items-stretch gap-2">
@@ -1915,6 +1920,11 @@ export default function OpenAccountsTab(props) {
                           else txnType = 'payment_sent';
                         }
                         var typeMeta = TRANSACTION_TYPES[txnType] || TRANSACTION_TYPES.credit_adjustment;
+                        // v55.83-SM — our invoice green, their bill red; the customer view is mirrored.
+                        var smCust = ledgerPerspective[a.id] === 'customer';
+                        var smCls = txnType === 'sales_invoice' ? (smCust ? 'text-red-700' : 'text-emerald-700')
+                                  : txnType === 'vendor_bill' ? (smCust ? 'text-emerald-700' : 'text-red-700') : null;
+                        if (smCls) typeMeta = Object.assign({}, typeMeta, { descCls: smCls, amountCls: smCls });
                         var pr = computePaidRemaining(entry, simResult);
                         var rowTint = typeMeta.rowCls || '';
                         // v55.83-H — Removed the per-row light currency tint washes
@@ -2008,8 +2018,8 @@ export default function OpenAccountsTab(props) {
                                 if (txnType === 'payment_received') {
                                   return (
                                     <span>
-                                      <span className="text-teal-600">− {fmtNum(s.ar)}</span>
-                                      <div className="text-[9px] text-teal-600 italic font-medium opacity-75 mt-0.5">reduces what they owe</div>
+                                      <span className="text-slate-600">− {fmtNum(s.ar)}</span>
+                                      <div className="text-[9px] text-slate-500 italic font-medium mt-0.5">{smCust ? 'you owe KTC less' : 'they owe us less'}</div>
                                     </span>
                                   );
                                 }
@@ -2024,8 +2034,8 @@ export default function OpenAccountsTab(props) {
                                 if (isFavorable) {
                                   return (
                                     <span>
-                                      <span className="text-emerald-700">{fmtNum(s.ap)}</span>
-                                      <div className="text-[9px] text-teal-600 italic font-medium opacity-75 mt-0.5">reduces what we owe</div>
+                                      <span className="text-slate-600">− {fmtNum(s.ap)}</span>
+                                      <div className="text-[9px] text-slate-500 italic font-medium mt-0.5">{smCust ? 'KTC owes you less' : 'we owe them less'}</div>
                                     </span>
                                   );
                                 }
@@ -2068,7 +2078,8 @@ export default function OpenAccountsTab(props) {
                                 carry the USD running constant. Currency code is stamped in the cell. */}
                             {(function () {
                               var rbForCur = (entry._running_by_currency && entry._running_by_currency[entryCur]) || 0;
-                              var cls = 'font-extrabold ' + (rbForCur > 0 ? 'text-emerald-300' : rbForCur < 0 ? 'text-red-300' : 'text-slate-200');
+                              var smUp = smCust ? rbForCur < 0 : rbForCur > 0, smDown = smCust ? rbForCur > 0 : rbForCur < 0;
+                              var cls = 'font-extrabold ' + (smUp ? 'text-emerald-300' : smDown ? 'text-red-300' : 'text-slate-200');
                               return (
                                 <td className={'px-3 py-1.5 text-right font-mono whitespace-nowrap ' + cls}>
                                   <span className="text-[9px] font-bold text-slate-400 mr-1">{entryCur}</span>{fmtSigned(rbForCur)}
@@ -2101,7 +2112,7 @@ export default function OpenAccountsTab(props) {
                               Total AP (We Owe Them): Y
                               Net <CUR> Position: X − Y
                           Each currency gets its own 3-line block. AR and AP are NEVER mixed. */}
-                      {s.currencies.map(function (cur, sumIdx) {
+                      {s.currencies.filter(function (cur) { var f = ledgerCurFilter[a.id] || 'ALL'; return f === 'ALL' || f === cur; }).map(function (cur, sumIdx) {
                         var cs = s.byCurrency[cur];
                         var curEntries = (accEntries || []).filter(function (e) {
                           var ec = String(e.currency || 'USD').toUpperCase().trim();

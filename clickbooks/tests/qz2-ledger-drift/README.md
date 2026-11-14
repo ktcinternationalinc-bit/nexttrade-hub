@@ -21,3 +21,12 @@ After the QX file, also run `../../../sql/v55-83-RB-ledger-completion.sql`, then
 parked), split change → reverse/re-post, money-out split (classified path does
 not double-book), classified → split, NextTrade advance (Due from) + bill it
 paid (real category) + void, opening balance once. Trial balance nets to 0.
+
+## SJ / SK / SL (Nov 13 2026) — payables, month-end, journal entries
+After `13_rb.sql`: add the columns the newer SQL expects, run RS, then the three files and their scenarios:
+
+    psql -d cb -c "alter table public.expense_categories add column if not exists sort int, add column if not exists active boolean default true; create table if not exists public.vendor_bill_lines(id uuid primary key default gen_random_uuid(), bill_id uuid, line_kind text, commission_amount numeric);"
+    psql -d cb -f ../../../sql/v55-83-RS-commission-ledger.sql -f ../../../sql/v55-83-SJ-bills-payable.sql -f ../../../sql/v55-83-SK-reconcile-close.sql -f ../../../sql/v55-83-SL-journal-entries.sql
+    psql -d cb -At -f 14_sj.sql -f 15_sk.sql -f 16_sl.sql
+
+No line may print FAIL; each file ends with "TRIAL BALANCE nets to zero: 0".

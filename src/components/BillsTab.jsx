@@ -9,6 +9,7 @@ import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
+import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
 var SRC_WORDS = { vendor_default: '🏷 this vendor’s bills are always this way', read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
@@ -407,6 +408,8 @@ export default function BillsTab(props) {
       <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length + ' bill(s)'}</span>
     </div>
     {panel === 'rules' && <PriceRulesPanel api={api} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
+    {/* v55.83-SJ — what we owe by age + bills on the books before they are paid */}
+    {panel === 'reports' && <PayablesPanel bills={(data && data.bills) || []} userId={userProfile && userProfile.id} />}
     {panel === 'reports' && <BillReportsPanel api={api} onClose={function () { setPanel(null); }} />}
 
     {/* v55.83-QS (Max, Nov 8 01:02: "the import bills is not working... nothing

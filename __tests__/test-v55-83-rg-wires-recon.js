@@ -103,7 +103,7 @@ ok('3h: the portal shows the 3 steps (🤖 audit, 1st, 2nd verifier) and lets a 
   WT.indexOf('① 🤖 Audit') > 0 && WT.indexOf('②③ ✍ Sign-off by TWO different people') > 0 && WT.indexOf("action: 'set_release'") > 0);
 var AT = R('src/components/AccountingTab.jsx'); var AX = R('src/lib/accounting-access.js'); var ST = R('src/components/SettingsTab.jsx');
 ok('3i: 🏦 Wires is its own tab in BUYING, on the ClickBooks (KTC Hub) side, gated by Wires: View / Sign Off; Settings lists the 3 new switches',
-  AT.indexOf("['wires', '🏦 Wires']") > 0 && AT.indexOf("['bills', 'wires', 'purchaseorders']") > 0 && AT.indexOf("<WiresTab {...props} />") > 0 && /KTC_SCREENS = \[[^\]]*'wires'/.test(AX) &&
+  AT.indexOf("['wires', '🏦 Wires']") > 0 && /* superseded pin (v55.83-SI): 🔔 Waiting for me added in front, Bills / Wires / Purchase Orders unchanged */ AT.indexOf("['waiting', 'bills', 'wires', 'purchaseorders']") > 0 && AT.indexOf("<WiresTab {...props} />") > 0 && /KTC_SCREENS = \[[^\]]*'wires'/.test(AX) &&
   ["key: 'wires.view'", "key: 'wires.signoff'", "key: 'recon.signoff'"].every(function (k) { return ST.indexOf(k) > 0; }));
 ok('3j: AccountingTab declares userProfile (the Audit Trail tab referenced it undeclared)', AT.indexOf('var userProfile = props.userProfile;') > 0);
 var BT = R('src/components/BillsTab.jsx'); var BR = R('src/app/api/accounting/bills/route.js');

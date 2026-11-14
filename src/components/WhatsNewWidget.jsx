@@ -33,6 +33,65 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SM',
+    date: '2026-11-14',
+    title: 'Clearer account statements, with a running balance for each currency',
+    items: [
+      'Open Accounts statements (print and Excel) now show a running balance after every transaction — one column for EGP and one for USD. The old printed page had no room for those columns, so they never appeared.',
+      'Balances are written in words: “they owe us 34,795.41” or “we owe them 10,961.03”. Our invoices are green, their bills are red, and payments are grey with a minus sign because they lower a balance.',
+      'The statement follows the currency tab you are on. On “EGP” it prints only EGP transactions, the EGP balance and the EGP summary; the same for USD. On screen the tab now also hides the other currency’s tiles and summary.',
+      'New at the top: a box per currency showing how the balance is built, and a “Still open” list of unpaid invoices and bills with their age in days. Each currency has a totals line; currencies are never added together.',
+      'Customer copy: same numbers, written from their side (“You owe KTC”, “KTC owes you”, “Your payment”), colours mirrored, clearly marked “Customer copy”, and without your internal notes. The internal one is marked “Internal — not for sending”.',
+      { superAdminOnly: true, text: 'No SQL. New src/lib/statement-view.js (buildStatement → statementHtml / statementSheet) is used by printAccountLedger and exportAccountLedgerToExcel; the previous layouts remain only behind opts.legacy === true. Combined two-currency print is A4 landscape. A blocked print window now shows a message on the page instead of a browser alert.' },
+    ],
+  },
+  {
+    version: 'v55.83-SL',
+    date: '2026-11-13',
+    title: 'Journal entries, approved by a second person',
+    items: [
+      'Accounting → ✍️ Journal entries (under REPORTS · LEDGER): write an adjusting entry — an accrual, a correction, moving a cost between categories. The screen shows running totals and will not send an entry that does not balance.',
+      'One person writes it; a different person approves it; only then is it in the ledger. Nobody can approve their own entry, including the super admin.',
+      'A wrong entry is never edited: “↩ Write a reversing entry” fills in the opposite entry, which is approved the same way.',
+      'Bank accounts and the receivable / payable control accounts cannot be used in a hand entry — they move only with real bank lines, invoices and bills.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SL-journal-entries.sql. New switches: Settings → Banking & Accounting Access → 5b · Journal entries (journals.prepare, journals.approve). Table clickbooks_us.manual_journal_requests (DB check decided_by <> created_by; immutable once decided); approval posts via post_journal as source mj:<id>. Identity = verified session.' },
+    ],
+  },
+  {
+    version: 'v55.83-SK',
+    date: '2026-11-13',
+    title: 'Month-end: reconcile the bank, then close the month',
+    items: [
+      'Accounting → 📅 Month-end (under REPORTS · MONEY & CASH). Step 1: for each bank account, type the ending balance from the bank statement. The Hub compares it with the books to the cent and says “reconciled” or shows the difference.',
+      'When there is a difference, it lists the bank lines up to that date that are not on the books yet — the usual reason. Nothing is ever adjusted to force the two to agree.',
+      'Step 2: when every bank account with activity agrees, the super admin closes the month. After that the ledger refuses any entry dated in it; a correction is a new entry dated later.',
+      'Reopening a closed month: super admin only, with a written reason kept in the history.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SK-reconcile-close.sql. Needs “see bank balances” (verified session). Table clickbooks_us.bank_reconciliations (append-only; CHECK reconciled = difference 0). close sets books.locked_through (core trigger CB_PERIOD_LOCKED already enforces). Only bank ASSET accounts mapped in bank_ledger_map are reconciled — credit cards / loans come with priority 4.' },
+    ],
+  },
+  {
+    version: 'v55.83-SJ',
+    date: '2026-11-13',
+    title: 'Bills on the books before they are paid',
+    items: [
+      '💸 Bills → 📊 Reports: new “📒 What we owe, by age” — every unpaid bill by vendor, split into not due yet, 1–30, 31–60, 61–90 and over 90 days late, with what is already on a wire.',
+      'New (off until the super admin switches it on): a validated bill is recorded in the ledger on its bill date — the cost, and “we owe this vendor”. Paying it clears the debt. So the balance sheet shows what we owe, and costs land in the month they were billed.',
+      'It starts from a date you choose; earlier bills are not touched, so nothing is counted twice. Bills paid through RTM Capital stay one professional-fee line.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SJ-bills-payable.sql (needs RB; uses RS when present). Additive: entries apbill:<bill> (Dr cost/commission, Cr 2000) and appay:<payment> (Dr 2000, Cr cost) — existing posting functions untouched; one extra step in clickbooks_us_ledger_extras_job. Needs account 2000 approved. Switch: Bills → Reports → Bills on the books (super admin). Agree the start date with the accountant (moves bill costs to accrual from that date).' },
+    ],
+  },
+  {
+    version: 'v55.83-SI',
+    date: '2026-11-12',
+    title: '🔔 Waiting for me',
+    items: [
+      'Accounting → 🔔 Waiting for me (first button under BUYING): one list of what needs YOU — bills to validate, price flags to resolve, pre-wires to finish, wires waiting for your signature, approved wires to send, and validated bills that are due but not on any wire.',
+      'Stuck items are marked in red: a bill waiting 3+ days, a wire unsigned for 3+ days, a wire sent 7+ days ago that the bank still does not show, a validated bill past its due date.',
+      'Each person sees only what their switches let them do. The list only reads — nothing changes until you open the bill or the wire.',
+      { superAdminOnly: true, text: 'v55.83-SI — NO SQL. lib/waiting-list.js (pure) + components/WaitingTab.jsx; uses the existing bills list + wires list requests. Only server change: wires list adds signer_ids. Thresholds: STUCK_BILL_DAYS 3, STUCK_WIRE_DAYS 3, STUCK_BANK_DAYS 7, DUE_SOON_DAYS 7. Push / bell alerts for stuck items are NOT in this build.' },
+    ],
+  },
+  {
     version: 'v55.83-SH',
     date: '2026-11-12',
     title: 'Bank sync: reconnect continues where the Hub left off',
