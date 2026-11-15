@@ -148,6 +148,12 @@ export default function BooksHomeTab(props) {
       });
   }
   useEffect(function () { loadCashflow(from, to); loadPeriodStats(from, to); loadQueues(); loadCatalog(); loadProposals(); loadLate(); loadDrift(); loadForecastStrip(); }, []);
+  // v55.83-SO — coming Back to this screen after a quick jump: refresh the numbers, keep the filters
+  useEffect(function () {
+    function onBack(ev) { if (ev && ev.detail && ev.detail.sub === 'books_home') { loadQueues(); } }
+    window.addEventListener('nt-acct-returned', onBack);
+    return function () { window.removeEventListener('nt-acct-returned', onBack); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () { prefillSuggestions(outQueue, hubRules); }, [outQueue, hubRules]); // eslint-disable-line // eslint-disable-line
 
   function applyPeriod(f, t, label) { setFrom(f); setTo(t); setPreset(label); loadCashflow(f, t); loadPeriodStats(f, t); }
@@ -235,15 +241,20 @@ export default function BooksHomeTab(props) {
           <div>
             <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🏦 1 · BANK REALITY — money that actually moved in this period (from the bank feed)</div>
             <div className="flex gap-2 flex-wrap">
-              <Card label={'CAME IN' + (V.fin ? ' (' + sum.actual_in_count + ' bank txns)' : '')} value={gv(V.fin, '$' + fmt(sum.actual_in))} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="ALL settled deposits (incl. transfers)"
+              <Card label={'CAME IN' + (V.fin ? ' (' + sum.actual_in_count + ' bank txns)' : '')} value={gv(V.fin, '$' + fmt(sum.actual_in))} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="settled deposits — transfers between your own accounts are not counted"
                 onClick={go(V.fin, function () { setCfDrill({ title: 'Came in — settled bank deposits', keys: [{ key: 'came_in', sign: 1 }] }); })} />
               <Card label={'of which SALES' + (V.fin ? ' (' + (cf.sales_in_count || 0) + ')' : '')} value={gv(V.fin, '$' + fmt(cf.sales_in || 0))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="deposits matched to invoices / customer payments"
                 onClick={go(V.fin, function () { setCfDrill({ title: 'Sales received — deposits matched to invoices or categorized customer payment', keys: [{ key: 'sales_in', sign: 1 }] }); })} />
-              <Card label={'WENT OUT' + (V.fin ? ' (' + sum.actual_out_count + ')' : '')} value={gv(V.fin, '$' + fmt(sum.actual_out))} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="ALL settled spending (incl. transfers)"
+              <Card label={'WENT OUT' + (V.fin ? ' (' + sum.actual_out_count + ')' : '')} value={gv(V.fin, '$' + fmt(sum.actual_out))} bg="#fee2e2" border="#fecaca" fg="#7f1d1d" sub="settled spending — transfers between your own accounts are not counted"
                 onClick={go(V.fin, function () { setCfDrill({ title: 'Went out — settled bank spending', keys: [{ key: 'went_out', sign: -1 }] }); })} />
               <Card label="NET MOVED" value={gv(V.fin, (sum.actual_net >= 0 ? '+$' : '−$') + fmt(Math.abs(sum.actual_net)))} bg="#e0e7ff" border="#c7d2fe" fg="#312e81" sub="in − out, bank reality"
                 onClick={go(V.fin, function () { setCfDrill({ title: 'Net moved — every settled bank transaction (in +, out −)', keys: [{ key: 'came_in', sign: 1 }, { key: 'went_out', sign: -1 }] }); })} />
+              {/* v55.83-SO — money moved between the company's own accounts: shown, never added to in or out */}
+              {cf.transfers_between && cf.transfers_between.count > 0 && <Card label={'BETWEEN OWN ACCOUNTS' + (V.fin ? ' (' + cf.transfers_between.count + ')' : '')} value={gv(V.fin, '$' + fmt(cf.transfers_between.total))} bg="#f1f5f9" border="#cbd5e1" fg="#0f172a" sub="linked transfers — not income, not spending, not in the totals" />}
             </div>
+            {cf.transfers_unlinked && cf.transfers_unlinked.count > 0 && <div className="mt-1 rounded-lg px-3 py-2 text-[11px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #fcd34d' }}>
+              ⚠ {cf.transfers_unlinked.count} bank {cf.transfers_unlinked.count === 1 ? 'line is' : 'lines are'} marked “transfer” but not linked to {cf.transfers_unlinked.count === 1 ? 'its' : 'their'} other side{V.fin ? ' ($' + fmt(cf.transfers_unlinked.total) + ')' : ''}. The second leg is missing. {cf.transfers_unlinked.count === 1 ? 'It is' : 'They are'} treated as a transfer — not counted in CAME IN or WENT OUT. Link {cf.transfers_unlinked.count === 1 ? 'it' : 'them'} in Categories → Intra-company transfers, or pick the real category.
+            </div>}
           </div>
           {ps && ps.invoices && <div>
             <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🧾 2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices</div>

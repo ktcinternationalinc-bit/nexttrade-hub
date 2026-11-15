@@ -1061,7 +1061,11 @@ export default function BankReviewTab(props) {
           <div className="border border-slate-700 rounded bg-slate-900/60 p-3 text-sm">
             <div className="flex items-center justify-between mb-2">
               <div className="font-extrabold text-slate-100 truncate">{sel.name}</div>
-              <button onClick={function () { setSel(null); }} className="text-slate-400 hover:text-slate-200 text-xs">✕ close</button>
+              {/* v55.83-SO — an obvious way out of the transaction, and back to where the person came from */}
+              <div className="flex items-center gap-2 shrink-0">
+                {props.onBack && <button onClick={function () { setSel(null); props.onBack(); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back{props.backLabel ? ' to ' + props.backLabel : ''}</button>}
+                <button onClick={function () { setSel(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #cbd5e1' }}>✕ Close</button>
+              </div>
             </div>
             {isReviewDuplicate(sel) && <div className="bg-rose-100 text-rose-950 rounded p-2 text-xs font-semibold mb-2">Duplicate bank row. Use the original transaction row for matching, categorizing, review, and approval. This duplicate is kept only for audit.</div>}
             {sel.unsupported_account && <div className="bg-amber-100 text-amber-950 rounded p-2 text-xs font-semibold mb-2">⚠ Credit/loan account — money-in/out direction is NOT auto-verified for these. Review manually before approving.</div>}

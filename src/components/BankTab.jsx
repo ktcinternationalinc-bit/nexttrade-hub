@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 import { fmtET } from '../lib/et-time';
 import { getActiveWaveBusiness, setActiveWaveBusiness, scopeIfRegistered } from '../lib/wave-business';
 import SiloBanner from './SiloBanner';
@@ -754,6 +755,8 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       {/* v55.83-QC (Max): manual CSV statement import — the guaranteed route
           when a bank (M&T) won't give Plaid its history. bank.connections
           permission; super admins always. */}
+      {/* v55.83-SO — after a sync or a statement upload: look for the same bank line recorded twice */}
+      <DuplicateCheckPanel userProfile={userProfile} />
       <StatementImport userProfile={userProfile} canUse={isSuperAdmin || !!(modulePerms && modulePerms['bank.connections'] === true)} />
 
       {/* Pull range (changes Plaid import) vs display filters (change only what you see) */}

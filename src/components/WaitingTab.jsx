@@ -32,11 +32,17 @@ export default function WaitingTab(props) {
       if (r[0] && !r[0].ok) { e.push('Bills: ' + (r[0].error || 'not loaded')); }
       if (r[1] && !r[1].ok) { e.push('Wires: ' + (r[1].error || 'not loaded')); }
       setErrs(e);
-      setData(waitingFor({ bills: (r[0] && r[0].ok && r[0].bills) || [], wires: (r[1] && r[1].ok && r[1].packages) || [], perms: perms, userId: userProfile && userProfile.id }));
+      setData(waitingFor({ bills: (r[0] && r[0].ok && r[0].bills) || [], wires: (r[1] && r[1].ok && r[1].packages) || [], funding: (r[1] && r[1].ok && r[1].funding_open) || [] /* v55.83-SP */, perms: perms, userId: userProfile && userProfile.id }));
       setAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     }).finally(function () { setBusy(false); });
   }
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-SO — coming Back to this screen after a quick jump: refresh the numbers, keep the filters
+  useEffect(function () {
+    function onBack(ev) { if (ev && ev.detail && ev.detail.sub === 'waiting') { load(); } }
+    window.addEventListener('nt-acct-returned', onBack);
+    return function () { window.removeEventListener('nt-acct-returned', onBack); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function go(k) { if (props.onGo) { props.onGo(k); } }
   var btn = { background: '#ffffff', color: INK, border: '1px solid #94a3b8' };

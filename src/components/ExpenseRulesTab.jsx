@@ -12,6 +12,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of'; // v55.83-PQ — Wave link
+import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 
 var KINDS = ['income', 'cogs', 'expense', 'other_income', 'other_expense', 'transfer', 'not_pnl']; // v55.83-PW — QuickBooks-style types
 var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expense', other_income: 'Other income', other_expense: 'Other expense', transfer: 'Transfer', not_pnl: 'Not P&L (loan/owner)' };
@@ -44,6 +45,7 @@ export default function ExpenseRulesTab(props) {
   var sW2 = useState(false); var showWave = sW2[0]; var setShowWave = sW2[1];
   var sPr = useState(null); var pairPanel = sPr[0]; var setPairPanel = sPr[1]; // v55.83-PQ — {txn, candidates} transfer pairing
   var sSg = useState(null); var suggestions = sSg[0]; var setSuggestions = sSg[1]; // v55.83-PR — scanned transfer pairs
+  var sTw = useState(0); var twice = sTw[0]; var setTwice = sTw[1]; // v55.83-SO — bank lines that are in the Hub twice (left out of the pairs)
   var sTr = useState(null); var trReport = sTr[0]; var setTrReport = sTr[1];       // v55.83-PR — intra-company transfer register
   var sTf = useState('2026-01-01'); var trFrom = sTf[0]; var setTrFrom = sTf[1];
   var sTt = useState(new Date().toISOString().substring(0, 10)); var trTo = sTt[0]; var setTrTo = sTt[1];
@@ -171,7 +173,7 @@ export default function ExpenseRulesTab(props) {
   function scanTransfers() {
     setBusy(true);
     api('transfer_suggestions').then(function (j) {
-      if (j && j.ok) { setSuggestions(j.suggestions || []); if ((j.suggestions || []).length === 0) { toast.success('Scanned all accounts — no unlinked transfer pairs found.'); } }
+      if (j && j.ok) { setSuggestions(j.suggestions || []); setTwice(j.recorded_twice || 0); if ((j.suggestions || []).length === 0) { toast.success('Scanned all accounts — no unlinked transfer pairs found.'); } }
       else { toast.error((j && j.error) || 'Scan failed.'); }
     }).finally(function () { setBusy(false); });
   }
@@ -373,6 +375,7 @@ export default function ExpenseRulesTab(props) {
     {/* ②½ Intra-company transfers (v55.83-PR, Max: "read through accounts and
         give suggestions to transfers... link them in the proper accounting
         terminology... sorting filtering and report building") */}
+    <DuplicateCheckPanel userProfile={userProfile} toast={toast} onChanged={function () { setSuggestions(null); loadExpenses(filter); }} />
     <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-1">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>↔ Intra-company transfers</div>
@@ -385,8 +388,11 @@ export default function ExpenseRulesTab(props) {
         {trReport && <button onClick={trCsv} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>⬇ CSV</button>}
       </div>
       <div className="text-[10px] mb-2" style={{ color: '#64748b' }}>Money moved between the company's own accounts (checking ↔ savings ↔ credit cards) is an <b>intra-company transfer</b>: one movement of funds, not income and not an expense. Linking the two legs books them through the <b>Inter-account transfer clearing</b> account, which nets to zero — balances move, the P&L doesn't.</div>
+      {suggestions && twice > 0 && <div className="mb-2 rounded-lg px-3 py-2 text-[11px] font-bold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #fcd34d' }}>
+        {twice} bank {twice === 1 ? 'line is' : 'lines are'} recorded twice (the same account connected more than once). Each is offered only once below. Use “Check for duplicates” above to remove the extra copies.
+      </div>}
       {suggestions && suggestions.length > 0 && <div className="mb-2 rounded-lg p-2" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
-        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#1e3a8a' }}>Suggested pairs ({suggestions.length}) — same amount, opposite direction, different account, ≤7 days apart:</div>
+        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#1e3a8a' }}>Suggested pairs ({suggestions.length}) — same amount, opposite direction, two different bank accounts, ≤7 days apart:</div>
         {suggestions.map(function (sg, i3) {
           return <div key={i3} className="flex gap-2 items-center py-1 flex-wrap" style={{ borderBottom: '1px solid #dbeafe' }}>
             <span className="text-[11px] font-extrabold tabular-nums" style={{ color: '#0f172a', minWidth: 90 }}>${fmt(sg.amount)}</span>
@@ -400,7 +406,7 @@ export default function ExpenseRulesTab(props) {
         })}
       </div>}
       {trReport && <div>
-        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#0f172a' }}>Transfer register {trReport.from} → {trReport.to}: {trReport.count} transfer(s), ${fmt(trReport.total)} moved between own accounts</div>
+        <div className="text-[11px] font-extrabold mb-1" style={{ color: '#0f172a' }}>Transfer register {trReport.from} → {trReport.to}: {trReport.count} transfer(s), ${fmt(trReport.total)} moved between own accounts{trReport.issues > 0 ? ' · ' + trReport.issues + ' need attention (not counted in the total)' : ' · both sides checked ✓'}</div>
         {trReport.transfers.length > 0 && <table className="w-full text-[10px]">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
             <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">From account</th>
@@ -409,8 +415,8 @@ export default function ExpenseRulesTab(props) {
             {trReport.transfers.map(function (g) {
               return <tr key={g.gid} style={{ borderBottom: '1px solid #f1f5f9' }}>
                 <td className="py-0.5 pr-2 whitespace-nowrap">{g.date}</td>
-                <td className="py-0.5 pr-2">{g.from_account || '?'}{g.legs < 2 ? ' ⚠ one leg only' : ''}</td>
-                <td className="py-0.5 pr-2">{g.to_account || '?'}</td>
+                <td className="py-0.5 pr-2">{g.from_account || '?'}</td>
+                <td className="py-0.5 pr-2">{g.to_account || '?'}{g.issue && <div className="font-bold" style={{ color: '#b91c1c' }}>⚠ {g.issue}</div>}</td>
                 <td className="py-0.5 text-right font-extrabold tabular-nums">${fmt(g.amount)}</td></tr>;
             })}
           </tbody>

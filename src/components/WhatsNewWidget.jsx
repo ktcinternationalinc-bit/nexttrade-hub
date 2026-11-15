@@ -33,6 +33,62 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SQ',
+    date: '2026-11-15',
+    title: 'Payment requests, part two (first half): wire copies per vendor, printable copies, currency check',
+    items: [
+      'Wire copies: on a sent request each vendor line now shows whether RTM’s (or NextTrade’s) copy of the wire is in. “Attach copy” saves it for that vendor, and the copy opens from the same line. The request is complete when every vendor’s copy is in.',
+      'NextTrade requests now wait for NextTrade’s wire copies too — the same as RTM.',
+      'Two printable copies of every request, both with the request number and a reference per vendor: the copy for RTM / NextTrade shows vendors, number of bills and totals; our copy adds every bill underneath, and marks a bill paid in part.',
+      'Currency: if a bill is in a different currency from the transfer, the request shows a red warning naming the bill and both currencies. Nothing is converted and nothing is blocked — it is there so a person checks before sending.',
+      'The request shows its dates side by side: the day the money left the bank (the day the bills are recorded paid) and the day the request was sent or is planned.',
+      'Books home: a bank line marked “transfer” whose second leg is missing is now treated as a transfer — it is not added to CAME IN or WENT OUT — and it stays flagged with its total until someone links the other side or re-categorizes it.',
+      'Still to come: the bills / service fee / waiting-for-bills breakdown in the P&L, NextTrade booked like RTM in the ledger, links between the screens, and the duplicate check running by itself after every bank sync.',
+      { superAdminOnly: true, text: 'No SQL in this build. New: src/lib/wire-request-print.js (requestCopyModel / requestCopyHtml, escaped, A4); wire-funding-server currencyMismatch() + iso_currency on funding lines; route get → by_vendor[].line_ids / waiting_line_ids / copies_in / copies[{path,…}], funding.currency(+_mismatch); save_draft → currency_mismatch; loadPackage paidThrough is true for any funded non-vendor request (so affiliate requests reach awaiting_proof → complete); rtm_proof unchanged apart from its message. bills route cashflow: bank lines with classification = transfer and no transfer_group_id are excluded from the summary and drills; transfers_unlinked keeps count + total. Older NextTrade wires that are not requests are unaffected (no proof step).' },
+    ],
+  },
+  {
+    version: 'v55.83-SP',
+    date: '2026-11-15',
+    title: 'Payment requests from money already sent to RTM or NextTrade (part one)',
+    items: [
+      'A transfer already sent to RTM or NextTrade can now pay bills. In Wires → New wire, pick the company and the Hub shows its transfers that still have money on them. Pick one and you are building a request to that company for that money — one vendor or several.',
+      'A request can never be more than what is left on the transfer. The screen shows the transfer, what is already used, this request (bills plus the service fee) and what is left after. “Fill to what is left” ticks validated bills, oldest due first, and pays the last one in part so it lands exactly.',
+      'One transfer can carry several requests. Each request has its own service fee, its own two signatures, and a reference number per vendor (for example WP-0042/1, WP-0042/2) with the number of bills and the total for each vendor.',
+      'Sending a request needs only the date — no wire leaves our bank. Each bill’s payment is recorded against the transfer and dated the day that money left the bank. A planned date is only a label; nothing is sent or recorded paid on it by itself, and a future “sent” date is refused.',
+      'Past payments through RTM or NextTrade now need two signatures too: build the request from the transfer that funded it. “Record a past wire” stays for wires sent straight to a vendor.',
+      'The service fee of a sent request can be changed without new signatures. It needs a reason, it is kept in the history, and it is refused if the transfer has no room for it or its month is closed.',
+      '“Waiting for me” now lists transfers with money still unused, until it is tied to bills or booked as the service fee.',
+      'Unchanged: wires sent directly from our own bank account work exactly as before. The rules for when a bill counts as paid, when an expense shows in reports, approvals and permissions are the same.',
+      'Still to come in part two: RTM’s wire copies per vendor, printable request copies, links between the screens, the bills / service fee / waiting-for-bills breakdown in the P&L, and NextTrade booked the same way as RTM in the ledger. Until then NextTrade requests work the same on screen, but the ledger still records money sent to NextTrade the way it did before.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SP-funded-requests.sql (re-runnable; deletes nothing). wire_packages gains funding_txn_id + planned_send_date; UNIQUE(bank_transaction_id) becomes a partial unique index for ordinary wires only (uq_wpkg_bank_line_exclusive), so only requests share a line; constraints wpkg_funded_not_vendor / wpkg_funded_same_line; wpkg_lock allows fee_amount / approved_total to change only inside wire_request_fee_change. New service-role functions: wire_funding_summary, wire_request_send (row locks, closed month via books.locked_through, one transaction: payments + line close + attach), wire_request_fee_change. packageFingerprint for a funded request covers bills + transfer, not the fee. Route actions: funding_lines, change_fee; mark_sent branches on funding_txn_id; record_past_wire refuses non-vendor. Real functions run on PG16: clickbooks/tests/sp-funded-requests (F0–F19). Not in this build: ledger kind for NextTrade is still affiliate (Due-from), currency mismatch flag.' },
+    ],
+  },
+  {
+    version: 'v55.83-SO',
+    date: '2026-11-15',
+    title: 'Transfers fixed, a “Check for duplicates” button, and an obvious Back button',
+    items: [
+      'Transfers: the scan no longer pairs a bank account with itself or lists the same pair twice. That happened when one account was connected to the Hub more than once. A transfer now always means money leaving one bank account and arriving in a different one, and linking two lines of the same account is refused.',
+      'Books home: money moved between your own accounts and linked as a transfer is no longer added to CAME IN and WENT OUT. It has its own “BETWEEN OWN ACCOUNTS” card. A line that is only marked “transfer” without its other side is flagged for you instead of being assumed.',
+      'New “🔍 Check for duplicates” button on All Transactions, Categories and Banking. It finds the same bank line recorded twice, shows the copies side by side, and suggests which to keep. It leaves repeating payments and the two sides of a transfer alone, and tells you how many it left.',
+      'Removing a duplicate takes it out of every total, screen, export and report — it is not just hidden. The original is kept on file with who removed it and why, and “Restore” puts it back exactly as it was. A copy that already has work on it (an invoice match, a bill payment, a wire) can only be the one you keep.',
+      'Back and Close: after jumping from one accounting screen to another you get a clear “← Back to …” button that returns you to the same place with your filters untouched. Transaction details now have a proper “✕ Close” button. Opening a transaction from Banking returns you to Banking.',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SO-duplicates.sql (re-runnable; deletes nothing). New: bank_transaction_duplicates (+ bank_duplicate_dismissals), bank_duplicate_remove / bank_duplicate_restore (service role only), a before-insert tombstone on bank_transactions so a removed line is not re-imported. Removal is refused for a line with accounting activity or in a closed month. The ledger follows through the existing drift check (reverse on removal, re-post on restore) — verified on Postgres in clickbooks/tests/qz2-ledger-drift/17_so.sql. New /api/accounting/duplicates; lines parked earlier with review_status = duplicate can be moved out from the same panel.' },
+    ],
+  },
+  {
+    version: 'v55.83-SN',
+    date: '2026-11-15',
+    title: 'See the actual bill, right on the Bills screen',
+    items: [
+      'Bills: every bill that came with a file now has a clear “📄 View bill” button. It opens the actual bill next to what the Hub read from it — side by side on a computer, the bill on top on a phone. “Open full size” opens it in its own tab.',
+      'The same “View the bill” button is inside the validation checks, so you can compare the bill with each check without leaving the screen.',
+      'A bill with no file says so (“View · no file”) and has an “Attach the bill” button for a PDF or a photo. A bill that already has its file keeps it — it is never replaced.',
+      { superAdminOnly: true, text: 'No SQL. New src/components/BillDocViewer.jsx + src/lib/bill-doc.js; new bills action attach_bill_file (Bills: Manage; pv/ path only; refuses a bill that already has a file; audited bill_file_attached). Signed links, 1 hour, bills-private bucket.' },
+    ],
+  },
+  {
     version: 'v55.83-SM',
     date: '2026-11-14',
     title: 'Clearer account statements, with a running balance for each currency',

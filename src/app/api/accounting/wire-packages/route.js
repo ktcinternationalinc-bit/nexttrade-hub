@@ -22,7 +22,11 @@ import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
 import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY } from '../../../../lib/wire-audit';
 import { packageContext, inChunks, loadPayParties, aiReviewPackage } from '../../../../lib/wire-package-server';
-import { attachWire, autoMatchSentWires, wireCandidates, AUTO_FEE_MAX } from '../../../../lib/wire-auto-match'; // v55.83-RZ
+import { attachWire, autoMatchSentWires, wireCandidates, AUTO_FEE_MAX, fileAsProfessionalFees } from '../../../../lib/wire-auto-match'; // v55.83-RZ
+import { fundingLines, currencyMismatch } from '../../../../lib/wire-funding-server'; // v55.83-SP — requests drawn from a transfer
+import { requestFit, requestByVendor, payeeKey } from '../../../../lib/wire-funding';
+var SP_HINT = ' — run sql/v55-83-SP-funded-requests.sql in Supabase first.';
+function spMissing(m) { return /funding_txn_id|planned_send_date|wire_request_|wire_funding_|schema cache/i.test(String(m || '')); }
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -91,7 +95,7 @@ async function loadPackage(db, id) {
   // once attached, the bills ARE paid by this wire — judge the frozen audit, not "paid before" by itself
   var live = applyOverrides(auditPackage(input), ovr, hash);
   // v55.83-RJ (review gap 6) — proof that the vendors were paid is asked from RTM-type companies only (NextTrade: bills only, no proof step)
-  var paidThrough = pkg.payee_kind === 'service_provider';
+  var paidThrough = pkg.payee_kind === 'service_provider' || (!!pkg.funding_txn_id && pkg.payee_kind !== 'vendor'); // v55.83-SQ — a request to NextTrade works like one to RTM: their wire copies are expected
   var rtmPending = paidThrough ? ctx.lines.filter(function (l) { return !l.rtm.confirmed_at; }).length : 0;
   return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: packageStatus(pkg, hash, rtmPending), rtmPending: rtmPending, paidThrough: paidThrough };
 }
@@ -115,6 +119,14 @@ export async function POST(req) {
       (vb.data || []).forEach(function (b) { if (!b.paid_via && b.vendor_name && vendors.indexOf(b.vendor_name) < 0) { vendors.push(b.vendor_name); } });
       vendors.sort(function (a, b) { return String(a).localeCompare(String(b)); });
       return NextResponse.json({ ok: true, parties: parties, vendors: vendors });
+    }
+    // ── v55.83-SP — the transfers a request can draw from: money already sent to RTM / NextTrade, with what is left on each
+    if (action === 'funding_lines') {
+      var fl = await fundingLines(db, { payee: String(body.payee_name || '').trim() || null, limit: 300 });
+      if (fl.error) { return fail(fl.error, 500); }
+      var onlyOpen = body.include_used !== true;
+      var flOut = fl.lines.filter(function (x) { return !onlyOpen || x.remaining > 0.005; });
+      return NextResponse.json({ ok: true, lines: flOut.slice(0, 100), unused_total: r2(fl.lines.reduce(function (a, x) { return a + Math.max(0, x.remaining); }, 0)) });
     }
     if (action === 'open_bills') {
       var kindO = String(body.payee_kind || ''); var payeeO = normRef(body.payee_name);
@@ -171,16 +183,20 @@ export async function POST(req) {
         var ls = allL.filter(function (l) { return l.package_id === p.id; }).map(function (l) { return { line_id: l.id, bill_id: l.bill_id, amount: r2(l.amount), payment_id: l.payment_id, bill: bBy[l.bill_id] || {}, rtm: { confirmed_at: l.rtm_confirmed_at } }; });
         // the list uses the fingerprint of what is stored (bills' own edits show up when the package is opened)
         var h = packageFingerprint(p, ls);
-        var pt = p.payee_kind === 'service_provider';
+        var pt = p.payee_kind === 'service_provider' || (!!p.funding_txn_id && p.payee_kind !== 'vendor'); // v55.83-SQ — same rule as the request view
         var pend = pt ? ls.filter(function (l) { return !l.rtm.confirmed_at; }).length : 0;
         var vend = []; ls.forEach(function (l) { var v = l.bill.vendor_name || '?'; if (vend.indexOf(v) < 0) { vend.push(v); } });
         var t = packageTotals(p, ls);
         return { id: p.id, label: packageLabel(p), payee_name: p.payee_name, payee_kind: p.payee_kind, created_at: p.created_at, created_by: nm[p.created_by] || null,
           bills: ls.length, vendors: vend, bills_total: t.bills, fee: t.fee, total: p.approved_total != null ? r2(p.approved_total) : t.total,
           status: packageStatus(p, h, pend), rtm_pending: pend, overridden: 0, sent_date: p.sent_date, bank_reference: p.bank_reference,
-          signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), signer_ids: [p.signoff1_by, p.signoff2_by].filter(Boolean) /* v55.83-SI — for the “Waiting for me” list */, bank_transaction_id: p.bank_transaction_id };
+          signers: [nm[p.signoff1_by], nm[p.signoff2_by]].filter(Boolean), signer_ids: [p.signoff1_by, p.signoff2_by].filter(Boolean) /* v55.83-SI — for the “Waiting for me” list */, bank_transaction_id: p.bank_transaction_id,
+          funding_txn_id: p.funding_txn_id || null, planned_send_date: p.planned_send_date || null /* v55.83-SP */ };
       });
-      return NextResponse.json({ ok: true, packages: out, auto_matched: autoL.matched, auto_ambiguous: autoL.ambiguous });
+      // v55.83-SP — money already sent to RTM / NextTrade that nothing has used yet (for “Waiting for me”); never breaks the list
+      var fundOpen = [];
+      try { var flL = await fundingLines(db, { limit: 300 }); if (!flL.error) { fundOpen = flL.lines.filter(function (x) { return x.remaining > 0.005; }).map(function (x) { return { id: x.id, date: x.date, payee: x.payee, amount: x.amount, used: x.used, remaining: x.remaining, planned: x.planned }; }); } } catch (eFo) { fundOpen = []; }
+      return NextResponse.json({ ok: true, packages: out, auto_matched: autoL.matched, auto_ambiguous: autoL.ambiguous, funding_open: fundOpen });
     }
 
     // ── save a DRAFT (create or replace its bills) — Wires: Prepare
@@ -247,6 +263,24 @@ export async function POST(req) {
         var openS = r2((Number(bb.total_amount) || 0) - paidS);
         if (clean[ci].amount > openS + 0.005) { return fail(whoB + ': $' + clean[ci].amount.toFixed(2) + ' is more than what is still owed ($' + openS.toFixed(2) + ').' + (openS <= 0.005 ? ' It is already paid — untick it.' : ''), 409); }
       }
+      // v55.83-SP — a request drawn from a transfer already sent to RTM / NextTrade: bills + service fee can never
+      // be more than what is left on that transfer (Max: "they should not go beyond the amount you transfer")
+      var fundS = Object.prototype.hasOwnProperty.call(body, 'funding_txn_id') ? (body.funding_txn_id ? String(body.funding_txn_id) : null) : undefined;
+      var planS = Object.prototype.hasOwnProperty.call(body, 'planned_send_date') ? (body.planned_send_date ? String(body.planned_send_date) : null) : undefined;
+      if (planS && !isDate(planS)) { return fail('The planned date is not a valid date.'); }
+      var fundInfo = null;
+      if (fundS) {
+        if (kindS === 'vendor') { return fail('A wire straight to a vendor leaves from our own bank — it does not draw from a transfer.'); }
+        if (!isUuid(fundS)) { return fail('Pick the transfer this request draws from.'); }
+        var flS = await fundingLines(db, { ids: [fundS] });
+        if (flS.error) { return fail(flS.error, 500); }
+        fundInfo = flS.lines[0] || null;
+        if (!fundInfo) { return fail('That transfer was not found among the money sent to a paid-through company. Mark it "sent to ' + payeeS + '" first (All Transactions).', 404); }
+        if (payeeKey(fundInfo.payee) !== payeeKey(payeeS)) { return fail('That transfer went to ' + fundInfo.payee + ', not ' + payeeS + '.', 409); }
+        var billsSumS = r2(clean.reduce(function (a, c) { return a + c.amount; }, 0));
+        var fitS = requestFit(fundInfo.remaining, billsSumS, feeS);
+        if (!fitS.fits) { return fail('This request is $' + fitS.total.toFixed(2) + ' (bills $' + fitS.bills.toFixed(2) + ' + service fee $' + fitS.fee.toFixed(2) + ') but only $' + r2(fundInfo.remaining).toFixed(2) + ' is left on the $' + r2(fundInfo.amount).toFixed(2) + ' transfer of ' + fundInfo.date + ' — $' + fitS.over_by.toFixed(2) + ' too much. Lower or split a bill, or lower the fee.', 409); }
+      }
       var pkgId = body.id || null; var editDiff = null;
       // one bill, one open wire — checked BEFORE anything is written (the database enforces it too)
       var onOther = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, is_open', 'bill_id', clean.map(function (c) { return c.bill_id; }));
@@ -257,6 +291,8 @@ export async function POST(req) {
         return fail((cb.vendor_name || 'A bill') + ' ' + (cb.bill_number || '') + ' is already on wire ' + packageLabel((cp && cp.data) || {}) + ' — one bill, one wire. Untick it here, or cancel that wire.', 409);
       }
       var headS = { payee_kind: kindS, payee_name: payeeS, fee_amount: feeS, fee_note: String(body.fee_note || '').trim().substring(0, 300) || null, memo: String(body.memo || '').trim().substring(0, 500) || null };
+      if (fundS !== undefined) { headS.funding_txn_id = fundS; }      // only touched when the screen sent it (works before the SP SQL is run)
+      if (planS !== undefined) { headS.planned_send_date = planS; }
       if (pkgId) {
         // v55.83-RJ (review gap 7) — change a draft WITHOUT ever leaving it empty: add new bills first, then update kept
         // ones, then remove unticked ones; a failure part-way leaves the old wire intact (signatures void via fingerprint)
@@ -290,10 +326,10 @@ export async function POST(req) {
         var gone = (oldL.data || []).filter(function (l) { return !seenB[l.bill_id]; }).map(function (l) { return l.id; });
         if (gone.length) { var dg = await db.from('wire_package_lines').delete().in('id', gone); if (dg.error) { return dbErr(dg.error); } }
         var upP = await db.from('wire_packages').update(Object.assign({ updated_at: nowIso() }, headS)).eq('id', pkgId).eq('status', 'draft');
-        if (upP.error) { return dbErr(upP.error); }
+        if (upP.error) { return spMissing(upP.error.message) ? fail(upP.error.message + SP_HINT) : dbErr(upP.error); }
       } else {
         var insP = await db.from('wire_packages').insert(Object.assign({ created_by: userId }, headS)).select('id, seq').single();
-        if (insP.error) { return dbErr(insP.error); }
+        if (insP.error) { return spMissing(insP.error.message) ? fail(insP.error.message + SP_HINT) : dbErr(insP.error); }
         pkgId = insP.data.id;
         var insL = await db.from('wire_package_lines').insert(clean.map(function (c) { return { package_id: pkgId, bill_id: c.bill_id, amount: c.amount, marked_paid_via: willMark[c.bill_id] === true }; }));
         if (insL.error) {
@@ -316,7 +352,9 @@ export async function POST(req) {
         }
       } catch (eAA) { autoA = null; }
       await audit(db, userId, body.id ? 'wire_package_updated' : 'wire_package_prepared', 'wire_package', pkgId, { payee: payeeS, kind: kindS, bills: clean.length, bills_total: totS.bills, fee: feeS, total: totS.total, will_mark_paid_via: Object.keys(willMark), changes: editDiff });
-      return NextResponse.json({ ok: true, id: pkgId, total: totS.total, audit: autoA, will_mark: Object.keys(willMark).length });
+      var curWarnS = fundInfo ? await currencyMismatch(db, fundInfo.currency, clean.map(function (c) { return c.bill_id; })) : [];
+      return NextResponse.json({ ok: true, id: pkgId, total: totS.total, audit: autoA, will_mark: Object.keys(willMark).length, currency_mismatch: curWarnS,
+        funding: fundInfo ? { remaining: r2(fundInfo.remaining), left_after: r2(fundInfo.remaining - totS.total), amount: r2(fundInfo.amount), date: fundInfo.date } : null });
     }
 
     // ── v55.83-RI (Max, Nov 9 10:34: "where the hell are all of the permisssioning and the setup?")
@@ -329,6 +367,9 @@ export async function POST(req) {
       var kindPW = String(body.payee_kind || ''); if (['service_provider', 'affiliate', 'vendor'].indexOf(kindPW) < 0) { return fail('Who did the wire go to — RTM, NextTrade or a vendor?'); }
       if (!isDate(body.sent_date)) { return fail('When was it sent (roughly)?'); }
       if (String(body.sent_date) > nowIso().substring(0, 10)) { return fail('That date is in the future — a past wire was already sent.'); } // v55.83-SB (bug review 4)
+      // v55.83-SP (Max, Nov 15: "Past requests also need to have confirmations with two signatures") — a past payment through
+      // RTM / NextTrade is now a REQUEST drawn from the transfer that funded it, signed by two people like any other.
+      if (kindPW !== 'vendor') { return fail('A past payment through RTM or NextTrade is now recorded as a request from the transfer that funded it, with two signatures: New wire → pick the company → pick the transfer → tick the bills. Its real date is kept.', 409); }
       var whyPW = String(body.reason || '').trim();
       if (whyPW.length < 10) { return fail('Say what this is (e.g. "June wire to RTM for these NexPac bills, before the Hub had wires") — at least 10 characters.'); }
       var inPW = Array.isArray(body.lines) ? body.lines : [];
@@ -472,6 +513,36 @@ export async function POST(req) {
       }
       var frozen = (pkg.status === 'sent' || pkg.status === 'attached');
       var t = packageTotals(pkg, P.ctx.lines);
+      // v55.83-SP — the transfer this request draws from: its amount, what is used, what is left
+      var fundG = null;
+      if (pkg.funding_txn_id) {
+        try {
+          var flG = await fundingLines(db, { ids: [pkg.funding_txn_id] });
+          var fx = flG.lines && flG.lines[0];
+          if (fx) {
+            var mine = pkg.status === 'attached' ? t.total : 0;
+            fundG = { id: fx.id, date: fx.date, name: fx.name, payee: fx.payee, currency: fx.currency, amount: fx.amount, used: fx.used, bills: fx.bills, fees: fx.fees, remaining: fx.remaining,
+              other_requests: fx.requests.filter(function (r) { return r.id !== pkg.id; }), this_request: mine,
+              fit: pkg.status === 'draft' ? requestFit(fx.remaining, t.bills, t.fee) : null };
+            fundG.currency_mismatch = await currencyMismatch(db, fx.currency, P.rawLines.map(function (l) { return l.bill_id; }));
+          } else { fundG = { missing: true }; }
+        } catch (eFg) { fundG = null; }
+      }
+      // v55.83-SQ — vendor by vendor: which of the company's wire copies are in, and the file to open
+      var byVendorG = requestByVendor(packageLabel(pkg), P.ctx.lines);
+      try {
+        var vKey = function (s0) { return String(s0 || 'Unknown vendor').toUpperCase().replace(/\s+/g, ' ').trim(); };
+        var billVendor = {}; P.ctx.lines.forEach(function (l) { billVendor[l.bill_id] = vKey(l.bill && l.bill.vendor_name); });
+        var fileBy = {}; files.forEach(function (f) { fileBy[f.id] = f; });
+        byVendorG.forEach(function (v) {
+          var mineV = P.rawLines.filter(function (l) { return billVendor[l.bill_id] === vKey(v.vendor); });
+          var seenF = {}; v.copies = [];
+          v.line_ids = mineV.map(function (l) { return l.id; });
+          v.waiting_line_ids = mineV.filter(function (l) { return !l.rtm_confirmed_at; }).map(function (l) { return l.id; });
+          v.copies_in = mineV.length - v.waiting_line_ids.length;
+          mineV.forEach(function (l) { var f = l.rtm_file_id && fileBy[l.rtm_file_id]; if (f && !seenF[f.id]) { seenF[f.id] = true; v.copies.push({ id: f.id, path: f.path, file_name: f.file_name, paid_date: l.rtm_paid_date || null, reference: l.rtm_reference || null }); } });
+        });
+      } catch (eBv) { /* the plain table still shows */ }
       return NextResponse.json({ ok: true, package: {
         id: pkg.id, label: packageLabel(pkg), payee_kind: pkg.payee_kind, payee_name: pkg.payee_name, fee_amount: r2(pkg.fee_amount), fee_note: pkg.fee_note, memo: pkg.memo,
         status: P.status, raw_status: pkg.status, created_at: pkg.created_at, created_by: nmG[pkg.created_by] || null,
@@ -481,7 +552,8 @@ export async function POST(req) {
         attached: (pkg.attached_by || pkg.attached_at) ? { by: pkg.attached_by ? (nmG[pkg.attached_by] || 'user') : 'the Hub (automatically)', at: pkg.attached_at, note: pkg.attach_note, bank: bank, bank_fee: r2(pkg.bank_fee), auto: pkg.matched_auto === true } : null,
         cancelled: pkg.cancelled_by ? { by: nmG[pkg.cancelled_by] || 'user', at: pkg.cancelled_at, note: pkg.cancel_note } : null,
         reversed: pkg.reversed_by ? { by: nmG[pkg.reversed_by] || 'user', at: pkg.reversed_at, note: pkg.reverse_note } : null,
-        rtm_pending: P.rtmPending, paid_through: P.paidThrough },
+        rtm_pending: P.rtmPending, paid_through: P.paidThrough,
+        funding_txn_id: pkg.funding_txn_id || null, planned_send_date: pkg.planned_send_date || null, funding: fundG, by_vendor: byVendorG },
         lines: P.ctx.lines.map(function (l) { return Object.assign({}, l, { rtm: Object.assign({}, l.rtm, { confirmed_by: l.rtm.confirmed_by ? (nmG[l.rtm.confirmed_by] || 'user') : null }) }); }),
         // after it is sent the checks shown are the ones the two people signed (frozen) — live re-checks would call its own payments "paid before"
         checks: (function (res) {
@@ -585,7 +657,7 @@ export async function POST(req) {
       var toUnmark = P.rawLines.filter(function (l) { return l.marked_paid_via === true; }).map(function (l) { return l.bill_id; });
       if (toUnmark.length) { await db.from('vendor_bills').update({ paid_via: null }).in('id', toUnmark).eq('paid_via', pkg.payee_name); undone.bills_unmarked = toUnmark; }
       // 3) the bank line: back to its old label, free for another match
-      if (pkg.bank_transaction_id && pkg.payee_kind !== 'vendor') {
+      if (pkg.bank_transaction_id && pkg.payee_kind !== 'vendor' && !pkg.funding_txn_id) { // v55.83-SP — a request leaves its transfer as it is (other requests draw from it)
         await db.from('bank_transactions').update({ third_party_payer: pkg.prev_third_party_payer || null }).eq('id', pkg.bank_transaction_id).eq('third_party_payer', pkg.payee_name);
         undone.bank_line_restored = true;
       }
@@ -665,6 +737,21 @@ export async function POST(req) {
       if (!gT) { return fail('Marking a wire sent needs "Wires: Send" — Settings → 🏦 Banking & Accounting Access.', 403); }
       if (P.status !== 'ready_to_send') { return fail(pkg.status === 'draft' ? 'Not approved yet: it needs a passing 🤖 audit on the current bills and BOTH sign-offs.' : 'This wire is already ' + pkg.status + '.', 409); }
       if (!isDate(body.sent_date)) { return fail('The date the wire was sent is required.'); }
+      // v55.83-SP — a planned date never sends anything; "sent" means it already happened
+      if (String(body.sent_date) > nowIso().substring(0, 10)) { return fail('That date is in the future. Put a future date in "planned for"; mark it sent on the day it goes.'); }
+      // v55.83-SP — a REQUEST drawn from a transfer: no bank confirmation (no wire leaves our bank). One database step records
+      // each bill's payment against the transfer (dated the day that money left) and marks the request attached — or nothing.
+      if (pkg.funding_txn_id) {
+        var rs = await db.rpc('wire_request_send', { p_pkg: pkg.id, p_actor: userId, p_sent_date: body.sent_date });
+        if (rs.error) { return fail(rs.error.message + (spMissing(rs.error.message) ? SP_HINT : ''), 400); }
+        var rsD = rs.data || {};
+        if (rsD.ok !== true) { return fail(rsD.why || 'The request was not sent.', 409); }
+        var pfS = null;
+        try { pfS = await fileAsProfessionalFees(db, pkg.funding_txn_id, userId, pkg); } catch (ePf) { pfS = null; } // unchanged rule: one professional-fees line, only when it has no category yet
+        await audit(db, userId, 'wire_request_sent', 'wire_package', pkg.id, { payee: pkg.payee_name, transfer: pkg.funding_txn_id, sent_date: body.sent_date, bills: rsD.bills_paid, bills_total: rsD.bills_total, service_fee: rsD.fee, total: rsD.total, paid_date: rsD.paid_date, left_on_transfer: rsD.remaining_after });
+        await audit(db, userId, 'bill_payments_from_wire', 'bank_transaction', pkg.funding_txn_id, { package: packageLabel(pkg), request: true, bills: rsD.bills_paid, total: rsD.total });
+        return NextResponse.json({ ok: true, request: true, bills_paid: rsD.bills_paid, total: rsD.total, paid_date: rsD.paid_date, left_on_transfer: rsD.remaining_after, filed_as: pfS });
+      }
       var refT = String(body.bank_reference || '').trim().substring(0, 80);
       if (refT.length < 3) { return fail("The bank's wire reference / confirmation number is required."); }
       var pathT = String(body.proof_path || '');
@@ -737,11 +824,29 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, matched: mn2.matched.length > 0, result: mn2 });
     }
 
+    // ── v55.83-SP (Max, Nov 15) — change the SERVICE FEE of a request that was already sent: no new signatures, a reason, the
+    //    audit trail; refused when the transfer has no room for it or its month is closed
+    if (action === 'change_fee') {
+      var gF = await perm(db, userId, ['wires.send'], req);
+      if (!gF) { return fail('Changing the service fee needs "Wires: Send".', 403); }
+      if (!pkg.funding_txn_id) { return fail('Only a request drawn from a transfer has a service fee that can change after it is sent.', 409); }
+      var feeTyped = String(body.fee_amount == null ? '' : body.fee_amount).trim();
+      if (!(/^\d+(\.\d+)?$/.test(feeTyped) || /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(feeTyped))) { return fail('The fee "' + feeTyped + '" is not a valid number — type it like 1500.00 or 1,500.00.'); }
+      var whyF = String(body.reason || '').trim();
+      if (whyF.length < 5) { return fail('Say why the service fee changes.'); }
+      var cf = await db.rpc('wire_request_fee_change', { p_pkg: pkg.id, p_fee: r2(feeTyped.replace(/,/g, '')), p_actor: userId });
+      if (cf.error) { return fail(cf.error.message + (spMissing(cf.error.message) ? SP_HINT : ''), 400); }
+      var cfD = cf.data || {};
+      if (cfD.ok !== true) { return fail(cfD.why || 'The fee was not changed.', 409); }
+      await audit(db, userId, 'wire_request_fee_changed', 'wire_package', pkg.id, { from: cfD.from, to: cfD.to, total: cfD.total, left_on_transfer: cfD.remaining_after, reason: whyF.substring(0, 300) });
+      return NextResponse.json({ ok: true, from: cfD.from, to: cfD.to, total: cfD.total, left_on_transfer: cfD.remaining_after });
+    }
+
     // ── 📎 RTM's proof that it paid the vendors: one file can cover several bills
     if (action === 'rtm_proof') {
       var gQ = await perm(db, userId, ['wires.send', 'wires.prepare'], req);
       if (!gQ) { return fail('Adding RTM proof needs "Wires: Send" or "Wires: Prepare".', 403); }
-      if (!P.paidThrough) { return fail('Proof of vendor payments is for wires through RTM (NextTrade wires have no proof step).', 409); }
+      if (!P.paidThrough) { return fail('Copies of the vendor payments are for requests and wires paid through RTM or NextTrade.', 409); }
       if (pkg.status !== 'sent' && pkg.status !== 'attached') { return fail('Proof comes after the wire is sent.', 409); }
       var lineIds = Array.isArray(body.line_ids) ? body.line_ids.filter(isUuid) : [];
       var mineIds = P.rawLines.map(function (l) { return l.id; });

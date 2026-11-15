@@ -74,7 +74,7 @@ ok('2a: forecast action returns buckets + tagged rows + unflagged counts, US-sco
   /unflagged: \{ expenses: unrevOut\.count \|\| 0, deposits: unmatchedIn\.count \|\| 0 \}/.test(br));
 var at = R('src/components/AccountingTab.jsx');
 ok('2b: 📈 Forecast tab wired behind bills/AR permissions',
-  at.indexOf("['forecast', '📈 Forecast']") >= 0 && /sub === 'forecast' && <div className="p-3"><CashForecastTab/.test(at));
+  at.indexOf("['forecast', '📈 Forecast']") >= 0 && /* v55.83-SO realign: kept alive behind a quick jump */ /alive\('forecast'\) && <div className="p-3" style=\{shown\('forecast'\)\}><CashForecastTab/.test(at));
 var ft = R('src/components/CashForecastTab.jsx');
 ok('2c (PH): cards clickable, Σ footer, LATE columns aged and marked ⚠, CSV export exists',
   /setDrill\(\{ bucket: b, kind: 'in' \}\)/.test(ft) && /equals the card to the cent/.test(ft) &&

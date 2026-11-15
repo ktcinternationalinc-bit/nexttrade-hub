@@ -412,7 +412,18 @@ export default function App() {
   // v55.83-IN — deep-link from the raw Bank tab "Match in Bank Review" button into
   // Accounting → Bank Review & Matching, carrying the bank transaction id so it auto-selects.
   const [acctDeepLink, setAcctDeepLink] = useState(null); // { sub, txnId } | null
-  const goToBankReview = (txnId) => { setAcctDeepLink({ sub: 'review', txnId: txnId || null }); setTab('accounting'); };
+  // v55.83-SO — remember where a quick jump into Accounting came from, so "Back" returns there
+  const [acctReturn, setAcctReturn] = useState(null); // { tab, y, label } | null
+  const goToBankReview = (txnId) => {
+    var y0 = 0; try { y0 = window.scrollY || 0; } catch (e0) {}
+    setAcctReturn({ tab: tab, y: y0, label: tab === 'bank' ? 'Banking' : 'where you were' });
+    setAcctDeepLink({ sub: 'review', txnId: txnId || null }); setTab('accounting');
+  };
+  const returnFromAccounting = () => {
+    var r0 = acctReturn; if (!r0) { return; }
+    setAcctReturn(null); setAcctDeepLink(null); setTab(r0.tab);
+    setTimeout(function () { try { window.scrollTo(0, r0.y || 0); } catch (e1) {} }, 80);
+  };
   // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
   // dashboard (or any non-tickets tab), we switch to tickets, open the
   // ticket modal, and remember which tab to return to when modal closes.
@@ -2899,6 +2910,7 @@ export default function App() {
   const navigate = (t, opts) => {
     setTabLoading(true);
     if (t !== 'accounting') { setAcctDeepLink(null); } // v55.83-IN — clear stale Bank Review deep-link on manual nav elsewhere
+    setAcctReturn(null); // v55.83-SO — a manual move to another tab is a fresh start, no Back
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
     if (opts && opts.from && opts.to) {
@@ -5565,7 +5577,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-SM</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-SQ</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -14674,14 +14686,18 @@ export default function App() {
           <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} canBulkDeleteBubbles={isSuperAdmin || (modulePerms && modulePerms['Delete Shipping Bubbles'] === true)} canDeleteRates={isAdmin || (modulePerms && modulePerms['Delete Shipping Rates'] === true)} /></SafeSection>
         )}
 
-        {tab === 'bank' && (
+        {/* v55.83-SO — Banking stays alive (hidden) while a transaction opened from it is being handled in
+            Accounting, so "Back to Banking" returns to the same account, filters and scroll position */}
+        {(tab === 'bank' || (acctReturn && acctReturn.tab === 'bank')) && (
+          <div style={{ display: tab === 'bank' ? 'block' : 'none' }}>
           <SafeSection label="Bank">
             <BankTab user={user} supabase={supabase} modulePerms={modulePerms} userProfile={userProfile} onGoToBankReview={goToBankReview} />
           </SafeSection>
+          </div>
         )}
         {tab === 'accounting' && (
           <SafeSection label="Accounting">
-            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} />
+            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} onReturn={acctReturn ? returnFromAccounting : null} returnLabel={acctReturn ? acctReturn.label : ''} />
           </SafeSection>
         )}
 
