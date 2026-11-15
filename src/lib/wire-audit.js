@@ -224,14 +224,7 @@ export function packageTotals(pkg, lines) {
 }
 export function packageFingerprint(pkg, lines) {
   var p = pkg || {};
-  // v55.83-SP (Max, Nov 15: a service-fee change "doesn't need double signatures") — a request drawn from a transfer is
-  // signed for its BILLS and the transfer it draws from; its service fee is not part of what the two people sign.
-  // An ordinary wire is unchanged: its fingerprint covers the whole total, fee included.
-  var tot = packageTotals(p, lines);
-  if (p.funding_txn_id) {
-    return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name) + '|from:' + String(p.funding_txn_id), amount: tot.bills }, lines, { validation: true });
-  }
-  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: tot.total }, lines, { validation: true });
+  return wireFingerprint({ id: String(p.id || '') + '|' + (p.payee_kind || '') + '|' + normRef(p.payee_name), amount: packageTotals(p, lines).total }, lines, { validation: true });
 }
 // input = auditWire's input + { pkg: {id, seq, payee_kind, payee_name, fee_amount}, otherOpen: { bill_id: 'WP-0003' } }
 export function auditPackage(input) {

@@ -47,6 +47,8 @@ export default function FxPnLReport(props) {
   var [movements, setMovements] = useState([]);
   var [fxRates, setFxRates] = useState([]);
   var [products, setProducts] = useState([]);
+  var [saleItems, setSaleItems] = useState([]);        // v55.83-U: consumed invoice lines
+  var [invoicesById, setInvoicesById] = useState({});  // v55.83-U: id -> {invoice_date}
   var [loading, setLoading] = useState(true);
   var [error, setError] = useState(null);
 
@@ -60,11 +62,15 @@ export default function FxPnLReport(props) {
       setLoading(true);
       setError(null);
       try {
-        var [layRes, movRes, fxRes, prodRes] = await Promise.all([
+        var [layRes, movRes, fxRes, prodRes, itemRes, invRes] = await Promise.all([
           supabase.from('inventory_layers').select('*'),
           supabase.from('inventory_movements').select('*'),
           supabase.from('fx_rates').select('*').order('rate_date', { ascending: false }),
           supabase.from('inventory_products').select('id, quick_code, name_en').eq('active', true),
+          // v55.83-U — sales come from consumed invoice lines (where the EGP P&L is stamped),
+          // NOT inventory_movements (which only logs receipts). This is the real sale data.
+          supabase.from('invoice_items').select('id, invoice_id, variant_id, product_id, sale_quantity, line_total, cogs_total, cogs_egp_at_receipt, cost_egp_at_sale, gross_profit_egp, realized_fx_egp, consumed_layers, inventory_status, uses_inventory').eq('uses_inventory', true),
+          supabase.from('invoices').select('id, invoice_date'),
         ]);
         if (cancelled) return;
         if (layRes && !layRes.error) setLayers(layRes.data || []);
@@ -78,6 +84,11 @@ export default function FxPnLReport(props) {
           }
         }
         if (prodRes && !prodRes.error) setProducts(prodRes.data || []);
+        if (itemRes && !itemRes.error) setSaleItems((itemRes.data || []).filter(function (it) { return it.inventory_status === 'consumed'; }));
+        else if (itemRes && itemRes.error) console.warn('[fx-pnl] invoice_items:', itemRes.error.message);
+        if (invRes && !invRes.error) {
+          var im = {}; (invRes.data || []).forEach(function (iv) { im[iv.id] = iv; }); setInvoicesById(im);
+        }
       } catch (e) {
         if (!cancelled) {
           console.error('[fx-pnl] load failed:', e);
@@ -151,104 +162,81 @@ export default function FxPnLReport(props) {
   }
 
   // ── REALIZED P&L (per sold movement) ────────────────────────
+  // v55.83-U — REALIZED FX is driven by CONSUMED INVOICE LINES (where the EGP P&L
+  // is stamped by consume_invoice_item_inventory), not by inventory_movements
+  // (which only logs receipts). Signs follow the validated model
+  // (__tests__/mock-fx-pnl-model.js): realized_fx = cost@receipt - cost@sale
+  // (NEGATIVE when the pound devalued), and real_margin + realized_fx == total_gp.
   var realized = useMemo(function () {
     var rows = [];
     var totals = { real_margin: 0, realized_fx: 0, total_gp: 0, sold_qty: 0, revenue: 0, backfill_count: 0, unconvertable_count: 0 };
 
-    movements.forEach(function (m) {
-      var d = m.moved_at ? String(m.moved_at).substring(0, 10) : '';
-      if (dateFrom && d < dateFrom) return;
-      if (dateTo && d > dateTo) return;
-      var qty = Number(m.quantity || m.qty || 0);
-      var isOutbound = (m.movement_type === 'sale') || (m.type === 'sale') ||
-                       (m.movement_type === 'outbound') || qty > 0;
-      if (!isOutbound) return;
+    saleItems.forEach(function (it) {
+      var inv = invoicesById[it.invoice_id];
+      var d = inv && inv.invoice_date ? String(inv.invoice_date).substring(0, 10) : '';
+      if (dateFrom && d && d < dateFrom) return;
+      if (dateTo && d && d > dateTo) return;
 
-      var product = productsById[m.product_id];
-      var label = product ? ((product.quick_code || '') + ' · ' + (product.name_en || '')) : (m.product_id || '(unknown)');
-      var revenue = Number(m.revenue || 0);
-      var cogs = Number(m.cogs || 0);
-      // v55.83-A.6.27.66 (H2) — currency of the source layer/movement.
-      var sourceCur = String(m.cost_currency || (m.source_layer_id && layersById[m.source_layer_id] && layersById[m.source_layer_id].cost_currency) || 'EGP').toUpperCase();
+      var pid = it.variant_id || it.product_id;
+      var product = productsById[pid];
+      var label = product ? ((product.quick_code || '') + ' · ' + (product.name_en || '')) : (pid || '(unknown)');
 
-      // Determine cost_egp_at_receipt — prefer stored value, fall back to layer cost or backfill
-      var costAtReceipt = Number(m.cost_egp_at_receipt || 0);
+      var qty = Number(it.sale_quantity || 0);
+      var revenue = Number(it.line_total || 0);
+      var nativeCogs = Number(it.cogs_total || 0);
+
+      // Entry-rate EGP cost (real cost locked at purchase). Prefer the stamped
+      // value; fall back to summing the consumed layers' per-uom snapshot.
+      var costAtReceipt = Number(it.cogs_egp_at_receipt || 0);
+      var costAtSale = Number(it.cost_egp_at_sale || 0);
       var backfill = false;
       var unconvertable = false;
-      if (!costAtReceipt) {
-        var layer = m.source_layer_id ? layersById[m.source_layer_id] : null;
-        if (layer && Number(layer.cost_egp_at_receipt) > 0) {
-          costAtReceipt = Number(layer.cost_egp_at_receipt);
-        } else if (cogs > 0) {
-          // v55.83-A.6.27.66 (H2) — CONVERT through FX rate instead of
-          // assuming cogs is EGP. Was the worst silent-data bug in the
-          // app: USD cogs treated as EGP → reports off by 50× silently.
-          if (sourceCur === 'EGP') {
-            costAtReceipt = cogs;
-          } else {
-            var rate = fxToEgp(d, sourceCur);
-            if (rate && rate > 0) {
-              costAtReceipt = cogs * rate;
-            } else {
-              // No FX rate available — flag as unconvertable, don't make up a number
-              costAtReceipt = 0;
-              unconvertable = true;
-            }
-          }
-          backfill = true;
-        }
-      }
 
-      var costAtSale = Number(m.cost_egp_at_sale || 0);
-      if (!costAtSale && cogs > 0) {
-        // Same conversion logic for cost-at-sale
-        if (sourceCur === 'EGP') {
-          costAtSale = cogs;
-        } else {
-          var rateAtSale = fxToEgp(d, sourceCur);
-          if (rateAtSale && rateAtSale > 0) {
-            costAtSale = cogs * rateAtSale;
-          } else {
-            costAtSale = 0;
-            unconvertable = true;
-          }
-        }
-        backfill = backfill || (!Number(m.cost_egp_at_sale));
+      if (!costAtReceipt && Array.isArray(it.consumed_layers)) {
+        it.consumed_layers.forEach(function (cl) {
+          var per = Number(cl.cost_egp_at_receipt_per_uom || 0);
+          if (per > 0) costAtReceipt += per * Number(cl.qty_consumed || 0);
+        });
+        backfill = costAtReceipt > 0;
       }
+      // Last-resort: convert native COGS at the sale-date rate for BOTH sides so
+      // FX delta is 0 rather than inventing a snapshot. Flag as unconvertable if
+      // no rate exists for a non-EGP line.
+      if (!costAtReceipt && nativeCogs > 0) {
+        var srcCur = 'EGP';
+        if (Array.isArray(it.consumed_layers) && it.consumed_layers[0]) srcCur = String(it.consumed_layers[0].cost_currency || 'EGP').toUpperCase();
+        if (srcCur === 'EGP') { costAtReceipt = nativeCogs; }
+        else {
+          var r = fxToEgp(d, srcCur);
+          if (r && r > 0) { costAtReceipt = nativeCogs * r; backfill = true; }
+          else { costAtReceipt = 0; unconvertable = true; }
+        }
+      }
+      if (!costAtSale) { costAtSale = costAtReceipt; } // no sale snapshot -> no FX delta
 
       var realMargin = revenue - costAtReceipt;
-      var realizedFx = costAtSale - costAtReceipt;
-      var totalGp = revenue - costAtSale;
+      var realizedFx = costAtReceipt - costAtSale;   // NEG = FX loss (devaluation)
+      var totalGp = revenue - costAtSale;            // == realMargin + realizedFx
 
       rows.push({
-        key: m.id,
-        date: d,
-        label: label,
-        qty: Math.abs(qty),
-        revenue: revenue,
-        cost_at_receipt: costAtReceipt,
-        cost_at_sale: costAtSale,
-        real_margin: realMargin,
-        realized_fx: realizedFx,
-        total_gp: totalGp,
-        backfill: backfill,
-        unconvertable: unconvertable,
-        source_currency: sourceCur,
+        key: it.id, date: d, label: label, qty: qty, revenue: revenue,
+        cost_at_receipt: costAtReceipt, cost_at_sale: costAtSale,
+        real_margin: realMargin, realized_fx: realizedFx, total_gp: totalGp,
+        backfill: backfill, unconvertable: unconvertable,
       });
 
       totals.real_margin += realMargin;
       totals.realized_fx += realizedFx;
       totals.total_gp += totalGp;
-      totals.sold_qty += Math.abs(qty);
+      totals.sold_qty += qty;
       totals.revenue += revenue;
       if (backfill) totals.backfill_count++;
       if (unconvertable) totals.unconvertable_count++;
     });
 
     rows.sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
-
     return { rows: rows, totals: totals };
-  }, [movements, layersById, productsById, dateFrom, dateTo]);
+  }, [saleItems, invoicesById, productsById, dateFrom, dateTo]);
 
   // ── UNREALIZED FX (per layer still on hand) ─────────────────
   var unrealized = useMemo(function () {
@@ -300,7 +288,7 @@ export default function FxPnLReport(props) {
         }
       }
 
-      var unrealizedFx = todayValue - costAtReceipt;
+      var unrealizedFx = costAtReceipt - todayValue;  // v55.83-U: NEG = would cost more EGP today (FX loss)
 
       // Only include rows with non-zero on-hand stock
       rows.push({

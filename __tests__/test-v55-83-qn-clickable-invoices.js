@@ -25,9 +25,8 @@ ok('3: All Invoices — invoice numbers clickable with the SAME peek + edit hand
   /setPeekId2\(r\.id\); \}\}/.test(bb) && /\{peekId2 && <InvoicePeek invoiceId=\{peekId2\}/.test(bb) &&
   /onGo2\('invoices'\)/.test(bb));
 ok('4: both tabs receive onGo from AccountingTab so the jump actually navigates',
-  // v55.83-SO realign (Max Nov 15, Priority 1): jumps go through goFrom so the Back button can return here. Same navigation.
-  /<AccountingCustomerHistory key=\{'acct-arh\|' \+ waveKey\} \{\.\.\.props\} onGo=\{goFrom\} \/>/.test(at) &&
-  /<BusinessBooksTab \{\.\.\.props\} onGo=\{goFrom\} \/>/.test(at));
+  /<AccountingCustomerHistory key=\{'acct-arh\|' \+ waveKey\} \{\.\.\.props\} onGo=\{setSub\} \/>/.test(at) &&
+  /<BusinessBooksTab \{\.\.\.props\} onGo=\{setSub\} \/>/.test(at));
 console.log('');
 console.log('QN: ' + pass + ' passed, ' + fail + ' failed');
 if (fail > 0) process.exit(1);

@@ -34,7 +34,7 @@ var ledger = fs.readFileSync(path.join(__dirname, '..', 'src/lib/open-account-le
 console.log('\n── HOTFIX 28 code structure ──');
 
 ok('A1: simulate builds typeById lookup from ALL entries (not just open)',
-  /var typeById = \{\};[\s\S]{0,300}entries \|\| \[\]\)\.forEach[\s\S]{0,200}typeById\[e\.id\] = e\.transaction_type/.test(ledger));
+  /var typeById = \{\};[\s\S]{0,300}entries \|\| \[\]\)\.forEach[\s\S]{0,200}typeById\[e\.id\] = String\(e\.transaction_type/.test(ledger));
 
 ok('A2: offset handler validates offset_invoice_id against transaction_type === sales_invoice',
   /invType[\s\S]{0,200}invType !== 'sales_invoice'/.test(ledger));
@@ -44,7 +44,7 @@ ok('A3: offset handler validates offset_bill_id against transaction_type === ven
 
 ok('A4: TYPE GUARD runs BEFORE the side-application logic (atomic)',
   (function () {
-    var block = ledger.match(/else if \(type === 'offset'\)[\s\S]*?else \{[\s\S]*?Unknown transaction_type/);
+    var block = ledger.match(/else if \(type === 'offset'\)[\s\S]*?else \{[\s\S]*?Unrecognized transaction_type/);
     if (!block) return false;
     var typeGuardIdx = block[0].indexOf('TYPE GUARD');
     var resolveIdx = block[0].indexOf('Resolve OPEN-pool memberships');

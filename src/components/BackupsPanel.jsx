@@ -16,7 +16,9 @@
 //   - Delete button (with confirmation)
 //   - Auto-refresh after each operation
 // ============================================================
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '../lib/supabase';
+import { fetchBackup } from '../lib/backup-client';
 import { fmtET } from '../lib/et-time';
 
 function fmtBytes(n) {
@@ -41,94 +43,105 @@ function kindStyle(k) {
   return { bg: 'bg-slate-100', text: 'text-slate-700', label: k || 'unknown' };
 }
 
-export default function BackupsPanel({ user, userProfile }) {
+export default function BackupsPanel() {
   var [backups, setBackups] = useState([]);
   var [loading, setLoading] = useState(true);
   var [running, setRunning] = useState(false);
   var [error, setError] = useState('');
   var [lastResult, setLastResult] = useState(null);
+  var activity = useRef({ mounted: true, epoch: 0, userId: null, controllers: new Set() });
 
-  var load = useCallback(async function () {
-    setLoading(true);
-    setError('');
+  var requestBackup = useCallback(async function (url, init, download) {
+    var state = activity.current, epoch = state.epoch, controller = new AbortController();
+    state.controllers.add(controller);
     try {
-      var res = await fetch('/api/backup/list');
-      var json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'list failed');
-      setBackups(json.backups || []);
+      var response = await fetchBackup(supabase, url, Object.assign({}, init, { signal: controller.signal }));
+      var result = download && response.ok ? await response.blob() : await response.json();
+      if (!state.mounted || epoch !== state.epoch) { var stale = new Error('Session changed'); stale.ignored = true; throw stale; }
+      if (!response.ok || (!download && !result.ok)) {
+        if (response.status === 401 || response.status === 403 || response.status === 503) { setBackups([]); setLastResult(null); }
+        throw new Error(result.error || 'The backup request failed.');
+      }
+      return download ? { blob: result, disposition: response.headers.get('content-disposition') || '' } : result;
     } catch (e) {
-      setError('Could not load backups: ' + ((e && e.message) || 'unknown'));
-    } finally {
-      setLoading(false);
-    }
+      if (!state.mounted || epoch !== state.epoch || e.name === 'AbortError') e.ignored = true;
+      throw e;
+    } finally { state.controllers.delete(controller); }
   }, []);
 
-  useEffect(function () { load(); }, [load]);
+  var showError = function (prefix, e) {
+    if (activity.current.mounted && !e?.ignored) setError(prefix + ((e && e.message) || 'Please retry.'));
+  };
+  var load = useCallback(async function () {
+    setLoading(true); setError('');
+    try {
+      var json = await requestBackup('/api/backup/list');
+      setBackups(json.backups || []);
+    } catch (e) {
+      if (activity.current.mounted && !e?.ignored) { setBackups([]); setLastResult(null); setError('Could not load backups: ' + (e.message || 'Please sign in again.')); }
+    } finally { if (activity.current.mounted) setLoading(false); }
+  }, [requestBackup]);
+
+  useEffect(function () {
+    var state = activity.current;
+    state.mounted = true;
+    void load();
+    var auth = supabase.auth.onAuthStateChange(function (event, session) {
+      var id = session?.user?.id || null;
+      if (event === 'SIGNED_OUT' || (event === 'SIGNED_IN' && id !== state.userId)) {
+        state.epoch += 1; state.controllers.forEach(function (controller) { controller.abort(); });
+        setBackups([]); setLastResult(null); setRunning(false); setLoading(false);
+        setError(event === 'SIGNED_OUT' ? 'Sign in again to access backups.' : '');
+        if (event === 'SIGNED_IN') setTimeout(function () { if (state.mounted) void load(); }, 0);
+      }
+      state.userId = id;
+    });
+    return function () {
+      state.mounted = false; state.epoch += 1;
+      state.controllers.forEach(function (controller) { controller.abort(); });
+      auth.data.subscription.unsubscribe();
+    };
+  }, [load]);
 
   var runBackupNow = async function () {
     if (running) return;
-    setRunning(true);
-    setError('');
-    setLastResult(null);
+    setRunning(true); setError(''); setLastResult(null);
     try {
-      var triggeredBy = (userProfile && userProfile.id) || (user && user.id) || null;
-      var triggeredByName = (userProfile && userProfile.name) || (user && user.email) || 'super_admin';
-      var res = await fetch('/api/backup/snapshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'manual',
-          triggered_by: triggeredBy,
-          triggered_by_name: triggeredByName,
-          notes: 'Manual snapshot from Admin → Backups',
-        }),
-      });
-      var json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'snapshot failed');
+      var json = await requestBackup('/api/backup/snapshot', { method: 'POST',
+        body: JSON.stringify({ kind: 'manual', notes: 'Manual snapshot from Admin → Backups' }) });
       setLastResult(json);
       await load();
-    } catch (e) {
-      setError('Backup failed: ' + ((e && e.message) || 'unknown'));
-    } finally {
-      setRunning(false);
-    }
+    } catch (e) { showError('Backup failed: ', e); }
+    finally { if (activity.current.mounted) setRunning(false); }
   };
 
-  var downloadBackup = function (id) {
+  var downloadBackup = async function (id) {
     if (!id) return;
-    // Open in new tab — browser handles the JSON file save via Content-Disposition
     try {
-      window.open('/api/backup/download?id=' + encodeURIComponent(id), '_blank');
-    } catch (_) {}
+      var result = await requestBackup('/api/backup/download?id=' + encodeURIComponent(id), undefined, true);
+      var match = /filename="([a-z0-9.-]+)"/i.exec(result.disposition);
+      var url = URL.createObjectURL(result.blob), link = document.createElement('a');
+      link.href = url; link.download = match ? match[1] : 'ktc-backup.json';
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    } catch (e) { showError('Could not download: ', e); }
   };
 
   var togglePin = async function (b) {
     try {
-      var res = await fetch('/api/backup/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: b.id, pinned: !b.pinned }),
-      });
-      var json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'pin toggle failed');
+      await requestBackup('/api/backup/manage', { method: 'POST', body: JSON.stringify({ id: b.id, pinned: !b.pinned }) });
       await load();
-    } catch (e) {
-      setError('Could not update pin: ' + ((e && e.message) || 'unknown'));
-    }
+    } catch (e) { showError('Could not update pin: ', e); }
   };
 
   var deleteBackup = async function (b) {
     if (!b || !b.id) return;
-    var label = (kindStyle(b.kind).label) + ' from ' + fmtDate(b.created_at);
+    var label = kindStyle(b.kind).label + ' from ' + fmtDate(b.created_at);
     if (!window.confirm('Delete this backup?\n\n' + label + '\n\nThis cannot be undone.')) return;
     try {
-      var res = await fetch('/api/backup/manage?id=' + encodeURIComponent(b.id), { method: 'DELETE' });
-      var json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'delete failed');
+      await requestBackup('/api/backup/manage?id=' + encodeURIComponent(b.id), { method: 'DELETE' });
       await load();
-    } catch (e) {
-      setError('Could not delete: ' + ((e && e.message) || 'unknown'));
-    }
+    } catch (e) { showError('Could not delete: ', e); }
   };
 
   // Summary stats
@@ -149,8 +162,8 @@ export default function BackupsPanel({ user, userProfile }) {
           <div>
             <h3 className="text-base font-extrabold text-slate-900">💾 Business Data Backups</h3>
             <p className="text-xs text-slate-600 mt-0.5">
-              Periodic snapshots of your business-critical tables (tickets, invoices, treasury, checks, customers, inventory, HR, and more).
-              Daily snapshots run automatically at 4&nbsp;AM&nbsp;ET; weekly on Sundays; monthly on the 1st. You can also run one right now.
+              Snapshots of your business-critical tables (tickets, invoices, treasury, checks, customers, inventory, HR, and more). Provider credentials are excluded from new snapshots and downloads.
+              When the backup schedule is activated, daily snapshots can also create weekly copies on Sundays and monthly copies on the 1st. You can run a manual snapshot here.
             </p>
           </div>
           <button

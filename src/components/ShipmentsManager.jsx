@@ -21,6 +21,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { canEditInventory } from '../lib/inventory-permissions';
 import FinalizeCostDialog from './FinalizeCostDialog';
+import NexpacShipmentPanel from './NexpacShipmentPanel';
 
 var STATUSES = [
   { v: 'draft', label: 'Draft', tone: 'slate' },
@@ -815,6 +816,11 @@ function ShipmentDetail({ shipment, skus, warehouses, canEdit, myId, toast, work
             </table>
           </div>
         )}
+      </div>
+
+      {/* Expected (NEXPAC) vs Actual — import the report, compare, AI-match */}
+      <div className="p-4 border-t border-slate-100">
+        <NexpacShipmentPanel shipment={shipment} actualLines={lineItems} skuById={skuById} canEdit={canEdit} toast={toast} />
       </div>
 
       {/* Movements summary if any */}

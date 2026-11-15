@@ -16,6 +16,7 @@
 //     lists them with confirmation option ("Did you mean X?")
 
 import { useState, useEffect, useRef } from 'react';
+import RestrictedNotice from './RestrictedNotice';
 import * as XLSX from 'xlsx';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 
@@ -404,6 +405,7 @@ export default function InventoryImportProducts(props) {
     // Mirrors HOTFIX 7 single-product flow: detect collisions on quick_code+suffix,
     // classification_slug, name_en, name_ar so duplicates inside one file are caught
     // before any DB call (and named clearly so the user can fix the right row).
+    var seenDesignSkus = {};   // Design SKU must be unique (Max Jun 1 2026)
     var seenQuickCodes = {};   // key: quick_code|variant_suffix → first rowNum seen
     var seenSlugs = {};        // key: slug → first rowNum seen
     var seenNameEn = {};       // key: name_en lowercased → first rowNum seen
@@ -476,54 +478,35 @@ export default function InventoryImportProducts(props) {
         var familyCode = String(resolvedLevels[1].code || '').toUpperCase().trim();
         // Recipes match the single-product form (NAMING_RECIPES in InventoryProductMaster.jsx)
         var IMPORT_RECIPES = {
-          // Textile: Family Category Grade Construction Color
-          'TX':      [1, 2, 3, 4, 6],
-          'TEX':     [1, 2, 3, 4, 6],
-          'TEXTILE': [1, 2, 3, 4, 6],
-          // Leather: Family Category Grade Construction Color
-          'LE':      [1, 2, 3, 4, 6],
-          'LEA':     [1, 2, 3, 4, 6],
-          'LEATHER': [1, 2, 3, 4, 6],
-          // PVC Pool: Family Category Grade Construction Color Backing Pattern Spec
-          'PV':      [1, 2, 3, 4, 6, 5, 7, 8],
+          // v55.83-A (Jun 1 2026) — real family codes L/T/P/B. Match ProductMaster.
+          'L':       [1, 2, 3, 4, 5, 6],   // Leather: Family Category Grade Construction Backing Color
+          'T':       [1, 2, 3, 4, 5, 6],   // Textile: same 6-field order
+          'P':       [1, 2, 3, 4, 6, 5, 7, 8], // PVC: Family Category Grade Construction Color Backing Pattern Spec
+          'B':       [1, 2, 3, 4, 6, 5, 7, 8], // Boat Decking: same 8-field order
+          'TEX':     [1, 2, 3, 4, 5, 6],
+          'TEXTILE': [1, 2, 3, 4, 5, 6],
+          'LEA':     [1, 2, 3, 4, 5, 6],
+          'LEATHER': [1, 2, 3, 4, 5, 6],
           'PVC':     [1, 2, 3, 4, 6, 5, 7, 8],
           'PVCPOOL': [1, 2, 3, 4, 6, 5, 7, 8],
-          // Boat Decking (PVC-based)
-          'BD':      [1, 2, 3, 4, 6, 5, 7, 8],
           'PVCBD':   [1, 2, 3, 4, 6, 5, 7, 8],
         };
-        var IMPORT_NOISE_EN = { 'not applicable': 1, 'none': 1, 'n/a': 1, 'na': 1, '-': 1, '—': 1 };
-        var IMPORT_NOISE_AR = { 'غير مطبق': 1, 'لا يوجد': 1, '-': 1, '—': 1 };
         var recipe = IMPORT_RECIPES[familyCode];
         if (!recipe) {
           var prefixKey = Object.keys(IMPORT_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
           if (prefixKey) recipe = IMPORT_RECIPES[prefixKey];
         }
-        if (!recipe) recipe = [1, 2, 3, 4, 6]; // default
+        if (!recipe) recipe = [1, 3, 6, 5]; // default
         var enParts = [];
         var arParts = [];
         recipe.forEach(function (lvl) {
           var lvlOpt = resolvedLevels[lvl];
           if (!lvlOpt) return;
-          if (lvlOpt.label_en) {
-            var ile = String(lvlOpt.label_en).trim();
-            if (ile && !IMPORT_NOISE_EN[ile.toLowerCase()]) enParts.push(ile);
-          }
-          if (lvlOpt.label_ar) {
-            var ila = String(lvlOpt.label_ar).trim();
-            if (ila && !IMPORT_NOISE_AR[ila]) arParts.push(ila);
-          }
+          if (lvlOpt.label_en) enParts.push(String(lvlOpt.label_en).trim());
+          if (lvlOpt.label_ar) arParts.push(String(lvlOpt.label_ar).trim());
         });
-        var importDedupe = function (s) {
-          var seen = {}; var out = [];
-          String(s || '').split(/\s+/).forEach(function (w) {
-            if (!w) return; var k = w.toLowerCase();
-            if (seen[k]) return; seen[k] = 1; out.push(w);
-          });
-          return out.join(' ');
-        };
-        if (!nameEn && enParts.length > 0) nameEn = importDedupe(enParts.join(' '));
-        if (!nameAr && arParts.length > 0) nameAr = importDedupe(arParts.join(' '));
+        if (!nameEn && enParts.length > 0) nameEn = enParts.join(' ');
+        if (!nameAr && arParts.length > 0) nameAr = arParts.join(' ');
       }
 
       // NOW check empty names (after auto-fill attempt)
@@ -532,7 +515,8 @@ export default function InventoryImportProducts(props) {
 
       // UOM / currency / numbers
       var uom = String(raw.default_uom || '').trim().toLowerCase();
-      if (uom && VALID_UOM.indexOf(uom) < 0) errs.push('default_uom must be one of: ' + VALID_UOM.join(', '));
+      if (!uom) errs.push('default_uom is required (one of: ' + VALID_UOM.join(', ') + ')');
+      else if (VALID_UOM.indexOf(uom) < 0) errs.push('default_uom must be one of: ' + VALID_UOM.join(', '));
       var currency = String(raw.default_currency || '').trim().toUpperCase();
       if (currency && VALID_CURRENCY.indexOf(currency) < 0) errs.push('default_currency must be one of: ' + VALID_CURRENCY.join(', '));
 
@@ -554,6 +538,16 @@ export default function InventoryImportProducts(props) {
             ' already appears on row ' + seenQuickCodes[qk] + '. No duplicates allowed.');
         } else {
           seenQuickCodes[qk] = rowNum;
+        }
+      }
+
+      // v55.83-A (Max Jun 1 2026) — DESIGN SKU must be UNIQUE (quick_code may repeat).
+      if (designSku) {
+        var dk = designSku.toLowerCase();
+        if (seenDesignSkus[dk]) {
+          errs.push('DUPLICATE within file — Design Code "' + designSku + '" already appears on row ' + seenDesignSkus[dk] + '. Design Codes must be unique.');
+        } else {
+          seenDesignSkus[dk] = rowNum;
         }
       }
 
@@ -767,12 +761,7 @@ export default function InventoryImportProducts(props) {
   if (!canImport) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Importing products requires the "Edit Product List" permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message={'Importing products requires the "Edit Product List" permission. Ask Max to grant it from Settings - Roles & Permissions.'} />
       </div>
     );
   }

@@ -1,3 +1,10 @@
+// ⚠ SUPERSEDED by v55.83-T (2026-06-07) — DO NOT use these assertions to drive code changes.
+// The two parallel inventory engines were consolidated into ONE. System B (inv_sku_id /
+// consumeFifo / inv_layers / inv_movements / AdjustmentsManager) was intentionally retired.
+// Assertions in this Stage-B/C/D/E/F suite describe that removed dual-engine behavior and no
+// longer reflect the product. Current behavior is covered by test-v55-83-t-single-inventory-engine.js.
+// Left in place for history; expected to fail. Do NOT re-add System B to make it pass.
+
 // v55.83-A.6.27.44b — Invoice form: 📦 From Inventory + ✏️ Manual tabs in product picker.
 // Records variant linkage on invoice_items WITHOUT FIFO consumption.
 // Strict regression guards on invoice/banking/treasury/checks logic.

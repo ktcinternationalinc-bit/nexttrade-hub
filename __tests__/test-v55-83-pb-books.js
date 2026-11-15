@@ -84,8 +84,7 @@ ok('3b: ledgerly 15-min schedule removed; ClickBooks shadow + rules schedules pr
 // ── 4. Tab cleanup: Books + Bills in; 4 ClickBooks tabs collapsed to 2
 ok("4a: '🏦 Books' home and '💸 Bills' tabs wired",
   at.indexOf("['books_home', '🏦 Books']") >= 0 && at.indexOf("['bills', '💸 Bills']") >= 0 &&
-  // v55.83-SO realign (Max Nov 15, Priority 1): Books home is kept alive behind a quick jump so Back returns to it unchanged.
-  /alive\('books_home'\) && <div className="p-3" style=\{shown\('books_home'\)\}><BooksHomeTab/.test(at) && /sub === 'bills' && <div className="p-3"><BillsTab/.test(at));
+  /sub === 'books_home' && <div className="p-3"><BooksHomeTab/.test(at) && /sub === 'bills' && <div className="p-3"><BillsTab/.test(at));
 ok('4b: ClickBooks collapsed: Financial Reports tab + single admin tab hosting foundation/rules/cutover',
   at.indexOf("'📊 Financial Reports'") >= 0 && at.indexOf("'⚙️ ClickBooks Admin'") >= 0 &&
   at.indexOf("['clickbooks_us'") < 0 && at.indexOf("['clickbooks_workflows'") < 0 && at.indexOf("['clickbooks_cutover'") < 0 &&

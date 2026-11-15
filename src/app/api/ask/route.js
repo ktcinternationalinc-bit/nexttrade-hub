@@ -1105,6 +1105,35 @@ export async function POST(request) {
               if (dRes && dRes.error) throw dRes.error;
               execLine = '🗑 Cancelled event: ' + dTarget.title + ' on ' + dTarget.event_date + (dTarget.event_time ? ' @ ' + dTarget.event_time : '');
               actionsExecuted.push({ ok: true, type: 'delete_event', message: execLine });
+            } else if (actionData.type === 'update_ticket') {
+              // v55.83-AF — this multi-action loop handled create_ticket but was
+              // missing update_ticket, so reassigning/updating a ticket through
+              // Nadia fell through to "Unknown action type". Mirrors the canonical
+              // single-action handler (find ticket, apply fields, comment, notify).
+              var utq = null;
+              if (actionData.ticket_number) utq = await supabase.from('tickets').select('*').eq('ticket_number', actionData.ticket_number).maybeSingle();
+              else if (actionData.title) utq = await supabase.from('tickets').select('*').ilike('title', '%' + actionData.title + '%').limit(1).maybeSingle();
+              if (!utq || !utq.data) throw new Error('Ticket not found: ' + (actionData.ticket_number || actionData.title));
+              var utk = utq.data;
+              var utUp = {};
+              var utCh = [];
+              if (actionData.status) { var utSt = normalizeTicketStatus(actionData.status); if (utSt) { utUp.status = utSt; utCh.push('Status -> ' + utSt); } }
+              if (actionData.priority) { var utPr = normalizeTicketPriority(actionData.priority); utUp.priority = utPr; utCh.push('Priority -> ' + utPr); }
+              if (actionData.assigned_to) { utUp.assigned_to = actionData.assigned_to; var utWho = gUsersList.find(function (u) { return u.id === actionData.assigned_to; }); utCh.push('Reassigned' + (utWho ? ' to ' + utWho.name : '')); }
+              if (actionData.due_date !== undefined) { utUp.due_date = actionData.due_date || null; utCh.push('Due -> ' + (actionData.due_date || 'removed')); }
+              if (actionData.new_title) { utUp.title = String(actionData.new_title); utCh.push('Title -> "' + String(actionData.new_title).substring(0, 60) + '"'); }
+              if (actionData.description !== undefined) { utUp.description = actionData.description ? String(actionData.description) : null; utCh.push('Description updated'); }
+              if (actionData.category) { utUp.category = String(actionData.category); utCh.push('Category -> ' + actionData.category); }
+              if (actionData.add_comment || actionData.comment) { utCh.push('Note added'); }
+              if (utCh.length === 0) throw new Error('update_ticket called with no recognized fields. Accepted: status, priority, assigned_to, due_date, new_title, description, category, add_comment.');
+              if (Object.keys(utUp).length > 0) { utUp.updated_at = new Date().toISOString(); var utRes = await supabase.from('tickets').update(utUp).eq('id', utk.id); if (utRes && utRes.error) throw utRes.error; }
+              var utComment = '🤖 AI: ' + utCh.join(', ');
+              var utNote = actionData.add_comment || actionData.comment;
+              if (utNote) utComment += '\n— ' + String(utNote);
+              await supabase.from('ticket_comments').insert({ ticket_id: utk.id, comment_text: utComment, is_system: true, created_by: userId });
+              if (actionData.assigned_to && actionData.assigned_to !== userId) { notifyTicketAssignedServer([actionData.assigned_to], (utk.ticket_number || '') + ' ' + (utUp.title || utk.title), userId).catch(function () {}); }
+              execLine = '✅ ' + (utk.ticket_number || 'ticket') + ' updated: ' + utCh.join(', ');
+              actionsExecuted.push({ ok: true, type: 'update_ticket', message: execLine, ticket_number: utk.ticket_number });
             } else {
               throw new Error('Unknown action type: ' + actionData.type);
             }

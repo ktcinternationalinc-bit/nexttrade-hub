@@ -113,7 +113,7 @@ ok('5f: RTM / NextTrade wires book exactly like the 🏦 paid-through flow (meth
   S.indexOf("pkg.payee_kind === 'vendor' ? 'wire' : 'rtm'") > 0 && S.indexOf('third_party_payer: pkg.payee_name') > 0 && S.indexOf("pkg.payee_kind === 'affiliate'") > 0);
 ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with the date and reference; only for paid-through wires, after sending',
   // superseded pin (v55.83-RJ, independent review gap 6 / Max 16:14 "nextrade ... only with bills"): proof is asked from RTM-type companies only
-  S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && /* v55.83-SQ realign — requests to NextTrade now expect its wire copies too, so the message names both */ S.indexOf('Copies of the vendor payments are for requests and wires paid through RTM or NextTrade.') > 0);
+  S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && S.indexOf('Proof of vendor payments is for wires through RTM (NextTrade wires have no proof step).') > 0);
 ok('5h: a NextTrade or vendor wire with a fee is refused at save; amounts never above a bill\'s open balance; one bill one open wire checked before writing',
   // superseded pin (v55.83-RJ): plainer words ("what is still owed", "untick it")
   /* superseded (SC): vendor wires only */ S.indexOf("A wire straight to a vendor is bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('one bill, one wire. Untick it here') > 0);

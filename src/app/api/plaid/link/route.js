@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { authorizePlaidOperation, plaidJson, plaidError } from '../_auth';
+import { readBankJson } from '../../../../lib/bank-visibility';
 
 const PLAID_BASE = {
   sandbox: 'https://sandbox.plaid.com',
@@ -8,7 +9,13 @@ const PLAID_BASE = {
 
 export async function POST(req) {
   try {
-    const { user_id } = await req.json();
+    // v55.83-QB (Max): bank connections are their own permission; super admins
+    // always pass (env-verified inside the authorizer). Legacy grants keep
+    // working so nobody is locked out by the new key.
+    let access;
+    try { access = await authorizePlaidOperation(req, 'bank.connections', false); }
+    catch (eQB) { access = await authorizePlaidOperation(req, 'categories.apply', false); }
+    await readBankJson(req);
     const env = process.env.PLAID_ENV || 'sandbox';
     const base = PLAID_BASE[env] || PLAID_BASE.sandbox;
 
@@ -18,18 +25,25 @@ export async function POST(req) {
       body: JSON.stringify({
         client_id: process.env.PLAID_CLIENT_ID,
         secret: process.env.PLAID_SECRET,
-        user: { client_user_id: user_id || 'default' },
+        user: { client_user_id: access.authUserId },
         client_name: 'KTC NextTrade Hub',
         products: ['transactions'],
+        // v55.83-PU (Max, Nov 7 05:57/06:01: "prepull of bank transactions from
+        // 2 years... only show me the one from the previous month") — without
+        // days_requested Plaid ingests its DEFAULT ~90 days at connect, so the
+        // "All (2 years)" backfill had nothing older to pull. 730 is Plaid's
+        // maximum. Existing connections must be RECONNECTED once after this
+        // deploys for Plaid to ingest the older history.
+        transactions: { days_requested: 730 },
         country_codes: ['US'],
         language: 'en',
       }),
     });
 
     const data = await res.json();
-    if (data.error_code) return NextResponse.json({ error: data.error_message }, { status: 400 });
-    return NextResponse.json({ link_token: data.link_token });
+    if (data.error_code) return plaidJson({ error: data.error_message, env: env }, { status: 400 });
+    return plaidJson({ link_token: data.link_token, env: env });
   } catch (e) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return plaidError(e);
   }
 }

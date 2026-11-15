@@ -5,7 +5,7 @@ function days(a, b) { var x = new Date(String(a || '').substring(0, 10) + 'T00:0
 function money(x) { return '$' + (Math.round((Number(x) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export var STUCK_BILL_DAYS = 3;   // a bill waiting this long for validation is marked stuck
-export var STUCK_WIRE_DAYS = 3; var STUCK_UNUSED_DAYS = 7; // SP — unused transfer money older than a week   // a pre-wire / unsigned wire this old is marked stuck
+export var STUCK_WIRE_DAYS = 3;   // a pre-wire / unsigned wire this old is marked stuck
 export var STUCK_BANK_DAYS = 7;   // a SENT wire with no bank line after this many days is marked stuck
 export var DUE_SOON_DAYS = 7;
 
@@ -46,15 +46,6 @@ export function waitingFor(input) {
       wires.filter(function (w) { return w.status === 'sent' && w.sent_date && days(w.sent_date, today) >= STUCK_BANK_DAYS; }).map(function (w) { var it = wireItem(w, w.sent_date, STUCK_BANK_DAYS, 'sent ' + w.sent_date); it.stuck = true; return it; }));
     sec('wire_proof', 'Paid — waiting for proof', 'The bank line is matched; the payer’s proof of payment to the vendors is still missing.', 'wires',
       wires.filter(function (w) { return w.status === 'awaiting_proof'; }).map(function (w) { return wireItem(w, w.sent_date || w.created_at, null, (w.rtm_pending || 0) + ' bill(s) without proof'); }));
-  }
-  // v55.83-SP (Max, Nov 15: "it should be waiting for me ... every transfer should be used totally") — money already sent to
-  // RTM / NextTrade that no bill and no service fee has used yet
-  if (p.prepare) {
-    sec('transfer_unused', 'Transfers with money still unused', 'This money was sent to the paid-through company but is not tied to bills yet. Build a request from it, or book the rest as their service fee.', 'wires',
-      (i.funding || []).filter(function (f) { return Number(f.remaining) > 0.005; }).map(function (f) {
-        var age = days(f.date, today);
-        return { id: f.id, title: (f.payee || '?') + ' · transfer of ' + f.date, detail: money(f.amount) + ' sent · ' + money(f.used) + ' used' + (f.planned > 0 ? ' · ' + money(f.planned) + ' on requests not sent yet' : ''), amount: money(f.remaining), age: age, stuck: age != null && age >= STUCK_UNUSED_DAYS, chip: 'unused' };
-      }));
   }
   if (p.prepare) {
     sec('bill_ready', 'Validated bills not on any wire', 'Due within ' + DUE_SOON_DAYS + ' days or already late. Build a wire for them.', 'wires',

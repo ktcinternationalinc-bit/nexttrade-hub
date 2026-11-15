@@ -94,6 +94,39 @@ export function canApproveAdjustments(userProfile, modulePerms) {
 }
 
 /**
+ * Inventory Report Center — view reports. Its own grantable permission, but anyone with
+ * basic inventory access can view (reports are read-only views of data they can already see).
+ */
+export function canViewInventoryReports(userProfile, modulePerms) {
+  if (!userProfile) return false;
+  if (userProfile.role === 'super_admin') return true;
+  if (modulePerms && (modulePerms['inventory.reports.view'] === true || modulePerms['Inventory Reports'] === true)) return true;
+  return canViewInventory(userProfile, modulePerms);
+}
+
+/**
+ * Export inventory reports to Excel/CSV. Stricter than view — explicit grant or admin.
+ */
+export function canExportInventoryReports(userProfile, modulePerms) {
+  if (!userProfile) return false;
+  if (userProfile.role === 'super_admin') return true;
+  if (userProfile.role === 'admin') return true;
+  if (!modulePerms) return false;
+  return modulePerms['inventory.reports.export'] === true;
+}
+
+/**
+ * See cost / valuation columns inside reports. Maps to its own key, and anyone who can
+ * already see inventory costs sees valuation too.
+ */
+export function canSeeValuationInReports(userProfile, modulePerms) {
+  if (!userProfile) return false;
+  if (userProfile.role === 'super_admin') return true;
+  if (modulePerms && modulePerms['inventory.valuation.view'] === true) return true;
+  return canSeeInventoryCosts(userProfile, modulePerms);
+}
+
+/**
  * Helper for strip-and-return: takes a row from inv_skus / inv_shipments /
  * inv_invoice_lines and removes the cost/P&L fields if the viewer doesn't
  * have permission. Use in BOTH server responses and client renderers.

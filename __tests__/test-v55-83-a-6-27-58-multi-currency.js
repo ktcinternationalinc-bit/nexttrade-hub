@@ -164,7 +164,8 @@ ok('H4: each entry row renders per-currency running cells from _running_by_curre
 ok('H5: entry\'s own currency cell highlighted (bg-slate-100), inactive dimmed (HOTFIX 30 staircase: text-slate-300 + opacity-60)',
   /var isThisEntryCur = \(cur === entryCur\)[\s\S]{0,600}'bg-slate-100[\s\S]{0,300}text-slate-300 font-medium opacity-60/.test(oa));
 ok('H6: per-currency Summary block split (one block per cur, v72 HOTFIX 11 polish — with spacer rows)',
-  /s\.currencies\.map\(function \(cur, sumIdx\)/.test(oa) && /Net \{cur\} Position/.test(oa));
+  // v55.83-SM realign: the summary blocks now also follow the currency tab (filter before map). Same one-block-per-currency split.
+  /s\.currencies\.filter\([\s\S]{0,140}\)\.map\(function \(cur, sumIdx\)/.test(oa) && /Net \{cur\} Position/.test(oa));
 ok('H7: totals row places per-currency balance in correct running column',
   /s\.currencies\.map\(function \(col, colI\) \{\s+if \(col !== cur\) return <td/.test(oa));
 

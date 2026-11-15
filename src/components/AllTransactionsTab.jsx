@@ -9,7 +9,6 @@
 // to all of them (learns rules like single picks) · deposits jump straight
 // into Bank Review matching.
 import React, { useState, useEffect } from 'react';
-import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import WireQuickView from './WireQuickView'; // v55.83-RM
@@ -438,7 +437,6 @@ export default function AllTransactionsTab(props) {
 
   return <div className="flex flex-col gap-2">
     {wireView && <WireQuickView wire={wireView} userProfile={userProfile} onClose={function () { setWireView(null); }} />}
-    <DuplicateCheckPanel userProfile={userProfile} toast={toast} onChanged={function () { load(); }} />
     <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>📑 All Transactions — every connected account</div>

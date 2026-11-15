@@ -20,8 +20,6 @@ import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — th
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { realAccounts, realKeyOf, dupText, dupCents, dupDate } from '../../../../lib/duplicate-detect'; // v55.83-SO — the same REAL account can be in the Hub twice (reconnected bank)
-import { loadBankAccounts } from '../../../../lib/duplicates-server';
 
 var API_BUILD_MARKER = 'v55.83-PI-expense-rules';
 
@@ -225,24 +223,13 @@ export async function POST(req) {
         .select('id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, classification, transfer_group_id, matched_invoice_id')
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).neq('pending', true)
         .is('transfer_group_id', null).is('matched_invoice_id', null)
-        .neq('review_status', 'duplicate') // v55.83-SO — a marked duplicate copy is never one side of a transfer
         .gte('date', sinceS).order('date', { ascending: false }).limit(2000);
       if (txS.error) { return NextResponse.json({ ok: false, error: txS.error.message + (/transfer_group_id/.test(txS.error.message) ? ' — run the PQ SQL first.' : ''), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      // v55.83-SO (Max's screenshot, Nov 15: every pair listed twice, and "out of •6353 → into •6353").
-      // A reconnected bank is a second link with new account ids for the SAME real account, so the old
-      // check "different account id" paired an account with itself, and each bank line existed twice.
-      // Now: accounts are compared by bank + last four; a line that is in the Hub twice is offered once.
-      var realS = realAccounts(await loadBankAccounts(db));
+      var accS = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
       var acName = {};
-      Object.keys(realS).forEach(function (k8) { acName[k8] = realS[k8].label; });
-      var outs = []; var ins = []; var seenLine = {}; var twiceS = 0;
-      (txS.data || []).forEach(function (t8) {
-        if (t8.direction !== 'out' && t8.direction !== 'in') { return; }
-        var lineKey = realKeyOf(t8.account_id, realS) + '|' + t8.direction + '|' + dupCents(t8) + '|' + dupDate(t8) + '|' + dupText(t8.name || t8.merchant_name);
-        if (seenLine[lineKey]) { twiceS++; return; }
-        seenLine[lineKey] = true;
-        (t8.direction === 'out' ? outs : ins).push(t8);
-      });
+      (accS.data || []).forEach(function (a8) { acName[a8.plaid_account_id] = (a8.name || 'account') + (a8.mask ? ' •' + a8.mask : ''); });
+      var outs = []; var ins = [];
+      (txS.data || []).forEach(function (t8) { (t8.direction === 'out' ? outs : t8.direction === 'in' ? ins : []).push(t8); });
       var hintRx = /transfer|xfer|trnsfr|internal|between accounts|payment to chk|payment to cc|crcardpmt|credit crd|card payment/i;
       var usedIn = {}; var pairs = [];
       for (var oi = 0; oi < outs.length && pairs.length < 50; oi++) {
@@ -250,7 +237,7 @@ export async function POST(req) {
         for (var ii = 0; ii < ins.length; ii++) {
           var I = ins[ii];
           if (usedIn[I.id]) { continue; }
-          if (realKeyOf(I.account_id, realS) === realKeyOf(O.account_id, realS)) { continue; } // a transfer LEAVES one real account and ARRIVES in another
+          if ((I.account_id || '') === (O.account_id || '')) { continue; } // a transfer LEAVES one account and ARRIVES in another
           if (Math.abs((Number(I.amount_abs) || 0) - (Number(O.amount_abs) || 0)) > 0.005) { continue; }
           var gap = Math.abs(Math.round((Date.parse(I.posted_date || I.date) - Date.parse(O.posted_date || O.date)) / 86400000));
           if (gap > 7) { continue; }
@@ -267,7 +254,7 @@ export async function POST(req) {
         }
       }
       pairs.sort(function (p8, q8) { return q8.amount - p8.amount; });
-      return NextResponse.json({ ok: true, suggestions: pairs, scanned_since: sinceS, recorded_twice: twiceS, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, suggestions: pairs, scanned_since: sinceS, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── transfers_report (v55.83-PR): the intra-company transfer register —
@@ -282,36 +269,21 @@ export async function POST(req) {
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).not('transfer_group_id', 'is', null)
         .gte('date', tf).lte('date', tt).limit(2000);
       if (txR.error) { return NextResponse.json({ ok: false, error: txR.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var realR = realAccounts(await loadBankAccounts(db));
+      var accR = await db.from('plaid_accounts').select('plaid_account_id, name, mask');
       var acName2 = {};
-      Object.keys(realR).forEach(function (k9) { acName2[k9] = realR[k9].label; });
+      (accR.data || []).forEach(function (a9) { acName2[a9.plaid_account_id] = (a9.name || 'account') + (a9.mask ? ' •' + a9.mask : ''); });
       var byGid = {};
       (txR.data || []).forEach(function (t9) {
         if (!byGid[t9.transfer_group_id]) { byGid[t9.transfer_group_id] = { gid: t9.transfer_group_id, amount: Math.round((Number(t9.amount_abs) || 0) * 100) / 100, date: null, from_account: null, to_account: null, legs: 0 }; }
         var g9 = byGid[t9.transfer_group_id]; g9.legs++;
-        if (t9.direction === 'out') { g9.from_key = realKeyOf(t9.account_id, realR); g9.outs = (g9.outs || 0) + 1; }
-        if (t9.direction === 'in') { g9.to_key = realKeyOf(t9.account_id, realR); g9.ins = (g9.ins || 0) + 1; }
         var d9 = t9.posted_date || t9.date;
         if (!g9.date || d9 < g9.date) { g9.date = d9; }
         if (t9.direction === 'out') { g9.from_account = acName2[t9.account_id] || 'account'; }
         if (t9.direction === 'in') { g9.to_account = acName2[t9.account_id] || 'account'; }
       });
       var rowsR = Object.values(byGid).sort(function (a0, b0) { return (b0.date || '') < (a0.date || '') ? -1 : 1; });
-      // v55.83-SO — check BOTH sides of every linked transfer. A sound transfer has exactly one line out
-      // and one line in, in two different real accounts. Anything else is flagged, never guessed at.
-      var issuesR = 0;
-      rowsR.forEach(function (r1) {
-        r1.issue = null;
-        if (r1.legs !== 2 || r1.outs !== 1 || r1.ins !== 1) {
-          r1.issue = (r1.legs === 1 ? 'Only one side is in this date range or linked — the other side is missing.' : 'This link has ' + r1.legs + ' lines; a transfer has exactly one out and one in.');
-        } else if (r1.from_key && r1.from_key === r1.to_key) {
-          r1.issue = 'Both sides are in the same bank account — this is not a transfer. Unlink it, then use "Check for duplicates".';
-        }
-        if (r1.issue) { issuesR++; }
-        delete r1.from_key; delete r1.to_key; delete r1.outs; delete r1.ins;
-      });
-      var sumR = 0; rowsR.forEach(function (r0) { if (!r0.issue) { sumR = Math.round((sumR + r0.amount) * 100) / 100; } });
-      return NextResponse.json({ ok: true, from: tf, to: tt, transfers: rowsR, count: rowsR.length, total: sumR, issues: issuesR, api_build_marker: API_BUILD_MARKER });
+      var sumR = 0; rowsR.forEach(function (r0) { sumR = Math.round((sumR + r0.amount) * 100) / 100; });
+      return NextResponse.json({ ok: true, from: tf, to: tt, transfers: rowsR, count: rowsR.length, total: sumR, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── bulk_classify (v55.83-PW, Max 10:51: "all accounting transactions
@@ -551,9 +523,6 @@ export async function POST(req) {
       var cand = await candQ.order('date', { ascending: false }).limit(manualT ? 400 : 20);
       if (cand.error) { return NextResponse.json({ ok: false, error: cand.error.message + (/transfer_group_id/.test(cand.error.message) ? ' — run sql/v55-83-PQ-category-wave-link.sql first.' : ''), api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var outC = cand.data || [];
-      // v55.83-SO — the other leg must be in a DIFFERENT real account (not this account's second connection)
-      var realT = realAccounts(await loadBankAccounts(db));
-      outC = outC.filter(function (c0) { return realKeyOf(c0.account_id, realT) !== realKeyOf(t0.account_id, realT); });
       if (manualT) {
         var qT = String((body.payload && body.payload.q) || '').trim().toLowerCase();
         if (qT) { outC = outC.filter(function (c) { return (String(c.merchant_name || '') + ' ' + String(c.name || '') + ' ' + Number(c.amount_abs).toFixed(2) + ' ' + String(c.posted_date || c.date)).toLowerCase().indexOf(qT) >= 0; }); }
@@ -586,10 +555,6 @@ export async function POST(req) {
       if (Math.abs((Number(A.amount_abs) || 0) - (Number(B.amount_abs) || 0)) > 0.005) { return NextResponse.json({ ok: false, error: 'Amounts differ ($' + Number(A.amount_abs).toFixed(2) + ' vs $' + Number(B.amount_abs).toFixed(2) + ') — the two legs of one transfer are the same money, so they must match to the cent. A bank/wire fee is its own separate line: categorize it as Bank fees.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       // v55.83-QX — one set of books only: money moving to another COMPANY is intercompany (due to / due from), not an internal transfer
       if (A.wave_business_id && B.wave_business_id && A.wave_business_id !== B.wave_business_id) { return NextResponse.json({ ok: false, error: 'These two accounts belong to DIFFERENT companies — that is an intercompany payment (loan to / owed by the other company), not a transfer between your own accounts. Categorize each side on its own.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      // v55.83-SO — both legs in the SAME real bank account is not a transfer. It is either an unrelated
-      // deposit and payment of the same size, or the same line recorded twice.
-      var realP = realAccounts(await loadBankAccounts(db));
-      if (realKeyOf(A.account_id, realP) === realKeyOf(B.account_id, realP)) { return NextResponse.json({ ok: false, error: 'Both lines are in the same bank account (' + ((realP[A.account_id] && realP[A.account_id].label) || 'same account') + '). A transfer leaves one account and arrives in another, so these are not a transfer. If it is the same bank line recorded twice, use "Check for duplicates".', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (A.review_status === 'duplicate' || B.review_status === 'duplicate') { return NextResponse.json({ ok: false, error: 'One of these is a marked DUPLICATE copy — pair the original instead.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       var gid = (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : require('crypto').randomUUID();
       var updP = await db.from('bank_transactions')

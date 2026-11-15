@@ -5,6 +5,7 @@ import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
 import { fmtET, todayET } from '../lib/et-time';
 import EmailComposer from './EmailComposer';
+import CrmActivityPanel, { CrmClientHistory } from './CrmActivityPanel'; // v55.83-RJ
 import { fE, fmt } from '../lib/utils';
 
 const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
@@ -56,6 +57,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   const [allNotes, setAllNotes] = useState([]);
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
+  const [histKey, setHistKey] = useState(0); // v55.83-RJ — refresh the client's history after a change
 
   // Load all notes once for card display
   const loadAllNotes = async () => {
@@ -187,6 +189,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
       const bT = custInvoices(b).reduce((s, i) => s + Number(i.total_amount || 0), 0);
       return bT - aT;
     });
+    // v55.83-RJ — newest added / recently updated (unknown dates go last)
+    if (sortBy === 'newest_added') arr.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    if (sortBy === 'recently_updated') arr.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
     if (sortBy === 'latest_note') arr.sort((a, b) => {
       const aN = getLastNote(a.id);
       const bN = getLastNote(b.id);
@@ -224,6 +229,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         group_name: f.group || '', client_type: f.clientType || '',
         industry: f.industry || '', lead_source: f.leadSource || '',
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
+        created_by: myId || null, // v55.83-RJ — who added the client (the database also stamps it)
       }, myId);
       await logActivity(myId, 'Created client: ' + f.name, 'crm');
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
@@ -248,7 +254,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
       }, myId);
       await logActivity(myId, 'Edited client: ' + (f.name || sel.name), 'crm');
       if (f.assignedRep && f.assignedRep !== sel.assigned_rep) notifyClientAssigned([f.assignedRep], f.name || sel.name, myId);
-      setEditingClient(false); setF({}); onReload();
+      setEditingClient(false); setF({}); onReload(); setHistKey(k => k + 1);
       loadClientData({...sel, name: f.name || sel.name});
     } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
@@ -311,7 +317,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
       await logActivity(myId, 'Pipeline: ' + (client.name_en || client.name) + ' → ' + stageName, 'crm');
       await dbInsert('client_notes', { customer_id: client.id, note_text: '📊 Pipeline stage changed: ' + oldStage + ' → ' + newStage + ' by ' + (users?.find(u => u.id === myId)?.name || '') }, myId);
       if (client.assigned_rep && client.assigned_rep !== myId) notifyCRMStatus([client.assigned_rep], client.name, stageName, myId);
-      if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); }
+      if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); setHistKey(k => k + 1); }
       onReload();
     } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
@@ -335,6 +341,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition">+ New Client</button>
         </div>
       </div>
+
+      {/* v55.83-RJ (Max, Nov 9 11:16) — added & updated by period, open by default */}
+      <CrmActivityPanel customers={customers.filter(c => isAdmin || !c.restricted)} users={users} lang={lang} isAdmin={isAdmin} canSeeContact={canSeeContact} onOpen={loadClientData} />
 
       {/* Pipeline Visual */}
       <div className="bg-white rounded-2xl p-4 mb-4 border border-slate-100 shadow-sm">
@@ -376,6 +385,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
           <option value="alpha">A → Z</option><option value="alpha_rev">Z → A</option>
           <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
           <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
+          <option value="newest_added">Newest added</option><option value="recently_updated">Recently updated</option>
         </select>
         <span className="text-[10px] text-slate-500 ml-auto">{filtered.length} results</span>
       </div>
@@ -510,6 +520,11 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                   </div>
                 )}
 
+                {/* v55.83-RJ — when this client was added, and by whom */}
+                <div className="text-[10px] mb-1.5" style={{ color: '#64748b' }}>
+                  {'➕ Added ' + (c.created_at ? fmtET(c.created_at, 'shortdate') : '—') + ((users?.find(u => u.id === c.created_by)?.name) ? ' by ' + users.find(u => u.id === c.created_by).name : '')}
+                  {c.updated_at ? ' · ✏ ' + fmtET(c.updated_at, 'shortdate') : ''}
+                </div>
                 {/* Footer */}
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-1.5">
@@ -614,7 +629,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 const newVal = !sel.important;
                 await dbUpdate('customers', sel.id, { important: newVal }, myId);
                 setSel({...sel, important: newVal});
-                onReload();
+                onReload(); setHistKey(k => k + 1);
               } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
             }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
@@ -647,7 +662,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                     try {
                       await dbUpdate('customers', sel.id, { restricted: e.target.checked }, myId);
                       setSel({...sel, restricted: e.target.checked});
-                      onReload();
+                      onReload(); setHistKey(k => k + 1);
                     } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                   }} className="w-4 h-4" />
                 <label className="text-xs font-semibold text-red-700">Restricted — Admin Only / مقيد — للمسؤول فقط</label>
@@ -656,6 +671,8 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
           </div>
         )}
       </div>
+      {/* v55.83-RJ — added (date + who), last update, and every change with its date */}
+      <CrmClientHistory client={sel} users={users} canSeeContact={canSeeContact} reloadKey={histKey} />
       {canSeeSales(sel) ? (
         <div className="grid grid-cols-4 gap-2 mb-3">
           <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>

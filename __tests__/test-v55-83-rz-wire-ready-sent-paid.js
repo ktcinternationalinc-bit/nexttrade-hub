@@ -135,16 +135,11 @@ console.log('RZ — bills go OPEN → READY → SENT → PAID; the Hub finds the
   var btP = bankLine('2026-06-15', 1750, 'WIRE OUT RTM JUNE');
   var p0 = await call(wires, 'u1', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: P1, amount: 1200 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001' });
   check('8a: only the super admin records a past wire (it has no signatures)', !p0.ok && /super admin/.test(p0.error), p0);
-  // v55.83-SP realign (Max, Nov 15: "Past requests also need to have confirmations with two signatures") — a past payment THROUGH RTM is now a
-  // request drawn from its transfer (two signatures); the no-signature past wire stays for a wire straight to a vendor, so 8b–8f run on one.
-  var pR = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: P1, amount: 1200 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001' });
-  check('8a2: a past payment through RTM is refused here — it is a request with two signatures now', !pR.ok && /two signatures/.test(pR.error) && db.t.wire_packages.length === 5, pR);
-  db.t.vendor_bills.forEach(function (b) { if (b.id === P1 || b.id === P2) { b.paid_via = null; } });
-  var p1 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'vendor', payee_name: 'NexPac Corporation', lines: [{ bill_id: P1, amount: 1200 }], sent_date: '2026-06-14', reason: 'June' });
+  var p1 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: P1, amount: 1200 }], sent_date: '2026-06-14', reason: 'June' });
   check('8b: a reason of at least 10 characters is required', !p1.ok && /at least 10 characters/.test(p1.error), p1);
-  var p2 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'vendor', payee_name: 'NexPac Corporation', lines: [{ bill_id: P1, amount: 1300 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001 + 13002' });
+  var p2 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: P1, amount: 1300 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001 + 13002' });
   check('8c: more than a bill’s open amount is refused', !p2.ok && /only \$1200\.00 is still open/.test(p2.error) && db.t.wire_packages.length === 5, p2);
-  var p3 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'vendor', payee_name: 'NexPac Corporation', lines: [{ bill_id: P1, amount: 1200 }, { bill_id: P2, amount: 550 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001 + 13002 (part)' });
+  var p3 = await call(wires, 'u9', { action: 'record_past_wire', payee_kind: 'service_provider', payee_name: 'RTM Capital', lines: [{ bill_id: P1, amount: 1200 }, { bill_id: P2, amount: 550 }], sent_date: '2026-06-14', reason: 'June wire to RTM for NexPac 13001 + 13002 (part)' });
   var pp = pkg(p3.id) || {};
   check('8d: recorded (bills that were never validated are allowed — they were paid before validation existed) → found in the bank → attached', p3.ok && p3.matched && pp.after_the_fact === true && /June wire/.test(pp.after_the_fact_note) && pp.status === 'attached' && pp.bank_transaction_id === btP.id, { p3: p3, st: pp.status });
   var rP1 = await billRow(P1); var rP2 = await billRow(P2);

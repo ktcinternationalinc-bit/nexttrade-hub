@@ -25,10 +25,11 @@ var EXPANDED_STORAGE_KEY = 'nadia.expanded';
 
 export default function NadiaFloatingOverlay(props) {
   // Expanded/collapsed state — restored from localStorage so it persists across pages.
-  var [expanded, setExpanded] = useState(function() {
-    if (typeof window === 'undefined') return false;
-    try { return localStorage.getItem(EXPANDED_STORAGE_KEY) === 'true'; } catch (e) { return false; }
-  });
+  // v55.83-OP — expanded is NOT restored from storage anymore: awake always
+  // starts false, and a restored expanded=true would mount AIGreeter (and her
+  // voice) on page load while "asleep" — the exact bug Max reported. Every
+  // page starts with the sleeping pill; the button is the only way in.
+  var [expanded, setExpanded] = useState(false);
 
   // S17 — Muted state: if parent passes externalMuted + onMutedChange, use
   // those (lets the dashboard AIGreeter and the overlay share one source of
@@ -49,6 +50,12 @@ export default function NadiaFloatingOverlay(props) {
     }
   };
 
+  // v55.83-OP (Max, Oct 13): "the ai helper automatically starts talking on
+  // each page. I don't want that anymore — wake it with a button." awake
+  // defaults FALSE on every load and is deliberately NOT persisted: Nadia is
+  // dormant — chat engine UNMOUNTED, no tab greetings, no TTS, nothing —
+  // until the pill is pressed. Collapsing puts her back to sleep.
+  var [awake, setAwake] = useState(false);
   useEffect(function() {
     try { localStorage.setItem(EXPANDED_STORAGE_KEY, expanded ? 'true' : 'false'); } catch (e) {}
   }, [expanded]);
@@ -107,8 +114,8 @@ export default function NadiaFloatingOverlay(props) {
     var handleMute = function() { setMuted(true); };
     var handleUnmute = function() { setMuted(false); };
     var handleToggle = function() { setMuted(function(m) { return !m; }); };
-    var handleExpand = function() { setExpanded(true); setUserCollapsedAt(0); };
-    var handleCollapse = function() { setExpanded(false); };
+    var handleExpand = function() { setAwake(true); setExpanded(true); setUserCollapsedAt(0); }; // OP: an explicit expand event is a wake
+    var handleCollapse = function() { setExpanded(false); setAwake(false); try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {} }; // OP: collapse = back to sleep, silent
     window.addEventListener('nadia-mute', handleMute);
     window.addEventListener('nadia-unmute', handleUnmute);
     window.addEventListener('nadia-toggle-mute', handleToggle);
@@ -162,7 +169,7 @@ export default function NadiaFloatingOverlay(props) {
     if (currentCount > assistantCountRef.current) {
       // Only auto-expand if user hasn't recently dismissed. userCollapsedAt
       // is cleared when user manually expands (see setExpanded usage below).
-      if (!expanded && !userCollapsedAt) setExpanded(true);
+      if (awake && !expanded && !userCollapsedAt) setExpanded(true); // OP: never auto-expand while asleep
     }
     assistantCountRef.current = currentCount;
   }, [sessionMsgsForCount.length, props.suppressed]);
@@ -194,12 +201,14 @@ export default function NadiaFloatingOverlay(props) {
   if (!expanded) {
     return (
       <>
-        {/* Hidden AIGreeter — rendered but visually invisible. Still runs
-            its effects, still plays TTS audio. This is what makes Nadia
-            "start talking" on a new tab even before user clicks the pill. */}
-        <div style={{ position: 'fixed', left: -99999, top: -99999, width: 1, height: 1, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true">
-          <AIGreeter {...props} muted={muted} />
-        </div>
+        {/* v55.83-OP — the hidden AIGreeter mounts ONLY while awake. Asleep =
+            UNMOUNTED: no tab-greeting effects, no proactive speech, ever.
+            (The old always-mounted version is why Nadia talked on every page.) */}
+        {awake && (
+          <div style={{ position: 'fixed', left: -99999, top: -99999, width: 1, height: 1, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true">
+            <AIGreeter {...props} muted={muted} />
+          </div>
+        )}
         <div
           style={{
             position: 'fixed',
@@ -228,11 +237,11 @@ export default function NadiaFloatingOverlay(props) {
             fontWeight: 700,
             border: '1px solid rgba(255,255,255,0.15)',
           }}
-          onClick={function() { setExpanded(true); setUserCollapsedAt(0); }}
-          title="Open Nadia"
+          onClick={function() { setAwake(true); setExpanded(true); setUserCollapsedAt(0); }}
+          title={awake ? 'Open Nadia' : 'Nadia is asleep — tap to wake her'}
         >
-          <span style={{ fontSize: 18 }}>🤖</span>
-          <span>Nadia</span>
+          <span style={{ fontSize: 18 }}>{awake ? '🤖' : '💤'}</span>
+          <span>{awake ? 'Nadia' : 'Wake Nadia'}</span>
           {muted && (
             <span title="Muted — click to open then click the speaker icon to unmute"
               style={{ fontSize: 12, opacity: 0.85 }}>🔇</span>
@@ -308,7 +317,7 @@ export default function NadiaFloatingOverlay(props) {
             {muted ? <><span>🔇</span><span>Unmute</span></> : <><span>🔊</span><span>Mute</span></>}
           </button>
           <button
-            onClick={function() { setExpanded(false); setUserCollapsedAt(Date.now()); }}
+            onClick={function() { setExpanded(false); setAwake(false); setUserCollapsedAt(Date.now()); try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {} document.querySelectorAll('audio').forEach(function(a) { try { a.pause(); } catch (er) {} }); }} // OP: X = sleep + silence
             title="Minimize"
             style={{
               padding: '4px 10px', borderRadius: 6,

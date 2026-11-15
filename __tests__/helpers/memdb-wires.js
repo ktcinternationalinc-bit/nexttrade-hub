@@ -10,9 +10,7 @@ Q.prototype.not = function (col, op, val) { this.filters.push(['not_' + op, col,
 Q.prototype.or = function (expr) { this.filters.push(['or', expr, null]); return this; };
 Q.prototype.like = function (col, pat) { this.filters.push(['like', col, pat]); return this; };
 Q.prototype.ilike = function (col, pat) { this.filters.push(['ilike', col, pat]); return this; };
-// v55.83-SO — select(cols, { count, head }) returns a count; upsert(rows, { onConflict }) replaces by that column; db.rpc(name, args) calls db.rpcs[name]
-Q.prototype.select = function (cols, o) { if (this.op !== 'select') { this.wantRows = true; } if (o && o.head) { this.head = true; } return this; };
-Q.prototype.upsert = function (rows, o) { this.op = 'upsert'; this.payload = rows; this.conflict = (o && o.onConflict) || 'id'; return this; };
+Q.prototype.select = function () { if (this.op !== 'select') { this.wantRows = true; } return this; };
 // v55.83-SH — order(col, { ascending }) is honoured when a column is given (older tests call it for display order only)
 Q.prototype.order = function (col, o) { if (col) { this._order = { col: col, asc: !(o && o.ascending === false) }; } return this; };
 Q.prototype.limit = function (n) { this.lim = n; return this; };
@@ -68,11 +66,6 @@ Q.prototype.run = function () {
     made.forEach(function (r) { tbl.push(r); });
     return this.shape(made);
   }
-  if (this.op === 'upsert') {
-    var ua = Array.isArray(this.payload) ? this.payload : [this.payload]; var ck = this.conflict;
-    ua.forEach(function (u) { var ex = null; tbl.forEach(function (x) { if (String(x[ck]) === String(u[ck])) { ex = x; } }); if (ex) { Object.assign(ex, u); } else { tbl.push(Object.assign({ created_at: new Date().toISOString() }, u)); } });
-    return { data: null, error: null };
-  }
   if (this.op === 'update') {
     for (var j = 0; j < rows.length; j++) {
       if (hooks && hooks.update) { var ue = hooks.update(rows[j], this.payload); if (ue) { return { data: null, error: { message: ue } }; } }
@@ -82,7 +75,6 @@ Q.prototype.run = function () {
     return this.wantRows || this.sgl ? this.shape(rows) : { data: null, error: null };
   }
   if (this.op === 'delete') { db.t[this.name] = tbl.filter(function (r) { return rows.indexOf(r) < 0; }); return { data: null, error: null }; }
-  if (this.head) { return { data: null, count: rows.length, error: null }; }
   if (this.rng) { rows = rows.slice(this.rng[0], this.rng[1] + 1); }
   if (this._order) { var oc = this._order.col; var oa = this._order.asc; rows = rows.slice().sort(function (x, y) { var a1 = x[oc]; var b1 = y[oc]; if (a1 === b1) { return 0; } if (a1 == null) { return 1; } if (b1 == null) { return -1; } return (a1 < b1 ? -1 : 1) * (oa ? 1 : -1); }); }
   if (this.lim != null) { rows = rows.slice(0, this.lim); }
@@ -91,10 +83,5 @@ Q.prototype.run = function () {
 Q.prototype.shape = function (rows) {
   if (this.sgl) { return { data: rows[0] || null, error: (this.sgl === 2 && !rows[0]) ? { message: 'no rows' } : null }; }
   return { data: rows, error: null };
-};
-MemDB.prototype.rpc = function (name, args) {
-  var f = this.rpcs && this.rpcs[name];
-  if (!f) { return Promise.resolve({ data: null, error: { message: 'Could not find the function public.' + name + ' in the schema cache' } }); }
-  try { return Promise.resolve({ data: f(args, this), error: null }); } catch (e) { return Promise.resolve({ data: null, error: { message: e.message } }); }
 };
 module.exports = MemDB;

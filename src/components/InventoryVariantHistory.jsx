@@ -74,7 +74,7 @@ export default function InventoryVariantHistory({ variant, onClose, isOpen }) {
         var resOutbound = await safeQuery(
           supabase
             .from('invoice_items')
-            .select('id, invoice_id, description, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, inventory_consumed_at, backorder_qty')
+            .select('id, invoice_id, description, sale_quantity, sale_price_per_uom, cogs_total, gross_profit, inventory_status, inventory_consumed_at, backorder_qty, rolls_sold')
             .eq('variant_id', variant.id)
             .order('inventory_consumed_at', { ascending: false, nullsFirst: false })
             .limit(200)
@@ -292,6 +292,7 @@ export default function InventoryVariantHistory({ variant, onClose, isOpen }) {
                 { en: 'Invoice #', ar: 'رقم الفاتورة', get: function (r) { return r._invoice_order_number || '—'; }, mono: true },
                 { en: 'Customer', ar: 'العميل', get: function (r) { return r._invoice_customer_name || '—'; } },
                 { en: 'Qty Sold', ar: 'الكمية المباعة', get: function (r) { return fmtNum(r.sale_quantity, 3); }, right: true },
+                { en: 'Rolls Sold', ar: 'اللفات المباعة', get: function (r) { return (r.rolls_sold != null && r.rolls_sold !== '') ? fmtNum(r.rolls_sold, 0) : '—'; }, right: true },
                 { en: 'Sale $/unit', ar: 'سعر البيع', get: function (r) { return fmtMoney(r.sale_price_per_uom); }, right: true },
                 { en: 'COGS', ar: 'التكلفة', get: function (r) { return fmtMoney(r.cogs_total); }, right: true },
                 { en: 'Gross Profit', ar: 'الربح', get: function (r) { return fmtMoney(r.gross_profit); }, right: true, bold: true,

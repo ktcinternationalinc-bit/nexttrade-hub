@@ -24,13 +24,17 @@ import InventoryStockImport from './InventoryStockImport';
 import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
 import InventoryAdjustments from './InventoryAdjustments';
+import InventoryStockCount from './InventoryStockCount';
 import InventoryOverview from './InventoryOverview';
+import InventoryMixComposition from './InventoryMixComposition';
 // v55.83-A.6.27.62 — new reports + warehouse advances subtabs
 import InventoryPnLReports from './InventoryPnLReports';
 import WarehouseAdvancesTab from './WarehouseAdvancesTab';
 // v55.83-A.6.27.63 — FX rates admin + FX P&L report
 import FxRatesPanel from './FxRatesPanel';
 import FxPnLReport from './FxPnLReport';
+// v55.83-FW — bilingual Inventory Report Center (reusable report engine)
+import InventoryReportCenter from './InventoryReportCenter';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -38,47 +42,37 @@ import {
 } from '../lib/inventory-permissions';
 
 var SUBTABS = [
-  // v55.83-A.6.27.51 — Inventory Overview (default landing): big "what's in stock" screen
-  // with accordion grouped by Family, current/original/sold + avg cost & P&L (super-admin).
-  { id: 'overview', label: '📊 Overview', stage: 'View', desc: 'One-screen view of current stock by Family, with cascading multi-level classification filters.' },
-  // v55.83-A.6.27.32 — old-system subtabs HIDDEN from nav (Max never used
-  // them; new Phase 1 system replaces them). Components stay imported and
-  // in code for the eventual cleanup build, but no nav entries point here.
-  // Old tabs that were hidden: inventory (view), skus (Master SKUs),
-  // shipments, layers (Cost Layers), pnl (Profit by SKU), movements,
-  // adjustments, reports. These will be rebuilt in Builds 4.2-5 against
-  // the new Product List.
-  // { id: 'inventory', label: '📊 Inventory View', stage: 'B', desc: '...' },
-  // { id: 'skus', label: '📦 Master SKUs', stage: 'A', desc: '...' },
-  // { id: 'shipments', label: '🚢 Shipments', stage: 'B', desc: '...' },
-  // { id: 'layers', label: '🧱 Cost Layers', stage: 'C', desc: '...' },
-  // { id: 'pnl', label: '💵 Profit by SKU', stage: 'D', desc: '...' },
-  // { id: 'movements', label: '📜 Movements', stage: 'B', desc: '...' },
-  // { id: 'adjustments', label: '🔧 Adjustments', stage: 'E', desc: '...' },
-  // { id: 'reports', label: '📈 Reports', stage: 'F', desc: '...' },
-  { id: 'warehouses', label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
-  // v55.83-A.6.27.22 — Phase 1 Build 1 of the classification system
-  { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
-  // v55.83-A.6.27.23 — Phase 1 Build 2: Product List catalog
-  { id: 'productmaster', label: '🏷️ Product List', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
-  // v55.83-A.6.27.28 — Phase 1 Build 3: Bulk import products from Excel
-  { id: 'importproducts', label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
-  // v55.83-A.6.27.29 — Phase 1 Build 4.0: Inbound Shipments (warehouse receiving)
-  { id: 'receivestock', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product List.' },
-  // v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk import legacy stock
-  { id: 'importstock', label: '📦 Import Shipment', stage: 'Receiving', desc: 'One-time bulk import of existing inventory + shipment metadata from Excel.' },
-  // v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger + FIFO Cost Layers (engine)
-  { id: 'movementsledger', label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
-  { id: 'costlayers',      label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
-  // v55.83-A.6.27.36 — Phase 1 Build 4.5: Adjustments (qty / transfer / cost)
-  { id: 'adjustments',     label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
-  // v55.83-A.6.27.62 — Inventory P&L Reports (qty sold, revenue, COGS, gross profit, margin per product/category/warehouse/period)
-  { id: 'pnlreports',      label: '💹 P&L Reports', stage: 'Reports', desc: 'Profit and Loss by product, category, warehouse, or period. Top movers + export.' },
-  // v55.83-A.6.27.62 — Warehouse Advances (issue cash float to manager/driver/broker, track expenses against it)
-  { id: 'advances',        label: '💵 Advances', stage: 'Reports', desc: 'Issue cash advances; track spending against each advance.' },
-  // v55.83-A.6.27.63 — FX rate logging + FX P&L report (real margin vs currency-move gain/loss)
-  { id: 'fxrates',         label: '💱 FX Rates', stage: 'Reports', desc: 'Daily USD/EGP and other exchange rates. Used by FX P&L report.' },
-  { id: 'fxpnl',           label: '💱 FX P&L', stage: 'Reports', desc: 'Separates real margin from currency-movement gain/loss.' },
+  // v55.83-H — grouped navigation: each tab carries a `group` (core / import /
+  // financial) and a clean emoji-free `name`. Grouping + monochrome labels make
+  // the nav read as an executive command center rather than a colorful menu.
+  // Old hidden subtabs (inventory/skus/shipments/layers/pnl/movements/adjustments/
+  // reports) remain imported in code but have no nav entry.
+  { id: 'overview',        group: 'core',      name: 'Overview',          label: '📊 Overview', stage: 'View', desc: 'One-screen view of current stock by Family, with cascading multi-level classification filters.' },
+  { id: 'productmaster',   group: 'core',      name: 'Product List',      label: '🏷️ Product List', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
+  { id: 'mixcomposition',  group: 'core',      name: 'Stock Mix',         label: '🎨 Stock Mix', stage: 'View', desc: 'Read-only: what a Stock Mix Lot is currently made of, by real color stock. No inventory changes.' },
+  { id: 'masterlists',     group: 'admin',      name: 'Master Lists',      label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
+  { id: 'importproducts',  group: 'admin',      name: 'Import Products',   label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
+  { id: 'warehouses',      group: 'core',      name: 'Warehouses',        label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
+  { id: 'movementsledger', group: 'core',      name: 'Movements',         label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
+  { id: 'adjustments',     group: 'core',      name: 'Adjustments',       label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
+  { id: 'stockcount',      group: 'core',      name: 'Stock Count',       label: '🔢 Stock Count', stage: 'Engine', desc: 'Physical count: type what is actually on the racks, the system adjusts itself to match — fully audited.' },
+
+  { id: 'receivestock',    group: 'import',    name: 'Inbound Shipments', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Import a NEXPAC report inside a shipment to set its expected rolls/weights, then compare against actual.' },
+  { id: 'importstock',     group: 'import',    name: 'Import Shipment',   label: '📦 Import Shipment', stage: 'Receiving', desc: 'One-time bulk import of existing inventory + shipment metadata from Excel.' },
+  { id: 'costlayers',      group: 'import',    name: 'Cost Layers',       label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
+  { id: 'advances',        group: 'import',    name: 'Advances',          label: '💵 Advances', stage: 'Reports', desc: 'Issue cash advances; track spending against each advance.' },
+
+  { id: 'reportcenter',    group: 'financial', name: 'Reports',           label: '📋 Reports', stage: 'Reports', desc: 'Bilingual (EN/AR) inventory report center: stock snapshot + virtual mix composition, with export and print.' },
+  { id: 'pnlreports',      group: 'financial', name: 'P&L Reports',       label: '💹 P&L Reports', stage: 'Reports', desc: 'Profit and Loss by product, category, warehouse, or period. Top movers + export.' },
+  { id: 'fxrates',         group: 'financial', name: 'FX Rates',          label: '💱 FX Rates', stage: 'Reports', desc: 'Daily USD/EGP and other exchange rates. Used by FX P&L report.' },
+  { id: 'fxpnl',           group: 'financial', name: 'FX P&L',            label: '💱 FX P&L', stage: 'Reports', desc: 'Separates real margin from currency-movement gain/loss.' },
+];
+
+var SUBTAB_GROUPS = [
+  { key: 'core',      label: 'Core Inventory',          icon: '📦' },
+  { key: 'import',    label: 'Import Operations',        icon: '🚢' },
+  { key: 'financial', label: 'Financial Intelligence',  icon: '📊' },
+  { key: 'admin',     label: 'Administration',          icon: '⚙️' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -222,12 +216,21 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       <div className="bg-gradient-to-r from-slate-800 via-indigo-900 to-slate-800 rounded-xl p-4 border border-indigo-500/30 shadow-lg">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-xl font-extrabold text-white">📦 Inventory</h2>
+            <h2 className="text-xl font-extrabold text-white">📦 Inventory Management</h2>
             <p className="text-xs text-indigo-200 font-medium">
               Track every shipment from arrival through sale. Costs, stock, and profit in one place.
             </p>
           </div>
           <div className="flex items-center gap-1 text-[11px]">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-indigo-400/30 mr-1">
+              <div className="text-right">
+                <div className="text-[9px] uppercase tracking-wider text-indigo-300 font-bold">Last Inventory Cutoff</div>
+                <div className="text-xs font-extrabold text-white">{cutoffLoading ? 'Loading…' : (cutoffDate ? cutoffDate : 'Not Set')}</div>
+              </div>
+              {canManageCutoff && (
+                <button type="button" onClick={function () { setCutoffPanelOpen(true); }} className="text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded px-2 py-1">Set Cutoff</button>
+              )}
+            </div>
             <span className="px-2 py-1 rounded bg-emerald-600 text-white font-extrabold ring-1 ring-emerald-700/50 shadow-sm">
               v55.83-A.6.27.45 · Invoice variant picker
             </span>
@@ -320,77 +323,64 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         </div>
       )}
 
-      {/* Subtab nav */}
-      <div className="flex gap-1 flex-wrap bg-slate-50 rounded-lg p-1 border border-slate-200">
-        {SUBTABS.map(function (st) {
-          // v55.83-A.6.27.9 — ALL stages now active.
-          var available = true;
-          // P&L tab requires the per-user pnl access permission
-          if (st.id === 'pnl' && !seePnL) available = false;
-          // Layers tab requires cost access (P&L access implies cost access)
-          if (st.id === 'layers' && !seeCosts && !seePnL) available = false;
-          // v55.83-A.6.27.22 — Master Lists tab requires super_admin or
-          // "Manage Inventory Master" permission. Hidden entirely for
-          // users without it (not just disabled) — this is admin-only.
-          if (st.id === 'masterlists' && !(isSuperAdmin || (modulePerms && modulePerms['Manage Inventory Master'] === true))) {
-            return null;
+      {/* Subtab nav — v55.83-H: grouped into Core Inventory / Import Operations /
+          Financial Intelligence with clean (emoji-free) labels. All permission
+          gating is preserved via the visibility helper below. */}
+      <div className="bg-slate-100 rounded-xl p-3 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {(function () {
+          // Returns { hidden, available } for a subtab, applying the same
+          // permission rules as before.
+          function visFor(st) {
+            var available = true;
+            if (st.id === 'pnl' && !seePnL) available = false;
+            if (st.id === 'layers' && !seeCosts && !seePnL) available = false;
+            if (st.id === 'masterlists' && !(isSuperAdmin || (modulePerms && modulePerms['Manage Inventory Master'] === true))) return { hidden: true };
+            if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product List'] === true)))) return { hidden: true };
+            if (st.id === 'importproducts' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Product List'] === true))) return { hidden: true };
+            if (st.id === 'receivestock' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) return { hidden: true };
+            if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) return { hidden: true };
+            if ((st.id === 'movementsledger' || st.id === 'costlayers') && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) return { hidden: true };
+            if (st.id === 'adjustments' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) return { hidden: true };
+            if (st.id === 'stockcount' && !(isSuperAdmin || (modulePerms && (modulePerms['Edit Inventory'] === true || modulePerms['Adjust Inventory'] === true)))) return { hidden: true };
+            return { hidden: false, available: available };
           }
-          // v55.83-A.6.27.23 — Product List tab visible to anyone with
-          // Inventory access (read-only) or super_admin / Edit Product
-          // Master (full CRUD). Component itself handles edit-gating.
-          if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product List'] === true)))) {
-            return null;
-          }
-          // v55.83-A.6.27.28 — Import Products tab requires Edit Product
-          // Master (same as creating individual products). Hidden if no
-          // perm. This is a heavy-impact action — strict gate.
-          if (st.id === 'importproducts' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Product List'] === true))) {
-            return null;
-          }
-          // v55.83-A.6.27.29 — Inbound Shipments tab visible to anyone with
-          // Inventory access (read-only) or super_admin / Edit Inventory
-          // (full CRUD). Cost fields inside the component are gated
-          // separately by canSeeInventoryCosts.
-          if (st.id === 'receivestock' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
-            return null;
-          }
-          // v55.83-A.6.27.30 — Import Stock tab gated to super_admin OR
-          // Edit Inventory (same as Inbound Shipments — both write to the
-          // same table). Cost columns in the template/preview are gated
-          // separately by canSeeInventoryCosts inside the component.
-          if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) {
-            return null;
-          }
-          // v55.83-A.6.27.34 — Movements Ledger + Cost Layers: read-only views.
-          // Available to anyone with Inventory access (read-only) or super_admin
-          // / Edit Inventory. Cost columns inside each component are gated
-          // separately by canSeeInventoryCosts.
-          if ((st.id === 'movementsledger' || st.id === 'costlayers') &&
-              !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
-            return null;
-          }
-          // v55.83-A.6.27.36 — Adjustments tab: view requires Inventory; creating requires Edit Inventory (handled in component)
-          if (st.id === 'adjustments' &&
-              !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
-            return null;
-          }
-          var isActive = subtab === st.id;
-          return (
-            <button key={st.id}
-              onClick={function () { if (available) setSubtab(st.id); }}
-              disabled={!available}
-              title={available ? st.desc : (st.id === 'pnl' ? 'Requires P&L permission' : st.id === 'layers' ? 'Requires cost access' : 'Coming in Stage ' + st.stage)}
-              className={'px-3 py-1.5 rounded-md text-xs font-bold transition '
-                + (isActive
-                  ? 'bg-indigo-600 text-white shadow'
-                  : available
-                    ? 'text-slate-700 hover:bg-white'
-                    : 'text-slate-400 cursor-not-allowed')}>
-              {st.label}
-              {!available && <span className="ml-1 text-[9px] opacity-60">· Stage {st.stage}</span>}
-            </button>
-          );
-        })}
+          return SUBTAB_GROUPS.map(function (grp) {
+            var tabsInGroup = SUBTABS.filter(function (st) { return st.group === grp.key; })
+              .map(function (st) { return { st: st, vis: visFor(st) }; })
+              .filter(function (x) { return !x.vis.hidden; });
+            if (tabsInGroup.length === 0) return null;
+            return (
+              <div key={grp.key} className="bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
+                <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-slate-100">
+                  <span className="text-sm">{grp.icon}</span>
+                  <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">{grp.label}</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  {tabsInGroup.map(function (x) {
+                    var st = x.st;
+                    var available = x.vis.available !== false;
+                    var isActive = subtab === st.id;
+                    return (
+                      <button key={st.id}
+                        onClick={function () { if (available) setSubtab(st.id); }}
+                        disabled={!available}
+                        title={available ? st.desc : (st.id === 'pnl' ? 'Requires P&L permission' : st.id === 'layers' ? 'Requires cost access' : 'Coming in Stage ' + st.stage)}
+                        className={'w-full text-left px-2.5 py-2 rounded-md text-xs font-bold transition flex items-center gap-1.5 '
+                          + (isActive
+                            ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-300'
+                            : available
+                              ? 'text-slate-700 hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                              : 'text-slate-400 cursor-not-allowed')}>
+                        <span>{st.label}</span>
+                        {!available && <span className="ml-auto text-[9px] opacity-60">Stage {st.stage}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          });
+        })()}
       </div>
 
       {/* Subtab content */}
@@ -415,16 +405,19 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {subtab === 'pnl' && (
         <InventoryPnL skus={skus} toast={toast} />
       )}
-      {/* v55.83-A.6.27.9 — Stage E + F live */}
-      {subtab === 'adjustments' && (
-        <AdjustmentsManager skus={skus} warehouses={warehouses} userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
-      )}
+      {/* v55.83-T — System B AdjustmentsManager (writes inv_layers) REMOVED.
+          The live Adjustments tab now renders ONLY System A's InventoryAdjustments
+          (see subtab === 'adjustments' below), so adjustments hit the same engine
+          as receiving, sales, and the dashboard. */}
       {subtab === 'reports' && (
         <InventoryReports skus={skus} warehouses={warehouses} toast={toast} />
       )}
       {/* v55.83-A.6.27.51 — Inventory Overview (new default landing) */}
       {subtab === 'overview' && (
         <InventoryOverview userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {subtab === 'mixcomposition' && (
+        <InventoryMixComposition userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
       {/* v55.83-A.6.27.22 — Phase 1 Build 1: Master Lists admin */}
       {subtab === 'masterlists' && (
@@ -459,6 +452,14 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         <InventoryAdjustments userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
+      {subtab === 'stockcount' && (
+        <InventoryStockCount userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+
+      {/* v55.83-FW — Bilingual Inventory Report Center (snapshot + virtual mix) */}
+      {subtab === 'reportcenter' && (
+        <InventoryReportCenter userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
       {/* v55.83-A.6.27.62 — Inventory P&L Reports */}
       {subtab === 'pnlreports' && (
         <InventoryPnLReports userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />

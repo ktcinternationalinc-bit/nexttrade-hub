@@ -263,9 +263,27 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (makeConfidential) {
         ticketRow.is_confidential = true;
       }
-      await dbInsert('tickets', ticketRow, myId || null);
+      var newTkt = await dbInsert('tickets', ticketRow, myId || null);
       var logTag = makePrivate ? ' [PRIVATE]' : (makeConfidential ? ' [CONFIDENTIAL]' : (assignedName ? ' → ' + assignedName : ''));
       await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + logTag, 'ticket');
+      // v55.83-IA — if a document was staged on the create form, upload it now that the ticket
+      // row exists (storage path uses the new ticket number; comment links to the new ticket id).
+      // Non-fatal: a failed attachment must not undo the created ticket.
+      if (f.attachFile && newTkt && newTkt.id) {
+        try {
+          var _file = f.attachFile;
+          if (_file.size > 10 * 1024 * 1024) { if (toast) toast.warning('Attachment skipped — file over 10MB.'); }
+          else {
+            var _ext = _file.name.split('.').pop();
+            var _fn = ticketNum + '_' + Date.now() + '.' + _ext;
+            var _up = await supabase.storage.from('ticket-attachments').upload(_fn, _file);
+            if (_up && _up.error) throw _up.error;
+            var _urlData = supabase.storage.from('ticket-attachments').getPublicUrl(_fn);
+            await dbInsert('ticket_comments', { ticket_id: newTkt.id, comment_text: '📎 Attached: ' + _file.name, attachment_url: (_urlData && _urlData.data && _urlData.data.publicUrl) || '', attachment_name: _file.name, is_system: false, created_by: myId }, myId);
+            if (toast) toast.success('Ticket created with attachment ✓');
+          }
+        } catch (_e) { if (toast) toast.error('Ticket created, but attachment upload failed: ' + ((_e && _e.message) || _e)); }
+      }
       // Don't notify anyone on private tickets — the assignee IS the creator.
       // Confidential tickets DO notify the assignees (they need to know).
       if (!makePrivate) {
@@ -549,6 +567,29 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     })();
   };
 
+  // v55.83-HY — reusable file attach. Used by BOTH the dedicated "Attach Document" button in the
+  // ticket detail header AND the comment composer's paperclip, so there is always an obvious way
+  // to add a document to a ticket. Uploads to the ticket-attachments storage bucket and records it
+  // as an attachment comment.
+  const attachFileToTicket = async (file) => {
+    if (!file || !sel) return;
+    if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); return; }
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
+      const { error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
+      const url = (urlData && urlData.publicUrl) || '';
+      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
+      await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
+      loadComments(sel.id);
+      if (toast) toast.success('File attached ✓');
+    } catch (err) { toast ? toast.error('Upload failed: ' + ((err && err.message) || err)) : alert('Upload failed'); }
+    setUploading(false);
+  };
+
   const addComment = async () => {
     if (!f.comment || !sel) return;
     // v55.44 — hard guard against rapid re-taps. If a save is already in
@@ -817,12 +858,25 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold hover:bg-slate-50">
           ← Back
         </button>
-        {canDeleteTicket(sel) && (
+        <div className="flex items-center gap-2">
+          {/* v55.83-HY — dedicated, always-visible Attach Document control in the detail header
+              (Max couldn't find the paperclip buried in the comment box). Same upload as comments. */}
+          <label title="Attach a document, image, or file to this ticket (max 10MB)"
+            className={'px-3 py-1 rounded border text-xs font-bold cursor-pointer transition ' + (uploading ? 'bg-slate-200 text-slate-400 border-slate-200' : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700')}>
+            {uploading ? '⏳ Uploading…' : '📎 Attach Document'}
+            <input type="file" className="hidden" disabled={uploading} onChange={async (e) => {
+              const file = e.target.files && e.target.files[0];
+              if (file) await attachFileToTicket(file);
+              e.target.value = '';
+            }} />
+          </label>
+          {canDeleteTicket(sel) && (
           <button onClick={() => deleteTicket(sel)}
             className="px-3 py-1 rounded border border-red-300 text-red-600 text-xs font-semibold hover:bg-red-50 transition">
             🗑 Delete Ticket
           </button>
-        )}
+          )}
+        </div>
       </div>
 
       {/* TICKET HEADER */}
@@ -1082,6 +1136,68 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             {sel.order_number && <div className="text-[10px] text-slate-500 mt-1">Order #{sel.order_number}</div>}
             {sel.client_name && <div className="text-[10px] text-slate-500">Client: {sel.client_name}</div>}
           </div>
+
+          {/* VISIBILITY — change a ticket to Confidential/Private AFTER creation.
+              v55.83-A (Max Jun 1 2026). Rules mirror creation:
+                • Only super_admin can set or keep PRIVATE (creator-only).
+                • CONFIDENTIAL (creator + assignees) is mutually exclusive with Private.
+                • Anyone who can edit the ticket can set Normal/Confidential. */}
+          {canEditTicketContent(sel) && (
+            <div className="rounded-lg p-3 bg-slate-100">
+              <div className="text-[10px] text-slate-500 font-semibold">Visibility / مستوى الخصوصية</div>
+              <select
+                value={sel.is_private ? 'private' : (sel.is_confidential ? 'confidential' : 'normal')}
+                onChange={async (e) => {
+                  var choice = e.target.value;
+                  var wantPrivate = choice === 'private';
+                  var wantConfidential = choice === 'confidential';
+                  if (wantPrivate && !isSuperAdmin) {
+                    if (toast) toast.error('Only a super admin can make a ticket private / المشرف الأعلى فقط');
+                    return;
+                  }
+                  var curr = sel.is_private ? 'private' : (sel.is_confidential ? 'confidential' : 'normal');
+                  if (choice === curr) return;
+                  var patch = {
+                    is_private: wantPrivate,
+                    is_confidential: wantConfidential,
+                    private_to: wantPrivate ? myId : null,
+                    updated_at: new Date().toISOString(),
+                    updated_by: myId
+                  };
+                  var prev = sel;
+                  setSel({ ...sel, is_private: wantPrivate, is_confidential: wantConfidential, private_to: wantPrivate ? myId : null });
+                  try {
+                    await dbUpdate('tickets', sel.id, patch, myId);
+                    try {
+                      var myName2 = getUserName(myId) || 'Unknown';
+                      var label = wantPrivate ? 'PRIVATE (creator only)' : (wantConfidential ? 'CONFIDENTIAL (creator + assignees)' : 'NORMAL');
+                      var vText = '🔒 Visibility changed to ' + label + ' (by ' + myName2 + ')';
+                      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: vText, is_system: true, created_by: myId }, myId);
+                    } catch (vAuditErr) { try { console.warn('[audit] visibility comment failed:', vAuditErr && vAuditErr.message); } catch(_) {} }
+                    try { await logActivity(myId, 'Changed visibility of ' + (sel.ticket_number || sel.title) + ' to ' + choice, 'ticket'); } catch(_) {}
+                    if (toast) toast.success('Visibility updated ✓');
+                    try { loadComments(sel.id); } catch(_) {}
+                    if (onReload) onReload();
+                  } catch (vErr) {
+                    setSel(prev);
+                    var vMsg = vErr && vErr.message ? vErr.message : String(vErr);
+                    var vHint = '';
+                    if (/column .* does not exist/i.test(vMsg)) {
+                      vHint = ' — Missing column. Ensure tickets has is_private, is_confidential, private_to.';
+                    }
+                    if (toast) toast.error('Visibility save failed: ' + vMsg + vHint);
+                    else alert('Visibility save failed: ' + vMsg + vHint);
+                  }
+                }}
+                className="text-sm font-bold bg-transparent border-0 cursor-pointer outline-none w-full text-slate-900">
+                <option value="normal">🌐 Normal — team can see</option>
+                <option value="confidential">🟠 Confidential — creator + assignees</option>
+                {(isSuperAdmin || sel.is_private) && <option value="private">🔒 Private — creator only</option>}
+              </select>
+              {sel.is_private && <div className="text-[10px] text-blue-700 mt-1 font-semibold">Only you can see this ticket.</div>}
+              {sel.is_confidential && <div className="text-[10px] text-orange-700 mt-1 font-semibold">Visible to you and assignees only.</div>}
+            </div>
+          )}
         </div>
 
         {/* LAST UPDATED INFO */}
@@ -1196,24 +1312,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           onSubmit={addComment}
           uploading={uploading}
           submitting={submittingComment}
-          onAttach={async (file) => {
-            if (!file || !sel) return;
-            if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); return; }
-            setUploading(true);
-            try {
-              const ext = file.name.split('.').pop();
-              const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
-              const { data: upData, error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
-              if (upErr) throw upErr;
-              const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
-              const url = urlData?.publicUrl || '';
-              await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
-              await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
-              loadComments(sel.id);
-              if (toast) toast.success('File attached ✓');
-            } catch (err) { toast ? toast.error('Upload failed: ' + err.message) : alert('Upload failed: ' + err.message); }
-            setUploading(false);
-          }}
+          onAttach={attachFileToTicket}
         />
       </div>
 
@@ -1385,6 +1484,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         <div className="col-span-2"><label className="text-[10px] font-semibold">Client</label>
           <input list="tkt-cl" value={f.clientName||''} onChange={e=>{ const m=customers.find(c=>c.name===e.target.value); setF({...f,clientName:e.target.value,customerId:m?m.id:''}); }} className="w-full px-3 py-2 rounded border text-sm" />
           <datalist id="tkt-cl">{customers.map(c=><option key={c.id} value={c.name}/>)}</datalist></div>
+        {/* v55.83-IA — attach a document while creating the ticket. The file is staged here and
+            uploaded after the ticket row exists (storage path uses the new ticket number). */}
+        <div className="col-span-2"><label className="text-[10px] font-semibold">📎 Attach a document (optional)</label>
+          <input type="file" onChange={e=>setF({...f, attachFile: (e.target.files && e.target.files[0]) || null})} className="w-full px-3 py-2 rounded border text-sm bg-white" />
+          {f.attachFile && <p className="text-[10px] text-blue-600 mt-1 font-semibold">Will attach: {f.attachFile.name}</p>}
+          <p className="text-[10px] text-slate-500 mt-0.5">Max 10MB. Uploaded right after the ticket is created.</p></div>
         {/* v55.82-V — PRIVATE TICKETS for super_admin (Max May 12 2026).
             Only super_admin sees this toggle. When checked: the ticket is
             visible only to the creator + the creator's AI session. Other

@@ -66,7 +66,7 @@ var paidOther = W.auditPackage({ pkg: rtm, lines: [line(bill('t4', 'Fast Truckin
 ok('5c: another (older) bill of the same vendor on the release with no date to compare = WARNING, not a permanent block', paidOther.pass && codes(paidOther).indexOf('DUP_RELEASE') >= 0);
 // gap 6 — NextTrade wires do not wait for "proof"
 ok('6: proof of vendor payments is only asked from RTM-type companies; NextTrade wires finish when the bank line is attached',
-  /* v55.83-SQ realign — an ordinary NextTrade wire still has no proof step; a REQUEST drawn from a transfer (funding_txn_id) expects copies from either company */ S.indexOf("var paidThrough = pkg.payee_kind === 'service_provider' || (!!pkg.funding_txn_id && pkg.payee_kind !== 'vendor');") > 0 && S.indexOf("var pt = p.payee_kind === 'service_provider' || (!!p.funding_txn_id && p.payee_kind !== 'vendor');") > 0 && W.packageStatus({ status: 'attached' }, 'h', 0) === 'complete');
+  S.indexOf("var paidThrough = pkg.payee_kind === 'service_provider';") > 0 && S.indexOf("var pt = p.payee_kind === 'service_provider';") > 0 && W.packageStatus({ status: 'attached' }, 'h', 0) === 'complete');
 // gap 7 — a failed save never leaves a broken wire
 ok('7a: the RI column is checked BEFORE anything is written', S.indexOf("db.from('wire_package_lines').select('marked_paid_via').limit(1)") > 0 && S.indexOf('Run sql/v55-83-RI-wire-simple.sql in Supabase first') > 0);
 ok('7b: a new wire whose bills fail to save is removed (no empty drafts); a changed wire adds → updates → removes, never emptied first',

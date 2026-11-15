@@ -1,37 +1,38 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// v55.83-GV — LEGACY ROUTE DISABLED (410 Gone).
+//
+// This route used to stamp bank_transactions.matched_invoice_id (POST) and
+// clear it (DELETE). That was accounting-unsafe: it never created or voided
+// accounting_invoice_payments / payment_matches, never recomputed invoice
+// balances, never wrote an audit row, and never queued a Wave payment. A
+// transaction looked matched/unmatched in the Bank tab while the books posted
+// nothing — silent corruption.
+//
+// Matching + unmatching now live ONLY in Accounting -> Bank Review & Matching,
+// which runs the accounting-safe engine (payment_matches +
+// accounting_invoice_payments + balance recompute + audit + Wave sync queue +
+// silo selection). This route is hard-blocked so nothing — UI, scripts, or
+// stale clients — can mutate bank_transactions through it again.
 
-// POST: match a transaction to an invoice
-export async function POST(req) {
-  try {
-    const { transaction_id, invoice_id } = await req.json();
-    const { error } = await supabase
-      .from('bank_transactions')
-      .update({ matched_invoice_id: invoice_id, matched_at: new Date().toISOString() })
-      .eq('id', transaction_id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true });
-  } catch (e) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+var GONE_MSG = 'Legacy Plaid match route disabled. Use accounting-safe Bank Review & Matching (Accounting -> Bank Review) for matching and unmatching.';
+
+function gone() {
+  return NextResponse.json({ error: GONE_MSG, disabled: true }, { status: 410 });
 }
 
-// DELETE: unmatch a transaction
-export async function DELETE(req) {
-  try {
-    const { transaction_id } = await req.json();
-    const { error } = await supabase
-      .from('bank_transactions')
-      .update({ matched_invoice_id: null, matched_at: null })
-      .eq('id', transaction_id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true });
-  } catch (e) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+export async function POST() {
+  return gone();
+}
+
+export async function DELETE() {
+  return gone();
+}
+
+export async function GET() {
+  return gone();
+}
+
+export async function PUT() {
+  return gone();
 }

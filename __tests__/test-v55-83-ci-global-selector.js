@@ -8,8 +8,7 @@ ok(/<WaveBusinessFilter onChange=\{function \(b\) \{ setWaveKey/.test(at),'globa
 ['acct-dash','acct-arh','acct-led','acct-cus','acct-inv','acct-pf','acct-rev'].forEach(function(k){
   ok(new RegExp("key=\\{'"+k+"\\|' \\+ waveKey\\}").test(at), k+' remounts on business change');
 });
-// v55.83-SO realign: the jump goes through goFrom so the Back button can return to the dashboard.
-ok(/onOpenBankReview=\{function \(\) \{ goFrom\('review'\); \}\}/.test(at),'dashboard wired to open Bank Review');
+ok(/onOpenBankReview=\{function \(\) \{ setSub\('review'\); \}\}/.test(at),'dashboard wired to open Bank Review');
 var dash=p('src/components/AccountingDashboard.jsx');
 ok(/Open Bank Review/.test(dash) && /props\.onOpenBankReview/.test(dash),'dashboard has Open Bank Review button');
 // list tabs read the global active business, no in-tab filter

@@ -10,8 +10,6 @@
 //    progress bar of the steps.
 import React, { useState, useEffect, useRef } from 'react';
 import { fillToAmount, fillVendors } from '../lib/wire-fill'; // v55.83-SC — build a wire for an amount
-import { requestFit } from '../lib/wire-funding';
-import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; // v55.83-SQ — the two printable copies of a request // v55.83-SP — a request drawn from a transfer never goes over it
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
@@ -273,9 +271,10 @@ function PastWireForm(p) {
     <div className="text-[12px] mb-2" style={{ color: SUB }}>Tick the bills it paid and roughly when it was sent. The Hub then finds the real money-out in the bank (a week either side; up to $100 more is accepted as an extra charge on the bill) and records those bills PAID. No signatures — it is kept in the history with your reason.</div>
     <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>1 · Who got the money?</div>
     <div className="flex gap-2 flex-wrap mb-2">
+      {(payees.parties || []).map(function (x) { var k = x.kind === 'affiliate' ? 'affiliate' : 'service_provider'; var on = past.kind === k && past.payee === x.name;
+        return <button key={x.name} onClick={function () { p.onPick(k, x.name); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: on ? '#0f766e' : '#ffffff', color: on ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>{'🏢 ' + x.name}</button>; })}
       <button onClick={function () { p.onPick('vendor', ''); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: past.kind === 'vendor' ? '#0f766e' : '#ffffff', color: past.kind === 'vendor' ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>🧾 A vendor directly</button>
     </div>
-    <div className="text-[12px] mb-2 rounded-lg p-2" style={{ color: '#78350f', background: '#fffbeb', border: '1px solid #fcd34d' }}>{'A past payment through ' + (payees.parties || []).map(function (x) { return x.name; }).join(' or ') + ' is recorded as a request from the transfer that funded it, with two signatures: ＋ New wire → pick the company → pick the transfer → tick the bills. The bills are dated the day that transfer left the bank.'}</div>
     {past.kind && <div>
       <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>2 · The bills that wire paid (change the amount for a part payment)</div>
       {!past.bills ? <div className="text-[12px]" style={{ color: MUTED }}>Loading the open bills…</div> : past.bills.length === 0 ? <div className="text-[12px]" style={{ color: SUB }}>No open bills for this choice.</div>
@@ -320,8 +319,6 @@ export default function WirePackagesPanel(props) {
   var a16 = useState({}); var ovrDraft = a16[0]; var setOvrDraft = a16[1];
   var a17 = useState(null); var delAsk = a17[0]; var setDelAsk = a17[1];
   var a19 = useState(null); var dateAsk = a19[0]; var setDateAsk = a19[1]; // RZ — correcting the sent date
-  var a22 = useState(null); var vCopy = a22[0]; var setVCopy = a22[1];     // SQ — attaching the company's wire copy for one vendor
-  var a21 = useState(null); var feeAsk = a21[0]; var setFeeAsk = a21[1];   // SP — changing the service fee of a sent request
   var a20 = useState(null); var past = a20[0]; var setPast = a20[1];         // RZ — recording a wire sent before the Hub had wires
   var a18 = useState(null); var viewLine = a18[0]; var setViewLine = a18[1]; // RY — the bill opened from the wire // v55.83-RO — the delete / undo question, inline // v55.83-RL — reasons being typed, per check
 
@@ -334,7 +331,7 @@ export default function WirePackagesPanel(props) {
   }
   function load() { api({ action: 'list' }).then(function (j) { if (j && j.ok) { setList(j.packages || []); (j.auto_matched || []).forEach(function (m) { toast.success('🔗 ' + m.label + ' found in the bank — ' + m.bills_paid + ' bill(s) now PAID' + (m.bank_fee ? ' (extra charge $' + fmt(m.bank_fee) + ')' : '') + '.'); }); } else { setList([]); if (j && j.error) { toast.error(j.error); } } }).catch(function () { setList([]); }); }
   function open(id) {
-    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null); setDateAsk(null); setFeeAsk(null); setVCopy(null);
+    setBusy(true); setNote(''); setCands(null); setOvr(''); setRelDraft({}); setDelAsk(null); setDateAsk(null);
     api({ action: 'get', id: id }).then(function (j) {
       if (j && j.ok) { setDet(j); setEd(null); setProofF({ ticks: {}, date: '', ref: '', file: null }); if (j.package.raw_status === 'sent') { loadCands(id); } }
       else { toast.error((j && j.error) || 'Could not open the wire.'); }
@@ -368,40 +365,19 @@ export default function WirePackagesPanel(props) {
     setBusy(true);
     api({ action: 'payees' }).then(function (j) { if (j && j.ok) { setPayees(j); fn(j); } else { toast.error((j && j.error) || 'Could not load who wires can go to.'); } }).finally(function () { setBusy(false); });
   }
-  function startNew() { withPayees(function () { setDet(null); setQ(''); setEd({ id: null, kind: null, payee: '', fee: '', fee_note: '', memo: '', picks: {}, bills: null, fundId: null, fund: null, planned: '' }); }); }
+  function startNew() { withPayees(function () { setDet(null); setQ(''); setEd({ id: null, kind: null, payee: '', fee: '', fee_note: '', memo: '', picks: {}, bills: null }); }); }
   function startChange(existing) {
     withPayees(function () {
       var p = existing.package; var picks = {}; var info = {};
       existing.lines.forEach(function (l) { picks[l.bill_id] = String(l.amount); info[l.bill_id] = l; });
       setQ('');
-      setEd({ id: p.id, kind: p.payee_kind, payee: p.payee_kind === 'vendor' ? '' : p.payee_name, fee: p.fee_amount ? String(p.fee_amount) : '', fee_note: p.fee_note || '', memo: p.memo || '', picks: picks, bills: null, lineInfo: info, fundId: p.funding_txn_id || null, fund: null, planned: p.planned_send_date || '' });
+      setEd({ id: p.id, kind: p.payee_kind, payee: p.payee_kind === 'vendor' ? '' : p.payee_name, fee: p.fee_amount ? String(p.fee_amount) : '', fee_note: p.fee_note || '', memo: p.memo || '', picks: picks, bills: null, lineInfo: info });
       loadBills(p.payee_kind, p.payee_kind === 'vendor' ? '' : p.payee_name, p.id);
-      if (p.payee_kind !== 'vendor') { loadFunding(p.payee_kind, p.payee_name); }
     });
   }
   function pickPayee(kind, name) {
-    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [], fundId: null, fund: null }));
+    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [] }));
     loadBills(kind, name, ed.id);
-    if (kind !== 'vendor') { loadFunding(kind, name); }
-  }
-  // v55.83-SP — the transfers already sent to this company that still have money on them
-  function loadFunding(kind, payee) {
-    api({ action: 'funding_lines', payee_name: payee }).then(function (j) {
-      setEd(function (e) {
-        if (!e || e.kind !== kind || String(e.payee || '') !== String(payee || '')) { return e; }
-        return Object.assign({}, e, { fund: (j && j.ok) ? (j.lines || []) : [], fundErr: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the transfers.') });
-      });
-    });
-  }
-  function fundLine() { return (ed && ed.fundId && (ed.fund || []).filter(function (x) { return x.id === ed.fundId; })[0]) || null; }
-  function fillToLeft() {
-    var fl = fundLine(); if (!fl) { return; }
-    var f = fillToAmount(ed.bills || [], String(fl.remaining), { fee: ed.fee, vendors: ed.fillVendors || [] });
-    if (!f.ok) { setEd(Object.assign({}, ed, { target: String(fl.remaining), fillMsg: { bad: true, text: f.error } })); return; }
-    var text = f.count + ' bill(s) chosen, oldest due first — bills $' + fmt(f.bills_total) + (f.fee > 0 ? ' + service fee $' + fmt(f.fee) : '') + ' = $' + fmt(f.total) + ' of the $' + fmt(fl.remaining) + ' left on the transfer.'
-      + (f.partial ? ' ' + f.partial.vendor_name + ' ' + (f.partial.bill_number || '') + ' is paid in part: $' + fmt(f.partial.paid) + ' of $' + fmt(f.partial.of) + '.' : '')
-      + (f.short > 0.005 ? ' Not enough validated bills yet: $' + fmt(f.short) + ' stays on the transfer, waiting for bills (or raise the service fee to use it).' : '');
-    setEd(Object.assign({}, ed, { target: String(fl.remaining), picks: f.picks, fillMsg: { bad: false, text: text } }));
   }
   function loadBills(kind, payee, pkgId) {
     api({ action: 'open_bills', payee_kind: kind, payee_name: payee, package_id: pkgId }).then(function (j) {
@@ -468,15 +444,7 @@ export default function WirePackagesPanel(props) {
     if (bad) { toast.error('The amount for ' + bad + ' is not a number — type it like 1250.00 (or untick the bill).'); return; }
     var feeV = String(ed.fee || '').replace(/,/g, '').trim();
     if (ed.kind === 'service_provider' && feeV && !(Number(feeV) >= 0)) { toast.error('The fee is not a number — type it like 250.00, or leave it empty.'); return; }
-    var payload = { action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind !== 'vendor' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines };
-    if (ed.kind !== 'vendor') { // v55.83-SP — only sent when it applies, so ordinary wires are saved exactly as before
-      if (ed.fundId || ed.id) { payload.funding_txn_id = ed.fundId || null; }
-      if (ed.planned || ed.id) { payload.planned_send_date = ed.planned || null; }
-      var flS = fundLine();
-      if (flS) { var sumS = 0; lines.forEach(function (l) { sumS += l.amount; }); var fitS = requestFit(flS.remaining, sumS, Number(feeV) || 0);
-        if (!fitS.fits) { toast.error('This request is $' + fmt(fitS.total) + ' but only $' + fmt(flS.remaining) + ' is left on the transfer — $' + fmt(fitS.over_by) + ' too much. Lower a bill amount or the fee.'); return; } }
-    }
-    act(payload,
+    act({ action: 'save_draft', id: ed.id, payee_kind: ed.kind, payee_name: ed.payee, fee_amount: ed.kind !== 'vendor' ? (Number(feeV) || 0) : 0, fee_note: ed.fee_note, memo: ed.memo, lines: lines },
       function (j) { return j.audit ? (j.audit.pass ? '✅ Saved and checked — it is ready for the 1st signature.' : '⛔ Saved — the check found ' + j.audit.blocks + ' problem(s) to fix. See the red box.') : 'Saved.'; },
       function (j) { setEd(null); open(j.id); });
   }
@@ -499,33 +467,6 @@ export default function WirePackagesPanel(props) {
     upload(sendF.file, det.package.id).then(function (u) {
       return act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date, bank_reference: sendF.ref, proof_path: u.path, proof_name: u.name }, '📤 Marked SENT. When the money-out shows in the bank feed, attach it here.');
     }).catch(function (e) { toast.error((e && e.message) || 'Upload failed.'); setBusy(false); });
-  }
-  // v55.83-SP — a request drawn from a transfer: no bank confirmation (nothing leaves our bank); the bills are recorded paid on the transfer
-  function sendRequest() {
-    if (!sendF.date) { toast.error('Pick the date the request went to ' + det.package.payee_name + '.'); return; }
-    act({ action: 'mark_sent', id: det.package.id, sent_date: sendF.date }, function (j) { return '📤 Request sent — ' + j.bills_paid + ' bill payment(s) recorded on the transfer, dated ' + j.paid_date + '. $' + fmt(j.left_on_transfer) + ' left on the transfer.'; });
-  }
-  // v55.83-SQ — print a copy of the request: for the company (vendor, bills, total) or ours (with the bill breakdown)
-  function printCopy(kind) {
-    var w = null; try { w = window.open('', '_blank'); } catch (eW) { w = null; }
-    if (!w) { toast.error('The browser blocked the print window. Allow pop-ups for this site and press the button again.'); return; }
-    var html = requestCopyHtml(requestCopyModel(det.package, det.lines, det.audit, kind, new Date().toISOString().substring(0, 16).replace('T', ' ')));
-    w.document.open(); w.document.write(html); w.document.close();
-    setTimeout(function () { try { w.focus(); w.print(); } catch (eP) { /* the page is open; the person can print from the browser */ } }, 300);
-  }
-  // v55.83-SQ — the company's wire copy for ONE vendor of the request
-  function saveVendorCopy() {
-    if (!vCopy.date) { setVCopy(Object.assign({}, vCopy, { err: 'The date ' + det.package.payee_name + ' wired the vendor is required.' })); return; }
-    if (!vCopy.file) { setVCopy(Object.assign({}, vCopy, { err: 'Attach the copy of the wire (PDF or picture).' })); return; }
-    setBusy(true);
-    upload(vCopy.file, det.package.id).then(function (u) {
-      return act({ action: 'rtm_proof', id: det.package.id, line_ids: vCopy.line_ids, paid_date: vCopy.date, reference: vCopy.refText || vCopy.ref, proof_path: u.path, proof_name: u.name }, function () { return '📎 Wire copy saved for ' + vCopy.vendor + ' (' + vCopy.ref + ').'; }, function () { setVCopy(null); open(det.package.id); });
-    }).catch(function (e) { setBusy(false); setVCopy(function (v0) { return v0 ? Object.assign({}, v0, { err: (e && e.message) || 'The file could not be uploaded.' }) : v0; }); });
-  }
-  function saveFee() {
-    if (String(feeAsk.reason || '').trim().length < 5) { setFeeAsk(Object.assign({}, feeAsk, { err: 'Say why the service fee changes (at least 5 characters).' })); return; }
-    act({ action: 'change_fee', id: det.package.id, fee_amount: feeAsk.fee, reason: feeAsk.reason }, function (j) { return 'Service fee changed from $' + fmt(j.from) + ' to $' + fmt(j.to) + '. $' + fmt(j.left_on_transfer) + ' left on the transfer.'; },
-      function () { setFeeAsk(null); open(det.package.id); }).then(function (j) { if (!(j && j.ok)) { setFeeAsk(function (f0) { return f0 ? Object.assign({}, f0, { err: (j && j.error) || 'Not saved.' }) : f0; }); } });
   }
   // v55.83-RZ — look in the bank feed now (the Hub also does this on every bank sync / statement import / opening Wires)
   function matchNow() {
@@ -623,41 +564,6 @@ export default function WirePackagesPanel(props) {
         <button onClick={function () { pickPayee('vendor', ''); }} className="rounded-xl px-4 py-3 text-left" style={{ minWidth: 200, background: ed.kind === 'vendor' ? '#0f766e' : '#ffffff', color: ed.kind === 'vendor' ? '#ffffff' : INK, border: '2px solid ' + (ed.kind === 'vendor' ? '#0f766e' : '#cbd5e1') }}>
           <div className="text-[14px] font-extrabold">🧾 A vendor directly</div><div className="text-[11px]" style={{ opacity: 0.85 }}>we wire the vendor ourselves · one vendor</div></button>
       </div>
-      {/* v55.83-SP — where the money comes from: a transfer already sent, or a new wire */}
-      {ed.kind && ed.kind !== 'vendor' && <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', border: '2px solid ' + (ed.fundId ? '#0f766e' : '#cbd5e1') }}>
-        <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Where does the money come from?'}</div>
-        {!ed.fund ? <div className="text-[12px]" style={{ color: MUTED }}>{ed.fundErr ? '⛔ ' + ed.fundErr : 'Looking for transfers already sent to ' + ed.payee + '…'}</div> : <div>
-          {ed.fund.length === 0 && <div className="text-[12px] mb-1" style={{ color: SUB }}>{'No transfer to ' + ed.payee + ' has money left on it. To use one, mark the bank line “sent to ' + ed.payee + '” in All Transactions — or continue below with a new wire.'}</div>}
-          {ed.fund.length > 0 && <div className="text-[12px] mb-2 font-bold" style={{ color: '#92400e' }}>{'💰 ' + ed.fund.length + ' transfer(s) to ' + ed.payee + ' still have money waiting for bills. Pick one and this becomes a request to ' + ed.payee + ' for that money.'}</div>}
-          <div className="flex flex-col gap-1.5">
-            {ed.fund.map(function (x) { var on = ed.fundId === x.id;
-              return <button key={x.id} onClick={function () { setEd(Object.assign({}, ed, { fundId: on ? null : x.id, fillMsg: null })); }} className="rounded-lg px-3 py-2 text-left" style={{ background: on ? '#ecfdf5' : '#f8fafc', color: INK, border: '2px solid ' + (on ? '#0f766e' : '#e2e8f0') }}>
-                <div className="flex gap-3 items-center flex-wrap text-[12px]">
-                  <span className="font-extrabold">{(on ? '◉ ' : '○ ') + x.date + ' · transfer $' + fmt(x.amount)}</span>
-                  <span style={{ color: SUB }}>{'already used $' + fmt(x.used) + (x.requests.length ? ' (' + x.requests.map(function (r) { return r.label; }).join(', ') + ')' : '')}</span>
-                  <span className="font-extrabold" style={{ color: '#065f46' }}>{'left $' + fmt(x.remaining)}</span>
-                  {x.planned > 0 && <span style={{ color: '#92400e' }}>{'· $' + fmt(x.planned) + ' on requests not sent yet'}</span>}
-                </div>
-                <div className="text-[11px]" style={{ color: MUTED }}>{String(x.name || '').substring(0, 90)}</div></button>; })}
-            <button onClick={function () { setEd(Object.assign({}, ed, { fundId: null, fillMsg: null })); }} className="rounded-lg px-3 py-2 text-left text-[12px] font-extrabold" style={{ background: !ed.fundId ? '#eff6ff' : '#f8fafc', color: INK, border: '2px solid ' + (!ed.fundId ? '#1d4ed8' : '#e2e8f0') }}>{(!ed.fundId ? '◉ ' : '○ ') + 'A new wire from our bank (not sent yet) — works as before'}</button>
-          </div>
-          {fundLine() && (function () { var fl = fundLine(); var fit = requestFit(fl.remaining, billsSum, feeN);
-            return <div className="mt-2 rounded-lg p-2" style={{ background: fit.fits ? '#ecfdf5' : '#fef2f2', border: '1px solid ' + (fit.fits ? '#6ee7b7' : '#fca5a5') }}>
-              <div className="flex gap-4 flex-wrap text-[12px] font-bold" style={{ color: INK }}>
-                <span>{'Transfer $' + fmt(fl.amount)}</span><span>{'− already used $' + fmt(fl.used)}</span>
-                <span>{'− this request $' + fmt(fit.total) + ' (bills $' + fmt(fit.bills) + ' + service fee $' + fmt(fit.fee) + ')'}</span>
-                <span className="font-extrabold" style={{ color: fit.fits ? '#065f46' : '#b91c1c' }}>{fit.fits ? (fit.exact ? '= $0.00 left — the transfer is fully used ✓' : '= $' + fmt(fit.left_after) + ' left, waiting for bills') : '⛔ $' + fmt(fit.over_by) + ' more than the transfer — lower a bill amount or the fee'}</span>
-              </div>
-              <div className="flex gap-2 items-center flex-wrap mt-1.5">
-                <Btn color="#0f766e" onClick={fillToLeft} disabled={busy || !ed.bills}>{'⚡ Fill to the $' + fmt(fl.remaining) + ' that is left'}</Btn>
-                <span className="text-[11px]" style={{ color: SUB }}>Validated bills, oldest due first, the last one paid in part. The bills are recorded paid on {fl.date} — the day the money left our bank.</span>
-              </div></div>; })()}
-          <div className="mt-2 flex gap-2 items-center flex-wrap">
-            <label className="text-[12px] font-bold" style={{ color: SUB }}>Planned for (optional) <input type="date" value={ed.planned || ''} onChange={function (e) { setEd(Object.assign({}, ed, { planned: e.target.value })); }} className={inp} style={inpS} /></label>
-            <span className="text-[11px]" style={{ color: MUTED }}>A label only — nothing is sent or recorded paid on that date by itself.</span>
-          </div>
-        </div>}
-      </div>}
       {/* step 2 */}
       {ed.kind && ed.bills && <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
         <div className="flex gap-2 items-center flex-wrap">
@@ -727,7 +633,7 @@ export default function WirePackagesPanel(props) {
             <input value={ed.fee} onChange={function (e) { setEd(Object.assign({}, ed, { fee: e.target.value })); }} placeholder="0" className={inp} style={Object.assign({ width: 90 }, inpS)} />
             {feeN > 0 && <input value={ed.fee_note} onChange={function (e) { setEd(Object.assign({}, ed, { fee_note: e.target.value })); }} placeholder="what the fee is for" className={inp} style={Object.assign({ width: 170 }, inpS)} />}</span>}
           <div className="flex-1" />
-          <div className="text-[15px] font-extrabold" style={{ color: INK }}>{(ed.fundId ? 'This request: $' : 'Total to wire: $') + fmt(billsSum + feeN)}</div>
+          <div className="text-[15px] font-extrabold" style={{ color: INK }}>Total to wire: ${fmt(billsSum + feeN)}</div>
           <Btn big color="#0f766e" onClick={saveWire} disabled={busy || !picksN}>{busy ? 'Saving & checking…' : '💾 Save & check →'}</Btn>
         </div>
       </div>}
@@ -781,14 +687,6 @@ export default function WirePackagesPanel(props) {
           : <div className="flex gap-2 items-center flex-wrap"><input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder={A.ai_ok === true ? 'what you checked (optional)' : 'what you checked (required)'} className={inp} style={Object.assign({ flex: '1 1 280px' }, inpS)} />
             <Btn big color="#047857" onClick={sign} disabled={busy}>{'✍ I verified it — sign as ' + who}</Btn>
             {(function () { var mine = A.my_reviewed || []; var n = det.lines.filter(function (l) { return mine.indexOf(l.bill_id) >= 0; }).length; return <span className="text-[12px] font-extrabold" style={{ color: n === det.lines.length ? '#065f46' : '#b45309' }}>{n === det.lines.length ? '✓ You checked all ' + n + ' bill(s)' : '👁 You checked ' + n + ' of ' + det.lines.length + ' bills — open and check each one below before signing'}</span>; })()}</div>}</div>;
-    } else if (st === 'ready_to_send' && P.funding_txn_id) {
-      nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 Send this request to ' + P.payee_name + ' — $' + fmt(P.total)}</div>
-        <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. The money is already with ' + P.payee_name + (P.funding && P.funding.date ? ' (transfer of ' + P.funding.date + ')' : '') + ' — no wire leaves our bank. When you send, each bill’s payment is recorded against that transfer, dated ' + ((P.funding && P.funding.date) || 'the transfer date') + '.'}</div>
-        {P.planned_send_date && <div className="mb-1 text-[12px]" style={{ color: SUB }}>{'Planned for ' + P.planned_send_date + ' (a label — it does not send by itself).'}</div>}
-        {perms.send ? <div className="flex gap-2 items-center flex-wrap">
-          <label className="text-[12px] font-bold" style={{ color: SUB }}>Request sent on <input type="date" value={sendF.date} onChange={function (e) { setSendF(Object.assign({}, sendF, { date: e.target.value })); }} className={inp} style={inpS} /></label>
-          <Btn big color="#1d4ed8" onClick={sendRequest} disabled={busy}>{'📤 Send request ' + P.label + ' to ' + P.payee_name}</Btn></div>
-          : <div style={{ color: SUB }}>Waiting for someone with “Wires: Send”.</div>}</div>;
     } else if (st === 'ready_to_send') {
       nextBox = <div><div className="mb-1 text-[15px] font-extrabold" style={{ color: '#065f46' }}>{'📤 ' + sendWords(P) + ' — $' + fmt(P.total)}</div>
         <div className="mb-2 font-bold" style={{ color: '#065f46' }}>{'Approved by ' + A.signoff1.name + ' and ' + A.signoff2.name + '. Wire exactly $' + fmt(P.total) + ' to ' + P.payee_name + (P.payee_kind === 'vendor' ? ' (the vendor, directly)' : '') + ' from the bank, then fill this in:'}</div>
@@ -882,57 +780,6 @@ export default function WirePackagesPanel(props) {
       {/* the ONE thing to do now */}
       <div className="rounded-xl p-3 mb-3 text-[13px]" style={{ background: '#f8fafc', border: '2px solid #1e293b' }}>
         <div className="text-[11px] font-extrabold mb-1" style={{ color: MUTED, letterSpacing: 1 }}>NEXT STEP</div>{nextBox}</div>
-
-      {/* v55.83-SP — the transfer this request draws from, and the request vendor by vendor */}
-      {P.funding_txn_id && <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
-        <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'💰 Request ' + P.label + ' — drawn from a transfer to ' + P.payee_name}</div>
-        {!P.funding || P.funding.missing ? <div className="text-[12px] font-bold" style={{ color: '#b91c1c' }}>⛔ The transfer is no longer marked as sent to {P.payee_name}. Mark it again in All Transactions, or change this request.</div>
-          : <div className="flex gap-4 flex-wrap text-[12px] font-bold" style={{ color: INK }}>
-            <span>{'Transfer of ' + P.funding.date + ': $' + fmt(P.funding.amount)}</span>
-            <span style={{ color: SUB }}>{'bills are recorded paid on ' + P.funding.date + (P.sent && P.sent.date ? ' · request sent ' + P.sent.date : (P.planned_send_date ? ' · planned for ' + P.planned_send_date : ''))}</span>
-            <span style={{ color: SUB }}>{'bills paid from it $' + fmt(P.funding.bills) + ' · service fees $' + fmt(P.funding.fees)}</span>
-            <span className="font-extrabold" style={{ color: P.funding.remaining > 0.005 ? '#92400e' : '#065f46' }}>{P.funding.remaining > 0.005 ? '$' + fmt(P.funding.remaining) + ' still unused — waiting for bills' : 'fully used ✓'}</span>
-            {P.funding.fit && <span className="font-extrabold" style={{ color: P.funding.fit.fits ? '#065f46' : '#b91c1c' }}>{P.funding.fit.fits ? 'after this request: $' + fmt(P.funding.fit.left_after) + ' left' : '⛔ this request is $' + fmt(P.funding.fit.over_by) + ' more than what is left — change it'}</span>}
-            {P.funding.other_requests.length > 0 && <span style={{ color: SUB }}>{'also on this transfer: ' + P.funding.other_requests.map(function (r) { return r.label + ' $' + fmt(r.total); }).join(', ')}</span>}
-          </div>}
-        {P.funding && (P.funding.currency_mismatch || []).length > 0 && <div className="mt-2 rounded-lg p-2 text-[12px] font-extrabold" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fca5a5' }}>
-          {'⚠ Currency does not match: the transfer is in ' + P.funding.currency + ' but ' + P.funding.currency_mismatch.map(function (c) { return c.vendor + ' ' + c.bill_number + ' is in ' + c.currency; }).join('; ') + '. Amounts are not converted — check before sending.'}</div>}
-        <div className="mt-2 flex gap-2 flex-wrap items-center">
-          <Btn light onClick={function () { printCopy('payee'); }}>{'🖨 Copy for ' + P.payee_name}</Btn>
-          <Btn light onClick={function () { printCopy('ktc'); }}>🖨 Our copy (bill by bill)</Btn>
-          <span className="text-[11px]" style={{ color: MUTED }}>{'Both carry ' + P.label + ' and a reference per vendor. ' + P.payee_name + '’s copy shows vendors, number of bills and totals only.'}</span>
-        </div>
-        {(P.by_vendor || []).length > 0 && <div className="overflow-x-auto rounded-lg mt-2" style={{ border: '1px solid #e2e8f0' }}><table className="w-full text-[12px]">
-          <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th className="px-2 py-1.5 text-left">Reference</th><th className="px-2 py-1.5 text-left">{'Vendor ' + P.payee_name + ' pays'}</th><th className="px-2 py-1.5 text-right">Bills</th><th className="px-2 py-1.5 text-right">Amount</th><th className="px-2 py-1.5 text-left">{P.payee_name + '’s wire copy'}</th></tr></thead>
-          <tbody style={{ color: INK }}>
-            {P.by_vendor.map(function (v) { return <tr key={v.ref} style={{ borderTop: '1px solid #e2e8f0' }}><td className="px-2 py-1.5 font-extrabold">{v.ref}</td><td className="px-2 py-1.5 font-bold">{v.vendor}{v.partial ? <span className="ml-1 text-[11px]" style={{ color: '#92400e' }}>{'(' + v.partial + ' paid in part)'}</span> : null}</td><td className="px-2 py-1.5 text-right">{v.bills}</td><td className="px-2 py-1.5 text-right font-bold">{'$' + fmt(v.amount)}</td>
-              <td className="px-2 py-1.5">{P.raw_status !== 'attached' ? <span style={{ color: MUTED }}>after the request is sent</span> : <span className="flex gap-2 items-center flex-wrap">
-                {(v.copies || []).map(function (c) { return <button key={c.id} onClick={function () { openFile(c.path); }} className="underline font-bold" style={{ color: '#1d4ed8' }}>{'📎 ' + (c.file_name || 'wire copy') + (c.paid_date ? ' · wired ' + c.paid_date : '')}</button>; })}
-                {(v.waiting_line_ids || []).length === 0 ? <span className="font-extrabold" style={{ color: '#065f46' }}>✓ in</span>
-                  : <span className="flex gap-2 items-center"><span className="font-extrabold" style={{ color: '#92400e' }}>{'⏳ waiting' + ((v.copies_in || 0) > 0 ? ' for ' + v.waiting_line_ids.length + ' of ' + v.bills + ' bills' : '')}</span>
-                    <Btn light onClick={function () { setVCopy({ ref: v.ref, vendor: v.vendor, line_ids: v.waiting_line_ids, date: '', refText: '', file: null, err: '' }); }}>📎 Attach copy</Btn></span>}
-              </span>}</td></tr>; })}
-            <tr style={{ borderTop: '2px solid #cbd5e1', background: '#f8fafc' }}><td className="px-2 py-1.5 font-extrabold" colSpan={3}>{P.payee_name + ' service fee' + (P.fee_note ? ' (' + P.fee_note + ')' : '')}</td><td className="px-2 py-1.5 text-right font-bold">{'$' + fmt(P.fee_amount)}</td><td></td></tr>
-            <tr style={{ background: '#f8fafc' }}><td className="px-2 py-1.5 font-extrabold" colSpan={3}>Request total</td><td className="px-2 py-1.5 text-right font-extrabold">{'$' + fmt(P.total)}</td><td></td></tr>
-          </tbody></table></div>}
-        {vCopy && <div className="rounded-lg p-2 mt-2" style={{ background: '#faf5ff', border: '1px solid #d8b4fe' }}>
-          <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>{'📎 ' + P.payee_name + '’s wire copy for ' + vCopy.vendor + ' — ' + vCopy.ref}</div>
-          <div className="flex gap-2 items-center flex-wrap">
-            <label className="text-[12px] font-bold" style={{ color: SUB }}>Wired on <input type="date" value={vCopy.date} onChange={function (e) { setVCopy(Object.assign({}, vCopy, { date: e.target.value, err: '' })); }} className={inp} style={inpS} /></label>
-            <input value={vCopy.refText} onChange={function (e) { setVCopy(Object.assign({}, vCopy, { refText: e.target.value })); }} placeholder={'their wire reference (optional)'} className={inp} style={Object.assign({ width: 220 }, inpS)} />
-            <label className="text-[12px] font-bold rounded-lg px-2 py-1.5" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer' }}>📎 {vCopy.file ? vCopy.file.name : 'the wire copy (PDF / picture)'}
-              <input type="file" accept="application/pdf,image/*" onChange={function (e) { setVCopy(Object.assign({}, vCopy, { file: e.target.files && e.target.files[0], err: '' })); }} style={{ display: 'none' }} /></label>
-            <Btn color="#7e22ce" onClick={saveVendorCopy} disabled={busy}>Save copy</Btn><Btn light onClick={function () { setVCopy(null); }}>Cancel</Btn></div>
-          {vCopy.err && <div className="mt-1 text-[12px] font-extrabold" style={{ color: '#b91c1c' }}>{'⛔ ' + vCopy.err}</div>}</div>}
-        {P.raw_status === 'attached' && perms.send && !feeAsk && <div className="mt-2"><Btn light onClick={function () { setFeeAsk({ fee: String(P.fee_amount || 0), reason: '', err: '' }); }}>✏ Change the service fee</Btn> <span className="text-[11px]" style={{ color: MUTED }}>No new signatures — a reason is kept in the history.</span></div>}
-        {feeAsk && <div className="rounded-lg p-2 mt-2" style={{ background: '#eff6ff', border: '1px solid #93c5fd' }}>
-          <div className="flex gap-2 items-center flex-wrap">
-            <label className="text-[12px] font-bold" style={{ color: SUB }}>Service fee $ <input value={feeAsk.fee} inputMode="decimal" onChange={function (e) { setFeeAsk(Object.assign({}, feeAsk, { fee: e.target.value, err: '' })); }} className={inp} style={Object.assign({ width: 110 }, inpS)} /></label>
-            <input value={feeAsk.reason} onChange={function (e) { setFeeAsk(Object.assign({}, feeAsk, { reason: e.target.value, err: '' })); }} placeholder="why it changes" className={inp} style={Object.assign({ flex: '1 1 240px' }, inpS)} />
-            <Btn color="#1d4ed8" onClick={saveFee} disabled={busy}>Save fee</Btn><Btn light onClick={function () { setFeeAsk(null); }}>Cancel</Btn></div>
-          {P.funding && !P.funding.missing && <div className="mt-1 text-[11px]" style={{ color: SUB }}>{'Room on the transfer: the fee can be at most $' + fmt((Number(P.fee_amount) || 0) + Math.max(0, P.funding.remaining)) + '.'}</div>}
-          {feeAsk.err && <div className="mt-1 text-[12px] font-extrabold" style={{ color: '#b91c1c' }}>{'⛔ ' + feeAsk.err}</div>}</div>}
-      </div>}
 
       {/* the bills */}
       <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Bills on this wire (' + det.lines.length + ') · bills $' + fmt(P.bills_total) + (P.fee_amount > 0 ? ' + ' + P.payee_name + ' fee $' + fmt(P.fee_amount) + (P.fee_note ? ' (' + P.fee_note + ')' : '') : '')}</div>

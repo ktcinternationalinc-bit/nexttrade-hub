@@ -71,6 +71,19 @@ export function AttachmentManager(props) {
   var isSuperAdmin = !!props.isSuperAdmin;
   var canEdit = props.canEdit !== false; // default true
 
+  // v55.83-II — internal-only product photos. Optional modes (all default OFF
+  // so existing public invoice/ticket attachments are unchanged):
+  //   bucketName   — which Storage bucket to use (default 'attachments')
+  //   isPrivate    — bucket is PRIVATE; display/download via short-lived SIGNED
+  //                  URLs (no public_url stored). For internal-only assets.
+  //   imageOnly    — only accept image/* files; render as a thumbnail gallery
+  //   enablePrimary— allow marking one attachment as the primary/cover image
+  //   title        — override the section header label
+  var bucket = props.bucketName || BUCKET_NAME;
+  var isPrivate = !!props.isPrivate;
+  var imageOnly = !!props.imageOnly;
+  var enablePrimary = !!props.enablePrimary;
+
   var [items, setItems] = useState([]);
   var [loading, setLoading] = useState(true);
   var [error, setError] = useState(null);
@@ -78,6 +91,7 @@ export function AttachmentManager(props) {
   var [uploadProgress, setUploadProgress] = useState('');
   var [dragOver, setDragOver] = useState(false);
   var [users, setUsers] = useState([]); // for displaying uploader names
+  var [signedUrls, setSignedUrls] = useState({}); // storage_path -> signed URL (private mode)
 
   useEffect(function () {
     if (!parentType || !parentId) { setLoading(false); return; }
@@ -102,7 +116,7 @@ export function AttachmentManager(props) {
           }
           setItems([]);
         } else {
-          setItems(res.data || []);
+          setItems(sortItems(res.data || []));
         }
         // Best-effort load users for uploader display
         try {
@@ -123,6 +137,45 @@ export function AttachmentManager(props) {
     return function () { cancelled = true; };
   }, [parentType, parentId]);
 
+  // Primary first, then sort_order, then newest. (sort_order/is_primary only
+  // exist when the product-photo migration ran; missing values sort as 0/false.)
+  function sortItems(rows) {
+    return (rows || []).slice().sort(function (a, b) {
+      var ap = a.is_primary ? 0 : 1, bp = b.is_primary ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      var ao = Number(a.sort_order) || 0, bo = Number(b.sort_order) || 0;
+      if (ao !== bo) return ao - bo;
+      return String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || ''));
+    });
+  }
+
+  // Private bucket → mint short-lived signed URLs for display/download whenever
+  // the item list changes. Public buckets use the stored public_url directly.
+  useEffect(function () {
+    if (!isPrivate) return;
+    var paths = (items || []).map(function (x) { return x.storage_path; }).filter(Boolean);
+    if (!paths.length) { setSignedUrls({}); return; }
+    var cancelled = false;
+    (async function () {
+      try {
+        var res = await supabase.storage.from(bucket).createSignedUrls(paths, 3600);
+        if (cancelled || !res || res.error || !res.data) return;
+        var map = {};
+        res.data.forEach(function (row) {
+          if (row && row.path && row.signedUrl) map[row.path] = row.signedUrl;
+        });
+        setSignedUrls(map);
+      } catch (e) { console.warn('[attachments] signed-url mint failed:', e); }
+    })();
+    return function () { cancelled = true; };
+  }, [items, isPrivate, bucket]);
+
+  // Resolve the display/download URL for an attachment (signed in private mode).
+  function urlFor(att) {
+    if (isPrivate) return signedUrls[att.storage_path] || '';
+    return att.public_url || '';
+  }
+
   function uploaderName(userId) {
     if (!userId) return 'Unknown';
     var u = users.find(function (x) { return x.id === userId; });
@@ -137,8 +190,24 @@ export function AttachmentManager(props) {
         .eq('parent_type', parentType)
         .eq('parent_id', parentId)
         .order('uploaded_at', { ascending: false });
-      if (!res.error) setItems(res.data || []);
+      if (!res.error) setItems(sortItems(res.data || []));
     } catch (e) { console.error('[attachments] reload failed:', e); }
+  }
+
+  // Mark one attachment as the primary/cover image (clears the flag on siblings).
+  async function setPrimary(att) {
+    if (!enablePrimary || !att) return;
+    try {
+      var clr = await supabase.from('attachments').update({ is_primary: false })
+        .eq('parent_type', parentType).eq('parent_id', parentId);
+      if (clr && clr.error) throw clr.error;
+      var setRes = await supabase.from('attachments').update({ is_primary: true }).eq('id', att.id);
+      if (setRes && setRes.error) throw setRes.error;
+      await reload();
+    } catch (e) {
+      console.error('[attachments] setPrimary failed:', e);
+      alert('Could not set primary photo: ' + ((e && e.message) || String(e)));
+    }
   }
 
   async function uploadFile(file) {
@@ -149,6 +218,10 @@ export function AttachmentManager(props) {
     }
     if (file.size <= 0) {
       alert('Empty file — cannot upload.');
+      return;
+    }
+    if (imageOnly && !(file.type && file.type.indexOf('image/') === 0)) {
+      alert('Only image files (JPG, PNG, WEBP, etc.) can be uploaded here.');
       return;
     }
     // v55.83-A.6.27.66 (H6, Max May 23 2026) — per-record attachment quota.
@@ -179,7 +252,7 @@ export function AttachmentManager(props) {
       var storagePath = parentType + '/' + parentId + '/' + timestamp + '-' + safeName;
 
       // Upload to Supabase Storage
-      var uploadRes = await supabase.storage.from(BUCKET_NAME).upload(storagePath, file, {
+      var uploadRes = await supabase.storage.from(bucket).upload(storagePath, file, {
         cacheControl: '3600',
         upsert: false,
         contentType: file.type || 'application/octet-stream',
@@ -187,25 +260,32 @@ export function AttachmentManager(props) {
       if (uploadRes.error) {
         var em = (uploadRes.error && uploadRes.error.message) || String(uploadRes.error);
         if (/bucket.*not found|bucket.*does not exist/i.test(em)) {
-          throw new Error('Storage bucket "attachments" does not exist. Create it in Supabase Dashboard → Storage → New bucket (public, 100 MB).');
+          throw new Error('Storage bucket "' + bucket + '" does not exist. Create it in Supabase Dashboard → Storage → New bucket' + (isPrivate ? ' (PRIVATE, 100 MB).' : ' (public, 100 MB).'));
         }
         // v55.83-A.6.27.72 HOTFIX 5 — clearer hint when storage.objects RLS blocks upload
         if (/row-level security|row level security|new row violates/i.test(em)) {
           throw new Error(
-            'Upload blocked by Supabase storage policy. The "attachments" storage bucket needs RLS policies for authenticated users.\n\n' +
-            'Fix: run the SQL block at the bottom of /sql/v55-83-a-6-27-61-attachments.sql in Supabase SQL Editor. ' +
-            'It creates 4 policies on storage.objects (INSERT/SELECT/UPDATE/DELETE) scoped to bucket_id=\'attachments\'.'
+            'Upload blocked by Supabase storage policy. The "' + bucket + '" storage bucket needs RLS policies for authenticated users.\n\n' +
+            'Fix: run the SQL for this bucket (' + (isPrivate ? '/sql/v55-83-II-product-photos.sql' : '/sql/v55-83-a-6-27-61-attachments.sql') + ') in Supabase SQL Editor. ' +
+            'It creates 4 policies on storage.objects (INSERT/SELECT/UPDATE/DELETE) scoped to bucket_id=\'' + bucket + '\'.'
           );
         }
         throw uploadRes.error;
       }
 
-      // Get public URL
-      var urlRes = supabase.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
-      var publicUrl = (urlRes && urlRes.data && urlRes.data.publicUrl) || '';
+      // Public bucket → store a stable public URL. Private bucket → no public
+      // URL is stored; display/download use short-lived signed URLs at render.
+      var publicUrl = '';
+      if (!isPrivate) {
+        var urlRes = supabase.storage.from(bucket).getPublicUrl(storagePath);
+        publicUrl = (urlRes && urlRes.data && urlRes.data.publicUrl) || '';
+      }
 
-      // Insert metadata row
-      var insRes = await supabase.from('attachments').insert({
+      // Insert metadata row. The is_private/is_primary/sort_order/caption
+      // columns only exist after the product-photo migration — include them
+      // only in the private/primary modes that depend on that migration, so
+      // legacy public attachments never reference columns that aren't there.
+      var metaRow = {
         parent_type: parentType,
         parent_id: parentId,
         file_name: file.name,
@@ -214,10 +294,16 @@ export function AttachmentManager(props) {
         storage_path: storagePath,
         public_url: publicUrl,
         uploaded_by: currentUserId || null,
-      });
+      };
+      if (isPrivate) metaRow.is_private = true;
+      if (enablePrimary) {
+        metaRow.is_primary = items.length === 0; // first photo becomes primary
+        metaRow.sort_order = items.length;
+      }
+      var insRes = await supabase.from('attachments').insert(metaRow);
       if (insRes.error) {
         // Try to clean up the storage file since metadata insert failed
-        try { await supabase.storage.from(BUCKET_NAME).remove([storagePath]); } catch (_) {}
+        try { await supabase.storage.from(bucket).remove([storagePath]); } catch (_) {}
         throw insRes.error;
       }
 
@@ -279,7 +365,7 @@ export function AttachmentManager(props) {
     try {
       // 1. Delete the file from Storage
       try {
-        var rmRes = await supabase.storage.from(BUCKET_NAME).remove([att.storage_path]);
+        var rmRes = await supabase.storage.from(bucket).remove([att.storage_path]);
         if (rmRes.error) {
           console.warn('[attachments] storage remove failed (proceeding to delete metadata):', rmRes.error.message);
         }
@@ -331,7 +417,8 @@ export function AttachmentManager(props) {
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
       <div className="text-xs font-extrabold text-slate-700 tracking-wider mb-2">
-        📎 ATTACHMENTS ({items.length})
+        {(props.title || (imageOnly ? '🖼️ PHOTOS' : '📎 ATTACHMENTS'))} ({items.length})
+        {isPrivate && <span className="ml-2 text-[9px] font-bold text-amber-700">🔒 INTERNAL — not public</span>}
       </div>
 
       {error && (
@@ -358,19 +445,24 @@ export function AttachmentManager(props) {
           ) : (
             <>
               <div className="text-xs text-slate-700 font-semibold mb-1">
-                Drag files here or click to pick / اسحب الملفات أو اضغط للاختيار
+                {imageOnly
+                  ? 'Drag photos here or click to pick / اسحب الصور أو اضغط للاختيار'
+                  : 'Drag files here or click to pick / اسحب الملفات أو اضغط للاختيار'}
               </div>
-              <div className="text-[10px] text-slate-500 mb-2">Max 100 MB per file · any type</div>
+              <div className="text-[10px] text-slate-500 mb-2">
+                Max 100 MB per file · {imageOnly ? 'images only (JPG, PNG, WEBP)' : 'any type'}
+              </div>
               <label className="inline-block cursor-pointer">
                 <input
                   type="file"
                   multiple
+                  accept={imageOnly ? 'image/*' : undefined}
                   onChange={handleFileInput}
                   disabled={uploading}
                   className="hidden"
                 />
                 <span className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold rounded inline-block">
-                  📤 Choose File(s)
+                  {imageOnly ? '📷 Choose Photo(s)' : '📤 Choose File(s)'}
                 </span>
               </label>
             </>
@@ -387,33 +479,48 @@ export function AttachmentManager(props) {
         <div className="mt-2 space-y-1">
           {items.map(function (att) {
             var isImage = att.mime_type && att.mime_type.startsWith('image/');
+            var url = urlFor(att);
             return (
               <div
                 key={att.id}
-                className="bg-white border border-slate-200 rounded p-2 flex items-center gap-2 hover:bg-slate-50"
+                className={
+                  'bg-white border rounded p-2 flex items-center gap-2 hover:bg-slate-50 ' +
+                  (att.is_primary ? 'border-amber-400 ring-1 ring-amber-300' : 'border-slate-200')
+                }
               >
-                <div className="text-2xl">{fileIcon(att.file_name, att.mime_type)}</div>
+                {isImage && url ? (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block w-12 h-12 rounded overflow-hidden bg-slate-200 flex-shrink-0"
+                    title="Open full image"
+                  >
+                    <img src={url} alt={att.file_name} className="w-full h-full object-cover" />
+                  </a>
+                ) : (
+                  <div className="text-2xl">{fileIcon(att.file_name, att.mime_type)}</div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-bold text-slate-900 truncate" title={att.file_name}>
+                    {att.is_primary && <span className="text-amber-600 mr-1" title="Primary photo">★</span>}
                     {att.file_name}
                   </div>
                   <div className="text-[10px] text-slate-600">
                     {fmtSize(att.file_size)} · uploaded by {uploaderName(att.uploaded_by)} · {fmtDate(att.uploaded_at)}
                   </div>
                 </div>
-                {isImage && att.public_url && (
-                  <a
-                    href={att.public_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block w-10 h-10 rounded overflow-hidden bg-slate-200 flex-shrink-0"
-                    title="Preview image"
+                {enablePrimary && canEdit && !att.is_primary && (
+                  <button
+                    onClick={function () { setPrimary(att); }}
+                    className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-extrabold rounded"
+                    title="Make this the primary/cover photo"
                   >
-                    <img src={att.public_url} alt={att.file_name} className="w-full h-full object-cover" />
-                  </a>
+                    ☆ Set primary
+                  </button>
                 )}
                 <a
-                  href={att.public_url}
+                  href={url || undefined}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded"

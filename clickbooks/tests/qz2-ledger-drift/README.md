@@ -30,11 +30,3 @@ After `13_rb.sql`: add the columns the newer SQL expects, run RS, then the three
     psql -d cb -At -f 14_sj.sql -f 15_sk.sql -f 16_sl.sql
 
 No line may print FAIL; each file ends with "TRIAL BALANCE nets to zero: 0".
-
-## SO (Nov 15 2026) — confirmed duplicates leave the books
-Copy the database (`createdb -T cb cbso`) and run `17_so.sql` (it loads `../../../sql/v55-83-SO-duplicates.sql` itself).
-T1–T20: both copies posted → guards refuse (different amount, opposite direction, same row, invoice match, transfer
-leg, wire, closed month) → remove moves the row out and keeps the original → the drift check reverses its entry →
-the bank sending the same line again is skipped while other new lines still arrive → the record cannot be erased or
-rewritten → restore puts the row back unchanged and the ledger re-posts → second removal makes a second record →
-trial balance nets to 0 → re-running the SQL file is safe.

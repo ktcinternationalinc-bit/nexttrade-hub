@@ -20,8 +20,7 @@ var rt = R('src/app/api/accounting/expense-rules/route.js');
 ok('1a: the scanner reads ALL silo accounts — cent-equal amounts, opposite directions, DIFFERENT accounts, ≤7 days, never paired/invoice-matched legs',
   /action === 'transfer_suggestions'/.test(rt) &&
   /is\('transfer_group_id', null\)\.is\('matched_invoice_id', null\)/.test(rt) &&
-  // v55.83-SO realign (Max Nov 15, Priority 1): accounts are compared as REAL accounts (bank + last four), so a reconnected account is never paired with itself.
-  /a transfer LEAVES one real account and ARRIVES in another/.test(rt) &&
+  /a transfer LEAVES one account and ARRIVES in another/.test(rt) &&
   /gap > 7\) \{ continue; \}/.test(rt));
 ok('1b: each candidate leg is used ONCE (greedy best-score, usedIn), transfer-looking text boosts the score, suggestions are proposals — only a human links',
   /usedIn\[I\.id\]\) \{ continue; \}/.test(rt) && /hintRx\.test/.test(rt) &&
@@ -39,8 +38,7 @@ ok('2b: proper accounting terminology stated — clearing account, nets to zero,
   /nets to zero/.test(ui) && /balances move, the P&L doesn't/.test(ui));
 ok('2c: picking "transfer" as a category immediately offers the other leg; a one-leg register row is flagged',
   /cls === 'transfer' && !t\.transfer_group_id\) \{ openPair\(t\); \}/.test(ui) &&
-  // v55.83-SO realign (Max Nov 15, Priority 1): the register now checks both sides server-side and shows the reason (g.issue) instead of the bare 'one leg only' tag.
-  /g\.issue && <div/.test(ui));
+  /one leg only/.test(ui));
 
 // ── PS (Max 05:33: "expected in... for what period?") ──
 var brA = R('src/app/api/accounting/bills/route.js');
@@ -143,8 +141,7 @@ ok('9c: all three peek hosts navigate to the Invoices tab on edit (onGo(\'invoic
   (R('src/components/BooksHomeTab.jsx').match(/onGo\('invoices'\)/g) || []).length >= 1 &&
   /onGo\('invoices'\)/.test(R('src/components/CashForecastTab.jsx')) &&
   /onGo\('invoices'\)/.test(R('src/components/PeriodStatsTab.jsx')) &&
-  // v55.83-SO realign (Max Nov 15, Priority 1): quick jumps go through goFrom (remembers where you were, for the Back button). Same navigation.
-  /<PeriodStatsTab \{\.\.\.props\} onGo=\{goFrom\} \/>/.test(R('src/components/AccountingTab.jsx')));
+  /<PeriodStatsTab \{\.\.\.props\} onGo=\{setSub\} \/>/.test(R('src/components/AccountingTab.jsx')));
 
 // ── PW part 3 (Max 10:49: customer merge/unmerge, names together) ──
 var achM = R('src/components/AccountingCustomerHistory.jsx');

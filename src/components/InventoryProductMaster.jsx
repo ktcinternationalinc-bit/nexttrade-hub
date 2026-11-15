@@ -17,8 +17,12 @@
 // upstream. If no rules exist, the child is universal.
 
 import { useState, useEffect, useMemo } from 'react';
+import RestrictedNotice from './RestrictedNotice';
+import { createPortal } from 'react-dom';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import InventoryVariantHistory from './InventoryVariantHistory';
+import AttachmentManager from './AttachmentManager';
+import { loadPrimaryPhotoUrls } from '../lib/inventory-photos';
 
 var UOM_OPTIONS = [
   { v: 'kg',     en: 'Kilograms',     ar: 'كيلوغرام' },
@@ -72,50 +76,24 @@ var LEVEL_LABELS = {
 //
 // To add a new family rule: add a key like 'NEWFAM': [1, 3, 6] and the system
 // builds "<family> <grade> <color>" automatically in both languages.
-// v55.83-A naming spec (Max May 31 2026):
-//   Textile / Leather → Family > Category > Grade > Construction > Color   [1,2,3,4,6]
-//   PVC (Pool) / Boat Decking → Family > Category > Grade > Color > Pattern > Spec Class  [1,2,3,6,7,8]
-// Keys are matched against the family CODE. After the .37 classification refresh the
-// live family codes are 2-letter (LE / TX / PV / BD); the longer aliases are kept so
-// older data and any future code styles still resolve to the right recipe.
 var NAMING_RECIPES = {
-  // Textile: Family > Category > Grade > Construction > Color
-  'TX':      [1, 2, 3, 4, 6],
-  'TEX':     [1, 2, 3, 4, 6],
-  'TEXTILE': [1, 2, 3, 4, 6],
-  // Leather: Family > Category > Grade > Construction > Color
-  'LE':      [1, 2, 3, 4, 6],
-  'LEA':     [1, 2, 3, 4, 6],
-  'LEATHER': [1, 2, 3, 4, 6],
-  // PVC Pool: Family > Category > Grade > Construction > Color > Backing > Pattern > Spec Class
-  'PV':      [1, 2, 3, 4, 6, 5, 7, 8],
+  // v55.83-A (Max Jun 1 2026) — keyed to ACTUAL family codes in the data (L, T, P, B).
+  // Levels: 1 Family · 2 Category · 3 Grade · 4 Construction · 5 Backing · 6 Color · 7 Pattern · 8 Spec
+  // Leather (L) & Textile (T): Family Category Grade Construction Backing Color  (6-field, Backing BEFORE Color)
+  'L':       [1, 2, 3, 4, 5, 6],
+  'T':       [1, 2, 3, 4, 5, 6],
+  // PVC (P) & Boat Decking (B): Family Category Grade Construction Color Backing Pattern Spec (8-field, Color BEFORE Backing)
+  'P':       [1, 2, 3, 4, 6, 5, 7, 8],
+  'B':       [1, 2, 3, 4, 6, 5, 7, 8],
+  // Legacy aliases kept so older imports still resolve
+  'TEX':     [1, 2, 3, 4, 5, 6],
+  'TEXTILE': [1, 2, 3, 4, 5, 6],
+  'LEA':     [1, 2, 3, 4, 5, 6],
+  'LEATHER': [1, 2, 3, 4, 5, 6],
   'PVC':     [1, 2, 3, 4, 6, 5, 7, 8],
   'PVCPOOL': [1, 2, 3, 4, 6, 5, 7, 8],
-  // Boat Decking (PVC-based) — same convention as PVC
-  'BD':      [1, 2, 3, 4, 6, 5, 7, 8],
   'PVCBD':   [1, 2, 3, 4, 6, 5, 7, 8],
 };
-
-// Labels that are real selections but read as noise inside a product name —
-// dropped from the composed name so we never get "Headliner Not Applicable Black Foam".
-var NAME_NOISE_EN = { 'not applicable': 1, 'none': 1, 'n/a': 1, 'na': 1, '-': 1, '—': 1 };
-var NAME_NOISE_AR = { 'غير مطبق': 1, 'لا يوجد': 1, '-': 1, '—': 1 };
-
-// Drop repeated words (case-insensitive, keep first occurrence, preserve order) so
-// names like "Leather Automotive Leather Luxurious Embossed Leather White" collapse to
-// "Leather Automotive Luxurious Embossed White".
-function dedupeWords(s) {
-  var seen = {};
-  var out = [];
-  String(s || '').split(/\s+/).forEach(function (w) {
-    if (!w) return;
-    var k = w.toLowerCase();
-    if (seen[k]) return;
-    seen[k] = 1;
-    out.push(w);
-  });
-  return out.join(' ');
-}
 
 // Build a product name (en + ar) from the form's level selections, looking up
 // each list value to get its label_en / label_ar.
@@ -133,11 +111,11 @@ function buildAutoName(form, lists) {
   // Resolve recipe — match on exact code first, then prefix (e.g. 'PVCPOOL01' starts with 'PVC')
   var recipe = NAMING_RECIPES[familyCode] || null;
   if (!recipe) {
-    var prefixKey = Object.keys(NAMING_RECIPES).find(function (k) { return familyCode.indexOf(k) === 0; });
+    var prefixKey = Object.keys(NAMING_RECIPES).find(function (k) { return k.length >= 2 && familyCode.indexOf(k) === 0; });
     if (prefixKey) recipe = NAMING_RECIPES[prefixKey];
   }
-  // Default recipe — Family > Category > Grade > Construction > Color — when no family-specific rule
-  if (!recipe) recipe = [1, 2, 3, 4, 6];
+  // Default recipe — Family > Grade > Color > Backing — when no family-specific rule
+  if (!recipe) recipe = [1, 3, 6, 5];
   // Walk the recipe; collect labels; record any unfilled level for the UI to gate Save
   var enParts = [];
   var arParts = [];
@@ -152,18 +130,12 @@ function buildAutoName(form, lists) {
     }
     var entry = lists.find(function (l) { return l.id === id; });
     if (!entry) continue;
-    if (entry.label_en) {
-      var le = String(entry.label_en).trim();
-      if (le && !NAME_NOISE_EN[le.toLowerCase()]) enParts.push(le);
-    }
-    if (entry.label_ar) {
-      var la = String(entry.label_ar).trim();
-      if (la && !NAME_NOISE_AR[la]) arParts.push(la);
-    }
+    if (entry.label_en) enParts.push(String(entry.label_en).trim());
+    if (entry.label_ar) arParts.push(String(entry.label_ar).trim());
   }
   return {
-    name_en: dedupeWords(enParts.join(' ')),
-    name_ar: dedupeWords(arParts.join(' ')),
+    name_en: enParts.join(' '),
+    name_ar: arParts.join(' '),
     recipe: recipe,
     missing: missing,
     familyCode: familyCode,
@@ -197,6 +169,7 @@ function emptyForm() {
     default_currency: 'EGP',
     default_rack: '',
     notes: '',
+    is_virtual_mix: false,
   };
 }
 
@@ -213,6 +186,7 @@ export default function InventoryProductMaster(props) {
   var [lists, setLists] = useState([]);          // all inventory_lists rows
   var [rules, setRules] = useState([]);          // all inventory_list_rules rows
   var [products, setProducts] = useState([]);    // all inventory_products rows
+  var [photoUrls, setPhotoUrls] = useState({});  // v55.83-IJ — productId -> signed primary-photo thumb URL
   var [loading, setLoading] = useState(true);
 
   // Filters / search
@@ -240,6 +214,10 @@ export default function InventoryProductMaster(props) {
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
+  // Lock background scroll while a product modal is open so only the modal body scrolls.
+  useEffect(function () {
+    if (modalMode) { var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }
+  }, [modalMode]);
   // v55.83-A.6.27.71 (Phase 4) — Removed dead variant modal state.
   // The variant modal was replaced by openCloneTemplate() in v55.83-A.6.27.42
   // but the JSX + state + helpers were left in place. None of variantModalOpen,
@@ -454,6 +432,17 @@ export default function InventoryProductMaster(props) {
     return out;
   }
 
+  // v55.83-IJ — mint signed thumbnail URLs for products with a primary photo.
+  // Graceful: no photos / no migration / no bucket → empty map → no thumbs.
+  useEffect(function () {
+    if (!products || !products.length) { setPhotoUrls({}); return; }
+    var cancelled = false;
+    loadPrimaryPhotoUrls(products.map(function (p) { return p.id; })).then(function (map) {
+      if (!cancelled) setPhotoUrls(map || {});
+    });
+    return function () { cancelled = true; };
+  }, [products]);
+
   // Filtered product list for the table
   var filteredProducts = useMemo(function () {
     var list = products.slice();
@@ -565,6 +554,7 @@ export default function InventoryProductMaster(props) {
       default_currency: p.default_currency || 'EGP',
       default_rack: p.default_rack || '',
       notes: p.notes || '',
+      is_virtual_mix: p.is_virtual_mix === true,
     });
   }
 
@@ -644,8 +634,8 @@ export default function InventoryProductMaster(props) {
     setEditLocked(false);              // a new copy can't be "locked"
     setEditIsTemplate(p.is_family_template === true);
     setForm({
-      name_en: (p.name_en || '') + ' (copy)',
-      name_ar: (p.name_ar || '') + ' (نسخة)',
+      name_en: p.name_en || '',
+      name_ar: p.name_ar || '',
       quick_code: '',                  // user must enter a new quick code (uniqueness)
       design_sku: '',
       family_list_id: p.family_list_id || '',
@@ -670,7 +660,7 @@ export default function InventoryProductMaster(props) {
       notes: p.notes || '',
     });
     // Immediate user feedback so it's obvious the copy happened.
-    toast.success('✓ Copied — change the Quick Code, then Save / تم النسخ — غيّر الكود ثم احفظ');
+    toast.success('✓ Copied — fields prefilled. Change the name, code, color or spec to make it unique, then Save / تم النسخ — غيّر الاسم أو الكود أو اللون لجعله فريدًا ثم احفظ');
   }
 
   function closeModal() {
@@ -744,19 +734,30 @@ export default function InventoryProductMaster(props) {
     // thing, then they fixed it and got another error, and another. Now: one
     // message lists EVERY field they missed.
     var missing = [];
+    var isVirtual = form.is_virtual_mix === true;
     var nameEn = (form.name_en || '').trim();
     var nameAr = (form.name_ar || '').trim();
     if (!nameEn) missing.push('• English name (name_en)');
     if (!nameAr) missing.push('• Arabic name (name_ar)');
 
-    // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
-    // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
-    // most installs have no L9 options to pick. If/when L9 options exist
-    // and the user picks one, it's included in the slug and payload.
-    for (var lvl = 1; lvl <= 8; lvl++) {
-      if (!form[LEVEL_FIELD_MAP[lvl]]) {
-        missing.push('• Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
+    // A VIRTUAL MIX (Stock Mix Lot) holds no stock of its own and has no classification
+    // levels — the real colors keep their own inventory. So Levels 1-8, the classification
+    // slug, and UOM are NOT required for a virtual mix. It only needs a name (+ optional
+    // Quick Code / Design Code). Enforcing levels here is what silently blocked saving a
+    // virtual mix's name and Design Code.
+    if (!isVirtual) {
+      // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
+      // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
+      // most installs have no L9 options to pick. If/when L9 options exist
+      // and the user picks one, it's included in the slug and payload.
+      for (var lvl = 1; lvl <= 8; lvl++) {
+        if (!form[LEVEL_FIELD_MAP[lvl]]) {
+          missing.push('• Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
+        }
       }
+      // v55.83 (Max Jun 7 2026) — Unit of Measure is REQUIRED. A blank UOM made
+      // products silently land in the "units" bucket on the inventory overview.
+      if (!(form.default_uom || '').trim()) missing.push('• Unit of Measure (default_uom)');
     }
 
     if (missing.length > 0) {
@@ -765,16 +766,12 @@ export default function InventoryProductMaster(props) {
       return;
     }
 
-    var slug = computeSlug(form);
-    if (!slug) { fail('Could not compute classification slug — please re-check selections'); return; }
+    // Slug only applies to real classified products. A virtual mix has no classification.
+    var slug = isVirtual ? null : computeSlug(form);
+    if (!isVirtual && !slug) { fail('Could not compute classification slug — please re-check selections'); return; }
 
     // Quick code uniqueness (client-side; DB also enforces)
     var quickCode = (form.quick_code || '').trim();
-    if (modalMode === 'new' && (form.name_en || '').endsWith('(copy)') && !quickCode) {
-      fail('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
-      return;
-    }
-
     // v55.83-A.6.27.72 HOTFIX 7 — Comprehensive duplicate detection.
     // Checks quick_code, classification_slug, name_en, AND name_ar against
     // ALL products (active + inactive). NAMES the conflicting product.
@@ -786,30 +783,35 @@ export default function InventoryProductMaster(props) {
       return '"' + label + '" — Quick Code: ' + code + ' — Status: ' + status + ' — ID: ' + p.id;
     }
 
-    // 1) Quick code conflict (only if user typed one)
-    if (quickCode) {
-      var dupCode = products.find(function (p) {
+    // 1) Design SKU conflict — DESIGN SKU MUST BE UNIQUE (Max Jun 1 2026).
+    //    Quick Code is allowed to repeat; the Design Code/SKU is the unique key.
+    var designSku = (form.design_sku || '').trim();
+    if (designSku) {
+      var dupSku = products.find(function (p) {
         if (modalMode === 'edit' && p.id === modalProductId) return false;
-        return (p.quick_code || '').trim().toLowerCase() === quickCode.toLowerCase();
+        return (p.design_sku || '').trim().toLowerCase() === designSku.toLowerCase();
       });
-      if (dupCode) {
-        fail('DUPLICATE QUICK CODE — cannot save.\n\nThe code "' + quickCode + '" is already used by:\n' +
-             describeConflict(dupCode, 'quick_code') +
-             '\n\nNo duplicates allowed. Use a different Quick Code, or open the existing product and edit it.');
+      if (dupSku) {
+        fail('DUPLICATE DESIGN CODE — cannot save.\n\nThe Design Code "' + designSku + '" is already used by:\n' +
+             describeConflict(dupSku, 'design_sku') +
+             '\n\nDesign Codes must be unique. Use a different Design Code, or open the existing product and edit it. (Quick Codes may repeat — only the Design Code must be unique.)');
         return;
       }
     }
 
     // 2) Classification slug conflict (same exact combo of Family/Category/Grade/...etc)
-    var dupSlug = products.find(function (p) {
+    // Skipped for virtual mixes — they have no classification slug, so two virtual mixes
+    // both having a null slug must NOT be treated as a conflict.
+    var dupSlug = isVirtual ? null : products.find(function (p) {
       if (modalMode === 'edit' && p.id === modalProductId) return false;
+      if (!p.classification_slug) return false;
       return p.classification_slug === slug;
     });
     if (dupSlug) {
       fail('DUPLICATE CLASSIFICATION — cannot save.\n\nA product with the EXACT same Family/Category/Grade/Construction/Backing/Color/Pattern/Spec' + (form.origin_list_id ? '/Country' : '') + ' combination already exists:\n' +
            describeConflict(dupSlug, 'classification_slug') +
            '\n\nClassification slug: ' + slug +
-           '\n\nNo duplicates allowed. Change at least one of your level selections, or open the existing product and edit it.');
+           '\n\nA product with this identity already exists. Please change the product name, SKU, color, spec, or another identifying field before saving.');
       return;
     }
 
@@ -821,7 +823,7 @@ export default function InventoryProductMaster(props) {
     if (dupNameEn) {
       fail('DUPLICATE ENGLISH NAME — cannot save.\n\nA product named "' + nameEn + '" already exists:\n' +
            describeConflict(dupNameEn, 'name_en') +
-           '\n\nNo duplicates allowed. Adjust the name slightly to differentiate (e.g. add a thickness, color shade, or roll-length suffix), or open the existing product and edit it.');
+           '\n\nA product with this name already exists. Please change the product name, SKU, color, spec, or another identifying field before saving.');
       return;
     }
 
@@ -845,18 +847,20 @@ export default function InventoryProductMaster(props) {
         name_ar: nameAr,
         quick_code: quickCode || null,
         design_sku: (form.design_sku || '').trim() || null,
-        family_list_id: form.family_list_id,
-        category_list_id: form.category_list_id,
-        grade_list_id: form.grade_list_id,
-        construction_list_id: form.construction_list_id,
-        backing_list_id: form.backing_list_id,
-        color_list_id: form.color_list_id,
-        pattern_list_id: form.pattern_list_id,
-        spec_class_list_id: form.spec_class_list_id,
+        // v55.83-FY — a virtual mix has NO physical classification. Send every classification
+        // UUID as null (never '' — empty string fails the uuid columns), and no UOM/slug.
+        family_list_id: isVirtual ? null : (form.family_list_id || null),
+        category_list_id: isVirtual ? null : (form.category_list_id || null),
+        grade_list_id: isVirtual ? null : (form.grade_list_id || null),
+        construction_list_id: isVirtual ? null : (form.construction_list_id || null),
+        backing_list_id: isVirtual ? null : (form.backing_list_id || null),
+        color_list_id: isVirtual ? null : (form.color_list_id || null),
+        pattern_list_id: isVirtual ? null : (form.pattern_list_id || null),
+        spec_class_list_id: isVirtual ? null : (form.spec_class_list_id || null),
         // v55.83-A.6.27.NEXT (Issue 11) — origin_list_id was missing!
-        origin_list_id: form.origin_list_id,
+        origin_list_id: isVirtual ? null : (form.origin_list_id || null),
         classification_slug: slug,
-        default_uom: form.default_uom || null,
+        default_uom: isVirtual ? null : (form.default_uom || null),
         default_thickness_mm: form.default_thickness_mm ? Number(form.default_thickness_mm) : null,
         default_width_m: form.default_width_m ? Number(form.default_width_m) : null,
         default_gsm: form.default_gsm ? Number(form.default_gsm) : null,
@@ -868,6 +872,7 @@ export default function InventoryProductMaster(props) {
         default_currency: form.default_currency || null,
         default_rack: (form.default_rack || '').trim() || null,
         notes: (form.notes || '').trim() || null,
+        is_virtual_mix: form.is_virtual_mix === true,
         updated_by: userProfile && userProfile.id,
       };
       console.log(DEBUG, 'payload built:', payload);
@@ -1037,12 +1042,7 @@ export default function InventoryProductMaster(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
-          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
-          <div className="text-sm text-amber-800 mt-1 font-medium">
-            Viewing the Product List requires the Inventory permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
-          </div>
-        </div>
+        <RestrictedNotice title="Access restricted" message="Viewing the Product List requires the Inventory permission. Ask Max to grant it from Settings - Roles & Permissions." />
       </div>
     );
   }
@@ -1207,6 +1207,9 @@ export default function InventoryProductMaster(props) {
                   {p.is_family_template === false && p.variant_suffix && (
                     <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">PRODUCT</div>
                   )}
+                  {p.is_virtual_mix === true && (
+                    <div className="text-[9px] bg-violet-200 text-violet-900 font-extrabold rounded px-1.5 inline-block mt-0.5">VIRTUAL MIX</div>
+                  )}
                   {Number(p.use_count || 0) > 0 && (
                     <div className="text-[9px] text-slate-500 mt-0.5">used {p.use_count}×</div>
                   )}
@@ -1219,14 +1222,28 @@ export default function InventoryProductMaster(props) {
                       to text-sm font-extrabold. Also bumped English name from
                       text-sm font-bold to text-base font-extrabold for parity
                       and widened the Classification column. */}
-                  <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
-                  <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                  <div className="flex items-start gap-2 min-w-0">
+                    {photoUrls[p.id] && (
+                      <img
+                        src={photoUrls[p.id]}
+                        alt=""
+                        className="w-11 h-11 rounded object-cover border border-slate-200 flex-shrink-0 mt-0.5"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
+                      <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                    </div>
+                  </div>
                 </div>
                 {/* v55.83-A.6.27.43 — Classification breakdown as bullets per level.
                     Order: Family → Grade → Category → Construction → Backing → Color → Pattern → Spec → Country.
                     Each level shows label + value with high contrast (slate-900 on white). */}
                 <div className="text-xs">
                   {(function () {
+                    if (p.is_virtual_mix === true) {
+                      return <span className="text-violet-700 italic">Virtual Stock Mix — no physical inventory classification</span>;
+                    }
                     var bullets = describeProductBullets(p);
                     if (bullets.length === 0) {
                       return <span className="text-slate-500 italic">No classification set</span>;
@@ -1337,21 +1354,21 @@ export default function InventoryProductMaster(props) {
       </div>
 
       {/* New/Edit modal */}
-      {modalMode && (
+      {modalMode && typeof document !== 'undefined' && createPortal((
         <div
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-start justify-center"
           onClick={closeModal}
-          style={{ padding: 16 }}
+          style={{ padding: 16, overflow: 'hidden' }}
         >
           <div
             className="bg-white rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ maxWidth: 900, padding: 0 }}
+            style={{ maxWidth: 900, width: '100%', padding: 0, maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}
           >
             {/* Modal header — dark indigo with inline color (defensive readability) */}
             <div
               className="rounded-t-2xl flex justify-between items-center gap-2"
-              style={{ background: '#3730a3', padding: '14px 20px' }}
+              style={{ background: '#3730a3', padding: '14px 20px', flexShrink: 0 }}
             >
               <div>
                 <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>
@@ -1370,7 +1387,7 @@ export default function InventoryProductMaster(props) {
               </button>
             </div>
 
-            <div style={{ padding: 20, maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
+            <div style={{ padding: 20, overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
               {/* v55.83-A.6.27.43 — Edit lock banner: shown when this product has references
                   (used in receipts/movements/layers/adjustments). Spec dropdowns are read-only.
                   Name + notes + defaults remain editable. To change specs, create a new variant. */}
@@ -1384,6 +1401,26 @@ export default function InventoryProductMaster(props) {
                       ? 'This is a Template Product (blueprint). Editing or deleting does NOT affect any Products already created from it — they\'re independent snapshots.'
                       : 'This is a Product. Editing changes only this product. Existing inventory/sales attribution stays intact.'}
                   </div>
+                </div>
+              )}
+
+              {/* v55.83-II — Internal-only product photos. Edit mode only (a saved
+                  product.id is required as the attachment parent). Private bucket +
+                  signed URLs; one photo can be marked the primary/cover image. */}
+              {modalMode === 'edit' && modalProductId && (
+                <div className="mb-4">
+                  <AttachmentManager
+                    parentType="inventory_product"
+                    parentId={modalProductId}
+                    currentUserId={userProfile && userProfile.id}
+                    isSuperAdmin={isSuperAdmin}
+                    canEdit={canEdit}
+                    bucketName="product-photos"
+                    isPrivate={true}
+                    imageOnly={true}
+                    enablePrimary={true}
+                    title="🖼️ PRODUCT PHOTOS"
+                  />
                 </div>
               )}
 
@@ -1448,10 +1485,10 @@ export default function InventoryProductMaster(props) {
                       type="text"
                       value={form.name_en}
                       onChange={function (e) { setForm(Object.assign({}, form, { name_en: e.target.value, _name_manually_edited: true })); }}
-                      placeholder="Auto-builds from level selections"
-                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      placeholder={form.is_virtual_mix === true ? 'Enter mix lot name' : 'Auto-builds from level selections'}
+                      readOnly={form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
                       className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
-                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                        (form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
                           ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                           : 'bg-white')}
                     />
@@ -1462,9 +1499,9 @@ export default function InventoryProductMaster(props) {
                       value={form.name_ar}
                       onChange={function (e) { setForm(Object.assign({}, form, { name_ar: e.target.value, _name_manually_edited: true })); }}
                       placeholder="يُبنى تلقائياً من المستويات"
-                      readOnly={!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
+                      readOnly={form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0}
                       className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' +
-                        (!form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
+                        (form.is_virtual_mix !== true && !form._name_manually_edited && buildAutoName(form, lists).missing.length > 0
                           ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                           : 'bg-white')}
                       style={{ direction: 'rtl' }}
@@ -1546,9 +1583,9 @@ export default function InventoryProductMaster(props) {
 
               {/* Section 3: Tech spec defaults */}
               <div className="mb-4">
-                <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">DEFAULT TECHNICAL SPECS / المواصفات الافتراضية (optional)</div>
+                <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">DEFAULT TECHNICAL SPECS / المواصفات الافتراضية <span className="text-slate-500 font-bold">(UOM required · others optional)</span></div>
                 <div className="grid grid-cols-3 gap-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">UOM
+                  <label className="text-[11px] font-extrabold text-slate-700">UOM <span className="text-red-600">*</span>
                     <select
                       value={form.default_uom}
                       onChange={function (e) { setForm(Object.assign({}, form, { default_uom: e.target.value })); }}
@@ -1618,10 +1655,37 @@ export default function InventoryProductMaster(props) {
                   />
                 </label>
               </div>
+
+              {/* Section 6: Stock Mix Lot (virtual) — v55.83-DQ */}
+              <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.is_virtual_mix === true} onChange={function (e) {
+                    // v55.83-FX — checking "virtual" must also NAME it clearly as virtual and lock the
+                    // name (_name_manually_edited) so the auto-classification namer can't overwrite it.
+                    // Unchecking only clears the flag — it never strips the name (could destroy a custom name).
+                    var checked = e.target.checked;
+                    var next = Object.assign({}, form, { is_virtual_mix: checked });
+                    if (checked) {
+                      var en = String(next.name_en || '').trim();
+                      var ar = String(next.name_ar || '').trim();
+                      if (!en) { en = 'Stock Mix Virtual'; } else if (!/virtual/i.test(en)) { en = en + ' - Virtual'; }
+                      if (!ar) { ar = 'Stock Mix Virtual'; } else if (!/virtual/i.test(ar)) { ar = ar + ' - Virtual'; }
+                      next.name_en = en;
+                      next.name_ar = ar;
+                      next._name_manually_edited = true;
+                    }
+                    setForm(next);
+                  }} className="mt-0.5 w-4 h-4" />
+                  <span>
+                    <span className="text-[12px] font-extrabold text-indigo-900">This is a Stock Mix Lot (virtual)</span>
+                    <span className="block text-[11px] text-indigo-800 font-medium">A sellable mixed lot that holds no stock of its own. Its colors are mapped under Inventory → Stock Mix. Leave unchecked for normal products that hold real inventory.</span>
+                  </span>
+                </label>
+              </div>
             </div>
 
             {/* Modal footer */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px' }}>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px', flexShrink: 0 }}>
               <button
                 onClick={closeModal}
                 disabled={busy}
@@ -1641,7 +1705,7 @@ export default function InventoryProductMaster(props) {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* v55.83-A.6.27.42 — Create Variant modal */}
       {/* v55.83-A.6.27.44d.1 — Variant History modal */}

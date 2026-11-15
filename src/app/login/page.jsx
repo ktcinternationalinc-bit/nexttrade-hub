@@ -135,11 +135,26 @@ export default function LoginPage() {
       if (data?.user) {
         try {
           const lookupEmail = (email || '').toLowerCase().trim();
-          const { data: profile } = await supabase
+          let { data: profile } = await supabase
             .from('users')
             .select('id, name, active')
             .ilike('email', lookupEmail)
             .maybeSingle();
+
+          // v55.83 — robust fallback that mirrors the main app exactly, so a login
+          // can never silently go untracked: if the direct email lookup misses
+          // (stored email has a stray space, different casing, or simply differs),
+          // fetch the team and match by trimmed/lowercased email, then by auth id.
+          if (!profile) {
+            try {
+              const { data: allU } = await supabase.from('users').select('id, name, active, email');
+              if (allU && allU.length) {
+                profile = allU.find(function (u) { return (u.email || '').toLowerCase().trim() === lookupEmail; })
+                  || (data.user.id ? allU.find(function (u) { return u.id === data.user.id; }) : null)
+                  || null;
+              }
+            } catch (_) {}
+          }
 
           // v55.83-A.6.27.66 (C2, Max May 23 2026) — Hard block: deactivated
           // users CANNOT log in. Use the shared helper because active===false
