@@ -30,9 +30,6 @@ import * as XLSX from 'xlsx';
 // (unchanged behavior for existing call sites).
 
 import { T as t18n, stackedH } from './open-account-i18n.js';
-// v55.83-SM — the statement people see is now built by statement-view.js (one model for print
-// and Excel). The older layouts below stay only as a fallback behind opts.legacy === true.
-import { buildStatement, statementHtml, statementSheet } from './statement-view.js';
 
 function fmtMoney(n) {
   if (n == null || isNaN(Number(n))) return '';
@@ -97,20 +94,6 @@ function escapeHtml(s) {
 export function printAccountLedger(account, entity, entries, summary, opts) {
   if (!account) return;
   opts = opts || {};
-  if (opts.legacy !== true) {
-    var smModel = buildStatement(account, entity, entries, {
-      perspective: opts.perspective, bilingual: opts.bilingual === true, layout: opts.layout,
-      currency: opts.currency, today: opts.today,
-      applications: (opts.simulation && opts.simulation.applications) || null,
-    });
-    var smWin = null;
-    try { smWin = window.open('', '_blank', 'width=1150,height=780'); } catch (smErr) { smWin = null; }
-    if (!smWin) return { ok: false, reason: 'popup_blocked' };
-    smWin.document.open();
-    smWin.document.write(statementHtml(smModel));
-    smWin.document.close();
-    return { ok: true };
-  }
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var bilingual = opts.bilingual === true;
   // v55.83-A.6.27.72 HOTFIX 33 (Max v2 feedback) — layout option:
@@ -209,9 +192,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var debit  = Number(e.debit_amount  || 0);
       // Running net walks signed amounts (matches Running Balance column)
       var signed = signedAmount(e);
-      // v55.83-GM — customer statement is LABELS-ONLY: same amounts/columns/signs as internal,
-      // only the wording changes (headers flip via i18n). Do NOT negate/swap — that double-flipped
-      // sales invoices into the wrong column.
+      if (perspective === 'customer') signed = -signed;
       running += signed;
       var paid = applications[e.id] || 0;
       var remaining = 0;
@@ -236,19 +217,16 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         default: arSide = credit; apSide = debit;
       }
       // Customer perspective: AR ↔ AP swap (their receivable = our payable)
-      /* v55.83-GM: removed AR/AP amount swap — customer perspective is labels-only; the column
-         headers already flip via i18n (they_owe_us → "You Owe Us", we_owe_them → "Owed to You"),
-         so swapping the amounts too double-flipped (sales invoice showed under "Owed to You"). */
+      if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
       // v55.83-A.6.27.72 HOTFIX 14 (refined HOTFIX 15) — Per Max's exact spec:
       // sales_invoice → BLUE (#1d4ed8) — we're billing them
       // vendor_bill   → PURPLE (#7e22ce) — they're billing us  (changed from orange)
       // Customer perspective swaps interpretation (their AR is our AP).
-      // v55.83-GP — labels-only: colors are by transaction TYPE and do NOT flip with perspective.
       var invoiceColor = null;
       if (e.transaction_type === 'sales_invoice') {
-        invoiceColor = '#1d4ed8';
+        invoiceColor = perspective === 'customer' ? '#7e22ce' : '#1d4ed8';
       } else if (e.transaction_type === 'vendor_bill') {
-        invoiceColor = '#7e22ce';
+        invoiceColor = perspective === 'customer' ? '#1d4ed8' : '#7e22ce';
       }
       // v55.83-A.6.27.72 HOTFIX 30 — color by transaction TYPE not blanket-by-column.
       // sales_invoice/payment_received in AR column → green (asset)
@@ -258,14 +236,10 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var apColor = '#b91c1c';  // red default for vendor bills
       if (e.transaction_type === 'payment_sent') apColor = '#15803d';  // green
       if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
-      // v55.83-GT — a payment REDUCES a balance; render it as "− amount" (teal) so it never reads
-      // as new debt on a statement. Invoices/bills stay positive charges.
-      var arIsPmt = (e.transaction_type === 'payment_received');
-      var apIsPmt = (e.transaction_type === 'payment_sent');
       var arCellHtml = arSide > 0.005
-        ? '<span style="color:' + (arIsPmt ? '#0d9488' : (invoiceColor || arColor)) + '">' + (arIsPmt ? '− ' : '') + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+        ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
-        ? '<span style="color:' + (apIsPmt ? '#0d9488' : (invoiceColor || apColor)) + '">' + (apIsPmt ? '− ' : '') + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
+        ? '<span style="color:' + (invoiceColor || apColor) + '">' + escapeHtml(fmtMoney(apSide)) + '</span>' : '';
       // Single Remaining column — fills only on invoice/bill rows, colored by invoice color
       var remainingCellHtml = '';
       if (isInvoiceOrBill) {
@@ -317,15 +291,9 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
       var autoSyncMatch = rawDesc.match(/^(.+?)\s*Auto-synced from invoice .+?\.\s*Edit the invoice to change this entry\.\s*$/i);
       var mainDesc = autoSyncMatch ? autoSyncMatch[1].trim() : rawDesc;
       var hasAutoSync = !!autoSyncMatch;
-      // v55.83-GN \u2014 show entry notes (incl. invoice notes) under the description in ANY language,
-      // not only Arabic. RTL styling only when the note is actually Arabic.
-      // v55.83-GT \u2014 only REAL user notes belong on a statement. Strip the system "Auto-synced from
-      // invoice \u2026 Edit the invoice to change this entry." text; if nothing real is left, show nothing.
       var arNoteHtml = '';
-      var _userNote = e.notes ? String(e.notes).replace(/Auto-synced from invoice[\s\S]*?Edit the invoice to change this entry\.?/gi, '').trim() : '';
-      if (_userNote) {
-        var _isArNote = /[\u0600-\u06FF]/.test(_userNote);
-        arNoteHtml = '<div class="' + (_isArNote ? 'ar-sub' : '') + '"' + (_isArNote ? ' dir="rtl"' : '') + ' style="font-size:10px;color:#64748b">' + escapeHtml(_userNote) + '</div>';
+      if (bilingual && e.notes && /[\u0600-\u06FF]/.test(e.notes)) {
+        arNoteHtml = '<div class="ar-sub" dir="rtl" style="font-size:10px;color:#64748b">' + escapeHtml(e.notes) + '</div>';
       }
       var autoSyncHtml = hasAutoSync ? '<div class="auto-sync-note">auto-synced from invoice</div>' : '';
       rowsHtml += '<tr>'
@@ -358,11 +326,11 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">'
         + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bfdbfe;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#1e3a8a;font-weight:700;text-transform:uppercase">'
-        + (perspective === 'customer' ? 'You owe us' : 'They owe us')
+        + (perspective === 'customer' ? 'We owe you' : 'They owe us')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#1e3a8a">' + fmtMoney(simCur.theirOpenInvoices) + '</div></div>'
         + '<div style="flex:1;min-width:90px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#78350f;font-weight:700;text-transform:uppercase">'
-        + (perspective === 'customer' ? 'We owe you' : 'We owe them')
+        + (perspective === 'customer' ? 'You owe us' : 'We owe them')
         + '</div><div style="font-size:13px;font-family:monospace;font-weight:800;color:#78350f">' + fmtMoney(simCur.ourOpenBills) + '</div></div>'
         + '<div style="flex:1;min-width:90px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:4px;padding:6px 8px">'
         + '<div style="font-size:9px;color:#14532d;font-weight:700;text-transform:uppercase">'
@@ -406,9 +374,10 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
                   var pp = applications[e.id] || 0;
                   var fa = Number(e.credit_amount || 0) || Number(e.debit_amount || 0);
                   var rem = Math.max(0, fa - pp);
-                  // v55.83-GM — a sales invoice is ALWAYS the AR side (customer owes us); only the
-                  // labels flip for customer perspective, never the amount routing.
-                  var asAR = (e.transaction_type === 'sales_invoice');
+                  // AR/AP swap in customer perspective
+                  var asAR = perspective === 'customer'
+                    ? (e.transaction_type === 'vendor_bill')
+                    : (e.transaction_type === 'sales_invoice');
                   if (asAR) totAR += rem; else totAP += rem;
                 }
               });
@@ -425,7 +394,7 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
                 + escapeHtml(fmtMoney(totAR)) + ' − ' + escapeHtml(fmtMoney(totAP)) + ' = ' + escapeHtml(fmtSignedMoney(netP)) + ' ' + escapeHtml(cur)
                 + '<div style="font-size:9px; opacity:0.85; margin-top:2px; text-transform:uppercase; letter-spacing:1px">' + escapeHtml(subLabel) + '</div>'
                 + '</td>'
-                + '<td class="num" style="color:' + netColor + '">' + escapeHtml(fmtSignedMoney(cs.balance)) + '</td>'
+                + '<td class="num" style="color:' + netColor + '">' + escapeHtml(fmtSignedMoney(perspective === 'customer' ? -cs.balance : cs.balance)) + '</td>'
                 + '</tr>'
                 + '</tfoot>';
             })()
@@ -505,17 +474,14 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
         case 'credit_adjustment': arSide = credit; apSide = debit; break;
         case 'offset':           arSide = credit; apSide = debit; break;
       }
-      /* v55.83-GM: removed AR/AP amount swap — customer perspective is labels-only; the column
-         headers already flip via i18n (they_owe_us → "You Owe Us", we_owe_them → "Owed to You"),
-         so swapping the amounts too double-flipped (sales invoice showed under "Owed to You"). */
+      if (perspective === 'customer') { var tmp = arSide; arSide = apSide; apSide = tmp; }
       // Colors by type — payment_sent green not red
       var arColor = '#15803d', apColor = '#b91c1c';
       if (e.transaction_type === 'payment_sent') apColor = '#15803d';
       if (e.transaction_type === 'credit_adjustment') { apColor = '#15803d'; arColor = '#475569'; }
       var invoiceColor = e.transaction_type === 'sales_invoice' ? '#1d4ed8'
                        : e.transaction_type === 'vendor_bill' ? '#7e22ce' : null;
-      var arIsPmt = (e.transaction_type === 'payment_received'); // v55.83-GT — payment = reduction
-      var arCellHtml = arSide > 0.005 ? '<span style="color:' + (arIsPmt ? '#0d9488' : (invoiceColor || arColor)) + '">' + (arIsPmt ? '− ' : '') + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
+      var arCellHtml = arSide > 0.005 ? '<span style="color:' + (invoiceColor || arColor) + '">' + escapeHtml(fmtMoney(arSide)) + '</span>' : '';
       var apCellHtml = apSide > 0.005
         ? (apColor === '#15803d'
             ? '<span style="color:' + apColor + '">' + escapeHtml(fmtMoney(apSide)) + '</span><div style="font-size:9px;color:#0f766e;font-style:italic;opacity:0.75;margin-top:2px;">reduces what we owe</div>'
@@ -702,7 +668,6 @@ export function printAccountLedger(account, entity, entries, summary, opts) {
     + 'th.col-open    { width: 12%; text-align: right; }'
     + 'th.col-run     { text-align: right; }'  /* claims remainder */
     + 'td { word-break: break-word; overflow-wrap: anywhere; }'
-    + 'td.num, th.num, .col-money, .col-open, .col-run { white-space: nowrap !important; word-break: normal !important; overflow-wrap: normal !important; }'
     + 'td.desc-cell .desc-main { font-weight: 600; }'
     + 'td.desc-cell .auto-sync-note { font-size: 9px; color: #94a3b8; margin-top: 2px; font-style: italic; }'
     + 'td.desc-cell .desc-ref { font-size: 10px; color: #64748b; font-family: "SF Mono", Menlo, monospace; margin-top: 2px; }'
@@ -779,25 +744,6 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
   var perspective = opts.perspective === 'customer' ? 'customer' : 'internal';
   var bilingual = opts.bilingual === true;
   if (!account) return;
-  if (opts.legacy !== true) {
-    var smModel = buildStatement(account, entity, entries, {
-      perspective: opts.perspective, bilingual: bilingual, layout: 'combined',
-      currency: opts.currency, today: opts.today,
-      applications: (opts.simulation && opts.simulation.applications) || null,
-    });
-    var smSheet = statementSheet(smModel);
-    var smWs = XLSX.utils.aoa_to_sheet(smSheet.rows);
-    smWs['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 44 }, { wch: 16 }, { wch: 9 }, { wch: 16 }, { wch: 16 }, { wch: 14 }]
-      .concat(smModel.currencies.map(function () { return { wch: 34 }; }));
-    var smWb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(smWb, smWs, 'Statement');
-    var smName = 'Statement-' + sanitizeFilename(account.account_name)
-      + (smModel.filtered ? '-' + smModel.currencies.join('-') : '')
-      + (perspective === 'customer' ? '-customer' : '-internal')
-      + '-' + new Date().toISOString().substring(0, 10) + '.xlsx';
-    XLSX.writeFile(smWb, smName);
-    return { ok: true, filename: smName };
-  }
   // v55.83-A.6.27.72 HOTFIX 12 — Hide offset rows from Excel export to match screen view.
   entries = (entries || []).filter(function (e) { return e.transaction_type !== 'offset'; });
 
@@ -922,15 +868,10 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
       case 'offset':           arSide = credit; apSide = debit; break;
       default: arSide = credit; apSide = debit;
     }
-    // v55.83-HD (Codex QA FAIL fix) — strip the system "Auto-synced from invoice … Edit the
-    // invoice to change this entry." note from Excel notes too. Screen (OpenAccountsTab:1934)
-    // and print (this file:308) already strip it; the Excel description cell did not, leaking
-    // implementation noise onto customer/internal statements. If nothing real remains, append nothing.
-    var _xlNote = e.notes ? String(e.notes).replace(/Auto-synced from invoice[\s\S]*?Edit the invoice to change this entry\.?/gi, '').trim() : '';
     var row = [
       fmtDate(e.entry_date),
       xlType(e.transaction_type) || '',
-      (e.description || '') + (_xlNote ? ' — ' + _xlNote : ''),
+      (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
       e.reference_number || '',
       entryCur,
       arSide > 0.005 ? arSide : '',         // AR Side
@@ -965,8 +906,8 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
     var netP = totAR - totAP;
     var subLabel = netP > 0.005 ? 'in our favor' : netP < -0.005 ? 'against us' : 'settled';
     rows.push([cur + ' Summary:', '', '', '', '', '', '', '']);
-    rows.push(['', '', (perspective === 'customer' ? 'Total You Owe Us:' : 'Total AR (They Owe Us):'), '', cur, totAR, '', '']);
-    rows.push(['', '', (perspective === 'customer' ? 'Total Owed to You:' : 'Total AP (We Owe Them):'), '', cur, '', totAP, '']);
+    rows.push(['', '', 'Total AR (They Owe Us):', '', cur, totAR, '', '']);
+    rows.push(['', '', 'Total AP (We Owe Them):', '', cur, '', totAP, '']);
     rows.push(['', '', 'Net ' + cur + ' Position:', subLabel, cur, '', '', netP]);
     rows.push(['', '', '', '', '', '', '', '']);
   });
@@ -974,7 +915,7 @@ export function exportAccountLedgerToExcel(account, entity, entries, summary, op
   rows.push(['', '', '', '', '', '', '', '']);
   currencies.forEach(function (cur) {
     var cs = byCurrency[cur] || { balance: 0 };
-    var label = cs.balance > 0 ? (perspective === 'customer' ? 'You owe us' : 'They owe us') : cs.balance < 0 ? (perspective === 'customer' ? 'Owed to you' : 'We owe them') : 'Settled';
+    var label = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
     rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '', '']);
   });
 

@@ -49,6 +49,29 @@ export default function AccountingTab(props) {
   else if (_initSub === 'wavesync') { _initWaveStep = 'sync'; }
   if (_initWaveStep) { _initSub = 'wavehub'; }
   var [sub, setSub] = useState(_initSub);
+  // v55.83-SO (Max, Nov 15: "Add an obvious Close/Back control to transaction details and other pages opened
+  // during quick actions. Return me to the previous screen while preserving my filters and position.")
+  // A jump made from INSIDE a screen (a card, a queue button, "open in Bank Review") remembers where the
+  // person was. That screen stays alive but hidden, so its filters, open rows and typed text are untouched,
+  // and Back returns to the same scroll position. Picking a tab from the strip is a fresh start (no Back).
+  var [back, setBack] = useState(null); // { sub, y } | null
+  function goFrom(k) {
+    if (!k || k === sub) { return; }
+    var y0 = 0; try { y0 = window.scrollY || 0; } catch (e0) {}
+    setBack({ sub: sub, y: y0 });
+    setSub(k);
+    try { window.scrollTo(0, 0); } catch (e1) {}
+  }
+  function goBack() {
+    var b0 = back; if (!b0) { return; }
+    setBack(null); setSub(b0.sub);
+    setTimeout(function () {
+      try { window.scrollTo(0, b0.y || 0); window.dispatchEvent(new CustomEvent('nt-acct-returned', { detail: { sub: b0.sub } })); } catch (e2) {}
+    }, 60);
+  }
+  function pickTab(k) { setBack(null); setSub(k); }
+  function alive(k) { return sub === k || (back && back.sub === k); }
+  function shown(k) { return { display: sub === k ? 'block' : 'none' }; }
   var [waveKey, setWaveKey] = useState('');
   var tabs = [
     ['dashboard', '📊 Dashboard'],
@@ -141,7 +164,7 @@ export default function AccountingTab(props) {
             <div className="text-[9px] font-extrabold uppercase tracking-wider mb-0.5" style={{ color: '#64748b' }}>{g[0]}</div>
             <div className="flex flex-wrap gap-1">
               {items.map(function (k) {
-                return <button key={k} onClick={function () { setSub(k); }}
+                return <button key={k} onClick={function () { pickTab(k); }}
                   className={'px-3 py-1.5 text-xs rounded font-bold ' + (sub === k ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')}>
                   {keep[k]}
                 </button>;
@@ -153,22 +176,28 @@ export default function AccountingTab(props) {
       {sub !== 'books_home' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
-      {sub === 'dashboard' && <AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { setSub('review'); }} />}
-      {sub === 'books_home' && <div className="p-3"><BooksHomeTab {...props} onGo={setSub} /></div>}
-      {sub === 'waiting' && <div className="p-3"><WaitingTab {...props} onGo={setSub} /></div>}
+      {/* v55.83-SO — the obvious way back after a quick jump, or after arriving from another part of the Hub */}
+      {((back && back.sub !== sub) || props.onReturn) && <div className="px-3 pt-3 flex items-center gap-2 flex-wrap">
+        {back && back.sub !== sub && <button onClick={goBack} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {labelOfSub(tabs, back.sub)}</button>}
+        {!(back && back.sub !== sub) && props.onReturn && <button onClick={props.onReturn} className="px-4 py-2 rounded-lg text-[13px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #1d4ed8' }}>← Back to {props.returnLabel || 'where you were'}</button>}
+        <span className="text-[11px]" style={{ color: '#cbd5e1' }}>Your filters and place are kept.</span>
+      </div>}
+      {alive('dashboard') && <div style={shown('dashboard')}><AccountingDashboard key={'acct-dash|' + waveKey} {...props} onOpenBankReview={function () { goFrom('review'); }} /></div>}
+      {alive('books_home') && <div className="p-3" style={shown('books_home')}><BooksHomeTab {...props} onGo={goFrom} /></div>}
+      {alive('waiting') && <div className="p-3" style={shown('waiting')}><WaitingTab {...props} onGo={goFrom} /></div>}
       {sub === 'monthend' && <div className="p-3"><MonthEndTab /></div>}
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
-      {sub === 'forecast' && <div className="p-3"><CashForecastTab {...props} onGo={setSub} /></div>}
-      {sub === 'period_stats' && <div className="p-3"><PeriodStatsTab {...props} onGo={setSub} /></div>}
+      {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}
+      {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}
-      {sub === 'all_txns' && <div className="p-3"><AllTransactionsTab {...props} onGo={setSub} /></div>}
+      {alive('all_txns') && <div className="p-3" style={shown('all_txns')}><AllTransactionsTab {...props} onGo={goFrom} /></div>}
       {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} /></div>}
       {sub === 'company' && <CompanyProfileTab {...props} />}
-      {sub === 'arhistory' && <AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} onGo={setSub} />}
+      {alive('arhistory') && <div style={shown('arhistory')}><AccountingCustomerHistory key={'acct-arh|' + waveKey} {...props} onGo={goFrom} /></div>}
       {sub === 'ledger' && <CustomerLedger key={'acct-led|' + waveKey} {...props} />}
       {sub === 'customers' && <AccountingCustomersTab key={'acct-cus|' + waveKey} {...props} />}
       {sub === 'invoices' && <AccountingInvoicesTab key={'acct-inv|' + waveKey} {...props} defaultMode="invoices" />}
@@ -176,13 +205,20 @@ export default function AccountingTab(props) {
       {sub === 'balances' && <OpenBalancesTab {...props} />}
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
-      {sub === 'all_invoices' && <BusinessBooksTab {...props} onGo={setSub} />}
+      {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}
-      {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} />}
+      {sub === 'review' && <BankReviewTab key={'acct-rev|' + waveKey} {...props} onBack={back ? goBack : (props.onReturn || null)} backLabel={back ? labelOfSub(tabs, back.sub) : (props.returnLabel || '')} />}
       {sub === 'wavehub' && <WaveHub key={'acct-wavehub|' + waveKey} {...props} waveKey={waveKey} canWaveSync={canWaveSync} initialWaveStep={_initWaveStep} />}
     </div>
   );
+}
+
+// v55.83-SO — the plain name of a screen for the Back button (the tab label without its icon)
+export function labelOfSub(tabs, k) {
+  var hit = null;
+  (tabs || []).forEach(function (t) { if (t && t[0] === k) { hit = t[1]; } });
+  return hit ? String(hit).replace(/^[^A-Za-z0-9]+/, '').trim() : 'the previous screen';
 }
 
 // v55.83-PB — the four engine-room ClickBooks screens live behind ONE admin tab

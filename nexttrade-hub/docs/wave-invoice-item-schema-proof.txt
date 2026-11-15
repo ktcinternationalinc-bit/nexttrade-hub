@@ -1,0 +1,37 @@
+
+=== InvoiceCreateInput ===
+  businessId: ID!   <-- REQUIRED
+  customerId: ID!   <-- REQUIRED
+  status: InvoiceCreateStatus
+  currency: CurrencyCode
+  title: String
+  subhead: String
+  invoiceNumber: String
+  poNumber: String
+  invoiceDate: Date
+  exchangeRate: Decimal
+  dueDate: Date
+  items: [InvoiceCreateItemInput!]
+  discounts: [InvoiceDiscountInput!]
+  memo: String
+  footer: String
+  disableAmexPayments: Boolean
+  disableCreditCardPayments: Boolean
+  disableBankPayments: Boolean
+  itemTitle: String
+  unitTitle: String
+  priceTitle: String
+  amountTitle: String
+  hideName: Boolean
+  hideDescription: Boolean
+  hideUnit: Boolean
+  hidePrice: Boolean
+  hideAmount: Boolean
+  requireTermsOfServiceAgreement: Boolean
+
+=== InvoiceCreateItemInput ===
+  productId: ID!   <-- REQUIRED
+  description: String
+  quantity: Decimal
+  unitPrice: Decimal
+  taxes: [InvoiceCreateItemTaxInput!]

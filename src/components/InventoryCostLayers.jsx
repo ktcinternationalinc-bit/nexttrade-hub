@@ -10,7 +10,6 @@
 // Permission: view = Inventory; cost columns gated by canSeeInventoryCosts.
 
 import { useState, useEffect, useMemo } from 'react';
-import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 
@@ -60,13 +59,6 @@ export default function InventoryCostLayers(props) {
           supabase.from('inv_warehouses').select('id,name,code').order('name'),
         ]);
         if (cancelled) return;
-        // v55.83-HK — surface Supabase query errors (they don't throw → catch won't fire →
-        // empty view would look like "no stock" instead of a load failure).
-        var _errs = [];
-        if (lyRes && lyRes.error) { _errs.push('layers: ' + lyRes.error.message); }
-        if (prodRes && prodRes.error) { _errs.push('products: ' + prodRes.error.message); }
-        if (whRes && whRes.error) { _errs.push('warehouses: ' + whRes.error.message); }
-        if (_errs.length) { console.error('[layers] query errors', _errs); toast.error('Failed to load: ' + _errs.join(' · ')); }
         setLayers(lyRes.data || []);
         setProducts(prodRes.data || []);
         setWarehouses(whRes.data || []);
@@ -140,7 +132,10 @@ export default function InventoryCostLayers(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <RestrictedNotice title="Access restricted" message="Viewing cost layers requires the Inventory permission." />
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
+          <div className="text-sm text-amber-800 mt-1 font-medium">Viewing cost layers requires the Inventory permission.</div>
+        </div>
       </div>
     );
   }

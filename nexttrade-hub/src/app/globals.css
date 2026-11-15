@@ -1,0 +1,573 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #111827;
+  --bg-card: rgba(17, 24, 39, 0.7);
+  --bg-card-solid: #151c2e;
+  --bg-glass: rgba(255,255,255,0.04);
+  --bg-glass-hover: rgba(255,255,255,0.08);
+  --border-glass: rgba(255,255,255,0.08);
+  --border-glow: rgba(56,189,248,0.25);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #8b9cb8;
+  --accent: #38bdf8;
+  --accent-glow: rgba(56,189,248,0.15);
+  --accent2: #a78bfa;
+  --accent3: #34d399;
+  --danger: #f87171;
+  --warning: #fbbf24;
+  --success: #34d399;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 16px; }
+
+/* v55.83-A.6.27.60 — Center form labels app-wide for professional look.
+   Targets the common pattern: <label className="text-[10px] font-semibold">Field</label>
+   followed by an input/select on the next line. Excludes labels that contain
+   a checkbox/radio input (those need their flex inline layout) and labels with
+   explicit text-left/text-right already set. */
+label[class*="text-["][class*="font-"]:not([class*="text-left"]):not([class*="text-right"]):not(:has(input[type="checkbox"])):not(:has(input[type="radio"])) {
+  display: block;
+  text-align: center;
+}
+/* Make sure the label wrapper itself stays block-level so child input
+   stretches normally underneath the centered label. */
+label[class*="text-["][class*="font-"]:not(:has(input[type="checkbox"])):not(:has(input[type="radio"])) > span:first-child {
+  display: block;
+  text-align: center;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  background: var(--bg-primary);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56,189,248,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(167,139,250,0.06) 0%, transparent 50%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* ===== GLOBAL TEXT SIZE ===== */
+.text-xs { font-size: 0.82rem !important; line-height: 1.4 !important; }
+.text-sm { font-size: 0.95rem !important; line-height: 1.5 !important; }
+.text-\[10px\] { font-size: 0.78rem !important; line-height: 1.35 !important; }
+.text-\[9px\] { font-size: 0.73rem !important; line-height: 1.3 !important; }
+.text-\[8px\] { font-size: 0.68rem !important; }
+.text-lg { font-size: 1.2rem !important; }
+.text-xl { font-size: 1.45rem !important; }
+.text-2xl { font-size: 1.7rem !important; }
+.text-3xl { font-size: 2rem !important; }
+
+/* ===== DARK THEME OVERRIDES ===== */
+
+/* White cards → dark glass cards */
+.bg-white, .bg-slate-50 {
+  background: var(--bg-card) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-glass) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04) !important;
+  transition: all 0.25s cubic-bezier(0.4,0,0.2,1) !important;
+}
+.bg-white:hover {
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06), 0 0 20px var(--accent-glow) !important;
+  border-color: var(--border-glow) !important;
+}
+
+/* Background overrides */
+.bg-slate-100, .min-h-screen.bg-slate-100, body {
+  background: var(--bg-primary) !important;
+}
+
+/* Colored tint cards */
+.bg-blue-50, .bg-emerald-50, .bg-green-50, .bg-amber-50, .bg-red-50, .bg-purple-50,
+.bg-indigo-50, .bg-orange-50, .bg-yellow-50, .bg-cyan-50, .bg-sky-50, .bg-teal-50,
+.bg-pink-50, .bg-rose-50, .bg-fuchsia-50, .bg-violet-50, .bg-lime-50 {
+  background: rgba(255,255,255,0.05) !important;
+  backdrop-filter: blur(8px);
+  border-color: var(--border-glass) !important;
+  color: var(--text-primary) !important;
+}
+.bg-blue-50, .bg-sky-50, .bg-cyan-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
+.bg-emerald-50, .bg-green-50, .bg-teal-50, .bg-lime-50 { background: rgba(52,211,153,0.1) !important; border-color: rgba(52,211,153,0.2) !important; }
+.bg-red-50, .bg-rose-50, .bg-pink-50 { background: rgba(248,113,113,0.1) !important; border-color: rgba(248,113,113,0.2) !important; }
+.bg-amber-50, .bg-yellow-50 { background: rgba(251,191,36,0.1) !important; border-color: rgba(251,191,36,0.2) !important; }
+.bg-purple-50, .bg-indigo-50, .bg-violet-50, .bg-fuchsia-50 { background: rgba(167,139,250,0.1) !important; border-color: rgba(167,139,250,0.2) !important; }
+.bg-orange-50 { background: rgba(251,146,60,0.1) !important; border-color: rgba(251,146,60,0.2) !important; }
+
+/* Ensure text inside tinted areas stays readable */
+.bg-blue-50 *, .bg-emerald-50 *, .bg-green-50 *, .bg-amber-50 *, .bg-red-50 *,
+.bg-purple-50 *, .bg-indigo-50 *, .bg-orange-50 *, .bg-cyan-50 * {
+  color: inherit;
+}
+
+/* Status badges - brighter */
+.bg-blue-100, .bg-sky-100, .bg-cyan-100 { background: rgba(56,189,248,0.2) !important; color: #7dd3fc !important; }
+.bg-emerald-100, .bg-green-100, .bg-teal-100, .bg-lime-100 { background: rgba(52,211,153,0.2) !important; color: #6ee7b7 !important; }
+.bg-red-100, .bg-rose-100, .bg-pink-100 { background: rgba(248,113,113,0.2) !important; color: #fca5a5 !important; }
+/* v55.82-I (Max May 11 2026): bg-amber-100 was forcing text color to
+   light yellow (#fde68a), which produced yellow-on-yellow with no
+   contrast on the resulting amber pill. Now we keep the background
+   tint but DROP the text-color override — JSX className for text
+   (e.g. text-amber-900) wins.
+   v55.83-A.6.27.NEXT (Issue 8/9, Max May 23 2026): same fix for
+   bg-yellow-100 — was missing from this list entirely, so warning
+   banners rendered as Tailwind's bright #fef9c3 with no dark-theme
+   adjustment. Added to the amber group. */
+.bg-amber-100, .bg-yellow-100 { background: rgba(251,191,36,0.2) !important; }
+.bg-purple-100, .bg-violet-100, .bg-fuchsia-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
+.bg-slate-100:not(.min-h-screen) { background: rgba(255,255,255,0.08) !important; color: var(--text-secondary) !important; }
+.bg-indigo-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
+/* v55.83-A.6.27.NEXT (Issue 8, Max May 23 2026): -200 intensity overrides.
+   Previously these rendered as bright Tailwind defaults with whatever text
+   colour the JSX specified — usually invisible because the .font-extrabold
+   rule (line below) forced text to near-white. Map them to slightly more
+   saturated translucent overlays so e.g. the TEMPLATE badge reads. */
+.bg-sky-200 { background: rgba(56,189,248,0.28) !important; }
+.bg-blue-200 { background: rgba(56,189,248,0.28) !important; }
+.bg-emerald-200, .bg-green-200, .bg-teal-200 { background: rgba(52,211,153,0.28) !important; }
+.bg-amber-200, .bg-yellow-200 { background: rgba(251,191,36,0.28) !important; }
+.bg-purple-200, .bg-violet-200, .bg-indigo-200 { background: rgba(167,139,250,0.28) !important; }
+
+/* Text colors for dark */
+.text-slate-900, .text-slate-800, .text-slate-700 { color: var(--text-primary) !important; }
+.text-slate-600 { color: var(--text-secondary) !important; }
+.text-slate-500 { color: var(--text-muted) !important; }
+.text-slate-400 { color: rgba(160,178,200,0.9) !important; }
+.text-slate-300 { color: rgba(170,188,210,0.8) !important; }
+
+/* Accent text - keep vibrant */
+.text-blue-600, .text-blue-700, .text-blue-500 { color: #38bdf8 !important; }
+.text-emerald-600, .text-emerald-700, .text-emerald-500, .text-green-700, .text-green-600 { color: #34d399 !important; }
+.text-red-500, .text-red-600, .text-red-700 { color: #f87171 !important; }
+/* v55.82-I — amber text on amber background is yellow-on-yellow. Don't
+   force a pale color here; let the JSX className choose (text-amber-900
+   on light bg, text-amber-300 on dark bg, etc.). */
+.text-purple-600, .text-purple-700 { color: #a78bfa !important; }
+.text-indigo-600, .text-indigo-700 { color: #818cf8 !important; }
+
+/* v55.83-A.6.27.72 HOTFIX 29 — Global -900/-800 dark-text auto-brightening.
+   Per Max May 28 2026 screenshot ("Current/Original columns too dark on
+   dark screen"): every `text-X-900` and `text-X-800` instance Tailwind
+   defaults to a near-black colored hue. On the portal's dark theme that
+   reads as invisible-on-dark. Until HOTFIX 29 only -500/-600/-700 had
+   dark-theme overrides; the -800/-900 darkest shades silently regressed
+   readability on every dark surface.
+   New rule: any -800 or -900 text shade automatically maps to its bright
+   -200 or -300 counterpart on the dark theme. This is the HOTFIX 25
+   readability rule enforced GLOBALLY rather than per-component. */
+.text-blue-800, .text-blue-900, .text-sky-800, .text-sky-900, .text-cyan-800, .text-cyan-900 { color: #7dd3fc !important; }
+.text-emerald-800, .text-emerald-900, .text-green-800, .text-green-900, .text-teal-800, .text-teal-900, .text-lime-800, .text-lime-900 { color: #6ee7b7 !important; }
+.text-red-800, .text-red-900, .text-rose-800, .text-rose-900, .text-pink-800, .text-pink-900 { color: #fca5a5 !important; }
+.text-purple-800, .text-purple-900, .text-violet-800, .text-violet-900, .text-fuchsia-800, .text-fuchsia-900 { color: #c4b5fd !important; }
+.text-indigo-800, .text-indigo-900 { color: #a5b4fc !important; }
+.text-orange-800, .text-orange-900 { color: #fdba74 !important; }
+/* NOTE on amber: HOTFIX 25 keeps amber JSX free to choose its own shade
+   for the amber-on-amber pill case, so amber-800/900 are intentionally
+   excluded from this global override. */
+
+/* Borders */
+.border-slate-200, .border-slate-100, .border-slate-50 { border-color: var(--border-glass) !important; }
+.border-blue-200, .border-blue-300 { border-color: rgba(56,189,248,0.2) !important; }
+.border-emerald-200, .border-green-200, .border-green-300 { border-color: rgba(52,211,153,0.2) !important; }
+.border-red-200, .border-red-300 { border-color: rgba(248,113,113,0.2) !important; }
+.border-amber-200 { border-color: rgba(251,191,36,0.2) !important; }
+.border-purple-200, .border-purple-300, .border-indigo-200, .border-indigo-300 { border-color: rgba(167,139,250,0.2) !important; }
+
+/* ===== BUTTONS ===== */
+/* Input fields in dark theme */
+input, textarea, select {
+  background: rgba(15, 23, 42, 0.8) !important;
+  color: #e2e8f0 !important;
+  border-color: var(--border-glass) !important;
+}
+input::placeholder, textarea::placeholder {
+  color: rgba(148, 163, 184, 0.5) !important;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: rgba(56, 189, 248, 0.5) !important;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15) !important;
+}
+/* FORCE dark input — overrides everything including Safari native styles */
+.dark-input, .dark-input:focus, .dark-input:active {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  background-color: #0f172a !important;
+  background: #0f172a !important;
+  color: #f1f5f9 !important;
+  caret-color: #38bdf8 !important;
+  border: 2px solid rgba(56, 189, 248, 0.4) !important;
+  border-radius: 8px !important;
+  padding: 10px 14px !important;
+  font-size: 14px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+.dark-input::placeholder {
+  color: rgba(148, 163, 184, 0.6) !important;
+}
+.dark-input:focus {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2) !important;
+}
+
+button {
+  transition: all 0.2s cubic-bezier(0.4,0,0.2,1);
+  min-height: 32px;
+}
+button:active { transform: scale(0.97); }
+
+/* Primary buttons glow */
+.bg-blue-500 {
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6) !important;
+  box-shadow: 0 2px 12px rgba(56,189,248,0.3) !important;
+  border: none !important;
+}
+.bg-blue-500:hover, .bg-blue-600 {
+  box-shadow: 0 4px 20px rgba(56,189,248,0.45) !important;
+}
+.bg-emerald-500 {
+  background: linear-gradient(135deg, #10b981, #059669) !important;
+  box-shadow: 0 2px 12px rgba(52,211,153,0.3) !important;
+}
+.bg-red-500 {
+  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  box-shadow: 0 2px 12px rgba(248,113,113,0.3) !important;
+}
+.bg-purple-500 {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed) !important;
+  box-shadow: 0 2px 12px rgba(167,139,250,0.3) !important;
+}
+.bg-amber-500 {
+  background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+  box-shadow: 0 2px 12px rgba(251,191,36,0.3) !important;
+}
+
+/* Ghost buttons */
+.bg-white\/10 {
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+}
+.bg-white\/10:hover { background: rgba(255,255,255,0.12) !important; }
+
+/* ===== INPUTS ===== */
+input, select, textarea {
+  transition: border-color 0.2s, box-shadow 0.2s;
+  font-size: 0.9rem !important;
+  min-height: 38px;
+  background: rgba(255,255,255,0.05) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-glass) !important;
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted) !important; opacity: 0.7; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 20px rgba(56,189,248,0.08) !important;
+  background: rgba(255,255,255,0.08) !important;
+}
+option { background: var(--bg-secondary); color: var(--text-primary); }
+
+/* ===== ROUNDED CORNERS ===== */
+.rounded-xl { border-radius: 1rem !important; }
+.rounded-lg { border-radius: 0.65rem !important; }
+.rounded-2xl { border-radius: 1.25rem !important; }
+
+/* ===== TAB NAVIGATION ===== */
+.tab-nav {
+  background: var(--bg-secondary) !important;
+  border-bottom: 1px solid var(--border-glass);
+  padding: 0.25rem 0.5rem !important;
+}
+.tab-nav button {
+  padding: 0.7rem 1rem !important;
+  font-size: 0.82rem !important;
+  border-radius: 0.5rem !important;
+  border-bottom: none !important;
+  margin: 0.15rem 0.1rem !important;
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+}
+.tab-nav button:hover {
+  color: var(--text-primary) !important;
+  background: var(--bg-glass-hover) !important;
+}
+.tab-nav button[class*="text-blue-600"],
+.tab-nav button[class*="border-blue-600"] {
+  color: var(--accent) !important;
+  background: rgba(56,189,248,0.1) !important;
+  border: 1px solid rgba(56,189,248,0.2) !important;
+  box-shadow: 0 0 12px rgba(56,189,248,0.08);
+}
+.tab-nav button[class*="bg-blue-50"] {
+  background: rgba(56,189,248,0.1) !important;
+}
+
+/* ===== STAT CARDS ===== */
+[style*="borderLeftWidth"] {
+  transition: transform 0.2s, box-shadow 0.25s;
+  padding: 1.1rem !important;
+  position: relative;
+  overflow: hidden;
+}
+[style*="borderLeftWidth"]::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 3px;
+  filter: blur(4px);
+  opacity: 0.5;
+}
+[style*="borderLeftWidth"]:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.06) !important;
+}
+
+/* ===== TABLES ===== */
+th {
+  font-size: 0.75rem !important;
+  padding: 0.65rem 0.75rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(255,255,255,0.03) !important;
+  color: var(--text-muted) !important;
+  border-bottom: 1px solid var(--border-glass) !important;
+}
+td {
+  padding: 0.55rem 0.75rem !important;
+  font-size: 0.84rem !important;
+  border-color: var(--border-glass) !important;
+}
+tr:hover td { background: rgba(56,189,248,0.04); }
+thead { background: transparent !important; }
+tbody tr { border-color: var(--border-glass) !important; }
+
+/* ===== MODAL ===== */
+.fixed.inset-0 { backdrop-filter: blur(6px); }
+.fixed.inset-0 > .bg-white,
+.fixed.inset-0 .bg-white.rounded-2xl {
+  background: var(--bg-card-solid) !important;
+  border: 1px solid var(--border-glass) !important;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.5), 0 0 40px rgba(56,189,248,0.05) !important;
+}
+.bg-black\/50 { background: rgba(0,0,0,0.6) !important; }
+.bg-black\/60 { background: rgba(0,0,0,0.65) !important; }
+
+/* ===== BADGES ===== */
+.rounded-full {
+  padding: 0.2rem 0.6rem !important;
+  font-size: 0.72rem !important;
+}
+
+/* ===== HEADINGS ===== */
+h2 { letter-spacing: -0.03em; font-weight: 800 !important; }
+h3 { letter-spacing: -0.02em; }
+
+/* Title text colors for dark backgrounds */
+/* v55.83-A.6.27.NEXT (Issue 8/9, Max May 23 2026): REMOVED the rule
+   .font-extrabold { color: var(--text-primary); } that lived here.
+   That rule clobbered every bold element's color, overriding explicit
+   dark text colours set by parent banners. It was the cause of the
+   yellow-on-yellow "Heads up:" / "BK" bug in the Create Variant modal
+   AND the white-text-on-light-blue TEMPLATE badge in Product List.
+   The body cascade already sets color: var(--text-primary) for dark
+   backgrounds, so this rule was redundant on dark-themed pages and
+   actively harmful inside light-coloured callout banners. */
+.text-blue-800 { color: #7dd3fc !important; }
+.text-emerald-800, .text-green-800 { color: #6ee7b7 !important; }
+.text-red-800 { color: #fca5a5 !important; }
+/* v55.82-I — removed `.text-amber-800, .text-amber-700` override here too.
+   See companion note above. JSX className decides. */
+.text-indigo-800 { color: #c4b5fd !important; }
+
+/* ===== CALENDAR ===== */
+.grid-cols-7 > div {
+  min-height: 5rem !important;
+  padding: 0.4rem !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+}
+.grid-cols-7 > div .text-\[8px\],
+.grid-cols-7 > div .text-\[9px\] {
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+  padding: 0.15rem 0.3rem !important;
+  border-radius: 4px;
+}
+
+/* ===== CHART BARS ===== */
+.recharts-cartesian-grid line { stroke: rgba(255,255,255,0.05) !important; }
+.recharts-text { fill: var(--text-muted) !important; }
+
+/* ===== DASHED BORDERS ===== */
+.border-dashed { border-color: rgba(255,255,255,0.12) !important; }
+
+/* ===== ANIMATIONS ===== */
+@keyframes gentlePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(56,189,248,0.15); }
+  50% { box-shadow: 0 0 25px rgba(56,189,248,0.3); }
+}
+.animate-pulse { animation: gentlePulse 2s ease-in-out infinite; }
+
+/* v55.82-B — UNIFIED ACTIVE-ASSISTANT GLOW SYSTEM.
+   Replaces the previous "inline boxShadow + class animation tries to override
+   it" approach which was the root of two visible bugs:
+     PROBLEM 2 — active persona not pulsing. The inline boxShadow always wins
+                 over a CSS animation, so .ktc-assistant-speaking's keyframes
+                 had no effect. The glow looked static even when speaking.
+     PROBLEM 3 — random blinking on all three avatars. transition-all on the
+                 tile, combined with the inline boxShadow appearing/dis-
+                 appearing on isActive flips, caused the browser to fight
+                 between transition interpolation and CSS class animation.
+                 The result was visible flicker across all tiles every time
+                 React re-rendered the AssistantsBar (every speaking event,
+                 every Sara-seen-today refresh, etc.).
+
+   Now both states are pure CSS classes driven by a single CSS variable
+   --ktc-glow-color. The inline boxShadow is GONE. JS just sets the variable.
+     IDLE active = .ktc-assistant-active     → static soft glow + slow pulse
+     SPEAKING    = .ktc-assistant-speaking   → faster, deeper pulse (overrides)
+   Both animations only animate box-shadow. No transform, no opacity, no
+   anything else that could fight the tile's hover scale. */
+/* v55.82-I — GLOW VISIBILITY OVERHAUL (Max May 11 2026 photo evidence).
+   Per Max: "if someone is active, they should be glowing. It should be a
+   very visible glow. It's not happening now." Photo showed the cyan Sara
+   tile completely flat against the cyan gradient background — the previous
+   ring + box-shadow used 0.5 alpha colors that disappeared into the card's
+   own background gradient.
+
+   Two fixes:
+     1. Add a high-contrast WHITE inner ring (4px) before the colored halo
+        so the boundary between card and glow is always visible, regardless
+        of background color.
+     2. Wider, more saturated colored halos. 0.5 alpha bumped via richer
+        shadow stacking (multiple shadows = additive glow that pops).
+     3. Slow breathing range goes from 4px → 8px (was 4-6px) so the size
+        change is actually noticeable.
+
+   IDLE active = .ktc-assistant-active     → static soft glow + slow pulse
+   SPEAKING    = .ktc-assistant-speaking   → faster, deeper pulse (overrides)
+   Both animations only animate box-shadow. No transform, no opacity, no
+   anything else that could fight the tile's hover scale. */
+@keyframes ktcAssistantActiveBreath {
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 10px var(--ktc-glow-color),
+      0 8px 36px var(--ktc-glow-color),
+      0 0 60px var(--ktc-glow-color);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 14px var(--ktc-glow-color),
+      0 12px 48px var(--ktc-glow-color),
+      0 0 80px var(--ktc-glow-color);
+  }
+}
+.ktc-assistant-active {
+  animation: ktcAssistantActiveBreath 3s ease-in-out infinite;
+}
+
+@keyframes ktcAssistantSpeakingPulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 12px var(--ktc-glow-color),
+      0 12px 40px var(--ktc-glow-color),
+      0 0 80px var(--ktc-glow-color);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 18px var(--ktc-glow-color),
+      0 20px 64px var(--ktc-glow-color),
+      0 0 100px var(--ktc-glow-color);
+  }
+}
+.ktc-assistant-speaking {
+  animation: ktcAssistantSpeakingPulse 1.2s ease-in-out infinite;
+}
+/* Removed .ktc-assistant-active-pulse — idle active no longer pulses. */
+
+/* Active tab glow animation */
+.tab-nav button[class*="text-blue-600"] {
+  animation: glowPulse 3s ease-in-out infinite;
+}
+
+/* ===== GRADIENT TEXT UTIL ===== */
+.gradient-text {
+  background: linear-gradient(135deg, #38bdf8, #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* RTL */
+[style*="direction: rtl"] { font-feature-settings: "liga" 0; }
+
+/* Print */
+@media print {
+  html { font-size: 14px; }
+  body { background: white !important; color: black !important; }
+  .bg-white { background: white !important; color: black !important; border: 1px solid #ccc !important; box-shadow: none !important; }
+  button, .tab-nav, nav { display: none !important; }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  html { font-size: 15px; }
+  .grid-cols-7 > div { min-height: 3.5rem !important; }
+  th, td { padding: 0.4rem 0.5rem !important; }
+}
+
+/* ===== HOVER STATES - ensure text stays readable ===== */
+.hover\:bg-blue-50:hover { background: rgba(56,189,248,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-emerald-50:hover { background: rgba(52,211,153,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-red-50:hover { background: rgba(248,113,113,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-amber-50:hover { background: rgba(251,191,36,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-purple-50:hover { background: rgba(167,139,250,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-slate-50:hover { background: rgba(255,255,255,0.06) !important; color: var(--text-primary) !important; }
+
+/* Line-through for closed items - keep visible */
+.line-through { text-decoration-color: rgba(255,255,255,0.4) !important; }
+
+/* Opacity overrides - don't let items become invisible */
+.opacity-50 { opacity: 0.6 !important; }
+
+@keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* v55.79 — PortraitAvatar listening ring pulse + speaking subtle scale.
+   Used by Jenna and Sara (not Nadia, who has her own animated SVG). */
+@keyframes avatarListeningBreath {
+  0%, 100% { transform: scale(1.0); opacity: 0.85; }
+  50%      { transform: scale(1.08); opacity: 1.0; }
+}
+.avatar-listening-pulse {
+  animation: avatarListeningBreath 1.4s ease-in-out infinite;
+}

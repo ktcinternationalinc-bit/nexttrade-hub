@@ -1,16 +1,11 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
-import { fetchUserAdmin } from '../lib/user-admin-client';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
 import BusinessEntitiesPanel from './BusinessEntitiesPanel';
-import AccountingVisibilityPanel from './AccountingVisibilityPanel';
-import BankBalancePermissions from './BankBalancePermissions'; // eslint-disable-line no-unused-vars -- v55.83-RI: its two grants now live in BankingAccessPanel
-import BankingAccessPanel, { BANKING_KEYS } from './BankingAccessPanel'; // v55.83-RI
-import ClickBooksOperatorPermissions from './ClickBooksOperatorPermissions';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
 // Existing helper rejects both active===false AND active===null (legacy bug).
@@ -452,77 +447,6 @@ const ACTION_PERMS = [
   { key: 'Reopen Closed Buckets',        label: 'Reopen Closed Buckets',        desc: 'Reopen a closed bucket to revert reconciliation. Use sparingly — every reopen is audit-logged.' },
   // v55.83-A.6.27.69 (Phase 2 bonus) — Shipping bulk-delete permission.
   { key: 'Delete Shipping Bubbles',      label: 'Delete Shipping Bubbles',      desc: 'Use bulk-delete inside a shipping route bubble (Detail view) to remove multiple historical rates at once. Without this, the bulk-select toolbar and per-row checkboxes are hidden. Super-admin always has this.' },
-  // v55.83-I (Max Jun 3 2026) — single-rate delete permission (matches the bubble one).
-  { key: 'Delete Shipping Rates',        label: 'Delete Shipping Rates',        desc: 'Delete an individual shipping rate (the red Del button on each rate row). Previously admin-only; this lets a non-admin user delete single rates. Admins and super-admin always have this.' },
-  // v55.83-GA — Wave Sync & Accounting permissions, assignable to staff. Default OFF.
-  // The key strings match what BOTH the server route guard (server-permissions PERMISSION_ALIASES)
-  // and the client helpers (bank-permissions) recognize, so granting one here is honored everywhere.
-  { key: 'wave.sync.view',              label: 'Wave: View Sync Center',         desc: 'See the Wave Sync Center screen (pending sync queue, status). Required before any other Wave action is usable from the UI.' },
-  { key: 'wave.sync.dry_run',           label: 'Wave: Dry Run',                  desc: 'Run a dry run (preview what would be sent to Wave) without actually pushing.' },
-  { key: 'wave.sync.log.view',          label: 'Wave: View Sync Log',            desc: 'View the Wave sync log (history of pushes/imports, successes and failures).' },
-  { key: 'wave.customers.push',         label: 'Wave: Push Customers',           desc: 'Push Hub customers up to Wave.' },
-  { key: 'wave.invoices.push',          label: 'Wave: Push Invoices',            desc: 'Push approved Hub invoices up to Wave.' },
-  { key: 'wave.payments.push',          label: 'Wave: Push Payments',            desc: 'Push matched invoice payments to Wave (records the payment in Wave).' },
-  { key: 'wave.import.run',             label: 'Wave: Run Import',               desc: 'Pull customers/invoices from Wave into the Hub (import / reconcile).' },
-  { key: 'wave.categories.pull',        label: 'Wave: Pull Categories',          desc: 'Pull the Wave chart of accounts (categories) into the Hub.' },
-  { key: 'wave.settings.manage',        label: 'Wave: Manage Settings',          desc: 'Change Wave Sync settings: default product, payment deposit account, default bank account, run the database check.' },
-  { key: 'ar.view_summary',             label: 'AR: View Company Summary',       desc: 'See company-wide Accounts Receivable totals on the dashboard (total owed). Separate from seeing individual invoice balances.' },
-  { key: 'ar.view_customer_balances',   label: 'AR: View Customer Balances',     desc: 'See how much each customer owes across all their invoices (top customer balances).' },
-  { key: 'ar.view_invoice_balances',    label: 'AR: View Invoice Balances',      desc: 'See the balance due on individual invoices (needed by payment matchers). Does NOT reveal company-wide totals.' },
-  { key: 'ar.send_reminders', label: 'AR: Send reminders', desc: 'Send late-invoice payment reminders to customers by email/WhatsApp.' },
-  { key: 'bills.view',    label: 'Bills: View',    desc: 'See vendor bills (what the company owes) and the cash-flow view.' },
-  { key: 'bills.manage',  label: 'Bills: Manage',  desc: 'Add/edit/void bills and record bill payments. Implies view.' },
-  { key: 'bills.price_rules', label: 'Bills: Price rules', desc: 'Enter expected prices of products / services and commission rules; the Hub checks every bill against them and flags differences for a person.' },
-  { key: 'journals.prepare', label: 'Journals: Write', desc: 'Write a journal entry (accrual, correction, re-class) and send it for approval.' },
-  { key: 'journals.approve', label: 'Journals: Approve', desc: 'Approve or reject a journal entry someone else wrote; approving posts it to the ledger.' },
-  { key: 'wires.view',    label: 'Wires: View',    desc: 'Open the 🏦 Wires portal: every wire sent to vendors, its audit, and all the bills it paid. Needs ClickBooks access.' },
-  { key: 'wires.prepare', label: 'Wires: Prepare', desc: 'Prepare a wire BEFORE it is sent: pick who it goes to (RTM Capital, NextTrade Industries — bills only — or a vendor), the bills it pays and the optional RTM fee; run the audit; cancel a wire not yet sent.' },
-  { key: 'wires.signoff', label: 'Wires: Sign Off', desc: 'Be one of the TWO people who verify a prepared wire after the audit, before it is sent. The same person can never sign both.' },
-  { key: 'wires.send', label: 'Wires: Send', desc: 'Mark an approved wire as sent (with the bank confirmation attached), attach it to its bank line (the bills are recorded paid then), and add RTM proof.' },
-  { key: 'recon.signoff', label: 'Order Recon: Reconcile & Approve', desc: 'Resolve saved order-reconciliation lines, mark a run reconciled, or approve one (approver must be a different person).' },
-  { key: 'pnl.view',                    label: 'P&L: View',                      desc: 'See profit & loss — revenue, cost of goods, margins per product and per invoice. Sensitive: reveals costs.' },
-  { key: 'pnl.edit_costs',              label: 'P&L: Edit Product Costs',        desc: 'Enter and change product costs (with effective-from dates). The most sensitive accounting grant.' },
-  { key: 'ar.view_upcoming_due',        label: 'AR: View Upcoming Due',          desc: 'See the upcoming-due buckets (due now / 1-30 / 31-60 / 61-90 days) on the dashboard. Separate from the overall AR summary.' },
-  { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },
-  { key: 'ar.manage_overdue_dashboard', label: 'AR: Manage Overdue',            desc: 'Ignore / un-ignore invoices on the overdue dashboard (writes to the invoice). Separate from just viewing overdue.' },
-  { key: 'ar.export',                   label: 'AR: Export',                     desc: 'Export AR reports to Excel/CSV.' },
-  { key: 'payments.match',              label: 'Payments: Match to Invoice',     desc: 'Match a bank deposit to a customer invoice (records a payment in the Hub).' },
-  { key: 'payments.unmatch',            label: 'Payments: Unmatch',              desc: 'Reverse a payment match. Audit-logged.' },
-  { key: 'payments.mark_manual_done',   label: 'Payments: Mark Manual Done',     desc: 'Mark a queued payment as already entered in Wave by hand (clears it from the queue without faking a Wave id).' },
-  { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
-  { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
-  { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
-  { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
-  { key: 'accounting.view_underlying',  label: 'Accounting: Open Cards (rows only) — RETIRED', desc: 'No longer used (v55.83-RE). Card navigation now follows the card\'s own group: P1 cards (Expected, Bills Due, Late, Overdue) and P3 cards (Invoiced, Paid, Still Open, Collected) open their records; P2 cards need P2.' },
-  { key: 'audit.view',                  label: 'Audit: View Trail',              desc: 'See the 🧾 Audit Trail — who categorized, matched, created, paid, validated what and when. Append-only; nobody can edit or delete audit rows. Super admins always can. (v55.83-QI)' },
-  { key: 'accounting.change_dates',     label: 'Accounting: Change Date Filters', desc: 'Move the time filters beyond the defaults (Stats/Books: June 1 2026 → today; All Transactions: Jan 1 2026 → today). Without it the server clamps the range and says so. (v55.83-QI)' },
-  { key: 'bank.classify',               label: 'Bank: Categorize Transactions',  desc: 'Apply a category (classification / Wave category) to a bank transaction.' },
-  // v55.83-GW — Inventory Report Center permissions (keys match inventory-permissions.js).
-  // view falls back to general Inventory access; export/valuation are explicit grants.
-  { key: 'inventory.reports.view',      label: 'Inventory: View Reports',        desc: 'Open the Inventory Report Center (Snapshot, Virtual Mix Composition, Movement). Falls back to general Inventory tab access if not set.' },
-  { key: 'inventory.reports.export',    label: 'Inventory: Export Reports',      desc: 'Download Excel/CSV from the Inventory Report Center. Admins and super-admin always have this.' },
-  { key: 'inventory.valuation.view',    label: 'Inventory: See Valuation in Reports', desc: 'Show cost/valuation columns (avg cost, total value) in inventory reports. Without this, quantities show but costs are Restricted. Falls back to "See Inventory Costs".' },
-  // v55.83-HR (Codex P0) — Accounting DOCUMENT permissions. These let staff work invoices,
-  // customers, company profile, and purchase orders WITHOUT needing Bank: View. Bank: View now
-  // only controls Bank Review & Matching. Stable codes (ACCT-001..007) are shown for admins.
-  // v55.83-PW (Max, Nov 7 10:56/10:59) — the three permission LEVELS:
-  // general accounting access, money TOTALS on cards, bank balances (the
-  // protected SQL grant). Super admin always sees all.
-  // v55.83-RE (Max, Nov 8 15:12) — UNIFIED ACCOUNTING PERMISSIONS, identical in KTC Hub (ClickBooks) and Wave Hub:
-  // v55.83-RF (Max, Nov 8 15:25: "2 switches with same permissioning for both") — P1 is one switch PER HUB:
-  { key: 'accounting.clickbooks.access', label: 'P1a · ClickBooks (KTC Hub) Access', desc: 'Opens the ClickBooks screens: Books, All Transactions, Categories & Rules, Bills, Stats, Forecast, Financial Reports. Required before P2/P3 take effect there. On its own shows Expected (30 / 30–60 / 61–90 / 90+), Bills Due, Late and Total Overdue — clickable to their records.' },
-  { key: 'accounting.wavehub.access',    label: 'P1b · Wave Hub Access', desc: 'Opens the Wave Hub screens: Dashboard, Bank Review & Matching, Invoices, Proformas, All Invoices, Customers, AR History, Customer Ledger, Open Balances, Order Reconciliation, Sales Report, P&L, Purchase Orders, Wave. Required before P2/P3 take effect there. Same card rules as ClickBooks.' },
-  { key: 'accounting.view',             label: 'Accounting Access (both hubs) — RETIRED', desc: 'Replaced by P1a + P1b. Still counts as both until the v55.83-RF SQL moves everyone onto the two switches; then untick it.' },
-  { key: 'accounting.view_totals',      label: 'P2 · Bank & Financial Summary', desc: 'Shows Came In, Went Out, Sales, Net Moved and Projected Net (and opens those cards) in BOTH hubs; Bank Balance also needs the Bank Balances switch at the top of this page. Needs P1a or P1b. Without it these show "Restricted" — the invoicing and operational cards keep working.' },
-  { key: 'accounting.view_invoicing',   label: 'P3 · Invoicing & Collections', desc: 'Shows Invoiced, Paid, Still Open and Collected and opens their invoices, payments and collections in BOTH hubs. Needs P1a or P1b. Does NOT need P2.' },
-  { key: 'accounting.company_profile.view', label: 'ACCT-001 - Company Profile: View', desc: 'View the company profile used on printed invoices/proformas. Does NOT require Bank: View.' },
-  { key: 'accounting.company_profile.edit', label: 'ACCT-001E - Company Profile: Edit', desc: 'Edit the company profile (name, logo, branding on printed invoices/proformas). Admins/super-admin always have this.' },
-  { key: 'accounting.customers.view',       label: 'ACCT-002 - Accounting Customers: View', desc: 'View Hub accounting customers (separate from CRM and from bank transactions). Does NOT require Bank: View.' },
-  { key: 'accounting.customers.edit',       label: 'ACCT-003 - Accounting Customers: Edit', desc: 'Create / edit / archive Hub accounting customers.' },
-  { key: 'invoice.view',                    label: 'ACCT-004 - Invoices: View',       desc: 'View Hub invoices and proformas (read-only). Does NOT require Bank: View.' },
-  { key: 'invoice.create',                  label: 'ACCT-005 - Invoices: Create/Edit', desc: 'Create and edit Hub invoices and proformas. (Legacy "Edit Invoices" also grants this.)' },
-  { key: 'purchase_orders.view',            label: 'ACCT-006 - Purchase Orders: View', desc: 'View internal purchase orders. Does NOT require Bank: View. NOTE: for launch back-compat, "Invoices: View" also currently opens POs until roles are assigned.' },
-  { key: 'purchase_orders.edit',            label: 'ACCT-007 - Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders. NOTE: for launch back-compat, "Invoices: Create/Edit" also currently grants this until roles are assigned.' },
 ];
 
 const NOTIF_TYPES = [
@@ -1098,39 +1022,19 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     setLoaded(true);
   };
 
-  const togglePermission = async (userId, module, displayedHasAccess) => {
-    // These grants use the verified-super-admin API, never the legacy map.
-    if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
-      if (toast) toast.error('Use Settings → 🏦 Banking & Accounting Access to change these permissions.');
-      return;
-    }
-    // v55.83-IG (Codex) — flip EXACTLY the state the user sees. The caller passes the displayed
-    // hasAccess (which already accounts for legacy fallbacks like Open Accounts via readPerm), so a
-    // first click always inverts the visible ON/OFF — no default-vs-display mismatch. Falls back to
-    // the per-list default only if not provided.
-    // (IE/IF history: default had to match display, and the write is optimistic + loud — see below.)
-    const isTabPerm = TAB_PERMS.some(p => p.key === module);
-    const current = (typeof displayedHasAccess === 'boolean')
-      ? displayedHasAccess
-      : (permissions[userId]?.[module] ?? (isTabPerm ? true : false));
+  const togglePermission = async (userId, module) => {
+    const current = permissions[userId]?.[module] ?? true;
     const newVal = !current;
-    setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } })); // optimistic
     try {
-      const sel = await supabase.from('module_permissions').select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
-      if (sel.error) throw sel.error;
-      let res;
-      if (sel.data) {
-        res = await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', sel.data.id);
+      const { data: existing } = await supabase.from('module_permissions')
+        .select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
+      if (existing) {
+        await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', existing.id);
       } else {
-        res = await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
+        await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
       }
-      if (res && res.error) throw res.error;
-      if (toast) toast.success((newVal ? 'Granted' : 'Removed') + ': ' + module);
-    } catch (err) {
-      console.error('[togglePermission]', err);
-      setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: current } })); // revert
-      if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (You may lack rights to edit permissions, or a DB policy is blocking it.)');
-    }
+      setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: newVal } }));
+    } catch (err) { console.error(err); }
   };
 
   const toggleNotif = async (userId, notifType) => {
@@ -1185,7 +1089,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
     setAddLoading(true); setAddError(''); setAddSuccess('');
     try {
-      var res = await fetchUserAdmin(supabase, '/api/users', {
+      var res = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1205,7 +1109,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
   const handleUpdateUser = async (userId, updates) => {
     try {
-      var res = await fetchUserAdmin(supabase, '/api/users', {
+      var res = await fetch('/api/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: userId, ...updates })
@@ -1219,7 +1123,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const handleDeactivateUser = async (userId, userName) => {
     if (!confirm('Deactivate ' + userName + '? They will no longer be able to log in.')) return;
     try {
-      var res = await fetchUserAdmin(supabase, '/api/users?id=' + encodeURIComponent(userId), { method: 'DELETE' });
+      var res = await fetch('/api/users?id=' + userId, { method: 'DELETE' });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { onReload(); loadPrefs(); }
@@ -1230,7 +1134,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     var confirmation = prompt('Type "DELETE ' + userName + '" to permanently remove this person and all their data. This CANNOT be undone.');
     if (confirmation !== 'DELETE ' + userName) { if (confirmation !== null) alert('Text did not match. Deletion cancelled.'); return; }
     try {
-      var res = await fetchUserAdmin(supabase, '/api/users?id=' + encodeURIComponent(userId) + '&permanent=true', { method: 'DELETE' });
+      var res = await fetch('/api/users?id=' + userId + '&permanent=true', { method: 'DELETE' });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { alert(userName + ' has been permanently deleted.'); onReload(); loadPrefs(); }
@@ -1255,7 +1159,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['banking', '🏦 Banking & Accounting Access'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities'], ['accountingvis', '📅 Accounting Visibility']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -1271,11 +1175,6 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* ===== BUSINESS ENTITIES (SUPER ADMIN ONLY) v55.83-A.6.27.53 ===== */}
       {section === 'entities' && isSuperAdmin && (
         <BusinessEntitiesPanel userProfile={userProfile} isSuperAdmin={isSuperAdmin} toast={toast} />
-      )}
-
-      {/* ===== ACCOUNTING HISTORY VISIBILITY (SUPER ADMIN ONLY) v55.83-JE ===== */}
-      {section === 'accountingvis' && isSuperAdmin && (
-        <AccountingVisibilityPanel userProfile={userProfile} toast={toast} />
       )}
 
       {/* ===== CUSTOMS RATES (v55.51) ===== */}
@@ -1570,19 +1469,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       )}
 
             {/* ===== MODULE ACCESS ===== */}
-      {/* v55.83-RI (Max, Nov 9 10:38: "i need all of the banking permissions in one box and easy to understand and use") */}
-      {section === 'banking' && (
-        <div>
-          <BankingAccessPanel users={nonSuperUsers} permissions={permissions} togglePermission={togglePermission} />
-          <div className="text-[12px] font-extrabold mb-2" style={{ color: '#334155' }}>Advanced — ClickBooks admin tools (super admin)</div>
-          <ClickBooksOperatorPermissions />
-        </div>
-      )}
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4">
-          <div className="rounded-lg p-3 mb-4 text-[12px] font-bold" style={{ background: '#e0f2fe', border: '1px solid #7dd3fc', color: '#0c4a6e' }}>
-            🏦 Every banking & accounting switch (ClickBooks, Wave Hub, money totals, bank balances, bank work, bills, wires, order reconciliation) is now in ONE place: <button onClick={() => setSection('banking')} className="underline font-extrabold" style={{ color: '#075985' }}>Settings → 🏦 Banking & Accounting Access</button>. This table holds everything else.
-          </div>
           {/* v55.83-A.6.27.NEXT (Issues 4, 5, 6) — Permissions table rebuild:
               - Heading + controls live ABOVE the scroll container so they stay
                 visible while scrolling.
@@ -1597,7 +1485,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
             <div>
               <h3 className="text-sm font-bold">Module Access / صلاحيات الوحدات</h3>
-              <p className="text-[10px] text-slate-500 mt-0.5">Toggle modules and actions for team members. The two special financial permissions use the separate control above.</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">Super Admin always has full access. Toggle modules and actions for other users.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <input
@@ -1625,7 +1513,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               return label.toLowerCase().includes(fLow) || (desc || '').toLowerCase().includes(fLow);
             };
             const visibleTabs = TAB_PERMS.filter(p => matches(p.label, p.desc));
-            const visibleActions = ACTION_PERMS.filter(p => BANKING_KEYS.indexOf(p.key) < 0 && matches(p.label, p.desc)); // v55.83-RI — banking switches live in their own box
+            const visibleActions = ACTION_PERMS.filter(p => matches(p.label, p.desc));
             const colCount = nonSuperUsers.length + 1;
 
             // v55.83-A.6.27.NEXT (Issue 4 back-compat) — for "Edit Open Accounts"
@@ -1677,7 +1565,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                             : (permissions[u.id]?.[p.key] ?? true);
                           return (
                             <td key={u.id} className="px-2 py-1.5 text-center align-top">
-                              <button onClick={() => togglePermission(u.id, p.key, hasAccess)}
+                              <button onClick={() => togglePermission(u.id, p.key)}
                                 className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
                                 {hasAccess ? 'ON' : 'OFF'}
                               </button>
@@ -1712,7 +1600,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                             : (permissions[u.id]?.[p.key] ?? false);
                           return (
                             <td key={u.id} className="px-2 py-1.5 text-center align-top">
-                              <button onClick={() => togglePermission(u.id, p.key, hasAccess)}
+                              <button onClick={() => togglePermission(u.id, p.key)}
                                 className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
                                 {hasAccess ? 'ON' : 'OFF'}
                               </button>

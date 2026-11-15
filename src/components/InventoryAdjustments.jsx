@@ -11,7 +11,6 @@
 // FIFO consumption is handled atomically by consume_layers_fifo() server-side.
 
 import { useState, useEffect, useMemo } from 'react';
-import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
 
@@ -73,15 +72,6 @@ export default function InventoryAdjustments(props) {
         supabase.from('inv_warehouses').select('id,name,code').order('name'),
         supabase.from('inventory_layers').select('*').eq('status', 'open').gt('qty_remaining', 0).order('receipt_date'),
       ]);
-      // v55.83-HK — Supabase returns {data:null,error} on a query failure (RLS / missing
-      // column) WITHOUT throwing, so the catch below never fires and the screen would show an
-      // empty list instead of the real reason. Surface per-table query errors explicitly.
-      var _errs = [];
-      if (adjRes && adjRes.error) { _errs.push('adjustments: ' + adjRes.error.message); }
-      if (prodRes && prodRes.error) { _errs.push('products: ' + prodRes.error.message); }
-      if (whRes && whRes.error) { _errs.push('warehouses: ' + whRes.error.message); }
-      if (lyRes && lyRes.error) { _errs.push('layers: ' + lyRes.error.message); }
-      if (_errs.length) { console.error('[adjustments] query errors', _errs); toast.error('Failed to load: ' + _errs.join(' · ')); }
       setAdjustments(adjRes.data || []);
       setProducts(prodRes.data || []);
       setWarehouses(whRes.data || []);
@@ -237,7 +227,10 @@ export default function InventoryAdjustments(props) {
   if (!canView) {
     return (
       <div style={{ padding: 24 }}>
-        <RestrictedNotice title="Access restricted" message="Viewing adjustments requires the Inventory permission." />
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+          <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
+          <div className="text-sm text-amber-800 mt-1 font-medium">Viewing adjustments requires the Inventory permission.</div>
+        </div>
       </div>
     );
   }

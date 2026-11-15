@@ -4,11 +4,9 @@ import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmtET, todayET, yesterdayET, fmtETRange } from '../lib/et-time';
 import HRReport from './HRReport';
-import PerformanceReviewCenter from './PerformanceReviewCenter';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
 import BackupsPanel from './BackupsPanel';
-import { useBankVisibility } from '../lib/use-bank-visibility';
 import LoginHistoryV2 from './LoginHistoryV2';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
@@ -26,7 +24,6 @@ const PIPELINE_STAGES = [
 ];
 
 export default function AdminTab({ user, userProfile, users, isAdmin, customers, modulePerms }) {
-  var canUseBackups = useBankVisibility().isVerifiedSuperAdmin === true;
   const [logs, setLogs] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [rates, setRates] = useState([]);
@@ -39,10 +36,6 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   // Today/Yesterday/7d/30d buckets so they don't go blank when the user picks
   // a narrow custom range like "Today".
   const [sessionsLast30d, setSessionsLast30d] = useState([]);
-  // v55.83 — 30-day daily_log "login" slice (all users), always loaded independent
-  // of the date filter, so the per-user 7-day login grid is reliable for the whole
-  // week even when a user has an activity-log login but no user_sessions row.
-  const [loginLogs30d, setLoginLogs30d] = useState([]);
   const [loginSummary, setLoginSummary] = useState([]);  // user_login_summary view (ET-aware)
   // v55.61 — Track whether the login_events table is set up. If the SQL
   // wasn't run, every user appears "Offline" forever even when they're
@@ -198,14 +191,6 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         var thirtyAgo = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
         return supabase.from('user_sessions').select('*').gte('date', thirtyAgo).order('login_at', { ascending: false }).limit(2000)
           .then(function (r) { setSessionsLast30d(r.data || []); }).catch(function (e) { console.warn('sessionsLast30d:', e); });
-      })(),
-      // v55.83 — 30-day daily_log login slice (all users), for the 7-day login grid.
-      (function () {
-        var d2 = new Date();
-        d2.setDate(d2.getDate() - 30);
-        var thirtyAgo2 = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d2);
-        return supabase.from('daily_log').select('user_id, log_date, log_category, entry_text, created_at').eq('log_category', 'login').gte('log_date', thirtyAgo2).limit(3000)
-          .then(function (r) { setLoginLogs30d(r.data || []); }).catch(function (e) { console.warn('loginLogs30d:', e); });
       })(),
       // Login summary endpoint
       fetch('/api/login-event?summary=1').then(function (r) { return r.json(); }).then(function (d) {
@@ -583,7 +568,6 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       {[
         ['scorecards','📊 Scorecards'],
         ...(canSeeHR ? [['hr_report','📋 HR Report']] : []),
-        ...(canSeeHR ? [['perf_review','🧾 Performance Reviews']] : []),
         // v55.65 — HR Inbox: routine requests + sensitive complaints from team.
         // super_admin sees ALL; regular admins see admin-visible requests + non-anonymous complaints only.
         ['hr_inbox','📬 HR Inbox'],
@@ -596,7 +580,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         // v55.74 — Backups: super_admin only. Contains snapshots of every
         // business-critical table (treasury, invoices, customers, etc.) so
         // it MUST NOT be visible to regular admins.
-        ...(canUseBackups ? [['backups','💾 Backups']] : []),
+        ...(isSuperAdmin ? [['backups','💾 Backups']] : []),
       ].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
@@ -613,11 +597,6 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     {section === 'hr_report' && canSeeHR && (
       <HRReport user={user} userProfile={userProfile} users={users} customers={customers} />
     )}
-
-    {/* ===== PERFORMANCE REVIEWS (v55.83-NK) ===== */}
-    {section === 'perf_review' && canSeeHR && (
-      <PerformanceReviewCenter userProfile={userProfile} users={users} />
-    )}
     {section === 'hr_report' && !canSeeHR && (
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
         You don't have permission to view the HR Report. Ask a super admin to enable the "HR Report" permission for you in Settings.
@@ -630,12 +609,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     )}
 
     {/* ===== BACKUPS (v55.74) — super_admin only ===== */}
-    {section === 'backups' && canUseBackups && (
+    {section === 'backups' && isSuperAdmin && (
       <BackupsPanel user={user} userProfile={userProfile} />
     )}
-    {section === 'backups' && !canUseBackups && (
+    {section === 'backups' && !isSuperAdmin && (
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
-        Backups require a verified super admin. They contain sensitive financial and personnel data.
+        Backups are only available to super_admin. They contain sensitive financial and personnel data.
       </div>
     )}
 
@@ -951,16 +930,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         if (!dUser) return null;
         const uLogs = logs.filter(l => l.user_id === drillUser);
         const todayLogs = uLogs.filter(l => l.log_date === todayStr);
-        // v55.83 — the 7-day login grid must look past the admin date filter AND
-        // agree with the activity log shown above it. Use the 30-day session window
-        // (not the date-filtered `sessions`), and ALSO treat any daily_log "login"
-        // entry as a login day — so a day the activity log shows a login on can never
-        // render as a red ❌ just because no user_sessions row happened to be written.
-        const uSessions = (sessionsLast30d || []).filter(s => s.user_id === drillUser).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-        const loginDayMap = {};
-        uSessions.forEach(s => { if (s.date) loginDayMap[s.date] = loginDayMap[s.date] || s; });
-        loginLogs30d.forEach(function (l) { if (l.user_id === drillUser && l.log_date && !loginDayMap[l.log_date]) loginDayMap[l.log_date] = { date: l.log_date, login_at: l.created_at, _fromLog: true }; });
-        uLogs.forEach(l => { if (l.log_category === 'login' && l.log_date && !loginDayMap[l.log_date]) loginDayMap[l.log_date] = { date: l.log_date, login_at: l.created_at, _fromLog: true }; });
+        const uSessions = sessions.filter(s => s.user_id === drillUser).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
         const catGroups = {};
         todayLogs.forEach(l => {
           const cat = l.log_category || (l.auto_generated ? 'other' : 'manual');
@@ -1015,7 +985,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   const d = new Date(); d.setDate(d.getDate() - (6 - i));
                   const ds = fmtET(d, 'iso');
                   const dayLabel = fmtET(d, 'weekday', { tag: false }).substring(0, 3);
-                  const sess = loginDayMap[ds];
+                  const sess = uSessions.find(s => s.date === ds);
                   return (
                     <div key={ds} className={'rounded-lg p-2 text-center text-[9px] ' + (sess ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200')}>
                       <div className="font-bold">{dayLabel}</div>

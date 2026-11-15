@@ -218,7 +218,7 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
-    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
+    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -583,11 +583,26 @@ export async function POST(req) {
       var today2 = new Date().toISOString().substring(0, 10);
       var bank = await fetchAll(function () {
         return db.from('bank_transactions')
-          .select('id, direction, amount_abs, pending, date, posted_date, iso_currency, wave_business_id, name, merchant_name, classification, matched_invoice_id')
+          .select('id, direction, amount_abs, pending, date, posted_date, iso_currency, wave_business_id, name, merchant_name, classification, matched_invoice_id, transfer_group_id')
           .eq('wave_business_id', US_WAVE_BUSINESS_ID)
           .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count
           .gte('date', fromD).lte('date', toD);
       });
+      // v55.83-SO (Max, Nov 15: "Internal transfers must not incorrectly inflate income, expenses, or
+      // totals"). Money moved between the company's OWN accounts and LINKED as a transfer is one
+      // movement, so it is no longer counted in CAME IN or WENT OUT; it is reported on its own line.
+      // v55.83-SQ (Max, Nov 15: "mark transfer but flag it that it is missing second leg") — a line only MARKED
+      // transfer, with no linked other side, is treated as a transfer too: NOT counted in or out, and flagged
+      // (count + total) so a person links its other side or re-categorizes it.
+      var trfBetween = { count: 0, total: 0 }; var trfUnlinked = { count: 0, total: 0 };
+      bank.forEach(function (tB) {
+        if (tB.pending === true) { return; }
+        var dB = tB.posted_date || tB.date;
+        if (!(dB >= fromD && dB <= toD)) { return; }
+        if (tB.transfer_group_id) { if (tB.direction === 'out') { trfBetween.count++; trfBetween.total = r2(trfBetween.total + (Number(tB.amount_abs) || 0)); } }
+        else if (tB.classification === 'transfer') { trfUnlinked.count++; trfUnlinked.total = r2(trfUnlinked.total + (Number(tB.amount_abs) || 0)); }
+      });
+      bank = bank.filter(function (tB2) { return !tB2.transfer_group_id && tB2.classification !== 'transfer'; });
       var bankTx = bank.map(function (t) {
         return { direction: t.direction, amount_abs: t.amount_abs, pending: t.pending, date: t.posted_date || t.date };
       });
@@ -662,8 +677,9 @@ export async function POST(req) {
         expected_in: r2(sumExpL), expected_in_count: expAllL.length,
         due_out: r2(sumBillL), due_out_count: billRowsL.length,
         projected_net: r2(sumExpL - sumBillL) };
-      var cfPayload = { summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL };
+      var cfPayload = { transfers_between: trfBetween, transfers_unlinked: trfUnlinked, summary: summary, ahead: aheadL, sales_in: r2(sumSalesL), sales_in_count: salesRowsL.length, bills_due: dueBills, expected_in: expIn, drills: drillsL };
       cfPayload = maskCashflow(cfPayload, vis); // v55.83-RE — P2 values masked, P1 cards (expected / bills due) stay
+      if (!canTotals) { cfPayload.transfers_between = { count: trfBetween.count, total: null }; cfPayload.transfers_unlinked = { count: trfUnlinked.count, total: null }; } // v55.83-SO — money totals stay behind "See Money Totals"
       cfPayload.ok = true; cfPayload.marker = API_BUILD_MARKER; cfPayload.from = fromD; cfPayload.to = toD;
       cfPayload.totals_masked = !canTotals; cfPayload.rows_visible = canRows; cfPayload.vis = vis; cfPayload.date_filters_locked = cfLocked;
       return NextResponse.json(cfPayload);
@@ -1099,6 +1115,20 @@ export async function POST(req) {
     //    exist. Flag now; later the SAME 🔗 match flow attaches the real
     //    bills (record_payment guards unchanged). The flag only makes the
     //    transaction findable until then.
+    // v55.83-SN (Max, Nov 14: "where do I view the bill?") — attach the document to a bill that has none.
+    // Private path only; a bill that already has its file keeps it (never silently replaced).
+    if (action === 'attach_bill_file') {
+      var afPath = String(body.attachment_path || '').trim();
+      if (!body.bill_id || !/^pv\/\d{10,}-[a-zA-Z0-9._-]{1,60}$/.test(afPath)) { return NextResponse.json({ error: 'A bill and a private file path are required.' }, { status: 400 }); }
+      var afCur = await db.from('vendor_bills').select('id, record_status, attachment_path').eq('id', body.bill_id).maybeSingle();
+      if (afCur.error || !afCur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      if (afCur.data.record_status === 'deleted') { return NextResponse.json({ error: 'This bill was deleted — a file cannot be attached to it.' }, { status: 409 }); }
+      if (String(afCur.data.attachment_path || '').trim()) { return NextResponse.json({ error: 'This bill already has its file. It was not replaced.' }, { status: 409 }); }
+      var afUp = await db.from('vendor_bills').update({ attachment_path: afPath }).eq('id', body.bill_id).select('id').maybeSingle();
+      if (afUp.error) { return NextResponse.json({ error: afUp.error.message }, { status: 400 }); }
+      await audit(db, userId, 'bill_file_attached', 'vendor_bill', body.bill_id, { attachment_path: afPath });
+      return NextResponse.json({ ok: true });
+    }
     if (action === 'advance_flag') {
       var txAv = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
       if (txAv.error || !txAv.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }

@@ -1,0 +1,117 @@
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const PLAID_BASE = {
+  sandbox: 'https://sandbox.plaid.com',
+  development: 'https://development.plaid.com',
+  production: 'https://production.plaid.com',
+};
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
+
+export async function POST(req) {
+  try {
+    const { public_token, metadata, wave_business_id, initial_backfill_start_date } = await req.json();
+    const env = process.env.PLAID_ENV || 'sandbox';
+    const base = PLAID_BASE[env] || PLAID_BASE.sandbox;
+
+    // Exchange public token for access token
+    const res = await fetch(`${base}/item/public_token/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: process.env.PLAID_CLIENT_ID,
+        secret: process.env.PLAID_SECRET,
+        public_token,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.error_code) return NextResponse.json({ error: data.error_message }, { status: 400 });
+
+    const { access_token, item_id } = data;
+    const institution = metadata?.institution || {};
+
+    // Store connection in Supabase. v55.83-JR — also record the admin's chosen backfill start date so
+    // sync can pull history back to it. Schema-safe: if the JR column isn't present yet, retry without.
+    const baseConn = {
+      plaid_item_id: item_id,
+      access_token,
+      institution_id: institution.institution_id || null,
+      institution_name: institution.name || 'Unknown Bank',
+      status: 'active',
+      wave_business_id: wave_business_id || null,
+      last_synced: new Date().toISOString(),
+    };
+    const connInsert = Object.assign({}, baseConn);
+    if (initial_backfill_start_date) { connInsert.initial_backfill_start_date = String(initial_backfill_start_date).substring(0, 10); }
+    let conn, error;
+    let backfillSaved = !!initial_backfill_start_date;
+    ({ data: conn, error } = await supabase.from('bank_connections').upsert(connInsert, { onConflict: 'plaid_item_id' }).select().single());
+    if (error && /initial_backfill_start_date|column/.test(error.message || '')) {
+      // v55.83-JT (Codex) — the JR column is missing; don't silently drop the admin's chosen backfill
+      // date. Save the base row but report backfill_saved:false so the UI warns to run the JR SQL.
+      backfillSaved = false;
+      ({ data: conn, error } = await supabase.from('bank_connections').upsert(baseConn, { onConflict: 'plaid_item_id' }).select().single());
+    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Pull accounts so we can show account names/masks. Balances are stored here but
+    // only shown to admins (bank.view_account_balances) at display time. Non-fatal.
+    var accountsAssigned = !!wave_business_id; // v55.83-JY — did new accounts get stamped to the chosen silo?
+    var accountAssignmentError = null;
+    try {
+      const accRes = await fetch(`${base}/accounts/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.PLAID_CLIENT_ID,
+          secret: process.env.PLAID_SECRET,
+          access_token,
+        }),
+      });
+      const accData = await accRes.json();
+      if (accData && Array.isArray(accData.accounts) && conn && conn.id) {
+        const accRows = accData.accounts.map((a) => ({
+          connection_id: conn.id,
+          business_id: conn.business_id || null,
+          plaid_account_id: a.account_id,
+          name: a.name || null,
+          official_name: a.official_name || null,
+          mask: a.mask || null,
+          type: a.type || null,
+          subtype: a.subtype || null,
+          iso_currency: (a.balances && a.balances.iso_currency_code) || 'USD',
+          current_balance: a.balances ? a.balances.current : null,
+          available_balance: a.balances ? a.balances.available : null,
+          is_read_only: true,
+          updated_at: new Date().toISOString(),
+        }));
+        if (accRows.length) {
+          await supabase.from('plaid_accounts').upsert(accRows, { onConflict: 'plaid_account_id' });
+          // v55.83-JX (Max live: new accounts show "Unassigned" + landed under the wrong silo) — stamp
+          // the connection's chosen silo onto its accounts that have NO assignment yet, so a KANDIL
+          // connect shows its accounts under KANDIL immediately. Only NULL rows are touched, so an
+          // account deliberately reassigned to another silo is preserved.
+          if (wave_business_id) {
+            // v55.83-JY (Codex) — don't hide a stamp failure; surface it so BankTab can warn instead of
+            // the admin discovering "Unassigned" later.
+            var stampRes = await supabase.from('plaid_accounts').update({ wave_business_id }).eq('connection_id', conn.id).is('wave_business_id', null);
+            if (stampRes && stampRes.error) { accountsAssigned = false; accountAssignmentError = stampRes.error.message || 'account stamp failed'; }
+          }
+        }
+      }
+    } catch (accErr) {
+      accountsAssigned = false;
+      accountAssignmentError = (accErr && accErr.message) || String(accErr);
+      // Connection still succeeds even if account pull fails; accounts refresh on next sync.
+    }
+
+    return NextResponse.json({ success: true, connection: { id: conn.id, institution_name: conn.institution_name }, backfill_saved: backfillSaved, requested_backfill_start_date: initial_backfill_start_date || null, accounts_assigned: accountsAssigned, account_assignment_error: accountAssignmentError });
+  } catch (e) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}

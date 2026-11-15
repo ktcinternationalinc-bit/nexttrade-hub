@@ -1,0 +1,10 @@
+{
+  "name": "KTC NextTrade Hub",
+  "short_name": "KTC Hub",
+  "description": "Egypt — USA Operations Hub",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060a14",
+  "theme_color": "#0ea5e9",
+  "icons": []
+}

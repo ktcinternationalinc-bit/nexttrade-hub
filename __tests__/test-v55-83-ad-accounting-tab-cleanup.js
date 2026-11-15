@@ -18,7 +18,8 @@ ok(/'bank', 'accounting'/.test(page),'accounting hidden by default for users wit
 ok(/tab === 'accounting'/.test(page)&&/<AccountingTab /.test(page),'accounting tab renders wrapper');
 ok(/'bank', 'accounting', 'quotes'/.test(page),'accounting is in the FINANCE sidebar group (actually rendered)');
 // bank tab stripped of accounting screens
-var bankSec=(page.match(/tab === 'bank' && \([\s\S]*?\)\}/)||[''])[0];
+// v55.83-SO realign: Banking stays alive (hidden) behind a transaction opened from it, so the condition has a second arm. Still Plaid-only.
+var bankSec=(page.match(/\(tab === 'bank' \|\| \(acctReturn && acctReturn\.tab === 'bank'\)\) && \([\s\S]*?\)\}/)||[''])[0];
 ok(/BankTab/.test(bankSec)&&!/AccountingDashboard/.test(bankSec)&&!/BankReviewTab/.test(bankSec)&&!/AccountingInvoicesTab/.test(bankSec),'Bank tab is Plaid-only (accounting moved out)');
 // wrapper sub-tabs
 ok(/'dashboard'/.test(atab)&&/'customers'/.test(atab)&&/'invoices'/.test(atab)&&/'proformas'/.test(atab)&&/'review'/.test(atab),'wrapper has all five sub-sections');

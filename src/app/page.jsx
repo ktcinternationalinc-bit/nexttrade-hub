@@ -2,8 +2,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { filterActiveUsers } from '../lib/active-users';
-import { useBankVisibility } from '../lib/use-bank-visibility';
-import { dashboardCashFlow, dashboardCurrencyRows } from '../lib/dashboard-financial-data';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META, parseAmount, isValidAmount } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import { fmtET, todayET, etDateStr } from '../lib/et-time';
@@ -45,7 +43,6 @@ import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
 import NotificationBell from '../components/NotificationBell';
 import BankTab from '../components/BankTab';
-import AccountingTab from '../components/AccountingTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import OpenAccountsTab from '../components/OpenAccountsTab';
@@ -160,15 +157,6 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
 } from 'recharts';
-// v55.83-H — monochrome line icons for the sidebar (replacing emoji). lucide
-// icons inherit currentColor, so they pick up the zinc/emerald nav colors and
-// stay strictly monochrome — the "clean line icons only" direction.
-import {
-  LayoutDashboard, DollarSign, Users, FileText, Landmark, Building2, Banknote,
-  FileCheck, AlertTriangle, BookOpen, BarChart3, Warehouse, Package, Stamp,
-  Ship, Handshake, Ticket, Bug, Mail, Calendar, Notebook, Crown, Bot,
-  Megaphone, Brain, Search, Settings, Download, Circle
-} from 'lucide-react';
 
 // ============================================
 // TABS CONFIG
@@ -181,7 +169,6 @@ const TABS = [
   { id: 'treasury', label: 'Treasury / الخزنة', icon: '🏦' },
   { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
   { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
-  { id: 'accounting', label: 'Accounting / محاسبة', icon: '🧾' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
   { id: 'openaccounts', label: 'Open Accounts / حسابات', icon: '📒' },
@@ -204,17 +191,6 @@ const TABS = [
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
-
-// v55.83-H — monochrome line-icon map for the sidebar, keyed by tab id.
-// Replaces the colorful emoji per the enterprise design direction.
-const TAB_ICONS = {
-  dashboard: LayoutDashboard, sales: DollarSign, customers: Users, quotes: FileText,
-  treasury: Landmark, egyptbank: Building2, bank: Banknote, checks: FileCheck,
-  debts: AlertTriangle, openaccounts: BookOpen, reports: BarChart3, warehouse: Warehouse,
-  inventory: Package, customs: Stamp, shipping: Ship, crm: Handshake, tickets: Ticket,
-  systemtickets: Bug, comms: Mail, calendar: Calendar, dailylog: Notebook, admin: Crown,
-  ai: Bot, social: Megaphone, brand: Brain, seo: Search, settings: Settings, import: Download,
-};
 
 // ============================================
 // NON-ORDER BANK EVENT CATEGORIES
@@ -402,17 +378,12 @@ function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave,
 // MAIN APP
 // ============================================
 export default function App() {
-  const { canViewFullDashboard: seeFullDashboard, canViewBankBalances: seeBankBalances } = useBankVisibility();
   // Auth
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
-  // v55.83-IN — deep-link from the raw Bank tab "Match in Bank Review" button into
-  // Accounting → Bank Review & Matching, carrying the bank transaction id so it auto-selects.
-  const [acctDeepLink, setAcctDeepLink] = useState(null); // { sub, txnId } | null
-  const goToBankReview = (txnId) => { setAcctDeepLink({ sub: 'review', txnId: txnId || null }); setTab('accounting'); };
   // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
   // dashboard (or any non-tickets tab), we switch to tickets, open the
   // ticket modal, and remember which tab to return to when modal closes.
@@ -467,11 +438,6 @@ export default function App() {
   // inventoryCutoffDate: loaded from app_settings.inventory_cutoff_date.
   //   When set, invoices on/after this date force inventory mode (enforced in 44c). Today it's just a guide.
   const [inventoryProducts, setInventoryProducts] = useState([]);
-  // v55.83-MX — { productId: { qty, uom, provisional } } from open FIFO layers.
-  const [stockAvailable, setStockAvailable] = useState({});
-  // v55.83-GE — ids of virtual Stock Mix products. They are excluded from the invoice picker and
-  // blocked from FIFO consumption until Phase 2 (component drawdown) is built.
-  const [virtualMixIds, setVirtualMixIds] = useState(function () { return {}; });
   const [inventoryCutoffDate, setInventoryCutoffDate] = useState(null);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -481,26 +447,6 @@ export default function App() {
   const [userProfile, setUserProfile] = useState(null);
   const profileIdRef = useRef(null);
   const [modulePerms, setModulePerms] = useState({});
-  // v55.83-SA (Max, Nov 12 07:29: "Not just admin." — people with Bills ON still did not see bills) — a person's switches
-  // were read ONCE at sign-in, so anything granted afterwards did nothing until they signed out and in again. Re-read
-  // them when the Hub comes back to the front and every 2 minutes (one small query; same table, same shape).
-  useEffect(() => {
-    const uid = userProfile && userProfile.id;
-    if (!uid) return undefined;
-    let alive = true;
-    const refresh = async () => {
-      try {
-        const { data, error } = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', uid);
-        if (!alive || error || !Array.isArray(data)) return;
-        const m = {}; data.forEach(p => { m[p.module_name] = p.has_access; });
-        setModulePerms(prev => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m));
-      } catch (e) { /* keep what we have */ }
-    };
-    const onFront = () => { if (document.visibilityState === 'visible') refresh(); };
-    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', onFront);
-    const iv = setInterval(refresh, 120000);
-    return () => { alive = false; window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', onFront); clearInterval(iv); };
-  }, [userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [lang, setLang] = useState('ar'); // 'ar' or 'en'
   const [categoriesList, setCategoriesList] = useState([]);  // from `categories` table (bilingual)
 
@@ -519,11 +465,6 @@ export default function App() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedDebtor, setSelectedDebtor] = useState(null);
   const [treasuryDrill, setTreasuryDrill] = useState(null);
-  // v55.83-MZ — which currency the Treasury cards, table and balance show.
-  // Defaults to EGP (Max: "Default is showing EGP"). Session-only on purpose:
-  // every visit to Treasury starts on EGP so nobody reads a USD figure thinking
-  // it's pounds because the toggle was left flipped yesterday.
-  const [treasuryCurrency, setTreasuryCurrency] = useState('EGP');
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [checkView, setCheckView] = useState('pending');
   const [checkSort, setCheckSort] = useState('date'); // date | customer | order
@@ -648,14 +589,6 @@ export default function App() {
       setNadiaWokenInTab(function(prev) {
         var next = Object.assign({}, prev);
         delete next.treasury;
-        return next;
-      });
-    }
-    // v55.83-OP — dashboard sleeps again when you leave it, like Treasury.
-    if (tab !== 'dashboard' && nadiaWokenInTab.dashboard) {
-      setNadiaWokenInTab(function(prev) {
-        var next = Object.assign({}, prev);
-        delete next.dashboard;
         return next;
       });
     }
@@ -903,15 +836,6 @@ export default function App() {
   const [fxRate, setFxRate] = useState(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
-  // v55.83-MW — Header NET amount is HIDDEN BY DEFAULT.
-  // The top toolbar is on screen during screen-shares, customer visits and
-  // anyone walking past the desk, and it was showing the company's entire
-  // cash position in bright green. Now it shows dots until the eye button
-  // is clicked. Deliberately NOT persisted: every page load / refresh /
-  // login starts hidden again, so revealing it once can never leave it
-  // exposed on a machine later. (If Max wants it remembered per user, this
-  // becomes a localStorage pair like ktc.lastPersona — one-line change.)
-  const [netVisible, setNetVisible] = useState(false);
   const [showNotifBell, setShowNotifBell] = useState(false);
   // v55.40 — Unread voicemail count for the header badge. Polled every
   // 30 seconds via the same endpoint the dashboard widget uses, so the
@@ -1602,35 +1526,8 @@ export default function App() {
       // Safe to fail silently — invoice form falls back to legacy/manual mode.
       try {
         const { data: ipRows } = await supabase.from('inventory_products').select('*').eq('active', true).order('name_en');
-        // v55.83-GE — SAFETY GATE: exclude virtual Stock Mix products from the invoice "From
-        // Inventory" picker (they hold no stock of their own and selling them is not yet wired to
-        // expand into real component colors — that is Phase 2). Track their ids to also block
-        // FIFO consumption if one somehow reaches save.
-        const allActiveProducts = ipRows || [];
-        const vmix = {};
-        allActiveProducts.forEach(function (p) { if (p && p.is_virtual_mix === true) { vmix[p.id] = true; } });
-        setVirtualMixIds(vmix);
-        setInventoryProducts(allActiveProducts.filter(function (p) { return p.is_virtual_mix !== true; }));
+        setInventoryProducts(ipRows || []);
       } catch (e) { setInventoryProducts([]); }
-      // v55.83-MX — real on-hand stock per product, so the "From Inventory"
-      // picker can show what's actually available BEFORE the line is added.
-      // Previously the picker listed every product with no quantity at all, so
-      // there was no moment where the system could tell Max he was about to
-      // sell stock it couldn't deduct. Sums open FIFO layers (post-MX these
-      // exist from the moment goods arrive, costed or not).
-      try {
-        const { data: layerRows } = await supabase.from('inventory_layers')
-          .select('product_id, qty_remaining, uom, is_provisional')
-          .eq('status', 'open').gt('qty_remaining', 0);
-        const avail = {};
-        (layerRows || []).forEach(function (l) {
-          if (!l || !l.product_id) return;
-          if (!avail[l.product_id]) avail[l.product_id] = { qty: 0, uom: l.uom || '', provisional: false };
-          avail[l.product_id].qty += Number(l.qty_remaining || 0) || 0;
-          if (l.is_provisional === true) avail[l.product_id].provisional = true;
-        });
-        setStockAvailable(avail);
-      } catch (e) { setStockAvailable({}); }
       // v55.83-A.6.27.44b — load cutoff date setting.
       // When null/missing, both modes always available. When set, future-dated invoices force inventory mode (in 44c).
       try {
@@ -1968,7 +1865,7 @@ export default function App() {
   };
 
   // Breadcrumb — shows current location
-  const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
   const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
   const currentGroup = TAB_GROUPS[tab] || '';
 
@@ -1996,31 +1893,18 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Treasury', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', accounting: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
   };
 
   const visibleTabs = useMemo(() => {
     if (userProfile?.role === 'super_admin') return TABS; // super admin sees all
     if (!userProfile) return TABS.filter(t => t.id === 'dashboard'); // loading — show nothing
     return TABS.filter(t => {
-      // v55.83-QI (Max 12:33): "accounting view is the USA side to see — if
-      // not permissioned does not even show up for the user." The Accounting
-      // entry is driven by the accounting grants themselves (same OR-list as
-      // inside the tab), never by the generic Bank module.
-      if (t.id === 'accounting') {
-        // v55.83-RE (Max, Nov 8 15:12 — Unified Accounting Permissions): P1
-        // "Accounting Access" ONLY. Other accounting permissions take effect
-        // inside, never open the module on their own. Owner/admin roles and
-        // super admin keep everything (same as the server).
-        // v55.83-RF (Max 15:25) — two switches: ClickBooks (KTC Hub) Access or Wave Hub Access opens the menu
-        return modulePerms['accounting.clickbooks.access'] === true || modulePerms['accounting.wavehub.access'] === true ||
-          modulePerms['accounting.view'] === true || userProfile?.role === 'owner' || userProfile?.role === 'admin';
-      }
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
       // No explicit permission: hide all financial + admin tabs (even for admin/manager role)
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'accounting', 'egyptbank', 'reports', 'customs', 'customers'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports', 'customs', 'customers'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -2119,7 +2003,6 @@ export default function App() {
   // count toward invoice.total_collected only.
   const totalBankIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_in || 0), 0), [filteredTreasury]);
   const totalBankOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_out || 0), 0), [filteredTreasury]);
-  const dashboardCurrencyTreasury = useMemo(() => dashboardCurrencyRows(filteredTreasury, seeBankBalances), [filteredTreasury, seeBankBalances]);
 
   // Running balance — computed in display order so top row always = current net when newest first
   const treasuryBalanceMap = useMemo(() => {
@@ -2137,96 +2020,6 @@ export default function App() {
     });
     return map;
   }, [treasury]);
-
-  // ==========================================
-  // v55.83-MZ — CURRENCY VIEW (Max Aug 11 2026)
-  // "there should be a toggle that shows the OTHER CURRENCIES THE IN AND OUT
-  //  AND NET ON DEMAND ... AND ALSO SHOW THE SPECIFIC TRANSACTIONS THAT MAKE UP
-  //  THOSE VALUES ... AND ... see the balance of the other currencies"
-  //
-  // Money in this table lives in three different shapes:
-  //   EGP   -> cash_in / cash_out
-  //   USD   -> usd_in / usd_out          (its own dedicated columns)
-  //   other -> foreign_amount + foreign_currency + foreign_direction ('in'/'out')
-  //
-  // These are DELIBERATELY never summed together. Adding dollars to pounds is
-  // meaningless, and no FX conversion happens here — each currency is its own
-  // sealed bucket with its own in, out, net and running balance.
-  // ==========================================
-  const treasuryCurrencies = useMemo(() => {
-    const found = { EGP: true };
-    treasury.forEach(t => {
-      if (Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0) found.USD = true;
-      if (Number(t.foreign_amount || 0) > 0 && t.foreign_currency) found[t.foreign_currency] = true;
-    });
-    // EGP always first, the rest alphabetical.
-    return ['EGP'].concat(Object.keys(found).filter(c => c !== 'EGP').sort());
-  }, [treasury]);
-
-  // Pull the in/out pair for one row in the selected currency. Returns zeros
-  // when the row holds nothing in that currency, which is how filtering works.
-  const currencyAmounts = useCallback((t, cur) => {
-    if (cur === 'EGP') {
-      return { in: Number(t.cash_in || 0), out: Number(t.cash_out || 0) };
-    }
-    if (cur === 'USD') {
-      return { in: Number(t.usd_in || 0), out: Number(t.usd_out || 0) };
-    }
-    if (t.foreign_currency === cur && Number(t.foreign_amount || 0) > 0) {
-      const amt = Number(t.foreign_amount || 0);
-      return t.foreign_direction === 'out' ? { in: 0, out: amt } : { in: amt, out: 0 };
-    }
-    return { in: 0, out: 0 };
-  }, []);
-
-  const currencyTotals = useMemo(() => {
-    let cin = 0, cout = 0, count = 0;
-    filteredTreasury.forEach(t => {
-      const a = currencyAmounts(t, treasuryCurrency);
-      if (a.in === 0 && a.out === 0) return;
-      cin += a.in; cout += a.out; count += 1;
-    });
-    return { in: cin, out: cout, net: cin - cout, count };
-  }, [filteredTreasury, treasuryCurrency, currencyAmounts]);
-
-  // Rows that actually carry money in the selected currency — this is the
-  // "show me the specific transactions that make up those values" list.
-  const currencyTxns = useMemo(() => {
-    if (treasuryCurrency === 'EGP') return filteredTreasury;
-    return filteredTreasury.filter(t => {
-      const a = currencyAmounts(t, treasuryCurrency);
-      return a.in > 0 || a.out > 0;
-    });
-  }, [filteredTreasury, treasuryCurrency, currencyAmounts]);
-
-  // Running balance in the selected currency. Built from the FULL treasury set
-  // (not the filtered one) so a date filter narrows what you SEE without
-  // rewriting history — the balance on a row still reflects everything before it.
-  const currencyBalanceMap = useMemo(() => {
-    if (treasuryCurrency === 'EGP') return treasuryBalanceMap;
-    const sorted = [...treasury].sort((a, b) => {
-      const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
-      if (d !== 0) return d;
-      return (a.created_at || '').localeCompare(b.created_at || '');
-    });
-    const map = {};
-    let running = 0;
-    sorted.forEach(t => {
-      const a = currencyAmounts(t, treasuryCurrency);
-      if (a.in === 0 && a.out === 0) return; // untouched rows don't carry the balance forward
-      running += a.in - a.out;
-      map[t.id] = running;
-    });
-    return map;
-  }, [treasury, treasuryCurrency, treasuryBalanceMap, currencyAmounts]);
-
-  // Formatter for the active currency. fE() is EGP-specific.
-  const fCur = useCallback((n, cur) => {
-    const c = cur || treasuryCurrency;
-    if (c === 'EGP') return fE(n);
-    const sym = c === 'USD' ? '$' : (c === 'EUR' ? '€' : (c === 'GBP' ? '£' : ''));
-    return sym + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + (sym ? '' : ' ' + c);
-  }, [treasuryCurrency]);
 
   // ==========================================
   // AUTO-MATCH BANK PLACEHOLDERS to imported bank transactions
@@ -2898,7 +2691,6 @@ export default function App() {
   // the Sales tab showing only that month's invoices.
   const navigate = (t, opts) => {
     setTabLoading(true);
-    if (t !== 'accounting') { setAcctDeepLink(null); } // v55.83-IN — clear stale Bank Review deep-link on manual nav elsewhere
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
     if (opts && opts.from && opts.to) {
@@ -2912,14 +2704,6 @@ export default function App() {
       setMode('ytd');
     }
     setTimeout(() => setTabLoading(false), 300);
-  };
-
-  // Full dashboard is read access. Its links never add access to another
-  // module or open the legacy Treasury editing drills on their own.
-  const openDashboardModule = (target, opts) => {
-    if (!visibleTabs.some(item => item.id === target)) return false;
-    navigate(target, opts);
-    return true;
   };
 
   // Open an invoice while preserving the user's exact Treasury position so
@@ -5565,7 +5349,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-SM</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.71</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5579,60 +5363,22 @@ export default function App() {
           <div className="flex items-center gap-2">
             {/* Treasury Net — terminal-style status block.
                 Permission gate unchanged from original. */}
-            {/* v55.83-MW — Amount is masked until the eye is clicked. The two
-                actions are separate buttons inside one bordered shell (never a
-                button inside a button — invalid HTML and it breaks keyboard
-                focus): left = go to Treasury, right = show/hide. When masked we
-                also drop the coloured status dot, because a green-vs-red dot
-                would still leak whether the company is up or down. */}
-            {(tab === 'dashboard' ? seeFullDashboard : (isSuperAdmin || modulePerms?.['Treasury'] === true)) && (
-              <div className="flex items-center border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
-                style={{ background: '#0a0a0a' }}>
-                <button onClick={() => { if (openDashboardModule('treasury')) setMode('all'); }}
-                  className="group flex items-center gap-2 pl-3 pr-2 py-1.5"
-                  aria-label="View Treasury">
-                  <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
-                  {netVisible ? (
-                    <>
-                      <span className="text-sm font-bold tabular-nums"
-                        style={{
-                          fontFamily: '"JetBrains Mono", monospace',
-                          color: allTimeNet >= 0 ? '#34d399' : '#f87171',
-                        }}>
-                        {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
-                      </span>
-                      <span className="w-1.5 h-1.5 rounded-full"
-                        style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
-                    </>
-                  ) : (
-                    <span className="text-sm font-bold tracking-[0.2em] select-none"
-                      style={{ fontFamily: '"JetBrains Mono", monospace', color: '#52525b' }}
-                      aria-label="Treasury net hidden">••••••</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNetVisible(!netVisible)}
-                  className="px-2 py-1.5 border-l border-zinc-800 text-zinc-500 hover:text-emerald-400 transition-colors"
-                  title={netVisible ? 'Hide the net amount' : 'Show the net amount'}
-                  aria-pressed={netVisible}
-                  aria-label={netVisible ? 'Hide the treasury net amount' : 'Show the treasury net amount'}>
-                  {netVisible ? (
-                    /* eye-off */
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                      <path d="M6.61 6.61A18.15 18.15 0 0 0 2 12s3 8 10 8a9.74 9.74 0 0 0 5.39-1.61" />
-                      <line x1="2" y1="2" x2="22" y2="22" />
-                    </svg>
-                  ) : (
-                    /* eye */
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  )}
-                </button>
-              </div>
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+              <button onClick={() => { setTab('treasury'); setMode('all'); }}
+                className="group flex items-center gap-2 px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                style={{ background: '#0a0a0a' }}
+                aria-label="View Treasury">
+                <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
+                <span className="text-sm font-bold tabular-nums"
+                  style={{
+                    fontFamily: '"JetBrains Mono", monospace',
+                    color: allTimeNet >= 0 ? '#34d399' : '#f87171',
+                  }}>
+                  {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
+              </button>
             )}
 
             {/* Global search — terminal command convention */}
@@ -5794,22 +5540,23 @@ export default function App() {
 
         {/* SECONDARY ROW — live ticker of key metrics. Pure terminal flair.
             Renders only on dashboard to keep other tabs distraction-free. */}
-        {tab === 'dashboard' && seeFullDashboard && (
+        {tab === 'dashboard' && (isSuperAdmin || modulePerms?.['Treasury'] === true) && (
           <div className="hidden md:block px-4 py-1.5 border-t border-zinc-900 overflow-hidden" style={{ background: '#0a0a0a' }}>
             <div className="flex items-center gap-6 text-[10px] font-mono whitespace-nowrap overflow-x-auto" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
               {(() => {
                 const todayN = todayET();
                 const monthStart = todayN.substring(0, 7) + '-01';
-                const monthFlow = dashboardCashFlow(treasury, monthStart, seeBankBalances);
-                const monthIn = monthFlow.incoming, monthOut = monthFlow.outgoing, monthNet = monthFlow.net;
+                const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                const monthNet = monthIn - monthOut;
                 const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
                 const overdue = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).reduce((a, i) => a + Number(i.outstanding || 0), 0);
                 const pendCk = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
                 return (
                   <>
-                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK IN' : 'MTD CASH IN'}</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
-                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK OUT' : 'MTD CASH OUT'}</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
-                    <span><span className="text-zinc-500">{seeBankBalances ? 'MTD CASH + BANK NET' : 'MTD CASH NET'}</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
+                    <span><span className="text-zinc-500">MTD IN</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
+                    <span><span className="text-zinc-500">MTD OUT</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
+                    <span><span className="text-zinc-500">MTD NET</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
                     <span className="text-zinc-700">│</span>
                     <span><span className="text-zinc-500">A/R</span> <span className="text-zinc-200 tabular-nums">{fE(ar)}</span></span>
                     <span><span className="text-zinc-500">OVERDUE</span> <span className={'tabular-nums ' + (overdue > 0 ? 'text-orange-400' : 'text-zinc-200')}>{fE(overdue)}</span></span>
@@ -5947,10 +5694,7 @@ export default function App() {
           <div className="py-2">
             {[
               { group: 'OVERVIEW', items: ['dashboard'] },
-              { group: '🇺🇸 USA FINANCE', items: ['bank', 'accounting'] },
-              { group: '🇪🇬 EGYPT FINANCE', items: ['sales', 'quotes', 'treasury', 'checks', 'debts', 'egyptbank'] },
-              { group: 'OPEN ACCOUNTS', items: ['openaccounts'] },
-              { group: 'REPORTS', items: ['reports'] },
+              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'openaccounts', 'egyptbank', 'bank', 'quotes', 'reports'] },
               { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
               { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
@@ -5972,9 +5716,7 @@ export default function App() {
                           : 'text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50'
                         )}
                         style={isActive ? { boxShadow: 'inset 1px 0 0 #34d399' } : {}}>
-                        <span className="w-4 flex items-center justify-center shrink-0 opacity-80">
-                          {(function () { const Ic = TAB_ICONS[t.id] || Circle; return <Ic size={15} strokeWidth={2} />; })()}
-                        </span>
+                        <span className="text-[13px] w-4 text-center opacity-80">{t.icon}</span>
                         <span className="truncate flex-1">
                           <span>{t.label.split(' / ')[0]}</span>
                           {t.label.includes(' / ') && <span className="text-[9px] text-zinc-600 block leading-tight" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
@@ -6173,33 +5915,10 @@ export default function App() {
                       <div className="flex gap-2">
                         <button onClick={async () => {
                           try {
-                            // v55.83-MX — give the stock back BEFORE deleting the
-                            // lines. Previously this only reversed the retired
-                            // System B engine (inv_movements), which no current
-                            // sale ever writes to — so deleting an invoice left
-                            // the goods deducted forever with no way to recover
-                            // them except a manual adjustment.
-                            var reversalFailures = [];
-                            try {
-                              const { data: liveItems } = await supabase.from('invoice_items')
-                                .select('id, description, inventory_status')
-                                .eq('invoice_id', selectedInvoice.id)
-                                .eq('inventory_status', 'consumed');
-                              for (const li of (liveItems || [])) {
-                                const rv = await supabase.rpc('reverse_invoice_item_inventory', { p_item_id: li.id });
-                                if (rv.error) reversalFailures.push((li.description || li.id).substring(0, 40));
-                              }
-                            } catch (revErr) {
-                              console.warn('[invoice-delete] stock reversal failed:', revErr && revErr.message);
-                              reversalFailures.push('all lines');
-                            }
-                            if (reversalFailures.length > 0) {
-                              if (!confirm('Could not return stock to inventory for: ' + reversalFailures.join(', ') +
-                                '\n\nDelete the invoice anyway? Inventory will stay short and will need a manual adjustment. / حذف الفاتورة على أي حال؟')) {
-                                return;
-                              }
-                            }
-                            // Legacy System B reversal — historical rows only.
+                            // v55.83-A.6.27 — Stage D: before deleting items,
+                            // reverse FIFO consumption on any sale movements
+                            // linked to those items so the layers get their
+                            // qty back. Otherwise stock would stay drained.
                             try {
                               const { data: salesMovs } = await supabase.from('inv_movements')
                                 .select('id, consumed_layers, linked_invoice_item_id')
@@ -6209,10 +5928,12 @@ export default function App() {
                                 if (m.consumed_layers && Array.isArray(m.consumed_layers)) {
                                   await reverseFifoConsumption(m.consumed_layers);
                                 }
+                                // Mark movement as reversed (delete it; the
+                                // layer qtys are already restored)
                                 await supabase.from('inv_movements').delete().eq('id', m.id);
                               }
                             } catch (revErr) {
-                              console.warn('[invoice-delete] legacy reverse failed:', revErr && revErr.message);
+                              console.warn('[invoice-delete] reverse failed:', revErr && revErr.message);
                             }
                             await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
                             await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
@@ -6692,20 +6413,9 @@ export default function App() {
                 if (!lineItem || !lineItem.id) return;
                 if (!confirm('Delete this line item from the invoice? / حذف هذا البند من الفاتورة؟\n\n' + (lineItem.description || '').substring(0, 80))) return;
                 try {
-                  // v55.83-MX — return this line's stock to inventory first.
-                  // The old code only reversed the retired System B engine via
-                  // cogs_movement_id, which current sales never populate, so
-                  // deleting a line silently kept the goods deducted.
-                  if (lineItem.inventory_status === 'consumed') {
-                    const rv = await supabase.rpc('reverse_invoice_item_inventory', { p_item_id: lineItem.id });
-                    if (rv.error) {
-                      if (!confirm('Could not return this line\'s stock to inventory (' + (rv.error.message || 'unknown') +
-                        ').\n\nDelete the line anyway? Inventory will stay short. / حذف البند على أي حال؟')) return;
-                    } else {
-                      toast.success('Stock returned to inventory / تمت إعادة المخزون');
-                    }
-                  }
-                  // Legacy System B reversal — historical rows only.
+                  // v55.83-A.6.27 — Stage D: reverse FIFO consumption first
+                  // so the cost layers get their qty back, then delete the
+                  // sale movement, then delete the invoice item.
                   if (lineItem.cogs_movement_id) {
                     try {
                       const { data: mov } = await supabase.from('inv_movements')
@@ -6881,20 +6591,6 @@ export default function App() {
                               </div>
                             </div>
                           )}
-                          {/* v55.83-MX — HONEST WARNING. This panel inserts plain
-                              lines with no inventory linkage and never calls the
-                              consume engine, so goods added here leave the
-                              warehouse with no record. Wiring the full inventory
-                              picker into this panel is a separate build; until
-                              then, say so plainly instead of losing stock quietly. */}
-                          <div className="mb-2 p-2 rounded bg-amber-100 border border-amber-400 text-amber-950 text-[11px] font-bold">
-                            ⚠ Lines added here do NOT deduct from inventory.
-                            <div className="font-medium mt-0.5">
-                              Use this for freight, fees, or non-stock items. To sell goods from the
-                              warehouse, add the line on a new invoice using 📦 From Inventory so the
-                              stock and roll count come off correctly.
-                            </div>
-                          </div>
                           {/* Save / Cancel */}
                           <div className="flex gap-2">
                             <button onClick={async () => {
@@ -7923,12 +7619,6 @@ export default function App() {
                         <div style={{direction:'rtl'}}><span className="font-semibold">Description:</span> {txn.description}</div>
                         {Number(txn.cash_in) > 0 && <div><span className="font-semibold text-emerald-600">Cash In:</span> {fE(txn.cash_in)}</div>}
                         {Number(txn.cash_out) > 0 && <div><span className="font-semibold text-red-500">Cash Out:</span> {fE(txn.cash_out)}</div>}
-                        {/* v55.83-NB — a delete must show ALL the money on the line,
-                            not just the EGP side; deleting a "0 EGP" row that holds
-                            $27,450 should never look like deleting nothing. */}
-                        {Number(txn.usd_in) > 0 && <div><span className="font-semibold text-emerald-600">USD In:</span> ${Number(txn.usd_in).toLocaleString()}</div>}
-                        {Number(txn.usd_out) > 0 && <div><span className="font-semibold text-red-500">USD Out:</span> ${Number(txn.usd_out).toLocaleString()}</div>}
-                        {Number(txn.foreign_amount) > 0 && txn.foreign_currency && <div><span className={'font-semibold ' + (txn.foreign_direction === 'out' ? 'text-red-500' : 'text-emerald-600')}>{txn.foreign_currency} {txn.foreign_direction === 'out' ? 'Out' : 'In'}:</span> {Number(txn.foreign_amount).toLocaleString()} {txn.foreign_currency}</div>}
                       </div>
                       {txn.linked_invoice_id && (
                         <div className="text-[10px] text-amber-600 mt-2 font-semibold">⚠️ This is linked to an invoice — unlinking will also adjust the collected amount.</div>
@@ -8094,65 +7784,6 @@ export default function App() {
                         </div>
                       </div>
                     )}
-                    {/* v55.83-NB (Max Aug 11) — "accountant needs to be able to edit each
-                        line and fix it manually if necessary in the other currencies
-                        besides EGP". This modal edited only the EGP (cash) and bank
-                        sides; a wrong USD or EUR figure was uncorrectable from the UI.
-                        The section appears whenever the row carries non-EGP money OR
-                        the accountant is currently in a non-EGP Treasury view (so a
-                        missing dollar amount can be ADDED to a row, not just fixed).
-                        USD lives in its own usd_in/usd_out pair; all other currencies
-                        share foreign_amount + foreign_currency + foreign_direction —
-                        the same sealed-bucket shapes the MZ toggle reads. */}
-                    {(!isBankRow && (Number(txn.usd_in || 0) > 0 || Number(txn.usd_out || 0) > 0
-                      || Number(txn.foreign_amount || 0) > 0 || treasuryCurrency !== 'EGP')) && (
-                      <div className="rounded-lg p-3 border-2 border-amber-300" style={{ background: '#fffbeb' }}>
-                        <div className="text-[10px] font-extrabold uppercase tracking-wide mb-2" style={{ color: '#78350f' }}>
-                          💵 Other currency on this line / عملة أخرى
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 mb-2">
-                          <div>
-                            <label className="text-[10px] font-bold text-emerald-700">USD In / وارد دولار</label>
-                            <input type="number" value={txn.usd_in || 0}
-                              onChange={e => setEditTreasuryModal({...txn, usd_in: Number(e.target.value) || 0})}
-                              className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-700 font-semibold" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-red-600">USD Out / صادر دولار</label>
-                            <input type="number" value={txn.usd_out || 0}
-                              onChange={e => setEditTreasuryModal({...txn, usd_out: Number(e.target.value) || 0})}
-                              className="w-full px-3 py-2 rounded-lg border text-sm text-red-600 font-semibold" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
-                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Currency / العملة</label>
-                            <input value={txn.foreign_currency || ''} placeholder="EUR"
-                              onChange={e => setEditTreasuryModal({...txn, foreign_currency: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3)})}
-                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold uppercase" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Amount / المبلغ</label>
-                            <input type="number" value={txn.foreign_amount || 0}
-                              onChange={e => setEditTreasuryModal({...txn, foreign_amount: Number(e.target.value) || 0})}
-                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold" style={{ color: '#78350f' }}>Direction / اتجاه</label>
-                            <select value={txn.foreign_direction || 'in'}
-                              onChange={e => setEditTreasuryModal({...txn, foreign_direction: e.target.value})}
-                              className="w-full px-3 py-2 rounded-lg border text-sm font-semibold bg-white">
-                              <option value="in">In / وارد</option>
-                              <option value="out">Out / صادر</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div className="text-[10px] mt-2 font-medium" style={{ color: '#78350f' }}>
-                          These amounts stay in their own currency — they are never added to the EGP totals.
-                          Set an amount to 0 to remove it from that currency's ledger.
-                        </div>
-                      </div>
-                    )}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Category / التصنيف</label>
                       <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
@@ -8197,22 +7828,6 @@ export default function App() {
                         } else {
                           payload.cash_in  = Number(txn.cash_in)  || 0;
                           payload.cash_out = Number(txn.cash_out) || 0;
-                          // v55.83-NB — persist the other-currency side. Only for
-                          // cash rows: the currency section is never shown on bank
-                          // rows, so bank edits can't accidentally zero these out.
-                          payload.usd_in  = Number(txn.usd_in)  || 0;
-                          payload.usd_out = Number(txn.usd_out) || 0;
-                          var fcur = String(txn.foreign_currency || '').trim().toUpperCase();
-                          var famt = Number(txn.foreign_amount) || 0;
-                          // An amount with no currency code is meaningless and would
-                          // vanish from every ledger — refuse the ambiguity here.
-                          if (famt > 0 && !fcur) {
-                            toast.error('Enter a currency code (e.g. EUR) for the foreign amount, or set the amount to 0. / أدخل رمز العملة');
-                            return;
-                          }
-                          payload.foreign_currency  = famt > 0 ? fcur : null;
-                          payload.foreign_amount    = famt;
-                          payload.foreign_direction = famt > 0 ? (txn.foreign_direction === 'out' ? 'out' : 'in') : null;
                         }
                         handleSaveTreasuryEdit(txn.id, payload);
                       }} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
@@ -9097,27 +8712,6 @@ export default function App() {
                                           <div className="text-slate-700 hover:text-white mt-0.5">{p.name_en}</div>
                                           <div className="text-slate-700 hover:text-white" style={{ direction: 'rtl' }}>{p.name_ar}</div>
                                           <div className="text-[10px] text-slate-500 hover:text-white font-mono mt-0.5">{p.classification_slug}</div>
-                                          {/* v55.83-MX — real on-hand stock. The picker used to show
-                                              nothing, so a product with zero stock looked identical to
-                                              one with 10 tons and the shortfall only surfaced later as a
-                                              silent backorder row. */}
-                                          {(function () {
-                                            var av = stockAvailable[p.id];
-                                            var onHand = av ? Number(av.qty || 0) : 0;
-                                            if (onHand > 0) {
-                                              return (
-                                                <div className="mt-1 text-[10px] font-extrabold text-emerald-800 hover:text-white">
-                                                  ✓ {onHand.toLocaleString(undefined, { maximumFractionDigits: 2 })} {(av.uom || '').toUpperCase()} on hand
-                                                  {av.provisional && <span className="ml-1 font-bold text-amber-700 hover:text-amber-200">· cost not final yet</span>}
-                                                </div>
-                                              );
-                                            }
-                                            return (
-                                              <div className="mt-1 text-[10px] font-extrabold text-red-700 hover:text-white">
-                                                ⚠ No stock on hand — selling this creates a shortage
-                                              </div>
-                                            );
-                                          })()}
                                         </div>
                                       );
                                     });
@@ -9188,6 +8782,7 @@ export default function App() {
                   <table className="w-full border-collapse text-xs mb-2">
                     <thead><tr className="bg-blue-100">
                       <th className="px-2 py-1 text-left text-[10px]">Item / البند</th>
+                      <th className="px-2 py-1 text-left text-[10px] w-28">📦 SKU (optional)</th>
                       <th className="px-2 py-1 text-right text-[10px] w-16">Qty</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Price</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Total</th>
@@ -9215,17 +8810,21 @@ export default function App() {
                               className="w-full text-[10px] border rounded px-1 py-0.5"
                               style={{direction: (item.inv_desc || '').match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr'}} />
                           </td>
+                          {/* v55.83-A.6.27 — Stage D: link to inventory SKU.
+                              When set, save will drain FIFO layers + stamp COGS. */}
+                          <td className="px-2 py-1">
+                            <select value={item.inv_sku_id || ''}
+                              onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_sku_id: e.target.value || null}; setFormData({...formData, invoiceItems: items}); }}
+                              className="w-full text-[10px] border rounded px-1 py-0.5">
+                              <option value="">— none —</option>
+                              {(invSkus || []).map(s => (
+                                <option key={s.id} value={s.id}>{s.sku_number}</option>
+                              ))}
+                            </select>
+                          </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
-                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" />
-                            {item.uses_inventory && (
-                              <input type="number" value={item.inv_rolls != null ? item.inv_rolls : ''}
-                                onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_rolls: e.target.value === '' ? '' : (Number(e.target.value) || 0)}; setFormData({...formData, invoiceItems: items}); }}
-                                placeholder="rolls / لفات"
-                                title="Number of rolls sold on this line (optional — used to track rolls on hand)"
-                                className="w-full text-right text-[9px] border border-amber-300 rounded px-1 py-0.5 mt-0.5 text-amber-700 bg-amber-50/40" />
-                            )}
-                          </td>
+                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_price}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_price: Number(e.target.value) || 0, inv_total: items[idx].inv_qty * (Number(e.target.value) || 0)}; setFormData({...formData, invoiceItems: items}); }}
                             className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
@@ -9533,14 +9132,17 @@ export default function App() {
                   }).select('id').single();
                   if (newInv && items.length > 0) {
                     for (const item of items) {
-                      // v55.83-T — SINGLE inventory engine. Inventory-linked items carry
-                      // uses_inventory + variant_id; on insert we call System A's
-                      // consume_invoice_item_inventory RPC (FIFO over inventory_layers),
-                      // which stamps cogs_total + gross_profit. No other engine runs.
+                      // v55.83-A.6.27 — Stage D: insert with inv_sku_id, then
+                      // if the SKU is set, drain FIFO layers + create a sale
+                      // movement + stamp COGS back onto this invoice_item.
+                      // v55.83-A.6.27.44b — Also persist NEW inventory variant linkage when present.
+                      //   uses_inventory + variant_id + warehouse_id + sale_quantity + sale_price_per_uom
+                      //   are saved here but FIFO consumption does NOT run yet (lands in 44c).
                       const itemPayload = {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
                         product_id: item.product_id || null,
+                        inv_sku_id: item.inv_sku_id || null,
                       };
                       // Only attach the new variant-linkage fields when this item came from the
                       // 📦 From Inventory tab. Other items keep legacy/manual behavior unchanged.
@@ -9551,45 +9153,16 @@ export default function App() {
                         itemPayload.uom = item.variant_uom || null;
                         itemPayload.sale_quantity = Number(item.inv_qty) || 0;
                         itemPayload.sale_price_per_uom = Number(item.inv_price) || 0;
-                        // v55.83-H — record rolls sold on this line (optional). Pure attribute;
-                        // FIFO/cost consumption is unaffected. The Overview subtracts summed
-                        // rolls_sold from rolls received to show real rolls-on-hand.
-                        if (item.inv_rolls !== '' && item.inv_rolls != null) itemPayload.rolls_sold = Number(item.inv_rolls) || 0;
                         itemPayload.inventory_status = 'draft';
                       }
                       const insertedItem = await dbInsert('invoice_items', itemPayload, user?.id);
-                      // v55.83-MX — DO NOT let a missing migration hide again.
-                      //
-                      // dbInsert self-heals by stripping unknown columns and
-                      // retrying (up to 8). An inventory line sets 7 of them.
-                      // Before MX, invoice_items had NONE of those columns in
-                      // production, so all 7 were stripped one by one and the
-                      // line saved as an ordinary manual line. The invoice
-                      // looked perfect and the link to the product was thrown
-                      // away every single time — silently, for months. That is
-                      // the real reason stock never moved.
-                      //
-                      // If it ever happens again, say so immediately and loudly
-                      // instead of pretending the sale was recorded.
-                      if (item.uses_inventory === true && insertedItem && insertedItem.__strippedColumns
-                          && insertedItem.__strippedColumns.length > 0) {
-                        console.error('[invoice-save] INVENTORY LINK DROPPED — missing columns:', insertedItem.__strippedColumns);
-                        toast.error('⚠ STOCK NOT LINKED for "' + (item.inv_desc || '?').substring(0, 40) +
-                          '". The database is missing: ' + insertedItem.__strippedColumns.join(', ') +
-                          '. Run the v55.83-MX migration — until then this sale will NOT reduce inventory. / لم يتم ربط المخزون');
-                      }
                       // v55.83-A.6.27.44c — Auto-FIFO-consume for inventory-linked items.
                       // Fires on submit (insert). Reads from inventory_layers oldest-first,
                       // stamps cogs_total + gross_profit + consumed_layers on the item,
                       // creates an inventory_backorders row if sale qty > available stock.
                       // Failure here does NOT fail the whole invoice — operator gets a
                       // toast warning and can review/fix manually.
-                      if (item.uses_inventory === true && item.variant_id && virtualMixIds[item.variant_id]) {
-                        // v55.83-GE — SAFETY GATE: never run FIFO against a virtual Stock Mix product
-                        // (it has no stock layers of its own). Phase 2 will expand it into real
-                        // component colors; until then, do not deduct and warn clearly.
-                        toast.warning('Virtual Stock Mix cannot be sold yet (component drawdown not enabled) — stock NOT deducted for "' + (item.inv_desc || '?').substring(0, 50) + '". Remove this line or sell the real color products. / لا يمكن بيع المزيج الافتراضي بعد');
-                      } else if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
+                      if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
                         try {
                           const consumeRes = await supabase.rpc('consume_invoice_item_inventory', { p_item_id: insertedItem.id });
                           if (consumeRes.error) {
@@ -9612,10 +9185,50 @@ export default function App() {
                           await dbUpdate('inventory', prod.id, { current_quantity: newQty, stock_status: newQty <= 0 ? 'out_of_stock' : newQty < 5 ? 'low' : 'in_stock' }, user?.id);
                         }
                       }
-                      // v55.83-T — System B (inv_sku_id / consumeFifo / inv_movements) RETIRED.
-                      // Every sale now deducts stock + COGS through ONE engine only: System A's
-                      // consume_invoice_item_inventory RPC above (variant_id -> inventory_layers).
-                      // This removes the parallel/double-deduction path entirely.
+                      // v55.83-A.6.27 — Stage D: drain new inventory layers if inv_sku_id set
+                      if (item.inv_sku_id && Number(item.inv_qty) > 0 && insertedItem && insertedItem.id) {
+                        try {
+                          const drain = await consumeFifo(item.inv_sku_id, null, Number(item.inv_qty));
+                          if (drain && !drain.error && drain.qtyDrained > 0) {
+                            // Create sale movement
+                            const movInsert = await supabase.from('inv_movements').insert({
+                              sku_id: item.inv_sku_id,
+                              warehouse_id: (drain.consumed && drain.consumed[0])
+                                ? (await supabase.from('inv_layers').select('warehouse_id').eq('id', drain.consumed[0].layer_id).maybeSingle()).data?.warehouse_id
+                                : null,
+                              movement_type: 'sale',
+                              qty_change: -Number(drain.qtyDrained),
+                              source_table: 'invoices',
+                              source_id: newInv.id,
+                              linked_invoice_id: newInv.id,
+                              linked_invoice_item_id: insertedItem.id,
+                              consumed_layers: drain.consumed,
+                              unit_cost_usd: drain.weightedUnitUsd,
+                              unit_cost_egp: drain.weightedUnitEgp,
+                              total_cost_usd: drain.totalCogsUsd,
+                              total_cost_egp: drain.totalCogsEgp,
+                              occurred_at: new Date().toISOString(),
+                              note: 'Auto: sale from invoice ' + (newInv.id || ''),
+                              created_by: user?.id || null,
+                            }).select().single();
+                            if (!movInsert.error && movInsert.data) {
+                              // Stamp COGS + movement id on the invoice_item
+                              await supabase.from('invoice_items').update({
+                                cogs_usd: drain.totalCogsUsd,
+                                cogs_egp: drain.totalCogsEgp,
+                                cogs_movement_id: movInsert.data.id,
+                              }).eq('id', insertedItem.id);
+                            }
+                            if (drain.shortfall > 0) {
+                              toast.warn && toast.warn('Stock shortfall on ' + (item.inv_desc || 'item') + ': sold ' + drain.qtyDrained + ', short ' + drain.shortfall);
+                            }
+                          } else if (drain && drain.error) {
+                            toast.warn && toast.warn('Inventory drain failed for ' + (item.inv_desc || 'item') + ': ' + drain.error);
+                          }
+                        } catch (e) {
+                          console.warn('[sale-deduct] threw:', e && e.message);
+                        }
+                      }
                     }
                   }
                   // BACKFILL: link any orphan treasury rows (cash OR bank) that reference
@@ -10273,8 +9886,6 @@ export default function App() {
                 below (not above) the new dashboard GUI". */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
-              canViewFullDashboard={seeFullDashboard}
-              onOpenCompanySales={visibleTabs.some(item => item.id === 'sales') ? opts => openDashboardModule('sales', opts) : undefined}
               renderSection="rest" />
 
             {/* v55.83-A.6.27.9 — What's New is COLLAPSED by default now.
@@ -10313,15 +9924,16 @@ export default function App() {
                 in JetBrains Mono. Sharp corners. Click-through on every
                 tile to the relevant tab.
                 =========================================================== */}
-            {seeFullDashboard && (() => {
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (() => {
               const todayN = todayET();
               const monthStart = todayN.substring(0, 7) + '-01';
               const sevenDaysOut = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
               const myId = userProfile?.id;
 
               // Money flows
-              const monthFlow = dashboardCashFlow(treasury, monthStart, seeBankBalances);
-              const monthIn = monthFlow.incoming, monthOut = monthFlow.outgoing, monthNet = monthFlow.net;
+              const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+              const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+              const monthNet = monthIn - monthOut;
 
               // A/R and overdue
               const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
@@ -10347,8 +9959,8 @@ export default function App() {
                 var days = [];
                 for (var i = 29; i >= 0; i--) {
                   var d = new Date(Date.now() - i * 86400000).toISOString().substring(0, 10);
-                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0), 0);
-                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0), 0);
+                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
                   days.push(dayIn - dayOut);
                 }
                 return days;
@@ -10415,11 +10027,11 @@ export default function App() {
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-zinc-800 border border-zinc-800">
                     {/* TILE 1 — TREASURY NET (with sparkline) */}
                     <Tile
-                      label="PHYSICAL CASH NET"
+                      label="TREASURY NET"
                       value={(allTimeNet >= 0 ? '+' : '') + fE(allTimeNet)}
                       valueColor={allTimeNet >= 0 ? '#34d399' : '#f87171'}
                       sub="all-time · click for detail"
-                      onClick={() => { if (openDashboardModule('treasury')) setMode('all'); }}
+                      onClick={() => { setTab('treasury'); setMode('all'); }}
                       badge={<span className="w-1.5 h-1.5 rounded-full" style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />}>
                       {/* 30-day sparkline */}
                       {sparkData.length > 1 && (
@@ -10438,11 +10050,11 @@ export default function App() {
 
                     {/* TILE 2 — MTD NET */}
                     <Tile
-                      label={seeBankBalances ? 'MTD CASH + BANK NET' : 'MTD CASH NET'}
+                      label="MTD NET"
                       value={(monthNet >= 0 ? '+' : '') + fE(monthNet)}
                       valueColor={monthNet >= 0 ? '#34d399' : '#f87171'}
                       sub={'IN ' + fE(monthIn) + ' / OUT ' + fE(monthOut)}
-                      onClick={() => { if (openDashboardModule('treasury')) setMode('mtd'); }}
+                      onClick={() => { setTab('treasury'); setMode('mtd'); }}
                     />
 
                     {/* TILE 3 — ACCOUNTS RECEIVABLE */}
@@ -10453,7 +10065,7 @@ export default function App() {
                       sub={overdueAmt > 0
                         ? <span className="text-orange-400">{overdueInvs.length} overdue · {fE(overdueAmt)}</span>
                         : 'no overdue invoices'}
-                      onClick={() => { openDashboardModule('sales'); }}
+                      onClick={() => { setTab('sales'); }}
                       badge={overdueAmt > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-orange-400" style={{ boxShadow: '0 0 6px #fb923c' }} /> : null}
                     />
 
@@ -10465,7 +10077,7 @@ export default function App() {
                       sub={overdueCk.length > 0
                         ? <span className="text-red-400">{overdueCk.length} overdue · next 7d {fE(next7CkAmt)}</span>
                         : <span>next 7d {fE(next7CkAmt)} ({next7Ck.length})</span>}
-                      onClick={() => { openDashboardModule('checks'); }}
+                      onClick={() => { setTab('checks'); }}
                       badge={overdueCk.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : null}
                     />
 
@@ -10478,7 +10090,7 @@ export default function App() {
                       sub={myT.length > 0
                         ? <span><span className="text-sky-400">{myT.length} mine</span>{overdueT.length > 0 ? <span className="text-red-400"> · {overdueT.length} overdue</span> : null}</span>
                         : 'none assigned to me'}
-                      onClick={() => { openDashboardModule('tickets'); }}
+                      onClick={() => { setTab('tickets'); }}
                       badge={overdueT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : (myT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-sky-400" style={{ boxShadow: '0 0 6px #38bdf8' }} /> : null)}
                     />
 
@@ -10489,7 +10101,7 @@ export default function App() {
                       unit={teamUsers.length === 1 ? 'user' : 'users'}
                       valueColor="#fafafa"
                       sub={<span className="font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{invoices.length} INV · {treasury.length} TXN</span>}
-                      onClick={() => { openDashboardModule('admin'); }}
+                      onClick={() => { setTab('admin'); }}
                       badge={<span className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{ boxShadow: '0 0 6px #34d399' }} />}
                     />
                   </div>
@@ -10557,10 +10169,10 @@ export default function App() {
               const firstName = (userProfile.name || '').split(' ')[0];
 
               // Permission checks
-              const hasTreasury = seeFullDashboard || isSuperAdmin || modulePerms?.['Treasury'];
-              const hasSales = seeFullDashboard || isSuperAdmin || modulePerms?.['Sales'];
+              const hasTreasury = isSuperAdmin || modulePerms?.['Treasury'];
+              const hasSales = isSuperAdmin || modulePerms?.['Sales'];
               const hasTickets = isSuperAdmin || modulePerms?.['Tickets'];
-              const hasChecks = seeFullDashboard || isSuperAdmin || modulePerms?.['Checks'];
+              const hasChecks = isSuperAdmin || modulePerms?.['Checks'];
 
               // Login analysis
               const prevLogins = (lastLoginInfo || []).filter(s => s.date !== todayStr);
@@ -10792,7 +10404,7 @@ export default function App() {
               const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
               const todayEvents = dashEvents.filter(e => e.event_date === todayStr && (e.assigned_to === myId || e.created_by === myId || !e.assigned_to));
               // Check due reminders (today + tomorrow) — for treasury-access users
-              const hasTreasuryAccess = seeFullDashboard || userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury'] === true;
+              const hasTreasuryAccess = userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury'] === true;
               const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
               const checksDueToday = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === todayStr) : [];
               const checksDueTomorrow = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowStr) : [];
@@ -11423,7 +11035,7 @@ export default function App() {
                 per Max's reorder request May 15 2026. See new mount below. */}
 
             {/* ===== PENDING CHECKS ===== */}
-            {pendingChecks && pendingChecks.length > 0 && seeFullDashboard && (() => {
+            {pendingChecks && pendingChecks.length > 0 && (isSuperAdmin || modulePerms['Treasury']) && (() => {
               const expanded = hideSections.dash_pendChecks;
               const sorted = [...pendingChecks].sort((a,b) => (a.check_date || a.date || '').localeCompare(b.check_date || b.date || ''));
               const visible = expanded ? sorted : sorted.slice(0, 5);
@@ -11461,9 +11073,16 @@ export default function App() {
 
 
 
-            {/* Shared financial overview requires the dedicated verified
-                dashboard grant. Bank summaries still require their own grant. */}
-            {seeFullDashboard && (<>
+            {/* v55.83-A.6.27.11 (Max May 15 2026) — Per Max: "no one except
+                the super admin and those with treasury access permissioning
+                can see any financial data on the dashboard from the banks
+                or transactions or sales or otherwise (except for monthly
+                sales)". Wrap the entire Financial Overview block in a single
+                top-level gate so Sales-only users no longer see ANY of it
+                (invoices, cash register, etc.). Monthly Sales is rendered
+                inside PersonalDashboard and stays available to all per the
+                "except for monthly sales" carve-out. */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             {/* Section: Financial */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
               <div style={{ width: 3, height: 20, borderRadius: 2, background: '#10b981' }} />
@@ -11497,22 +11116,24 @@ export default function App() {
               )}
             </div>
 
-            {/* Dashboard read access does not change invoice edit permissions. */}
-            {seeFullDashboard && (<>
+            {/* Invoices — Sales or Treasury access. After A.6.27.11 the outer
+                gate is already Treasury OR super_admin, so this inner gate is
+                effectively the same; keeping it for defense-in-depth. */}
+            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
             {!hideSections.invoices && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={canEditInvoices ? () => setDrillType('invoiced') : undefined} spark={sparkData.inv} />
-              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={canEditInvoices ? () => setDrillType('collected') : undefined} spark={sparkData.col} />
-              <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={canEditInvoices ? () => setDrillType('outstanding') : undefined} />
-              <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => openDashboardModule('debts')} />
+              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={() => setDrillType('invoiced')} spark={sparkData.inv} />
+              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={() => setDrillType('collected')} spark={sparkData.col} />
+              <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={() => setDrillType('outstanding')} />
+              <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => navigate('debts')} />
             </div>}
             </>)}
 
-            {/* Physical cash figures are part of the shared dashboard. */}
-            {seeFullDashboard && (<>
+            {/* Cash Register — Treasury access ONLY */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, cash: !hideSections.cash})}>
               <div>
                 <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
@@ -11523,12 +11144,12 @@ export default function App() {
             {!hideSections.cash && <>
             <div className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide mb-1">Safe / الخزنة (physical cash)</div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Safe only / خزنة فقط" color="#10b981" onClick={canEditTreasury ? () => setTreasuryDrill('in') : undefined} spark={sparkData.cin} />
-              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Safe only / خزنة فقط" color="#ef4444" onClick={canEditTreasury ? () => setTreasuryDrill('out') : undefined} spark={sparkData.cout} />
-              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Safe balance / رصيد الخزنة" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={canEditTreasury ? () => setTreasuryDrill('net') : undefined} />
-              <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => openDashboardModule('checks')} />
+              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Safe only / خزنة فقط" color="#10b981" onClick={() => setTreasuryDrill('in')} spark={sparkData.cin} />
+              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Safe only / خزنة فقط" color="#ef4444" onClick={() => setTreasuryDrill('out')} spark={sparkData.cout} />
+              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Safe balance / رصيد الخزنة" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
+              <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => navigate('checks')} />
             </div>
-            {seeBankBalances && (totalBankIn > 0 || totalBankOut > 0) && (
+            {(totalBankIn > 0 || totalBankOut > 0) && (
               <>
                 <div className="text-[10px] text-indigo-700 font-bold uppercase tracking-wide mb-1">🏦 Bank / البنك (tracked separately — does NOT affect safe balance)</div>
                 <div className="grid grid-cols-3 gap-3 mb-5">
@@ -11571,8 +11192,8 @@ export default function App() {
             </>}{/* end cash register gate */}
             </>)}{/* end treasury gate */}
 
-            {/* Company monthly sales, current year only. */}
-            {seeFullDashboard && (
+            {/* Monthly Sales — Sales or Treasury permission, current year only */}
+            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (
             <div className="bg-white rounded-xl p-4 mb-4">
               <h3 className="text-sm font-bold mb-2">📊 Monthly Sales — {new Date().getFullYear()} / المبيعات الشهرية</h3>
               {(() => {
@@ -11611,7 +11232,7 @@ export default function App() {
                           const monthTo2 = m.month + '-' + String(lastDay2).padStart(2, '0');
                           return (
                             <tr key={m.month}
-                                onClick={() => openDashboardModule('sales', { from: monthFrom2, to: monthTo2 })}
+                                onClick={() => navigate('sales', { from: monthFrom2, to: monthTo2 })}
                                 title={'Click to see all ' + m.count + ' orders from ' + m.month}
                                 className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
                               <td className="px-2 py-1 text-xs font-semibold">{m.month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
@@ -11689,15 +11310,15 @@ export default function App() {
               );
             })()}
 
-            {/* Company income/expense figures; underlying write rights stay separate. */}
-            {seeFullDashboard && (<>
+            {/* Income/Expense Buckets + USD — Treasury access only */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             {/* Income Buckets */}
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-4">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
                 {incomeBuckets.map((e, i) => (
                   <div key={e.cat}>
-                    <div onClick={canEditTreasury ? () => setExpenseDrill('in:' + e.cat) : undefined}
+                    <div onClick={() => setExpenseDrill('in:' + e.cat)}
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
@@ -11722,7 +11343,7 @@ export default function App() {
               <h3 className="text-sm font-bold mb-2 text-red-700">Expense Buckets / تصنيف المنصرفات</h3>
               {expenseBuckets.map((e, i) => (
                 <div key={e.cat}>
-                    <div onClick={canEditTreasury ? () => setExpenseDrill(e.cat) : undefined}
+                  <div onClick={() => setExpenseDrill(e.cat)}
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
@@ -11782,7 +11403,7 @@ export default function App() {
             })()}
             </>)}{/* end treasury gate for buckets */}
             </div>{/* end financial-command */}
-            </>)}{/* end verified Full dashboard access gate */}
+            </>)}{/* v55.83-A.6.27.11 — end gate: super_admin OR Treasury only */}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
             {egyptBankTxns.length > 0 && (isSuperAdmin || modulePerms['Egypt Bank']) && (() => {
@@ -11799,8 +11420,7 @@ export default function App() {
                   </div>
                   {!hideSections.egyptBankDash && (
                     <div>
-                      <div className={'grid gap-2 mb-2 ' + (seeBankBalances ? 'grid-cols-4' : 'grid-cols-2')}>
-                        {seeBankBalances && <>
+                      <div className="grid grid-cols-4 gap-2 mb-2">
                         <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
                           <div className="text-[9px] text-green-600 font-bold">Deposits</div>
                           <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
@@ -11809,7 +11429,6 @@ export default function App() {
                           <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
                           <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
                         </div>
-                        </>}
                         <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
                           <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
                           <div className="text-xs font-black text-amber-900">{unmatched}</div>
@@ -11841,16 +11460,16 @@ export default function App() {
 
 
             {/* ===== USD DOLLAR LEDGER ===== */}
-            {seeFullDashboard && (() => {
-              const usdIn = dashboardCurrencyTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
-              const usdOut = dashboardCurrencyTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
+            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
+              const usdIn = filteredTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
+              const usdOut = filteredTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
               const usdNet = usdIn - usdOut;
-              const usdTxns = dashboardCurrencyTreasury.filter(t => Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0);
+              const usdTxns = filteredTreasury.filter(t => Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0);
               if (usdTxns.length === 0) return null;
               return (
                 <div className="mt-6">
                   <div className="bg-amber-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, usd: !hideSections.usd})}>
-                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار{!seeBankBalances && ' · Physical cash'}</span>
+                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
                     <span className="text-xs text-amber-600">{hideSections.usd ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.usd && (<>
@@ -11899,8 +11518,8 @@ export default function App() {
             })()}
 
             {/* ===== FOREIGN CURRENCY LEDGER (EUR/GBP/SAR/AED/etc) ===== */}
-            {seeFullDashboard && (() => {
-              const foreignTxns = dashboardCurrencyTreasury.filter(t => Number(t.foreign_amount || 0) > 0 && t.foreign_currency);
+            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
+              const foreignTxns = filteredTreasury.filter(t => Number(t.foreign_amount || 0) > 0 && t.foreign_currency);
               if (foreignTxns.length === 0) return null;
               const byCur = {};
               foreignTxns.forEach(t => {
@@ -11913,7 +11532,7 @@ export default function App() {
               return (
                 <div className="mt-6">
                   <div className="bg-indigo-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, foreign: !hideSections.foreign})}>
-                    <span className="text-sm font-bold text-indigo-800">🌍 FOREIGN CURRENCY LEDGER / دفتر العملات الأجنبية{!seeBankBalances && ' · Physical cash'}</span>
+                    <span className="text-sm font-bold text-indigo-800">🌍 FOREIGN CURRENCY LEDGER / دفتر العملات الأجنبية</span>
                     <span className="text-xs text-indigo-600">{hideSections.foreign ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.foreign && Object.entries(byCur).map(([cur, data]) => (
@@ -11960,7 +11579,7 @@ export default function App() {
 
 
             {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
-            {seeFullDashboard && (() => {
+            {isAdmin && (() => {
               const divData = {};
               filteredInvoices.forEach(inv => {
                 const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
@@ -12129,9 +11748,7 @@ export default function App() {
                 selectedAssistant === 'jenna' ? 'text-rose-700 border-rose-300 hover:bg-rose-50' :
                 selectedAssistant === 'sara'  ? 'text-cyan-700 border-cyan-300 hover:bg-cyan-50' :
                                                 'text-indigo-700 border-indigo-300 hover:bg-indigo-50';
-              // v55.83-OP (Max): no auto-start anywhere — the dashboard chat mounts
-              // ONLY after the Wake button (same pattern Treasury already had).
-              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled && nadiaWokenInTab.dashboard) ? (
+              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled) ? (
                 <div id="nadia-greeter-anchor">
                   <SafeSection label="Nadia">
                     <AIGreeter
@@ -12152,9 +11769,9 @@ export default function App() {
                   </SafeSection>
                 </div>
               ) : greeterSettings.enabled ? (
-                <button onClick={() => { setGreeterDismissed(false); setNadiaWokenInTab(function(prev) { return Object.assign({}, prev, { dashboard: true }); }); }}
+                <button onClick={() => setGreeterDismissed(false)}
                   className={'w-full px-4 py-3 rounded-xl text-sm font-semibold border-2 transition flex items-center justify-center gap-2 bg-white ' + activePersonaColor}>
-                  🤖 <span>Wake {activePersonaName}</span>
+                  🤖 <span>Talk to {activePersonaName}</span>
                 </button>
               ) : null;
               return (
@@ -13127,39 +12744,10 @@ export default function App() {
                 );
               })()}
             </div>
-            {/* v55.83-MZ — Currency switcher. Only rendered when there IS other
-                currency money in the safe; a pure-EGP business never sees it. */}
-            {treasuryCurrencies.length > 1 && (
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Currency / العملة</span>
-                {treasuryCurrencies.map(function (cur) {
-                  var active = treasuryCurrency === cur;
-                  return (
-                    <button key={cur} onClick={() => { setTreasuryCurrency(cur); setTreasuryDrill(null); }}
-                      className="px-3 py-1 rounded-md text-xs font-extrabold transition-all"
-                      style={active
-                        ? { background: '#f8fafc', color: '#0f172a', border: '2px solid #38bdf8', boxShadow: '0 0 12px rgba(56,189,248,0.35)' }
-                        : { background: '#1e293b', color: '#cbd5e1', border: '2px solid #334155' }}
-                      aria-pressed={active}>
-                      {cur}
-                    </button>
-                  );
-                })}
-                {treasuryCurrency !== 'EGP' && (
-                  <span className="text-[10px] font-bold px-2 py-1 rounded"
-                    style={{ background: '#fef3c7', color: '#1c1917', border: '1px solid #f59e0b' }}>
-                    Showing {treasuryCurrency} only — not converted to EGP
-                  </span>
-                )}
-              </div>
-            )}
             <div className="grid grid-cols-3 gap-3 mb-3">
               {/* S17 — Treasury summary cards redesigned for high contrast.
                   Dark solid backgrounds with bright neon-colored numbers.
-                  All content centered inside each bucket.
-                  v55.83-MZ — now driven by currencyTotals, so the same three
-                  buckets answer "in / out / net" for whichever currency is
-                  selected. Each currency is sealed: no FX conversion, no mixing. */}
+                  All content centered inside each bucket. */}
               <div onClick={() => setTreasuryDrill('in')}
                 className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
                 style={{
@@ -13169,10 +12757,10 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-emerald-400 text-base">💰</span>
-                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">{treasuryCurrency} In / وارد</div>
+                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Cash In / وارد</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}>
-                  {fCur(currencyTotals.in)}
+                  {fE(totalCashIn)}
                 </div>
               </div>
               <div onClick={() => setTreasuryDrill('out')}
@@ -13184,34 +12772,34 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-red-400 text-base">💸</span>
-                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">{treasuryCurrency} Out / منصرف</div>
+                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Cash Out / منصرف</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-red-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(239,68,68,0.3)' }}>
-                  {fCur(currencyTotals.out)}
+                  {fE(totalCashOut)}
                 </div>
               </div>
               <div onClick={() => setTreasuryDrill('net')}
                 className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
                 style={{
-                  background: currencyTotals.net >= 0
+                  background: totalCashIn >= totalCashOut
                     ? 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)'
                     : 'linear-gradient(135deg, #78350f 0%, #92400e 100%)',
-                  border: '2px solid ' + (currencyTotals.net >= 0 ? '#3b82f6' : '#f59e0b'),
-                  boxShadow: '0 0 0 1px ' + (currencyTotals.net >= 0 ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)') + ' inset',
+                  border: '2px solid ' + (totalCashIn >= totalCashOut ? '#3b82f6' : '#f59e0b'),
+                  boxShadow: '0 0 0 1px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)') + ' inset',
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
-                  <span className="text-base">{currencyTotals.net >= 0 ? '📈' : '📉'}</span>
-                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (currencyTotals.net >= 0 ? 'text-blue-200' : 'text-amber-200')}>{treasuryCurrency} Net / صافي</div>
+                  <span className="text-base">{totalCashIn >= totalCashOut ? '📈' : '📉'}</span>
+                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (totalCashIn >= totalCashOut ? 'text-blue-200' : 'text-amber-200')}>Net / صافي</div>
                 </div>
-                <div className={'text-xl sm:text-2xl font-black tracking-tight ' + (currencyTotals.net >= 0 ? 'text-blue-300' : 'text-amber-300')}
-                  style={{ textShadow: '0 0 20px ' + (currencyTotals.net >= 0 ? 'rgba(59,130,246,0.3)' : 'rgba(245,158,11,0.3)') }}>
-                  {fCur(currencyTotals.net)}
+                <div className={'text-xl sm:text-2xl font-black tracking-tight ' + (totalCashIn >= totalCashOut ? 'text-blue-300' : 'text-amber-300')}
+                  style={{ textShadow: '0 0 20px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.3)' : 'rgba(245,158,11,0.3)') }}>
+                  {fE(totalCashIn - totalCashOut)}
                 </div>
-                {currencyTotals.in > 0 && (
+                {totalCashIn > 0 && (
                   <div className="mt-2 h-1 w-4/5 rounded-full bg-black/30 overflow-hidden">
                     <div style={{
-                      width: Math.min(100, Math.max(0, currencyTotals.net / currencyTotals.in * 100)) + '%',
-                      background: currencyTotals.net >= 0 ? '#60a5fa' : '#fbbf24',
+                      width: Math.min(100, Math.max(0, (totalCashIn - totalCashOut) / totalCashIn * 100)) + '%',
+                      background: totalCashIn >= totalCashOut ? '#60a5fa' : '#fbbf24',
                       height: '100%',
                       transition: 'width 0.3s'
                     }} />
@@ -13219,103 +12807,6 @@ export default function App() {
                 )}
               </div>
             </div>
-            {/* v55.83-MZ — the transactions behind the three buckets above.
-                Max asked to "SHOW THE SPECIFIC TRANSACTIONS THAT MAKE UP THOSE
-                VALUES". For EGP the main table below already does this; for any
-                other currency the main table shows EGP columns, so the backing
-                rows would otherwise be invisible. */}
-            {treasuryCurrency !== 'EGP' && (
-              <div className="rounded-xl p-3 mb-3" style={{ background: '#0f172a', border: '1px solid #334155' }}>
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                  <div className="text-xs font-extrabold text-slate-100">
-                    💵 {treasuryCurrency} transactions ({currencyTxns.length})
-                    {treasuryDrill === 'in' && <span className="ml-2 text-emerald-300">— showing money in</span>}
-                    {treasuryDrill === 'out' && <span className="ml-2 text-red-300">— showing money out</span>}
-                  </div>
-                  {treasuryDrill && (
-                    <button onClick={() => setTreasuryDrill(null)}
-                      className="text-[10px] font-bold px-2 py-1 rounded bg-slate-700 text-slate-100 hover:bg-slate-600">
-                      Show all {treasuryCurrency}
-                    </button>
-                  )}
-                </div>
-                {currencyTxns.length === 0 ? (
-                  <div className="text-xs p-3 rounded" style={{ background: '#fef3c7', color: '#1c1917' }}>
-                    No {treasuryCurrency} transactions in the current filter.
-                  </div>
-                ) : (
-                  <div className="overflow-auto max-h-[340px] rounded border border-slate-700">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0" style={{ background: '#1e293b' }}>
-                        <tr>
-                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Date</th>
-                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Order</th>
-                          <th className="px-2 py-1.5 text-left font-extrabold text-slate-100">Description</th>
-                          <th className="px-2 py-1.5 text-right font-extrabold text-emerald-200">In</th>
-                          <th className="px-2 py-1.5 text-right font-extrabold text-red-200">Out</th>
-                          <th className="px-2 py-1.5 text-right font-extrabold text-slate-100">Balance</th>
-                          <th className="px-2 py-1.5 text-right font-extrabold text-slate-100"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currencyTxns
-                          .filter(t => {
-                            if (!treasuryDrill || treasuryDrill === 'net') return true;
-                            const a = currencyAmounts(t, treasuryCurrency);
-                            return treasuryDrill === 'in' ? a.in > 0 : a.out > 0;
-                          })
-                          .slice()
-                          .sort((a, b) => (b.transaction_date || '').localeCompare(a.transaction_date || ''))
-                          .map(t => {
-                            const a = currencyAmounts(t, treasuryCurrency);
-                            const bal = currencyBalanceMap[t.id];
-                            return (
-                              <tr key={t.id} className="border-b border-slate-800">
-                                <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">{t.transaction_date || '—'}</td>
-                                <td className="px-2 py-1.5 font-mono font-bold text-indigo-300">{t.order_number || '—'}</td>
-                                <td className="px-2 py-1.5 text-slate-200">{t.description || '—'}</td>
-                                <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">{a.in > 0 ? fCur(a.in) : ''}</td>
-                                <td className="px-2 py-1.5 text-right font-mono font-bold text-red-300">{a.out > 0 ? fCur(a.out) : ''}</td>
-                                <td className="px-2 py-1.5 text-right font-mono font-bold whitespace-nowrap"
-                                  style={{ color: (bal || 0) >= 0 ? '#6ee7b7' : '#fca5a5' }}>
-                                  {bal == null ? '—' : fCur(bal)}
-                                </td>
-                                {/* v55.83-NB — edit + delete straight from the currency
-                                    ledger (Max: "accountant needs to be able to edit
-                                    each line and fix it manually ... also the ability
-                                    to delete a line"). Both open the SAME treasury
-                                    modal as the EGP table, so every existing guard
-                                    applies unchanged: the delete confirmation, the
-                                    super-admin / creator-within-24h delete rule,
-                                    invoice-collected recalc, and the linked-check
-                                    revert all come for free. */}
-                                <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                                  <button onClick={() => setEditTreasuryModal({ ...t })}
-                                    className="text-slate-300 hover:text-white px-1"
-                                    title="Edit this line / تعديل">✏️</button>
-                                  <button onClick={() => setEditTreasuryModal({ ...t, confirmDelete: true })}
-                                    className="text-slate-300 hover:text-red-300 px-1"
-                                    title="Delete this line / حذف">🗑</button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                      </tbody>
-                      <tfoot>
-                        <tr style={{ background: '#1e293b' }}>
-                          <td className="px-2 py-1.5 font-extrabold text-slate-100" colSpan={3}>Total {treasuryCurrency}</td>
-                          <td className="px-2 py-1.5 text-right font-mono font-extrabold text-emerald-200">{fCur(currencyTotals.in)}</td>
-                          <td className="px-2 py-1.5 text-right font-mono font-extrabold text-red-200">{fCur(currencyTotals.out)}</td>
-                          <td className="px-2 py-1.5 text-right font-mono font-extrabold"
-                            style={{ color: currencyTotals.net >= 0 ? '#93c5fd' : '#fcd34d' }}>{fCur(currencyTotals.net)}</td>
-                          <td />
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
             {query && (() => {
               const searchResults = filteredTreasury.filter(t => {
                 const words = query.split(/\s+/).filter(w => w.length > 0);
@@ -13435,7 +12926,7 @@ export default function App() {
                     <th className="px-2 py-2 text-xs" style={{direction:'rtl'}}>Description</th>
                     <th className="px-2 py-2 text-xs text-right">In</th>
                     <th className="px-2 py-2 text-xs text-right">Out</th>
-                    <th className="px-2 py-2 text-xs text-right">Balance{treasuryCurrency !== 'EGP' ? ' (' + treasuryCurrency + ')' : ''}</th>
+                    <th className="px-2 py-2 text-xs text-right">Balance</th>
                     <th className="px-2 py-2 text-xs"></th>
                   </tr></thead>
                   <tbody>
@@ -13675,18 +13166,9 @@ export default function App() {
                           {Number(txn.usd_out) > 0 && <div className="text-red-500 text-[11px]">${Number(txn.usd_out).toLocaleString()} <span className="text-[9px] text-amber-600">USD</span></div>}
                           {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500 text-[11px]">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[9px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
-                        {/* v55.83-MZ — balance follows the currency toggle. In a
-                            non-EGP view, rows that hold no money in that currency
-                            have no balance of their own, so they show a dash
-                            rather than repeating the previous row's figure (which
-                            would read like a frozen or wrong balance). */}
-                        <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (currencyBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
+                        <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (treasuryBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
                           {/* Bank rows don't contribute to safe running balance — show dash */}
-                          {isBankRow
-                            ? <span className="text-indigo-400" title="Bank row — not part of safe balance">—</span>
-                            : (currencyBalanceMap[txn.id] == null
-                                ? <span className="text-slate-300" title={'No ' + treasuryCurrency + ' movement on this row'}>—</span>
-                                : fCur(currencyBalanceMap[txn.id]))}
+                          {isBankRow ? <span className="text-indigo-400" title="Bank row — not part of safe balance">—</span> : fE(treasuryBalanceMap[txn.id] || 0)}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">
@@ -14188,12 +13670,6 @@ export default function App() {
                       ))}
                       <option value="__custom">+ Custom...</option>
                     </select>
-                    {formData.whExpCat === '__custom' && (
-                      <input autoFocus value={formData.whExpCatCustom || ''}
-                        onChange={e => setFormData({...formData, whExpCatCustom: e.target.value})}
-                        placeholder="Type new category name / اكتب اسم التصنيف"
-                        className="w-full mt-1 px-3 py-2 rounded-lg border-2 border-purple-400 bg-purple-50 text-sm text-slate-900 font-semibold" />
-                    )}
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-600">Subcategory / فرعي</label>
@@ -14257,8 +13733,9 @@ export default function App() {
                   if (!formData.whExpDesc || !formData.whExpAmount) { alert('Please fill in description and amount'); return; }
                   let cat = formData.whExpCat || '';
                   if (cat === '__custom') {
-                    cat = (formData.whExpCatCustom || '').trim();
-                    if (!cat) { alert('Please type the new category name / اكتب اسم التصنيف الجديد'); return; }
+                    const custom = prompt('Enter custom category name:');
+                    if (!custom) return;
+                    cat = custom.trim();
                   }
                   try {
                     await dbInsert('warehouse_expenses', {
@@ -14271,7 +13748,7 @@ export default function App() {
                       advance_id: formData.whAdvanceId || null,
                       created_by: userProfile?.id,
                     }, userProfile?.id);
-                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpCatCustom: '', whExpSub: '', whExpRef: '', whType: 'general', whAdvanceId: ''});
+                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general', whAdvanceId: ''});
                     await loadAllData();
                   } catch(err) { toast.error(err.message); }
                 }} className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold">
@@ -14671,18 +14148,11 @@ export default function App() {
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} canBulkDeleteBubbles={isSuperAdmin || (modulePerms && modulePerms['Delete Shipping Bubbles'] === true)} canDeleteRates={isAdmin || (modulePerms && modulePerms['Delete Shipping Rates'] === true)} /></SafeSection>
+          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} canBulkDeleteBubbles={isSuperAdmin || (modulePerms && modulePerms['Delete Shipping Bubbles'] === true)} /></SafeSection>
         )}
 
         {tab === 'bank' && (
-          <SafeSection label="Bank">
-            <BankTab user={user} supabase={supabase} modulePerms={modulePerms} userProfile={userProfile} onGoToBankReview={goToBankReview} />
-          </SafeSection>
-        )}
-        {tab === 'accounting' && (
-          <SafeSection label="Accounting">
-            <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} />
-          </SafeSection>
+          <SafeSection label="Bank"><BankTab user={user} supabase={supabase} /></SafeSection>
         )}
 
         {tab === 'egyptbank' && (

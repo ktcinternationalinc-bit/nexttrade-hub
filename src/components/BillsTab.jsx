@@ -9,6 +9,7 @@ import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
+import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN — the actual bill, on the screen
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
@@ -570,10 +571,10 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
                 <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}</td>
-                <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{b.attachment_path && <button className="ml-1" title="View the imported bill file (private link, 1 hour)" onClick={function () { openDoc(b.attachment_path); }}>📎</button>}{wireChip(b)}</td>
+                <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{wireChip(b)}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">
-                  <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : 'View'}</button>
+                  <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} title={b.attachment_path ? 'Show the actual bill next to what the Hub read from it' : 'Show the bill details — no file is attached yet'} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={b.attachment_path ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : (b.attachment_path ? '📄 View bill' : 'View · no file')}</button>
                   {canManage && b.record_status === 'active' && b.open > 0.005 && <button onClick={function () { closePanels(); setPaying({ bill: b, amount: b.open, paid_date: TODAY }); loadOutTxns(); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>Pay</button>}
                   {canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setEditing(Object.assign({}, b)); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>Edit</button>}
                   {/* v55.83-QZ (Max, Nov 8 11:51): duplicate a bill, then edit anything — a NEW pending-validation bill;
@@ -597,6 +598,7 @@ export default function BillsTab(props) {
               {validating && validating.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
 <div className="rounded-xl p-3 mb-3" style={{ background: '#fffbeb', border: '1px solid #f59e0b' }}>
       <div className="text-xs font-extrabold mb-1" style={{ color: '#78350f' }}>Validate: {validating.bill.vendor_name} {validating.bill.bill_number ? '· ' + validating.bill.bill_number : ''} — ${fmt(validating.bill.total_amount)}</div>
+      <BillDocToggle bill={validating.bill} api={api} toast={toast} canManage={canManage} onChanged={load} />
       <div className="text-[11px] mb-2" style={{ color: '#92400e' }}>Validation is not a formality. Confirm each check ONLY if you actually performed it — this record is audited, with your name and timestamp on it. Everything you enter is saved as you go; the bill counts as validated only after “✓ Mark validated”.</div>
       {/* v55.83-RP (Max 21:04: "Prior to validation there MUST be a selection of the TYPE of bill and the direction of the bill") */}
       <div className="flex gap-2 items-center mb-1 flex-wrap">
@@ -780,6 +782,10 @@ export default function BillsTab(props) {
                 </div>
               </td></tr>}
               {expanded === b.id && <tr><td colSpan={11} className="py-1.5 pl-4" style={{ background: '#f8fafc', color: '#334155' }}>
+                {/* v55.83-SN — the actual bill beside what the Hub read (stacked on a phone, the bill first) */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pr-2">
+                <div><BillDocViewer bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} /></div>
+                <div>
                 <BillLinesPanel bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} onRules={function () { setPanel('rules'); }} />
                 {b.notes && <div className="text-[11px] mb-1"><b>Notes:</b> {b.notes}</div>}
                 {paysOf(b.id).length === 0 ? <span className="text-[11px]">No payments yet.</span> :
@@ -789,6 +795,8 @@ export default function BillsTab(props) {
                       {canManage && !p.voided && <button onClick={function () { closePanels(); setRowAsk({ kind: 'void_payment', bill: b, payment: p }); }} className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>void</button>}
                     </div>;
                   })}
+                </div>
+                </div>
               </td></tr>}
             </React.Fragment>;
           })}

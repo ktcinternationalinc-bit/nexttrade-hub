@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Open Accounts — Running Credit Model — Mockup</title>
+<style>
+  body { background: #0a0a0a; color: #e5e5e5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 24px; font-size: 13px; }
+  h1 { font-size: 18px; font-weight: 700; margin: 0 0 16px 0; }
+  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .header-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .account-name { font-size: 16px; font-weight: 700; }
+  .account-pill { font-size: 11px; background: #3C3489; color: white; padding: 2px 8px; border-radius: 6px; }
+
+  /* Per-currency strip */
+  .currency-strip { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .currency-strip .cur-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px; }
+  .balance-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .balance-tile { background: #1f1f1f; border-radius: 6px; padding: 10px; }
+  .balance-tile .label { font-size: 10px; color: #aaa; margin-bottom: 4px; font-weight: 500; }
+  .balance-tile .value { font-size: 18px; font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+  .balance-tile .sublabel { font-size: 10px; color: #888; margin-top: 2px; }
+  .pos { color: #4ade80; }
+  .neg { color: #ef4444; }
+  .neutral { color: #fff; }
+
+  /* Ledger table */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th { background: #0a0a0a; color: #aaa; text-align: left; padding: 8px 10px; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: top; }
+  tr.invoice-out td { background: rgba(59, 130, 246, 0.08); }
+  tr.invoice-in td { background: rgba(245, 158, 11, 0.08); }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+  .pill-cashin { background: #14532d; color: #86efac; }
+  .pill-cashout { background: #7f1d1d; color: #fca5a5; }
+  .pill-billed-them { background: #1e3a8a; color: #93c5fd; }
+  .pill-billed-us { background: #78350f; color: #fcd34d; }
+  .amt-in { color: #4ade80; font-weight: 600; text-align: right; }
+  .amt-out { color: #ef4444; font-weight: 600; text-align: right; }
+  .amt-running { font-weight: 700; text-align: right; }
+  .dash { color: #555; text-align: right; }
+  .scenario-note { font-size: 11px; color: #888; margin-top: 4px; font-style: italic; }
+  .section-title { font-size: 14px; font-weight: 700; margin: 24px 0 8px 0; color: #e5e5e5; }
+  .scenario-tag { display: inline-block; background: #3C3489; color: white; padding: 2px 8px; border-radius: 6px; font-size: 10px; margin-left: 8px; }
+  .explainer { background: #0f1a2e; border-left: 3px solid #3b82f6; padding: 10px 14px; border-radius: 4px; font-size: 12px; color: #cbd5e1; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+
+<h1>Open Accounts — Running Credit Model Mockup</h1>
+
+<div class="explainer">
+  <strong>How it works:</strong> Every account has two running credits per currency — one tracking what each side owes the other.<br>
+  • <strong>Our credit with them</strong> goes UP when we pay them, DOWN when they invoice us.<br>
+  • <strong>Their credit with us</strong> goes UP when they pay us, DOWN when we invoice them.<br>
+  • If a credit goes negative, that's the amount owed.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- ACCOUNT: TEST                                                    -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="card">
+  <div class="header-row">
+    <span class="account-name">TEST</span>
+    <span class="account-pill">vs KTC INTL</span>
+    <span style="color: #888; font-size: 11px; margin-left: auto;">9 entries · 3 invoices</span>
+  </div>
+
+  <!-- USD strip -->
+  <div class="currency-strip">
+    <div class="cur-label">USD</div>
+    <div class="balance-row">
+      <div class="balance-tile">
+        <div class="label">Our credit with them</div>
+        <div class="value pos mono">+$23,933.00</div>
+        <div class="sublabel">we've prepaid them this much</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Their credit with us</div>
+        <div class="value neg mono">−$19,000.00</div>
+        <div class="sublabel">they owe us this much (negative = debt)</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Net position</div>
+        <div class="value pos mono">+$42,933.00</div>
+        <div class="sublabel">in our favor (we're prepaid + they owe us)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EGP strip -->
+  <div class="currency-strip">
+    <div class="cur-label">EGP</div>
+    <div class="balance-row">
+      <div class="balance-tile">
+        <div class="label">Our credit with them</div>
+        <div class="value neutral mono">0.00</div>
+        <div class="sublabel">we haven't prepaid them anything</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Their credit with us</div>
+        <div class="value pos mono">+99,967.00</div>
+        <div class="sublabel">they've prepaid us this much</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Net position</div>
+        <div class="value neg mono">−99,967.00</div>
+        <div class="sublabel">against us (they're prepaid with us)</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Description</th>
+        <th>What happened</th>
+        <th>Cur</th>
+        <th style="text-align: right;">Our credit Δ</th>
+        <th style="text-align: right;">Their credit Δ</th>
+        <th style="text-align: right;">Our credit USD</th>
+        <th style="text-align: right;">Their credit USD</th>
+        <th style="text-align: right;">Our credit EGP</th>
+        <th style="text-align: right;">Their credit EGP</th>
+      </tr>
+    </thead>
+    <tbody>
+
+      <!-- 1. They paid us $1,000 -->
+      <tr>
+        <td class="mono">2026-05-23</td>
+        <td>This is a test</td>
+        <td><span class="pill pill-cashin">💰 They paid us</span></td>
+        <td class="mono">USD</td>
+        <td class="dash">—</td>
+        <td class="amt-in">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono amt-running pos">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">0.00</td>
+      </tr>
+
+      <!-- 2. They invoiced us $28,000 -->
+      <tr class="invoice-in">
+        <td class="mono">2026-05-23</td>
+        <td>📄 Invoice from TEST — leather supply
+          <div class="scenario-note">Reduces our credit with them by $28,000</div>
+        </td>
+        <td><span class="pill pill-billed-us">📥 They billed us $28,000</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-out">−28,000.00</td>
+        <td class="dash">—</td>
+        <td class="mono amt-running neg">−28,000.00</td>
+        <td class="mono amt-running pos">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">0.00</td>
+      </tr>
+
+      <!-- 3. We paid them $25,000 -->
+      <tr>
+        <td class="mono">2026-05-23</td>
+        <td>payment for invoice (carpet)</td>
+        <td><span class="pill pill-cashout">💸 We paid them</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-in">+25,000.00</td>
+        <td class="dash">—</td>
+        <td class="mono amt-running neg">−3,000.00</td>
+        <td class="mono amt-running pos">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">0.00</td>
+      </tr>
+
+      <!-- 4. We paid them $3,433 -->
+      <tr>
+        <td class="mono">2026-05-23</td>
+        <td>payment for 102</td>
+        <td><span class="pill pill-cashout">💸 We paid them</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-in">+3,433.00</td>
+        <td class="dash">—</td>
+        <td class="mono amt-running pos">+433.00</td>
+        <td class="mono amt-running pos">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">0.00</td>
+      </tr>
+
+      <!-- 5. They paid us 50,000 EGP -->
+      <tr>
+        <td class="mono">2026-05-23</td>
+        <td>payment</td>
+        <td><span class="pill pill-cashin">💰 They paid us</span></td>
+        <td class="mono">EGP</td>
+        <td class="dash">—</td>
+        <td class="amt-in">+50,000.00</td>
+        <td class="mono dash">+433.00</td>
+        <td class="mono dash">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono amt-running pos">+50,000.00</td>
+      </tr>
+
+      <!-- 6. We invoiced them 33 EGP -->
+      <tr class="invoice-out">
+        <td class="mono">2026-05-23</td>
+        <td>📄 Invoice asdf
+          <div class="scenario-note">Reduces their credit with us by 33 EGP</div>
+        </td>
+        <td><span class="pill pill-billed-them">📤 We billed them 33 EGP</span></td>
+        <td class="mono">EGP</td>
+        <td class="dash">—</td>
+        <td class="amt-out">−33.00</td>
+        <td class="mono dash">+433.00</td>
+        <td class="mono dash">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono amt-running pos">+49,967.00</td>
+      </tr>
+
+      <!-- 7. They paid us another 50,000 EGP -->
+      <tr>
+        <td class="mono">2026-05-25</td>
+        <td>paper x payment</td>
+        <td><span class="pill pill-cashin">💰 They paid us</span></td>
+        <td class="mono">EGP</td>
+        <td class="dash">—</td>
+        <td class="amt-in">+50,000.00</td>
+        <td class="mono dash">+433.00</td>
+        <td class="mono dash">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono amt-running pos">+99,967.00</td>
+      </tr>
+
+      <!-- 8. We paid them $23,500 -->
+      <tr>
+        <td class="mono">2026-05-25</td>
+        <td>for leather on container</td>
+        <td><span class="pill pill-cashout">💸 We paid them</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-in">+23,500.00</td>
+        <td class="dash">—</td>
+        <td class="mono amt-running pos">+23,933.00</td>
+        <td class="mono dash">+1,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">+99,967.00</td>
+      </tr>
+
+      <!-- 9. We invoiced them $20,000 -->
+      <tr class="invoice-out">
+        <td class="mono">2026-05-25</td>
+        <td>📄 Invoice INV-TEST-2026-001
+          <div class="scenario-note">Reduces their credit with us by $20,000</div>
+        </td>
+        <td><span class="pill pill-billed-them">📤 We billed them $20,000</span></td>
+        <td class="mono">USD</td>
+        <td class="dash">—</td>
+        <td class="amt-out">−20,000.00</td>
+        <td class="mono dash">+23,933.00</td>
+        <td class="mono amt-running neg">−19,000.00</td>
+        <td class="mono dash">0.00</td>
+        <td class="mono dash">+99,967.00</td>
+      </tr>
+
+    </tbody>
+  </table>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SCENARIO 2: clean buyer-only account                             -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="section-title">Simpler example — customer who only buys from us <span class="scenario-tag">SCENARIO 2</span></div>
+
+<div class="card">
+  <div class="header-row">
+    <span class="account-name">SAMPLE CUSTOMER A</span>
+    <span class="account-pill">vs KTC INTL</span>
+  </div>
+
+  <div class="currency-strip">
+    <div class="cur-label">USD</div>
+    <div class="balance-row">
+      <div class="balance-tile">
+        <div class="label">Our credit with them</div>
+        <div class="value neutral mono">0.00</div>
+        <div class="sublabel">we haven't paid them anything</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Their credit with us</div>
+        <div class="value neg mono">−$5,000.00</div>
+        <div class="sublabel">they owe us $5,000 (open invoice)</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Net position</div>
+        <div class="value pos mono">+$5,000.00</div>
+        <div class="sublabel">in our favor</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Description</th>
+        <th>What happened</th>
+        <th>Cur</th>
+        <th style="text-align: right;">Their credit Δ</th>
+        <th style="text-align: right;">Their credit USD</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="invoice-out">
+        <td class="mono">2026-05-15</td>
+        <td>📄 Invoice INV-001 — 100 rolls leather</td>
+        <td><span class="pill pill-billed-them">📤 We billed them $20,000</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-out">−20,000.00</td>
+        <td class="mono amt-running neg">−20,000.00</td>
+      </tr>
+      <tr>
+        <td class="mono">2026-05-18</td>
+        <td>Wire received against INV-001</td>
+        <td><span class="pill pill-cashin">💰 They paid us</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-in">+15,000.00</td>
+        <td class="mono amt-running neg">−5,000.00</td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic;">
+    Their balance is −$5,000 = they still owe us $5,000 against that invoice. Simple.
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SCENARIO 3: prepaid customer                                     -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="section-title">Simpler example — customer who prepays before we invoice <span class="scenario-tag">SCENARIO 3</span></div>
+
+<div class="card">
+  <div class="header-row">
+    <span class="account-name">SAMPLE CUSTOMER B</span>
+    <span class="account-pill">vs KTC INTL</span>
+  </div>
+
+  <div class="currency-strip">
+    <div class="cur-label">USD</div>
+    <div class="balance-row">
+      <div class="balance-tile">
+        <div class="label">Our credit with them</div>
+        <div class="value neutral mono">0.00</div>
+        <div class="sublabel">—</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Their credit with us</div>
+        <div class="value pos mono">+$5,000.00</div>
+        <div class="sublabel">they're prepaid; balance to use against future invoice</div>
+      </div>
+      <div class="balance-tile">
+        <div class="label">Net position</div>
+        <div class="value neg mono">−$5,000.00</div>
+        <div class="sublabel">against us (we owe them goods)</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Description</th>
+        <th>What happened</th>
+        <th>Cur</th>
+        <th style="text-align: right;">Their credit Δ</th>
+        <th style="text-align: right;">Their credit USD</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono">2026-05-10</td>
+        <td>Wire received — prepayment for order</td>
+        <td><span class="pill pill-cashin">💰 They paid us</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-in">+10,000.00</td>
+        <td class="mono amt-running pos">+10,000.00</td>
+      </tr>
+      <tr class="invoice-out">
+        <td class="mono">2026-05-12</td>
+        <td>📄 Invoice INV-002 — partial shipment</td>
+        <td><span class="pill pill-billed-them">📤 We billed them $5,000</span></td>
+        <td class="mono">USD</td>
+        <td class="amt-out">−5,000.00</td>
+        <td class="mono amt-running pos">+5,000.00</td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic;">
+    They prepaid $10k. We invoiced them $5k. They still have $5k credit sitting with us — ready to apply to the next invoice we send them.
+  </div>
+</div>
+
+</body>
+</html>
