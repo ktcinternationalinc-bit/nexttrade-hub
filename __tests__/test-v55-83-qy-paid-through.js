@@ -26,14 +26,14 @@ ok('1: registry with both companies; kind decides the unlinked remainder — RTM
 ok('2: works before the SQL is run (built-in defaults); bills and payments only accept a REGISTERED company',
   /var PARTY_DEFAULTS = \[/.test(bills) && /Unknown "paid via" company/.test(bills) && /Unknown paid-through company/.test(bills));
 ok('3: reports are PER company — payments attributed by the company on the bank line, covered bills by the bill\'s "paid via"; no more lumping every payer under RTM',
-  /partiesP\.forEach\(function \(party\) \{/.test(bills) &&
-  /if \(partyKey\(t9\.third_party_payer\) !== pk\) \{ return; \}/.test(bills) &&
-  /if \(!b9 \|\| partyKey\(b9\.paid_via \|\| 'RTM Capital'\) !== pk\) \{ return; \}/.test(bills) &&
+  /* v55.83-SR realign — the per-company blocks moved, sum for sum, into src/lib/paid-through-blocks.js (run for real in test-v55-83-sr-*) */ /buildPaidThroughBlocks\(\{ parties: partiesP,/.test(bills) && /\(o\.parties \|\| \[\]\)\.forEach\(function \(party\) \{/.test(R('src/lib/paid-through-blocks.js')) &&
+  /if \(partyKeyOf\(t\.payer\) !== pk \|\|/.test(R('src/lib/paid-through-blocks.js')) &&
+  /if \(!b \|\| partyKeyOf\(b\.paid_via \|\| 'RTM Capital'\) !== pk \|\|/.test(R('src/lib/paid-through-blocks.js')) &&
   /spend = \{ rtm: rtmBlk, paid_through: ptBlocks,/.test(bills));
 ok('4: Stats — one tax/real-cost switch PER company (default tax view for all); totals identical; the remainder line uses the company\'s own label',
   /var sRt = useState\(\{\}\); var ptOn = sRt\[0\]/.test(ps) && /function ptAdjust\(cats0\)/.test(ps) &&
   ps.split('ptAdjust(data.spending.categories)').length === 3 &&
-  /label: \(rtm && rtm\.remainder_label\) \|\| 'RTM service fee/.test(ps));
+  /* v55.83-SR realign — the per-company blocks moved, sum for sum, into src/lib/paid-through-blocks.js (run for real in test-v55-83-sr-*) */ /label: b\.remainder_label \|\| 'RTM service fee/.test(R('src/lib/paid-through-blocks.js')) && /remainderRows\(rtm\)\.forEach/.test(ps));
 ok('5: match popup — RTM radio AND a 🏭 NextTrade radio; the panel switches company, picks only THAT company\'s bills, and labels the rest as fee (RTM) or advance (NextTrade)',
   /openRtm\(t2, 'NextTrade Industries'\)/.test(at) && /billsApi\(\{ action: 'rtm_open_bills', payer: p0 \}\)/.test(at) &&
   /'advance with NextTrade, awaiting its costs \(the rest\): \$'/.test(at) &&

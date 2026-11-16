@@ -503,9 +503,10 @@ export default function AllTransactionsTab(props) {
               <td className="py-1 pr-2 font-semibold cursor-pointer" title="Click to show the full description"
                 onClick={function () { var e2 = Object.assign({}, expanded); e2[t.id] = !e2[t.id]; setExpanded(e2); }}
                 style={expanded[t.id] ? { whiteSpace: 'normal', wordBreak: 'break-word' } : {}}>
-                {t.wire && <button onClick={function (e) { e.stopPropagation(); setWireView(t.wire); }} title={t.wire.kind === 'package' ? 'Open the wire: the bills it paid, who approved it, its history' : 'Money out that paid bills like a wire, with no wire approved in advance — open the bills'}
-                  className="mr-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={t.wire.kind === 'package' ? (t.wire.status === 'reversed' ? { background: '#e2e8f0', color: '#7f1d1d' } : { background: '#4338ca', color: '#ffffff' }) : { background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>
-                  {t.wire.kind === 'package' ? '📤 ' + t.wire.label + (t.wire.status === 'reversed' ? ' (undone)' : '') : '🏦 wire · no approval'}</button>}
+                {/* v55.83-SU — a transfer can carry several requests: one chip each */}
+                {(t.wires && t.wires.length > 1 ? t.wires : (t.wire ? [t.wire] : [])).map(function (wv) { return <button key={wv.id} onClick={function (e) { e.stopPropagation(); setWireView(wv); }} title={wv.kind === 'package' ? 'Open the wire: the bills it paid, who approved it, its history' : 'Money out that paid bills like a wire, with no wire approved in advance — open the bills'}
+                  className="mr-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={wv.kind === 'package' ? (wv.status === 'reversed' ? { background: '#e2e8f0', color: '#7f1d1d' } : { background: '#4338ca', color: '#ffffff' }) : { background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>
+                  {wv.kind === 'package' ? '📤 ' + wv.label + (wv.status === 'reversed' ? ' (undone)' : '') : '🏦 wire · no approval'}</button>; })}
                 {expanded[t.id] ? (t.who_full || t.who) : (String(t.who).substring(0, 46) + (String(t.who_full || t.who).length > 46 ? '…' : ''))}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: t.direction === 'out' ? '#7f1d1d' : '#065f46' }}>{(t.direction === 'out' ? '−$' : '+$') + fmt(t.amount)}</td>
               <td className="py-1 pr-2">

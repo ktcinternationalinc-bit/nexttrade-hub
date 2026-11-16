@@ -18,6 +18,7 @@
 //     deterministic, so the upsert is idempotent on top of the deficit rule.
 //   - Validation never guesses: a bad row is reported, never "fixed".
 import { NextResponse } from 'next/server';
+import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -259,10 +260,13 @@ export async function POST(req) {
         inserted = toInsert.length;
       }
       await audit(d, userId, 'statement_rows_imported', 'plaid_account', target, { imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad, window: { from: minD, to: maxD } }); // v55.83-QI
+      var dupC = null; // v55.83-SU — the duplicate check runs by itself after an upload (fail-soft; before wires are matched)
+      if (inserted > 0) { try { dupC = await autoTwinCheck(d, { actorId: userId, budgetMs: 6000 }); } catch (eDu) { dupC = null; } }
       var wireM = null; // v55.83-RZ — imported lines may be the wires we sent: match them (fail-soft)
       if (inserted > 0 && silo === US_WAVE_BUSINESS_ID) { try { wireM = await autoMatchSentWires(d, { actorId: userId, budgetMs: 10000 }); } catch (eWM) { wireM = null; } }
       return NextResponse.json({ ok: true, imported: inserted, skipped_existing: skippedExisting, descriptions_updated: renamed, skipped_bad: bad,
         wires_matched: wireM ? wireM.matched.length : 0,
+        duplicates_removed: dupC ? dupC.removed : 0, duplicates_to_review: dupC ? dupC.to_review : 0,
         bad_examples: badWhy, window: { from: minD, to: maxD },
         us_books: silo === US_WAVE_BUSINESS_ID, // v55.83-RC — ClickBooks (USA) screens list US-silo accounts only
         account: { name: acc.data.name, mask: acc.data.mask } });

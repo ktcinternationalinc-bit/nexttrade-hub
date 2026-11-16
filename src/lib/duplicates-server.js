@@ -1,6 +1,8 @@
 // v55.83-SO — server helpers for the duplicate check. Var + concat only.
 // Every query is on its own try/catch: one missing table never breaks the check.
 
+import { findDuplicates, realAccounts, twinAutoPicks } from './duplicate-detect'; // v55.83-SU
+import { audit } from './audit-server';
 export var DUP_COLS = 'id, wave_business_id, bank_source, account_id, posted_date, date, direction, amount, amount_abs, iso_currency, name, merchant_name, check_number, pending, review_status, matched_invoice_id, linked_id, transfer_group_id, classification, category_verified, plaid_transaction_id, created_at';
 
 // → [{ plaid_account_id, name, mask, connection_id, institution_name, connection_status }]
@@ -74,4 +76,38 @@ export async function loadDismissed(db) {
     ((r && r.data) || []).forEach(function (d) { out[d.pair_key] = true; });
   } catch (e) { /* SQL not run yet → nothing dismissed */ }
   return out;
+}
+
+// v55.83-SU — the duplicate check, run by itself after a bank sync or a statement upload.
+// Clears only what twinAutoPicks allows (the same line through a second connection of the same account); everything else
+// is counted and left for a person in "Check for duplicates". Never throws; never blocks the sync.
+// → { ran, removed, to_review, needs_sql, errors }
+export async function autoTwinCheck(db, opts) {
+  var o = opts || {}; var res = { ran: false, removed: 0, to_review: 0, needs_sql: false, errors: 0 };
+  try {
+    var days = o.days || 45;
+    var since = new Date(Date.now() - days * 86400000).toISOString().substring(0, 10);
+    var rows = await loadBankRows(db, since, 20000);
+    var real = realAccounts(await loadBankAccounts(db));
+    var dismissed = await loadDismissed(db);
+    var first = findDuplicates(rows, { real: real, dismissed: dismissed });
+    var byId = {}; rows.forEach(function (t) { byId[t.id] = t; });
+    var ids = []; first.groups.forEach(function (g) { g.rows.forEach(function (x) { ids.push(x.id); }); });
+    var prot = await protectedReasons(db, ids.map(function (id) { return byId[id]; }));
+    var found = findDuplicates(rows, { real: real, dismissed: dismissed, protectedIds: prot });
+    var picks = twinAutoPicks(found.groups, byId);
+    res.ran = true; res.to_review = found.groups.length;
+    var started = Date.now(); var budget = o.budgetMs || 6000;
+    for (var i = 0; i < picks.length; i++) {
+      if (Date.now() - started > budget) { break; }
+      var p = picks[i];
+      var r = await db.rpc('bank_duplicate_remove', { p_dup: p.remove_id, p_keep: p.keep_id, p_actor: o.actorId || null, p_reason: 'Automatic check after a bank sync: the same bank line arrived through a second connection of the same account.' });
+      if (r.error) { if (/bank_duplicate_|bank_transaction_duplicates|schema cache|does not exist/i.test(String(r.error.message || ''))) { res.needs_sql = true; break; } res.errors++; continue; }
+      if (r.data && r.data.ok === true) {
+        res.removed++; res.to_review--;
+        try { await audit(db, o.actorId || null, 'bank_duplicate_auto_removed', 'bank_transaction', p.remove_id, { kept: p.keep_id, amount: p.amount, date: p.date, by: 'automatic check after sync', can_restore: true }); } catch (eA) { /* the removal record itself is kept by the database */ }
+      } else { res.errors++; }
+    }
+  } catch (e) { res.errors++; }
+  return res;
 }

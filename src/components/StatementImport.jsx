@@ -187,14 +187,14 @@ export default function StatementImport(props) {
     setBusy(true); setErr(''); setResult(null);
     var chunks = [];
     for (var i = 0; i < all.rows.length; i += 1000) { chunks.push(all.rows.slice(i, i + 1000)); }
-    var agg = { imported: 0, skipped_existing: 0, descriptions_updated: 0, skipped_bad: all.bad, from: null, to: null };
+    var agg = { imported: 0, skipped_existing: 0, descriptions_updated: 0, skipped_bad: all.bad, from: null, to: null, dup_removed: 0, dup_review: 0 };
     var chain = Promise.resolve(true);
     chunks.forEach(function (ch) {
       chain = chain.then(function (okSoFar) {
         if (!okSoFar) { return false; }
         return api({ action: 'import_rows', target_plaid_account_id: target, rows: ch }).then(function (j) {
           if (!j || !j.ok) { setErr((j && j.error) || 'Import failed part-way — what already imported stays (re-running is safe: nothing duplicates).'); return false; }
-          agg.imported += j.imported || 0; agg.skipped_existing += j.skipped_existing || 0; agg.descriptions_updated += j.descriptions_updated || 0; if (j.us_books === false) { agg.not_us = true; } agg.skipped_bad += j.skipped_bad || 0;
+          agg.imported += j.imported || 0; agg.skipped_existing += j.skipped_existing || 0; agg.descriptions_updated += j.descriptions_updated || 0; if (j.us_books === false) { agg.not_us = true; } agg.skipped_bad += j.skipped_bad || 0; agg.dup_removed += j.duplicates_removed || 0; agg.dup_review = j.duplicates_to_review || 0; /* v55.83-SU */
           if (j.window) { if (!agg.from || j.window.from < agg.from) { agg.from = j.window.from; } if (!agg.to || j.window.to > agg.to) { agg.to = j.window.to; } }
           return true;
         });
@@ -280,7 +280,7 @@ export default function StatementImport(props) {
     </div>}
     {err && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#fef2f2', color: '#7f1d1d' }}>{err}</div>}
     {result && <div className="text-[10px] font-bold mb-1 rounded p-1.5" style={{ background: '#ecfdf5', color: '#064e3b' }}>
-      ✅ Imported {result.imported} transaction(s) ({result.from} → {result.to}) · {result.skipped_existing} already stored (no duplicate made){result.descriptions_updated ? ' · ' + result.descriptions_updated + ' stored line(s) got their real description' : ''} · {result.skipped_bad} unreadable line(s). They now behave like any bank transaction — categorize in 📑 All Transactions (rules + bulk make it fast), match deposits to invoices, pair transfers. The 15-minute sync also runs your rules on them automatically.
+      ✅ Imported {result.imported} transaction(s) ({result.from} → {result.to}) · {result.skipped_existing} already stored (no duplicate made){result.descriptions_updated ? ' · ' + result.descriptions_updated + ' stored line(s) got their real description' : ''} · {result.skipped_bad} unreadable line(s).{result.dup_removed ? ' 🧹 ' + result.dup_removed + ' line(s) already in the Hub through another connection of this account were removed automatically (kept on file, can be restored).' : ''}{result.dup_review ? ' 🔍 ' + result.dup_review + ' possible duplicate(s) need a person — press “Check for duplicates”.' : ''} They now behave like any bank transaction — categorize in 📑 All Transactions (rules + bulk make it fast), match deposits to invoices, pair transfers. The 15-minute sync also runs your rules on them automatically.
         {result.window_hint !== false && result.from && result.from < '2026-01-01' ? ' Lines before Jan 1, 2026: in 📑 All Transactions press "All dates" to see them.' : ''}
         {result.not_us ? ' ⚠ This account is assigned to a NON-US silo, so ClickBooks (USA) screens do not list it — move it to the USA silo in the Bank tab if it is a US account.' : ''}</div>}
     {parsed && <button onClick={doImport} disabled={busy || !target || all.rows.length === 0}

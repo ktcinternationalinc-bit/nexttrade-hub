@@ -4,6 +4,7 @@ import { readBankJson, projectPlaidAccountMetadata } from '../../../../lib/bank-
 import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
 import { hubNewestForConnection } from '../../../../lib/bank-continue'; // v55.83-SH
 import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ — new bank lines → sent wires matched, bills PAID
+import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU — the duplicate check runs by itself after a sync
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -224,6 +225,11 @@ export async function POST(req) {
     // v55.83-RZ (Max: "when the wire is actually sent and you see a transaction for that amount ... automatically match") —
     // fail-soft: a matcher problem never fails the bank sync.
     var wireMatch = null;
+    // v55.83-SU (Max, Nov 15: "yes - also if bank linked twice it should know and prevent duplicates") — BEFORE anything is
+    // matched to the new lines: the same bank line arriving through a second connection of the same account is cleared
+    // (kept on file, restorable); anything less certain is only counted for a person. Fail-soft.
+    var dupCheck = null;
+    if (synced > 0) { try { dupCheck = await autoTwinCheck(supabase, { actorId: null, budgetMs: 5000 }); } catch (eDC) { dupCheck = null; } }
     if (synced > 0) { try { wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 4000 }); } catch (eWM) { wireMatch = null; } }
 
     // v55.83-JR — compute the newest posted date overall + per account, and STORE the incremental
@@ -253,6 +259,7 @@ export async function POST(req) {
     }
 
     return plaidJson({
+      duplicates_removed: dupCheck ? dupCheck.removed : 0, duplicates_to_review: dupCheck ? dupCheck.to_review : 0, // v55.83-SU
       synced: synced,
       superseded: superseded.length,
       accounts: projectPlaidAccountMetadata(acctsFromPlaid),

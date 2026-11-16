@@ -468,15 +468,16 @@ export async function POST(req) {
       } catch (eApW) { appliedBy = {}; legsBy = {}; }
       // v55.83-RM (Max, Nov 9 12:49: "We should always click on the wire transactions ... and see the bills associated to it and
       // history") — which bank lines ARE a prepared wire (WP-…), and which paid bills as a wire without one
-      var wireBy = {};
+      var wireBy = {}; var wiresBy = {}; // v55.83-SU — one bank line can carry several requests: keep them all
       try {
         var txIdsW = (txA.data || []).map(function (t9) { return t9.id; });
         for (var wi = 0; wi < txIdsW.length; wi += 200) {
           var wq = await db.from('wire_packages').select('id, seq, status, payee_name, bank_transaction_id').in('bank_transaction_id', txIdsW.slice(wi, wi + 200));
           if (wq.error) { break; }
-          (wq.data || []).forEach(function (w9) { wireBy[w9.bank_transaction_id] = { kind: 'package', id: w9.id, label: 'WP-' + String(w9.seq || 0).padStart(4, '0'), status: w9.status, payee: w9.payee_name }; });
+          (wq.data || []).forEach(function (w9) { var wOne = { kind: 'package', id: w9.id, label: 'WP-' + String(w9.seq || 0).padStart(4, '0'), status: w9.status, payee: w9.payee_name }; if (!wireBy[w9.bank_transaction_id]) { wireBy[w9.bank_transaction_id] = wOne; } (wiresBy[w9.bank_transaction_id] = wiresBy[w9.bank_transaction_id] || []).push(wOne); });
         }
-      } catch (eWb) { wireBy = {}; }
+      } catch (eWb) { wireBy = {}; wiresBy = {}; }
+      Object.keys(wiresBy).forEach(function (kW) { wiresBy[kW].sort(function (a, b) { return a.label < b.label ? -1 : 1; }); wireBy[kW] = wiresBy[kW][0]; });
       var accA = await db.from('plaid_accounts').select('plaid_account_id, name, mask, wave_business_id');
       var acMap = {};
       (accA.data || []).forEach(function (a6) { acMap[a6.plaid_account_id] = (a6.name || 'account') + (a6.mask ? ' •' + a6.mask : ''); });
@@ -513,6 +514,7 @@ export async function POST(req) {
           third_party: t7.third_party_payer || null, advance: t7.advance_flag === true,
           applied: appliedBy[t7.id] || 0, applied_legs: legsBy[t7.id] || 0,
           // v55.83-RM — the wire this line is (or: a money-out that paid bills like a wire, with no approved wire)
+          wires: wiresBy[t7.id] || null,
           wire: wireBy[t7.id] || ((t7.direction === 'out' && billLegsBy[t7.id] > 0 && /\bWIRE\b|\bWT\b|FEDWIRE|SWIFT|WIRE TRANSFER/i.test(wfull.join(' '))) ? { kind: 'bank', id: t7.id } : null) };
       });
       return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: txA.capped === true, date_filters_locked: atLocked,

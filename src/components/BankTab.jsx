@@ -330,6 +330,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       if (win.start) { msg += ' Pulled ' + (win.incremental ? 'forward from ' : 'from ') + win.start + ' → ' + (win.end || 'today') + '.'; }
       if (data.continued_from) { msg += ' Continued from the last transaction already on the Hub (' + data.continued_from + ') — the full history was NOT pulled again. Use “Re-pull history” only if you want it all.'; }
       if (data.newest_posted_date) { msg += ' Newest posted: ' + data.newest_posted_date + '.'; }
+      // v55.83-SU — the duplicate check ran by itself
+      if (Number(data.duplicates_removed) > 0) { msg += ' 🧹 ' + data.duplicates_removed + ' line(s) that arrived a second time through another connection of the same account were removed automatically (kept on file — “Check for duplicates” → removed list → Restore).'; }
+      if (Number(data.duplicates_to_review) > 0) { msg += ' 🔍 ' + data.duplicates_to_review + ' possible duplicate(s) need a person — press “Check for duplicates”.'; }
       if (Number(data.manual_deduped) > 0) { msg += ' 🚩 ' + data.manual_deduped + ' duplicate(s) already on the Hub (CSV import or the earlier bank link) — ignored, nothing doubled.'; }
       // v55.83-QB (Max, Nov 7 11:40: "where is the rest of the history... something
       // is not right") — a DEEP re-pull that comes back with Plaid total 0 for the

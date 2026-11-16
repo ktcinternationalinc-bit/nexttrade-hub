@@ -48,8 +48,8 @@ ok('3c: Projected balance row = real bank total + running position, labeled with
   /fc\.bank_balance\.total \+ fc\.buckets\[b\]\.running/.test(bh));
 ok('3d: Position cells are clickable — cumulative drill shows EVERY invoice/bill up to that window, signed, Σ to the cent',
   /setFcDrill\(\{ bucket: b, kind: 'cum' \}\)/.test(bh) &&
-  /indexOf\(r\.bucket\) <= cumIdx/.test(bh) &&
-  /fcDrill\.kind === 'cum' && r\.kind === 'out'\) \? -r\.amount : r\.amount/.test(bh) &&
+  /* v55.83-ST realign — the row picking moved, rule for rule, into src/lib/books-home-view.js agingDrillRows (run against the card numbers in test-v55-83-st-late-cards.js) */ /indexOf\(r\.bucket\) <= cumIdx/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/books-home-view.js'), 'utf8')) &&
+  /d\.kind === 'cum' && r\.kind === 'out' \? -1 : 1\) \* cents\(r\.amount\)/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/books-home-view.js'), 'utf8')) &&
   /Running position through · /.test(bh));
 
 // ── Max 05:01 (screenshot): rule rows invisible — bg-white class was

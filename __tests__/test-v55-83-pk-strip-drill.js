@@ -34,10 +34,10 @@ ok('2b: Out cells click through to the bills behind the number',
   /setFcDrill\(\{ bucket: b, kind: 'out' \}\)/.test(bh) && /Show the bills behind this number/.test(bh));
 ok('2c (PQ): drill sums rows to the cent from fc.rows — one source of truth; PQ added the cumulative Position drill alongside the per-cell filter',
   /equals the number above to the cent/.test(bh) &&
-  /return r\.bucket === fcDrill\.bucket && r\.kind === fcDrill\.kind;/.test(bh) &&
-  /\(fc\.rows \|\| \[\]\)\.filter\(function \(r\) \{/.test(bh));
-ok('2d: big buckets are capped at 80 rows with an honest pointer to the full Forecast list',
-  /all\.slice\(0, 80\)/.test(bh) && /Showing the biggest \{shown\.length\} of \{all\.length\}/.test(bh));
+  /* v55.83-ST realign — the row picking moved, rule for rule, into src/lib/books-home-view.js agingDrillRows (run against the card numbers in test-v55-83-st-late-cards.js) */ /return r\.bucket === d\.bucket && r\.kind === d\.kind;/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/books-home-view.js'), 'utf8')) &&
+  /agingDrillRows\(fc\.rows \|\| \[\], fcDrill, fc\.bucket_order \|\| \[\]\)/.test(bh));
+ok('2d: big buckets are capped (v55.83-ST realign: 300 rows, was 80) with an honest pointer to the full Forecast list',
+  /all\.slice\(0, 300\)/.test(bh) && /Showing the biggest \{shown\.length\} of \{all\.length\}/.test(bh));
 
 // 3. Period presets
 ok('3a: Books home presets include "Jun 1 →" and "This year"',

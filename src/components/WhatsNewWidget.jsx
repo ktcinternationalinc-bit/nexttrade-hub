@@ -33,6 +33,59 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SU',
+    date: '2026-11-15',
+    title: 'Duplicate check runs by itself after a sync, links between wires, bills and bank lines',
+    items: [
+      'After every bank sync and every statement upload the duplicate check now runs by itself. If the same bank line arrives a second time through another connection of the same account, the extra copy is removed automatically. It is kept on file and can be restored from “Check for duplicates”.',
+      'It only clears the certain case: the same account, amount, description and day, exactly two copies, on two different connections, and the copy it removes has no work on it. Anything less certain — for example two identical fees on the same day — is left alone and you are told how many need a person.',
+      'After a sync or an upload the message now says how many were removed and how many need checking.',
+      'Bills: a bill paid by a wire or a request shows a “📤 WP-…” button. Click it to open that wire — the bills it paid, who signed, its history. A bill paid in parts shows each one.',
+      'All Transactions: a transfer that carries several requests now shows a button for each request. Before, only one was shown.',
+      'On a sent request: “Book the unused $… as the service fee” fills the fee change for you (it still asks for a reason and is kept in the history).',
+      'Not included: a transfer that has no request yet still cannot have its unused money booked as a fee — build a request from it first.',
+      { superAdminOnly: true, text: 'No SQL (uses the SO duplicate functions; without them nothing is removed and the sync is unaffected). duplicate-detect.js twinAutoPicks (same_line groups of exactly 2 rows on different account ids, same day or same cheque number, removal candidate unreviewed / unverified / unprotected); duplicates-server.js autoTwinCheck (45-day window, time budget, bank_duplicate_remove with p_actor null on cron, audit bank_duplicate_auto_removed). Called in plaid/transactions and statement-import BEFORE autoMatchSentWires. bills list adds paid_by_wires (closed wire_package_lines with a payment on attached packages); expense-rules all_transactions adds wires[] per line; BillsTab + AllTransactionsTab open WireQuickView.' },
+    ],
+  },
+  {
+    version: 'v55.83-ST',
+    date: '2026-11-15',
+    title: 'Late-invoice cards on the Books home open properly',
+    items: [
+      'Tapping a late card (Late 1–30, 31–60, 61–90, 91+) now takes you to its invoices. They were opening far down the page inside the “Late & upcoming” section, so on a phone it looked as if the card did nothing.',
+      'TOTAL OVERDUE now opens every late invoice. Before, it opened only the ones 1–30 days late, so the list did not match the number on the card.',
+      'The list shows up to 300 invoices (was 80), biggest first, and the total on top always covers all of them.',
+      { superAdminOnly: true, text: 'No SQL. BooksHomeTab fcDrill accepts { buckets:[…], kind, label }; row picking moved to src/lib/books-home-view.js agingDrillRows (cent-exact sum), run against aging.js forecastBuckets / tagRows in test-v55-83-st-late-cards.js. The drill panel still renders inside the forecast strip block; fcRef.scrollIntoView (added in SS) brings it into view.' },
+    ],
+  },
+  {
+    version: 'v55.83-SS',
+    date: '2026-11-15',
+    title: 'Books home on a phone: the rows behind a card are readable, and bills due is a clean list',
+    items: [
+      'On a phone, tapping a card on the Books home used to show only the reference and the name — the amounts were off the side of the screen. Each row is now stacked: reference, who, the amount in bold, then date, due date, original, paid and balance underneath.',
+      'Tapping a card now scrolls to its rows (they open below all the cards, so on a phone it could look as if nothing happened), and there is a proper “✕ Close” button.',
+      '“Due in this period” was one long run of dark-red text on the dark page, one entry per bill. It is now a white panel: one line per vendor with the number of bills, the due dates and the total, and a “See every bill” button.',
+      'Section headings and “all caught up” on the Books home now have their own background so they read clearly in the dark skin.',
+      { superAdminOnly: true, text: 'No SQL. BooksHomeTab: drill panel gets a ref + scrollIntoView on cfDrill change, md:hidden stacked list / hidden md:block table; bills_due rendered via src/lib/books-home-view.js groupBillsDue (cent-exact, vendor-normalized); heading and status pills with explicit backgrounds. Same drill pattern still exists unchanged on PeriodStatsTab and CashForecastTab (wide tables, sideways scroll on a phone).' },
+    ],
+  },
+  {
+    version: 'v55.83-SR',
+    date: '2026-11-15',
+    title: 'NextTrade is booked like RTM from Nov 15, and the P&L shows bills · service fee · waiting for bills',
+    items: [
+      'From Nov 15, 2026 money sent to NextTrade is booked the same way as money sent to RTM: the whole transfer is one professional-fees line. Everything dated before Nov 15 stays exactly as it was booked (as an advance with NextTrade).',
+      'P&L (Stats → Spending by category): under each company’s line you can switch between “one line” and “broken down”. Broken down now shows three parts for transfers from Nov 15 on: the bills paid in their real categories, the service fee on your requests, and the money still waiting for bills. Money waiting for bills stays professional fees.',
+      'If a period covers both sides of Nov 15, NextTrade shows as two rows — “before 2026-11-15” (advance) and “from 2026-11-15” (one professional-fees line) — so the old and new treatment are never mixed.',
+      'Totals do not move: money out, spending, deductible spending and every category total are the same before and after a request is sent. Only “bills paid” goes up, because the bills are now recorded paid.',
+      'ClickBooks ledger: the nightly check re-books only NextTrade entries dated Nov 15 or later that were booked the old way (it reverses them and posts them again — nothing is edited). Earlier entries are not touched.',
+      'New wire screen: NextTrade is no longer described as “our affiliate”.',
+      'Not in this build: links between the wire, transaction, vendor and bill screens; the duplicate check running by itself after every bank sync; booking the unused rest of a transfer as a service fee when it has no request yet (today the fee goes on a request).',
+      { superAdminOnly: true, text: 'Run sql/v55-83-SR-provider-from.sql (re-runnable; deletes nothing; never edits a journal). Adds paid_through_parties.provider_from (set to 2026-11-15 for RTM Capital and NextTrade Industries where empty). If clickbooks_us is installed: adds affiliate_due_account(uuid,text,date) and rewrites IN PLACE (pg_get_functiondef + exact-count replace, aborts with nothing changed on any mismatch) classified_sync_run, drift_sync_run (3 calls), affbill_lines, apbill_lines, appay_lines to use the dated rule — bank line by coalesce(posted_date,date), bill payment by paid_date, AP accrual by bill_date; appay_lines also clears an accrued bill when an rtm-method payment is dated in the provider era and its bank line is in the ledger. Hub: src/lib/paid-through-blocks.js (buildPaidThroughBlocks, remainderRows, eraOf) replaces the inline block maths in period_stats, with fees_booked / waiting / remainder_other and a block key; PeriodStatsTab switches are keyed by block. Without the SQL the report output is identical to SQ. PG16 evidence: clickbooks/tests/sr-provider-from (R0–R9).' },
+    ],
+  },
+  {
     version: 'v55.83-SQ',
     date: '2026-11-15',
     title: 'Payment requests, part two (first half): wire copies per vendor, printable copies, currency check',

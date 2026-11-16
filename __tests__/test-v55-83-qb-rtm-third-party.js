@@ -44,8 +44,8 @@ ok('2d: save_bill stores the via-RTM flag and SAYS when it could not (pre-SQL), 
   bills.split('Saved WITHOUT the via-RTM flag').length === 3);
 ok('2e: period_stats rtm block — payments from stamped out-txns, covered bills from method-rtm payments joined to the bill category, service_fee = payments − allocations',
   /\.not\('third_party_payer', 'is', null\)\.neq\('pending', true\)/.test(bills) &&
-  /if \(p9\.method !== 'rtm' \|\| p9\.voided === true\) \{ return; \}/.test(bills) &&
-  /service_fee: r2\(rtmPayTotal - rtmAllocTotal\)/.test(bills) &&
+  /* v55.83-SR realign — the per-company blocks moved, sum for sum, into src/lib/paid-through-blocks.js (run for real in test-v55-83-sr-*) */ /if \(p\.method !== 'rtm' \|\| p\.voided === true \|\| !inP\(p\.paid_date\)\) \{ return; \}/.test(R('src/lib/paid-through-blocks.js')) &&
+  /var remainder = r2\(payTotal - allocTotal\);/.test(R('src/lib/paid-through-blocks.js')) && /service_fee: remainder/.test(R('src/lib/paid-through-blocks.js')) &&
   /spend = \{ rtm: rtmBlk, paid_through: ptBlocks, categories: catRows/.test(bills)); // (QY: the RTM block is now one of the per-company blocks; rtm kept for back-compat)
 
 var at = R('src/components/AllTransactionsTab.jsx');

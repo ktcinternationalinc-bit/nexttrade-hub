@@ -5,7 +5,8 @@
 // One home screen: money in/out for a period, expected-in vs bills-due, and
 // WORK QUEUES — deposits to match, expenses to categorize (one click, with
 // background rule proposals), bills due. All US business.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { groupBillsDue, agingDrillRows } from '../lib/books-home-view'; // v55.83-SS / ST
 import { supabase } from '../lib/supabase';
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { CLASSIFICATIONS } from '../lib/bank-permissions';
@@ -154,6 +155,10 @@ export default function BooksHomeTab(props) {
     window.addEventListener('nt-acct-returned', onBack);
     return function () { window.removeEventListener('nt-acct-returned', onBack); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-SS — the rows behind a card open BELOW all the cards; bring them into view so a tap on a card visibly does something
+  var drillRef = useRef(null); var fcRef = useRef(null);
+  useEffect(function () { if (fcDrill && fcRef.current && fcRef.current.scrollIntoView) { try { fcRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (eSf) { /* stays where it is */ } } }, [fcDrill]); // eslint-disable-line
+  useEffect(function () { if (cfDrill && drillRef.current && drillRef.current.scrollIntoView) { try { drillRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (eSv) { /* older browsers: stays where it is */ } } }, [cfDrill]); // eslint-disable-line
   useEffect(function () { prefillSuggestions(outQueue, hubRules); }, [outQueue, hubRules]); // eslint-disable-line // eslint-disable-line
 
   function applyPeriod(f, t, label) { setFrom(f); setTo(t); setPreset(label); loadCashflow(f, t); loadPeriodStats(f, t); }
@@ -239,7 +244,7 @@ export default function BooksHomeTab(props) {
               read and understand and the cards should be grouped in a way that
               makes sense" — four labeled groups, each answering ONE question. */}
           <div>
-            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🏦 1 · BANK REALITY — money that actually moved in this period (from the bank feed)</div>
+            <div className="text-[11px] font-extrabold mb-1 rounded px-2 py-1" style={{ color: '#0f172a', background: '#e2e8f0', display: 'inline-block' }}>🏦 1 · BANK REALITY — money that actually moved in this period (from the bank feed)</div>
             <div className="flex gap-2 flex-wrap">
               <Card label={'CAME IN' + (V.fin ? ' (' + sum.actual_in_count + ' bank txns)' : '')} value={gv(V.fin, '$' + fmt(sum.actual_in))} bg="#d1fae5" border="#a7f3d0" fg="#065f46" sub="settled deposits — transfers between your own accounts are not counted"
                 onClick={go(V.fin, function () { setCfDrill({ title: 'Came in — settled bank deposits', keys: [{ key: 'came_in', sign: 1 }] }); })} />
@@ -257,7 +262,7 @@ export default function BooksHomeTab(props) {
             </div>}
           </div>
           {ps && ps.invoices && <div>
-            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>🧾 2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices</div>
+            <div className="text-[11px] font-extrabold mb-1 rounded px-2 py-1" style={{ color: '#0f172a', background: '#e2e8f0', display: 'inline-block' }}>🧾 2 · INVOICES CREATED IN THIS PERIOD — and what happened to those exact invoices</div>
             <div className="flex gap-2 flex-wrap">
               <Card label={'INVOICED' + (V.inv ? ' (' + (ps.invoices.count || 0) + ' invoices)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.invoiced))} bg="#eef2ff" border="#c7d2fe" fg="#312e81" sub="invoices issued in the period"
                 onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Invoiced — actual invoices issued in this period', keys: [{ key: 'invoiced', sign: 1 }] }); })} />
@@ -268,7 +273,7 @@ export default function BooksHomeTab(props) {
             </div>
           </div>}
           {ps && ps.invoices && <div>
-            <div className="text-[10px] font-extrabold mb-1" style={{ color: '#64748b' }}>💰 3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date (old invoices included)</div>
+            <div className="text-[11px] font-extrabold mb-1 rounded px-2 py-1" style={{ color: '#0f172a', background: '#e2e8f0', display: 'inline-block' }}>💰 3 · ALL INVOICE MONEY RECEIVED THIS PERIOD — whatever the invoice's date (old invoices included)</div>
             <div className="flex gap-2 flex-wrap">
               <Card label={'COLLECTED — ALL INVOICES' + (V.inv ? ' (' + (ps.invoices.collected_count || 0) + ' payments)' : '')} value={gv(V.inv, '$' + fmt(ps.invoices.collected))} bg="#ecfdf5" border="#6ee7b7" fg="#064e3b" sub="each row says if its invoice is from this period or older"
                 onClick={go(V.inv, function () { setCfDrill({ src: 'ps', title: 'Collected — every invoice payment received in this period (old invoices included)', keys: [{ key: 'collected', sign: 1 }] }); })} />
@@ -308,7 +313,7 @@ export default function BooksHomeTab(props) {
                   onClick={function () { setFcDrill({ bucket: lk, kind: 'in' }); }} />;
               })}
               <Card label="TOTAL OVERDUE" value={'$' + fmt((fc.buckets['L1-30'].ar + fc.buckets['L31-60'].ar + fc.buckets['L61-90'].ar + fc.buckets['L90+'].ar))} bg="#fff1f2" border="#fecdd3" fg="#7f1d1d" sub={(fc.buckets['L1-30'].ar_count + fc.buckets['L31-60'].ar_count + fc.buckets['L61-90'].ar_count + fc.buckets['L90+'].ar_count) + ' invoices late in total'}
-                onClick={function () { setFcDrill({ bucket: 'L1-30', kind: 'in' }); }} />
+                onClick={function () { setFcDrill({ buckets: ['L1-30', 'L31-60', 'L61-90', 'L90+'], kind: 'in', label: 'All overdue invoices' }); }} />
             </div>
           </div>}
         </div>}
@@ -334,14 +339,34 @@ export default function BooksHomeTab(props) {
         });
         merged.sort(function (a3, b5) { return b5.amount - a3.amount; });
         var shown2 = merged.slice(0, 300);
-        return <div className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        return <div ref={drillRef} className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '2px solid #1d4ed8', scrollMarginTop: 90 }}>
           <div className="flex gap-2 items-center mb-1 flex-wrap">
             <div className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>
               {cfDrill.title} — {fullCount} row(s), Σ {(total >= 0 ? '+$' : '−$') + fmt(Math.abs(Math.round(total * 100) / 100))} (equals the card to the cent)</div>
             <div className="flex-1" />
-            <button onClick={function () { setCfDrill(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
+            <button onClick={function () { setCfDrill(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #0f172a' }}>✕ Close</button>
           </div>
-          <div className="overflow-x-auto" style={{ maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[10px]">
+          {/* v55.83-SS — on a phone nine columns do not fit (only Ref and Who showed): one stacked row per line, amount always visible */}
+          <div className="md:hidden" style={{ maxHeight: 420, overflowY: 'auto' }}>
+            {shown2.map(function (r7, i7) {
+              return <div key={i7} className="py-2" style={{ borderBottom: '1px solid #e2e8f0', color: '#0f172a' }}>
+                <div className="flex gap-2 items-start">
+                  <div className="flex-1 min-w-0">
+                    {r7.invoice_id
+                      ? <button onClick={function () { setPeekId(r7.invoice_id); }} className="font-extrabold underline text-left text-[13px]" style={{ color: '#1d4ed8' }}>{r7.ref}{r7.rel ? ' · ' + r7.rel : ''}</button>
+                      : <div className="font-extrabold text-[13px]">{r7.ref}</div>}
+                    <div className="text-[12px] font-semibold" style={{ color: '#334155' }}>{String(r7.who || '').substring(0, 60)}</div>
+                  </div>
+                  <div className="text-[14px] font-extrabold tabular-nums whitespace-nowrap" style={{ color: r7.sign < 0 ? '#7f1d1d' : '#065f46' }}>{(r7.sign < 0 ? '−$' : '+$') + fmt(r7.amount)}</div>
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: '#475569' }}>
+                  {(r7.date ? r7.date : '—') + (r7.due ? ' · due ' + r7.due : '') + (r7.total != null ? ' · original ' + nd(r7.total) : '') + (r7.paid != null ? ' · paid ' + nd(r7.paid) : '') + (r7.open != null ? ' · balance ' + nd(r7.open) : '')}
+                  {r7.source ? <span style={{ color: '#64748b' }}>{' · ' + r7.source}</span> : null}
+                </div>
+              </div>;
+            })}
+          </div>
+          <div className="hidden md:block overflow-x-auto" style={{ maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[10px]">
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
               <th className="py-1 pr-2 text-left font-semibold">Ref</th><th className="py-1 pr-2 text-left font-semibold">Who / description</th>
               <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
@@ -370,9 +395,26 @@ export default function BooksHomeTab(props) {
       })();
       })()}
       {cfDrill && cfDrill.src !== 'ps' && cf && !cf.drills && <div className="mt-2 text-[11px] font-bold" style={{ color: '#431407', background: '#ffedd5', borderRadius: 8, padding: 8 }}>Deploy v55.83-PL to get the rows behind the cards — then click again.</div>}
-      {cf && cf.bills_due && cf.bills_due.length > 0 && <div className="mt-2 text-[11px]" style={{ color: '#431407' }}>
-        <b>Due in this period:</b> {cf.bills_due.map(function (b) { return b.vendor_name + ' $' + fmt(b.open) + (b.due_date ? ' (' + b.due_date + ')' : ''); }).join(' · ')}
-      </div>}
+      {/* v55.83-SS — was one long run of dark-red text on the dark page (unreadable), one entry per bill: now a white panel, one line per vendor */}
+      {cf && cf.bills_due && cf.bills_due.length > 0 && (function () {
+        var gd = groupBillsDue(cf.bills_due);
+        return <div className="mt-2 rounded-lg p-3" style={{ background: '#ffffff', border: '1px solid #fdba74', color: '#0f172a' }}>
+          <div className="flex gap-2 items-center flex-wrap mb-1">
+            <div className="text-[13px] font-extrabold" style={{ color: '#0f172a' }}>{'Bills due in this period — ' + gd.count + ' bill' + (gd.count === 1 ? '' : 's') + ', $' + fmt(gd.total)}</div>
+            <div className="flex-1" />
+            <button onClick={function () { setCfDrill({ title: 'Bills due in the next 30 days', keys: [{ key: 'bills_due', sign: -1 }] }); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#1d4ed8', border: '2px solid #1d4ed8' }}>See every bill</button>
+          </div>
+          {gd.groups.map(function (g) {
+            return <div key={g.vendor} className="flex gap-2 items-baseline py-1.5" style={{ borderTop: '1px solid #f1f5f9' }}>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-bold" style={{ color: '#0f172a' }}>{g.vendor}</div>
+                <div className="text-[11px]" style={{ color: '#475569' }}>{g.count + ' bill' + (g.count === 1 ? '' : 's') + (g.first_due ? ' · due ' + (g.first_due === g.last_due ? g.first_due : g.first_due + ' → ' + g.last_due) : '')}</div>
+              </div>
+              <div className="text-[14px] font-extrabold tabular-nums whitespace-nowrap" style={{ color: '#7f1d1d' }}>{'$' + fmt(g.total)}</div>
+            </div>;
+          })}
+        </div>;
+      })()}
     </div>
 
     {/* ── Aging forecast strip (Max: the dashboard should show late 1-30/31-60/61-90/90+ and upcoming, in AND out, with shortage forecasting) ── */}
@@ -441,21 +483,38 @@ export default function BooksHomeTab(props) {
       <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Every number here is real invoices/bills by DUE DATE — nothing else. ⚠ side = already late (aged by how long). Green side = on time, by when it comes due. Position = running in − out; where it turns red is where cash runs short. Click any number for the exact invoices/bills behind it.{fc.excluded_old && fc.excluded_old.count > 0 ? ' · Only invoices CREATED since Apr 1, 2026 are counted — ' + fc.excluded_old.count + ' older invoice(s) ($' + fmt(fc.excluded_old.sum) + ') are left out as pre-system history whose payments may simply never have been matched.' : ''}</div>
       {fcDrill && (function () {
         var L2 = { 'L90+': '⚠ 90+ days late', 'L61-90': '⚠ 61–90 late', 'L31-60': '⚠ 31–60 late', 'L1-30': '⚠ 1–30 late', 'D0-30': 'Due ≤30 days', 'D31-60': 'Due 31–60', 'D61-90': 'Due 61–90', 'D90+': 'Due 90+' };
-        var cumIdx = (fc.bucket_order || []).indexOf(fcDrill.bucket);
-        var all = (fc.rows || []).filter(function (r) {
-          if (fcDrill.kind === 'cum') { return (fc.bucket_order || []).indexOf(r.bucket) <= cumIdx; } // every row up to this window
-          return r.bucket === fcDrill.bucket && r.kind === fcDrill.kind;
-        }).sort(function (a, b) { return b.amount - a.amount; });
-        var sum = 0; all.forEach(function (r) { sum += (fcDrill.kind === 'cum' && r.kind === 'out') ? -r.amount : r.amount; });
-        var shown = all.slice(0, 80);
-        return <div className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-          <div className="flex gap-2 items-center mb-1">
+        // v55.83-ST — one tested helper picks the rows (TOTAL OVERDUE now opens ALL late invoices, not only 1–30 days)
+        var adr = agingDrillRows(fc.rows || [], fcDrill, fc.bucket_order || []); var all = adr.rows; var sum = adr.sum;
+        var shown = all.slice(0, 300);
+        return <div ref={fcRef} className="mt-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '2px solid #1d4ed8', scrollMarginTop: 90 }}>
+          <div className="flex gap-2 items-center mb-1 flex-wrap">
             <div className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>
-              {(fcDrill.kind === 'cum' ? 'Running position through · ' : fcDrill.kind === 'in' ? 'Coming in · ' : 'Going out · ') + (L2[fcDrill.bucket] || fcDrill.bucket)} — {all.length} row(s), Σ {(sum < 0 ? '−$' : '$') + fmt(Math.abs(Math.round(sum * 100) / 100))} (equals the number above to the cent)</div>
+              {fcDrill.label ? fcDrill.label : (fcDrill.kind === 'cum' ? 'Running position through · ' : fcDrill.kind === 'in' ? 'Coming in · ' : 'Going out · ') + (L2[fcDrill.bucket] || fcDrill.bucket)} — {all.length} row(s), Σ {(sum < 0 ? '−$' : '$') + fmt(Math.abs(Math.round(sum * 100) / 100))} (equals the number above to the cent)</div>
             <div className="flex-1" />
-            <button onClick={function () { setFcDrill(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ close</button>
+            <button onClick={function () { setFcDrill(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#0f172a', border: '2px solid #0f172a' }}>✕ Close</button>
           </div>
-          <table className="w-full text-[10px]">
+          {/* v55.83-SS — phone: one stacked row per invoice / bill, the open amount always visible */}
+          <div className="md:hidden" style={{ maxHeight: 420, overflowY: 'auto' }}>
+            {shown.map(function (r8, i8) {
+              var neg = fcDrill.kind === 'cum' && r8.kind === 'out';
+              return <div key={i8} className="py-2" style={{ borderBottom: '1px solid #e2e8f0', color: '#0f172a' }}>
+                <div className="flex gap-2 items-start">
+                  <div className="flex-1 min-w-0">
+                    {r8.invoice_id
+                      ? <button onClick={function () { setPeekId(r8.invoice_id); }} className="font-extrabold underline text-left text-[13px]" style={{ color: '#1d4ed8' }}>{r8.ref}{r8.rel ? ' · ' + r8.rel : ''}</button>
+                      : <div className="font-extrabold text-[13px]">{r8.ref}</div>}
+                    <div className="text-[12px] font-semibold" style={{ color: '#334155' }}>{String(r8.who || '').substring(0, 60)}</div>
+                  </div>
+                  <div className="text-[14px] font-extrabold tabular-nums whitespace-nowrap" style={{ color: neg ? '#7f1d1d' : '#0f172a' }}>{(fcDrill.kind === 'cum' ? (neg ? '−$' : '+$') : '$') + fmt(r8.amount)}</div>
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: '#475569' }}>
+                  {(r8.date ? r8.date : '—') + (r8.due ? ' · due ' + r8.due : '') + (r8.total != null ? ' · original ' + nd(r8.total) : '') + (r8.paid != null ? ' · paid ' + nd(r8.paid) : '')}
+                  {r8.source ? <span style={{ color: '#64748b' }}>{' · ' + r8.source}</span> : null}
+                </div>
+              </div>;
+            })}
+          </div>
+          <table className="hidden md:table w-full text-[10px]">
             <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
               <th className="py-1 pr-2 text-left font-semibold">Reference</th><th className="py-1 pr-2 text-left font-semibold">{fcDrill.kind === 'out' ? 'Vendor' : fcDrill.kind === 'cum' ? 'Customer / Vendor' : 'Customer'}</th>
               <th className="py-1 pr-2 text-left font-semibold">Date</th><th className="py-1 pr-2 text-left font-semibold">Due</th>
@@ -476,7 +535,7 @@ export default function BooksHomeTab(props) {
               })}
             </tbody>
           </table>
-          {all.length > shown.length && <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Showing the biggest {shown.length} of {all.length} — the 📈 Forecast tab has the full list + CSV.</div>}
+          {all.length > shown.length && <div className="text-[10px] mt-1" style={{ color: '#64748b' }}>Showing the biggest {shown.length} of {all.length} — the Σ above still covers all of them. The 📈 Forecast tab has the full list + CSV.</div>}
         </div>;
       })()}
     </div>}
@@ -486,13 +545,13 @@ export default function BooksHomeTab(props) {
       <div className="bg-white rounded-xl border border-slate-200 p-3">
         <div className="text-xs font-extrabold text-slate-900 mb-1">📥 Deposits to match to invoices</div>
         <div className="text-2xl font-extrabold tabular-nums" style={{ color: qCounts.in_unmatched > 0 ? '#1d4ed8' : '#065f46' }}>{qCounts.in_unmatched}</div>
-        <div className="text-[11px] text-slate-600 mb-2">{qCounts.in_unmatched > 0 ? 'money-in transactions waiting to be connected to an invoice' : 'all caught up ✓'}</div>
+        <div className="text-[11px] font-bold mb-2 rounded px-2 py-0.5" style={{ display: 'inline-block', color: qCounts.in_unmatched > 0 ? '#78350f' : '#065f46', background: qCounts.in_unmatched > 0 ? '#fef3c7' : '#d1fae5' }}>{qCounts.in_unmatched > 0 ? 'money-in transactions waiting to be connected to an invoice' : 'all caught up ✓'}</div>
         {qCounts.in_unmatched > 0 && <button onClick={function () { onGo('review'); }} className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open matching →</button>}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-3">
         <div className="text-xs font-extrabold text-slate-900 mb-1">🏷️ Expenses to categorize <span className="font-semibold text-slate-500">({qCounts.out_unreviewed} waiting)</span></div>
-        {outQueue.length === 0 ? <div className="text-[11px]" style={{ color: '#065f46' }}>all caught up ✓</div> :
+        {outQueue.length === 0 ? <div className="text-[11px] font-bold rounded px-2 py-0.5" style={{ display: 'inline-block', color: '#065f46', background: '#d1fae5' }}>all caught up ✓</div> :
           outQueue.map(function (t) {
             return <div key={t.id} className="flex gap-2 items-center py-1" style={{ borderBottom: '1px solid #f1f5f9' }}>
               <span className="text-[10px] text-slate-500 whitespace-nowrap">{t.posted_date || t.date}</span>

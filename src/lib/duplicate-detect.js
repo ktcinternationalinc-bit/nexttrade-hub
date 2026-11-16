@@ -186,3 +186,31 @@ export function findDuplicates(rows, opts) {
   });
   return { groups: groups, stats: { scanned: live.length, recurring: recurring, transfer_sides: sides } };
 }
+
+// v55.83-SU (Max, Nov 15: "if bank linked twice it should know and prevent duplicates") — which duplicate groups are safe
+// to clear WITHOUT a person: only the same bank line that arrived through two connections of the same account.
+// Deliberately narrow (money is never matched loosely):
+//   · the check itself calls it "same bank line brought in twice" (same real account, amount, direction, currency, text);
+//   · exactly TWO copies — three or more could be real repeated payments seen on both connections: a person decides;
+//   · the two copies sit on two different connections (account ids) of that one account;
+//   · same day (or the same cheque number);
+//   · the copy to remove carries no work: not protected, not reviewed/approved, not verified, no invoice, no transfer.
+// rowsById: the raw bank rows (for the account id). → [{ remove_id, keep_id, amount, date }]
+export function twinAutoPicks(groups, rowsById) {
+  var out = [];
+  (groups || []).forEach(function (g) {
+    if (!g || g.kind !== 'same_line' || !g.rows || g.rows.length !== 2) { return; }
+    var keep = g.rows[0].id === g.suggest_keep_id ? g.rows[0] : g.rows[1];
+    var dup = g.rows[0].id === g.suggest_keep_id ? g.rows[1] : g.rows[0];
+    if (keep.id !== g.suggest_keep_id || keep.id === dup.id) { return; }
+    var ka = (rowsById[keep.id] || {}).account_id, da = (rowsById[dup.id] || {}).account_id;
+    if (!ka || !da || String(ka) === String(da)) { return; }
+    var sameDay = keep.date && keep.date === dup.date;
+    var sameCheque = keep.check_number && String(keep.check_number) === String(dup.check_number);
+    if (!sameDay && !sameCheque) { return; }
+    if (dup.protected || dup.verified || dup.matched_invoice || dup.transfer) { return; }
+    if (dup.review_status && dup.review_status !== 'unreviewed') { return; }
+    out.push({ remove_id: dup.id, keep_id: keep.id, amount: g.amount, date: dup.date });
+  });
+  return out;
+}

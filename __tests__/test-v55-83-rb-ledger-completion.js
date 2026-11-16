@@ -62,8 +62,8 @@ ok('3b: drift knows the advance (no reverse/re-post loop) and the bills NextTrad
   /'manual', 'affbill:' \|\| v\.id::text/.test(rb) && /'paid through a service provider \(stays one line\)'/.test(rb));
 var ps = R('src/components/PeriodStatsTab.jsx');
 ok('3c: Stats + accountant pack match the books — NextTrade defaults to real-cost, its unlinked remainder is an ADVANCE (not P&L), the pack always takes advances out; RTM keeps its one line',
-  /var feeKind = \(rtm && rtm\.kind === 'affiliate'\) \? 'not_pnl' : 'expense';/.test(ps) &&
-  /function ptIsOn\(b\) \{ return ptOn\[b\.payer\] === undefined \? b\.kind === 'affiliate' : ptOn\[b\.payer\] === true; \}/.test(ps) &&
+  /* v55.83-SR realign — the per-company blocks moved, sum for sum, into src/lib/paid-through-blocks.js (run for real in test-v55-83-sr-*) */ /var kind = b\.kind === 'affiliate' \? 'not_pnl' : 'expense';/.test(R('src/lib/paid-through-blocks.js')) &&
+  /function ptIsOn\(b\) \{ var bk = b\.key \|\| b\.payer; return ptOn\[bk\] === undefined \? b\.kind === 'affiliate' : ptOn\[bk\] === true; \}/.test(ps) &&
   /\(taxCats\(data\.spending\.categories\) \|\| \[\]\)\.forEach\(function \(c\) \{ sp\.push\(/.test(ps) &&
   /\(taxCats\(data\.spending\.categories\) \|\| \[\]\)\.forEach\(function \(c\) \{ if \(c\.kind === 'cogs'\)/.test(ps));
 var bills = R('src/app/api/accounting/bills/route.js');

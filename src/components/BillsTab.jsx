@@ -10,6 +10,7 @@ import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
 import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN — the actual bill, on the screen
+import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
@@ -32,6 +33,7 @@ export default function BillsTab(props) {
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
   var sE = useState(''); var loadErr = sE[0]; var setLoadErr = sE[1]; // v55.83-SA — why the list did not load, ON the screen (a toast is missed; an empty list looks like "no bills")
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
+  var sWq = useState(null); var wireQuick = sWq[0]; var setWireQuick = sWq[1]; // v55.83-SU
   var s3 = useState(null); var editing = s3[0]; var setEditing = s3[1]; // bill draft or null
   var s4 = useState(null); var paying = s4[0]; var setPaying = s4[1];   // {bill, amount, paid_date, bank_transaction_id}
   var s5 = useState('open'); var filter = s5[0]; var setFilter = s5[1];
@@ -300,6 +302,13 @@ export default function BillsTab(props) {
   function paysOf(id) { return payments.filter(function (p) { return p.bill_id === id; }); }
   // v55.83-RZ (Max 00:17: "it goes from OPEN to READY ... and then ... the status of the bills become PAID") — a bill on a wire shows
   // where the wire is: OPEN (being signed) → READY (both signatures) → SENT (waiting for the bank line) → PAID (matched)
+  // v55.83-SU — the wire(s) / request(s) that PAID this bill: click to open it (bills, signatures, history)
+  function paidByChips(b) {
+    if (!b.paid_by_wires || !b.paid_by_wires.length) { return null; }
+    return <div className="mt-0.5 flex gap-1 flex-wrap">{b.paid_by_wires.map(function (w, i) {
+      return <button key={w.id + '-' + i} onClick={function (e) { e.stopPropagation(); setWireQuick(w); }} title={'Open ' + w.label + ' — the ' + (w.request ? 'request to ' : 'wire to ') + (w.payee || '') + ' that paid $' + fmt(w.amount) + ' of this bill'}
+        className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#4338ca', color: '#ffffff' }}>{'📤 ' + w.label}</button>; })}</div>;
+  }
   function wireChip(b) {
     if (!b.wire_state || (b.status !== 'OPEN' && b.status !== 'PARTIAL')) { return null; }
     var w = b.wire_state; var c = w.state === 'ready' ? ['#dbeafe', '#1e3a8a'] : w.state === 'sent' ? ['#e0e7ff', '#3730a3'] : ['#f1f5f9', '#334155'];
@@ -365,6 +374,7 @@ export default function BillsTab(props) {
 
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white nt-light';
   return <div className="nt-paper rounded-xl border border-slate-200 p-3" style={{ background: '#ffffff', color: '#0f172a' }}>
+    {wireQuick && <WireQuickView wire={wireQuick} userProfile={userProfile} onClose={function () { setWireQuick(null); }} />}
     {loadErr && <div className="rounded-lg px-3 py-2 mb-2 text-[13px] font-extrabold flex gap-2 items-center flex-wrap" style={{ background: '#fef2f2', color: '#991b1b', border: '2px solid #fca5a5' }}>
       <span>{'⛔ The bills did not load: ' + loadErr}</span>
       <button onClick={load} className="px-2 py-1 rounded text-[12px] font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Try again</button></div>}
@@ -571,7 +581,7 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2 text-right">${fmt(b.paid)}</td>
                 <td className="py-1.5 pr-2 text-right font-extrabold">${fmt(b.open)}</td>
                 <td className="py-1.5 pr-2">{b.category ? (catLabelOf[b.category] || b.category) : '—'}</td>
-                <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{wireChip(b)}</td>
+                <td className="py-1.5 pr-2">{b.wire_state && b.status === 'OPEN' && b.wire_state.state !== 'on_wire' ? null : chip(b.status)}{wireChip(b)}{paidByChips(b)}</td>
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">
                   <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} title={b.attachment_path ? 'Show the actual bill next to what the Hub read from it' : 'Show the bill details — no file is attached yet'} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={b.attachment_path ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : (b.attachment_path ? '📄 View bill' : 'View · no file')}</button>

@@ -618,7 +618,7 @@ export default function WirePackagesPanel(props) {
         {(payees.parties || []).map(function (p) {
           var k = p.kind === 'affiliate' ? 'affiliate' : 'service_provider'; var on = ed.kind === k && ed.payee === p.name;
           return <button key={p.name} onClick={function () { pickPayee(k, p.name); }} className="rounded-xl px-4 py-3 text-left" style={{ minWidth: 200, background: on ? '#0f766e' : '#ffffff', color: on ? '#ffffff' : INK, border: '2px solid ' + (on ? '#0f766e' : '#cbd5e1') }}>
-            <div className="text-[14px] font-extrabold">🏢 {p.name}</div><div className="text-[11px]" style={{ opacity: 0.85 }}>{k === 'affiliate' ? 'our affiliate · optional service fee' : 'pays the vendors for us · optional service fee'}</div></button>;
+            <div className="text-[14px] font-extrabold">🏢 {p.name}</div><div className="text-[11px]" style={{ opacity: 0.85 }}>{k === 'affiliate' ? 'pays the vendors for us · optional service fee' : 'pays the vendors for us · optional service fee'}</div></button>;
         })}
         <button onClick={function () { pickPayee('vendor', ''); }} className="rounded-xl px-4 py-3 text-left" style={{ minWidth: 200, background: ed.kind === 'vendor' ? '#0f766e' : '#ffffff', color: ed.kind === 'vendor' ? '#ffffff' : INK, border: '2px solid ' + (ed.kind === 'vendor' ? '#0f766e' : '#cbd5e1') }}>
           <div className="text-[14px] font-extrabold">🧾 A vendor directly</div><div className="text-[11px]" style={{ opacity: 0.85 }}>we wire the vendor ourselves · one vendor</div></button>
@@ -924,7 +924,10 @@ export default function WirePackagesPanel(props) {
               <input type="file" accept="application/pdf,image/*" onChange={function (e) { setVCopy(Object.assign({}, vCopy, { file: e.target.files && e.target.files[0], err: '' })); }} style={{ display: 'none' }} /></label>
             <Btn color="#7e22ce" onClick={saveVendorCopy} disabled={busy}>Save copy</Btn><Btn light onClick={function () { setVCopy(null); }}>Cancel</Btn></div>
           {vCopy.err && <div className="mt-1 text-[12px] font-extrabold" style={{ color: '#b91c1c' }}>{'⛔ ' + vCopy.err}</div>}</div>}
-        {P.raw_status === 'attached' && perms.send && !feeAsk && <div className="mt-2"><Btn light onClick={function () { setFeeAsk({ fee: String(P.fee_amount || 0), reason: '', err: '' }); }}>✏ Change the service fee</Btn> <span className="text-[11px]" style={{ color: MUTED }}>No new signatures — a reason is kept in the history.</span></div>}
+        {P.raw_status === 'attached' && perms.send && !feeAsk && <div className="mt-2"><Btn light onClick={function () { setFeeAsk({ fee: String(P.fee_amount || 0), reason: '', err: '' }); }}>✏ Change the service fee</Btn>
+          {/* v55.83-SU (Max: "We can book it as a professional fee, or we can put it as remaining waiting for bills") */}
+          {P.funding && !P.funding.missing && P.funding.remaining > 0.005 && <span> <Btn light onClick={function () { setFeeAsk({ fee: (Math.round(((Number(P.fee_amount) || 0) + P.funding.remaining) * 100) / 100).toFixed(2), reason: 'Book the unused $' + fmt(P.funding.remaining) + ' of the transfer as the service fee', err: '' }); }}>{'💰 Book the unused $' + fmt(P.funding.remaining) + ' as the service fee'}</Btn></span>}
+          <span className="text-[11px]" style={{ color: MUTED }}> No new signatures — a reason is kept in the history.</span></div>}
         {feeAsk && <div className="rounded-lg p-2 mt-2" style={{ background: '#eff6ff', border: '1px solid #93c5fd' }}>
           <div className="flex gap-2 items-center flex-wrap">
             <label className="text-[12px] font-bold" style={{ color: SUB }}>Service fee $ <input value={feeAsk.fee} inputMode="decimal" onChange={function (e) { setFeeAsk(Object.assign({}, feeAsk, { fee: e.target.value, err: '' })); }} className={inp} style={Object.assign({ width: 110 }, inpS)} /></label>

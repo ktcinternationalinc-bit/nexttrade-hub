@@ -2,6 +2,7 @@
 // v55.83-PH — Accounting > 📉 Stats (Max, Nov 6): "i need a tab from june 1st
 // on for both invoices and bills to see stats". Default June 1, 2026 → today;
 // invoices and bills side by side; month-by-month table; CSV.
+import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
@@ -25,16 +26,10 @@ function rtmAdjust(cats0, rtm) {
     if (!map[a.key]) { map[a.key] = { key: a.key, label: a.label || a.key, kind: a.kind || 'expense', count: 0, total: 0 }; }
     map[a.key].total = r2a(map[a.key].total + a.total); map[a.key].via_rtm = r2a((map[a.key].via_rtm || 0) + a.total); map[a.key].count += a.count || 0;
   });
-  var fee = r2a((rtm && rtm.service_fee) || 0);
-  // v55.83-QY — the unlinked remainder is labeled by the company's kind:
-  // RTM (service provider) → its service fee; NextTrade (affiliate) → an
-  // advance awaiting its costs. Same money either way, so totals never move.
-  var feeKey = '__pt_' + String((rtm && rtm.payer) || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  // v55.83-RB (gap review): a RELATED company's unlinked remainder is an
-  // ADVANCE (balance sheet, "Due from NextTrade") — never an expense; a
-  // service provider's (RTM) is its fee. The ClickBooks ledger books it the same way.
-  var feeKind = (rtm && rtm.kind === 'affiliate') ? 'not_pnl' : 'expense';
-  if (Math.abs(fee) > 0.005) { map[feeKey] = { key: feeKey, label: (rtm && rtm.remainder_label) || 'RTM service fee (payments − covered bills)', kind: feeKind, count: (rtm && rtm.payments_count) || 0, total: fee }; }
+  // v55.83-SR — the remainder is shown as up to three rows that always add up to it: the company's fee / advance (as
+  // before), the service fee booked on requests, and money still waiting for bills. Same money, so totals never move.
+  // (label fallback kept here: 'RTM service fee (payments − covered bills)'; an affiliate's remainder stays 'not_pnl')
+  remainderRows(rtm).forEach(function (rw) { map[rw.key] = rw; });
   return Object.keys(map).map(function (k) { return map[k]; })
     .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out; })
     .sort(function (x, y) { return y.total - x.total; });
@@ -64,7 +59,7 @@ export default function PeriodStatsTab(props) {
   // v55.83-RB — a RELATED company (NextTrade) defaults to the real-cost view:
   // money sent ahead of its costs is an advance, not spending. RTM stays on the
   // one-line tax view by default (Max's decision). Either can be switched.
-  function ptIsOn(b) { return ptOn[b.payer] === undefined ? b.kind === 'affiliate' : ptOn[b.payer] === true; }
+  function ptIsOn(b) { var bk = b.key || b.payer; return ptOn[bk] === undefined ? b.kind === 'affiliate' : ptOn[bk] === true; } // v55.83-SR — one switch per block (a company can have a before / from block)
   function ptAdjust(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (ptIsOn(b0)) { out = rtmAdjust(out, b0); } }); return out; }
   // the accountant pack: related companies ALWAYS real-cost (advances are not deductible), RTM always one line
   function taxCats(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (b0.kind === 'affiliate') { out = rtmAdjust(out, b0); } }); return out; }
@@ -335,10 +330,10 @@ export default function PeriodStatsTab(props) {
         {ptBlocks().map(function (pb) {
           var onP = ptIsOn(pb);
           var isAff = pb.kind === 'affiliate';
-          return <div key={pb.payer} className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: isAff ? '#f0fdfa' : '#fdf2f8', border: '1px solid ' + (isAff ? '#99f6e4' : '#fbcfe8') }}>
-            <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer} ({isAff ? 'related company — pays costs for us' : 'third-party payer'}):</span>
-            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
-            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : 'service fee'})</label>
+          return <div key={pb.key || pb.payer} className="flex gap-3 items-center flex-wrap mb-1 rounded p-1.5" style={{ background: isAff ? '#f0fdfa' : '#fdf2f8', border: '1px solid ' + (isAff ? '#99f6e4' : '#fbcfe8') }}>
+            <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer}{pb.era_note ? ' · ' + pb.era_note : ''} ({isAff ? 'booked as an advance — earlier entries stay as booked' : 'pays vendors for us — one professional-fees line'}):</span>
+            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.key || pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
+            <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.key || pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : ((pb.waiting > 0.005 || pb.fees_booked > 0.005) ? 'not in bills' : 'service fee')}){!isAff && (pb.waiting > 0.005 || pb.fees_booked > 0.005) ? ' = bills $' + fmt(pb.allocations_total) + ' · service fee $' + fmt((Number(pb.fees_booked) || 0) + (Number(pb.remainder_other) || 0)) + ' · waiting for bills $' + fmt(pb.waiting) : ''}</label>
             {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'Money sent ahead of its costs is an ADVANCE (balance sheet), not spending, until NextTrade\'s bills are linked — the accountant pack and the ClickBooks books use this view.' : 'Totals identical in both views. The accountant tax pack uses the one-line tax view.'} Row drills show direct bank rows only.</span>}
           </div>;
         })}

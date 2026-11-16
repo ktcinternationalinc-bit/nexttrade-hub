@@ -37,7 +37,7 @@ ok('2a: all six cards clickable (came in, went out, net, expected in, bills due,
   /keys: \[\{ key: 'expected_in', sign: 1 \}, \{ key: 'bills_due', sign: -1 \}\]/.test(bh));
 ok('2b: drill panel shows Σ that equals the card to the cent, signed rows, inline-white panel (dark-skin safe)',
   /equals the card to the cent/.test(bh) && /total \+= k\.sign \* d3\.sum/.test(bh) &&
-  /background: '#f8fafc', border: '1px solid #e2e8f0'/.test(bh));
+  /* v55.83-SS realign — same near-white panel, now with a blue outline so it stands out when scrolled to */ /background: '#f8fafc', border: '2px solid #1d4ed8'/.test(bh));
 ok('2c: capped lists say so honestly and the Σ still covers everything',
   /the Σ above still covers ALL of them/.test(bh));
 ok('2d: clicking on an old deploy explains itself instead of doing nothing',

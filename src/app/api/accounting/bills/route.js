@@ -9,6 +9,7 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
+import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks'; // v55.83-SR
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -149,7 +150,9 @@ var PARTY_DEFAULTS = [
 ];
 async function loadParties(db) {
   try {
-    var pr = await db.from('paid_through_parties').select('name, kind, remainder_label, active, sort').eq('active', true).order('sort');
+    // v55.83-SR — provider_from: from that date the company is one line by category, broken down underneath
+    var pr = await db.from('paid_through_parties').select('name, kind, remainder_label, active, sort, provider_from').eq('active', true).order('sort');
+    if (pr.error) { pr = await db.from('paid_through_parties').select('name, kind, remainder_label, active, sort').eq('active', true).order('sort'); } // SR SQL not run yet → exactly as before
     if (!pr.error && pr.data && pr.data.length) { return pr.data; }
   } catch (eP) {}
   return PARTY_DEFAULTS;
@@ -321,6 +324,22 @@ export async function POST(req) {
           rows.forEach(function (b) { var ws = wsBy[b.id]; if (ws) { b.wire_state = ws; b.wire_state_words = wireStateWords(ws, b.open); } });
         }
       } catch (eWS) { /* wires SQL not run */ }
+      // v55.83-SU — link from a bill to the wire / request that paid it (a bill paid in parts can have several)
+      try {
+        var paidWL = await fetchAll(function () { return db.from('wire_package_lines').select('bill_id, package_id, amount, payment_id, is_open').eq('is_open', false); });
+        paidWL = paidWL.filter(function (l) { return !!l.payment_id; });
+        var pwIds = []; paidWL.forEach(function (l) { if (pwIds.indexOf(l.package_id) < 0) { pwIds.push(l.package_id); } });
+        var pwBy = {};
+        for (var pwi = 0; pwi < pwIds.length; pwi += 200) {
+          var pwq = await db.from('wire_packages').select('id, seq, status, payee_name, funding_txn_id').in('id', pwIds.slice(pwi, pwi + 200));
+          if (pwq.error) { break; }
+          (pwq.data || []).forEach(function (w) { pwBy[w.id] = w; });
+        }
+        var byBillW = {};
+        paidWL.forEach(function (l) { var w = pwBy[l.package_id]; if (!w || w.status !== 'attached') { return; }
+          (byBillW[l.bill_id] = byBillW[l.bill_id] || []).push({ kind: 'package', id: w.id, label: 'WP-' + String(w.seq || 0).padStart(4, '0'), status: w.status, payee: w.payee_name, request: !!w.funding_txn_id, amount: r2(l.amount) }); });
+        rows.forEach(function (b) { if (byBillW[b.id]) { b.paid_by_wires = byBillW[b.id]; } });
+      } catch (ePW) { /* wires SQL not run */ }
       return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals });
     }
 
@@ -1648,41 +1667,19 @@ export async function POST(req) {
             .not('third_party_payer', 'is', null).neq('pending', true).neq('review_status', 'duplicate')
             .gte('date', pFrom).lte('date', pTo).limit(2000);
           if (!rtmTx.error) {
-            partiesP.forEach(function (party) {
-              var pk = partyKey(party.name);
-              var rtmPayTotal = 0; var rtmPayByCat = {}; var rtmPayCount = 0;
-              (rtmTx.data || []).forEach(function (t9) {
-                if (partyKey(t9.third_party_payer) !== pk) { return; }
-                var d9 = t9.posted_date || t9.date;
-                if (!(d9 >= pFrom && d9 <= pTo)) { return; }
-                var a9 = r2(t9.amount_abs); rtmPayTotal = r2(rtmPayTotal + a9); rtmPayCount++;
-                var k9 = t9.classification || 'uncategorized';
-                if (!rtmPayByCat[k9]) { rtmPayByCat[k9] = { key: k9, label: catLabels[k9] || k9, total: 0 }; }
-                rtmPayByCat[k9].total = r2(rtmPayByCat[k9].total + a9);
-              });
-              var rtmAllocByCat = {}; var rtmAllocTotal = 0; var rtmRows = [];
-              (LS.pays || []).forEach(function (p9) {
-                if (p9.method !== 'rtm' || p9.voided === true) { return; }
-                if (!(p9.paid_date >= pFrom && p9.paid_date <= pTo)) { return; }
-                var b9 = billNameById[p9.bill_id];
-                if (!b9 || partyKey(b9.paid_via || 'RTM Capital') !== pk) { return; }
-                var k10 = b9.category || 'uncategorized';
-                var am9 = r2(p9.amount);
-                if (!rtmAllocByCat[k10]) { rtmAllocByCat[k10] = { key: k10, label: catLabels[k10] || k10, kind: kindOf(k10), count: 0, total: 0 }; }
-                rtmAllocByCat[k10].count++; rtmAllocByCat[k10].total = r2(rtmAllocByCat[k10].total + am9);
-                rtmAllocTotal = r2(rtmAllocTotal + am9);
-                if (rtmRows.length < 300) { rtmRows.push({ date: p9.paid_date, who: b9.vendor_name || '(bill)', ref: b9.bill_number || '—', category: k10, amount: am9 }); }
-              });
-              if (rtmPayCount > 0 || rtmAllocTotal > 0) {
-                var blk = { payer: party.name, kind: party.kind, remainder_label: party.remainder_label,
-                  payments_total: rtmPayTotal, payments_count: rtmPayCount,
-                  payments_by_cat: Object.keys(rtmPayByCat).map(function (k) { return rtmPayByCat[k]; }),
-                  allocations_by_cat: Object.keys(rtmAllocByCat).map(function (k) { return rtmAllocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
-                  allocations_total: rtmAllocTotal, service_fee: r2(rtmPayTotal - rtmAllocTotal), rows: rtmRows };
-                ptBlocks.push(blk);
-                if (pk === 'rtm capital') { rtmBlk = blk; }
+            // v55.83-SR — the blocks are built by src/lib/paid-through-blocks.js (same sums as before; a company with a
+            // provider_from date is split at that date, and lines from it on are broken into bills / service fee / waiting)
+            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: t9.classification, payer: t9.third_party_payer }; });
+            var ptReqs = [];
+            try {
+              var ptIds = ptLines.map(function (x) { return x.id; });
+              for (var qi = 0; qi < ptIds.length; qi += 200) {
+                var wq = await db.from('wire_packages').select('bank_transaction_id, fee_amount, status, funding_txn_id').in('bank_transaction_id', ptIds.slice(qi, qi + 200));
+                if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
-            });
+            } catch (eWq) { ptReqs = []; }
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo });
+            ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
         spend = { rtm: rtmBlk, paid_through: ptBlocks, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,

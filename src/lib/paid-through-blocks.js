@@ -1,0 +1,87 @@
+// v55.83-SR — the P&L breakdown of money sent to a paid-through company (RTM Capital, NextTrade Industries).
+// Max, Nov 15 2026: "the whole transfer is one professional fee with the bills listed underneath … the breakdown of that
+// underneath in the PL will go under uncategorized … this will be a specific service fee" · "NextTrade follows RTM from now
+// on; older entries stay as booked".
+//
+// A company has an optional provider_from date. A bank line (or bill payment) dated BEFORE it keeps the company's
+// original treatment; dated on/after it, the company is treated like a service provider: one line by its category, and
+// underneath: bills paid · service fee (on requests) · uncategorized, waiting for bills.
+// Pure. Every block conserves its total: payments = covered bills + (service fee + waiting + other).
+function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
+export function partyKeyOf(x) { return String(x || '').trim().toLowerCase(); }
+
+// 'advance' = money sent ahead to a related company (not an expense until its bills are linked); 'provider' = one line
+export function eraOf(party, date) {
+  var p = party || {};
+  if (p.kind !== 'affiliate') { return 'provider'; }
+  if (p.provider_from && date && String(date) >= String(p.provider_from)) { return 'provider'; }
+  return 'advance';
+}
+// is this line broken into bills / service fee / waiting? — only from the company's provider_from date
+export function isSplitLine(party, date) { var p = party || {}; return !!(p.provider_from && date && String(date) >= String(p.provider_from)); }
+
+// o: { parties, lines:[{id,date,amount,classification,payer}], pays:[{bill_id,amount,paid_date,bank_transaction_id,method,voided}],
+//      billById:{id:{vendor_name,bill_number,category,paid_via}}, requests:[{bank_transaction_id,fee_amount,status,funding_txn_id}],
+//      catLabels, kindOf, from, to }
+export function buildPaidThroughBlocks(o) {
+  var catLabels = o.catLabels || {}; var kindOf = o.kindOf || function () { return 'expense'; };
+  var from = o.from, to = o.to; var out = [];
+  var inP = function (d) { return !!d && d >= from && d <= to; };
+  (o.parties || []).forEach(function (party) {
+    var pk = partyKeyOf(party.name);
+    ['advance', 'provider'].forEach(function (era) {
+      var payTotal = 0, payCount = 0, payByCat = {}; var feesBooked = 0, waiting = 0; var mine = [];
+      (o.lines || []).forEach(function (t) {
+        if (partyKeyOf(t.payer) !== pk || !inP(t.date) || eraOf(party, t.date) !== era) { return; }
+        var a = r2(t.amount); payTotal = r2(payTotal + a); payCount++; mine.push(t);
+        var k = t.classification || 'uncategorized';
+        if (!payByCat[k]) { payByCat[k] = { key: k, label: catLabels[k] || k, total: 0 }; }
+        payByCat[k].total = r2(payByCat[k].total + a);
+      });
+      var allocByCat = {}, allocTotal = 0, rows = [];
+      (o.pays || []).forEach(function (p) {
+        if (p.method !== 'rtm' || p.voided === true || !inP(p.paid_date)) { return; }
+        var b = (o.billById || {})[p.bill_id];
+        if (!b || partyKeyOf(b.paid_via || 'RTM Capital') !== pk || eraOf(party, p.paid_date) !== era) { return; }
+        var k = b.category || 'uncategorized'; var am = r2(p.amount);
+        if (!allocByCat[k]) { allocByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
+        allocByCat[k].count++; allocByCat[k].total = r2(allocByCat[k].total + am); allocTotal = r2(allocTotal + am);
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am }); }
+      });
+      if (!(payCount > 0 || allocTotal > 0)) { return; }
+      // bills / service fee / waiting — line by line, only for lines from provider_from on
+      mine.forEach(function (t) {
+        if (!isSplitLine(party, t.date)) { return; }
+        var used = 0; (o.pays || []).forEach(function (p) { if (p.bank_transaction_id === t.id && p.voided !== true) { used += Number(p.amount) || 0; } });
+        var fee = 0; (o.requests || []).forEach(function (w) { if (w.bank_transaction_id === t.id && w.status === 'attached' && w.funding_txn_id) { fee += Number(w.fee_amount) || 0; } });
+        feesBooked = r2(feesBooked + fee);
+        waiting = r2(waiting + Math.max(0, r2(Number(t.amount) - used - fee)));
+      });
+      var remainder = r2(payTotal - allocTotal);
+      var twoEras = party.kind === 'affiliate' && !!party.provider_from;
+      var blk = { key: party.name + (twoEras && era === 'advance' ? '|before' : ''), payer: party.name, kind: era === 'advance' ? 'affiliate' : 'service_provider', era: era,
+        era_note: twoEras ? (era === 'advance' ? 'before ' + party.provider_from : 'from ' + party.provider_from) : null,
+        remainder_label: era === 'advance' ? party.remainder_label : (party.kind === 'affiliate' ? party.name + ' service fee (payments − covered bills)' : party.remainder_label),
+        payments_total: payTotal, payments_count: payCount,
+        payments_by_cat: Object.keys(payByCat).map(function (k) { return payByCat[k]; }),
+        allocations_by_cat: Object.keys(allocByCat).map(function (k) { return allocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
+        allocations_total: allocTotal, service_fee: remainder,
+        fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows };
+      out.push(blk);
+    });
+  });
+  return out;
+}
+
+// the rows that replace the single "remainder" row in the broken-down view; they always add up to block.service_fee
+export function remainderRows(block) {
+  var b = block || {}; var rows = [];
+  var keyBase = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  var kind = b.kind === 'affiliate' ? 'not_pnl' : 'expense';
+  var fees = r2(b.fees_booked), waiting = r2(b.waiting);
+  var other = (b.fees_booked == null && b.waiting == null) ? r2(b.service_fee) : r2(b.remainder_other);
+  if (Math.abs(other) > 0.005) { rows.push({ key: keyBase, label: b.remainder_label || 'RTM service fee (payments − covered bills)', kind: kind, count: b.payments_count || 0, total: other }); }
+  if (Math.abs(fees) > 0.005) { rows.push({ key: keyBase + '_fee', label: (b.payer || 'RTM') + ' service fee (on requests)', kind: 'expense', count: 0, total: fees }); }
+  if (Math.abs(waiting) > 0.005) { rows.push({ key: keyBase + '_waiting', label: (b.payer || 'RTM') + ' — uncategorized, waiting for bills (stays professional fees)', kind: 'expense', count: 0, total: waiting, waiting: true }); }
+  return rows;
+}
