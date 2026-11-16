@@ -54,6 +54,22 @@ export function unitFactor(unit, productKey, factors) {
   var base = f.units || DEFAULT_UNIT_FACTORS;
   return base[u] > 0 ? Number(base[u]) : null;
 }
+// v55.83-TE (Max, Nov 16: "why is there no cost when there should be" — Stock Paper linked to "Texas Paper (LBS)" …) — a supplier
+// bill line whose unit field is empty but whose DESCRIPTION states the unit. This reads what is printed; it does not guess.
+// Exactly one unit word must be present; two different ones ("lbs … per ton") = still unknown.
+export function unitFromText(text) {
+  var t = ' ' + String(text || '').toLowerCase().replace(/[^a-z]+/g, ' ') + ' ';
+  var found = {};
+  if (/ (lb|lbs|pound|pounds) /.test(t)) { found.lb = true; }
+  if (/ (kg|kgs|kilo|kilos|kilogram|kilograms) /.test(t)) { found.kg = true; }
+  if (/ (ton|tons|tonne|tonnes|mt) /.test(t)) { found.t = true; }
+  if (/ (yd|yds|yard|yards) /.test(t)) { found.yd = true; }
+  if (/ linear (meter|meters|metre|metres) | lm /.test(t)) { found.lm = true; }
+  var k = Object.keys(found);
+  return k.length === 1 ? k[0] : '';
+}
+// the unit of a supplier bill line: its unit field, or else the unit its description states
+export function billLineUnit(l) { return unitKey(l && l.unit) || unitFromText(l && l.description); }
 export function toPounds(qty, unit, productKey, factors) {
   var f = unitFactor(unit, productKey, factors);
   if (f === null) { return null; }
@@ -162,7 +178,7 @@ export function resolveCost(q, billLines, opts) {
   var cand = [];
   (billLines || []).forEach(function (l) {
     if (!want[nameKey(l.description)]) { return; }
-    var lb = toPounds(l.qty, l.unit, q.productKey, o.factors);
+    var lb = toPounds(l.qty, billLineUnit(l), q.productKey, o.factors);
     if (lb === null || !(lb > 0)) { return; }
     // the product's cost on the bill: cost_amount (commission vendors) or, when that is empty, the line's printed amount.
     // No number, not a number, zero or negative = the cost is UNKNOWN. It is never turned into $0.
@@ -246,7 +262,7 @@ export function buildCells(input) {
       }
       var amtParts = allocate(gl.amt, parts.map(function (p) { return p.lb === null ? 1 : p.lb; }));
       parts.forEach(function (p, ix) {
-        var c = { invoice_id: inv.id, invoice: inv.number, invoice_date: inv.date, customer: inv.customer || null, line_id: gl.ln.id || null,
+        var c = { invoice_id: inv.id, invoice: inv.number, invoice_date: inv.date, customer: inv.customer || null, customer_id: inv.customer_id || null, line_id: gl.ln.id || null,
           description: gl.ln.description, group_id: gl.g ? gl.g.id : null, product: gl.g ? gl.g.name : String(gl.ln.description || '').trim(), product_key: gl.pKey,
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
           unit_factor: unitFactor(gl.ln.unit, gl.pKey, factors), pounds: p.lb, invoiced: amtParts[ix], flags: [] };
@@ -265,7 +281,7 @@ export function buildCells(input) {
     var hasManual = manual !== null && manual !== undefined && manual !== '';
     if (basis === 'CNF' || basis === 'TRUCKING_INCLUDED') {
       if (hasManual) {
-        embedded = r2(manual); embeddedSource = 'manual';
+        embedded = r2(manual); embeddedSource = inv.embedded_source || 'manual'; // TE: 'manual' or 'container cost' / 'container cost (estimate)'
         var goodsTotal = 0; mine.forEach(function (c) { goodsTotal += cents(c.invoiced); });
         if (cents(embedded) > goodsTotal) { flag('embedded_exceeds_goods', inv, { embedded: embedded, goods: money(goodsTotal) }); embedded = null; embeddedSource = null; }
       }
@@ -284,7 +300,7 @@ export function buildCells(input) {
         c.transport_revenue = null; c.flags.push('allocation_unresolved_missing_weight');
         if (embedded !== null) { c.embedded_transport = null; c.goods_revenue = null; } // the goods price cannot be separated either
       }
-      c.transport_source = lineT > 0 && embedded !== null ? 'invoice line + manual' : (lineT > 0 ? 'invoice line' : (embedded !== null ? 'manual' : null));
+      c.transport_source = lineT > 0 && embedded !== null ? 'invoice line + ' + embeddedSource : (lineT > 0 ? 'invoice line' : (embedded !== null ? embeddedSource : null));
       c.goods_price_confirmed = !!basis && !((basis === 'CNF' || basis === 'TRUCKING_INCLUDED') && embedded === null && !(tLines > 0));
       if (!c.goods_price_confirmed) { c.flags.push(basis ? 'transport_not_separated' : 'basis_missing'); }
       if (!c.release) { c.flags.push('release_missing'); }
@@ -327,7 +343,7 @@ export function buildCells(input) {
     c.outbound_kind = c.release ? outKind[c.release] : 'unknown';
     if (!c.release) { c.outbound_cost = null; }
     var cost = (c.pounds !== null && input.costOf) ? input.costOf({ id: c.invoice_id, date: c.invoice_date, releases: c.release ? [c.release] : [] }, c) : null;
-    c.cost_method = cost ? cost.method : null; c.cost_sources = cost ? (cost.sources || []) : [];
+    c.cost_method = cost ? cost.method : null; c.cost_level = cost ? (cost.level || null) : null; c.cost_note = cost ? (cost.note || null) : null; c.cost_sources = cost ? (cost.sources || []) : [];
     var costKnown = !!cost && cost.base_per_lb !== null && cost.base_per_lb !== undefined && Number(cost.base_per_lb) > 0 && !isNaN(Number(cost.commission_per_lb));
     c.base_cost_per_lb = costKnown ? r4(cost.base_per_lb) : null; c.commission_per_lb = costKnown ? r4(cost.commission_per_lb) : null;
     c.base_cost = costKnown && c.pounds !== null ? r2(c.pounds * cost.base_per_lb) : null;

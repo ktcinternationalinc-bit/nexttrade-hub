@@ -23,7 +23,7 @@ ok('ON4: average price = revenue / quantity, null when quantity is zero (no fake
   /p\.avg_price = p\.qty > 0 \? r2\(p\.revenue \/ p\.qty\) : null/.test(rt));
 ok('ON5: product identity = wave_product_name || description (verified columns only)',
   /it\.wave_product_name \|\| it\.description/.test(rt) &&
-  /select\('invoice_id, description, quantity, unit_price, wave_product_name'\)/.test(rt));
+  /select\('id, invoice_id, description, quantity, unit_price, wave_product_name'\)/.test(rt)); // v55.83-TE realign: + id, for a unit set on one invoice line
 ok('ON6: non-USD invoices are reported separately, NEVER summed into the USD tables',
   /usdIds\[it\.invoice_id\] !== true\) \{ return; \}/.test(rt) && /non_usd: nonUsdRows/.test(rt) &&
   /never summed into USD/.test(ui));
@@ -34,7 +34,7 @@ ok('ON8: UI default period is June 1, 2026 onward; presets incl. Last month, Las
   /'Last month'/.test(ui) && /'Last 3 months'/.test(ui) && /'This year', '2026-01-01'/.test(ui) &&
   /'2025', '2025-01-01', '2025-12-31'/.test(ui) && /'All history'/.test(ui));
 ok('ON9: clicking a customer expands their product breakdown with average prices',
-  /setOpenCust\(open \? null : c\.customer\)/.test(ui) && /avg \{cp\.avg_price/.test(ui));
+  /setOpenCust\(open \? null : c\.customer\)/.test(ui) && /cp\.avg_price_per_lb/.test(ui)); // v55.83-TE realign: the customer’s products show pounds and $ per lb
 ok('ON10: both tables export CSV and the tab lives under Accounting',
   /sales-by-product\.csv/.test(ui) && /sales-by-customer\.csv/.test(ui) &&
   /\['sales_report', '📈 Sales Report'\]/.test(at));

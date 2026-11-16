@@ -113,6 +113,35 @@ CREATE TABLE IF NOT EXISTS public.pl_name_kinds (
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- 10) v55.83-TE — a customer's USUAL pricing basis (Maa Kirpa: always CNF). Used for every invoice of that customer that has no
+--     basis of its own. Setting one invoice still overrides it.
+CREATE TABLE IF NOT EXISTS public.pl_customer_terms (
+  customer_id    uuid PRIMARY KEY,
+  customer_name  text,
+  basis          text NOT NULL CHECK (basis IN ('EXW', 'CNF', 'TRUCKING_INCLUDED')),
+  updated_by     text,
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- 11) v55.83-TE (Max, Nov 16: "then I would need to manually enter cases like this, from that spot") — a goods cost typed by hand,
+--     per POUND, used ONLY when no linked supplier bill gives a cost. For one sale (an invoice line) or as a product's default.
+CREATE TABLE IF NOT EXISTS public.pl_line_costs (
+  invoice_item_id    uuid PRIMARY KEY,
+  cost_per_lb        numeric NOT NULL CHECK (cost_per_lb > 0),
+  commission_per_lb  numeric NOT NULL DEFAULT 0 CHECK (commission_per_lb >= 0),
+  note               text,
+  updated_by         text,
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.pl_group_costs (
+  group_id           uuid PRIMARY KEY,
+  cost_per_lb        numeric NOT NULL CHECK (cost_per_lb > 0),
+  commission_per_lb  numeric NOT NULL DEFAULT 0 CHECK (commission_per_lb >= 0),
+  note               text,
+  updated_by         text,
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
 -- 8) an outbound transportation ESTIMATE for a release, used only until the real bill arrives (never added to it)
 CREATE TABLE IF NOT EXISTS public.pl_release_estimates (
   release_key        text PRIMARY KEY,
@@ -126,7 +155,7 @@ CREATE TABLE IF NOT EXISTS public.pl_release_estimates (
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['pl_product_groups', 'pl_group_names', 'pl_name_units', 'pl_line_units', 'pl_unit_factors', 'pl_invoice_terms', 'pl_line_release_pounds', 'pl_release_estimates', 'pl_name_kinds'] LOOP
+  FOREACH t IN ARRAY ARRAY['pl_product_groups', 'pl_group_names', 'pl_name_units', 'pl_line_units', 'pl_unit_factors', 'pl_invoice_terms', 'pl_line_release_pounds', 'pl_release_estimates', 'pl_name_kinds', 'pl_customer_terms', 'pl_line_costs', 'pl_group_costs'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_read', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (true)', t || '_read', t);

@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
+import { nameKey, toPounds, unitKey, isTransportLine, DEFAULT_UNIT_FACTORS } from '../../../../lib/profitability'; // v55.83-TE — merged names + pounds, the same rules as Profitability
 
 var API_BUILD_MARKER = 'v55.83-ON-sales-report';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -89,11 +90,28 @@ export async function POST(req) {
     });
 
     var items = await fetchAll(function () {
-      return db.from('accounting_invoice_items').select('invoice_id, description, quantity, unit_price, wave_product_name');
+      return db.from('accounting_invoice_items').select('id, invoice_id, description, quantity, unit_price, wave_product_name');
     });
+    // v55.83-TE (Max, Nov 16: "the sales report should use the merged names and the top values should specify qty / LBS") —
+    // the product groups, units and shipping marks set on the Profitability report. Missing tables = report by raw name, no pounds.
+    async function opt(t, cols) { try { return await fetchAll(function () { return db.from(t).select(cols); }); } catch (eO) { return []; } }
+    var gRows = await opt('pl_product_groups', 'id, display_name, active, created_at');
+    var gnRows = await opt('pl_group_names', 'group_id, source, name_key, active');
+    var nuRows = await opt('pl_name_units', 'name_key, unit');
+    var luRows = await opt('pl_line_units', 'invoice_item_id, unit');
+    var ufRows = await opt('pl_unit_factors', 'unit, pounds_per_unit');
+    var nkRows = await opt('pl_name_kinds', 'name_key, kind');
+    var gName = {}; var canonOf = {}; var canonByName = {};
+    gRows.filter(function (g) { return g.active !== false; }).sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)); }).forEach(function (g) {
+      var k = nameKey(g.display_name) || ('id:' + g.id); if (!canonByName[k]) { canonByName[k] = g.id; gName[g.id] = g.display_name; } canonOf[g.id] = canonByName[k]; });
+    var groupOfName = {}; gnRows.forEach(function (n) { if (n.active !== false && n.source === 'invoice' && canonOf[n.group_id]) { groupOfName[n.name_key] = canonOf[n.group_id]; } });
+    var unitOfName = {}; nuRows.forEach(function (u) { unitOfName[u.name_key] = u.unit; });
+    var unitOfLine = {}; luRows.forEach(function (u) { unitOfLine[u.invoice_item_id] = u.unit; });
+    var factors = { units: Object.assign({}, DEFAULT_UNIT_FACTORS) }; ufRows.forEach(function (f) { var u = unitKey(f.unit); if (u && Number(f.pounds_per_unit) > 0) { factors.units[u] = Number(f.pounds_per_unit); } });
+    var kindOf = {}; nkRows.forEach(function (k) { kindOf[k.name_key] = k.kind; });
 
     var products = {}; var customers = {}; var custProd = {};
-    var shippingRevenue = 0; var shippingLines = 0; var productRevenue = 0; var itemCount = 0;
+    var shippingRevenue = 0; var shippingLines = 0; var productRevenue = 0; var itemCount = 0; var poundsTotal = 0; var noUnitLines = 0;
     var usdInvoiceSet = {};
     items.forEach(function (it) {
       var parent = invById[it.invoice_id];
@@ -108,7 +126,9 @@ export async function POST(req) {
       usdInvoiceSet[it.invoice_id] = true;
       itemCount += 1;
 
-      if (isShippingLine(name)) {
+      var nk = nameKey(name);
+      var shipping = kindOf[nk] === 'transport' || (kindOf[nk] !== 'goods' && (isShippingLine(name) || isTransportLine(name))); // TE: + overweight / surcharges and the hand marks
+      if (shipping) {
         shippingRevenue = r2(shippingRevenue + amount);
         shippingLines += 1;
         if (!customers[cid]) { customers[cid] = { customer: cname, revenue: 0, qty: 0, shipping: 0, invSet: {} }; }
@@ -118,31 +138,42 @@ export async function POST(req) {
       }
 
       productRevenue = r2(productRevenue + amount);
-      if (!products[name]) { products[name] = { product: name, qty: 0, revenue: 0, invSet: {} }; }
-      products[name].qty = r2(products[name].qty + qty);
-      products[name].revenue = r2(products[name].revenue + amount);
-      products[name].invSet[it.invoice_id] = true;
+      // TE — the MERGED name when the description is in a product group; pounds from the unit set on the description (or the line)
+      var gid = groupOfName[nk]; var pkey = gid ? 'g:' + gid : 'n:' + nk; var plabel = gid ? gName[gid] : name;
+      var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var lb = toPounds(qty, unit, null, factors);
+      if (lb === null) { noUnitLines += 1; } else { poundsTotal += lb; }
+      if (!products[pkey]) { products[pkey] = { product: plabel, grouped: !!gid, qty: 0, revenue: 0, pounds: 0, poundsMissing: false, invSet: {}, names: {} }; }
+      products[pkey].qty = r2(products[pkey].qty + qty);
+      products[pkey].revenue = r2(products[pkey].revenue + amount);
+      products[pkey].invSet[it.invoice_id] = true;
+      if (lb === null) { products[pkey].poundsMissing = true; } else { products[pkey].pounds += lb; }
+      var nm0 = products[pkey].names[nk] || (products[pkey].names[nk] = { product: name, unit: unit || null, qty: 0, revenue: 0, pounds: 0, poundsMissing: false, invSet: {} });
+      nm0.qty = r2(nm0.qty + qty); nm0.revenue = r2(nm0.revenue + amount); nm0.invSet[it.invoice_id] = true; if (lb === null) { nm0.poundsMissing = true; } else { nm0.pounds += lb; }
 
       if (!customers[cid]) { customers[cid] = { customer: cname, revenue: 0, qty: 0, shipping: 0, invSet: {} }; }
       customers[cid].revenue = r2(customers[cid].revenue + amount);
       customers[cid].qty = r2(customers[cid].qty + qty);
       customers[cid].invSet[it.invoice_id] = true;
 
-      var ck = cid + '||' + name;
-      if (!custProd[ck]) { custProd[ck] = { customer: cname, product: name, qty: 0, revenue: 0 }; }
+      var ck = cid + '||' + pkey;
+      if (!custProd[ck]) { custProd[ck] = { customer: cname, product: plabel, qty: 0, revenue: 0, pounds: 0, poundsMissing: false }; }
       custProd[ck].qty = r2(custProd[ck].qty + qty);
       custProd[ck].revenue = r2(custProd[ck].revenue + amount);
+      if (lb === null) { custProd[ck].poundsMissing = true; } else { custProd[ck].pounds += lb; }
     });
 
     function withAvg(rows) {
       return rows.map(function (p) {
         p.avg_price = p.qty > 0 ? r2(p.revenue / p.qty) : null;
+        // TE — average $ per POUND: only when every line behind it has a unit (pounds are never guessed)
+        if (p.pounds !== undefined) { p.pounds = Math.round(p.pounds); p.avg_price_per_lb = p.pounds > 0 && !p.poundsMissing ? Math.round(p.revenue / p.pounds * 10000) / 10000 : null; p.pounds_incomplete = !!p.poundsMissing; delete p.poundsMissing; }
         return p;
       });
     }
     var productRows = withAvg(Object.keys(products).map(function (k) {
       var p = products[k];
-      return { product: p.product, qty: p.qty, revenue: p.revenue, invoices: Object.keys(p.invSet).length };
+      var subs = withAvg(Object.keys(p.names).map(function (k2) { var n2 = p.names[k2]; return { product: n2.product, unit: n2.unit, qty: n2.qty, revenue: n2.revenue, pounds: n2.pounds, poundsMissing: n2.poundsMissing, invoices: Object.keys(n2.invSet).length }; })).sort(function (a, b) { return b.revenue - a.revenue; });
+      return { product: p.product, grouped: p.grouped, qty: p.qty, revenue: p.revenue, pounds: p.pounds, poundsMissing: p.poundsMissing, invoices: Object.keys(p.invSet).length, names: subs };
     })).sort(function (a, b) { return b.revenue - a.revenue; });
     var customerRows = Object.keys(customers).map(function (k) {
       var c = customers[k];
@@ -155,7 +186,7 @@ export async function POST(req) {
     return NextResponse.json({
       ok: true,
       totals: {
-        product_revenue: r2(productRevenue),
+        product_revenue: r2(productRevenue), pounds: Math.round(poundsTotal), lines_without_unit: noUnitLines,
         shipping_revenue: r2(shippingRevenue),
         grand_total: r2(productRevenue + shippingRevenue),
         invoices: Object.keys(usdInvoiceSet).length,

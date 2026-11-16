@@ -21,7 +21,7 @@ var VERIFIED = {
   tickets: ['id', 'ticket_number', 'title', 'status', 'priority', 'due_date', 'created_at', 'created_by', 'assigned_to', 'additional_assignees'], // TicketsTab
   ticket_comments: ['ticket_id', 'created_by', 'created_at', 'is_system', 'comment_text'], // TicketsTab
   user_sessions: ['user_id', 'date', 'login_at', 'logout_at', 'last_seen'], // AdminTab/DailyLog/LoginHistoryV2
-  accounting_invoice_items: ['invoice_id', 'description', 'quantity', 'unit_price', 'sku', 'product_ref', 'wave_product_id', 'wave_product_name', 'sort_order'], // blankItem() + openView order — the invoice form writes exactly these
+  accounting_invoice_items: ['id', /* v55.83-SY: read by the live Profitability route in production since 2026-11-16 */ 'invoice_id', 'description', 'quantity', 'unit_price', 'sku', 'product_ref', 'wave_product_id', 'wave_product_name', 'sort_order'], // blankItem() + openView order — the invoice form writes exactly these
   accounting_customers: ['id', 'company_name', 'contact_name', 'wave_customer_id', 'wave_business_id', 'business_tag'] // push-invoice-v2 L78 select + custName; business_tag created by OR SQL; wave_status/wave_invoice_id on invoices written by import-invoices fields — all cited, never guessed
 };
 // Our own tables (created by our SQL) are trusted:

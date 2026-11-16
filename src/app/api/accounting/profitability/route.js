@@ -67,6 +67,12 @@ export async function POST(req) {
         // v55.83-TD — a person's "shipping charge / product" marks (the report still runs before this table exists)
         try { setup.nameKinds = await fetchAll(function () { return db.from('pl_name_kinds').select('name_key, raw_name, kind'); }); setup.kinds_ready = true; }
         catch (eK) { if (!missingTable(eK && eK.message)) { throw eK; } setup.nameKinds = []; setup.kinds_ready = false; }
+        // v55.83-TE — customers' usual pricing basis (the report still runs before this table exists)
+        try { setup.customerTerms = await fetchAll(function () { return db.from('pl_customer_terms').select('customer_id, customer_name, basis'); }); setup.customer_terms_ready = true; }
+        catch (eCT) { if (!missingTable(eCT && eCT.message)) { throw eCT; } setup.customerTerms = []; setup.customer_terms_ready = false; }
+        // v55.83-TE — costs typed by hand (the report still runs before these tables exist)
+        try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note'); }); setup.manual_costs_ready = true; }
+        catch (eMC) { if (!missingTable(eMC && eMC.message)) { throw eMC; } setup.lineCosts = []; setup.groupCosts = []; setup.manual_costs_ready = false; }
       } catch (eS) {
         if (missingTable(eS && eS.message)) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
         throw eS;
@@ -241,6 +247,37 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, set: rowsU.length, api_build_marker: API_BUILD_MARKER });
     }
     // v55.83-TD — mark descriptions as a shipping charge to the customer, as a product, or back to "decided by the name"
+    // v55.83-TE — a customer's usual pricing basis ('' = none)
+    // v55.83-TE — a goods cost typed by hand, per pound: for one sale ('line') or a product's default ('group'). Blank cost = remove.
+    // It is used ONLY when no linked supplier bill gives a cost, and it is labelled "typed by hand" everywhere.
+    if (action === 'set_manual_cost') {
+      var lvl = body.level === 'group' ? 'group' : 'line';
+      var ref = lvl === 'group' ? body.group_id : body.invoice_item_id;
+      if (!ref) { return bad(lvl === 'group' ? 'The product group is required.' : 'The invoice line is required.'); }
+      var tbl = lvl === 'group' ? 'pl_group_costs' : 'pl_line_costs'; var col = lvl === 'group' ? 'group_id' : 'invoice_item_id';
+      var cpl = body.cost_per_lb === '' || body.cost_per_lb === null || body.cost_per_lb === undefined ? null : Number(String(body.cost_per_lb).replace(/[$,\s]/g, ''));
+      var mpl = body.commission_per_lb === '' || body.commission_per_lb === null || body.commission_per_lb === undefined ? 0 : Number(String(body.commission_per_lb).replace(/[$,\s]/g, ''));
+      if (cpl !== null && (isNaN(cpl) || !(cpl > 0) || cpl > 100)) { return bad('The cost must be dollars per POUND, above zero (for example 0.12).'); }
+      if (isNaN(mpl) || mpl < 0 || mpl > 100) { return bad('The commission must be dollars per pound, zero or more.'); }
+      var prevM = await db.from(tbl).select('cost_per_lb, commission_per_lb, note').eq(col, ref).maybeSingle();
+      if (prevM.error) { return fail(prevM.error); }
+      if (cpl === null) { var dlM = await db.from(tbl).delete().eq(col, ref); if (dlM.error) { return fail(dlM.error); } } // a report setting only
+      else { var rowM = { cost_per_lb: cpl, commission_per_lb: mpl, note: String(body.note || '').substring(0, 300) || null, updated_by: userId, updated_at: now }; rowM[col] = ref;
+        var upM = await db.from(tbl).upsert(rowM, { onConflict: col }); if (upM.error) { return fail(upM.error); } }
+      await audit(db, userId, 'pl_manual_cost_set', lvl === 'group' ? 'pl_product_group' : 'accounting_invoice_item', ref, { level: lvl, from: prevM.data || null, to: cpl === null ? null : { cost_per_lb: cpl, commission_per_lb: mpl, note: body.note || null } });
+      return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
+    }
+    if (action === 'set_customer_basis') {
+      if (!body.customer_id) { return bad('The customer is required.'); }
+      var cb = body.basis || '';
+      if (cb && PRICING_BASES.indexOf(cb) < 0) { return bad('Pick EXW, CNF or trucking included.'); }
+      var prevC = await db.from('pl_customer_terms').select('basis').eq('customer_id', body.customer_id).maybeSingle();
+      if (prevC.error) { return fail(prevC.error); }
+      if (cb) { var upC = await db.from('pl_customer_terms').upsert({ customer_id: body.customer_id, customer_name: String(body.customer_name || '').substring(0, 200) || null, basis: cb, updated_by: userId, updated_at: now }, { onConflict: 'customer_id' }); if (upC.error) { return fail(upC.error); } }
+      else { var dlC = await db.from('pl_customer_terms').delete().eq('customer_id', body.customer_id); if (dlC.error) { return fail(dlC.error); } } // a report setting only
+      await audit(db, userId, 'pl_customer_basis_set', 'accounting_customer', body.customer_id, { from: prevC.data ? prevC.data.basis : null, to: cb || null, customer: body.customer_name || null });
+      return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
+    }
     if (action === 'set_name_kind') {
       var kNames = Array.isArray(body.names) ? body.names : [body.name];
       var kind = body.kind || '';

@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TE',
+    date: '2026-11-17',
+    title: 'Profitability: a customer’s usual basis (Maa Kirpa = CNF), container shipping cost inside a CNF price, and a Containers list',
+    items: [
+      'A customer’s usual pricing basis: in By customer, open the customer and click EXW, CNF or Trucking included. Every invoice of that customer without its own basis uses it, shown as “customer’s usual”. One invoice can still be set differently.',
+      'CNF and trucking-included invoices: if you have not typed how much shipping is inside the price, the Hub now takes out what that invoice’s goods actually cost to ship (its share of the container’s shipping bill), labelled “container cost”. Typing an amount always wins. If the container has no shipping bill or estimate yet, nothing is taken out and the line says “transportation not separated”.',
+      'New tab “🚢 Containers (shipping cost)”: every container (release) in the period, where it shipped from, the customers and invoices on it, and its shipping cost from the bill — or “missing”, with a box to type an estimate until the bill arrives.',
+      'Database: run sql/v55-83-SY-profitability.sql once more to be able to set a customer’s usual basis. Everything else works without it.',
+      'Profitability: supplier bill lines with an empty unit field now use the unit written in their description, for example “Texas Paper (LBS)” is read as pounds. If the description names two different units, or none, the unit stays unknown. Each linked supplier description shows how many bill lines it has and warns when they have no unit.',
+      'Profitability: a goods cost can be typed by hand where none comes from a supplier bill. On a sale (open the product, then the name, and type the cost per pound in the “Cost from” column), or as a product’s default on its card in “Names, units and supplier links”. It is used only when the linked bills give no cost, a cost typed on one sale wins over the product default, and it is always shown as “typed by hand”. Every change is in the audit trail.',
+      'Profitability: where a goods cost is missing, the row now says why, for example “3: no linked purchase dated on or before this sale” (the sale happened before the first supplier bill you linked to that product).',
+      'Sales Report: products now use the merged names from Profitability. The table shows POUNDS and the average $ per lb; click a merged product to see each original name with its own quantity and unit. A new box at the top shows total pounds sold and the average $ per lb. Overweight surcharges and other shipping charges are counted as shipping there too.',
+      { superAdminOnly: true, text: 'SQL: pl_customer_terms (customer_id PK, basis). Route set_customer_basis (audited pl_customer_basis_set); report reads it, tolerates the table missing. assemble: basis = invoice → customer usual; after pass 2, CNF / TRUCKING_INCLUDED invoices with no typed embedded amount get embedded = sum of their cells’ outbound_cost (all known, > 0), embedded_source container cost / (estimate), then a pass 3. containers list from period cells + outbound map. Engine: embedded_source label, customer_id on cells.' },
+    ],
+  },
+  {
     version: 'v55.83-TD',
     date: '2026-11-16',
     title: 'Profitability: extra shipping charges (overweight surcharge and the like) count as shipping, not as a product',

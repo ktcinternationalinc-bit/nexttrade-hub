@@ -8,7 +8,7 @@
 //      split across ALL of its goods, not only the ones inside the period;
 //   2. pounds per release are worked out; 3. each transportation / brokerage / bonded bill is split between its releases;
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
-import { BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
+import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
 export function splitReleases(text) {
@@ -50,6 +50,8 @@ export function assembleProfitability(d) {
   var unitOfName = {}; (d.nameUnits || []).forEach(function (u) { unitOfName[u.name_key] = u.unit; });
   var unitOfLine = {}; (d.lineUnits || []).forEach(function (u) { unitOfLine[u.invoice_item_id] = u.unit; });
   var kindOf = {}; (d.nameKinds || []).forEach(function (k) { kindOf[k.name_key] = k.kind; }); // v55.83-TD
+  var custBasis = {}; (d.customerTerms || []).forEach(function (t) { custBasis[t.customer_id] = t.basis; }); // v55.83-TE
+  var lineCost = {}; (d.lineCosts || []).forEach(function (x) { lineCost[x.invoice_item_id] = x; }); var groupCost = {}; (d.groupCosts || []).forEach(function (x) { groupCost[x.group_id] = x; }); // TE — typed by hand
   var termsOf = {}; (d.terms || []).forEach(function (t) { termsOf[t.invoice_id] = t; });
   var relPoundsOfLine = {}; (d.lineReleasePounds || []).forEach(function (x) { (relPoundsOfLine[x.invoice_item_id] = relPoundsOfLine[x.invoice_item_id] || {})[x.release_key] = Number(x.pounds) || 0; });
   var estimateOf = {}; (d.estimates || []).forEach(function (e) { estimateOf[e.release_key] = Number(e.outbound_estimate); });
@@ -76,7 +78,8 @@ export function assembleProfitability(d) {
     });
     var text = lines.map(function (l) { return l.description; }).join(' · ');
     return { id: i.id, number: i.invoice_number, date: String(i.invoice_date || '').substring(0, 10), customer: (d.customerNames || {})[i.accounting_customer_id] || '(unknown customer)',
-      basis: t.basis || null, embedded_transport: t.embedded_transport === undefined ? null : t.embedded_transport, releases: relsOfInv[i.id].map(function (r) { return r.key; }), lines: lines,
+      customer_id: i.accounting_customer_id || null, basis: t.basis || custBasis[i.accounting_customer_id] || null, basis_source: t.basis ? 'invoice' : (custBasis[i.accounting_customer_id] ? 'customer' : null),
+      embedded_transport: t.embedded_transport === undefined ? null : t.embedded_transport, manual_embedded: t.embedded_transport !== undefined && t.embedded_transport !== null && t.embedded_transport !== '', releases: relsOfInv[i.id].map(function (r) { return r.key; }), lines: lines,
       _suggest: suggestBasis(text, lines.some(function (l) { return isTransportLine(l.description); })) };
   });
 
@@ -90,13 +93,22 @@ export function assembleProfitability(d) {
     costLines.push({ bill_id: b.id, bill_number: b.bill_number, vendor: b.vendor_name, bill_date: b.bill_date, release: b.release_number, description: l.description, qty: l.qty, unit: l.unit, cost_amount: l.cost_amount, amount: l.amount, commission_amount: l.commission_amount });
   });
   var linkedBillKeys = {}; Object.keys(billKeysOfGroup).forEach(function (g) { billKeysOfGroup[g].forEach(function (k) { linkedBillKeys[k] = true; }); });
-  costLines.forEach(function (l) { if (linkedBillKeys[nameKey(l.description)] && !unitKey(l.unit)) { badUnitLines++; flags.push({ kind: 'bill_line_unit_unknown', bill: l.bill_number, vendor: l.vendor, line: l.description, unit: l.unit || null }); } });
+  costLines.forEach(function (l) { if (linkedBillKeys[nameKey(l.description)] && !billLineUnit(l)) { badUnitLines++; flags.push({ kind: 'bill_line_unit_unknown', bill: l.bill_number, vendor: l.vendor, line: l.description, unit: l.unit || null }); } });
 
+  var linkStats = {}; // v55.83-TE — per product group: linked supplier lines found / with a usable unit / earliest date
+  Object.keys(billKeysOfGroup).forEach(function (g) { var want = {}; billKeysOfGroup[g].forEach(function (k) { want[k] = true; }); var st = { lines: 0, usable: 0, first: '' };
+    costLines.forEach(function (l) { if (!want[nameKey(l.description)]) { return; } st.lines++; if (billLineUnit(l)) { st.usable++; var dt = String(l.bill_date || '').substring(0, 10); if (dt && (!st.first || dt < st.first)) { st.first = dt; } } });
+    linkStats[g] = st; });
   function groupOf(desc) { return groupOfInvoiceName[nameKey(desc)] || null; }
   function costOf(inv, cell) {
     var keys = cell.group_id ? (billKeysOfGroup[cell.group_id] || []) : [];
-    if (!keys.length) { return null; } // nothing linked on purpose = no cost; similar names are never assumed to be the same product
-    return resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors });
+    // nothing linked on purpose = no cost from bills; similar names are never assumed to be the same product
+    var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors }) : null;
+    if (fromBills && !fromBills.cost_unknown && fromBills.base_per_lb !== null) { return fromBills; }
+    // v55.83-TE — only now a cost typed by hand: this sale's own, else the product's default
+    var m = (cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
+    if (m && Number(m.x.cost_per_lb) > 0) { return { base_per_lb: Number(m.x.cost_per_lb), commission_per_lb: Number(m.x.commission_per_lb) || 0, method: 'manual', level: m.level, note: m.x.note || null, sources: [] }; }
+    return fromBills;
   }
 
   // pass 1 — pounds per release (a release is usable for a split only when every goods line on it has its pounds)
@@ -147,6 +159,23 @@ export function assembleProfitability(d) {
 
   // pass 2 — everything
   var full = buildCells({ invoices: engineInvoices, groupOf: groupOf, costOf: costOf, outbound: outbound, brokerage: brokerage, bonded: bonded, factors: factors });
+  // v55.83-TE (Max, Nov 16, option A) — a CNF / trucking-included invoice with NO amount typed for the transportation inside its price:
+  // use what shipping that invoice's goods actually cost (its share of its container's shipping bill, or of the estimate). Labelled
+  // 'container cost'. A typed amount always wins. If the container's cost is not known, nothing is taken out ("not separated").
+  var shareOf = {}; var shareKind = {}; var shareBad = {};
+  full.cells.forEach(function (c) {
+    if (c.outbound_cost === null || c.outbound_cost === undefined) { shareBad[c.invoice_id] = true; return; }
+    shareOf[c.invoice_id] = r2((shareOf[c.invoice_id] || 0) + c.outbound_cost);
+    if (c.outbound_kind === 'estimate') { shareKind[c.invoice_id] = 'estimate'; }
+  });
+  var usedContainerCost = 0;
+  engineInvoices.forEach(function (iv) {
+    if ((iv.basis !== 'CNF' && iv.basis !== 'TRUCKING_INCLUDED') || iv.manual_embedded) { return; }
+    if (shareBad[iv.id] || !(shareOf[iv.id] > 0)) { return; }
+    iv.embedded_transport = shareOf[iv.id]; iv.embedded_source = shareKind[iv.id] === 'estimate' ? 'container cost (estimate)' : 'container cost';
+    usedContainerCost++;
+  });
+  if (usedContainerCost) { full = buildCells({ invoices: engineInvoices, groupOf: groupOf, costOf: costOf, outbound: outbound, brokerage: brokerage, bonded: bonded, factors: factors }); }
   var suggestOf = {}; engineInvoices.forEach(function (i) { suggestOf[i.id] = i._suggest; });
   full.cells.forEach(function (c) {
     var ro = c.release ? releaseOrigin(relRaw[c.release] || c.release, '') : { origin: '', source: 'no release' };
@@ -154,6 +183,17 @@ export function assembleProfitability(d) {
     c.outbound_bills = c.release && outbound[c.release] ? outbound[c.release].bills : [];
     if (c.group_id && !(billKeysOfGroup[c.group_id] || []).length) { c.flags.push('no_bill_description_linked'); }
     if (!c.group_id && c.base_cost === null) { c.flags.push('not_grouped_no_cost_source'); }
+    // v55.83-TE (Max, Nov 16: "why does the second not have an avg cost") — say WHY a cost is missing, one reason per sale
+    if (c.base_cost === null) {
+      c.cost_missing_reason = c.pounds === null ? 'unit not set'
+        : !c.group_id ? 'not in a product group'
+        : !(billKeysOfGroup[c.group_id] || []).length ? 'no supplier description linked'
+        : c.flags.indexOf('purchase_line_without_cost') >= 0 ? 'a linked supplier bill line has no cost'
+        : c.flags.indexOf('allocation_unresolved_missing_weight') >= 0 ? 'a weight on the invoice is missing'
+        : !(linkStats[c.group_id] || {}).lines ? 'the linked supplier descriptions have no bill lines in the Hub'
+        : !(linkStats[c.group_id] || {}).usable ? 'the linked supplier bill lines have no unit (lb / kg / ton …)'
+        : 'no linked purchase dated on or before this sale (first one: ' + linkStats[c.group_id].first + ')';
+    }
   });
   var cells = full.cells.filter(function (c) { return periodIds[c.invoice_id]; });
   cells.forEach(function (c) { c.name_key = nameKey(c.description); });
@@ -171,21 +211,28 @@ export function assembleProfitability(d) {
   byProductName.sort(function (a, b) { return b.goods_revenue - a.goods_revenue; });
   var byCustomer = summarize(cells, function (c) { return c.customer; });
   var byInvoice = summarize(cells, function (c) { return c.invoice_id; }, function (c) { return c.invoice; });
-  var invMeta = {}; engineInvoices.forEach(function (i) { invMeta[i.id] = { id: i.id, number: i.number, date: i.date, customer: i.customer, basis: i.basis, suggested_basis: i._suggest, embedded_transport: i.embedded_transport, releases: i.releases.map(function (k) { return { key: k, raw: relRaw[k] || k }; }) }; });
+  // count the reasons behind every row's missing cost (same keys as the rows themselves)
+  function whyMissing(rows, keyFn) {
+    var m = {}; cells.forEach(function (c) { if (!c.cost_missing_reason) { return; } var k = keyFn(c); var o = m[k] || (m[k] = {}); o[c.cost_missing_reason] = (o[c.cost_missing_reason] || 0) + 1; });
+    rows.forEach(function (r) { var o = m[r.key]; r.cost_missing_why = o ? Object.keys(o).map(function (w) { return { why: w, sales: o[w] }; }).sort(function (a, b) { return b.sales - a.sales; }) : []; });
+  }
+  whyMissing(byProduct, function (c) { return c.product_key; }); whyMissing(byProductName, function (c) { return c.product_key + '||' + c.name_key; });
+  whyMissing(byCustomer, function (c) { return c.customer; }); whyMissing(byInvoice, function (c) { return c.invoice_id; });
+  var invMeta = {}; engineInvoices.forEach(function (i) { invMeta[i.id] = { id: i.id, number: i.number, date: i.date, customer: i.customer, customer_id: i.customer_id, basis: i.basis, basis_source: i.basis_source, suggested_basis: i._suggest, embedded_transport: i.manual_embedded ? i.embedded_transport : null, embedded_used: i.embedded_transport, embedded_source: i.manual_embedded ? 'manual' : (i.embedded_source || null), releases: i.releases.map(function (k) { return { key: k, raw: relRaw[k] || k }; }) }; });
   byInvoice.forEach(function (r) { r.invoice = invMeta[r.key] || null; });
   var totals = summarize(cells, function () { return 'all'; })[0] || null;
   var sortRev = function (a, b) { return b.goods_revenue - a.goods_revenue; };
 
   // ── the lists a person works from to set things up ──
   var invNames = {}; cells.forEach(function (c) { var k = nameKey(c.description); var o = invNames[k] || (invNames[k] = { key: k, name: String(c.description).trim(), lines: 0, qty: 0, invoiced: 0, unit: unitOfName[k] || '', group_id: c.group_id, group: c.group_id ? c.product : null }); o.lines++; o.qty += c.orig_qty; o.invoiced = r2(o.invoiced + c.invoiced); });
-  var billNames = {}; costLines.forEach(function (l) { var k = nameKey(l.description); if (!k) { return; } var o = billNames[k] || (billNames[k] = { key: k, name: String(l.description).trim(), lines: 0, qty: 0, cost: 0, units: {}, vendors: {}, last_date: '' }); o.lines++; o.qty += Number(l.qty) || 0; var cst = Number(l.cost_amount != null && l.cost_amount !== '' ? l.cost_amount : l.amount); if (cst > 0) { o.cost = r2(o.cost + cst); } o.units[unitKey(l.unit) || '?'] = true; o.vendors[l.vendor || '?'] = true; if (String(l.bill_date || '') > o.last_date) { o.last_date = String(l.bill_date || ''); } });
+  var billNames = {}; costLines.forEach(function (l) { var k = nameKey(l.description); if (!k) { return; } var o = billNames[k] || (billNames[k] = { key: k, name: String(l.description).trim(), lines: 0, qty: 0, cost: 0, units: {}, vendors: {}, last_date: '' }); o.lines++; o.qty += Number(l.qty) || 0; var cst = Number(l.cost_amount != null && l.cost_amount !== '' ? l.cost_amount : l.amount); if (cst > 0) { o.cost = r2(o.cost + cst); } o.units[billLineUnit(l) || '?'] = true; if (!unitKey(l.unit) && billLineUnit(l)) { o.unit_from_name = true; } if (billLineUnit(l)) { o.usable = (o.usable || 0) + 1; } o.vendors[l.vendor || '?'] = true; if (String(l.bill_date || '') > o.last_date) { o.last_date = String(l.bill_date || ''); } });
 
   return {
     period: { from: from || null, to: to || null }, totals: totals,
     by_product: byProduct.sort(sortRev), by_product_names: byProductName, by_customer: byCustomer.sort(sortRev), by_invoice: byInvoice.sort(function (a, b) { return String((b.invoice && b.invoice.date) || '').localeCompare(String((a.invoice && a.invoice.date) || '')); }),
     cells: cells, flags: flags, unallocated: unallocated,
     reconciled: { product: reconcile(cells, byProduct).ok, product_names: reconcile(cells.filter(function (c) { return c.product_key.indexOf('g:') === 0; }), byProductName).ok, customer: reconcile(cells, byCustomer).ok, invoice: reconcile(cells, byInvoice).ok },
-    groups: Object.keys(groupById).map(function (k) { return groupById[k]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }),
+    groups: Object.keys(groupById).map(function (k) { var g0 = groupById[k]; g0.link_stats = linkStats[k] || { lines: 0, usable: 0, first: '' }; return g0; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }),
     invoice_names: Object.keys(invNames).map(function (k) { return invNames[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; }),
     transport_names: (function () { // v55.83-TD — the descriptions counted as shipping charged to the customer
       var t = {};
@@ -195,8 +242,25 @@ export function assembleProfitability(d) {
         o.lines++; o.invoiced = r2(o.invoiced + l.amount); }); });
       return Object.keys(t).map(function (k) { return t[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; });
     })(),
-    kinds_ready: d.kinds_ready !== false,
-    bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),
+    kinds_ready: d.kinds_ready !== false, customer_terms_ready: d.customer_terms_ready !== false, manual_costs_ready: d.manual_costs_ready !== false, group_costs: d.groupCosts || [],
+    customer_basis: d.customerTerms || [],
+    // v55.83-TE — every container (release) in the period with its shipping cost, so a missing one can be filled in one place
+    containers: (function () {
+      var m = {};
+      cells.forEach(function (c) {
+        if (!c.release) { return; }
+        var o = m[c.release] || (m[c.release] = { key: c.release, raw: c.release_raw, origin: c.origin, pounds: 0, invoices: {}, customers: {} });
+        if (c.pounds > 0) { o.pounds += c.pounds; } o.invoices[c.invoice] = true; o.customers[c.customer] = true;
+      });
+      return Object.keys(m).map(function (k) {
+        var o = m[k]; var ob = outbound[k] || { actual: null, estimate: null, bills: [] };
+        return { key: k, raw: o.raw, origin: o.origin, pounds: Math.round(o.pounds), invoices: Object.keys(o.invoices), customers: Object.keys(o.customers),
+          shipping_actual: ob.actual, shipping_estimate: ob.estimate === undefined ? null : ob.estimate, bills: (ob.bills || []).map(function (b) { return { bill_number: b.bill_number, vendor: b.vendor, amount: b.share !== undefined ? b.share : b.amount, type: b.type }; }),
+          status: ob.actual !== null && ob.actual !== undefined ? 'bill' : (ob.estimate !== null && ob.estimate !== undefined ? 'estimate' : 'missing') };
+      }).sort(function (a, b) { var r = { missing: 0, estimate: 1, bill: 2 }; return r[a.status] - r[b.status] || String(a.raw).localeCompare(String(b.raw)); });
+    })(),
+    counts_container_cost_used: usedContainerCost,
+    bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, usable_lines: o.usable || 0, unit_from_name: !!o.unit_from_name, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),
     factors: factors.units, window_days: d.windowDays > 0 ? d.windowDays : 90,
     bonded_per_houston_release: BONDED_PER_HOUSTON_RELEASE, actual_bonded_bills: actualBonded, actual_bonded_total: r2(actualBonded.reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0)),
     counts: { invoices_in_period: Object.keys(periodIds).length, invoices_brought_in_for_shared_releases: scope.length - Object.keys(periodIds).length, cells: cells.length, bill_lines_with_unknown_unit: badUnitLines }
