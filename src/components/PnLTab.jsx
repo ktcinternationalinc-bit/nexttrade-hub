@@ -6,6 +6,7 @@
 //     (default June 1, 2026 →). Uncosted products are flagged amber, never
 //     guessed into the margin. Shipping stays out of COGS.
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase'; // v55.83-TG
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -40,9 +41,12 @@ export default function PnLTab(props) {
   ];
 
   function call(payload) {
-    return fetch('/api/accounting/pnl', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
-      .then(function (r) { return r.json(); });
+    // v55.83-TG — the server checks the sign-in token itself (it no longer trusts the user id in the request)
+    return supabase.auth.getSession().then(function (sres) {
+      var token = sres && sres.data && sres.data.session ? sres.data.session.access_token : '';
+      return fetch('/api/accounting/pnl', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) });
+    }).then(function (r) { return r.json(); });
   }
   function loadReport(f, t) {
     setBusy(true);
@@ -141,8 +145,8 @@ export default function PnLTab(props) {
         <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-2">
           <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Revenue (USD)</div><div className="text-lg font-black">{fmt(tt.revenue)}</div></div>
           <div className="rounded-lg p-2" style={{ background: '#fee2e2', color: '#450a0a' }}><div className="text-[10px] font-bold">COGS</div><div className="text-lg font-black">{fmt(tt.cogs)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: tt.gross_profit >= 0 ? '#dcfce7' : '#fee2e2', color: tt.gross_profit >= 0 ? '#052e16' : '#450a0a' }}><div className="text-[10px] font-bold">Gross profit</div><div className="text-lg font-black">{fmt(tt.gross_profit)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Margin</div><div className="text-lg font-black">{tt.margin_pct != null ? tt.margin_pct + '%' : '—'}</div><div className="text-[9px]">on costed revenue</div></div>
+          <div className="rounded-lg p-2" style={{ background: tt.gross_profit >= 0 ? '#dcfce7' : '#fee2e2', color: tt.gross_profit >= 0 ? '#052e16' : '#450a0a' }}><div className="text-[10px] font-bold">Gross profit</div><div className="text-lg font-black">{tt.gross_profit === undefined ? '🔒 hidden' : fmt(tt.gross_profit)}</div></div>
+          <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Margin</div><div className="text-lg font-black">{tt.margin_pct === undefined ? '🔒 hidden' : tt.margin_pct != null ? tt.margin_pct + '%' : '—'}</div><div className="text-[9px]">on costed revenue</div></div>
           <div className="rounded-lg p-2" style={{ background: '#e0f2fe', color: '#0c2a5e' }}><div className="text-[10px] font-bold">Shipping (separate)</div><div className="text-lg font-black">{fmt(tt.shipping_revenue)}</div></div>
           <div className="rounded-lg p-2" style={{ background: tt.uncosted_revenue ? '#ffedd5' : '#dcfce7', color: tt.uncosted_revenue ? '#431407' : '#052e16' }}><div className="text-[10px] font-bold">Uncosted revenue</div><div className="text-lg font-black">{fmt(tt.uncosted_revenue)}</div><div className="text-[9px]">{tt.uncosted_lines} line(s) missing a cost</div></div>
         </div>
@@ -168,8 +172,8 @@ export default function PnLTab(props) {
                     <td className="px-2 py-1 text-right font-mono">{p.avg_sale_price != null ? fmt(p.avg_sale_price) : '—'}</td>
                     <td className="px-2 py-1 text-right font-mono">{p.avg_cost != null ? fmt(p.avg_cost) : '—'}</td>
                     <td className="px-2 py-1 text-right font-mono">{fmt(p.cogs)}</td>
-                    <td className={'px-2 py-1 text-right font-mono font-black ' + (p.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{fmt(p.profit)}</td>
-                    <td className="px-2 py-1 text-right font-bold">{p.margin_pct != null ? p.margin_pct + '%' : '—'}</td>
+                    <td className={'px-2 py-1 text-right font-mono font-black ' + (p.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{p.profit === undefined ? '🔒' : fmt(p.profit)}</td>
+                    <td className="px-2 py-1 text-right font-bold">{p.margin_pct === undefined ? '🔒' : p.margin_pct != null ? p.margin_pct + '%' : '—'}</td>
                   </tr>
                 );
               })}</tbody>
@@ -192,8 +196,8 @@ export default function PnLTab(props) {
                     <td className="px-2 py-1">{b.invoice_date || '—'}</td>
                     <td className="px-2 py-1 text-right font-mono">{fmt(b.revenue)}</td>
                     <td className="px-2 py-1 text-right font-mono">{fmt(b.cogs)}</td>
-                    <td className={'px-2 py-1 text-right font-mono font-black ' + (b.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{fmt(b.profit)}</td>
-                    <td className="px-2 py-1 text-right font-bold">{b.margin_pct != null ? b.margin_pct + '%' : '—'}</td>
+                    <td className={'px-2 py-1 text-right font-mono font-black ' + (b.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{b.profit === undefined ? '🔒' : fmt(b.profit)}</td>
+                    <td className="px-2 py-1 text-right font-bold">{b.margin_pct === undefined ? '🔒' : b.margin_pct != null ? b.margin_pct + '%' : '—'}</td>
                     <td className="px-2 py-1 text-right font-mono">{fmt(b.shipping)}</td>
                     <td className="px-2 py-1 text-right font-mono">{b.uncosted_revenue ? fmt(b.uncosted_revenue) : ''}</td>
                   </tr>

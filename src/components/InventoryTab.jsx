@@ -403,7 +403,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         <LayersLedger skus={skus} warehouses={warehouses} toast={toast} />
       )}
       {subtab === 'pnl' && (
-        <InventoryPnL skus={skus} toast={toast} />
+        <InventoryPnL skus={skus} toast={toast} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} />
       )}
       {/* v55.83-T — System B AdjustmentsManager (writes inv_layers) REMOVED.
           The live Adjustments tab now renders ONLY System A's InventoryAdjustments

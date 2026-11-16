@@ -486,6 +486,7 @@ const ACTION_PERMS = [
   { key: 'orders.monitor',              label: 'Orders: Monitor',                desc: 'See every warehouse order’s stage, missing requirements, invoice and deposit status, the 30-hour deadline and the per-order report.' }, // v55.83-TI
   { key: 'orders.manage',               label: 'Orders: Manage',                 desc: 'Match a deposit straight to an order, mark a deposit not required, set an override (keep open / close / not applicable) and close an order — each with a reason, recorded with your name.' }, // v55.83-TI
   { key: 'pnl.view',                    label: 'P&L: View',                      desc: 'See profit & loss — revenue, cost of goods, margins per product and per invoice. Sensitive: reveals costs.' },
+  { key: 'pnl.view_margin',             label: 'P&L: See profit & margin',       desc: 'See the PROFIT and MARGIN figures (columns, totals, rankings) in Profitability, Sales P&L and Inventory P&L. Without it those figures show 🔒. Super admin always sees them.' }, // v55.83-TG
   { key: 'pnl.edit_costs',              label: 'P&L: Edit Product Costs',        desc: 'Enter and change product costs (with effective-from dates). The most sensitive accounting grant.' },
   { key: 'ar.view_upcoming_due',        label: 'AR: View Upcoming Due',          desc: 'See the upcoming-due buckets (due now / 1-30 / 31-60 / 61-90 days) on the dashboard. Separate from the overall AR summary.' },
   { key: 'ar.view_overdue',             label: 'AR: View Overdue',               desc: 'See overdue receivables and aging.' },

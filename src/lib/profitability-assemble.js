@@ -8,6 +8,8 @@
 //      split across ALL of its goods, not only the ones inside the period;
 //   2. pounds per release are worked out; 3. each transportation / brokerage / bonded bill is split between its releases;
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
+import { warehouseOutboundForRelease, inferBasis, statedBasis, isWarehouseTestRow } from './warehouse-shipping'; // v55.83-TG
+import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge } from './shipping-terms'; // v55.83-TG
 import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
@@ -55,6 +57,11 @@ export function assembleProfitability(d) {
   var termsOf = {}; (d.terms || []).forEach(function (t) { termsOf[t.invoice_id] = t; });
   var relPoundsOfLine = {}; (d.lineReleasePounds || []).forEach(function (x) { (relPoundsOfLine[x.invoice_item_id] = relPoundsOfLine[x.invoice_item_id] || {})[x.release_key] = Number(x.pounds) || 0; });
   var estimateOf = {}; (d.estimates || []).forEach(function (e) { estimateOf[e.release_key] = Number(e.outbound_estimate); });
+  // v55.83-TG — the warehouse's shipping costs per release (shown always; USED only when Max's switch is on)
+  var warehouseOn = d.warehouseOn === true; var whByRel = {};
+  // Codex 16 Nov (P1): a TEST order is quarantined — it never reaches basis inference, cost status, the split or totals
+  (d.warehouseRows || []).forEach(function (w) { if (w.release_key && !w.superseded && !isWarehouseTestRow(w)) { (whByRel[w.release_key] = whByRel[w.release_key] || []).push(w); } });
+  function whHasCost(keys) { return keys.some(function (k) { return (whByRel[k] || []).some(function (w) { return w.section === 'main' && !w.conflict && ((Number(w.freight_used) || 0) > 0 || (Number(w.trucking_used) || 0) > 0 || (Number(w.manual_freight) || 0) > 0 || (Number(w.manual_trucking) || 0) > 0); }); }); }
 
   // ── invoices ──
   var live = (d.invoices || []).filter(isLive).filter(function (i) { return (i.currency || 'USD') === 'USD'; });
@@ -77,8 +84,30 @@ export function assembleProfitability(d) {
         transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
     });
     var text = lines.map(function (l) { return l.description; }).join(' · ');
+    // v55.83-TG (Max, Nov 16) — CNF / Ex Works by the rule: a shipping-charge LINE with an amount = Ex Works; no such line and the
+    // warehouse order has shipping costs = CNF. Used only when nothing was set by a person; labelled 'inferred'; conflicts flagged.
+    // Refined by Max the same day: the invoice should SAY CNF or EXW; CNF may or may not have a shipping line (none = in the
+    // price); EXW should have one; saying neither is always flagged for review. Later: learn each customer's history.
+    var tBasis = t.basis || custBasis[i.accounting_customer_id] || null; var tSource = t.basis ? 'invoice' : (custBasis[i.accounting_customer_id] ? 'customer' : null);
+    // v55.83-TG — the shipping terms chosen ON THE INVOICE are the one value (same row); they decide the basis
+    if (t.shipping_terms && basisOfTerms(t.shipping_terms)) { tBasis = basisOfTerms(t.shipping_terms); tSource = 'invoice_form'; }
+    var charged = false;
+    if (warehouseOn) {
+      charged = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; });
+      var relKeys = relsOfInv[i.id].map(function (r) { return r.key; });
+      var whCost = whHasCost(relKeys);
+      var said = statedBasis(text);
+      var fl = function (kind) { flags.push({ kind: kind, invoice: i.invoice_number, invoice_id: i.id, basis_source: tSource }); };
+      if (said === 'BOTH') { fl('basis_invoice_says_both_cnf_and_exw'); }
+      if (tBasis) { if ((said === 'CNF' || said === 'EXW') && said !== tBasis && (tBasis === 'CNF' || tBasis === 'EXW')) { fl('basis_set_differs_from_invoice_text'); } }
+      else if (said === 'CNF' || said === 'EXW') { tBasis = said; tSource = 'invoice_text'; }
+      else if (relKeys.length) { var inf = inferBasis(charged, whCost); if (inf) { tBasis = inf; tSource = 'inferred'; } fl('basis_not_stated_on_invoice'); }
+      if (tBasis === 'EXW' && !charged && whCost) { fl('basis_exw_without_shipping_line'); }
+      if (charged && relKeys.some(function (k) { return (whByRel[k] || []).some(function (w) { return w.section === 'main' && w.cost_status === 'customer_own_transport'; }); })) { fl('own_transport_but_invoice_charges_shipping'); }
+    }
     return { id: i.id, number: i.invoice_number, date: String(i.invoice_date || '').substring(0, 10), customer: (d.customerNames || {})[i.accounting_customer_id] || '(unknown customer)',
-      customer_id: i.accounting_customer_id || null, basis: t.basis || custBasis[i.accounting_customer_id] || null, basis_source: t.basis ? 'invoice' : (custBasis[i.accounting_customer_id] ? 'customer' : null),
+      customer_id: i.accounting_customer_id || null, basis: tBasis, basis_source: tSource, charged_transport: charged,
+      shipping_terms: t.shipping_terms || null, shipping_cost_estimate: t.shipping_cost_estimate === undefined || t.shipping_cost_estimate === null ? null : Number(t.shipping_cost_estimate),
       embedded_transport: t.embedded_transport === undefined ? null : t.embedded_transport, manual_embedded: t.embedded_transport !== undefined && t.embedded_transport !== null && t.embedded_transport !== '', releases: relsOfInv[i.id].map(function (r) { return r.key; }), lines: lines,
       _suggest: suggestBasis(text, lines.some(function (l) { return isTransportLine(l.description); })) };
   });
@@ -156,6 +185,43 @@ export function assembleProfitability(d) {
   Object.keys(truckCount).forEach(function (rel) { if (truckCount[rel] > 1) { flags.push({ kind: 'two_trucking_bills_on_one_release', release: relRaw[rel] || rel, count: truckCount[rel], bills: (outbound[rel].bills || []).filter(function (x) { return x.type === 'trucking'; }).map(function (x) { return x.bill_number; }) }); } });
   Object.keys(relKnown).forEach(function (rel) { if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = BONDED_PER_HOUSTON_RELEASE; } }); // v55.83-TC
   Object.keys(estimateOf).forEach(function (rel) { if (relKnown[rel]) { var o = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] }); o.estimate = estimateOf[rel]; } });
+  // v55.83-TG — warehouse freight + trucking fill what the Hub's own bills do not cover. A bill already in the Hub is never added
+  // twice; an estimate a person typed wins; a release with a part missing stays 'missing' (a missing part is never zero).
+  var whUsed = {};
+  if (warehouseOn) {
+    Object.keys(relKnown).forEach(function (rel) {
+      if (estimateOf[rel] !== undefined || !whByRel[rel]) { return; }
+      var o = outbound[rel]; var types = {}; ((o && o.bills) || []).forEach(function (b) { types[b.type] = true; });
+      if (types.shipping && types.trucking) { return; }
+      var w = warehouseOutboundForRelease(whByRel[rel], types);
+      if (!w.usable) {
+        flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: w.why });
+        // Codex 16 Nov (P1): the warehouse says a part is missing, so a partial Hub bill must NOT read as the complete cost.
+        // The known amount is kept, but as an ESTIMATE (never complete), and it is not used to separate a CNF price.
+        if (o && o.actual !== null && o.actual !== undefined) { o.estimate = o.actual; o.actual = null; o.partial = true; }
+        return;
+      }
+      whUsed[rel] = w;
+      var oo = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] });
+      var total = r2((oo.actual || 0) + w.amount);
+      if (w.final) { oo.actual = total; } else { oo.actual = null; oo.estimate = total; } // partly provisional = the whole release is an estimate
+      oo.warehouse = { amount: w.amount, final: w.final, freight: w.freight, trucking: w.trucking, order_id: w.row.order_id, link: w.row.source_link };
+    });
+  }
+
+  // v55.83-TG — the shipping cost typed ON THE INVOICE: an ESTIMATE, used only when the release has no bill, no typed release
+  // estimate and no warehouse figure. A bill always replaces it (Max: "Final confirmed value is based on bill").
+  var invEst = invoiceEstimatesByRelease(engineInvoices.map(function (iv) { return { invoice_id: iv.id, invoice_number: iv.number, shipping_terms: iv.shipping_terms, shipping_cost_estimate: iv.shipping_cost_estimate, releases: iv.releases }; }), relPounds);
+  (invEst.__unresolved || []).forEach(function (u) { flags.push({ kind: 'invoice_shipping_estimate_split_unresolved', invoice: u.invoice, releases: u.releases.map(function (k) { return relRaw[k] || k; }), amount: u.amount }); });
+  delete invEst.__unresolved;
+  Object.keys(invEst).forEach(function (rel) {
+    if (!relKnown[rel]) { return; }
+    var o = outbound[rel];
+    if (o && ((o.actual !== null && o.actual !== undefined) || (o.estimate !== null && o.estimate !== undefined))) { return; }
+    o = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] });
+    o.estimate = invEst[rel].amount; o.from_invoice_form = true;
+    if (invEst[rel].differ) { flags.push({ kind: 'invoice_shipping_estimates_differ', release: relRaw[rel] || rel, invoices: invEst[rel].invoices, used: invEst[rel].amount }); }
+  });
 
   // pass 2 — everything
   var full = buildCells({ invoices: engineInvoices, groupOf: groupOf, costOf: costOf, outbound: outbound, brokerage: brokerage, bonded: bonded, factors: factors });
@@ -172,8 +238,24 @@ export function assembleProfitability(d) {
   engineInvoices.forEach(function (iv) {
     if ((iv.basis !== 'CNF' && iv.basis !== 'TRUCKING_INCLUDED') || iv.manual_embedded) { return; }
     if (shareBad[iv.id] || !(shareOf[iv.id] > 0)) { return; }
-    iv.embedded_transport = shareOf[iv.id]; iv.embedded_source = shareKind[iv.id] === 'estimate' ? 'container cost (estimate)' : 'container cost';
+    if (iv.releases.some(function (k) { return outbound[k] && outbound[k].partial; })) { return; } // v55.83-TG — a part of the shipping cost is missing: not separated
+    if (warehouseOn && iv.charged_transport) { return; } // v55.83-TG — CNF WITH a shipping line: the shipping is charged on that line, not inside the price
+    if (iv.shipping_terms === 'CNF_SEPARATE') { return; } // v55.83-TG — chosen on the invoice: shipping is on its own line, the price is goods only
+    iv.embedded_transport = shareOf[iv.id]; iv.embedded_source = (shareKind[iv.id] === 'estimate' ? 'container cost (estimate)' : 'container cost') + (iv.basis_source === 'inferred' ? ' — CNF inferred by rule, estimated' : ''); // v55.83-TG
     usedContainerCost++;
+  });
+  // v55.83-TG (Max, Nov 16) — what we CHARGE for shipping must be at least our shipping cost + 7% on "CNF with a separate shipping
+  // line", and on EXW when a shipping line was added. EXW with no shipping line must have no shipping cost of ours.
+  engineInvoices.forEach(function (iv) {
+    var t2 = iv.shipping_terms; if (t2 !== 'CNF_SEPARATE' && t2 !== 'EXW') { return; }
+    var chargedAmt = r2(iv.lines.reduce(function (s, l) { return s + ((l.transport === true || (l.transport !== false && isTransportLine(l.description))) ? (Number(l.amount) || 0) : 0); }, 0));
+    var cost = shareBad[iv.id] ? null : (shareOf[iv.id] || 0);
+    var kindC = shareKind[iv.id] === 'estimate' ? 'estimate' : 'bill';
+    if (t2 === 'EXW' && !(chargedAmt > 0)) { if (cost > 0) { flags.push({ kind: 'exw_but_shipping_cost_on_release', invoice: iv.number, invoice_id: iv.id, cost: cost, cost_kind: kindC }); } return; }
+    if (t2 === 'CNF_SEPARATE' && !(chargedAmt > 0)) { flags.push({ kind: 'cnf_separate_without_shipping_line', invoice: iv.number, invoice_id: iv.id }); return; }
+    if (cost === null) { flags.push({ kind: 'shipping_markup_not_checkable', invoice: iv.number, invoice_id: iv.id, charged: chargedAmt }); return; }
+    var need = minShippingCharge(cost);
+    if (chargedAmt < need - 0.005) { flags.push({ kind: 'shipping_charged_below_cost_plus_7pct', invoice: iv.number, invoice_id: iv.id, charged: chargedAmt, cost: cost, cost_kind: kindC, minimum: need, short_by: r2(need - chargedAmt) }); }
   });
   if (usedContainerCost) { full = buildCells({ invoices: engineInvoices, groupOf: groupOf, costOf: costOf, outbound: outbound, brokerage: brokerage, bonded: bonded, factors: factors }); }
   var suggestOf = {}; engineInvoices.forEach(function (i) { suggestOf[i.id] = i._suggest; });
@@ -218,7 +300,7 @@ export function assembleProfitability(d) {
   }
   whyMissing(byProduct, function (c) { return c.product_key; }); whyMissing(byProductName, function (c) { return c.product_key + '||' + c.name_key; });
   whyMissing(byCustomer, function (c) { return c.customer; }); whyMissing(byInvoice, function (c) { return c.invoice_id; });
-  var invMeta = {}; engineInvoices.forEach(function (i) { invMeta[i.id] = { id: i.id, number: i.number, date: i.date, customer: i.customer, customer_id: i.customer_id, basis: i.basis, basis_source: i.basis_source, suggested_basis: i._suggest, embedded_transport: i.manual_embedded ? i.embedded_transport : null, embedded_used: i.embedded_transport, embedded_source: i.manual_embedded ? 'manual' : (i.embedded_source || null), releases: i.releases.map(function (k) { return { key: k, raw: relRaw[k] || k }; }) }; });
+  var invMeta = {}; engineInvoices.forEach(function (i) { invMeta[i.id] = { id: i.id, number: i.number, date: i.date, customer: i.customer, customer_id: i.customer_id, basis: i.basis, basis_source: i.basis_source, suggested_basis: i._suggest, shipping_terms: i.shipping_terms || null, shipping_cost_estimate: i.shipping_cost_estimate, embedded_transport: i.manual_embedded ? i.embedded_transport : null, embedded_used: i.embedded_transport, embedded_source: i.manual_embedded ? 'manual' : (i.embedded_source || null), releases: i.releases.map(function (k) { return { key: k, raw: relRaw[k] || k }; }) }; });
   byInvoice.forEach(function (r) { r.invoice = invMeta[r.key] || null; });
   var totals = summarize(cells, function () { return 'all'; })[0] || null;
   var sortRev = function (a, b) { return b.goods_revenue - a.goods_revenue; };
@@ -254,12 +336,41 @@ export function assembleProfitability(d) {
       });
       return Object.keys(m).map(function (k) {
         var o = m[k]; var ob = outbound[k] || { actual: null, estimate: null, bills: [] };
-        return { key: k, raw: o.raw, origin: o.origin, pounds: Math.round(o.pounds), invoices: Object.keys(o.invoices), customers: Object.keys(o.customers),
+        // v55.83-TG (Max, Nov 16 workflow) — freight and trucking SEPARATELY: the first estimate, the billed amount (final), the
+        // difference (flagged when not equal). Final is confirmed only by a bill; with no bill the estimate is what is used.
+        var wRow = (whByRel[k] || []).filter(function (w) { return w.section === 'main' && !w.conflict; });
+        wRow = wRow.length === 1 ? wRow[0] : null;
+        function partOf(name, billType) {
+          var bl = (ob.bills || []).filter(function (b) { return b.type === billType; });
+          var bill = bl.length ? r2(bl.reduce(function (s, b) { return s + (b.share !== undefined ? b.share : b.amount); }, 0)) : null;
+          var est = null; var from = null;
+          if (wRow) {
+            var man = wRow['manual_' + name];
+            if (man !== null && man !== undefined && man !== '') { est = r2(man); from = 'typed correction'; }
+            else if (wRow[name + '_estimate'] !== null && wRow[name + '_estimate'] !== undefined) { est = r2(wRow[name + '_estimate']); from = 'warehouse quote'; }
+            else if (wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined) { est = r2(wRow[name + '_final']); from = 'warehouse payment (no quote)'; }
+            else if (wRow[name + '_kind'] === 'own_transport') { est = 0; from = 'customer’s own transport (inferred)'; }
+            else if (wRow[name + '_used'] !== null && wRow[name + '_used'] !== undefined && wRow[name + '_kind'] !== 'bill') { est = r2(wRow[name + '_used']); from = 'warehouse'; }
+          }
+          var wire = wRow && wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined ? r2(wRow[name + '_final']) : null;
+          var diff = bill !== null && est !== null ? r2(bill - est) : null;
+          return { estimate: est, estimate_from: from, bill: bill, bills: bl.map(function (b) { return { bill_number: b.bill_number, vendor: b.vendor, date: b.bill_date, amount: b.share !== undefined ? b.share : b.amount }; }),
+            used: bill !== null ? bill : est, status: bill !== null ? 'final_billed' : (est !== null ? 'estimate' : 'missing'),
+            difference: diff, differs: diff !== null && Math.abs(diff) > 1, warehouse_payment: wire, payment_differs_from_bill: wire !== null && bill !== null && Math.abs(wire - bill) > 1 };
+        }
+        var pF = partOf('freight', 'shipping'); var pT = partOf('trucking', 'trucking');
+        var combEst = pF.estimate !== null && pT.estimate !== null ? r2(pF.estimate + pT.estimate) : (ob.from_invoice_form || estimateOf[k] !== undefined ? ob.estimate : null);
+        var parts = { freight: pF, trucking: pT, estimate_total: combEst, bill_total: pF.bill !== null || pT.bill !== null ? r2((pF.bill || 0) + (pT.bill || 0)) : null,
+          final_confirmed: pF.bill !== null && pT.bill !== null, combined_estimate_from: pF.estimate !== null && pT.estimate !== null ? 'warehouse' : (ob.from_invoice_form ? 'invoice form' : (estimateOf[k] !== undefined ? 'typed release estimate' : null)) };
+        parts.total_difference = parts.final_confirmed && combEst !== null ? r2(parts.bill_total - combEst) : null;
+        parts.total_differs = parts.total_difference !== null && Math.abs(parts.total_difference) > 1;
+        return { key: k, raw: o.raw, origin: o.origin, pounds: Math.round(o.pounds), invoices: Object.keys(o.invoices), customers: Object.keys(o.customers), parts: parts,
           shipping_actual: ob.actual, shipping_estimate: ob.estimate === undefined ? null : ob.estimate, bills: (ob.bills || []).map(function (b) { return { bill_number: b.bill_number, vendor: b.vendor, amount: b.share !== undefined ? b.share : b.amount, type: b.type }; }),
-          status: ob.actual !== null && ob.actual !== undefined ? 'bill' : (ob.estimate !== null && ob.estimate !== undefined ? 'estimate' : 'missing') };
-      }).sort(function (a, b) { var r = { missing: 0, estimate: 1, bill: 2 }; return r[a.status] - r[b.status] || String(a.raw).localeCompare(String(b.raw)); });
+          status: whUsed[k] ? (whUsed[k].final ? 'warehouse_final' : 'warehouse_estimate') : (ob.actual !== null && ob.actual !== undefined ? 'bill' : (ob.estimate !== null && ob.estimate !== undefined ? 'estimate' : 'missing')),
+          warehouse_used: whUsed[k] ? ob.warehouse : null, warehouse: (whByRel[k] || []).filter(function (w) { return w.section === 'main'; }).map(function (w) { return { id: w.id, order_id: w.order_id, release_number: w.release_number, status: w.status, cost_status: w.cost_status, freight_used: w.freight_used, freight_kind: w.freight_kind, trucking_used: w.trucking_used, trucking_kind: w.trucking_kind, manual_freight: w.manual_freight, manual_trucking: w.manual_trucking, combined_used: w.combined_used, bill_checks: w.bill_checks || [], flags: w.flags || [], link: w.source_link }; }) };
+      }).sort(function (a, b) { var r = { missing: 0, estimate: 1, warehouse_estimate: 1, warehouse_final: 2, bill: 2 }; return r[a.status] - r[b.status] || String(a.raw).localeCompare(String(b.raw)); });
     })(),
-    counts_container_cost_used: usedContainerCost,
+    counts_container_cost_used: usedContainerCost, warehouse_on: warehouseOn, warehouse_releases_used: Object.keys(whUsed).length,
     bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, usable_lines: o.usable || 0, unit_from_name: !!o.unit_from_name, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),
     factors: factors.units, window_days: d.windowDays > 0 ? d.windowDays : 90,
     bonded_per_houston_release: BONDED_PER_HOUSTON_RELEASE, actual_bonded_bills: actualBonded, actual_bonded_total: r2(actualBonded.reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0)),

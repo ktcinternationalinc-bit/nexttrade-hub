@@ -51,6 +51,10 @@
     {
       "path": "/api/accounting/order-monitor?job=nightly",
       "schedule": "30 7 * * *"
+    },
+    {
+      "path": "/api/accounting/warehouse-shipping",
+      "schedule": "15 */3 * * *"
     }
   ]
 }

@@ -12,6 +12,8 @@ import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permis
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
+import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge } from '../lib/shipping-terms'; // v55.83-TG
+import { isTransportLine } from '../lib/profitability'; // v55.83-TG
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -301,7 +303,7 @@ export default function AccountingInvoicesTab(props) {
 
   function startNew() {
     var today = new Date().toISOString().substring(0, 10);
-    if (isInvoice()) setHdr({ invoice_number: '', release_number: '', accounting_customer_id: '', invoice_date: today, due_date: '', notes: '', terms: '' });
+    if (isInvoice()) setHdr({ invoice_number: '', release_number: '', accounting_customer_id: '', invoice_date: today, due_date: '', notes: '', terms: '', shipping_terms: '', shipping_cost_estimate: '' });
     else setHdr({ proforma_number: '', accounting_customer_id: '', proforma_date: today, valid_until: '', notes: '', terms: '' });
     setItems([blankItem()]); setEditing('new');
   }
@@ -328,7 +330,7 @@ export default function AccountingInvoicesTab(props) {
           if (cands.length > 0 && cands[0].score >= 0.99) { pickedCust = cands[0].id; } // exact-ish match only; otherwise the human picks
           setHdr({ invoice_number: d2.invoice_number || '', release_number: '', accounting_customer_id: pickedCust,
             invoice_date: d2.invoice_date || today2, due_date: d2.due_date || '',
-            notes: (d2.notes || '') + (d2.customer_name && !pickedCust ? ((d2.notes ? ' · ' : '') + 'Document says customer: ' + d2.customer_name) : ''), terms: '' });
+            notes: (d2.notes || '') + (d2.customer_name && !pickedCust ? ((d2.notes ? ' · ' : '') + 'Document says customer: ' + d2.customer_name) : ''), terms: '', shipping_terms: '', shipping_cost_estimate: '' });
           var its = (d2.line_items || []).map(function (li) {
             return { description: li.description || '', quantity: String(li.quantity !== null && li.quantity !== undefined ? li.quantity : 1),
               unit_price: String(li.unit_price !== null && li.unit_price !== undefined ? li.unit_price : (li.line_total !== null && li.line_total !== undefined ? li.line_total : 0)),
@@ -363,10 +365,19 @@ export default function AccountingInvoicesTab(props) {
     window.addEventListener('nt-open-invoice-edit', onEvt);
     return function () { window.removeEventListener('nt-open-invoice-edit', onEvt); };
   }, []); // eslint-disable-line
+  // v55.83-TG — the invoice's shipping terms live in pl_invoice_terms (server route; the browser cannot read that table)
+  function loadShippingTerms(invId, cb) {
+    if (!invId) { return; }
+    fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_shipping_terms', invoice_id: invId, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.ok) { cb({ shipping_terms: j.shipping_terms || '', shipping_cost_estimate: j.shipping_cost_estimate === null || j.shipping_cost_estimate === undefined ? '' : String(j.shipping_cost_estimate) }); } })
+      .catch(function () {});
+  }
   function startEdit(row) {
     var tbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
     var key = isInvoice() ? 'invoice_id' : 'proforma_id';
-    setHdr(Object.assign({}, row)); setEditing(row); setItems([blankItem()]);
+    setHdr(Object.assign({ shipping_terms: '', shipping_cost_estimate: '' }, row)); setEditing(row); setItems([blankItem()]);
+    if (isInvoice()) { loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t); }); }); } // v55.83-TG
     supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
       var its = ((r && r.data) || []).map(function (it) { return { id: it.id, description: it.description || '', quantity: String(it.quantity != null ? it.quantity : 1), unit_price: String(it.unit_price != null ? it.unit_price : 0), sku: it.sku || '', product_ref: it.product_ref || '', wave_product_id: it.wave_product_id || '', wave_product_name: it.wave_product_name || '' }; });
       setItems(its.length ? its : [blankItem()]);
@@ -387,7 +398,7 @@ export default function AccountingInvoicesTab(props) {
     var e0 = isInvoice() ? row.due_date : row.valid_until;
     var span = (d0 && e0) ? Math.round((Date.parse(e0) - Date.parse(d0)) / 86400000) : null;
     var newEnd = (span != null && span >= 0) ? new Date(Date.parse(today) + span * 86400000).toISOString().substring(0, 10) : '';
-    if (isInvoice()) { setHdr({ invoice_number: '', release_number: row.release_number || '', accounting_customer_id: row.accounting_customer_id || '', invoice_date: today, due_date: newEnd, notes: row.notes || '', terms: row.terms || '' }); }
+    if (isInvoice()) { setHdr({ invoice_number: '', release_number: row.release_number || '', accounting_customer_id: row.accounting_customer_id || '', invoice_date: today, due_date: newEnd, notes: row.notes || '', terms: row.terms || '', shipping_terms: '', shipping_cost_estimate: '' }); loadShippingTerms(row.id, function (t) { setHdr(function (h) { return Object.assign({}, h, t); }); }); }
     else { setHdr({ proforma_number: '', accounting_customer_id: row.accounting_customer_id || '', proforma_date: today, valid_until: newEnd, notes: row.notes || '', terms: row.terms || '' }); }
     setEditing('new'); setItems([blankItem()]);
     supabase.from(tbl).select('*').eq(key, row.id).order('sort_order', { ascending: true }).then(function (r) {
@@ -477,6 +488,13 @@ export default function AccountingInvoicesTab(props) {
     var clean = items.filter(function (it) { return (it.description || '').trim() || Number(it.unit_price) || Number(it.quantity); });
     if (clean.length === 0) { toast.error('Add at least one line item.'); return; }
     var total = docTotal(clean);
+    // v55.83-TG (Max): every invoice has ONE shipping-terms value, and a shipping line must cover our cost + 7%
+    var shipCheck = null;
+    if (isInvoice()) {
+      shipCheck = checkShippingTerms(hdr.shipping_terms, hdr.shipping_cost_estimate, clean.map(function (it) { return { description: it.description, amount: itemTotal(it) }; }), isTransportLine);
+      if (!shipCheck.ok) { toast.error(shipCheck.error); return; }
+      if (shipCheck.warnings.length && typeof window !== 'undefined' && !window.confirm('Please check before saving:\n\n- ' + shipCheck.warnings.join('\n- ') + '\n\nSave anyway? (It will also show on the profit report as a warning.)')) { return; }
+    }
     setBusy(true);
     var tbl = isInvoice() ? 'accounting_invoices' : 'accounting_proformas';
     var itemTbl = isInvoice() ? 'accounting_invoice_items' : 'accounting_proforma_items';
@@ -525,9 +543,23 @@ export default function AccountingInvoicesTab(props) {
         return chain.then(function () { return docId; });
       });
     }).then(function (docId) {
+      if (!shipCheck) { return docId; }
+      return fetch('/api/accounting/invoice-write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'set_shipping_terms', invoice_id: docId, shipping_terms: shipCheck.value.shipping_terms, shipping_cost_estimate: shipCheck.value.shipping_cost_estimate, user_id: userProfile && userProfile.id }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (!(j && j.ok)) { throw { termsFailed: true, docId: docId, msg: (j && j.error) || 'unknown error' }; } return docId; }, function () { throw { termsFailed: true, docId: docId, msg: 'network' }; });
+    }).then(function (docId) {
       return logActivity(userProfile && userProfile.id, (editing === 'new' ? 'Created ' : 'Updated ') + (isInvoice() ? 'invoice ' : 'proforma ') + (hpayload.invoice_number || hpayload.proforma_number || docId) + ' (' + fmt(total) + ')', 'accounting_' + mode);
     }).then(function () { toast.success('Saved'); setEditing(null); load(); })
-      .catch(function (e) { console.error('[save] Save failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error — check console')); })
+      .catch(function (e) {
+        if (e && e.termsFailed) {
+          // v55.83-TG (Codex P2) — PARTIAL save: the invoice and its lines are saved, the shipping terms are not. Stay in the editor
+          // on the SAVED invoice (so pressing Save again updates it — never a duplicate) with the user's choices kept.
+          toast.error('PARTLY SAVED: the invoice is saved, but its SHIPPING TERMS were not (' + e.msg + '). Your choice is still here — press Save again.', { duration: 15000 });
+          if (editing === 'new') { setEditing(Object.assign({}, hdr, { id: e.docId, approval_status: 'draft' })); }
+          load(); return;
+        }
+        console.error('[save] Save failed: ', e); toast.error('Save failed: ' + ((e && e.message) || 'unknown error — check console'));
+      })
       .finally(function () { setBusy(false); });
   }
 
@@ -916,6 +948,28 @@ export default function AccountingInvoicesTab(props) {
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">{isInvoice() ? 'Due date' : 'Valid until'}</span><input type="date" value={(isInvoice() ? hdr.due_date : hdr.valid_until) || ''} disabled={locked(editing)} onChange={function (e) { uh(isInvoice() ? 'due_date' : 'valid_until', e.target.value); }} className={inp} /></label>
           </div>
 
+          {isInvoice() && (function () { // v55.83-TG — shipping terms: required, one value
+            var st = hdr.shipping_terms || '';
+            var shipAmt = items.reduce(function (t, it) { return t + (isTransportLine(it.description) ? itemTotal(it) : 0); }, 0);
+            var c = Number(hdr.shipping_cost_estimate) || 0;
+            var noLineExw = st === 'EXW' && !(shipAmt > 0);
+            return (
+              <div className="mb-2 rounded p-2" style={{ border: '2px solid ' + (st ? '#334155' : '#f59e0b'), background: st ? 'transparent' : 'rgba(245,158,11,0.08)' }}>
+                <div className="text-[11px] font-bold text-slate-200 mb-1">Shipping terms * <span className="font-normal text-slate-400">(pick one — required)</span></div>
+                <div className="flex flex-wrap gap-3 mb-1">
+                  {SHIPPING_TERMS.map(function (k) { return (
+                    <label key={k} className="flex items-center gap-1 text-xs text-slate-100 cursor-pointer">
+                      <input type="radio" name="ship_terms" checked={st === k} disabled={locked(editing)} onChange={function () { uh('shipping_terms', k); }} />{SHIPPING_TERMS_WORDS[k]}
+                    </label>); })}
+                </div>
+                <label className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+                  <span>{'Our shipping cost (freight + trucking)' + (st === 'EXW' ? ' — only if you add a shipping line' : '')}</span>
+                  <input value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
+                  <span>estimate — the bills replace it when they arrive</span>
+                </label>
+                {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Shipping line(s) must total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2)}</div>}
+              </div>);
+          })()}
           <div className="text-[11px] font-bold text-slate-200 mb-1">Line items</div>
           {(function () {
             var siloProducts = waveProducts.filter(function (p) { return (!waveBiz || waveBiz === 'all' || p.wave_business_id === waveBiz) && p.is_archived !== true; }).sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });

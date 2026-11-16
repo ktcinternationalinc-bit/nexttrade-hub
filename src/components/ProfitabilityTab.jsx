@@ -6,12 +6,15 @@
 // Nothing on this screen changes an invoice, a bill, inventory or the ledger.
 // All colours are inline: the dark theme repaints the bg-white class, which is how the Stats table became unreadable.
 import React, { useState, useEffect } from 'react';
+import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
+import { supabase } from '../lib/supabase'; // v55.83-TG
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
 // scroll bars, invisible on these white tables. These are grey, 14 px, always there.
 var SCROLL_CSS = '.pl-scroll{scrollbar-width:auto;scrollbar-color:#94a3b8 #e2e8f0}.pl-scroll::-webkit-scrollbar{width:14px;height:14px}.pl-scroll::-webkit-scrollbar-track{background:#e2e8f0}.pl-scroll::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:7px;border:3px solid #e2e8f0}.pl-scroll::-webkit-scrollbar-thumb:hover{background:#64748b}.pl-scroll::-webkit-scrollbar-corner{background:#e2e8f0}';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function pf(n) { return n === undefined ? '🔒 hidden' : '$' + fmt(n); } // v55.83-TG — profit hidden without 'P&L: See profit & margin'
 function fmt0(n) { return (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); }
 function fmt4(n) { return n === null || n === undefined ? '—' : '$' + Number(n).toFixed(4); }
 
@@ -35,7 +38,19 @@ var FLAG_WORDS = {
   brokerage_bill_on_non_houston_release: 'Brokerage / bonded bill is on a release that is not Houston',
   bill_split_unresolved: 'A bill could not be split between its releases',
   transport_bill_not_marked_outbound: 'A trucking / shipping bill on this release is not marked OUTBOUND, so it was not counted',
-  two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)'
+  two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)',
+  warehouse_cost_not_usable: 'The warehouse has this release but its shipping cost cannot be used yet (a part is missing, or two orders share the release)', // v55.83-TG
+  basis_not_stated_on_invoice: 'The invoice does not say CNF or EXW — basis guessed by the rule, please check', // v55.83-TG
+  basis_exw_without_shipping_line: 'EXW, but the invoice has no shipping charge line and the warehouse shows shipping costs', // v55.83-TG
+  basis_set_differs_from_invoice_text: 'The basis set in the Hub differs from what the invoice text says (CNF / EXW)', // v55.83-TG
+  basis_invoice_says_both_cnf_and_exw: 'The invoice text mentions both CNF and EXW', // v55.83-TG
+  own_transport_but_invoice_charges_shipping: 'Warehouse looks like customer’s own transport, but the invoice charges shipping', // v55.83-TG
+  shipping_charged_below_cost_plus_7pct: 'Shipping charged on the invoice is less than our shipping cost + 7%', // v55.83-TG
+  exw_but_shipping_cost_on_release: 'EXW with no shipping line, but we have a shipping cost on this release', // v55.83-TG
+  cnf_separate_without_shipping_line: 'Set as “CNF, separate shipping line”, but the invoice has no shipping line', // v55.83-TG
+  shipping_markup_not_checkable: 'Shipping line present, but our shipping cost is not known yet — the 7% check waits', // v55.83-TG
+  invoice_shipping_estimates_differ: 'Invoices on the same release give different shipping-cost estimates — the largest is used', // v55.83-TG
+  invoice_shipping_estimate_split_unresolved: 'An invoice on several releases has a shipping estimate, but a release has no pounds — it cannot be split, so it is not used' // v55.83-TG
 };
 var BASIS_WORDS = { EXW: 'EXW', CNF: 'CNF', TRUCKING_INCLUDED: 'Trucking included' };
 var UNIT_WORDS = { lb: 'pounds', kg: 'kilograms', t: 'tons', yd: 'yards', lm: 'linear metres' }; // v55.83-TA — + tons (1 ton = 1,000 kg = 2,204.62 lb) // v55.83-SZ — + kilograms (1 kg = 2.20462 lb)
@@ -48,6 +63,7 @@ export default function ProfitabilityTab(props) {
   var s2 = useState(''); var to = s2[0]; var setTo = s2[1];
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
+  var sEF = useState(true); var onlyDiff = sEF[0]; var setOnlyDiff = sEF[1]; // v55.83-TG — Estimate vs Final: show only differences
   var s5 = useState('product'); var view = s5[0]; var setView = s5[1];
   var s6 = useState(null); var open = s6[0]; var setOpen = s6[1];
   var s7 = useState({}); var pick = s7[0]; var setPick = s7[1];
@@ -61,7 +77,11 @@ export default function ProfitabilityTab(props) {
   var s15 = useState(false); var showWarn = s15[0]; var setShowWarn = s15[1];
 
   function call(payload) {
-    return fetch('/api/accounting/profitability', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
+    // v55.83-TG — the server checks the sign-in token itself (it no longer trusts the user id in the request)
+    return supabase.auth.getSession().then(function (sres) {
+      var token = sres && sres.data && sres.data.session ? sres.data.session.access_token : '';
+      return fetch('/api/accounting/profitability', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) });
+    })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
@@ -131,7 +151,7 @@ export default function ProfitabilityTab(props) {
             <td className="px-1.5 py-1 text-right">{cellMoney(c.outbound_cost)}<div style={{ color: c.outbound_kind === 'actual' ? SUB : '#b45309' }}>{c.outbound_kind === 'actual' ? (c.outbound_bills || []).map(function (b0) { return b0.bill_number; }).join(', ') : c.outbound_kind === 'estimate' ? 'ESTIMATE' : 'bill missing'}</div></td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.brokerage)}</td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.bonded)}</td>
-            <td className="px-1.5 py-1 text-right font-extrabold" style={{ color: c.complete ? (c.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{'$' + fmt(c.profit)}<div className="font-bold">{c.complete ? 'complete' : 'known part only'}</div></td>
+            <td className="px-1.5 py-1 text-right font-extrabold" style={{ color: c.complete ? (c.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{pf(c.profit)}<div className="font-bold">{c.complete ? 'complete' : 'known part only'}</div></td>
             <td className="px-1.5 py-1" style={{ color: '#92400e' }}>{(c.flags || []).filter(function (f, ix, arr) { return arr.indexOf(f) === ix; }).map(function (f) { return <div key={f}>{'• ' + (FLAG_WORDS[f] || f)}</div>; })}
               {invoiceRow && canEdit && <div className="mt-0.5"><select value={c.orig_unit || ''} onChange={function (e) { act({ action: 'set_line_unit', invoice_item_id: c.line_id, unit: e.target.value }, 'Unit of this one line saved.'); }} className="nt-light rounded text-[10px]" style={inp} title="Unit of THIS line only (overrides the unit of the description)">
                 <option value="">line unit: as the description</option><option value="lb">this line: pounds</option><option value="kg">this line: kilograms</option><option value="t">this line: tons</option><option value="yd">this line: yards</option><option value="lm">this line: linear metres</option></select></div>}</td>
@@ -153,23 +173,72 @@ export default function ProfitabilityTab(props) {
     </div>;
   }
   // v55.83-TE — every container (release) in the period and what its shipping cost
+  // v55.83-TG (Max, Nov 16 workflow) — one part (freight or trucking): estimate → bill (final) → difference
+  function partText(pp) {
+    if (!pp) { return <span style={{ color: SUB }}>—</span>; }
+    return <div>
+      <div>{'est. ' + (pp.estimate === null ? 'missing' : '$' + fmt(pp.estimate))}{pp.estimate_from ? <span style={{ color: SUB }}>{' (' + pp.estimate_from + ')'}</span> : null}</div>
+      <div style={{ fontWeight: 800, color: pp.bill !== null ? '#166534' : '#b45309' }}>{pp.bill !== null ? 'BILLED $' + fmt(pp.bill) + ' — final' : 'no bill yet — estimate used'}</div>
+      {pp.differs && <div style={{ color: '#b91c1c', fontWeight: 800 }}>{'⚠ difference ' + (pp.difference > 0 ? '+' : '') + '$' + fmt(pp.difference)}</div>}
+      {pp.payment_differs_from_bill && <div style={{ color: '#b91c1c', fontWeight: 700 }}>{'⚠ warehouse payment $' + fmt(pp.warehouse_payment) + ' ≠ bill'}</div>}
+    </div>;
+  }
+  function estFinalView() {
+    var all = (data.containers || []).filter(function (x) { return x.parts && (x.parts.freight.bill !== null || x.parts.trucking.bill !== null || x.parts.freight.estimate !== null || x.parts.trucking.estimate !== null); });
+    var list = onlyDiff ? all.filter(function (x) { var pp = x.parts; return pp.freight.differs || pp.trucking.differs || pp.freight.payment_differs_from_bill || pp.trucking.payment_differs_from_bill; }) : all;
+    var tot = { fe: 0, fb: 0, te: 0, tb: 0 };
+    list.forEach(function (x) { var pp = x.parts; if (pp.freight.bill !== null && pp.freight.estimate !== null) { tot.fe += pp.freight.estimate; tot.fb += pp.freight.bill; } if (pp.trucking.bill !== null && pp.trucking.estimate !== null) { tot.te += pp.trucking.estimate; tot.tb += pp.trucking.bill; } });
+    function csv() {
+      var rows = [['Release', 'Customer(s)', 'Invoice(s)', 'Freight estimate', 'Freight estimate from', 'Freight bill', 'Freight difference', 'Freight bills', 'Trucking estimate', 'Trucking estimate from', 'Trucking bill', 'Trucking difference', 'Trucking bills', 'Final confirmed']];
+      list.forEach(function (x) { var f = x.parts.freight; var t = x.parts.trucking; rows.push([x.raw, x.customers.join(' / '), x.invoices.join(' / '), f.estimate, f.estimate_from, f.bill, f.difference, f.bills.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' / '), t.estimate, t.estimate_from, t.bill, t.difference, t.bills.map(function (b) { return (b.vendor || '') + ' ' + (b.bill_number || ''); }).join(' / '), x.parts.final_confirmed ? 'yes' : 'no']); });
+      var txt = rows.map(function (r) { return r.map(function (v) { var q = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(q) ? '"' + q.replace(/"/g, '""') + '"' : q; }).join(','); }).join('\n');
+      var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv' })); a.download = 'estimate-vs-final-shipping.csv'; a.click();
+    }
+    return <div>
+      <div className="text-[11px] mb-2" style={{ color: SUB }}>{'Each shipment’s first ESTIMATE against the BILLED amount (the final cost), freight and trucking separately. A cost is final only when its bill is in the Hub; until then the profit report uses the estimate. Bills shared by several releases are split by pounds.'}</div>
+      <div className="flex gap-2 items-center mb-2 flex-wrap text-[11px]">
+        <label className="flex items-center gap-1 font-bold" style={{ color: INK }}><input type="checkbox" checked={onlyDiff} onChange={function (e) { setOnlyDiff(e.target.checked); }} />Only shipments with a difference</label>
+        <span style={{ color: SUB }}>{list.length + ' of ' + all.length + ' shipment(s)'}</span>
+        <span style={{ color: INK, fontWeight: 700 }}>{'Billed vs estimated — freight $' + fmt(tot.fb) + ' vs $' + fmt(tot.fe) + ' (' + (tot.fb - tot.fe >= 0 ? '+' : '') + fmt(tot.fb - tot.fe) + '), trucking $' + fmt(tot.tb) + ' vs $' + fmt(tot.te) + ' (' + (tot.tb - tot.te >= 0 ? '+' : '') + fmt(tot.tb - tot.te) + ')'}</span>
+        <Btn onClick={csv}>⬇ Download (CSV)</Btn>
+      </div>
+      <div className="overflow-auto rounded pl-scroll" style={{ border: '1px solid ' + LINE, maxHeight: '70vh' }}>
+        <table className="w-full text-[11px]" style={{ minWidth: 900 }}>
+          <thead><tr>{['Container (release)', 'Customer(s)', 'Invoice(s)', 'Freight / shipping', 'Trucking', 'Total', 'Status'].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-bold sticky top-0" style={Object.assign({}, th, { zIndex: 2 })}>{h}</th>; })}</tr></thead>
+          <tbody>{list.map(function (x, i) { var pp = x.parts; var diffRow = pp.freight.differs || pp.trucking.differs;
+            return <tr key={x.key} style={{ background: diffRow ? '#fef2f2' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE }}>
+              <td className="px-2 py-1.5 font-bold">{x.raw}</td><td className="px-2 py-1.5">{x.customers.join(', ')}</td><td className="px-2 py-1.5">{x.invoices.join(', ')}</td>
+              <td className="px-2 py-1.5">{partText(pp.freight)}</td><td className="px-2 py-1.5">{partText(pp.trucking)}</td>
+              <td className="px-2 py-1.5 tabular-nums">{(pp.estimate_total === null ? 'est. missing' : 'est. $' + fmt(pp.estimate_total)) + (pp.bill_total !== null ? ' · billed $' + fmt(pp.bill_total) : '')}{pp.total_differs && <div style={{ color: '#b91c1c', fontWeight: 800 }}>{'⚠ ' + (pp.total_difference > 0 ? '+' : '') + '$' + fmt(pp.total_difference)}</div>}</td>
+              <td className="px-2 py-1.5 font-bold" style={{ color: pp.final_confirmed ? '#166534' : '#b45309' }}>{pp.final_confirmed ? 'FINAL — both billed' : (pp.freight.bill !== null || pp.trucking.bill !== null ? 'PART BILLED — rest is estimate' : 'ESTIMATE — no bill yet')}</td></tr>; })}
+          {list.length === 0 && <tr><td colSpan={7} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>{onlyDiff ? 'No differences between estimates and bills in this period.' : 'No shipments with an estimate or a bill in this period.'}</td></tr>}</tbody>
+        </table></div>
+    </div>;
+  }
   function containersView() {
     var list = data.containers || [];
     var miss = list.filter(function (x) { return x.status === 'missing'; }).length;
+    var wPart = function (amt, kind, man) { return man !== null && man !== undefined ? '$' + fmt(man) + ' (corrected)' : amt === null || amt === undefined ? 'missing' : '$' + fmt(amt) + (kind === 'final' ? ' final' : ' quote'); };
     return <div>
+      <WarehouseShippingPanel userProfile={userProfile} toast={toast} onChanged={function () { load(); }} warehouseOn={data.warehouse_on === true} />
       <div className="text-[11px] mb-2" style={{ color: SUB }}>{'What each container cost us to ship (outbound trucking / shipping bills with the same release number). Where no bill is in yet, type an estimate; it is replaced, never added to, when the bill arrives. For CNF invoices with no amount typed, this cost is what is taken out of the price. ' + miss + ' of ' + list.length + ' container(s) have no shipping cost yet.'}</div>
       <div className="overflow-auto rounded pl-scroll" style={{ border: '1px solid ' + LINE, maxHeight: '70vh' }}>
         <table className="w-full text-[11px]" style={{ minWidth: 1000 }}>
-          <thead><tr>{['Container (release)', 'From', 'Customer(s)', 'Invoice(s)', 'Pounds', 'Shipping cost', 'Where it comes from', 'Estimate while the bill is missing'].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-bold sticky top-0" style={Object.assign({}, th, { zIndex: 2 })}>{h}</th>; })}</tr></thead>
+          <thead><tr>{['Container (release)', 'From', 'Customer(s)', 'Invoice(s)', 'Pounds', 'Shipping cost used', 'Freight / shipping (estimate → bill)', 'Trucking (estimate → bill)', 'Where it comes from', 'Warehouse (Nextrade) order', 'Estimate while the bill is missing'].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-bold sticky top-0" style={Object.assign({}, th, { zIndex: 2 })}>{h}</th>; })}</tr></thead>
           <tbody>{list.map(function (x, i) { var k = 'x:' + x.key;
             return <tr key={x.key} style={{ background: x.status === 'missing' ? '#fff7ed' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE }}>
               <td className="px-2 py-1.5 font-bold">{x.raw}</td><td className="px-2 py-1.5">{x.origin || <span style={{ color: '#b45309' }}>unknown</span>}</td>
               <td className="px-2 py-1.5">{x.customers.join(', ')}</td><td className="px-2 py-1.5">{x.invoices.join(', ')}</td><td className="px-2 py-1.5 text-right tabular-nums">{fmt0(x.pounds)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-bold">{x.status === 'bill' ? '$' + fmt(x.shipping_actual) : x.status === 'estimate' ? '$' + fmt(x.shipping_estimate) : <span style={{ color: '#b45309' }}>missing</span>}</td>
-              <td className="px-2 py-1.5">{x.status === 'bill' ? x.bills.map(function (b0) { return (b0.vendor || '') + ' ' + (b0.bill_number || '') + ' $' + fmt(b0.amount); }).join(' · ') : x.status === 'estimate' ? <span style={{ color: '#b45309', fontWeight: 700 }}>ESTIMATE (no bill yet)</span> : <span style={{ color: '#b45309' }}>no outbound bill with this release number</span>}</td>
-              <td className="px-2 py-1.5">{x.status === 'bill' ? <span style={{ color: SUB }}>bill in — no estimate needed</span> : canEdit ? <span className="flex gap-1 items-center">$<input value={draft[k] !== undefined ? draft[k] : (x.shipping_estimate === null ? '' : String(x.shipping_estimate))} onChange={function (e) { d(k, e.target.value); }} className="nt-light px-2 py-0.5 rounded text-[11px]" style={Object.assign({ width: 100 }, inp)} placeholder="estimate" />
+              <td className="px-2 py-1.5 text-right tabular-nums font-bold">{x.status === 'bill' || x.status === 'warehouse_final' ? '$' + fmt(x.shipping_actual) : x.status === 'estimate' || x.status === 'warehouse_estimate' ? '$' + fmt(x.shipping_estimate) : <span style={{ color: '#b45309' }}>missing</span>}</td>
+              <td className="px-2 py-1.5">{partText(x.parts && x.parts.freight)}</td><td className="px-2 py-1.5">{partText(x.parts && x.parts.trucking)}</td>
+              <td className="px-2 py-1.5">{x.status === 'warehouse_final' || x.status === 'warehouse_estimate' ? <span style={{ color: x.status === 'warehouse_final' ? '#166534' : '#b45309', fontWeight: 700 }}>{(x.status === 'warehouse_final' ? 'FINAL — billed' : 'ESTIMATE — final only when the bills are in the Hub') + (x.bills.length ? ' + Hub bill ' + x.bills.map(function (b0) { return (b0.bill_number || '') + ' $' + fmt(b0.amount); }).join(' · ') : '')}</span> : x.status === 'bill' ? x.bills.map(function (b0) { return (b0.vendor || '') + ' ' + (b0.bill_number || '') + ' $' + fmt(b0.amount); }).join(' · ') : x.status === 'estimate' ? <span style={{ color: '#b45309', fontWeight: 700 }}>ESTIMATE (no bill yet)</span> : <span style={{ color: '#b45309' }}>no outbound bill with this release number</span>}</td>
+              <td className="px-2 py-1.5">{(x.warehouse || []).length === 0 ? <span style={{ color: SUB }}>not in the warehouse sync</span> : x.warehouse.map(function (w) { return <div key={w.id}>
+                <a href={w.link || '#'} target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 700 }}>{'order ' + w.order_id}</a>{' · freight ' + wPart(w.freight_used, w.freight_kind, w.manual_freight) + ' + trucking ' + wPart(w.trucking_used, w.trucking_kind, w.manual_trucking)}
+                {(w.bill_checks || []).filter(function (c) { return c.status === 'bill_above_quote' || c.status === 'bill_below_quote'; }).map(function (c) { return <div key={c.part} style={{ color: '#b91c1c', fontWeight: 700 }}>{'⚠ ' + c.part + ' bill $' + fmt(c.bill_total) + ' vs quote $' + fmt(c.quote) + ' (' + (c.difference > 0 ? '+' : '') + fmt(c.difference) + ') — demurrage? extra charges?'}</div>; })}
+              </div>; })}{!data.warehouse_on && (x.warehouse || []).length > 0 && <div style={{ color: SUB, fontSize: 10 }}>shown only — not in the numbers until the switch is on</div>}</td>
+              <td className="px-2 py-1.5">{x.status === 'bill' || x.status === 'warehouse_final' ? <span style={{ color: SUB }}>{x.status === 'bill' ? 'bill in — no estimate needed' : 'warehouse final — no estimate needed'}</span> : canEdit ? <span className="flex gap-1 items-center">$<input value={draft[k] !== undefined ? draft[k] : (x.shipping_estimate === null ? '' : String(x.shipping_estimate))} onChange={function (e) { d(k, e.target.value); }} className="nt-light px-2 py-0.5 rounded text-[11px]" style={Object.assign({ width: 100 }, inp)} placeholder="estimate" />
                 <Btn onClick={function () { act({ action: 'set_estimate', release: x.raw, amount: draft[k] === undefined ? '' : draft[k] }, 'Estimate saved for ' + x.raw + '.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[k]; setDraft(o); } }); }}>save</Btn></span> : '—'}</td></tr>; })}
-          {list.length === 0 && <tr><td colSpan={8} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoice in this period has a release number.</td></tr>}</tbody>
+          {list.length === 0 && <tr><td colSpan={11} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoice in this period has a release number.</td></tr>}</tbody>
         </table></div>
     </div>;
   }
@@ -223,7 +292,7 @@ export default function ProfitabilityTab(props) {
     return [
       <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={Object.assign({ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', minWidth: 220, maxWidth: 300 }, sub ? { paddingLeft: 26 } : {})}>{(isOpen ? '▾ ' : '▸ ') + r.label}
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
-        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
+        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && <div style={{ color: '#b45309', fontWeight: 800 }}>some weights missing</div>}</td>,
       <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{money(r, 'goods_revenue')}</td>,
       <td key="c3" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#065f46' }}>{r.avg_goods_price_per_lb === null ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_goods_price_per_lb)}</td>,
@@ -237,8 +306,8 @@ export default function ProfitabilityTab(props) {
       <td key="c10" className={pc}>{money(r, 'brokerage')}</td>,
       <td key="c11" className={pc}>{money(r, 'bonded')}</td>,
       <td key="c12" className={pc}>{'$' + fmt(r.total_cost)}{r.unknown_fields.length > 0 && <div style={{ color: '#b45309', fontWeight: 800 }}>not all known</div>}</td>,
-      <td key="c13" className={pc + ' font-extrabold'} style={{ color: r.complete ? (r.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{'$' + fmt(r.profit)}{!r.complete && <div className="font-bold">known part only</div>}</td>,
-      <td key="c14" className={pc}>{r.transport_profit === null ? <span style={{ color: '#b45309' }}>unknown</span> : '$' + fmt(r.transport_profit)}</td>,
+      <td key="c13" className={pc + ' font-extrabold'} style={{ color: r.complete ? (r.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{pf(r.profit)}{!r.complete && <div className="font-bold">known part only</div>}</td>,
+      <td key="c14" className={pc}>{r.transport_profit === undefined ? '🔒' : r.transport_profit === null ? <span style={{ color: '#b45309' }}>unknown</span> : '$' + fmt(r.transport_profit)}</td>,
       <td key="c15" className="px-2 py-1 text-right">{statusChip(r)}</td>
     ];
   }
@@ -390,6 +459,7 @@ export default function ProfitabilityTab(props) {
     <style>{SCROLL_CSS}</style>
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold" style={{ color: INK }}>📊 Profitability — by product, customer and invoice</div>
+      {data && data.can_see_margin === false && <div className="text-[11px] font-bold mt-1" style={{ color: '#92400e' }}>🔒 Profit and margin are hidden for you. They need the “P&L: See profit & margin” permission (Settings → Module Access) — ask an admin.</div>}
       <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="nt-light px-2 py-1 rounded text-xs" style={inp} />
       <span style={{ color: SUB }}>→</span>
       <input type="date" value={to} onChange={function (e) { setTo(e.target.value); }} className="nt-light px-2 py-1 rounded text-xs" style={inp} />
@@ -412,7 +482,7 @@ export default function ProfitabilityTab(props) {
 
     {tt && <div>
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-2">
-        {[['Goods revenue', money(tt, 'goods_revenue'), '#dcfce7', '#052e16'], ['Transport charged', money(tt, 'transport_revenue'), '#e0f2fe', '#0c2a5e'], ['Goods cost', money(tt, 'base_cost'), '#fee2e2', '#7f1d1d'], ['Commission', money(tt, 'commission'), '#fee2e2', '#7f1d1d'], ['Inbound allowance', money(tt, 'inbound_allowance'), '#ffedd5', '#431407'], ['Outbound transport', money(tt, 'outbound_cost'), '#fee2e2', '#7f1d1d'], [tt.complete ? 'Profit' : 'Profit (known part only)', '$' + fmt(tt.profit), tt.complete ? '#d1fae5' : '#fef3c7', tt.complete ? '#065f46' : '#78350f']].map(function (k) {
+        {[['Goods revenue', money(tt, 'goods_revenue'), '#dcfce7', '#052e16'], ['Transport charged', money(tt, 'transport_revenue'), '#e0f2fe', '#0c2a5e'], ['Goods cost', money(tt, 'base_cost'), '#fee2e2', '#7f1d1d'], ['Commission', money(tt, 'commission'), '#fee2e2', '#7f1d1d'], ['Inbound allowance', money(tt, 'inbound_allowance'), '#ffedd5', '#431407'], ['Outbound transport', money(tt, 'outbound_cost'), '#fee2e2', '#7f1d1d'], [tt.complete ? 'Profit' : 'Profit (known part only)', pf(tt.profit), tt.complete ? '#d1fae5' : '#fef3c7', tt.complete ? '#065f46' : '#78350f']].map(function (k) {
           return <div key={k[0]} className="rounded-lg p-2" style={{ background: k[2], color: k[3] }}><div className="text-[10px] font-bold">{k[0]}</div><div className="text-[15px] font-black">{k[1]}</div></div>; })}
       </div>
       <div className="flex gap-2 items-center flex-wrap mb-2 text-[11px]">
@@ -431,11 +501,12 @@ export default function ProfitabilityTab(props) {
           {allWarnKinds.map(function (k) { return <div key={k}>{'• ' + (FLAG_WORDS[k] || k) + ' — ' + ((cellWarn[k] || 0) ? cellWarn[k] + ' line(s)' : warnCount[k] + ' time(s)')}</div>; })}
           {(data.unallocated || []).length > 0 && <div className="mt-1 font-extrabold">Amounts NOT yet placed on any product (they are not lost, and not in the profit above):</div>}
           {(data.unallocated || []).map(function (u, i) { return <div key={i}>{'• $' + fmt(u.amount) + ' — ' + String(u.what).replace(/_/g, ' ') + (u.invoice ? ' · invoice ' + u.invoice : '') + (u.bill ? ' · bill ' + u.bill : '') + (u.vendor ? ' (' + u.vendor + ')' : '') + (u.release ? ' · release ' + u.release : '') + ' — ' + u.why}</div>; })}
+          {(data.flags || []).filter(function (f) { return f.kind === 'shipping_charged_below_cost_plus_7pct' || f.kind === 'exw_but_shipping_cost_on_release' || f.kind === 'cnf_separate_without_shipping_line' || f.kind === 'invoice_shipping_estimates_differ' || f.kind === 'invoice_shipping_estimate_split_unresolved'; }).slice(0, 60).map(function (f, i) { return <div key={'s' + i} style={{ color: '#991b1b', fontWeight: 700 }}>{'• ' + (FLAG_WORDS[f.kind] || f.kind) + ': ' + (f.invoice ? 'invoice ' + f.invoice : '') + (f.release ? 'release ' + f.release : '') + (f.charged !== undefined ? ' — charged $' + fmt(f.charged) : '') + (f.cost !== undefined ? ', our cost $' + fmt(f.cost) + (f.cost_kind === 'estimate' ? ' (estimate)' : ' (bill)') : '') + (f.minimum !== undefined ? ', minimum $' + fmt(f.minimum) + ', short by $' + fmt(f.short_by) : '') + (f.used !== undefined ? ' — $' + fmt(f.used) + ' used' : '') + (f.releases ? ' — releases ' + f.releases.join(', ') : '') + (f.amount !== undefined ? ' — $' + fmt(f.amount) : '')}</div>; })}
           {(data.flags || []).filter(function (f) { return f.kind === 'two_trucking_bills_on_one_release' || f.kind === 'transport_bill_not_marked_outbound' || f.kind === 'brokerage_bill_on_non_houston_release' || f.kind === 'bill_split_unresolved'; }).slice(0, 40).map(function (f, i) { return <div key={'f' + i}>{'• ' + (FLAG_WORDS[f.kind] || f.kind) + ': ' + (f.bill ? 'bill ' + f.bill + ' ' : '') + (f.vendor ? '(' + f.vendor + ') ' : '') + (f.release ? 'release ' + f.release + ' ' : '') + (f.releases ? 'release ' + f.releases.join(', ') + ' ' : '') + (f.bills ? '— bills ' + f.bills.join(', ') : '') + (f.why ? '— ' + f.why : '')}</div>; })}
         </div>}
       </div>}
       <div className="flex gap-1.5 flex-wrap mb-2">
-        {[['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice'], ['containers', '🚢 Containers (shipping cost)'], ['setup', '⚙ Names, units and supplier links']].map(function (v) {
+        {[['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice'], ['containers', '🚢 Containers (shipping cost)'], ['estfinal', '⚖ Estimate vs Final (shipping)'], ['setup', '⚙ Names, units and supplier links']].map(function (v) {
           return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
         <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>
       </div>
@@ -444,6 +515,7 @@ export default function ProfitabilityTab(props) {
       {view === 'invoice' && viewTable(data.by_invoice || [], 'Invoice', true)}
       {view === 'setup' && setupView()}
       {view === 'containers' && containersView()}
+      {view === 'estfinal' && estFinalView()}
       <div className="text-[10px] mt-2" style={{ color: SUB }}>
         Profit = goods revenue + transportation charged − goods cost − commission − inbound allowance − outbound transportation − brokerage − bonded. Averages are total ÷ total pounds. Costs that belong to a release are split across all the goods on that release by pounds, before any grouping or filter. Brokerage and bonded go to Houston shipments only (release numbers starting 1002-); Canada (1001-) gets none. Bonded is a standard $200 per Houston shipment, split across its goods by pounds; actual bonded bills are not added on top.
       </div>
