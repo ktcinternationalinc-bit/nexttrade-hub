@@ -10,6 +10,8 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { readInvoiceFromBase64 } from '../../../../lib/invoice-extract-server'; // v55.83-PQ
+import { SHIPPING_TERMS, basisOfTerms } from '../../../../lib/shipping-terms'; // v55.83-TG
+import { audit } from '../../../../lib/audit-server'; // v55.83-TG
 
 // v55.83-QO — AI document reads need more than Vercel's default 10s.
 export const maxDuration = 60;
@@ -105,6 +107,40 @@ export async function POST(req) {
       if (lres && lres.error) { return NextResponse.json({ ok: false, error: 'Product mapping write failed: ' + lres.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
       if (!(lres && lres.data && lres.data.length)) { return NextResponse.json({ ok: false, error: 'No invoice line updated (not found, or it belongs to a different invoice).', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
       return NextResponse.json({ ok: true, item: lres.data[0], api_build_marker: API_BUILD_MARKER });
+    }
+
+    // ── v55.83-TG (Max, Nov 16): the invoice's SHIPPING TERMS — one value per invoice, kept in pl_invoice_terms (the row the
+    // profit report reads), with who/when and an audit entry. The invoice itself (amounts, lines, Wave) is not changed.
+    if (action === 'get_shipping_terms') {
+      var gg = await assertPermission(db, by, 'invoices.view', req);
+      if (!gg.ok) { return NextResponse.json({ ok: false, error: gg.error, api_build_marker: API_BUILD_MARKER }, { status: gg.status }); }
+      var gt = await db.from('pl_invoice_terms').select('*').eq('invoice_id', invoiceId).maybeSingle();
+      if (gt.error) { return NextResponse.json({ ok: false, error: gt.error.message, api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+      var d0 = gt.data || {};
+      return NextResponse.json({ ok: true, shipping_terms: d0.shipping_terms || null, shipping_cost_estimate: d0.shipping_cost_estimate === undefined ? null : d0.shipping_cost_estimate, ready: !gt.data || Object.prototype.hasOwnProperty.call(gt.data, 'shipping_terms'), api_build_marker: API_BUILD_MARKER });
+    }
+    if (action === 'set_shipping_terms') {
+      var sg = await assertPermission(db, by, 'invoices.edit', req);
+      if (!sg.ok) { return NextResponse.json({ ok: false, error: sg.error, api_build_marker: API_BUILD_MARKER }, { status: sg.status }); }
+      var stt = String(body.shipping_terms || '');
+      if (SHIPPING_TERMS.indexOf(stt) < 0) { return NextResponse.json({ ok: false, error: 'Pick the shipping terms: EXW, CNF in the price, or CNF with a separate shipping line.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var sc = body.shipping_cost_estimate === null || body.shipping_cost_estimate === undefined || body.shipping_cost_estimate === '' ? null : Number(body.shipping_cost_estimate);
+      if (sc !== null && (isNaN(sc) || sc < 0)) { return NextResponse.json({ ok: false, error: 'The shipping cost must be a number, zero or more.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      if (stt !== 'EXW' && !(sc > 0)) { return NextResponse.json({ ok: false, error: 'CNF needs the shipping cost we expect to pay.', api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      var inv0 = await db.from('accounting_invoices').select('id').eq('id', invoiceId).maybeSingle();
+      if (inv0.error || !inv0.data) { return NextResponse.json({ ok: false, error: 'Invoice not found.', api_build_marker: API_BUILD_MARKER }, { status: 404 }); }
+      var prevS = await db.from('pl_invoice_terms').select('*').eq('invoice_id', invoiceId).maybeSingle();
+      var nowS = new Date().toISOString();
+      var rowS = { invoice_id: invoiceId, basis: basisOfTerms(stt), shipping_terms: stt, shipping_cost_estimate: sc, updated_by: by, updated_at: nowS };
+      if (stt === 'EXW') { rowS.embedded_transport = null; } // EXW never has shipping inside the price
+      var upS = await db.from('pl_invoice_terms').upsert(rowS, { onConflict: 'invoice_id' }).select('invoice_id, shipping_terms, shipping_cost_estimate');
+      if (upS.error) {
+        var msgS = /shipping_terms|shipping_cost_estimate|column/i.test(upS.error.message) ? 'The shipping-terms columns are not in the database yet — run sql/v55-83-TG2-invoice-shipping-terms.sql in Supabase.' : upS.error.message;
+        return NextResponse.json({ ok: false, error: msgS, api_build_marker: API_BUILD_MARKER }, { status: 400 });
+      }
+      if (!(upS.data && upS.data.length && upS.data[0].shipping_terms === stt)) { return NextResponse.json({ ok: false, error: 'Shipping terms did not read back — not saved.', api_build_marker: API_BUILD_MARKER }, { status: 500 }); }
+      try { await audit(db, by, 'invoice_shipping_terms_set', 'accounting_invoice', invoiceId, { from: prevS && prevS.data ? { shipping_terms: prevS.data.shipping_terms || null, shipping_cost_estimate: prevS.data.shipping_cost_estimate === undefined ? null : prevS.data.shipping_cost_estimate, basis: prevS.data.basis || null } : null, to: { shipping_terms: stt, shipping_cost_estimate: sc, basis: rowS.basis } }); } catch (eA) {}
+      return NextResponse.json({ ok: true, saved: upS.data[0], api_build_marker: API_BUILD_MARKER });
     }
 
     return NextResponse.json({ ok: false, error: 'Unknown action "' + action + '".', api_build_marker: API_BUILD_MARKER }, { status: 400 });

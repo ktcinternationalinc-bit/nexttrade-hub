@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TG',
+    date: '2026-11-16',
+    title: 'Profitability → Containers: shipping costs from the warehouse (freight + trucking), open orders, and an automatic check every 3 hours',
+    items: [
+      { text: 'Containers now shows what each shipment cost in the Nextrade warehouse: freight and trucking side by side, the first quote and the final payment, and whether the total is final or still provisional.' },
+      { text: 'New “↻ Sync Shipping Costs” button, plus an automatic check every 3 hours. If a check fails, it says so in red and the figures from the last good check stay.' },
+      { text: 'New “Open Orders — Last 2 Years” list: every warehouse order not yet closed, oldest first, with shipped-but-not-closed orders in blue.' },
+      { text: 'A review list shows what needs a person: a payment far above its quote, a missing amount, a release with no invoice, or a forwarder or trucker bill in the Hub that does not match the quote (demurrage, waiting time…).' },
+      { text: 'The warehouse costs are shown for checking only. They go into the profit numbers only after the owner switches them on.' },
+      { text: 'All amounts are US dollars. A shipped Canada order with every shipping box empty is treated as the customer’s own transport (cost 0, marked “inferred”). One wire that pays several orders is never counted as one order’s cost.' },
+      { text: 'Invoice form: every invoice now needs ONE shipping choice — EXW (no shipping by us), CNF with shipping included in the price, or CNF with shipping charged on a separate line — plus our expected shipping cost. That cost is an estimate; the forwarder and trucker bills replace it as the final cost.' },
+      { text: 'A shipping line on a CNF-separate (or EXW) invoice must be at least our shipping cost + 7%. The invoice form warns before saving, and the profit report flags any invoice below it.' },
+      { text: 'Only a bill confirms a final shipping cost. Until the bills are in, the estimate is used. Containers now shows freight and trucking separately (estimate → bill → difference), and the new ⚖ Estimate vs Final report lists every difference (with a download). A warehouse payment that does not match the bill is flagged; the bill is used.' },
+      { text: 'Profit and margin figures (Profitability, Sales P&L, Inventory P&L) are now shown only to people with the new “P&L: See profit & margin” permission, and to super admin. Others see 🔒.' },
+      { text: 'CNF / EXW: the invoice should say which. CNF may or may not have a shipping line; EXW should have one. An invoice that says neither is guessed and put on the review list. A customer name that differs between the warehouse and the invoice is noted; matching is by release number only.' },
+      { superAdminOnly: true, text: 'v55.83-TG: source = warehouse STAGING (fix.nextrade-staging.com, read-only feed). Run sql/v55-83-TG-warehouse-shipping.sql. Vercel env: NEXTRADE_FEED_URL, NEXTRADE_FEED_TOKEN. Cron /api/accounting/warehouse-shipping every 3 hours (15 */3 * * *). P&L switch starts OFF (super admin turns it on in Containers).' }
+    ]
+  },
+  {
     version: 'v55.83-TF',
     date: '2026-11-16',
     title: 'Project 1: the 🧭 Sourcing desk, and supplier messages sent from info@ktcus.com only after approval',

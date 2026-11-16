@@ -43,6 +43,10 @@
     {
       "path": "/api/commercial/worker",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/accounting/warehouse-shipping",
+      "schedule": "15 */3 * * *"
     }
   ]
 }

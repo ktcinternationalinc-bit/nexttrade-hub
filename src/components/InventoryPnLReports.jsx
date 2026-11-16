@@ -19,6 +19,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import RestrictedNotice from './RestrictedNotice';
 import { supabase } from '../lib/supabase';
+import { canSeeMargin } from '../lib/margin-visibility'; // v55.83-TG
 import { canSeeInventoryPnL } from '../lib/inventory-permissions';
 
 function fmtNum(n, dp) {
@@ -59,6 +60,7 @@ export default function InventoryPnLReports(props) {
   var toast = props.toast || { success: function(){}, error: function(){}, info: function(){} };
 
   var canSeePnL = isSuperAdmin || canSeeInventoryPnL(modulePerms);
+  var seeM = canSeeMargin(isSuperAdmin, modulePerms); // v55.83-TG — profit / margin need 'P&L: See profit & margin'
 
   var [products, setProducts] = useState([]);
   var [warehouses, setWarehouses] = useState([]);
@@ -267,12 +269,13 @@ export default function InventoryPnLReports(props) {
   // Top 10 best/worst (only meaningful for per-product view)
   var topMovers = useMemo(function () {
     if (groupBy !== 'product') return null;
+    if (!seeM) return null; // v55.83-TG — rankings by profit are hidden without the permission
     var withSales = rows.slice();
     var best = withSales.slice(0, 10);
     var worst = withSales.slice().sort(function (a, b) { return a.gross_profit - b.gross_profit; }).slice(0, 10);
     var topRev = withSales.slice().sort(function (a, b) { return b.revenue - a.revenue; }).slice(0, 10);
     return { best: best, worst: worst, topRev: topRev };
-  }, [groupBy, rows]);
+  }, [groupBy, rows, seeM]);
 
   async function exportExcel() {
     try {
@@ -283,10 +286,10 @@ export default function InventoryPnLReports(props) {
                      'Sold Qty', 'Revenue', 'COGS', 'Gross Profit', 'Margin %'];
       var aoa = [headers];
       rows.forEach(function (r) {
-        aoa.push([r.label, r.sold_qty, r.revenue, r.cogs, r.gross_profit, r.margin_pct]);
+        aoa.push(seeM ? [r.label, r.sold_qty, r.revenue, r.cogs, r.gross_profit, r.margin_pct] : [r.label, r.sold_qty, r.revenue, r.cogs, 'hidden', 'hidden']);
       });
       // Total row
-      aoa.push(['TOTAL', grandTotal.sold_qty, grandTotal.revenue, grandTotal.cogs, grandTotal.gross_profit, grandTotal.margin_pct]);
+      aoa.push(seeM ? ['TOTAL', grandTotal.sold_qty, grandTotal.revenue, grandTotal.cogs, grandTotal.gross_profit, grandTotal.margin_pct] : ['TOTAL', grandTotal.sold_qty, grandTotal.revenue, grandTotal.cogs, 'hidden', 'hidden']);
       var sheet = XLSX.utils.aoa_to_sheet(aoa);
       sheet['!cols'] = [{ wch: 40 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
       XLSX.utils.book_append_sheet(wb, sheet, 'P&L by ' + groupBy);
@@ -421,11 +424,11 @@ export default function InventoryPnLReports(props) {
         </div>
         <div className={'border rounded p-3 ' + (grandTotal.gross_profit >= 0 ? 'bg-teal-100 border-teal-300' : 'bg-red-100 border-red-300')}>
           <div className={'text-[10px] font-extrabold uppercase tracking-wider ' + (grandTotal.gross_profit >= 0 ? 'text-teal-900' : 'text-red-900')}>Gross Profit</div>
-          <div className={'text-lg font-mono font-extrabold ' + (grandTotal.gross_profit >= 0 ? 'text-teal-900' : 'text-red-900')}>{fmtNum(grandTotal.gross_profit, 2)}</div>
+          <div className={'text-lg font-mono font-extrabold ' + (grandTotal.gross_profit >= 0 ? 'text-teal-900' : 'text-red-900')}>{seeM ? fmtNum(grandTotal.gross_profit, 2) : '🔒'}</div>
         </div>
         <div className="bg-violet-100 border border-violet-300 rounded p-3">
           <div className="text-[10px] font-extrabold text-violet-900 uppercase tracking-wider">Margin</div>
-          <div className="text-lg font-mono font-extrabold text-violet-900">{fmtPct(grandTotal.margin_pct)}</div>
+          <div className="text-lg font-mono font-extrabold text-violet-900">{seeM ? fmtPct(grandTotal.margin_pct) : '🔒'}</div>
         </div>
       </div>
 
@@ -455,8 +458,8 @@ export default function InventoryPnLReports(props) {
                     <td className="px-3 py-1.5 text-right font-mono text-blue-900">{fmtNum(r.sold_qty, 2)}</td>
                     <td className="px-3 py-1.5 text-right font-mono font-bold text-emerald-800">{fmtNum(r.revenue, 2)}</td>
                     <td className="px-3 py-1.5 text-right font-mono text-amber-800">{fmtNum(r.cogs, 2)}</td>
-                    <td className={'px-3 py-1.5 text-right font-mono font-extrabold ' + (r.gross_profit >= 0 ? 'text-teal-800' : 'text-red-700')}>{fmtNum(r.gross_profit, 2)}</td>
-                    <td className={'px-3 py-1.5 text-right font-mono font-extrabold ' + (r.margin_pct >= 0 ? 'text-violet-800' : 'text-red-700')}>{fmtPct(r.margin_pct)}</td>
+                    <td className={'px-3 py-1.5 text-right font-mono font-extrabold ' + (r.gross_profit >= 0 ? 'text-teal-800' : 'text-red-700')}>{seeM ? fmtNum(r.gross_profit, 2) : '🔒'}</td>
+                    <td className={'px-3 py-1.5 text-right font-mono font-extrabold ' + (r.margin_pct >= 0 ? 'text-violet-800' : 'text-red-700')}>{seeM ? fmtPct(r.margin_pct) : '🔒'}</td>
                   </tr>
                 );
               })}
@@ -467,8 +470,8 @@ export default function InventoryPnLReports(props) {
                 <td className="px-3 py-2 text-right font-mono text-blue-900">{fmtNum(grandTotal.sold_qty, 2)}</td>
                 <td className="px-3 py-2 text-right font-mono text-emerald-900">{fmtNum(grandTotal.revenue, 2)}</td>
                 <td className="px-3 py-2 text-right font-mono text-amber-900">{fmtNum(grandTotal.cogs, 2)}</td>
-                <td className={'px-3 py-2 text-right font-mono ' + (grandTotal.gross_profit >= 0 ? 'text-teal-900' : 'text-red-800')}>{fmtNum(grandTotal.gross_profit, 2)}</td>
-                <td className={'px-3 py-2 text-right font-mono ' + (grandTotal.margin_pct >= 0 ? 'text-violet-900' : 'text-red-800')}>{fmtPct(grandTotal.margin_pct)}</td>
+                <td className={'px-3 py-2 text-right font-mono ' + (grandTotal.gross_profit >= 0 ? 'text-teal-900' : 'text-red-800')}>{seeM ? fmtNum(grandTotal.gross_profit, 2) : '🔒'}</td>
+                <td className={'px-3 py-2 text-right font-mono ' + (grandTotal.margin_pct >= 0 ? 'text-violet-900' : 'text-red-800')}>{seeM ? fmtPct(grandTotal.margin_pct) : '🔒'}</td>
               </tr>
             </tfoot>
           </table>
@@ -485,7 +488,7 @@ export default function InventoryPnLReports(props) {
                 return (
                   <div key={r.key} className="text-xs flex justify-between items-center bg-white border border-emerald-200 rounded px-2 py-1">
                     <span className="font-semibold text-slate-900 truncate flex-1">{i + 1}. {r.label}</span>
-                    <span className="font-mono font-extrabold text-emerald-800 ml-2">{fmtNum(r.gross_profit, 2)}</span>
+                    <span className="font-mono font-extrabold text-emerald-800 ml-2">{seeM ? fmtNum(r.gross_profit, 2) : '🔒'}</span>
                   </div>
                 );
               })}
@@ -498,7 +501,7 @@ export default function InventoryPnLReports(props) {
                 return (
                   <div key={r.key} className="text-xs flex justify-between items-center bg-white border border-red-200 rounded px-2 py-1">
                     <span className="font-semibold text-slate-900 truncate flex-1">{i + 1}. {r.label}</span>
-                    <span className={'font-mono font-extrabold ml-2 ' + (r.gross_profit >= 0 ? 'text-teal-800' : 'text-red-700')}>{fmtNum(r.gross_profit, 2)}</span>
+                    <span className={'font-mono font-extrabold ml-2 ' + (r.gross_profit >= 0 ? 'text-teal-800' : 'text-red-700')}>{seeM ? fmtNum(r.gross_profit, 2) : '🔒'}</span>
                   </div>
                 );
               })}

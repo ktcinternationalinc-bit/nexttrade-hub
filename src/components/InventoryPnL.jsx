@@ -8,6 +8,7 @@
 // Then computes profit and margin per SKU + grand totals.
 
 import { useState, useEffect, useMemo } from 'react';
+import { canSeeMargin } from '../lib/margin-visibility'; // v55.83-TG
 import { supabase } from '../lib/supabase';
 
 function fmt(n, dec) {
@@ -16,7 +17,8 @@ function fmt(n, dec) {
   return Number(n).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
 }
 
-export default function InventoryPnL({ skus, toast }) {
+export default function InventoryPnL({ skus, toast, modulePerms, isSuperAdmin }) {
+  var seeM = canSeeMargin(isSuperAdmin, modulePerms); // v55.83-TG — profit / margin need 'P&L: See profit & margin'
   var [salesByInvoiceItem, setSalesByInvoiceItem] = useState([]);
   var [movementsBySku, setMovementsBySku] = useState({});
   var [loading, setLoading] = useState(true);
@@ -179,12 +181,12 @@ export default function InventoryPnL({ skus, toast }) {
           <div className={'rounded p-2 border ' + (totals.profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200')}>
             <div className={'text-[10px] font-bold uppercase ' + (totals.profit >= 0 ? 'text-emerald-700' : 'text-red-700')}>Profit</div>
             <div className={'text-lg font-extrabold font-mono ' + (totals.profit >= 0 ? 'text-emerald-900' : 'text-red-900')}>
-              ${fmt(totals.profit)}
+              {seeM ? '$' + fmt(totals.profit) : '🔒'}
             </div>
           </div>
           <div className="bg-slate-50 border border-slate-200 rounded p-2">
             <div className="text-[10px] text-slate-700 font-bold uppercase">Margin · Units</div>
-            <div className="text-lg font-extrabold text-slate-900 font-mono">{fmt(totals.margin, 1)}% · {fmt(totals.units, 0)}</div>
+            <div className="text-lg font-extrabold text-slate-900 font-mono">{seeM ? fmt(totals.margin, 1) + '%' : '🔒'} · {fmt(totals.units, 0)}</div>
           </div>
         </div>
       </div>
@@ -231,10 +233,10 @@ export default function InventoryPnL({ skus, toast }) {
                       <td className="px-2 py-2 text-right font-mono text-blue-700 font-bold">${fmt(r.revenue)}</td>
                       <td className="px-2 py-2 text-right font-mono text-amber-700">${fmt(r.cogsUsd)}</td>
                       <td className={'px-2 py-2 text-right font-mono font-extrabold ' + (r.profit >= 0 ? 'text-emerald-700' : 'text-red-700')}>
-                        ${fmt(r.profit)}
+                        {seeM ? '$' + fmt(r.profit) : '🔒'}
                       </td>
                       <td className={'px-2 py-2 text-right font-mono font-bold ' + (r.margin >= 20 ? 'text-emerald-700' : r.margin >= 0 ? 'text-amber-700' : 'text-red-700')}>
-                        {fmt(r.margin, 1)}%
+                        {seeM ? fmt(r.margin, 1) + '%' : '🔒'}
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-slate-500">{r.lineCount}</td>
                     </tr>

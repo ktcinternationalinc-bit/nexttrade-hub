@@ -16,6 +16,9 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
 import { audit } from '../../../../lib/audit-server';
+import { termsOfBasis } from '../../../../lib/shipping-terms'; // v55.83-TG
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
+import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
 import { nameKey, relKey, PRICING_BASES } from '../../../../lib/profitability';
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
 
@@ -46,8 +49,10 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = body.action || 'report';
-    var userId = body.user_id;
-    if (!userId) { return bad('user_id required', 400); }
+    // v55.83-TG (Codex P1) — who is calling comes from the verified sign-in token; a different body.user_id is refused
+    var who = await verifiedCaller(req, body, createClient);
+    if (who.error) { return bad(who.error, who.status); }
+    var userId = who.userId;
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     if (!pv || pv.ok !== true) { return bad('This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
 
@@ -64,6 +69,9 @@ export async function POST(req) {
           lineReleasePounds: await fetchAll(function () { return db.from('pl_line_release_pounds').select('invoice_item_id, release_key, pounds'); }),
           estimates: await fetchAll(function () { return db.from('pl_release_estimates').select('release_key, outbound_estimate, note'); })
         };
+        // v55.83-TG — the shipping terms chosen on the invoice (same row; works before the new columns exist)
+        try { setup.terms = await fetchAll(function () { return db.from('pl_invoice_terms').select('invoice_id, basis, embedded_transport, shipping_terms, shipping_cost_estimate'); }); setup.shipping_terms_ready = true; }
+        catch (eST) { setup.shipping_terms_ready = false; }
         // v55.83-TD — a person's "shipping charge / product" marks (the report still runs before this table exists)
         try { setup.nameKinds = await fetchAll(function () { return db.from('pl_name_kinds').select('name_key, raw_name, kind'); }); setup.kinds_ready = true; }
         catch (eK) { if (!missingTable(eK && eK.message)) { throw eK; } setup.nameKinds = []; setup.kinds_ready = false; }
@@ -92,9 +100,21 @@ export async function POST(req) {
         bills = await fetchAll(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, record_status, bill_type, shipment_direction, release_number'); });
         billLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id, bill_id, line_kind, description, qty, unit, unit_price, amount, cost_amount, commission_amount'); });
       } catch (eB) { billsNote = 'The bills could not be read (' + ((eB && eB.message) || 'error') + ') — every cost shows as missing.'; }
-      var out = assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null, invoices: inv, items: items, customerNames: custNames, bills: bills, billLines: billLines, windowDays: 90 }, setup));
+      // v55.83-TG — shipping costs synced from the Nextrade warehouse: always shown on Containers, used in the numbers only when the switch is on
+      var whRows = []; var whOn = false; var whNote = null;
+      try {
+        var whS = await db.from('pl_warehouse_settings').select('value').eq('key', 'use_in_pnl').maybeSingle();
+        if (whS.error) { throw new Error(whS.error.message); }
+        whOn = !!(whS.data && whS.data.value === true);
+        var whA = await db.from('pl_warehouse_settings').select('value').eq('key', 'active_source').maybeSingle(); if (whA.error) { throw new Error(whA.error.message); }
+        var whSource = whA.data ? whA.data.value : 'nextrade-staging';
+        whRows = await fetchAll(function () { return db.from('pl_warehouse_shipping').select('id, section, order_id, release_number, release_key, status, superseded, conflict, cost_status, freight_used, freight_kind, trucking_used, trucking_kind, freight_estimate, freight_final, trucking_estimate, trucking_final, manual_freight, manual_trucking, combined_used, bill_checks, flags, source_link').eq('source', whSource).eq('superseded', false).eq('in_latest_feed', true); });
+      } catch (eW) { whRows = []; whOn = false; whNote = /pl_warehouse/.test(String(eW && eW.message)) ? 'Warehouse shipping costs are not set up yet (sql/v55-83-TG-warehouse-shipping.sql).' : 'Warehouse shipping costs could not be read (' + ((eW && eW.message) || 'error') + ') — the report runs without them.'; }
+      var out = assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null, invoices: inv, items: items, customerNames: custNames, bills: bills, billLines: billLines, windowDays: 90, warehouseRows: whRows, warehouseOn: whOn }, setup));
       var canEdit = await assertPermission(db, userId, 'pnl.edit_costs', req);
-      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), bills_note: billsNote, api_build_marker: API_BUILD_MARKER }, out));
+      // v55.83-TG (Max) — profit / margin only for people with 'P&L: See profit & margin' (super admin always)
+      var seeM = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk = !!(seeM && seeM.ok === true);
+      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
     }
 
     // ── everything below changes the REPORT SET-UP only ──
@@ -320,9 +340,12 @@ export async function POST(req) {
       var emb = (body.embedded_transport === '' || body.embedded_transport === null || body.embedded_transport === undefined) ? null : Number(body.embedded_transport);
       if (emb !== null && (isNaN(emb) || emb < 0)) { return bad('The transportation amount must be a number, zero or more.'); }
       if (basis === 'EXW' && emb) { return bad('On EXW the transportation is the separate line on the invoice. A typed amount would add revenue the invoice does not carry.'); }
-      var prevT = await db.from('pl_invoice_terms').select('basis, embedded_transport').eq('invoice_id', body.invoice_id).maybeSingle();
+      var prevT = await db.from('pl_invoice_terms').select('*').eq('invoice_id', body.invoice_id).maybeSingle();
       if (prevT.error) { return fail(prevT.error); }
-      var upT = await db.from('pl_invoice_terms').upsert({ invoice_id: body.invoice_id, basis: basis, embedded_transport: basis === 'EXW' ? null : emb, updated_by: userId, updated_at: now }, { onConflict: 'invoice_id' });
+      var rowT = { invoice_id: body.invoice_id, basis: basis, embedded_transport: basis === 'EXW' ? null : emb, updated_by: userId, updated_at: now };
+      // v55.83-TG — ONE value: a basis changed here keeps the invoice's shipping terms in step
+      if (prevT.data && Object.prototype.hasOwnProperty.call(prevT.data, 'shipping_terms')) { rowT.shipping_terms = termsOfBasis(basis, prevT.data.shipping_terms); if (!rowT.shipping_terms) { rowT.shipping_cost_estimate = null; } }
+      var upT = await db.from('pl_invoice_terms').upsert(rowT, { onConflict: 'invoice_id' });
       if (upT.error) { return fail(upT.error); }
       await audit(db, userId, 'pl_invoice_terms_set', 'accounting_invoice', body.invoice_id, { from: prevT.data || null, to: { basis: basis, embedded_transport: basis === 'EXW' ? null : emb }, changes: 'report only — the invoice is not altered' });
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });

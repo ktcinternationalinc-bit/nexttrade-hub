@@ -14,6 +14,8 @@
 //   pnl.view to see the P&L (super admin passes both automatically).
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { createClient } from '@supabase/supabase-js';
 import { normalizeProductKey, pickCost, groupCosts } from '../../../../lib/product-cost';
 import { businessOfInvoice } from '../../../../lib/business-of';
@@ -49,8 +51,10 @@ export async function POST(req) {
   try {
     var body = await req.json();
     var action = body.action;
-    var userId = body.user_id;
-    if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
+    // v55.83-TG (Codex P1) — who is calling comes from the verified sign-in token; a different body.user_id is refused
+    var who = await verifiedCaller(req, body, createClient);
+    if (who.error) { return NextResponse.json({ error: who.error }, { status: who.status }); }
+    var userId = who.userId;
 
     // ── set_cost / delete_cost: the cost-entry permission
     if (action === 'set_cost' || action === 'delete_cost') {
@@ -197,8 +201,11 @@ export async function POST(req) {
       var grossProfit = r2(costedRevenueTotal - cogs);
       var nonUsdRows = Object.keys(nonUsdAgg).map(function (k) { return nonUsdAgg[k]; });
 
-      return NextResponse.json({
+      // v55.83-TG (Max) — profit / margin only with 'P&L: See profit & margin' (super admin always)
+      var seeM2 = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk2 = !!(seeM2 && seeM2.ok === true);
+      var pnlOut = {
         ok: true,
+        can_see_margin: marginOk2,
         totals: {
           revenue: r2(revenue),
           costed_revenue: costedRevenueTotal,
@@ -217,7 +224,8 @@ export async function POST(req) {
         non_usd: nonUsdRows,
         source: 'accounting_invoices ' + inv.length + ' live invoices in period · costs effective-dated per invoice date · margin computed on COSTED revenue only · shipping excluded from COGS',
         api_build_marker: API_BUILD_MARKER
-      });
+      };
+      return NextResponse.json(marginOk2 ? pnlOut : stripProfit(pnlOut));
     }
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });
