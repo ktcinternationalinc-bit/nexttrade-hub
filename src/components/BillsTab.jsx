@@ -59,6 +59,10 @@ export default function BillsTab(props) {
   // entering the type or the direction") — every entry in the validation panel is saved as it is made
   var s23 = useState(''); var vSaved = s23[0]; var setVSaved = s23[1];
   var s24 = useState(null); var pricePreview = s24[0]; var setPricePreview = s24[1];
+  // v55.83-SV — possible duplicates: the block shown when a save is refused, the 'these are different bills' box, and the override switch
+  var sDb = useState(null); var dupBlock = sDb[0]; var setDupBlock = sDb[1]; // { sig, reasons }
+  var sDa = useState(null); var dupAsk = sDa[0]; var setDupAsk = sDa[1];     // { id, reason }
+  var forceDup = useRef(false);
   var s25 = useState(null); var rowAsk = s25[0]; var setRowAsk = s25[1]; // RV — void bill / void payment / resolve dispute, asked under the row (no browser pop-ups)
   function closePanels() { if (vRef.current && vTimer.current) { flushV(); } vRef.current = null; setValidating(null); setPaying(null); setDisputing(null); setRowAsk(null); setEditing(function (e) { return e && e.id ? null : e; }); } // RU — the price check of a bill being imported, before Save
   var vRef = useRef(null); var vTimer = useRef(null);
@@ -276,10 +280,18 @@ export default function BillsTab(props) {
   var bills = (data && data.bills) || [];
   var payments = (data && data.payments) || [];
   var totals = (data && data.totals) || { open: 0, overdue: 0, open_count: 0 };
+  var dupN = bills.filter(function (b) { return b.record_status === 'active' && !!b.dup_flag; }).length; // v55.83-SV
+  var dupBlockBox = (dupBlock && editing && dupBlock.sig === dupSig(editing)) ? <div className="rounded-lg px-3 py-2 mb-2" style={{ flexBasis: '100%', width: '100%', background: '#e9d5ff', color: '#3b0764', border: '2px solid #7e22ce' }}>
+    <div className="text-[12px] font-extrabold">⚠ NOT SAVED — this looks like a bill that is already in the Hub</div>
+    {dupBlock.reasons.map(function (r, i) { return <div key={i} className="text-[11px]">{'• ' + r}</div>; })}
+    <div className="text-[11px] mt-1">If it really is a different bill, save it anyway. Your name is recorded against that decision.</div>
+    <button onClick={saveBillAnyway} disabled={busy} className="mt-1 px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#6b21a8', color: '#ffffff' }}>Save anyway — it is a different bill</button>
+  </div> : null;
   var shown = bills.filter(function (b) {
     if (filter === 'open') { return b.record_status === 'active' && b.disputed !== true && b.open > 0.005; }
     if (filter === 'paid') { return b.record_status === 'active' && b.open <= 0.005; }
     if (filter === 'disputed') { return b.disputed === true && b.record_status === 'active'; }
+    if (filter === 'duplicates') { return b.record_status === 'active' && !!b.dup_flag; }
     if (filter === 'void') { return b.record_status === 'void'; }
     return true;
   }).filter(function (b) {
@@ -344,22 +356,42 @@ export default function BillsTab(props) {
     var d = Object.assign({}, editing || {});
     setBusy(true);
     var pre = Promise.resolve(null);
+    var fileLost = false; // v55.83-SV — a file that did not upload is never silent
+    var sendForce = forceDup.current === true; forceDup.current = false;
     if (importFile && d._imported) {
       var safeName = String(importFile.file.name || 'bill').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 60);
       var storagePath = 'pv/' + Date.now() + '-' + safeName; // v55.83-PE: private bucket — financial documents are not public files
-      pre = supabase.storage.from('bills-private').upload(storagePath, importFile.file, { upsert: false })
-        .then(function (r) { return r && r.error ? null : storagePath; })
+      pre = importFile._path ? Promise.resolve(importFile._path) : supabase.storage.from('bills-private').upload(storagePath, importFile.file, { upsert: false })
+        .then(function (r) { if (r && r.error) { return null; } importFile._path = storagePath; return storagePath; })
         .catch(function () { return null; });
     }
     pre.then(function (att) {
       if (att) { d.attachment_path = att; }
-      return api({ action: 'save_bill', bill: d });
+      else if (importFile && d._imported) { fileLost = true; } // v55.83-SV — the upload failed: the bill still saves, and the person is TOLD
+      return api({ action: 'save_bill', bill: d, confirm_duplicate: sendForce });
     }).then(function (j) {
       if (j && j.ok) {
         if (j.price_check && j.price_check.status === 'flagged') { toast.error('Bill saved — ⚠ PRICE CHECK FLAGGED: ' + j.price_check.flags[0].text + (j.price_check.flags.length > 1 ? ' (+' + (j.price_check.flags.length - 1) + ' more — open the bill)' : '')); }
         else { toast.success('Bill saved.' + (j.price_check && j.price_check.status === 'ok' ? ' ✅ Prices match the rules.' : '') + (j.warning ? ' ⚠ ' + j.warning : '')); }
+        if (j.duplicate_warning) { toast.error('⚠ ' + j.duplicate_warning + ' — the row is highlighted in purple.'); }
+        if (fileLost) { toast.error('⚠ The bill was saved, but its FILE DID NOT UPLOAD. Open the bill and use “＋ Attach the bill”.'); }
+        setDupBlock(null);
         setEditing(null); setImportFile(null); setImportNotes([]); setPricePreview(null); load();
+      } else if (j && j.duplicate) {
+        setDupBlock({ sig: dupSig(d), reasons: j.duplicate_reasons || [] });
+        toast.error('NOT SAVED — this looks like a duplicate. Read the purple box next to Save.');
       } else { toast.error((j && j.error) || 'Save failed.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function dupSig(d) { return String((d && d.vendor_name) || '').trim().toUpperCase() + '|' + String((d && d.bill_number) || '').trim().toUpperCase() + '|' + String((d && d.total_amount) || '') + '|' + String((d && d.bill_date) || '') + '|' + String((d && d.release_number) || '').trim().toUpperCase() + '|' + String((d && d.bill_type) || ''); }
+  function saveBillAnyway() { forceDup.current = true; saveBill(); }
+  function dismissDup(b) {
+    var why = String((dupAsk && dupAsk.reason) || '').trim();
+    if (why.length < 10) { toast.error('Write why these are different bills (a short sentence).'); return; }
+    setBusy(true);
+    api({ action: 'dismiss_bill_dup', bill_id: b.id, other_ids: (b.dup_flag && b.dup_flag.others) || [], reason: why }).then(function (j) {
+      if (j && j.ok) { toast.success('Recorded: not a duplicate. The flag is cleared for that pair.'); setDupAsk(null); load(); }
+      else { toast.error((j && j.error) || 'Could not record it.'); }
     }).finally(function () { setBusy(false); });
   }
   function savePayment() {
@@ -383,9 +415,9 @@ export default function BillsTab(props) {
       <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>Open: ${fmt(totals.open)} ({totals.open_count})</span>
       {totals.overdue > 0 && <span className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#ffedd5', color: '#431407' }}>Overdue: ${fmt(totals.overdue)}</span>}
       <div className="flex-1" />
-      {['open', 'paid', 'disputed', 'void', 'all'].map(function (f) {
+      {['open', 'paid', 'duplicates', 'disputed', 'void', 'all'].map(function (f) {
         return <button key={f} onClick={function () { setFilter(f); }} className="px-2 py-1 rounded-lg text-[10px] font-extrabold"
-          style={filter === f ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{f.toUpperCase()}</button>;
+          style={filter === f ? { background: '#1e293b', color: '#ffffff' } : (f === 'duplicates' && dupN > 0 ? { background: '#e9d5ff', color: '#3b0764', border: '1px solid #7e22ce' } : { background: '#f1f5f9', color: '#334155' })}>{f === 'duplicates' ? '⚠ POSSIBLE DUPLICATES (' + dupN + ')' : f.toUpperCase()}</button>;
       })}
       <button onClick={function () { setPanel(panel === 'rules' ? null : 'rules'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'rules' ? { background: '#312e81', color: '#ffffff' } : { background: '#eef2ff', color: '#312e81', border: '1px solid #c7d2fe' }}>📏 Price rules</button>
       <button onClick={function () { setPanel(panel === 'reports' ? null : 'reports'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'reports' ? { background: '#14532d', color: '#ffffff' } : { background: '#f0fdf4', color: '#14532d', border: '1px solid #86efac' }}>📊 Reports</button>
@@ -554,7 +586,7 @@ export default function BillsTab(props) {
             {parties.map(function (p0) { return <option key={p0.name} value={p0.name}>{p0.name}</option>; })}
           </select></label>
         <input className={inp} style={{ width: 220 }} placeholder="Notes" value={editing.notes || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { notes: e.target.value })); }} />
-        <button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
+        {dupBlockBox}<button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setEditing(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
       </div>
     </div>}
@@ -571,9 +603,10 @@ export default function BillsTab(props) {
         <tbody>
           {shown.map(function (b) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
+            var dupOn = b.record_status === 'active' && !!b.dup_flag; var dupStrong = dupOn && b.dup_flag.level === 'strong'; // v55.83-SV
             return <React.Fragment key={b.id}>
-              <tr style={late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { background: '#ffffff', color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
-                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}{b.release_number && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Release this bill belongs to" style={{ background: '#e0e7ff', color: '#312e81' }}>REL {b.release_number}</span>}{b.shipment_direction && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.direction_source] || ''} style={{ background: '#f1f5f9', color: '#334155' }}>{b.shipment_direction === 'inbound' ? '⬅ IN' : 'OUT ➡'}</span>}{b.bill_type ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.bill_type_source] || ''} style={{ background: '#fef3c7', color: '#7c2d12' }}>{BILL_TYPE_LABEL[b.bill_type]}</span> : (b.validation_status !== 'validated' && b.record_status === 'active' ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Type not known yet — picked at validation" style={{ background: '#fee2e2', color: '#7f1d1d' }}>type?</span> : null)}{b.other_reference && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Other reference" style={{ background: '#ecfeff', color: '#155e75' }}>REF {b.other_reference}</span>}</td>
+              <tr style={dupOn ? { background: dupStrong ? '#e9d5ff' : '#f3e8ff', color: '#3b0764', borderBottom: '1px solid #c084fc', boxShadow: 'inset 4px 0 0 #7e22ce' } : late ? { background: '#ffedd5', color: '#431407', borderBottom: '1px solid #e2e8f0' } : { background: '#ffffff', color: '#0f172a', borderBottom: '1px solid #e2e8f0' }}>
+                <td className="py-1.5 pr-2 font-semibold">{b.vendor_name}{dupOn && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={b.dup_flag.reasons.join('\n')} style={{ background: '#6b21a8', color: '#ffffff' }}>{dupStrong ? '⚠ LIKELY DUPLICATE' : '⚠ POSSIBLE DUPLICATE'}</span>}{b.paid_via && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Another company pays this — it stays out of what-we-owe and cash forecasts; link it to the payment you send that company (All Transactions → 🔗 → 🏢)" style={{ background: '#fce7f3', color: '#9d174d' }}>🏢 via {b.paid_via}</span>}{b.release_number && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Release this bill belongs to" style={{ background: '#e0e7ff', color: '#312e81' }}>REL {b.release_number}</span>}{b.shipment_direction && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.direction_source] || ''} style={{ background: '#f1f5f9', color: '#334155' }}>{b.shipment_direction === 'inbound' ? '⬅ IN' : 'OUT ➡'}</span>}{b.bill_type ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title={SRC_WORDS[b.bill_type_source] || ''} style={{ background: '#fef3c7', color: '#7c2d12' }}>{BILL_TYPE_LABEL[b.bill_type]}</span> : (b.validation_status !== 'validated' && b.record_status === 'active' ? <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Type not known yet — picked at validation" style={{ background: '#fee2e2', color: '#7f1d1d' }}>type?</span> : null)}{b.other_reference && <span className="ml-1 px-1 py-0.5 rounded text-[8px] font-extrabold" title="Other reference" style={{ background: '#ecfeff', color: '#155e75' }}>REF {b.other_reference}</span>}</td>
                 <td className="py-1.5 pr-2">{b.bill_number || '—'}</td>
                 <td className="py-1.5 pr-2">{b.bill_date}</td>
                 <td className="py-1.5 pr-2">{b.due_date || '—'}{late ? ' ⚠' : ''}</td>
@@ -605,9 +638,18 @@ export default function BillsTab(props) {
               </tr>
               {/* v55.83-RV (Max 22:47: "the validation section should go BELOW the actual bill ... so we are not scrolling all the way up")
                   — validate / pay / dispute / edit / void open right under the bill they are for */}
+              {dupOn && <tr><td colSpan={11} className="px-3 py-1.5" style={{ background: dupStrong ? '#e9d5ff' : '#f3e8ff', color: '#3b0764', borderBottom: '2px solid #7e22ce', boxShadow: 'inset 4px 0 0 #7e22ce' }}>
+                <div className="text-[11px] font-extrabold">{dupStrong ? '⚠ LIKELY DUPLICATE — do not pay until a person has checked' : '⚠ POSSIBLE DUPLICATE — check before paying'}</div>
+                {b.dup_flag.reasons.map(function (r, i) { return <div key={i} className="text-[11px]">{'• ' + r}</div>; })}
+                {canManage && (dupAsk && dupAsk.id === b.id ? <div className="mt-1 flex items-center gap-1 flex-wrap">
+                  <input value={dupAsk.reason} onChange={function (e) { setDupAsk({ id: b.id, reason: e.target.value }); }} placeholder="Why are these different bills? (required — it is kept on record)" className="nt-light px-2 py-1 rounded-lg text-[11px]" style={{ minWidth: 320, flex: 1, background: '#ffffff', color: '#0f172a', border: '1px solid #7e22ce' }} />
+                  <button onClick={function () { dismissDup(b); }} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#6b21a8', color: '#ffffff' }}>Record: not a duplicate</button>
+                  <button onClick={function () { setDupAsk(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
+                </div> : <button onClick={function () { setDupAsk({ id: b.id, reason: '' }); }} className="mt-1 px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#ffffff', color: '#6b21a8', border: '1px solid #7e22ce' }}>These are different bills…</button>)}
+              </td></tr>}
               {validating && validating.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
 <div className="rounded-xl p-3 mb-3" style={{ background: '#fffbeb', border: '1px solid #f59e0b' }}>
-      <div className="text-xs font-extrabold mb-1" style={{ color: '#78350f' }}>Validate: {validating.bill.vendor_name} {validating.bill.bill_number ? '· ' + validating.bill.bill_number : ''} — ${fmt(validating.bill.total_amount)}</div>
+      <div className="flex items-start justify-between gap-2"><div className="text-xs font-extrabold mb-1" style={{ color: '#78350f' }}>Validate: {validating.bill.vendor_name} {validating.bill.bill_number ? '· ' + validating.bill.bill_number : ''} — ${fmt(validating.bill.total_amount)}</div><button onClick={closeV} title="Close this panel — what you entered is kept" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>✕ Close</button></div>
       <BillDocToggle bill={validating.bill} api={api} toast={toast} canManage={canManage} onChanged={load} />
       <div className="text-[11px] mb-2" style={{ color: '#92400e' }}>Validation is not a formality. Confirm each check ONLY if you actually performed it — this record is audited, with your name and timestamp on it. Everything you enter is saved as you go; the bill counts as validated only after “✓ Mark validated”.</div>
       {/* v55.83-RP (Max 21:04: "Prior to validation there MUST be a selection of the TYPE of bill and the direction of the bill") */}
@@ -765,7 +807,7 @@ export default function BillsTab(props) {
             {parties.map(function (p0) { return <option key={p0.name} value={p0.name}>{p0.name}</option>; })}
           </select></label>
         <input className={inp} style={{ width: 220 }} placeholder="Notes" value={editing.notes || ''} onChange={function (e) { setEditing(Object.assign({}, editing, { notes: e.target.value })); }} />
-        <button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
+        {dupBlockBox}<button onClick={saveBill} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Save</button>
         <button onClick={function () { setEditing(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
       </div>
     </div>
@@ -793,6 +835,7 @@ export default function BillsTab(props) {
               </td></tr>}
               {expanded === b.id && <tr><td colSpan={11} className="py-1.5 pl-4" style={{ background: '#f8fafc', color: '#334155' }}>
                 {/* v55.83-SN — the actual bill beside what the Hub read (stacked on a phone, the bill first) */}
+                <div className="flex justify-end pr-2 mb-1"><button onClick={function () { setExpanded(null); }} title="Close the bill details" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>✕ Close</button></div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pr-2">
                 <div><BillDocViewer bill={b} api={api} toast={toast} canManage={canManage} onChanged={load} /></div>
                 <div>

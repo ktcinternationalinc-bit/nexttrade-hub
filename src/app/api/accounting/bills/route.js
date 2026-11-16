@@ -23,6 +23,7 @@ import { importSort, BILL_TYPE_LABEL } from '../../../../lib/bill-extract';
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
 import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
 import { billDupVerdict } from '../../../../lib/bill-dup-server'; // v55.83-QH
+import { scanBills, checkOne, pairKey } from '../../../../lib/bill-dup-scan'; // v55.83-SV — every bill compared with every other bill
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -54,6 +55,16 @@ async function fetchAll(buildQ) {
 }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+// v55.83-SV — pairs a person marked "not a duplicate" (kept as bill events; nothing is ever removed).
+async function loadDupDismissed(db) {
+  var out = {};
+  try {
+    var evs = await fetchAll(function () { return db.from('vendor_bill_events').select('bill_id, details').eq('kind', 'dup_dismissed'); });
+    evs.forEach(function (e) { var o = e && e.details && e.details.other_id; if (o) { out[pairKey(e.bill_id, o)] = true; } });
+  } catch (eDD) { /* events table missing — nothing dismissed */ }
+  return out;
+}
 
 async function loadBills(db) {
   var bills;
@@ -221,7 +232,7 @@ export async function POST(req) {
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
 
-    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
+    var WRITE_ACTIONS = { save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1, dismiss_bill_dup: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
     // Bills: Manage. READS accept ANY totals-level permission — the explicit
     // "Accounting: See Money Totals" (ACCT-008), or the older Bills/AR views
@@ -340,7 +351,13 @@ export async function POST(req) {
           (byBillW[l.bill_id] = byBillW[l.bill_id] || []).push({ kind: 'package', id: w.id, label: 'WP-' + String(w.seq || 0).padStart(4, '0'), status: w.status, payee: w.payee_name, request: !!w.funding_txn_id, amount: r2(l.amount) }); });
         rows.forEach(function (b) { if (byBillW[b.id]) { b.paid_by_wires = byBillW[b.id]; } });
       } catch (ePW) { /* wires SQL not run */ }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals });
+      // v55.83-SV — compare every live bill with every other one, on every load (never only at entry).
+      var dupCount = 0;
+      try {
+        var dupScan = scanBills(rows, await loadDupDismissed(db));
+        rows.forEach(function (b) { var df = dupScan.byId[b.id]; if (df) { b.dup_flag = df; dupCount++; } });
+      } catch (eDS) { /* a scan problem never blocks the list */ }
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, bills: rows, payments: L.pays, totals: totals, dup_flagged: dupCount });
     }
 
     // ── save_bill: create or update (active bills only)
@@ -400,6 +417,22 @@ export async function POST(req) {
           fields.paid_via = hitS;
         }
       }
+      // v55.83-SV — a bill typed in by hand, edited or copied is checked against every bill on file BEFORE it is saved.
+      // A new bill that looks like a certain duplicate (or a second trucking bill for one release) is not saved until
+      // the person confirms. An edit is never blocked — it carries the warning back instead.
+      var dupSave = { level: null, reasons: [], others: [] };
+      try {
+        var dupAll = await loadBills(db);
+        dupSave = checkOne({ id: bl.id || null, vendor_name: vendor, bill_number: fields.bill_number, bill_date: fields.bill_date, total_amount: amt,
+          release_number: Object.prototype.hasOwnProperty.call(fields, 'release_number') ? fields.release_number : bl.release_number,
+          other_reference: Object.prototype.hasOwnProperty.call(fields, 'other_reference') ? fields.other_reference : bl.other_reference,
+          bill_type: Object.prototype.hasOwnProperty.call(fields, 'bill_type') ? fields.bill_type : bl.bill_type }, dupAll.bills, await loadDupDismissed(db));
+      } catch (eDC) { /* a check problem never blocks a save */ }
+      if (!bl.id && dupSave.level === 'strong' && body.confirm_duplicate !== true) {
+        return NextResponse.json({ error: 'This looks like a duplicate — it was NOT saved. ' + dupSave.reasons.join(' · '), duplicate: true, duplicate_level: dupSave.level, duplicate_reasons: dupSave.reasons }, { status: 409 });
+      }
+      var dupWarn = dupSave.level ? ('POSSIBLE DUPLICATE — ' + dupSave.reasons.join(' · ')).substring(0, 600) : null;
+      if (!bl.id && dupSave.level === 'strong') { await audit(db, userId, 'bill_duplicate_override', 'vendor_bill', null, { vendor: vendor, bill_number: fields.bill_number, amount: amt, reasons: dupSave.reasons, others: dupSave.others }); }
       if (bl.id) {
         var cur = await db.from('vendor_bills').select('*').eq('id', bl.id).maybeSingle();
         if (cur.error || !cur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
@@ -438,7 +471,7 @@ export async function POST(req) {
         if (fields.category) { learnedU = await learnRule(db, vendor, fields.category, userId); } // v55.83-PJ — a changed pick updates the rule
         await audit(db, userId, 'bill_updated', 'vendor_bill', bl.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
         var lnU = await linesAfterSave(bl.id, bl);
-        return NextResponse.json({ ok: true, id: bl.id, updated: true, rule_learned: learnedU, warning: qbWarnU || lnU.warning || undefined, price_check: lnU.check || undefined });
+        return NextResponse.json({ ok: true, id: bl.id, updated: true, rule_learned: learnedU, warning: qbWarnU || lnU.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnU.check || undefined });
       }
       // v55.83-PJ (Max): "remember and categorize later on with new bills
       // automatically when imported" — no category given? use the vendor's
@@ -471,7 +504,7 @@ export async function POST(req) {
       if (fields.category && !autoCat) { learnedB = await learnRule(db, vendor, fields.category, userId); }
       await audit(db, userId, 'bill_created', 'vendor_bill', ins.data && ins.data.id, { vendor: vendor, amount: amt, category: fields.category || null, paid_via: fields.paid_via || null }); // v55.83-QI
       var lnC = ins.data && ins.data.id ? await linesAfterSave(ins.data.id, bl) : {};
-      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, rule_learned: learnedB, warning: lnC.warning || undefined, price_check: lnC.check || undefined });
+      return NextResponse.json({ ok: true, id: ins.data && ins.data.id, created: true, auto_category: autoCat, rule_learned: learnedB, warning: lnC.warning || undefined, duplicate_warning: dupWarn || undefined, price_check: lnC.check || undefined });
     }
 
     // ── void_bill (reversible record_status; nothing is deleted)
@@ -1136,6 +1169,22 @@ export async function POST(req) {
     //    transaction findable until then.
     // v55.83-SN (Max, Nov 14: "where do I view the bill?") — attach the document to a bill that has none.
     // Private path only; a bill that already has its file keeps it (never silently replaced).
+    // v55.83-SV — "these two are NOT the same bill": written down with who and why; the flag for that pair goes away.
+    // Nothing is deleted. It is a new event on the bill, so it can always be seen later.
+    if (action === 'dismiss_bill_dup') {
+      var ddReason = String(body.reason || '').trim();
+      var ddOthers = Array.isArray(body.other_ids) ? body.other_ids.slice(0, 20) : [];
+      if (!body.bill_id || !ddOthers.length) { return NextResponse.json({ error: 'A bill and the bill(s) it was compared with are required.' }, { status: 400 }); }
+      if (ddReason.length < 10) { return NextResponse.json({ error: 'Write why these are not the same bill (at least a short sentence).' }, { status: 400 }); }
+      var ddCur = await db.from('vendor_bills').select('id').eq('id', body.bill_id).maybeSingle();
+      if (ddCur.error || !ddCur.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      for (var ddi = 0; ddi < ddOthers.length; ddi++) {
+        var ddIns = await db.from('vendor_bill_events').insert({ bill_id: body.bill_id, kind: 'dup_dismissed', actor_id: userId, details: { other_id: String(ddOthers[ddi]), reason: ddReason.substring(0, 500) } });
+        if (ddIns.error) { return NextResponse.json({ error: ddIns.error.message }, { status: 400 }); }
+      }
+      await audit(db, userId, 'bill_duplicate_dismissed', 'vendor_bill', body.bill_id, { others: ddOthers, reason: ddReason.substring(0, 500) });
+      return NextResponse.json({ ok: true });
+    }
     if (action === 'attach_bill_file') {
       var afPath = String(body.attachment_path || '').trim();
       if (!body.bill_id || !/^pv\/\d{10,}-[a-zA-Z0-9._-]{1,60}$/.test(afPath)) { return NextResponse.json({ error: 'A bill and a private file path are required.' }, { status: 400 }); }

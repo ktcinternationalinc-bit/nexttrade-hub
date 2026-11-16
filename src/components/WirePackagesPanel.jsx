@@ -270,12 +270,17 @@ function PastWireForm(p) {
   var vendorPicked = null; if (past.kind === 'vendor' && past.bills) { past.bills.forEach(function (b) { if (past.picks[b.id] != null && !vendorPicked) { vendorPicked = b.vendor_name; } }); }
   return <div className="rounded-xl p-3 mb-3" style={{ background: '#f8fafc', border: '2px solid #0f766e' }}>
     <div className="flex items-center gap-2 mb-1"><div className="text-[14px] font-extrabold" style={{ color: INK }}>🕘 Record a wire that was sent before the Hub had wires</div><div className="flex-1" /><Btn light onClick={function () { setPast(null); }}>Close</Btn></div>
-    <div className="text-[12px] mb-2" style={{ color: SUB }}>Tick the bills it paid and roughly when it was sent. The Hub then finds the real money-out in the bank (a week either side; up to $100 more is accepted as an extra charge on the bill) and records those bills PAID. No signatures — it is kept in the history with your reason.</div>
+    <div className="text-[12px] mb-2" style={{ color: SUB }}>First pick who actually paid the vendor. <b>A vendor directly</b>: we wired the vendor from our own bank — tick the bills and roughly when, and the Hub finds that money-out in the bank (a week either side; up to $100 more is accepted as an extra charge) and records the bills PAID. No signatures; your reason is kept in the history. <b>A company paid for us</b>: the vendor was paid by that company out of money we had already sent it, so our bank only shows the money we sent the company — you pick that transfer and tick the bills it covered.</div>
     <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>1 · Who got the money?</div>
     <div className="flex gap-2 flex-wrap mb-2">
-      <button onClick={function () { p.onPick('vendor', ''); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: past.kind === 'vendor' ? '#0f766e' : '#ffffff', color: past.kind === 'vendor' ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>🧾 A vendor directly</button>
+      <button onClick={function () { p.onPick('vendor', ''); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: past.kind === 'vendor' ? '#0f766e' : '#ffffff', color: past.kind === 'vendor' ? '#ffffff' : INK, border: '1px solid #94a3b8' }}>🧾 A vendor directly<div className="text-[10px] font-bold" style={{ opacity: 0.85 }}>we wired the vendor from our own bank</div></button>
+      {/* v55.83-SV (Max, Nov 16: "how to send a previous wire sent thru RTM? makes 0 sense") — the companies are choices again. They open the steps for
+          bills a company paid FOR us out of money we had already sent it (two signatures) — never the no-signature past wire. */}
+      {(payees.parties || []).map(function (x) {
+        var k = x.kind === 'affiliate' ? 'affiliate' : 'service_provider';
+        return <button key={x.name} onClick={function () { p.onParty(k, x.name); }} className="rounded-lg px-3 py-2 text-[12px] font-extrabold text-left" style={{ background: '#ffffff', color: INK, border: '1px solid #94a3b8' }}>{'🏢 ' + x.name + ' paid the vendors for us'}<div className="text-[10px] font-bold" style={{ color: SUB }}>{'out of money we had already sent to ' + x.name}</div></button>;
+      })}
     </div>
-    <div className="text-[12px] mb-2 rounded-lg p-2" style={{ color: '#78350f', background: '#fffbeb', border: '1px solid #fcd34d' }}>{'A past payment through ' + (payees.parties || []).map(function (x) { return x.name; }).join(' or ') + ' is recorded as a request from the transfer that funded it, with two signatures: ＋ New wire → pick the company → pick the transfer → tick the bills. The bills are dated the day that transfer left the bank.'}</div>
     {past.kind && <div>
       <div className="text-[12px] font-extrabold mb-1" style={{ color: INK }}>2 · The bills that wire paid (change the amount for a part payment)</div>
       {!past.bills ? <div className="text-[12px]" style={{ color: MUTED }}>Loading the open bills…</div> : past.bills.length === 0 ? <div className="text-[12px]" style={{ color: SUB }}>No open bills for this choice.</div>
@@ -540,6 +545,13 @@ export default function WirePackagesPanel(props) {
     act({ action: 'set_sent_date', id: det.package.id, sent_date: dateAsk.date, reason: dateAsk.reason }, function (j) { return j.matched ? '📅 Date corrected — and the bank line was found: the bills are now PAID.' : '📅 Date corrected — looking around the new date.'; },
       function () { setDateAsk(null); open(det.package.id); }).then(function (j) { if (!(j && j.ok)) { setDateAsk(function (d0) { return d0 ? Object.assign({}, d0, { err: (j && j.error) || 'Not saved.' }) : d0; }); } });
   }
+  // v55.83-SV — bills a company (RTM / NextTrade) already paid for us: the same request steps, opened with the company picked and explained in plain words
+  function startPaidFor(kind, name) {
+    setPast(null); setDet(null); setQ('');
+    setEd({ id: null, kind: kind, payee: name, fee: '', fee_note: '', memo: '', picks: {}, bills: null, fundId: null, fund: null, planned: '', fillMsg: null, fillVendors: [], paidFor: true });
+    loadBills(kind, name, null);
+    loadFunding(kind, name);
+  }
   function startPast() { withPayees(function () { setDet(null); setEd(null); setPast({ kind: null, payee: '', bills: null, picks: {}, date: '', ref: '', reason: '', err: '' }); }); }
   function pastPick(kind, name) {
     var nx = Object.assign({}, past, { kind: kind, payee: name, bills: null, picks: {}, err: '' }); setPast(nx);
@@ -608,10 +620,18 @@ export default function WirePackagesPanel(props) {
     var head = <thead><tr style={{ background: '#f1f5f9', color: SUB }}><th></th><th className="px-2 py-1.5 text-left text-[11px]">Vendor · bill</th><th className="px-2 py-1.5 text-left text-[11px]">In / Out · Release # · Reference</th><th className="px-2 py-1.5 text-right text-[11px]">Still owed</th><th className="px-2 py-1.5 text-right text-[11px]">Pay now</th></tr></thead>;
     return <div className="nt-paper rounded-xl p-4" style={{ border: '2px solid #0f766e' }}>
       <div className="flex gap-2 items-center mb-3">
-        <div className="text-[16px] font-extrabold" style={{ color: INK }}>{ed.id ? '✏ Change this wire' : '＋ New wire'}</div>
+        <div className="text-[16px] font-extrabold" style={{ color: INK }}>{ed.id ? '✏ Change this wire' : (ed.paidFor ? '🏢 Bills ' + ed.payee + ' paid for us' : '＋ New wire')}</div>
         <div className="flex-1" />
         <Btn light onClick={function () { setEd(null); }}>✕ Close</Btn>
       </div>
+      {ed.paidFor && <div className="rounded-xl p-3 mb-3 text-[12px]" style={{ background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>
+        <div className="font-extrabold mb-1">{'How this works — nothing is sent to the bank from here'}</div>
+        <div>{'1. We sent ' + ed.payee + ' a lump of money. That is the only line our bank shows.'}</div>
+        <div>{'2. ' + ed.payee + ' then paid our vendors out of that lump. Those payments are not in our bank.'}</div>
+        <div>{'3. Below: pick the transfer (the lump), then tick the bills it paid. The total cannot be more than the lump, less the service fee.'}</div>
+        <div>{'4. Two people sign. The bills are then marked PAID, dated the day the lump left our bank.'}</div>
+        <div className="mt-1" style={{ color: '#1e40af' }}>{'If the transfer is not listed below: open All Transactions, find the money we sent ' + ed.payee + ', and mark that line as sent to ' + ed.payee + ' (the 🏢 button on the line). Then come back.'}</div>
+      </div>}
       {/* step 1 */}
       <div className="text-[13px] font-extrabold mb-2" style={{ color: INK }}>1 · Who receives the money?</div>
       <div className="flex gap-2 flex-wrap mb-4">
@@ -625,10 +645,10 @@ export default function WirePackagesPanel(props) {
       </div>
       {/* v55.83-SP — where the money comes from: a transfer already sent, or a new wire */}
       {ed.kind && ed.kind !== 'vendor' && <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', border: '2px solid ' + (ed.fundId ? '#0f766e' : '#cbd5e1') }}>
-        <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{'Where does the money come from?'}</div>
+        <div className="text-[13px] font-extrabold mb-1" style={{ color: INK }}>{ed.paidFor ? 'Which transfer paid these bills? (Where does the money come from?)' : 'Where does the money come from?'}</div>
         {!ed.fund ? <div className="text-[12px]" style={{ color: MUTED }}>{ed.fundErr ? '⛔ ' + ed.fundErr : 'Looking for transfers already sent to ' + ed.payee + '…'}</div> : <div>
           {ed.fund.length === 0 && <div className="text-[12px] mb-1" style={{ color: SUB }}>{'No transfer to ' + ed.payee + ' has money left on it. To use one, mark the bank line “sent to ' + ed.payee + '” in All Transactions — or continue below with a new wire.'}</div>}
-          {ed.fund.length > 0 && <div className="text-[12px] mb-2 font-bold" style={{ color: '#92400e' }}>{'💰 ' + ed.fund.length + ' transfer(s) to ' + ed.payee + ' still have money waiting for bills. Pick one and this becomes a request to ' + ed.payee + ' for that money.'}</div>}
+          {ed.fund.length > 0 && <div className="text-[12px] mb-2 font-bold" style={{ color: '#92400e' }}>{'💰 ' + ed.fund.length + ' transfer(s) to ' + ed.payee + ' still have money waiting for bills. Pick one: the bills you tick are then paid OUT OF that transfer (the Hub calls this a request to ' + ed.payee + '). Nothing new leaves our bank.'}</div>}
           <div className="flex flex-col gap-1.5">
             {ed.fund.map(function (x) { var on = ed.fundId === x.id;
               return <button key={x.id} onClick={function () { setEd(Object.assign({}, ed, { fundId: on ? null : x.id, fillMsg: null })); }} className="rounded-lg px-3 py-2 text-left" style={{ background: on ? '#ecfdf5' : '#f8fafc', color: INK, border: '2px solid ' + (on ? '#0f766e' : '#e2e8f0') }}>
@@ -1010,8 +1030,8 @@ export default function WirePackagesPanel(props) {
       {perms.superAdmin && <Btn light onClick={startPast} disabled={busy}>🕘 Record a past wire</Btn>}
       {perms.prepare && <Btn big color="#0f766e" onClick={startNew} disabled={busy}>＋ New wire</Btn>}
     </div>
-    {past && payees && <PastWireForm past={past} setPast={setPast} payees={payees} busy={busy} onPick={pastPick} onSave={savePast} />}
-    <div className="text-[12px] mb-3" style={{ color: SUB }}>New wire → pick who gets the money → tick the bills → it checks itself → 2 people sign → send it at the bank → attach the bank line → RTM proof.</div>
+    {past && payees && <PastWireForm past={past} setPast={setPast} payees={payees} busy={busy} onPick={pastPick} onParty={startPaidFor} onSave={savePast} />}
+    <div className="text-[12px] mb-3" style={{ color: SUB }}><b>Paying a vendor now:</b> ＋ New wire → pick who gets the money → tick the bills → it checks itself → 2 people sign → send it at the bank → attach the bank line. <b>Already paid, before the Hub had wires:</b> 🕘 Record a past wire → pick who paid (us, or a company that paid for us).</div>
     {/* v55.83-RJ (review gaps 7, 15) — anything that would stop a wire, said up front */}
     {setup && (function () {
       var warnsS = [];

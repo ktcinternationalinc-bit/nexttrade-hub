@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SV',
+    date: '2026-11-15',
+    title: 'Bills: every bill is checked against every other bill for duplicates, flagged in purple',
+    items: [
+      'Why: NexPac bill 14481 was in the list twice with no warning. The old duplicate check only looked at a bill when it arrived from a file or an email. A bill typed in by hand, edited or copied was never checked, and two bills already in the Hub were never compared with each other.',
+      'Now every bill is compared with every other bill each time the Bills screen opens. Bills that look like duplicates get a PURPLE background and a “⚠ LIKELY DUPLICATE” or “⚠ POSSIBLE DUPLICATE” label, with the reasons written under the row and the other bill named.',
+      'One trucking bill per release number. A second trucking bill for the same release is flagged as a likely duplicate, whatever the vendor, amount or date.',
+      'It also flags: the same vendor and bill number; the same bill number written two ways (14481 and INV-14481, or with leading zeros); the same vendor, amount and bill date under two different numbers (unless each has its own release number); the same bill number under another vendor name; the same release number or reference with the same amount.',
+      'A new button “⚠ POSSIBLE DUPLICATES (n)” at the top of Bills shows only the flagged bills.',
+      'When you type in or copy a bill that looks like a certain duplicate, it is NOT saved. A purple box next to Save says why. If it really is a different bill, “Save anyway” saves it and records your name against that decision.',
+      'If two flagged bills are genuinely different, click “These are different bills…”, write why, and the flag for that pair is cleared. The reason is kept on record. Nothing is deleted or hidden by any of this.',
+      'A clear “✕ Close” button at the top of the validation panel and at the top of the bill details.',
+      'Wires → “Record a past wire” now shows RTM Capital and NextTrade Industries as choices (“paid the vendors for us”). Before, it showed only “A vendor directly” and a hard-to-follow note.',
+      'Picking a company opens the steps with a short explanation: we sent the company a lump of money, the company paid our vendors out of it, so you pick that transfer and tick the bills it paid. Two people sign, the same as before. Nothing is sent to the bank from that screen.',
+      'If the transfer is not listed, the screen now says what to do: mark the bank line as sent to that company in All Transactions.',
+      'If a bill’s file fails to upload when the bill is saved, the Hub now says so in red. Before, the bill was saved without its file and nothing was shown.',
+      'Not flagged on purpose: the same vendor billing the same amount a few days apart, because that is normal (a trucker’s standard rate, for example). A vendor’s next invoice number is not flagged either.',
+      'Not included: the date of service is not compared, because the Hub does not store it as its own field yet. Bills already paid twice are flagged but not corrected — a person decides what to do.',
+      { superAdminOnly: true, text: 'No SQL. New pure lib src/lib/bill-dup-scan.js (scanBills / checkOne / pairVerdict, bucketed by vendor, number, digits and release/reference code). bills route: list attaches dup_flag per row; save_bill runs checkOne before insert (409 duplicate:true unless confirm_duplicate; edits never blocked, warning returned); new action dismiss_bill_dup writes vendor_bill_events kind dup_dismissed. Audit actions bill_duplicate_override and bill_duplicate_dismissed. The older entry-time check (bill-dup-server.js) is unchanged.' },
+    ],
+  },
+  {
     version: 'v55.83-SU',
     date: '2026-11-15',
     title: 'Duplicate check runs by itself after a sync, links between wires, bills and bank lines',
