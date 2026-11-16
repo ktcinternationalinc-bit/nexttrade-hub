@@ -64,6 +64,9 @@ export async function POST(req) {
           lineReleasePounds: await fetchAll(function () { return db.from('pl_line_release_pounds').select('invoice_item_id, release_key, pounds'); }),
           estimates: await fetchAll(function () { return db.from('pl_release_estimates').select('release_key, outbound_estimate, note'); })
         };
+        // v55.83-TD — a person's "shipping charge / product" marks (the report still runs before this table exists)
+        try { setup.nameKinds = await fetchAll(function () { return db.from('pl_name_kinds').select('name_key, raw_name, kind'); }); setup.kinds_ready = true; }
+        catch (eK) { if (!missingTable(eK && eK.message)) { throw eK; } setup.nameKinds = []; setup.kinds_ready = false; }
       } catch (eS) {
         if (missingTable(eS && eS.message)) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
         throw eS;
@@ -236,6 +239,18 @@ export async function POST(req) {
       if (upU.error) { return fail(upU.error); }
       await audit(db, userId, 'pl_name_unit_set', 'pl_name_unit', rowsU.length === 1 ? rowsU[0].name_key : null, { unit: body.unit, names: names.slice(0, 100) });
       return NextResponse.json({ ok: true, set: rowsU.length, api_build_marker: API_BUILD_MARKER });
+    }
+    // v55.83-TD — mark descriptions as a shipping charge to the customer, as a product, or back to "decided by the name"
+    if (action === 'set_name_kind') {
+      var kNames = Array.isArray(body.names) ? body.names : [body.name];
+      var kind = body.kind || '';
+      if (kind && kind !== 'transport' && kind !== 'goods') { return bad('Choose shipping charge or product.'); }
+      var kRows = kNames.map(function (n) { return { name_key: nameKey(n), raw_name: String(n || '').trim().substring(0, 300), kind: kind, updated_by: userId, updated_at: now }; }).filter(function (r) { return !!r.name_key; });
+      if (!kRows.length) { return bad('No description given.'); }
+      if (kind) { var upK = await db.from('pl_name_kinds').upsert(kRows, { onConflict: 'name_key' }); if (upK.error) { return fail(upK.error); } }
+      else { var dlK = await db.from('pl_name_kinds').delete().in('name_key', kRows.map(function (r) { return r.name_key; })); if (dlK.error) { return fail(dlK.error); } } // a report setting only; nothing on the invoice changes
+      await audit(db, userId, 'pl_name_kind_set', 'pl_name_kind', kRows.length === 1 ? kRows[0].name_key : null, { kind: kind || 'by name', names: kNames.slice(0, 100) });
+      return NextResponse.json({ ok: true, set: kRows.length, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'set_line_unit') {
       if (!body.invoice_item_id) { return bad('The invoice line is required.'); }

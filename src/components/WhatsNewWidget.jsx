@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TD',
+    date: '2026-11-16',
+    title: 'Profitability: extra shipping charges (overweight surcharge and the like) count as shipping, not as a product',
+    items: [
+      'An invoice line like “Overweight surcharge” is an extra shipping cost charged to the customer. It is now counted as transportation charged on that invoice, not listed as a product that needs a unit.',
+      'Recognised by name: shipping, freight, trucking, delivery, overweight, surcharge, demurrage, detention and chassis charges.',
+      'Anything else can be marked by hand in “Names, units and supplier links” → section 2: choose “🚚 not a product — a shipping charge” in the Sold in list, or tick several and click “🚚 shipping charge”.',
+      'A blue box lists every description counted as shipping charged to the customer, and whether it was recognised by its name or marked by you. “✕ it is a product” puts one back as a product.',
+      'Database: run sql/v55-83-SY-profitability.sql once more to be able to mark descriptions by hand. The names above are recognised without it.',
+      { superAdminOnly: true, text: 'SQL: pl_name_kinds (name_key PK, kind transport|goods) added to sql/v55-83-SY-profitability.sql (re-runnable). TRANSPORT_RX + overweight|surcharge|demurrage|detention|chassis. Route action set_name_kind (audited pl_name_kind_set); report reads pl_name_kinds, tolerates the table missing. assemble: line.transport from the mark; transport_names list.' },
+    ],
+  },
+  {
     version: 'v55.83-TC',
     date: '2026-11-16',
     title: 'Profitability: scroll bars you can see, and a standard $200 bonded charge per Houston shipment',

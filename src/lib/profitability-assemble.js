@@ -49,6 +49,7 @@ export function assembleProfitability(d) {
   });
   var unitOfName = {}; (d.nameUnits || []).forEach(function (u) { unitOfName[u.name_key] = u.unit; });
   var unitOfLine = {}; (d.lineUnits || []).forEach(function (u) { unitOfLine[u.invoice_item_id] = u.unit; });
+  var kindOf = {}; (d.nameKinds || []).forEach(function (k) { kindOf[k.name_key] = k.kind; }); // v55.83-TD
   var termsOf = {}; (d.terms || []).forEach(function (t) { termsOf[t.invoice_id] = t; });
   var relPoundsOfLine = {}; (d.lineReleasePounds || []).forEach(function (x) { (relPoundsOfLine[x.invoice_item_id] = relPoundsOfLine[x.invoice_item_id] || {})[x.release_key] = Number(x.pounds) || 0; });
   var estimateOf = {}; (d.estimates || []).forEach(function (e) { estimateOf[e.release_key] = Number(e.outbound_estimate); });
@@ -70,7 +71,8 @@ export function assembleProfitability(d) {
     var lines = (itemsOf[i.id] || []).filter(function (it) { return (Number(it.quantity) || 0) !== 0 || (Number(it.unit_price) || 0) !== 0; }).map(function (it) {
       var nm = lineName(it);
       return { id: it.id, description: nm, qty: Number(it.quantity) || 0, unit: unitOfLine[it.id] || unitOfName[nameKey(nm)] || '', unit_price: Number(it.unit_price) || 0,
-        amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null };
+        amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null,
+        transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
     });
     var text = lines.map(function (l) { return l.description; }).join(' · ');
     return { id: i.id, number: i.invoice_number, date: String(i.invoice_date || '').substring(0, 10), customer: (d.customerNames || {})[i.accounting_customer_id] || '(unknown customer)',
@@ -185,6 +187,15 @@ export function assembleProfitability(d) {
     reconciled: { product: reconcile(cells, byProduct).ok, product_names: reconcile(cells.filter(function (c) { return c.product_key.indexOf('g:') === 0; }), byProductName).ok, customer: reconcile(cells, byCustomer).ok, invoice: reconcile(cells, byInvoice).ok },
     groups: Object.keys(groupById).map(function (k) { return groupById[k]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }),
     invoice_names: Object.keys(invNames).map(function (k) { return invNames[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; }),
+    transport_names: (function () { // v55.83-TD — the descriptions counted as shipping charged to the customer
+      var t = {};
+      engineInvoices.forEach(function (iv) { if (!periodIds[iv.id]) { return; } iv.lines.forEach(function (l) {
+        var isT = l.transport === true || (l.transport !== false && isTransportLine(l.description)); if (!isT) { return; }
+        var k = nameKey(l.description); var o = t[k] || (t[k] = { key: k, name: String(l.description).trim(), lines: 0, invoiced: 0, how: kindOf[k] === 'transport' ? 'marked by you' : 'recognised by its name' });
+        o.lines++; o.invoiced = r2(o.invoiced + l.amount); }); });
+      return Object.keys(t).map(function (k) { return t[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; });
+    })(),
+    kinds_ready: d.kinds_ready !== false,
     bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),
     factors: factors.units, window_days: d.windowDays > 0 ? d.windowDays : 90,
     bonded_per_houston_release: BONDED_PER_HOUSTON_RELEASE, actual_bonded_bills: actualBonded, actual_bonded_total: r2(actualBonded.reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0)),

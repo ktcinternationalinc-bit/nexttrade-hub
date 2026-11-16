@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS public.pl_line_release_pounds (
   updated_at      timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (invoice_item_id, release_key)
 );
+-- 9) v55.83-TD — what a sales description IS: 'transport' = a shipping charge to the customer (overweight surcharge, freight …),
+--    'goods' = a product. Only needed when the Hub reads the name wrongly; no row = decided by the name.
+CREATE TABLE IF NOT EXISTS public.pl_name_kinds (
+  name_key    text PRIMARY KEY,
+  raw_name    text,
+  kind        text NOT NULL CHECK (kind IN ('transport', 'goods')),
+  updated_by  text,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- 8) an outbound transportation ESTIMATE for a release, used only until the real bill arrives (never added to it)
 CREATE TABLE IF NOT EXISTS public.pl_release_estimates (
   release_key        text PRIMARY KEY,
@@ -116,7 +126,7 @@ CREATE TABLE IF NOT EXISTS public.pl_release_estimates (
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['pl_product_groups', 'pl_group_names', 'pl_name_units', 'pl_line_units', 'pl_unit_factors', 'pl_invoice_terms', 'pl_line_release_pounds', 'pl_release_estimates'] LOOP
+  FOREACH t IN ARRAY ARRAY['pl_product_groups', 'pl_group_names', 'pl_name_units', 'pl_line_units', 'pl_unit_factors', 'pl_invoice_terms', 'pl_line_release_pounds', 'pl_release_estimates', 'pl_name_kinds'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_read', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (true)', t || '_read', t);

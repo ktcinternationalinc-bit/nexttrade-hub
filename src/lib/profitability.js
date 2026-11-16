@@ -82,7 +82,9 @@ export function allocate(amount, weights) {
   return out.map(money);
 }
 
-var TRANSPORT_RX = /ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل/i;
+// v55.83-TD (Max, Nov 16: "overweight surcharge on Elite's invoice — it's an extra shipping cost") — surcharges and container extras
+// charged to the customer are TRANSPORTATION REVENUE, not a product. A person can still mark any description either way.
+var TRANSPORT_RX = /ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل/i;
 export function isTransportLine(description) { return TRANSPORT_RX.test(String(description || '')); }
 // CNF / C&F / CIF wording SUGGESTS the basis. A person confirms it. No wording and no transport line proves nothing.
 export function suggestBasis(text, hasTransportLine) {
