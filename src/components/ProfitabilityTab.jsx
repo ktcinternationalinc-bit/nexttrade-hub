@@ -17,7 +17,7 @@ var FLAG_WORDS = {
   transport_not_separated: 'Transportation not separated from the price',
   release_missing: 'No release number on the invoice',
   release_split_missing: 'Invoice is on two releases — pounds per release not entered',
-  unit_unknown: 'Unit not set (pounds, yards or linear metres)',
+  unit_unknown: 'Unit not set (pounds, kilograms, yards or linear metres)',
   cost_missing: 'Goods cost missing',
   cost_manual: 'Goods cost typed by hand',
   purchase_line_without_cost: 'A linked supplier bill line has no cost on it',
@@ -35,7 +35,7 @@ var FLAG_WORDS = {
   two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)'
 };
 var BASIS_WORDS = { EXW: 'EXW', CNF: 'CNF', TRUCKING_INCLUDED: 'Trucking included' };
-var UNIT_WORDS = { lb: 'pounds', yd: 'yards', lm: 'linear metres' };
+var UNIT_WORDS = { lb: 'pounds', kg: 'kilograms', yd: 'yards', lm: 'linear metres' }; // v55.83-SZ — + kilograms (1 kg = 2.20462 lb)
 var COLS = [['goods_revenue', 'Goods revenue'], ['transport_revenue', 'Transport charged'], ['base_cost', 'Goods cost'], ['commission', 'Commission'], ['inbound_allowance', 'Inbound allowance'], ['outbound_cost', 'Outbound transport'], ['brokerage', 'Brokerage'], ['bonded', 'Bonded']];
 
 export default function ProfitabilityTab(props) {
@@ -122,7 +122,7 @@ export default function ProfitabilityTab(props) {
             <td className="px-1.5 py-1 text-right font-extrabold" style={{ color: c.complete ? (c.profit >= 0 ? '#065f46' : '#7f1d1d') : '#78350f' }}>{'$' + fmt(c.profit)}<div className="font-bold">{c.complete ? 'complete' : 'known part only'}</div></td>
             <td className="px-1.5 py-1" style={{ color: '#92400e' }}>{(c.flags || []).filter(function (f, ix, arr) { return arr.indexOf(f) === ix; }).map(function (f) { return <div key={f}>{'• ' + (FLAG_WORDS[f] || f)}</div>; })}
               {invoiceRow && canEdit && <div className="mt-0.5"><select value={c.orig_unit || ''} onChange={function (e) { act({ action: 'set_line_unit', invoice_item_id: c.line_id, unit: e.target.value }, 'Unit of this one line saved.'); }} className="nt-light rounded text-[10px]" style={inp} title="Unit of THIS line only (overrides the unit of the description)">
-                <option value="">line unit: as the description</option><option value="lb">this line: pounds</option><option value="yd">this line: yards</option><option value="lm">this line: linear metres</option></select></div>}</td>
+                <option value="">line unit: as the description</option><option value="lb">this line: pounds</option><option value="kg">this line: kilograms</option><option value="yd">this line: yards</option><option value="lm">this line: linear metres</option></select></div>}</td>
           </tr>;
         })}</tbody>
       </table></div>;
@@ -218,8 +218,9 @@ export default function ProfitabilityTab(props) {
     return <div>
       <div className="rounded-lg p-3 mb-3" style={box}>
         <div className="text-[13px] font-extrabold mb-1">1 · Weights (how many pounds in one unit)</div>
-        <div className="text-[11px] mb-2" style={{ color: SUB }}>These are our reporting weights, not a physical conversion. Quantity × weight = pounds. Price ÷ weight = price per pound. Example: $0.30 per yard ÷ 2.5 = $0.12 per pound.</div>
+        <div className="text-[11px] mb-2" style={{ color: SUB }}>Everything is converted to pounds. Kilograms use the real conversion. Yards and linear metres use OUR reporting weights, which are not a physical conversion. Quantity × weight = pounds. Price ÷ weight = price per pound. Example: $0.30 per yard ÷ 2.5 = $0.12 per pound.</div>
         <div className="flex gap-3 items-center flex-wrap text-[12px]">
+          <span><b>1 kilogram = 2.20462 lb</b> <span style={{ color: SUB }}>(fixed)</span></span>
           {['yd', 'lm'].map(function (u) { var k = 'f:' + u;
             return <span key={u} className="flex items-center gap-1"><b>{'1 ' + (u === 'yd' ? 'yard' : 'linear metre') + ' ='}</b>
               <input value={draft[k] !== undefined ? draft[k] : String((data.factors || {})[u] || '')} disabled={!canEdit} onChange={function (e) { d(k, e.target.value); }} className="nt-light px-2 py-1 rounded text-[12px]" style={Object.assign({ width: 70 }, inp)} /> lb
@@ -229,11 +230,11 @@ export default function ProfitabilityTab(props) {
 
       <div className="rounded-lg p-3 mb-3" style={box}>
         <div className="text-[13px] font-extrabold mb-1">2 · What we call things when we SELL — set the unit, and put the same product under one name</div>
-        <div className="text-[11px] mb-2" style={{ color: SUB }}>An invoice line has a quantity but no unit, so the Hub must be told once per description. Tick descriptions that are the same product and give them one name. This changes the report only; the invoices keep their own wording.</div>
+        <div className="text-[11px] mb-2" style={{ color: SUB }}>An invoice line has a quantity but no unit, so the Hub must be told once per description whether it is sold in pounds, kilograms, yards or linear metres. Tick descriptions that are the same product and give them one name. This changes the report only; the invoices keep their own wording.</div>
         <div className="flex gap-2 items-center flex-wrap mb-2">
           <input value={nameQ} onChange={function (e) { setNameQ(e.target.value); }} placeholder="find a description…" className="nt-light px-2 py-1 rounded text-[12px]" style={Object.assign({ width: 220 }, inp)} />
           <span className="text-[11px] font-bold" style={{ color: SUB }}>{picked.length + ' ticked'}</span>
-          {canEdit && <span className="flex items-center gap-1 text-[11px]"><b>Set ticked to:</b>{['lb', 'yd', 'lm'].map(function (u) { return <Btn key={u} disabled={!picked.length} onClick={function () { act({ action: 'set_name_unit', names: pickedNames, unit: u }, picked.length + ' description(s) set to ' + UNIT_WORDS[u] + '.'); }}>{UNIT_WORDS[u]}</Btn>; })}</span>}
+          {canEdit && <span className="flex items-center gap-1 text-[11px]"><b>Set ticked to:</b>{['lb', 'kg', 'yd', 'lm'].map(function (u) { return <Btn key={u} disabled={!picked.length} onClick={function () { act({ action: 'set_name_unit', names: pickedNames, unit: u }, picked.length + ' description(s) set to ' + UNIT_WORDS[u] + '.'); }}>{UNIT_WORDS[u]}</Btn>; })}</span>}
           {canEdit && <span className="flex items-center gap-1 text-[11px]"><b>Group ticked as:</b>
             <input value={groupName} onChange={function (e) { setGroupName(e.target.value); }} placeholder="the name YOU want on the report" className="nt-light px-2 py-1 rounded text-[12px]" style={Object.assign({ width: 230 }, inp)} />
             <Btn bg="#047857" color="#ffffff" disabled={!picked.length || groupName.trim().length < 2} onClick={function () { act({ action: 'group_save', display_name: groupName, invoice_names: pickedNames }, 'Group “' + groupName.trim() + '” saved.').then(function (ok) { if (ok) { setPick({}); setGroupName(''); } }); }}>Save group</Btn></span>}
@@ -249,7 +250,7 @@ export default function ProfitabilityTab(props) {
                 <td className="px-2 py-1"><input type="checkbox" checked={!!pick[n.key]} onChange={function () { var o = Object.assign({}, pick); o[n.key] = !o[n.key]; setPick(o); }} style={{ width: 15, height: 15 }} /></td>
                 <td className="px-2 py-1 font-bold">{n.name}</td><td className="px-2 py-1">{n.lines}</td><td className="px-2 py-1 tabular-nums">{fmt(n.qty)}</td><td className="px-2 py-1 tabular-nums">{'$' + fmt(n.invoiced)}</td>
                 <td className="px-2 py-1"><select value={n.unit || ''} disabled={!canEdit || busy} onChange={function (e) { if (e.target.value) { act({ action: 'set_name_unit', names: [n.name], unit: e.target.value }, 'Unit saved for “' + n.name + '”.'); } }} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({}, inp, n.unit ? {} : { border: '2px solid #f59e0b' })}>
-                  <option value="">⚠ not set</option><option value="lb">pounds</option><option value="yd">yards</option><option value="lm">linear metres</option></select></td>
+                  <option value="">⚠ not set</option><option value="lb">pounds</option><option value="kg">kilograms</option><option value="yd">yards</option><option value="lm">linear metres</option></select></td>
                 <td className="px-2 py-1">{n.group ? <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>{n.group}</span> : <span style={{ color: SUB }}>its own name</span>}</td></tr>;
             })}</tbody>
           </table></div>

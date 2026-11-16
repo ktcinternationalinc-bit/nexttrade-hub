@@ -46,31 +46,43 @@ CREATE INDEX IF NOT EXISTS ix_pl_group_names_group ON public.pl_group_names (gro
 CREATE TABLE IF NOT EXISTS public.pl_name_units (
   name_key    text PRIMARY KEY,
   raw_name    text,
-  unit        text NOT NULL CHECK (unit IN ('lb', 'yd', 'lm')),
+  unit        text NOT NULL CHECK (unit IN ('lb', 'kg', 'yd', 'lm')),
   updated_by  text,
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 -- 4) …and an override for one invoice line, when that line was sold in another unit
 CREATE TABLE IF NOT EXISTS public.pl_line_units (
   invoice_item_id uuid PRIMARY KEY,
-  unit            text NOT NULL CHECK (unit IN ('lb', 'yd', 'lm')),
+  unit            text NOT NULL CHECK (unit IN ('lb', 'kg', 'yd', 'lm')),
   updated_by      text,
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
 -- 5) pounds per unit — OUR reporting weights, not a physical conversion between yards and metres
 CREATE TABLE IF NOT EXISTS public.pl_unit_factors (
-  unit            text PRIMARY KEY CHECK (unit IN ('lb', 'yd', 'lm')),
+  unit            text PRIMARY KEY CHECK (unit IN ('lb', 'kg', 'yd', 'lm')),
   pounds_per_unit numeric NOT NULL CHECK (pounds_per_unit > 0),
   note            text,
   updated_by      text,
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
+-- v55.83-SZ (Max, Nov 16: "we need to set sold in KGS or pounds or Yards. 1 kg is 2.20462 lbs") — kilograms are a unit too.
+-- If this script was already run before kilograms existed, these lines widen the three unit checks. Safe to run again.
+-- These MUST come before the rows below are added: on a database that already has the tables, the old check would
+-- otherwise refuse the kilogram row (that was the error "violates check constraint pl_unit_factors_unit_check").
+ALTER TABLE public.pl_name_units   DROP CONSTRAINT IF EXISTS pl_name_units_unit_check;
+ALTER TABLE public.pl_name_units   ADD  CONSTRAINT pl_name_units_unit_check   CHECK (unit IN ('lb', 'kg', 'yd', 'lm'));
+ALTER TABLE public.pl_line_units   DROP CONSTRAINT IF EXISTS pl_line_units_unit_check;
+ALTER TABLE public.pl_line_units   ADD  CONSTRAINT pl_line_units_unit_check   CHECK (unit IN ('lb', 'kg', 'yd', 'lm'));
+ALTER TABLE public.pl_unit_factors DROP CONSTRAINT IF EXISTS pl_unit_factors_unit_check;
+ALTER TABLE public.pl_unit_factors ADD  CONSTRAINT pl_unit_factors_unit_check CHECK (unit IN ('lb', 'kg', 'yd', 'lm'));
 INSERT INTO public.pl_unit_factors (unit, pounds_per_unit, note) VALUES
   ('lb', 1,   'pounds'),
+  ('kg', 2.20462, 'kilograms: 1 kg = 2.20462 lb'),
   ('yd', 2.5, 'business reporting weight: 1 yard = 2.5 lb'),
   ('lm', 2.5, 'business reporting weight: 1 linear metre = 2.5 lb')
 ON CONFLICT (unit) DO NOTHING;
+UPDATE public.pl_unit_factors SET pounds_per_unit = 2.20462 WHERE unit = 'kg';
 
 -- 6) what a person decided about an invoice FOR THE REPORT: pricing basis and the transportation inside the price
 CREATE TABLE IF NOT EXISTS public.pl_invoice_terms (

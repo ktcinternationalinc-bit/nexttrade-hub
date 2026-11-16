@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SZ',
+    date: '2026-11-16',
+    title: 'Profitability: kilograms added — everything is converted to pounds',
+    items: [
+      'A description (or a single invoice line) can now be set as sold in kilograms, as well as pounds, yards or linear metres.',
+      '1 kilogram = 2.20462 lb. Quantities in kilograms are multiplied by 2.20462 and prices per kilogram are divided by 2.20462, so every line reports in pounds and dollars per pound. The original quantity, unit and price stay visible in the drill-down.',
+      'Supplier bill lines in kilograms are converted the same way, so a product bought in kilograms and sold in pounds (or the other way round) is costed correctly.',
+      'The kilogram conversion is fixed. Yards and linear metres remain our own reporting weights (2.5 lb each) and can still be changed.',
+      'Database: run sql/v55-83-SY-profitability.sql (again, if you already ran it). It now allows kilograms. It is safe to run more than once and removes nothing.',
+      { superAdminOnly: true, text: 'profitability.js: KG_TO_LB = 2.20462, unitKey maps kg/kgs/kilo(s)/kilogram(s), DEFAULT_UNIT_FACTORS.kg. Route unitOk + kg; set_factor limited to yd / lm. sql/v55-83-SY-profitability.sql now re-runnable: unit CHECKs widened via DROP CONSTRAINT IF EXISTS / ADD CONSTRAINT (pl_name_units, pl_line_units, pl_unit_factors) and kg seeded.' },
+    ],
+  },
+  {
     version: 'v55.83-SY',
     date: '2026-11-16',
     title: 'New report: Profitability by product, customer and invoice',
