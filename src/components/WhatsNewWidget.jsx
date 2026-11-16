@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SW',
+    date: '2026-11-16',
+    title: 'Categories & Rules: find a description, and a rule can mark a line as sent to RTM or NextTrade',
+    items: [
+      'Categories & Rules has a new “🔎 Find” box. Type part of a description, a category or a company and the rules list narrows as you type.',
+      '“Find it in the bank lines” shows the real bank lines whose description contains what you typed, so you can see the words the bank actually uses. One click turns a found text into a new rule.',
+      'A rule can now do more than give a category. Next to the category there is a second choice: “sent to RTM Capital” or “sent to NextTrade Industries”. Pick a category, a company, or both.',
+      'A company rule marks matching money-out lines the same way the 🏢 button on a bank line does, so those transfers show up when you record bills a company paid for us.',
+      'It only marks lines nobody has marked yet. It never changes a line a person marked, never marks money coming in, and never marks a transfer between our own accounts.',
+      '“Test first” now also says how many lines would be marked, and lists some of them, before you save.',
+      'The rules list shows the company next to the category, and you can change it with “edit”.',
+      'Needs one database script: sql/v55-83-SW-rule-party-flag.sql. Until it is run, the company choice is switched off and says so; everything else works as before.',
+      { superAdminOnly: true, text: 'ONE SQL: sql/v55-83-SW-rule-party-flag.sql (us_expense_rules.third_party_payer text; classification DROP NOT NULL; CHECK classification or third_party_payer). expense-rules-server.js: partyFlagRows / applyPartyFlag (direction out, third_party_payer null, no transfer_group_id, not duplicate, not pending; re-checked at write; audit rule_flagged_paid_through; affiliate lines auto-reviewed when a person saved/applied), applyRuleToAll and applyExpenseRules run them; bestRule and suggestCategory ignore rules with no classification. Route: list returns parties + flag_ready, save_rule accepts third_party_payer, rule_preview returns would_flag / flag_sample.' },
+    ],
+  },
+  {
     version: 'v55.83-SV',
     date: '2026-11-15',
     title: 'Bills: every bill is checked against every other bill for duplicates, flagged in purple',

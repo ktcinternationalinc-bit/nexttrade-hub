@@ -34,7 +34,11 @@ export default function ExpenseRulesTab(props) {
   var s5 = useState(false); var busy = s5[0]; var setBusy = s5[1];
   var s6 = useState(''); var newCat = s6[0]; var setNewCat = s6[1];
   var sK = useState('expense'); var newKind = sK[0]; var setNewKind = sK[1]; // v55.83-PW
-  var s7 = useState({ match_text: '', classification: '' }); var nr = s7[0]; var setNr = s7[1];
+  var s7 = useState({ match_text: '', classification: '', third_party_payer: '' }); var nr = s7[0]; var setNr = s7[1];
+  // v55.83-SW — find a rule / a bank description, and rules that mark a line as sent to RTM / NextTrade
+  var sFq = useState(''); var findQ = sFq[0]; var setFindQ = sFq[1];
+  var sPt = useState([]); var parties = sPt[0]; var setParties = sPt[1];
+  var sFr = useState(true); var flagReady = sFr[0]; var setFlagReady = sFr[1];
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
   // v55.83-QV (Max, Nov 8 11:16) — test / edit / remove rules
@@ -57,7 +61,7 @@ export default function ExpenseRulesTab(props) {
   }
   function loadAll() {
     api('list').then(function (j) {
-      if (j && j.ok) { setCats(j.categories || []); setRules(j.rules || []); setNeedsSql(null); }
+      if (j && j.ok) { setCats(j.categories || []); setRules(j.rules || []); setParties(j.parties || []); setFlagReady(j.flag_ready !== false); setNeedsSql(null); }
       else if (j && j.needs_sql) { setNeedsSql(j.error); }
       else if (j) { toast.error(j.error || 'Could not load.'); }
     });
@@ -99,21 +103,23 @@ export default function ExpenseRulesTab(props) {
   }
   function addRule() {
     setBusy(true);
-    api('save_rule', { match_text: nr.match_text, classification: nr.classification }).then(function (j) {
+    api('save_rule', { match_text: nr.match_text, classification: nr.classification, third_party_payer: nr.third_party_payer || '' }).then(function (j) {
+      if (j && j.ok && j.applied_now && j.applied_now.flagged > 0) { toast.success('🏢 ' + j.applied_now.flagged + ' money-out line(s) marked as sent to ' + nr.third_party_payer + '.'); }
+      if (j && j.ok) { setNr({ match_text: '', classification: '', third_party_payer: '' }); }
       if (j && j.ok) { toast.success('Rule saved and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' matching line(s)' + (j.applied_now && j.applied_now.left_people ? ' · ' + j.applied_now.left_people + ' kept a person\'s pick (use 🔍 test → apply to all to replace them)' : '') + '. It keeps applying automatically.'); setNr({ match_text: '', classification: '' }); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
     }).finally(function () { setBusy(false); });
   }
   function ruleActive(r, active) {
     setBusy(true);
-    var call = active ? api('save_rule', { id: r.id, match_text: r.match_text, classification: r.classification, auto_apply: r.auto_apply !== false, active: true }) : api('deactivate_rule', { id: r.id });
+    var call = active ? api('save_rule', { id: r.id, match_text: r.match_text, classification: r.classification, third_party_payer: r.third_party_payer || '', auto_apply: r.auto_apply !== false, active: true }) : api('deactivate_rule', { id: r.id });
     call.then(function (j) {
       if (j && j.ok) { loadAll(); } else { toast.error((j && j.error) || 'Could not update the rule.'); }
     }).finally(function () { setBusy(false); });
   }
   function testRule(r, text) {
     setBusy(true);
-    api('rule_preview', r ? { id: r.id } : { match_text: text }).then(function (j) {
+    api('rule_preview', r ? { id: r.id } : { match_text: text, third_party_payer: nr.third_party_payer || '' }).then(function (j) {
       if (j && j.ok) { setPreview(Object.assign({ rule: r || null }, j)); }
       else { toast.error((j && j.error) || 'Could not test the rule.'); }
     }).finally(function () { setBusy(false); });
@@ -128,6 +134,8 @@ export default function ExpenseRulesTab(props) {
     setBusy(true);
     api('apply_rule_now', { id: r.id, overwrite_people: overwritePeople === true }).then(function (j) {
       if (j && j.ok) {
+        if (j.flagged > 0) { toast.success('🏢 ' + j.flagged + ' money-out line(s) marked as sent to ' + (r.third_party_payer || 'the company') + '.'); }
+        if (j.flag_error) { toast.error('The category was applied, but the company mark was not: ' + j.flag_error); }
         toast.success('Applied to ' + j.applied + ' of ' + (j.matches || 0) + ' matching line(s)' + (j.already_right ? ' · ' + j.already_right + ' already had this category' : '') + (j.skipped_human ? ' · ' + j.skipped_human + ' kept a person\'s pick' : '') + (j.skipped_verified ? ' · ' + j.skipped_verified + ' verified, untouched' : '') + '.');
         setPreview(null); loadAll();
       } else { toast.error((j && j.error) || 'Could not apply the rule.'); }
@@ -137,7 +145,8 @@ export default function ExpenseRulesTab(props) {
   function saveEdit() {
     if (!editRule) { return; }
     setBusy(true);
-    api('save_rule', { id: editRule.id, match_text: editRule.match_text, classification: editRule.classification, auto_apply: true, active: true }).then(function (j) {
+    api('save_rule', { id: editRule.id, match_text: editRule.match_text, classification: editRule.classification || '', third_party_payer: editRule.third_party_payer || '', auto_apply: true, active: true }).then(function (j) {
+      if (j && j.ok && j.applied_now && j.applied_now.flagged > 0) { toast.success('🏢 ' + j.applied_now.flagged + ' money-out line(s) marked as sent to ' + editRule.third_party_payer + '.'); }
       if (j && j.ok) { toast.success('Rule updated and applied now to ' + ((j.applied_now && j.applied_now.applied) || 0) + ' line(s); it keeps applying automatically.'); setEditRule(null); loadAll(); }
       else { toast.error((j && j.error) || 'Could not save the rule.'); }
     }).finally(function () { setBusy(false); });
@@ -247,6 +256,12 @@ export default function ExpenseRulesTab(props) {
   }
   var activeCats = cats.filter(function (c) { return c.active !== false; });
   var labelOf = {}; cats.forEach(function (c) { labelOf[c.key] = c.label; });
+  // v55.83-SW — the rules shown: removed ones only when asked, then narrowed by the find box (description, category or company)
+  var findKey = findQ.trim().toLowerCase();
+  var shownRules = rules.filter(function (r0) { return showRemoved || r0.active !== false; }).filter(function (r0) {
+    if (!findKey) { return true; }
+    return (String(r0.match_text || '') + ' ' + String(labelOf[r0.classification] || r0.classification || '') + ' ' + String(r0.third_party_payer || '')).toLowerCase().indexOf(findKey) >= 0;
+  });
 
   return <div className="flex flex-col gap-3">
     {needsSql && <div className="rounded-xl p-3 text-xs font-semibold" style={{ background: '#ffedd5', color: '#431407', border: '1px solid #fdba74' }}>
@@ -312,7 +327,13 @@ export default function ExpenseRulesTab(props) {
           <option value="">category…</option>
           {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
         </select>
-        <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || !nr.classification} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || !nr.classification) ? 0.5 : 1 }}>+ new rule</button>
+        <span className="text-[11px] font-bold" style={{ color: '#64748b' }}>and / or</span>
+        <select value={nr.third_party_payer} disabled={!flagReady} title={flagReady ? 'Mark matching MONEY-OUT lines as sent to this company (the same as the 🏢 button on a bank line)' : 'Run sql/v55-83-SW-rule-party-flag.sql in Supabase to turn this on'} onChange={function (e) { setNr(Object.assign({}, nr, { third_party_payer: e.target.value })); }}
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
+          <option value="">{flagReady ? 'not sent to a company' : 'company mark — needs SQL (SW)'}</option>
+          {parties.map(function (x) { return <option key={x.name} value={x.name}>{'🏢 sent to ' + x.name}</option>; })}
+        </select>
+        <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)) ? 0.5 : 1 }}>+ new rule</button>
         <button onClick={function () { testRule(null, nr.match_text); }} disabled={busy || nr.match_text.trim().length < 3} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || nr.match_text.trim().length < 3) ? 0.5 : 1 }}>🔍 test first</button>
         <label className="flex items-center gap-1 text-[10px] font-bold ml-2" style={{ color: '#64748b' }}><input type="checkbox" checked={showRemoved} onChange={function (e) { setShowRemoved(e.target.checked); }} /> show removed rules</label>
       </div>
@@ -328,6 +349,11 @@ export default function ExpenseRulesTab(props) {
           <span className="px-1.5 py-0.5 rounded" style={{ background: '#fef3c7', color: '#92400e' }}>{preview.human_picked} picked by a person — kept unless you apply to all</span>
           <span className="px-1.5 py-0.5 rounded" style={{ background: '#ecfdf5', color: '#064e3b' }}>{preview.verified} verified — never touched</span>
         </div>
+        {preview.flag_party && <div className="rounded px-2 py-1 mb-1 text-[10px] font-extrabold" style={{ background: '#dbeafe', color: '#1e3a8a' }}>
+          {'🏢 ' + (preview.would_flag == null ? 'Could not count the lines for ' + preview.flag_party : preview.would_flag + ' money-out line(s) would be marked as sent to ' + preview.flag_party) + ' — only lines nobody has marked yet; never money in, never a transfer between our own accounts.'}
+          {(preview.flag_sample || []).map(function (f0, fi) { return <div key={fi} className="font-semibold" style={{ color: '#0f172a' }}>{f0.date + ' · ' + f0.text + ' · −$' + Number(f0.amount || 0).toFixed(2)}</div>; })}
+        </div>}
+        {!preview.rule && preview.matches > 0 && <button onClick={function () { setNr(Object.assign({}, nr, { match_text: preview.match_text })); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mb-1" style={{ background: '#047857', color: '#ffffff' }}>＋ Use “{preview.match_text}” for a new rule</button>}
         {preview.matches === 0 && <div className="text-[10px] font-bold mb-1" style={{ color: '#7f1d1d' }}>No bank line contains this text — that is why Hits stays at 0. Rules match the words AS THE BANK WRITES THEM (e.g. PSE&G shows as "Pse&g", not "Public Service"). Copy a word from the actual bank line.</div>}
         {(preview.sample || []).map(function (s0, si) {
           return <div key={si} className="flex gap-2 text-[10px] py-0.5" style={{ borderBottom: '1px solid #e0e7ff', color: '#0f172a' }}>
@@ -341,35 +367,49 @@ export default function ExpenseRulesTab(props) {
           {preview.human_picked > 0 && <button onClick={function () { applyOne(preview.rule, true); }} disabled={busy} title="Replace the categories people picked on these lines too (verified lines are never changed)" className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#b45309', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply to ALL {preview.fillable + preview.human_picked} matches (replace people's picks)</button>}
         </div>}
       </div>}
+      <div className="flex gap-1.5 flex-wrap items-center mb-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>🔎 Find</span>
+        <input value={findQ} onChange={function (e) { setFindQ(e.target.value); }} placeholder="type part of a description, category or company…"
+          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 280 }} />
+        <span className="text-[10px] font-bold" style={{ color: '#64748b' }}>{findQ.trim() ? shownRules.length + ' of ' + rules.filter(function (r0) { return showRemoved || r0.active !== false; }).length + ' rule(s)' : 'filters the rules below as you type'}</span>
+        <button onClick={function () { testRule(null, findQ); }} disabled={busy || findQ.trim().length < 3} title="Show the bank lines whose description contains this text" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || findQ.trim().length < 3) ? 0.5 : 1 }}>🔍 find it in the bank lines</button>
+        {findQ && <button onClick={function () { setFindQ(''); }} className="px-2 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>clear</button>}
+      </div>
       {rules.length === 0 ? <div className="text-[11px]" style={{ color: '#64748b' }}>No rules yet — they appear here automatically the first time you categorize an expense, or add one above.</div> :
         <div className="overflow-x-auto"><table className="w-full text-xs">
           <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
-            <th className="py-1.5 pr-2 text-left font-semibold">When the line contains</th><th className="py-1.5 pr-2 text-left font-semibold">Category</th>
+            <th className="py-1.5 pr-2 text-left font-semibold">When the line contains</th><th className="py-1.5 pr-2 text-left font-semibold">Category / company</th>
             <th className="py-1.5 pr-2 text-left font-semibold">From</th><th className="py-1.5 pr-2 text-right font-semibold">Hits</th><th className="py-1.5 text-left font-semibold">&nbsp;</th></tr></thead>
           <tbody style={{ color: '#0f172a' }}>
-            {rules.filter(function (r0) { return showRemoved || r0.active !== false; }).map(function (r) {
+            {shownRules.length === 0 && <tr><td colSpan={5} className="py-2 text-[11px]" style={{ color: '#64748b' }}>No rule matches “{findQ}”. Use “find it in the bank lines” to see the descriptions the bank uses, then make a rule from one.</td></tr>}
+            {shownRules.map(function (r) {
               var on = r.active !== false;
               var ed = editRule && editRule.id === r.id;
               return <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9', opacity: on ? 1 : 0.45 }}>
                 <td className="py-1.5 pr-2 font-semibold">{ed ? <input value={editRule.match_text} onChange={function (e) { setEditRule(Object.assign({}, editRule, { match_text: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light" style={{ width: 180 }} /> : '"' + r.match_text + '"'}</td>
                 <td className="py-1.5 pr-2">{ed ? <select value={editRule.classification} onChange={function (e) { setEditRule(Object.assign({}, editRule, { classification: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light">
-                  {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select> : (labelOf[r.classification] || r.classification)}</td>
+                  <option value="">(no category)</option>
+                  {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select> : (r.classification ? (labelOf[r.classification] || r.classification) : <span style={{ color: '#64748b' }}>—</span>)}
+                  {ed ? <select value={editRule.third_party_payer || ''} disabled={!flagReady} onChange={function (e) { setEditRule(Object.assign({}, editRule, { third_party_payer: e.target.value })); }} className="px-1.5 py-0.5 rounded border border-slate-300 text-[11px] nt-light ml-1">
+                    <option value="">not sent to a company</option>
+                    {parties.map(function (x) { return <option key={x.name} value={x.name}>{'🏢 sent to ' + x.name}</option>; })}</select>
+                    : (r.third_party_payer ? <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#dbeafe', color: '#1e3a8a' }}>{'🏢 sent to ' + r.third_party_payer}</span> : null)}</td>
                 <td className="py-1.5 pr-2"><span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={r.source === 'learned' ? { background: '#e0e7ff', color: '#312e81' } : { background: '#f1f5f9', color: '#334155' }}>{r.source === 'learned' ? '🧠 learned' : '✍ manual'}</span></td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{r.hit_count || 0}</td>
                 <td className="py-1.5 whitespace-nowrap">
                   {ed ? <span>
-                    <button onClick={saveEdit} disabled={busy || String(editRule.match_text || '').trim().length < 3} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>✓ save</button>
+                    <button onClick={saveEdit} disabled={busy || String(editRule.match_text || '').trim().length < 3 || (!editRule.classification && !editRule.third_party_payer)} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>✓ save</button>
                     <button onClick={function () { setEditRule(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>cancel</button>
                   </span> : <span>
                     <button onClick={function () { testRule(r); }} disabled={busy} title="See which bank lines this rule catches, and apply it now" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#e0e7ff', color: '#312e81' }}>🔍 test</button>
-                    {on && <button onClick={function () { setEditRule({ id: r.id, match_text: r.match_text, classification: r.classification }); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>✏ edit</button>}
+                    {on && <button onClick={function () { setEditRule({ id: r.id, match_text: r.match_text, classification: r.classification || '', third_party_payer: r.third_party_payer || '' }); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>✏ edit</button>}
                     {on ? <button onClick={function () { removeRule(r); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>🗑 remove</button>
                       : <button onClick={function () { ruleActive(r, true); }} disabled={busy} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#d1fae5', color: '#065f46' }}>↺ restore</button>}
                   </span>}</td></tr>;
             })}
           </tbody>
         </table></div>}
-      <div className="text-[10px] mt-1.5" style={{ color: '#64748b' }}>🧠 learned rules are written automatically every time a human categorizes an expense — changing your pick on the same merchant updates the rule. Rules only ever fill in UNCATEGORIZED expenses (they never overwrite a human) and run on their own every 15 minutes.</div>
+      <div className="text-[10px] mt-1.5" style={{ color: '#64748b' }}>🧠 learned rules are written automatically every time a human categorizes an expense — changing your pick on the same merchant updates the rule. Rules only ever fill in UNCATEGORIZED expenses (they never overwrite a human) and run on their own every 15 minutes. A rule can also mark a money-out line as 🏢 sent to RTM Capital or NextTrade Industries — only lines nobody has marked yet.</div>
     </div>
 
     {/* ②½ Intra-company transfers (v55.83-PR, Max: "read through accounts and

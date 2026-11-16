@@ -12,6 +12,8 @@
 //   Fails soft everywhere (tables may not exist until the PI SQL runs).
 import { merchantKey, bestRule, ruleMatches } from './expense-rules';
 import { US_WAVE_BUSINESS_ID } from './business-of';
+import { autoReviewIfComplete } from './bank-allocation-server'; // v55.83-SW — money sent to a related company is finished when marked
+import { audit } from './audit-server';
 
 export async function learnRule(db, txnText, classification, by) {
   try {
@@ -40,7 +42,7 @@ export async function learnRule(db, txnText, classification, by) {
 export async function suggestCategory(db, text) {
   try {
     if (!text) { return null; }
-    var rr = await db.from('us_expense_rules').select('id, match_text, classification, active').eq('active', true).limit(1000);
+    var rr = await db.from('us_expense_rules').select('id, match_text, classification, active').eq('active', true).not('classification', 'is', null).limit(1000);
     if (rr.error) { return null; }
     var r = bestRule(rr.data || [], text);
     return r ? r.classification : null;
@@ -134,48 +136,111 @@ export async function previewRule(db, matchText, ruleCls) {
   hits.forEach(function (t) { b[ruleBucket(t, ruleCls)].push(t); });
   return { scanned: got.rows.length, hits: hits, buckets: b };
 }
+// v55.83-SW (Max, Nov 16: "select not only expense but if it is RTM or NEXTRADE flag") — a rule can ALSO (or only) mark the
+// bank line as money sent to a paid-through company. Same guard rails as a person clicking the 🏢 button, plus: it only ever
+// FILLS A BLANK. A line a person already marked, a transfer between our own accounts, a pending line, a duplicate copy and
+// money IN are never touched.
+export async function partyFlagRows(db, matchText) {
+  var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, third_party_payer, transfer_group_id, review_status',
+    function (q) { return q.eq('direction', 'out').is('third_party_payer', null); });
+  if (got.error) { return { error: got.error }; }
+  var probe = { match_text: matchText };
+  var rows = got.rows.filter(function (t) { return !t.transfer_group_id && t.review_status !== 'duplicate' && ruleMatches(probe, rowText(t)); });
+  return { rows: rows };
+}
+async function partyKind(db, name) {
+  try {
+    var pr = await db.from('paid_through_parties').select('name, kind, active').eq('active', true);
+    var hit = null; ((pr && pr.data) || []).forEach(function (x) { if (String(x.name || '').trim().toLowerCase() === String(name || '').trim().toLowerCase()) { hit = x.kind; } });
+    if (hit) { return hit; }
+  } catch (eK) { /* table missing — fall through */ }
+  return /nexttrade/i.test(String(name || '')) ? 'affiliate' : 'service_provider';
+}
+export async function applyPartyFlag(db, rule, by) {
+  var payer = String((rule && rule.third_party_payer) || '').trim();
+  if (!payer) { return { flagged: 0, ids: [] }; }
+  var pf = await partyFlagRows(db, rule.match_text);
+  if (pf.error) { return { error: pf.error }; }
+  var ids = pf.rows.map(function (t) { return t.id; }); var done = [];
+  for (var i = 0; i < ids.length; i += 200) {
+    var up = await db.from('bank_transactions').update({ third_party_payer: payer }).in('id', ids.slice(i, i + 200))
+      .is('third_party_payer', null).eq('direction', 'out').select('id'); // re-check: never race a person
+    if (up.error) { return { error: up.error.message + (/third_party_payer/.test(up.error.message || '') ? ' — run sql/v55-83-QB-rtm-third-party.sql first.' : '') }; }
+    (up.data || []).forEach(function (r) { done.push(r.id); });
+  }
+  if (done.length) {
+    var reviewed = 0;
+    try { if (by && (await partyKind(db, payer)) === 'affiliate') { reviewed = (await autoReviewIfComplete(db, done, by)).length; } } catch (eR) { /* marking stands; review is a bonus */ }
+    try { await audit(db, by || null, 'rule_flagged_paid_through', 'us_expense_rule', rule.id || null, { payer: payer, match_text: rule.match_text, lines: done.length, reviewed: reviewed, bank_transaction_ids: done.slice(0, 200) }); } catch (eA) { /* audit is best-effort here */ }
+  }
+  return { flagged: done.length, ids: done, candidates: ids.length };
+}
+
 export async function applyRuleToAll(db, rule, opts) {
   var o = opts || {};
-  var pv = await previewRule(db, rule.match_text, rule.classification);
-  if (pv.error) { return { error: pv.error }; }
-  var ids = function (arr) { return arr.map(function (t) { return t.id; }); };
-  var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank');
-  var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule');
-  var a3 = o.overwrite_people === true ? await batchSet(db, ids(pv.buckets.human), rule.classification, 'any') : 0;
-  var applied = a1 + a2 + a3;
-  if (applied > 0 && rule.id) {
-    await db.from('us_expense_rules').update({ hit_count: (Number(rule.hit_count) || 0) + applied, last_hit_at: new Date().toISOString() }).eq('id', rule.id);
+  var res = { applied: 0, filled_blank: 0, retargeted: 0, overwrote_people: 0, matches: 0, already_right: 0, left_people: 0, verified_untouched: 0, scanned: 0, flagged: 0 };
+  if (rule.classification) {
+    var pv = await previewRule(db, rule.match_text, rule.classification);
+    if (pv.error) { return { error: pv.error }; }
+    var ids = function (arr) { return arr.map(function (t) { return t.id; }); };
+    var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank');
+    var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule');
+    var a3 = o.overwrite_people === true ? await batchSet(db, ids(pv.buckets.human), rule.classification, 'any') : 0;
+    res.applied = a1 + a2 + a3; res.filled_blank = a1; res.retargeted = a2; res.overwrote_people = a3; res.matches = pv.hits.length;
+    res.already_right = pv.buckets.same.length; res.left_people = o.overwrite_people === true ? 0 : pv.buckets.human.length;
+    res.verified_untouched = pv.buckets.verified.length; res.scanned = pv.scanned;
   }
-  return { applied: applied, filled_blank: a1, retargeted: a2, overwrote_people: a3, matches: pv.hits.length,
-    already_right: pv.buckets.same.length, left_people: o.overwrite_people === true ? 0 : pv.buckets.human.length,
-    verified_untouched: pv.buckets.verified.length, scanned: pv.scanned };
+  if (rule.third_party_payer) { // v55.83-SW
+    var fl = await applyPartyFlag(db, rule, o.by || null);
+    if (fl.error) { if (!rule.classification) { return { error: fl.error }; } res.flag_error = fl.error; }
+    else { res.flagged = fl.flagged; if (!rule.classification) { res.matches = fl.candidates; } }
+  }
+  if (res.applied + res.flagged > 0 && rule.id) {
+    await db.from('us_expense_rules').update({ hit_count: (Number(rule.hit_count) || 0) + res.applied + res.flagged, last_hit_at: new Date().toISOString() }).eq('id', rule.id);
+  }
+  return res;
 }
 
 export async function applyExpenseRules(db, limit) {
   try {
-    var rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count').eq('active', true).eq('auto_apply', true).limit(1000);
+    var rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count, third_party_payer').eq('active', true).eq('auto_apply', true).limit(1000);
+    if (rulesRes.error && /third_party_payer/.test(rulesRes.error.message || '')) { // SW SQL not run yet → exactly as before
+      rulesRes = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, hit_count').eq('active', true).eq('auto_apply', true).limit(1000);
+    }
     if (rulesRes.error) { return { error: rulesRes.error.message }; }
     var rules = rulesRes.data || [];
     if (!rules.length) { return { applied: 0, scanned: 0, rules: 0 }; }
+    var catRules = rules.filter(function (r) { return !!r.classification; });
     // every row with NO category (any review status, money in and out) — blanks only on the automatic run
     var got = await pageBankRows(db, 'id, name, merchant_name, classification, category_verified', function (q) { return q.is('classification', null); });
     if (got.error) { return { error: got.error }; }
     var byRule = {};
     got.rows.forEach(function (t) {
       if (t.category_verified === true) { return; }
-      var r = bestRule(rules, rowText(t));
+      var r = bestRule(catRules, rowText(t));
       if (r) { (byRule[r.id] = byRule[r.id] || []).push(t.id); }
     });
     var applied = 0; var rid;
     for (rid in byRule) {
       if (Object.prototype.hasOwnProperty.call(byRule, rid)) {
         var cur = null;
-        for (var k = 0; k < rules.length; k++) { if (rules[k].id === rid) { cur = rules[k]; } }
+        for (var k = 0; k < catRules.length; k++) { if (catRules[k].id === rid) { cur = catRules[k]; } }
         var n = await batchSet(db, byRule[rid], cur.classification, 'blank');
         applied += n;
-        if (n > 0) { await db.from('us_expense_rules').update({ hit_count: (Number(cur.hit_count) || 0) + n, last_hit_at: new Date().toISOString() }).eq('id', rid); }
+        if (n > 0) { cur.hit_count = (Number(cur.hit_count) || 0) + n; await db.from('us_expense_rules').update({ hit_count: cur.hit_count, last_hit_at: new Date().toISOString() }).eq('id', rid); }
       }
     }
-    return { applied: applied, scanned: got.rows.length, rules: rules.length };
+    // v55.83-SW — rules that mark a line as sent to a paid-through company; the most specific text goes first, and a line
+    // marked by one rule is no longer blank for the next
+    var flagRules = rules.filter(function (r) { return !!r.third_party_payer; }).sort(function (x, y) { return String(y.match_text).length - String(x.match_text).length; });
+    var flagged = 0;
+    for (var f = 0; f < flagRules.length; f++) {
+      var fr = await applyPartyFlag(db, flagRules[f], null);
+      if (!fr.error && fr.flagged > 0) {
+        flagged += fr.flagged;
+        await db.from('us_expense_rules').update({ hit_count: (Number(flagRules[f].hit_count) || 0) + fr.flagged, last_hit_at: new Date().toISOString() }).eq('id', flagRules[f].id);
+      }
+    }
+    return { applied: applied, flagged: flagged, scanned: got.rows.length, rules: rules.length };
   } catch (e) { return { error: (e && e.message) || 'apply failed' }; }
 }

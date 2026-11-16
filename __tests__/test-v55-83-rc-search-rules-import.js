@@ -48,7 +48,7 @@ var srv = R('src/lib/expense-rules-server.js');
 ok('1c: ONE engine — money in AND out, every date, paged past 1,000, never a duplicate copy, never pending',
   /for \(var pg = 0; pg < 40; pg\+\+\)/.test(srv) && /\.not\('pending', 'is', true\)/.test(srv) &&
   /\.or\('review_status\.is\.null,review_status\.neq\.duplicate'\)/.test(srv) &&
-  !/\.eq\('direction', 'out'\)/.test(srv.split('async function pageBankRows')[1]));
+  !/\.eq\('direction', 'out'\)/.test(srv.split('async function pageBankRows')[1].split('export async function partyFlagRows')[0])); // v55.83-SW realign: the category engine; the RTM / NextTrade marking after it is money-out by nature
 ok('1d: fills every blank (any review status), re-targets earlier rule fills, replaces people\'s picks ONLY when asked; a VERIFIED row is never touched',
   /var a1 = await batchSet\(db, ids\(pv\.buckets\.blank\), rule\.classification, 'blank'\);/.test(srv) &&
   /var a2 = await batchSet\(db, ids\(pv\.buckets\.rule\), rule\.classification, 'rule'\);/.test(srv) &&
@@ -58,8 +58,8 @@ ok('1e: batched writes (200 per call) — a big apply finishes instead of timing
   /for \(var i = 0; i < ids\.length; i \+= 200\)/.test(srv) && /export const maxDuration = 60;/.test(R('src/app/api/accounting/expense-rules/route.js')));
 var er = R('src/app/api/accounting/expense-rules/route.js');
 ok('1f: saving or editing a rule APPLIES it immediately ("it should automatically apply regardless"); the 15-minute job keeps applying it',
-  /var apI = \(patch\.active && patch\.auto_apply && insr\.data && insr\.data\[0\]\) \? await applyRuleToAll\(db, insr\.data\[0\], \{\}\) : null;/.test(er) &&
-  /var apU = \(patch\.active && patch\.auto_apply && updr\.data && updr\.data\[0\]\) \? await applyRuleToAll\(db, updr\.data\[0\], \{\}\) : null;/.test(er) &&
+  /var apI = \(patch\.active && patch\.auto_apply && insr\.data && insr\.data\[0\]\) \? await applyRuleToAll\(db, insr\.data\[0\], \{ by: by \}\) : null;/.test(er) &&
+  /var apU = \(patch\.active && patch\.auto_apply && updr\.data && updr\.data\[0\]\) \? await applyRuleToAll\(db, updr\.data\[0\], \{ by: by \}\) : null;/.test(er) &&
   /var got = await pageBankRows\(db, 'id, name, merchant_name, classification, category_verified', function \(q\) \{ return q\.is\('classification', null\); \}\);/.test(srv));
 var ert = R('src/components/ExpenseRulesTab.jsx');
 ok('1g: the Apply button is ALWAYS clickable, always answers (incl. timeouts), and offers "apply to ALL matches" with a confirm',

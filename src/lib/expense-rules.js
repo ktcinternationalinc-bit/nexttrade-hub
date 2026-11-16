@@ -42,7 +42,7 @@ export function ruleMatches(rule, txnText) {
 export function bestRule(rules, txnText) {
   var best = null;
   (rules || []).forEach(function (r) {
-    if (!r || r.active === false) { return; }
+    if (!r || r.active === false || !r.classification) { return; } // v55.83-SW — a flag-only rule (no category) never suggests a category
     if (!ruleMatches(r, txnText)) { return; }
     if (!best || String(r.match_text).length > String(best.match_text).length) { best = r; }
   });
