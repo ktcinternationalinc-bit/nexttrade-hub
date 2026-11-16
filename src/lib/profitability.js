@@ -15,6 +15,9 @@
 // This report never changes an invoice, a bill, inventory or an accounting entry.
 
 export var INBOUND_ALLOWANCE_PER_LB = 0.02;
+// Max, Nov 16: "bonded should add $200 for all shipments from Houston USA" — a STANDARD charge per Houston release (shipment), split
+// across the goods on that release by pounds. Canada and unknown origin get none.
+export var BONDED_PER_HOUSTON_RELEASE = 200;
 export var PRICING_BASES = ['EXW', 'CNF', 'TRUCKING_INCLUDED'];
 // Business reporting weights (Max): not a physical conversion between yards and metres.
 // Kilograms are a real conversion (Max, Nov 16: "1 kg is 2.20462 lbs - convert everything to LBS"); yards and linear metres are business weights.
@@ -369,6 +372,9 @@ export function summarize(cells, keyFn, labelFn) {
     row.avg_goods_price_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.pounds) : null;
     row.avg_base_cost_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost ? r4(row.base_cost / row.pounds) : null;
     row.pounds_incomplete = row.weight_missing;
+    // v55.83-TC (Max, Nov 16: "Avg Cost All / LB - adding the commission and inbound allowance") — goods cost + commission + inbound
+    // allowance, ÷ pounds. Only when all three are fully known and every weight is there; otherwise no average is shown.
+    row.avg_all_cost_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.pounds) : null;
     row.total_cost = r2(row.base_cost + row.commission + row.inbound_allowance + row.outbound_cost + row.brokerage + row.bonded);
     row.transport_profit = row.unknown.outbound_cost ? null : r2(row.transport_revenue - row.outbound_cost);
     row.invoice_count = Object.keys(row.invoices).length; row.release_list = Object.keys(row.releases).sort(); row.name_list = Object.keys(row.names).sort();

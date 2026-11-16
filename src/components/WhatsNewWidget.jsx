@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TC',
+    date: '2026-11-16',
+    title: 'Profitability: scroll bars you can see, and a standard $200 bonded charge per Houston shipment',
+    items: [
+      'The report tables now have grey scroll bars at the bottom and the side, always visible. Before, the scroll bars were white on a white table and could not be seen.',
+      'The tables fit the screen height, so the bottom scroll bar is always in view, and the product / customer / invoice name stays on the left while you scroll sideways through the columns.',
+      'Bonded: every shipment from Houston (release numbers starting 1002-) now carries a standard $200 bonded charge, split across the goods on that shipment by pounds. Canada (1001-) and unknown origin get none.',
+      'A shipment shared by two invoices gets the $200 once, shared between them by pounds.',
+      'Actual bonded bills are no longer added into the report, so bonded is never counted twice. They are listed under the totals for comparison.',
+      'New column “Avg cost all / lb”: goods cost + commission + inbound allowance, divided by pounds. It sits next to “Avg cost / lb” (goods cost only) and is shown only when all three are known.',
+      { superAdminOnly: true, text: 'No SQL. profitability.js BONDED_PER_HOUSTON_RELEASE = 200. assemble: bonded[rel] = 200 for every release in scope whose releaseOrigin is HOUSTON; bonded_brokerage bills whose vendor matches /bond/ go to actual_bonded_bills (period) instead of allocation. ProfitabilityTab: .pl-scroll CSS (14 px, grey), maxHeight 70vh / 55vh, sticky first column.' },
+    ],
+  },
+  {
     version: 'v55.83-TB',
     date: '2026-11-16',
     title: 'Profitability: a product name can only exist once — same name means merged',

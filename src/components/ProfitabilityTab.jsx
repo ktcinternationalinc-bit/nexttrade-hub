@@ -8,6 +8,9 @@
 import React, { useState, useEffect } from 'react';
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
+// v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
+// scroll bars, invisible on these white tables. These are grey, 14 px, always there.
+var SCROLL_CSS = '.pl-scroll{scrollbar-width:auto;scrollbar-color:#94a3b8 #e2e8f0}.pl-scroll::-webkit-scrollbar{width:14px;height:14px}.pl-scroll::-webkit-scrollbar-track{background:#e2e8f0}.pl-scroll::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:7px;border:3px solid #e2e8f0}.pl-scroll::-webkit-scrollbar-thumb:hover{background:#64748b}.pl-scroll::-webkit-scrollbar-corner{background:#e2e8f0}';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmt0(n) { return (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); }
 function fmt4(n) { return n === null || n === undefined ? '—' : '$' + Number(n).toFixed(4); }
@@ -99,7 +102,7 @@ export default function ProfitabilityTab(props) {
 
   // ── drill-down: the cells behind a row ──
   function cellsTable(cells, invoiceRow) {
-    return <div className="overflow-auto rounded" style={{ border: '1px solid #cbd5e1', maxHeight: 420 }}>
+    return <div className="overflow-auto rounded pl-scroll" style={{ border: '1px solid #cbd5e1', maxHeight: '55vh' }}>
       <table className="w-full text-[10px]" style={{ minWidth: 1500 }}>
         <thead><tr>{['Invoice', 'Customer', 'Release', 'Original description', 'Original qty', 'Pounds', 'Goods revenue', '$ / lb', 'Transport charged', 'Goods cost', 'Cost from', 'Commission', 'Inbound', 'Outbound', 'Brokerage', 'Bonded', 'Profit', 'Needs attention'].map(function (h) { return <th key={h} className="px-1.5 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
         <tbody>{cells.map(function (c, i) {
@@ -179,7 +182,7 @@ export default function ProfitabilityTab(props) {
   function rowTds(r, isInvoice, isOpen, sub) {
     var pc = sub ? 'px-2 py-1 text-right tabular-nums' : 'px-2 py-1.5 text-right tabular-nums';
     return [
-      <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={sub ? { paddingLeft: 26 } : {}}>{(isOpen ? '▾ ' : '▸ ') + r.label}
+      <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={Object.assign({ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', minWidth: 220, maxWidth: 300 }, sub ? { paddingLeft: 26 } : {})}>{(isOpen ? '▾ ' : '▸ ') + r.label}
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
         {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && <div style={{ color: '#b45309', fontWeight: 800 }}>some weights missing</div>}</td>,
@@ -188,6 +191,7 @@ export default function ProfitabilityTab(props) {
       <td key="c4" className={pc}>{money(r, 'transport_revenue')}</td>,
       <td key="c5" className={pc}>{money(r, 'base_cost')}</td>,
       <td key="c6" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#7f1d1d' }}>{fmt4(r.avg_base_cost_per_lb)}</td>,
+      <td key="c6b" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#7f1d1d' }} title="(goods cost + commission + inbound allowance) ÷ pounds">{r.avg_all_cost_per_lb === null || r.avg_all_cost_per_lb === undefined ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_all_cost_per_lb)}</td>,
       <td key="c7" className={pc}>{money(r, 'commission')}</td>,
       <td key="c8" className={pc}>{money(r, 'inbound_allowance')}</td>,
       <td key="c9" className={pc}>{money(r, 'outbound_cost')}</td>,
@@ -200,7 +204,7 @@ export default function ProfitabilityTab(props) {
     ];
   }
   function detailRow(key, r, cs, isInvoice) {
-    return <tr key={key + ':d'}><td colSpan={16} className="px-2 py-2" style={{ background: '#f1f5f9' }}>
+    return <tr key={key + ':d'}><td colSpan={17} className="px-2 py-2" style={{ background: '#f1f5f9' }}>
       {isInvoice && invoicePanel(r)}
       <div className="text-[10px] mb-1" style={{ color: SUB }}>{'Releases: ' + (r.release_list.length ? r.release_list.join(', ') : 'none') + ' · ' + r.invoice_count + ' invoice(s) · ' + cs.length + ' line(s). Hover over “Cost from” to see the supplier bills behind a cost.'}</div>
       {cellsTable(cs, isInvoice)}</td></tr>;
@@ -209,9 +213,9 @@ export default function ProfitabilityTab(props) {
     // v55.83-TA — under each MERGED product, its original descriptions, each with its own totals and averages
     var subsOf = {};
     if (view === 'product') { ((data && data.by_product_names) || []).forEach(function (s0) { (subsOf[s0.parent] = subsOf[s0.parent] || []).push(s0); }); }
-    return <div className="overflow-auto rounded" style={{ border: '1px solid ' + LINE, maxHeight: 620 }}>
+    return <div className="overflow-auto rounded pl-scroll" style={{ border: '1px solid ' + LINE, maxHeight: '70vh' }}>
       <table className="w-full text-[11px]" style={{ minWidth: 1500 }}>
-        <thead><tr>{[firstCol, 'Pounds', 'Goods revenue', 'Avg $ / lb', 'Transport charged', 'Goods cost', 'Avg cost / lb', 'Commission', 'Inbound allowance', 'Outbound transport', 'Brokerage', 'Bonded', 'Total cost', 'Profit', 'Transport profit', ''].map(function (h, i) { return <th key={h + i} className={'px-2 py-1.5 font-bold sticky top-0 ' + (i === 0 ? 'text-left' : 'text-right')} style={th}>{h}</th>; })}</tr></thead>
+        <thead><tr>{[firstCol, 'Pounds', 'Goods revenue', 'Avg $ / lb', 'Transport charged', 'Goods cost', 'Avg cost / lb', 'Avg cost all / lb', 'Commission', 'Inbound allowance', 'Outbound transport', 'Brokerage', 'Bonded ($200 / Houston shipment)', 'Total cost', 'Profit', 'Transport profit', ''].map(function (h, i) { return <th key={h + i} className={'px-2 py-1.5 font-bold sticky top-0 ' + (i === 0 ? 'text-left' : 'text-right')} style={i === 0 ? Object.assign({}, th, { left: 0, zIndex: 3 }) : Object.assign({}, th, { zIndex: 2 })}>{h}</th>; })}</tr></thead>
         <tbody>{rows.map(function (r, i) {
           var isOpen = open === view + ':' + r.key;
           // v55.83-TB (Max: "should be all showing high level names .. drill down to see each name below it .. and further drill down
@@ -223,7 +227,7 @@ export default function ProfitabilityTab(props) {
           if (expanded && subs.length) {
             subs.forEach(function (s0) {
               var sOpen = open === view + ':' + s0.key;
-              out.push(<tr key={s0.key} onClick={function () { setOpen(sOpen ? view + ':' + r.key : view + ':' + s0.key); }} style={{ background: sOpen ? '#dbeafe' : '#f8fafc', color: '#334155', borderTop: '1px solid #e2e8f0', cursor: 'pointer' }}>{rowTds(s0, false, sOpen, true)}</tr>);
+              out.push(<tr key={s0.key} onClick={function () { setOpen(sOpen ? view + ':' + r.key : view + ':' + s0.key); }} style={{ background: sOpen ? '#dbeafe' : '#f8fafc', color: '#334155', borderTop: '1px solid #e2e8f0', cursor: 'pointer' }} /* sticky name cell inherits this */>{rowTds(s0, false, sOpen, true)}</tr>);
               if (sOpen) { out.push(detailRow(s0.key, s0, (data.cells || []).filter(function (c) { return c.product_key === s0.parent && c.name_key === s0.name_key; }), false)); }
             });
           } else if (isOpen) {
@@ -231,7 +235,7 @@ export default function ProfitabilityTab(props) {
           }
           return out;
         })}
-        {rows.length === 0 && <tr><td colSpan={16} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoices in this period.</td></tr>}</tbody>
+        {rows.length === 0 && <tr><td colSpan={17} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoices in this period.</td></tr>}</tbody>
       </table></div>;
   }
 
@@ -328,6 +332,7 @@ export default function ProfitabilityTab(props) {
   var incomplete = tt ? ((data.cells || []).filter(function (c) { return !c.complete; }).length) : 0;
 
   return <div className="rounded-xl p-3" style={{ background: '#ffffff', color: INK, border: '1px solid ' + LINE }}>
+    <style>{SCROLL_CSS}</style>
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold" style={{ color: INK }}>📊 Profitability — by product, customer and invoice</div>
       <input type="date" value={from} onChange={function (e) { setFrom(e.target.value); }} className="nt-light px-2 py-1 rounded text-xs" style={inp} />
@@ -356,7 +361,8 @@ export default function ProfitabilityTab(props) {
           return <div key={k[0]} className="rounded-lg p-2" style={{ background: k[2], color: k[3] }}><div className="text-[10px] font-bold">{k[0]}</div><div className="text-[15px] font-black">{k[1]}</div></div>; })}
       </div>
       <div className="flex gap-2 items-center flex-wrap mb-2 text-[11px]">
-        <span style={{ color: SUB }}>{fmt0(tt.pounds) + ' lb · ' + data.counts.invoices_in_period + ' invoice(s) · brokerage $' + fmt(tt.brokerage) + ' · bonded $' + fmt(tt.bonded)}</span>
+        <span style={{ color: SUB }}>{fmt0(tt.pounds) + ' lb · ' + data.counts.invoices_in_period + ' invoice(s) · brokerage $' + fmt(tt.brokerage) + ' · bonded $' + fmt(tt.bonded) + ' (standard $' + fmt(data.bonded_per_houston_release || 200) + ' per Houston shipment)'}</span>
+        {(data.actual_bonded_bills || []).length > 0 && <span style={{ color: SUB }}>{'Actual bonded bills dated in this period: $' + fmt(data.actual_bonded_total) + ' (' + data.actual_bonded_bills.length + ') — for comparison only, not added.'}</span>}
         <span className="px-1.5 py-0.5 rounded font-extrabold" style={data.reconciled.product && data.reconciled.customer && data.reconciled.invoice ? { background: '#d1fae5', color: '#065f46' } : { background: '#fee2e2', color: '#7f1d1d' }}>{data.reconciled.product && data.reconciled.customer && data.reconciled.invoice ? '✓ the three views add up to the same totals' : '⛔ the views do NOT add up — tell the developer'}</span>
         {data.counts.invoices_brought_in_for_shared_releases > 0 && <span style={{ color: SUB }}>{data.counts.invoices_brought_in_for_shared_releases + ' invoice(s) outside these dates share a release and were used for the cost split only'}</span>}
       </div>
@@ -383,7 +389,7 @@ export default function ProfitabilityTab(props) {
       {view === 'invoice' && viewTable(data.by_invoice || [], 'Invoice', true)}
       {view === 'setup' && setupView()}
       <div className="text-[10px] mt-2" style={{ color: SUB }}>
-        Profit = goods revenue + transportation charged − goods cost − commission − inbound allowance − outbound transportation − brokerage − bonded. Averages are total ÷ total pounds. Costs that belong to a release are split across all the goods on that release by pounds, before any grouping or filter. Brokerage and bonded charges go to Houston releases only (release numbers starting 1002-); Canada (1001-) gets none.
+        Profit = goods revenue + transportation charged − goods cost − commission − inbound allowance − outbound transportation − brokerage − bonded. Averages are total ÷ total pounds. Costs that belong to a release are split across all the goods on that release by pounds, before any grouping or filter. Brokerage and bonded go to Houston shipments only (release numbers starting 1002-); Canada (1001-) gets none. Bonded is a standard $200 per Houston shipment, split across its goods by pounds; actual bonded bills are not added on top.
       </div>
     </div>}
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}

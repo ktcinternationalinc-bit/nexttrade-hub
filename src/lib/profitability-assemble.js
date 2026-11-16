@@ -8,7 +8,7 @@
 //      split across ALL of its goods, not only the ones inside the period;
 //   2. pounds per release are worked out; 3. each transportation / brokerage / bonded bill is split between its releases;
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
-import { nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
+import { BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
 export function splitReleases(text) {
@@ -104,7 +104,7 @@ export function assembleProfitability(d) {
   Object.keys(relBad).forEach(function (k) { delete relPounds[k]; });
   var relKnown = {}; p1.cells.forEach(function (c) { if (c.release) { relKnown[c.release] = true; } });
 
-  var outbound = {}; var brokerage = {}; var bonded = {}; var truckCount = {};
+  var outbound = {}; var brokerage = {}; var bonded = {}; var truckCount = {}; var actualBonded = [];
   function addShare(map, rel, amount, bill, field) {
     if (field) { var o = map[rel] || (map[rel] = { actual: null, estimate: null, bills: [] }); o.actual = r2((o.actual || 0) + amount); o.bills.push(bill); }
     else { map[rel] = r2((map[rel] || 0) + amount); }
@@ -118,6 +118,8 @@ export function assembleProfitability(d) {
     var info = { bill_id: b.id, bill_number: b.bill_number, vendor: b.vendor_name, bill_date: b.bill_date, amount: amount, type: type };
     if (type === 'bonded_brokerage') {
       var isBonded = /bond/i.test(String(b.vendor_name || ''));
+      // v55.83-TC — bonded is the standard $200 per Houston shipment; actual bonded bills are listed for comparison, never added on top
+      if (isBonded) { if (inPeriod({ invoice_date: b.bill_date })) { actualBonded.push(info); } return; }
       if (!rels.length) { if (inPeriod({ invoice_date: b.bill_date })) { unallocated.push({ what: isBonded ? 'bonded_pool' : 'brokerage_pool', bill: b.bill_number, vendor: b.vendor_name, bill_date: b.bill_date, amount: amount, why: 'no release number on this bill — it must be assigned to Houston releases by a person' }); } return; }
       if (!mineRels.length) { return; }
       var notHouston = rels.filter(function (r) { return releaseOrigin(r.raw, '').origin !== 'HOUSTON'; });
@@ -138,6 +140,7 @@ export function assembleProfitability(d) {
     });
   });
   Object.keys(truckCount).forEach(function (rel) { if (truckCount[rel] > 1) { flags.push({ kind: 'two_trucking_bills_on_one_release', release: relRaw[rel] || rel, count: truckCount[rel], bills: (outbound[rel].bills || []).filter(function (x) { return x.type === 'trucking'; }).map(function (x) { return x.bill_number; }) }); } });
+  Object.keys(relKnown).forEach(function (rel) { if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = BONDED_PER_HOUSTON_RELEASE; } }); // v55.83-TC
   Object.keys(estimateOf).forEach(function (rel) { if (relKnown[rel]) { var o = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] }); o.estimate = estimateOf[rel]; } });
 
   // pass 2 — everything
@@ -184,6 +187,7 @@ export function assembleProfitability(d) {
     invoice_names: Object.keys(invNames).map(function (k) { return invNames[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; }),
     bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),
     factors: factors.units, window_days: d.windowDays > 0 ? d.windowDays : 90,
+    bonded_per_houston_release: BONDED_PER_HOUSTON_RELEASE, actual_bonded_bills: actualBonded, actual_bonded_total: r2(actualBonded.reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0)),
     counts: { invoices_in_period: Object.keys(periodIds).length, invoices_brought_in_for_shared_releases: scope.length - Object.keys(periodIds).length, cells: cells.length, bill_lines_with_unknown_unit: badUnitLines }
   };
 }
