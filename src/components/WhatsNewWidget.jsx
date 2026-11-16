@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TH',
+    date: '2026-11-16',
+    title: 'Wires show READY when both have signed · bills are paid only from a bank line · undo a payment · history in plain words',
+    items: [
+      { text: 'Wires: a wire with both signatures now shows “ready to send” in the list. The list was reading the bills without their validation and wrongly showed “PRE-WIRE · Check it”. A real change to a bill after signing still clears the signatures, as before.' },
+      { text: 'Bills → Pay: pick the money-out bank transaction first (search by name or amount). One bank transaction can pay several bills: each bill gets its full open amount until the bank amount runs out, and the last one is paid partly. A payment can no longer be recorded without its bank transaction.' },
+      { text: 'Bills → ↩ Undo payment: pick the payment and write why. It stays on record as undone (nothing is deleted), the bill opens again, and the bank transaction is free again for that amount. A payment made by a wire is undone in Wires (the whole wire).' },
+      { text: 'Bills → 🕘 History, and the Audit Trail: every action reads as one plain sentence — who did what, to which bill, wire or bank line, with the amount, date and reason — in New York time. The full record can still be opened.' },
+      { superAdminOnly: true, text: 'v55.83-TH: no SQL. Bug: wire-packages list selected vendor_bills without validation_status/other_reference/shipment_direction → fingerprint mismatch → needs_check; now WIRE_FINGERPRINT_BILL_FIELDS. New bills actions bank_lines_for_bills, pay_bills_from_bank (one insert), bill_history; record_payment requires bank_transaction_id; void_payment requires reason. lib/bill-bank-pay.js, lib/audit-words.js, lib/audit-subjects-server.js.' }
+    ]
+  },
+  {
     version: 'v55.83-TF',
     date: '2026-11-16',
     title: 'Project 1: the 🧭 Sourcing desk, and supplier messages sent from info@ktcus.com only after approval',

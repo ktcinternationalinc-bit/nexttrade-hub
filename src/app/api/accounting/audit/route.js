@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../../lib/server-permissions';
+import { addAuditSubjects } from '../../../../lib/audit-subjects-server'; // v55.83-TH — plain names instead of ids
 
 function db() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -50,7 +51,7 @@ export async function POST(req) {
         (bq.data || []).forEach(function (b) { bMap[b.id] = (b.vendor_name || '') + (b.bill_number ? ' · ' + b.bill_number : ''); });
       }
       (ev.data || []).forEach(function (e) {
-        rows.push({ at: e.created_at, actor_id: e.actor_id, action: 'bill_' + e.kind, entity: 'vendor_bill', entity_id: bMap[e.bill_id] || e.bill_id, details: e.details, source: 'bill_events' });
+        rows.push({ at: e.created_at, actor_id: e.actor_id, action: 'bill_' + e.kind, entity: 'vendor_bill', entity_id: e.bill_id, subject: bMap[e.bill_id] || null, details: e.details, source: 'bill_events' });
       });
     } catch (eE) { /* bill events optional */ }
 
@@ -70,12 +71,13 @@ export async function POST(req) {
         (pr.data || []).forEach(function (p) { if (!names[p.id]) { names[p.id] = p.name || p.email || p.id; } });
       }
     } catch (eN) {}
-    rows.forEach(function (r) { r.who = r.actor_id ? (names[r.actor_id] || r.actor_id) : '(system / scheduled job)'; });
+    rows.forEach(function (r) { r.who = r.actor_id ? (names[r.actor_id] || r.actor_id) : 'The Hub (automatic)'; });
+    try { await addAuditSubjects(d, rows); } catch (eS) { /* names are a nicety — the record still shows */ }
 
     var q = String(body.q || '').trim().toLowerCase();
     if (q) {
       rows = rows.filter(function (r) {
-        return (String(r.action) + ' ' + String(r.who) + ' ' + String(r.entity_id || '') + ' ' + JSON.stringify(r.details || {})).toLowerCase().indexOf(q) >= 0;
+        return (String(r.action).replace(/_/g, ' ') + ' ' + String(r.who) + ' ' + String(r.subject || '') + ' ' + String(r.entity_id || '') + ' ' + JSON.stringify(r.details || {}) + ' ' + JSON.stringify(r.refs || {})).toLowerCase().indexOf(q) >= 0;
       });
     }
     return NextResponse.json({ ok: true, rows: rows, count: rows.length });

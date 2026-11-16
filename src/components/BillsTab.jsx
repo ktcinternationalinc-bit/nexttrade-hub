@@ -13,6 +13,8 @@ import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN —
 import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
 import BillReportsPanel from './BillReportsPanel';
+import { allocateBankLine } from '../lib/bill-bank-pay'; // v55.83-TH
+import { describeAudit, niceWhen, niceDate } from '../lib/audit-words'; // v55.83-TH
 // v55.83-RP — where an imported value came from, said plainly to the person validating it
 var SRC_WORDS = { vendor_default: '🏷 this vendor’s bills are always this way', read_from_bill: '🤖 read from the bill', vendor_history: '🧠 from this vendor’s past bills', release_number: '🤖 release # on the bill → outbound', validator: '✓ set at validation', manual: '✍ set by hand' };
 
@@ -63,8 +65,9 @@ export default function BillsTab(props) {
   var sDb = useState(null); var dupBlock = sDb[0]; var setDupBlock = sDb[1]; // { sig, reasons }
   var sDa = useState(null); var dupAsk = sDa[0]; var setDupAsk = sDa[1];     // { id, reason }
   var forceDup = useRef(false);
+  var s26 = useState(null); var history = s26[0]; var setHistory = s26[1]; // v55.83-TH — {bill, rows, err} plain-words history of one bill
   var s25 = useState(null); var rowAsk = s25[0]; var setRowAsk = s25[1]; // RV — void bill / void payment / resolve dispute, asked under the row (no browser pop-ups)
-  function closePanels() { if (vRef.current && vTimer.current) { flushV(); } vRef.current = null; setValidating(null); setPaying(null); setDisputing(null); setRowAsk(null); setEditing(function (e) { return e && e.id ? null : e; }); } // RU — the price check of a bill being imported, before Save
+  function closePanels() { if (vRef.current && vTimer.current) { flushV(); } vRef.current = null; setValidating(null); setPaying(null); setHistory(null); setDisputing(null); setRowAsk(null); setEditing(function (e) { return e && e.id ? null : e; }); } // RU — the price check of a bill being imported, before Save
   var vRef = useRef(null); var vTimer = useRef(null);
   function flushV() {
     if (vTimer.current) { clearTimeout(vTimer.current); vTimer.current = null; }
@@ -394,14 +397,33 @@ export default function BillsTab(props) {
       else { toast.error((j && j.error) || 'Could not record it.'); }
     }).finally(function () { setBusy(false); });
   }
+  // v55.83-TH (Max, Nov 16) — every payment is linked to the real bank line; one bank line can pay several bills, the last one partly
+  function findLines(pp, q, amount) {
+    setPaying(Object.assign({}, pp, { q: q, amountQ: amount, lines: null, err: '' }));
+    api({ action: 'bank_lines_for_bills', q: q || '', amount: amount || '' }).then(function (j) {
+      setPaying(function (cur) { return cur && cur.bill.id === pp.bill.id ? Object.assign({}, cur, { lines: (j && j.ok) ? j.lines : [], err: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the bank lines.') }) : cur; });
+    });
+  }
+  function refill(pp, line, picks) {
+    var al = allocateBankLine(line ? line.remaining : 0, picks.map(function (b) { return { bill_id: b.id, open: b.open }; }));
+    var amounts = {}; al.lines.forEach(function (l) { amounts[l.bill_id] = l.amount; });
+    return Object.assign({}, pp, { line: line, picks: picks, amounts: amounts, err: '' });
+  }
   function savePayment() {
     var p = paying || {};
+    if (!p.line) { setPaying(Object.assign({}, p, { err: 'Pick the bank transaction that paid this bill first.' })); return; }
+    var rows = (p.picks || []).map(function (b) { return { bill_id: b.id, amount: Number((p.amounts || {})[b.id]) || 0 }; }).filter(function (x) { return x.amount > 0; });
+    if (!rows.length) { setPaying(Object.assign({}, p, { err: 'Nothing to pay — the amounts are all zero.' })); return; }
     setBusy(true);
-    api({ action: 'record_payment', bill_id: p.bill.id, amount: p.amount, paid_date: p.paid_date || TODAY, bank_transaction_id: p.bank_transaction_id || null, method: p.method || '' })
+    api({ action: 'pay_bills_from_bank', bank_transaction_id: p.line.id, bills: rows })
       .then(function (j) {
-        if (j && j.ok) { toast.success('Payment recorded.'); setPaying(null); load(); }
-        else { toast.error((j && j.error) || 'Payment failed.'); }
+        if (j && j.ok) { toast.success('Paid ' + j.paid + ' bill' + (j.paid === 1 ? '' : 's') + ' ($' + fmt(j.total) + ') from the ' + niceDate(p.line.date) + ' bank line' + (j.left_on_bank_line > 0.005 ? ' — $' + fmt(j.left_on_bank_line) + ' of it is still free.' : ' — the bank line is fully used.')); setPaying(null); load(); }
+        else { setPaying(function (cur) { return cur ? Object.assign({}, cur, { err: (j && j.error) || 'Payment failed.' }) : cur; }); }
       }).finally(function () { setBusy(false); });
+  }
+  function openHistory(b) {
+    closePanels(); setHistory({ bill: b, rows: null });
+    api({ action: 'bill_history', id: b.id }).then(function (j) { setHistory(function (h) { return h && h.bill.id === b.id ? Object.assign({}, h, { rows: (j && j.ok) ? j.rows : [], err: (j && j.ok) ? '' : ((j && j.error) || 'Could not load the history.') }) : h; }); });
   }
 
   var inp = 'px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white nt-light';
@@ -618,7 +640,9 @@ export default function BillsTab(props) {
                 <td className="py-1.5 pr-2">{b.record_status === 'active' ? valChip(b) : '—'}{b.price_check_status === 'flagged' ? <div title={((b.price_check && b.price_check.flags) || []).map(function (f) { return f.text; }).join('\n')} className="mt-0.5 text-[9px] font-extrabold" style={{ color: b.price_resolved_note ? '#065f46' : '#b91c1c' }}>{b.price_resolved_note ? '✓ price issue resolved' : '⚠ price check'}</div> : b.price_check_status === 'ok' ? <div className="mt-0.5 text-[9px] font-extrabold" style={{ color: '#065f46' }}>✅ prices OK</div> : null}</td>
                 <td className="py-1.5 whitespace-nowrap">
                   <button onClick={function () { setExpanded(expanded === b.id ? null : b.id); }} title={b.attachment_path ? 'Show the actual bill next to what the Hub read from it' : 'Show the bill details — no file is attached yet'} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={b.attachment_path ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{expanded === b.id ? 'Hide' : (b.attachment_path ? '📄 View bill' : 'View · no file')}</button>
-                  {canManage && b.record_status === 'active' && b.open > 0.005 && <button onClick={function () { closePanels(); setPaying({ bill: b, amount: b.open, paid_date: TODAY }); loadOutTxns(); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>Pay</button>}
+                  {canManage && b.record_status === 'active' && b.open > 0.005 && <button onClick={function () { closePanels(); var pp = { bill: b, picks: [b], amounts: {}, line: null, lines: null }; setPaying(pp); findLines(pp, '', ''); }} title="Pay from a bank line — pick the money-out bank transaction, then the bills it paid" className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#047857', color: '#ffffff' }}>Pay</button>}
+                  {canManage && paysOf(b.id).some(function (p0) { return !p0.voided; }) && <button onClick={function () { closePanels(); setRowAsk({ kind: 'undo_pay', bill: b, text: '', payment: null }); }} title="Undo a payment on this bill — it is kept on record as undone, the bill opens again and its bank line is free again" className="px-2 py-0.5 rounded text-[10px] font-extrabold mr-1" style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>↩ Undo payment</button>}
+                  <button onClick={function () { if (history && history.bill.id === b.id) { setHistory(null); } else { openHistory(b); } }} title="Everything that happened to this bill, in plain words" className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>🕘 History</button>
                   {canManage && b.record_status === 'active' && <button onClick={function () { closePanels(); setEditing(Object.assign({}, b)); }} className="px-2 py-0.5 rounded text-[10px] font-bold mr-1" style={{ background: '#f1f5f9', color: '#334155' }}>Edit</button>}
                   {/* v55.83-QZ (Max, Nov 8 11:51): duplicate a bill, then edit anything — a NEW pending-validation bill;
                       bill number left blank (never a duplicate), today's date with the same terms, no payments/document/validation copied */}
@@ -715,20 +739,47 @@ export default function BillsTab(props) {
               </td></tr>}
               {paying && paying.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
 <div className="rounded-xl p-3 mb-3" style={{ background: '#f0fdf4', border: '1px solid #86efac' }}>
-      <div className="text-xs font-extrabold mb-2" style={{ color: '#14532d' }}>Pay: {paying.bill.vendor_name} {paying.bill.bill_number ? '· ' + paying.bill.bill_number : ''} — open ${fmt(paying.bill.open)}</div>
-      <div className="flex gap-2 flex-wrap items-center">
-        <input className={inp} type="number" step="0.01" style={{ width: 120 }} placeholder="Amount *" value={paying.amount || ''} onChange={function (e) { setPaying(Object.assign({}, paying, { amount: e.target.value })); }} />
-        <label className="text-[10px] font-bold text-slate-600">Paid on<input className={inp + ' ml-1'} type="date" value={paying.paid_date || TODAY} onChange={function (e) { setPaying(Object.assign({}, paying, { paid_date: e.target.value })); }} /></label>
-        <select className={inp} style={{ maxWidth: 380 }} value={paying.bank_transaction_id || ''} onChange={function (e) { setPaying(Object.assign({}, paying, { bank_transaction_id: e.target.value })); }}>
-          <option value="">No bank link (cash/other)</option>
-          {outTxns.map(function (t) {
-            return <option key={t.id} value={t.id}>{(t.posted_date || t.date) + ' · $' + fmt(t.amount_abs) + ' · ' + String(t.merchant_name || t.name || '').substring(0, 48)}</option>;
-          })}
-        </select>
-        <button onClick={savePayment} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }}>Record payment</button>
-        <button onClick={function () { setPaying(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
-      </div>
-      <div className="text-[10px] mt-1" style={{ color: '#166534' }}>Linking the real bank transaction keeps the books provable — the list shows settled money-out from the US accounts.</div>
+      {(function () {
+        var pp = paying; var line = pp.line; var amounts = pp.amounts || {};
+        var used = (pp.picks || []).reduce(function (t, x) { return t + (Number(amounts[x.id]) || 0); }, 0);
+        var left = line ? Math.round((line.remaining - used) * 100) / 100 : 0;
+        var pickedIds = {}; (pp.picks || []).forEach(function (x) { pickedIds[x.id] = true; });
+        var more = bills.filter(function (x) { return !pickedIds[x.id] && x.record_status === 'active' && x.open > 0.005 && !x.paid_via && !(x.wire_state && x.wire_state.state) && (pp.allVendors || x.vendor_name === pp.bill.vendor_name); }).slice(0, 60);
+        return <div className="grid gap-2">
+          <div className="text-xs font-extrabold" style={{ color: '#14532d' }}>{'Pay ' + pp.bill.vendor_name + (pp.bill.bill_number ? ' bill ' + pp.bill.bill_number : '') + ' — from a bank line'}</div>
+          <div className="text-[11px]" style={{ color: '#166534' }}><b>Step 1.</b> Pick the money-out bank transaction that paid it. A payment cannot be recorded without one. Only bank lines with money still free are listed.</div>
+          <div className="flex gap-2 flex-wrap items-center">
+            <input className={inp} style={{ width: 200 }} placeholder="search name (e.g. NexPac, RTM)" value={pp.q || ''} onChange={function (e) { setPaying(Object.assign({}, pp, { q: e.target.value })); }} onKeyDown={function (e) { if (e.key === 'Enter') { findLines(pp, pp.q, pp.amountQ); } }} />
+            <input className={inp} style={{ width: 120 }} placeholder="amount, e.g. 20000" value={pp.amountQ || ''} onChange={function (e) { setPaying(Object.assign({}, pp, { amountQ: e.target.value })); }} onKeyDown={function (e) { if (e.key === 'Enter') { findLines(pp, pp.q, pp.amountQ); } }} />
+            <button onClick={function () { findLines(pp, pp.q, pp.amountQ); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>Find</button>
+          </div>
+          {pp.lines === null && <div className="text-[11px]" style={{ color: '#64748b' }}>Loading bank lines…</div>}
+          {pp.lines && pp.lines.length === 0 && <div className="text-[11px]" style={{ color: '#9a3412' }}>No money-out bank line with money still free matches that. Try another name or amount.</div>}
+          {pp.lines && pp.lines.length > 0 && <div className="rounded-lg overflow-auto" style={{ border: '1px solid #bbf7d0', maxHeight: 190, background: '#ffffff' }}>
+            <table className="w-full text-[11px]"><tbody>{pp.lines.map(function (t) { var on = line && line.id === t.id;
+              return <tr key={t.id} onClick={function () { setPaying(refill(pp, t, pp.picks)); }} style={{ cursor: 'pointer', background: on ? '#dcfce7' : '#ffffff', borderTop: '1px solid #f0fdf4' }}>
+                <td className="px-2 py-1"><input type="radio" readOnly checked={!!on} /></td><td className="px-2 py-1 whitespace-nowrap">{niceDate(t.date)}</td><td className="px-2 py-1">{t.name}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{'$' + fmt(t.amount)}</td><td className="px-2 py-1 text-right whitespace-nowrap font-extrabold" style={{ color: '#047857' }}>{'$' + fmt(t.remaining) + ' free'}</td></tr>; })}</tbody></table></div>}
+          {line && <div className="grid gap-1">
+            <div className="text-[11px]" style={{ color: '#166534' }}><b>Step 2.</b> The bills this bank line paid. Each bill gets its full open amount until the bank line runs out; the last one is paid partly. You can change any amount.</div>
+            <table className="w-full text-[11px]" style={{ background: '#ffffff', border: '1px solid #bbf7d0' }}><tbody>{pp.picks.map(function (x, i) { var a = Number(amounts[x.id]) || 0;
+              return <tr key={x.id} style={{ borderTop: '1px solid #f0fdf4' }}><td className="px-2 py-1 font-bold">{x.vendor_name + ' bill ' + (x.bill_number || '—')}</td><td className="px-2 py-1 text-right">{'open $' + fmt(x.open)}</td>
+                <td className="px-2 py-1 text-right">$<input className={inp} type="number" step="0.01" style={{ width: 110 }} value={amounts[x.id] === undefined ? '' : amounts[x.id]} onChange={function (e) { var am = Object.assign({}, amounts); am[x.id] = e.target.value; setPaying(Object.assign({}, pp, { amounts: am })); }} /></td>
+                <td className="px-2 py-1" style={{ color: a > 0 && a < x.open - 0.005 ? '#9a3412' : '#047857', fontWeight: 700 }}>{a <= 0 ? 'not paid from this line' : (a < x.open - 0.005 ? 'partly paid — $' + fmt(x.open - a) + ' stays open' : 'paid in full')}</td>
+                <td className="px-2 py-1 text-right">{i > 0 && <button onClick={function () { setPaying(refill(pp, line, pp.picks.filter(function (y) { return y.id !== x.id; }))); }} className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: '#f1f5f9', color: '#334155' }}>remove</button>}</td></tr>; })}</tbody></table>
+            <div className="text-[12px] font-extrabold" style={{ color: left < -0.005 ? '#b91c1c' : '#14532d' }}>{'Bank line $' + fmt(line.remaining) + ' free · using $' + fmt(used) + ' · ' + (left < -0.005 ? 'OVER by $' + fmt(-left) + ' — lower an amount' : (left > 0.005 ? '$' + fmt(left) + ' still free — add more bills below' : 'fully used'))}</div>
+            {left > 0.005 && more.length > 0 && <div className="grid gap-1"><div className="text-[11px] font-bold" style={{ color: '#166534' }}>{'Add another bill this bank line paid (' + (pp.allVendors ? 'any vendor' : pp.bill.vendor_name) + '):'}</div>
+              <div className="flex gap-1 flex-wrap">{more.map(function (x) { return <button key={x.id} onClick={function () { setPaying(refill(pp, line, pp.picks.concat([x]))); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#ffffff', color: '#14532d', border: '1px solid #86efac' }}>{'+ ' + (x.bill_number || '—') + ' · $' + fmt(x.open) + (pp.allVendors ? ' · ' + x.vendor_name : '')}</button>; })}</div>
+              <label className="text-[10px] flex items-center gap-1" style={{ color: '#334155' }}><input type="checkbox" checked={!!pp.allVendors} onChange={function (e) { setPaying(Object.assign({}, pp, { allVendors: e.target.checked })); }} />show other vendors' bills too</label></div>}
+            <div className="text-[11px]" style={{ color: '#334155' }}>{'Paid on: ' + niceDate(line.date) + ' (the bank line’s date)'}</div>
+          </div>}
+          {pp.err && <div className="rounded px-2 py-1.5 text-[12px] font-extrabold" style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#7f1d1d' }}>{'⛔ ' + pp.err}</div>}
+          <div className="flex gap-2">
+            <button onClick={savePayment} disabled={busy || !line || left < -0.005} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || !line || left < -0.005) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Record payment' + ((pp.picks || []).length > 1 ? 's' : '')}</button>
+            <button onClick={function () { setPaying(null); }} className="px-3 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>Cancel</button>
+          </div>
+        </div>;
+      })()}
     </div>
               </td></tr>}
               {disputing && disputing.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
@@ -812,22 +863,38 @@ export default function BillsTab(props) {
       </div>
     </div>
               </td></tr>}
+              {history && history.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
+                <div className="rounded-xl p-3" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
+                  <div className="flex items-center gap-2 mb-2"><div className="text-[13px] font-extrabold" style={{ color: '#0f172a' }}>{'🕘 History — ' + b.vendor_name + ' bill ' + (b.bill_number || '—')}</div><div className="flex-1" /><button onClick={function () { setHistory(null); }} className="px-2 py-0.5 rounded text-[11px] font-bold" style={{ background: '#e2e8f0', color: '#334155' }}>✕ Close</button></div>
+                  {history.rows === null && <div className="text-[11px]" style={{ color: '#64748b' }}>Loading…</div>}
+                  {history.err && <div className="text-[11px] font-bold" style={{ color: '#b91c1c' }}>{history.err}</div>}
+                  {history.rows && history.rows.length === 0 && !history.err && <div className="text-[11px]" style={{ color: '#64748b' }}>Nothing recorded for this bill yet.</div>}
+                  {history.rows && history.rows.length > 0 && <ol className="grid gap-1.5" style={{ listStyle: 'none', margin: 0, padding: 0 }}>{history.rows.map(function (r0, i) { var dsc = describeAudit(r0);
+                    return <li key={i} className="grid gap-0.5 rounded-lg px-2.5 py-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                      <div className="text-[12px]" style={{ color: '#0f172a' }}><b>{r0.who}</b>{' — ' + dsc.sentence}</div>
+                      <div className="text-[10px]" style={{ color: '#64748b' }}>{niceWhen(r0.at)}{dsc.facts.length ? ' · ' + dsc.facts.join(' · ') : ''}</div></li>; })}</ol>}
+                </div>
+              </td></tr>}
               {rowAsk && rowAsk.bill.id === b.id && <tr><td colSpan={11} className="py-2 px-1" style={{ background: '#ffffff' }}>
                 <div className="rounded-xl p-3" style={{ background: rowAsk.kind === 'resolve' ? '#ecfdf5' : '#fee2e2', border: '2px solid ' + (rowAsk.kind === 'resolve' ? '#10b981' : '#dc2626') }}>
-                  <div className="text-[13px] font-extrabold mb-1" style={{ color: rowAsk.kind === 'resolve' ? '#065f46' : '#7f1d1d' }}>{rowAsk.kind === 'delete' ? '🗑 Delete ' + rowAsk.bill.vendor_name + ' · ' + (rowAsk.bill.bill_number || '—') + ' ($' + fmt(rowAsk.bill.total_amount) + ')? It disappears from the Hub — lists, reports, wires, duplicate checks. Use this for a bill that should never have been here (e.g. imported twice). For a real bill that was cancelled, use Void instead (it stays visible as VOID). Its history stays on the audit trail.' : rowAsk.kind === 'reopen' ? '↩ Reopen the validation of this bill? It goes back to PENDING (audited) — fix it, then validate it again before it can be wired.' : rowAsk.kind === 'void_bill' ? '🗑 Void this bill? It stays on record as VOID (audited) and leaves what we owe.' : rowAsk.kind === 'void_payment' ? '🗑 Void this payment of $' + fmt(rowAsk.payment.amount) + ' (' + rowAsk.payment.paid_date + ')? The bill becomes open again by that amount.' : '✓ Resolve the dispute — how was it resolved? (goes on the audit trail)'}</div>
+                  <div className="text-[13px] font-extrabold mb-1" style={{ color: rowAsk.kind === 'resolve' ? '#065f46' : '#7f1d1d' }}>{rowAsk.kind === 'delete' ? '🗑 Delete ' + rowAsk.bill.vendor_name + ' · ' + (rowAsk.bill.bill_number || '—') + ' ($' + fmt(rowAsk.bill.total_amount) + ')? It disappears from the Hub — lists, reports, wires, duplicate checks. Use this for a bill that should never have been here (e.g. imported twice). For a real bill that was cancelled, use Void instead (it stays visible as VOID). Its history stays on the audit trail.' : rowAsk.kind === 'reopen' ? '↩ Reopen the validation of this bill? It goes back to PENDING (audited) — fix it, then validate it again before it can be wired.' : rowAsk.kind === 'void_bill' ? '🗑 Void this bill? It stays on record as VOID (audited) and leaves what we owe.' : rowAsk.kind === 'void_payment' ? '🗑 Void this payment of $' + fmt(rowAsk.payment.amount) + ' (' + rowAsk.payment.paid_date + ')? The bill becomes open again by that amount.' : rowAsk.kind === 'undo_pay' ? '↩ Undo a payment on ' + rowAsk.bill.vendor_name + ' bill ' + (rowAsk.bill.bill_number || '—') + '. Pick the payment, write why. It stays on record as UNDONE (nothing is deleted), the bill opens again by that amount, and its bank line is free again for that amount.' : '✓ Resolve the dispute — how was it resolved? (goes on the audit trail)'}</div>
+                  {rowAsk.kind === 'undo_pay' && <div className="grid gap-1 mb-2">{paysOf(rowAsk.bill.id).filter(function (p0) { return !p0.voided; }).map(function (p0) { var on = rowAsk.payment && rowAsk.payment.id === p0.id;
+                    return <label key={p0.id} className="flex items-center gap-2 text-[12px] rounded px-2 py-1" style={{ background: on ? '#ffedd5' : '#ffffff', border: '1px solid #fdba74', color: '#431407', cursor: 'pointer' }}><input type="radio" checked={!!on} onChange={function () { setRowAsk(Object.assign({}, rowAsk, { payment: p0, err: '' })); }} />{'$' + fmt(p0.amount) + ' paid ' + niceDate(p0.paid_date) + (p0.bank_transaction_id ? ' · from a bank line' : ' · no bank line')}</label>; })}</div>}
                   <div className="flex gap-2 items-center flex-wrap">
-                    {(rowAsk.kind === 'resolve' || rowAsk.kind === 'reopen' || rowAsk.kind === 'delete') && <input autoFocus className={inp} style={{ flex: '1 1 360px' }} placeholder={rowAsk.kind === 'delete' ? 'Why is it deleted? (required — e.g. imported twice)' : rowAsk.kind === 'reopen' ? 'Why is it reopened? (required — e.g. wrong amount on line 3)' : 'How was it resolved? (at least a sentence)'} value={rowAsk.text || ''} onChange={function (e) { setRowAsk(Object.assign({}, rowAsk, { text: e.target.value, err: '' })); }} />}
+                    {(rowAsk.kind === 'resolve' || rowAsk.kind === 'reopen' || rowAsk.kind === 'delete' || rowAsk.kind === 'undo_pay' || rowAsk.kind === 'void_payment') && <input autoFocus className={inp} style={{ flex: '1 1 360px' }} placeholder={rowAsk.kind === 'undo_pay' || rowAsk.kind === 'void_payment' ? 'Why is this payment undone? (required — e.g. linked to the wrong bank line)' : rowAsk.kind === 'delete' ? 'Why is it deleted? (required — e.g. imported twice)' : rowAsk.kind === 'reopen' ? 'Why is it reopened? (required — e.g. wrong amount on line 3)' : 'How was it resolved? (at least a sentence)'} value={rowAsk.text || ''} onChange={function (e) { setRowAsk(Object.assign({}, rowAsk, { text: e.target.value, err: '' })); }} />}
                     <button disabled={busy} onClick={function () {
-                      var ra = rowAsk; var req = ra.kind === 'delete' ? { action: 'delete_bill', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'reopen' ? { action: 'reopen_validation', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'void_bill' ? { action: 'void_bill', id: ra.bill.id } : ra.kind === 'void_payment' ? { action: 'void_payment', id: ra.payment.id } : { action: 'resolve_dispute', id: ra.bill.id, resolution: ra.text || '' };
+                      var ra = rowAsk; var req = ra.kind === 'delete' ? { action: 'delete_bill', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'reopen' ? { action: 'reopen_validation', id: ra.bill.id, reason: ra.text || '' } : ra.kind === 'void_bill' ? { action: 'void_bill', id: ra.bill.id } : ra.kind === 'void_payment' || ra.kind === 'undo_pay' ? { action: 'void_payment', id: ra.payment && ra.payment.id, reason: ra.text || '' } : { action: 'resolve_dispute', id: ra.bill.id, resolution: ra.text || '' };
+                      if (ra.kind === 'undo_pay' && !ra.payment) { setRowAsk(Object.assign({}, ra, { err: 'Pick which payment to undo.' })); return; }
+                      if ((ra.kind === 'undo_pay' || ra.kind === 'void_payment') && String(ra.text || '').trim().length < 5) { setRowAsk(Object.assign({}, ra, { err: 'Write why this payment is undone — it goes on the audit trail.' })); return; }
                       if (ra.kind === 'resolve' && String(ra.text || '').trim().length < 10) { setRowAsk(Object.assign({}, ra, { err: 'Write how it was resolved — at least a sentence.' })); return; }
                       if (ra.kind === 'delete' && String(ra.text || '').trim().length < 5) { setRowAsk(Object.assign({}, ra, { err: 'Write why it is deleted (at least 5 characters) — it goes on the audit trail.' })); return; }
                       if (ra.kind === 'reopen' && String(ra.text || '').trim().length < 5) { setRowAsk(Object.assign({}, ra, { err: 'Write why it is reopened — it goes on the audit trail.' })); return; }
                       setBusy(true);
                       api(req).then(function (j) {
-                        if (j && j.ok) { toast.success(ra.kind === 'delete' ? '🗑 Bill deleted — it is gone from the Hub (its history is kept).' : ra.kind === 'reopen' ? '↩ Validation reopened — the bill is PENDING again.' : ra.kind === 'void_bill' ? 'Bill voided.' : ra.kind === 'void_payment' ? 'Payment voided.' : 'Dispute resolved.'); setRowAsk(null); load(); }
+                        if (j && j.ok) { toast.success(ra.kind === 'delete' ? '🗑 Bill deleted — it is gone from the Hub (its history is kept).' : ra.kind === 'reopen' ? '↩ Validation reopened — the bill is PENDING again.' : ra.kind === 'void_bill' ? 'Bill voided.' : ra.kind === 'void_payment' || ra.kind === 'undo_pay' ? '↩ Payment undone — the bill is open again' + (j.open_after != null ? ' ($' + fmt(j.open_after) + ' open)' : '') + ' and its bank line is free again.' : 'Dispute resolved.'); setRowAsk(null); load(); }
                         else { setRowAsk(function (r0) { return r0 ? Object.assign({}, r0, { err: (j && j.error) || 'It did not go through — the server did not say why.' }) : r0; }); }
                       }).finally(function () { setBusy(false); });
-                    }} className="px-4 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: rowAsk.kind === 'resolve' ? '#047857' : rowAsk.kind === 'reopen' ? '#1e293b' : '#b91c1c', color: '#ffffff' }}>{busy ? 'Working…' : rowAsk.kind === 'resolve' ? '✓ Resolve' : rowAsk.kind === 'reopen' ? '↩ Reopen it' : rowAsk.kind === 'delete' ? '🗑 Delete it' : '🗑 Void it'}</button>
+                    }} className="px-4 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: rowAsk.kind === 'resolve' ? '#047857' : rowAsk.kind === 'reopen' ? '#1e293b' : '#b91c1c', color: '#ffffff' }}>{busy ? 'Working…' : rowAsk.kind === 'resolve' ? '✓ Resolve' : rowAsk.kind === 'reopen' ? '↩ Reopen it' : rowAsk.kind === 'delete' ? '🗑 Delete it' : rowAsk.kind === 'undo_pay' ? '↩ Undo this payment' : '🗑 Void it'}</button>
                     <button onClick={function () { setRowAsk(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{ background: '#ffffff', color: '#334155', border: '1px solid #cbd5e1' }}>Keep it</button>
                   </div>
                   {rowAsk.err && <div className="mt-2 rounded-lg px-3 py-2 text-[12px] font-extrabold" style={{ background: '#ffffff', color: '#b91c1c', border: '1px solid #fca5a5' }}>{'⛔ ' + rowAsk.err}</div>}
@@ -844,8 +911,8 @@ export default function BillsTab(props) {
                 {paysOf(b.id).length === 0 ? <span className="text-[11px]">No payments yet.</span> :
                   paysOf(b.id).map(function (p) {
                     return <div key={p.id} className="text-[11px] flex gap-2 items-center">
-                      <span>{p.paid_date} — ${fmt(p.amount)}{p.voided ? ' (VOID)' : ''}{p.bank_transaction_id ? ' · 🏦 bank-linked' : (p.method ? ' · ' + p.method : '')}</span>
-                      {canManage && !p.voided && <button onClick={function () { closePanels(); setRowAsk({ kind: 'void_payment', bill: b, payment: p }); }} className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d' }}>void</button>}
+                      <span>{'$' + fmt(p.amount) + ' paid ' + niceDate(p.paid_date) + (p.voided ? ' — UNDONE' : '') + (p.bank_transaction_id ? ' · 🏦 from a bank line' : ' · ⚠ no bank line (recorded before this was required)')}</span>
+                      {canManage && !p.voided && <button onClick={function () { closePanels(); setRowAsk({ kind: 'undo_pay', bill: b, payment: p, text: '' }); }} className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>↩ undo</button>}
                     </div>;
                   })}
                 </div>

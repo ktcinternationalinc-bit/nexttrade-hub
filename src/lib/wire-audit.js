@@ -25,6 +25,8 @@ function sameDay(a, b) { if (!a || !b) { return null; } return String(a).substri
 // One fingerprint of exactly what was checked and signed: every payment, its
 // bill, amount, release and reference. Any change → a different fingerprint →
 // earlier checks and sign-offs no longer count.
+// v55.83-TH — every bill column wireFingerprint reads. Any query whose rows feed a fingerprint must select at least these.
+export var WIRE_FINGERPRINT_BILL_FIELDS = 'id, vendor_name, bill_number, release_number, total_amount, record_status, other_reference, shipment_direction, validation_status';
 export function wireFingerprint(wire, lines, opts) {
   var parts = [String((wire && wire.id) || ''), r2(wire && wire.amount).toFixed(2)];
   // v55.83-RH — prepared wires have no payment yet: order by line / bill (RG wires keep ordering by payment, unchanged)

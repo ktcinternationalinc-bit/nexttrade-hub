@@ -20,7 +20,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server';
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server';
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
-import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY } from '../../../../lib/wire-audit';
+import { auditPackage, packageFingerprint, packageStatus, packageTotals, packageLabel, normRef, samePayee, applyOverrides, checkKey, OVERRIDABLE, NOT_OVERRIDABLE_WHY, WIRE_FINGERPRINT_BILL_FIELDS } from '../../../../lib/wire-audit';
 import { packageContext, inChunks, loadPayParties, aiReviewPackage } from '../../../../lib/wire-package-server';
 import { attachWire, autoMatchSentWires, wireCandidates, AUTO_FEE_MAX, fileAsProfessionalFees } from '../../../../lib/wire-auto-match'; // v55.83-RZ
 import { fundingLines, currencyMismatch } from '../../../../lib/wire-funding-server'; // v55.83-SP — requests drawn from a transfer
@@ -176,7 +176,10 @@ export async function POST(req) {
       var pIds = pkgs.map(function (p) { return p.id; });
       var allL = pIds.length ? await inChunks(db, 'wire_package_lines', '*', 'package_id', pIds) : [];
       var bIds = []; allL.forEach(function (l) { if (bIds.indexOf(l.bill_id) < 0) { bIds.push(l.bill_id); } });
-      var bl = bIds.length ? await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, release_number, total_amount, record_status', 'id', bIds) : [];
+      // v55.83-TH (Max, Nov 16: "both approved so status should be wire ready not remain as pre-wire check it") — the list must load
+      // EVERY bill field the fingerprint covers (validation, other reference, direction). Without validation_status every bill read as
+      // NOT-VALIDATED here, the list's fingerprint never matched the signed one, and a fully signed wire showed 'PRE-WIRE · Check it'.
+      var bl = bIds.length ? await inChunks(db, 'vendor_bills', WIRE_FINGERPRINT_BILL_FIELDS, 'id', bIds) : [];
       var bBy = {}; bl.forEach(function (b) { bBy[b.id] = b; });
       var nm = await userNames(db, [].concat(pkgs.map(function (p) { return p.created_by; }), pkgs.map(function (p) { return p.signoff1_by; }), pkgs.map(function (p) { return p.signoff2_by; }), pkgs.map(function (p) { return p.sent_by; })));
       var out = pkgs.map(function (p) {

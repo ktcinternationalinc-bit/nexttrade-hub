@@ -4,6 +4,7 @@
 // merged from the hub's append-only audit log and the bill event trail.
 // Read-only by construction: there is no edit or delete, for anyone.
 import React, { useState, useEffect } from 'react';
+import { describeAudit, niceWhen } from '../lib/audit-words'; // v55.83-TH — plain sentences (Max, Nov 16)
 
 var ACTION_LABELS = {
   bank_classify: '🏷 categorized a transaction', bulk_categorized: '🏷 bulk-categorized',
@@ -60,25 +61,18 @@ export default function AuditTrailTab(props) {
     </div>
     {err && <div className="text-[11px] font-bold rounded p-2" style={{ background: '#fef2f2', color: '#7f1d1d' }}>{err}</div>}
     {!err && !data && <div className="text-[11px]" style={{ color: '#334155' }}>Loading…</div>}
-    {data && <table className="w-full text-[11px]">
-      <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
-        <th className="py-1 pr-2 text-left font-semibold">When</th>
-        <th className="py-1 pr-2 text-left font-semibold">Who</th>
-        <th className="py-1 pr-2 text-left font-semibold">Did what</th>
-        <th className="py-1 text-left font-semibold">On</th></tr></thead>
-      <tbody style={{ color: '#0f172a' }}>
-        {(data.rows || []).map(function (r, i) {
-          return <React.Fragment key={i}>
-            <tr style={{ borderBottom: '1px solid #f1f5f9', cursor: r.details ? 'pointer' : 'default' }} onClick={function () { setOpen(open === i ? null : i); }}>
-              <td className="py-1 pr-2 whitespace-nowrap text-[10px]">{String(r.at || '').replace('T', ' ').substring(0, 19)}</td>
-              <td className="py-1 pr-2 font-bold">{r.who}</td>
-              <td className="py-1 pr-2">{ACTION_LABELS[r.action] || r.action}</td>
-              <td className="py-1 text-[10px]" style={{ color: '#64748b' }}>{String(r.entity_id || '').substring(0, 46)}{r.details ? ' ▾' : ''}</td></tr>
-            {open === i && r.details && <tr><td colSpan={4} className="py-1 pl-4 text-[10px]" style={{ background: '#f8fafc', color: '#334155' }}>{JSON.stringify(r.details)}</td></tr>}
-          </React.Fragment>;
-        })}
-        {(data.rows || []).length === 0 && <tr><td colSpan={4} className="py-3 text-center text-[11px]" style={{ color: '#64748b' }}>Nothing recorded yet{q ? ' for "' + q + '"' : ''} — actions start appearing after the QI SQL is run and work happens.</td></tr>}
-      </tbody>
-    </table>}
+    {data && <div className="grid gap-1.5">
+      {(data.rows || []).map(function (r, i) { var dsc = describeAudit(r);
+        return <div key={i} className="rounded-lg px-3 py-2 grid gap-0.5" style={{ border: '1px solid #e2e8f0', background: '#ffffff' }}>
+          <div className="flex gap-2 items-baseline flex-wrap">
+            <span className="text-[12px]" style={{ color: '#0f172a' }}><b>{r.who}</b>{' — ' + dsc.sentence}</span>
+            <span className="flex-1" /><span className="text-[10px] whitespace-nowrap" style={{ color: '#64748b' }}>{niceWhen(r.at)}</span></div>
+          {dsc.facts.length > 0 && <div className="text-[11px]" style={{ color: '#334155' }}>{dsc.facts.join(' · ')}</div>}
+          {r.details && <button type="button" onClick={function () { setOpen(open === i ? null : i); }} className="justify-self-start text-[10px]" style={{ color: '#64748b', background: 'none', border: 0, padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>{open === i ? 'hide the full record' : 'show the full record'}</button>}
+          {open === i && r.details && <pre className="text-[10px] whitespace-pre-wrap rounded p-2" style={{ background: '#f8fafc', color: '#334155', margin: 0 }}>{JSON.stringify(r.details, null, 2)}</pre>}
+        </div>;
+      })}
+      {(data.rows || []).length === 0 && <div className="py-3 text-center text-[11px]" style={{ color: '#64748b' }}>{'Nothing recorded yet' + (q ? ' for "' + q + '"' : '') + '.'}</div>}
+    </div>}
   </div>;
 }
