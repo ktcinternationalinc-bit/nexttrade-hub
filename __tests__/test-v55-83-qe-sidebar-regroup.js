@@ -22,7 +22,7 @@ ok('2: 🇪🇬 EGYPT FINANCE = sales, quotes, treasury, checks, debts, egyptban
 ok('3: OPEN ACCOUNTS is its OWN section; REPORTS its own row; Operations/People/System untouched',
   /\{ group: 'OPEN ACCOUNTS', items: \['openaccounts'\] \},/.test(pg) &&
   /\{ group: 'REPORTS', items: \['reports'\] \},/.test(pg) &&
-  /\{ group: 'OPERATIONS', items: \['warehouse', 'inventory', 'customs', 'shipping'\] \},/.test(pg));
+  /* v55.83-SV realign — the 🧭 Sourcing desk joins Operations at the end; the four existing items keep their order */ /\{ group: 'OPERATIONS', items: \['warehouse', 'inventory', 'customs', 'shipping', 'sourcing'\] \},/.test(pg));
 ok('4: every tab still renders through the SAME visibleTabs permission filter (regroup moves rows, never exposes them)',
   /const groupTabs = g\.items\.map\(id => visibleTabs\.find\(t => t\.id === id\)\)\.filter\(Boolean\);/.test(pg));
 ok('5: breadcrumbs follow the split — accounting under USA Finance, treasury under Egypt Finance, openaccounts and reports named',

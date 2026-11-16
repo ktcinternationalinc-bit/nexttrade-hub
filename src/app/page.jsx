@@ -12,6 +12,7 @@ import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
 import SystemTicketsPanel from '../components/SystemTicketsPanel';
 import WhatsNewWidget from '../components/WhatsNewWidget';
+import SourcingDeskTab from '../components/SourcingDeskTab'; // v55.83-SV (web chat) — Project 1, Stage 1 · merged into the live line as v55.83-TF
 import PendingNadiaMessages from '../components/PendingNadiaMessages';
 // v55.83-A — new Inventory module replaces the inline inventory section
 import InventoryTab from '../components/InventoryTab';
@@ -191,6 +192,7 @@ const TABS = [
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
   { id: 'crm', label: 'CRM', icon: '🤝' },
+  { id: 'sourcing', label: 'Sourcing desk / مصادر', icon: '🧭' },
   { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
   { id: 'systemtickets', label: 'System Tickets / نظام', icon: '🐛' },
   { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
@@ -2027,6 +2029,8 @@ export default function App() {
         return modulePerms['accounting.clickbooks.access'] === true || modulePerms['accounting.wavehub.access'] === true ||
           modulePerms['accounting.view'] === true || userProfile?.role === 'owner' || userProfile?.role === 'admin';
       }
+      // v55.83-SV — the Sourcing desk shows only for people given its switch (Max: "Super admin. And those permissioned")
+      if (t.id === 'sourcing') { return modulePerms['commercial.access'] === true; }
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
@@ -5577,7 +5581,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-TE</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-TF</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -5963,7 +5967,7 @@ export default function App() {
               { group: '🇪🇬 EGYPT FINANCE', items: ['sales', 'quotes', 'treasury', 'checks', 'debts', 'egyptbank'] },
               { group: 'OPEN ACCOUNTS', items: ['openaccounts'] },
               { group: 'REPORTS', items: ['reports'] },
-              { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
+              { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping', 'sourcing'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
               { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
             ].map(g => {
@@ -14695,6 +14699,10 @@ export default function App() {
           </SafeSection>
           </div>
         )}
+        {tab === 'sourcing' && (
+          <SafeSection label="Sourcing desk"><SourcingDeskTab toast={toast} userProfile={userProfile} /></SafeSection>
+        )}
+
         {tab === 'accounting' && (
           <SafeSection label="Accounting">
             <AccountingTab toast={toast} user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} modulePerms={modulePerms} onReload={loadAllData} deepLink={acctDeepLink} onReturn={acctReturn ? returnFromAccounting : null} returnLabel={acctReturn ? acctReturn.label : ''} />

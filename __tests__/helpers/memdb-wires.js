@@ -58,11 +58,13 @@ Q.prototype.run = function () {
     for (var i = 0; i < arr.length; i++) {
       var r = Object.assign({ id: crypto.randomUUID(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }, arr[i]);
       if (this.name === 'wire_packages') { r.seq = db.seq++; r.status = r.status || 'draft'; r.fee_amount = r.fee_amount || 0; }
+      if (this.name === 'sourcing_requests') { r.seq = db.seq++; } // v55.83-SV — the request number comes from the database
       if (this.name === 'wire_package_lines') {
         if (r.is_open === undefined) { r.is_open = true; }
         if (tbl.some(function (x) { return x.is_open && x.bill_id === r.bill_id; })) { return { data: null, error: { message: 'duplicate key value violates unique constraint "uq_wpkg_line_open_bill"' } }; }
       }
       if (hooks && hooks.insert) { var he = hooks.insert(r); if (he) { return { data: null, error: { message: he } }; } }
+      if (hooks && hooks.after) { hooks.after(r, null); } // v55.83-SW — computed columns (e.g. content_hash) after the write
       made.push(r);
     }
     made.forEach(function (r) { tbl.push(r); });
@@ -78,7 +80,7 @@ Q.prototype.run = function () {
       if (hooks && hooks.update) { var ue = hooks.update(rows[j], this.payload); if (ue) { return { data: null, error: { message: ue } }; } }
     }
     var pl = this.payload;
-    rows.forEach(function (r) { Object.assign(r, pl); if (pl.updated_at === undefined && r.updated_at) { r.updated_at = new Date(Date.now() + Math.random() * 1000).toISOString(); } });
+    rows.forEach(function (r) { var before = Object.assign({}, r); Object.assign(r, pl); if (pl.updated_at === undefined && r.updated_at) { r.updated_at = new Date(Date.now() + Math.random() * 1000).toISOString(); } if (hooks && hooks.after) { hooks.after(r, before); } });
     return this.wantRows || this.sgl ? this.shape(rows) : { data: null, error: null };
   }
   if (this.op === 'delete') { db.t[this.name] = tbl.filter(function (r) { return rows.indexOf(r) < 0; }); return { data: null, error: null }; }

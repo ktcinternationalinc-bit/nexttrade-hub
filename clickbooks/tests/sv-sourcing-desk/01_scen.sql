@@ -1,0 +1,37 @@
+-- v55.83-SV — the Sourcing desk's database rules, on a local Postgres (never Supabase). Run after sql/v55-83-SV-sourcing-desk.sql.
+\set ON_ERROR_STOP 0
+create or replace function public.try(q text) returns text language plpgsql as $$ begin execute q; return 'ALLOWED'; exception when others then return 'REFUSED: ' || left(sqlerrm, 110); end $$;
+insert into public.sourcing_requests(id, company, direction, title, product) values ('11111111-0000-0000-0000-000000000001','KTC Egypt','buy','Loaders','used Caterpillar 950 loaders');
+select 'V1 numbered: SR-' || lpad(seq::text, 4, '0') from public.sourcing_requests;
+select 'V2 closing without a reason: ' || public.try($q$update public.sourcing_requests set stage='closed' where seq=1$q$);
+select 'V3 a direction that does not exist: ' || public.try($q$insert into public.sourcing_requests(company,direction,title,product) values ('KTC Egypt','steal','x','x')$q$);
+insert into public.suppliers(id, legal_name, name_key, website, website_key, added_by_kind) values ('22222222-0000-0000-0000-000000000001','Acme Loaders Ltd','acme loaders','https://acme.example','acme.example','agent');
+select 'V4 same supplier name again: ' || public.try($q$insert into public.suppliers(legal_name,name_key) values ('ACME LOADERS','acme loaders')$q$);
+select 'V5 same website under another name: ' || public.try($q$insert into public.suppliers(legal_name,name_key,website_key) values ('Other','other','acme.example')$q$);
+select 'V6 the agent marks something VERIFIED: ' || public.try($q$insert into public.supplier_facts(supplier_id,topic,statement,grade,added_by_kind,source_url,evidence_note) values ('22222222-0000-0000-0000-000000000001','price','$40k','verified','agent','https://acme.example','seen')$q$);
+select 'V7 the agent states a fact with no source link: ' || public.try($q$insert into public.supplier_facts(supplier_id,topic,statement,grade,added_by_kind) values ('22222222-0000-0000-0000-000000000001','stock','12 units','claim','agent')$q$);
+select 'V8 a person marks VERIFIED with no evidence: ' || public.try($q$insert into public.supplier_facts(supplier_id,topic,statement,grade,added_by_kind) values ('22222222-0000-0000-0000-000000000001','stock','12 units','verified','person')$q$);
+insert into public.supplier_facts(id, supplier_id, topic, statement, grade, added_by_kind, source_url) values ('33333333-0000-0000-0000-000000000001','22222222-0000-0000-0000-000000000001','stock','12 units in Rotterdam','claim','agent','https://acme.example/stock');
+select 'V9 a recorded fact rewritten: ' || public.try($q$update public.supplier_facts set statement='20 units' where id='33333333-0000-0000-0000-000000000001'$q$);
+select 'V10 a recorded fact erased: ' || public.try($q$delete from public.supplier_facts where id='33333333-0000-0000-0000-000000000001'$q$);
+select 'V11 retracted without a reason: ' || public.try($q$update public.supplier_facts set retracted_at=now() where id='33333333-0000-0000-0000-000000000001'$q$);
+select 'V12 retracted with a reason: ' || public.try($q$update public.supplier_facts set retracted_at=now(), retracted_why='their page was out of date' where id='33333333-0000-0000-0000-000000000001'$q$);
+select 'V13 retracted a second time: ' || public.try($q$update public.supplier_facts set retracted_at=now(), retracted_why='again again' where id='33333333-0000-0000-0000-000000000001'$q$);
+select 'V14 a contact with no way to reach them: ' || public.try($q$insert into public.supplier_contacts(supplier_id,name) values ('22222222-0000-0000-0000-000000000001','Bob')$q$);
+select 'V15 a supplier dropped without a reason: ' || public.try($q$insert into public.sourcing_shortlist(request_id,supplier_id,status) values ('11111111-0000-0000-0000-000000000001','22222222-0000-0000-0000-000000000001','dropped')$q$);
+select 'V16 a draft marked sent (Stage 1 cannot send): ' || public.try($q$insert into public.outreach_drafts(request_id,supplier_id,subject,body,status) values ('11111111-0000-0000-0000-000000000001','22222222-0000-0000-0000-000000000001','s','b','sent')$q$);
+insert into public.agent_jobs(id, kind, ref_id) values ('44444444-0000-0000-0000-000000000001','sourcing_research','11111111-0000-0000-0000-000000000001');
+select 'V17 a second research job for the same request while one is waiting: ' || public.try($q$insert into public.agent_jobs(kind,ref_id) values ('sourcing_research','11111111-0000-0000-0000-000000000001')$q$);
+select 'V18 claim: ' || coalesce((select status || ' attempt ' || attempts from public.agent_job_claim(10)), 'nothing');
+select 'V19 claim again while it runs: ' || coalesce((select status from public.agent_job_claim(10)), 'nothing (one worker at a time)');
+update public.agent_jobs set locked_at = now() - interval '30 minutes' where id='44444444-0000-0000-0000-000000000001';
+select 'V20 a job stuck for 30 minutes is taken again: ' || coalesce((select status || ' attempt ' || attempts from public.agent_job_claim(10)), 'nothing');
+update public.agent_jobs set locked_at = now() - interval '30 minutes' where id='44444444-0000-0000-0000-000000000001';
+select 'V21 third attempt: ' || coalesce((select status || ' attempt ' || attempts from public.agent_job_claim(10)), 'nothing');
+update public.agent_jobs set locked_at = now() - interval '30 minutes' where id='44444444-0000-0000-0000-000000000001';
+select 'V22 after 3 attempts the claim returns: ' || coalesce((select status from public.agent_job_claim(10)), 'nothing');
+select 'V22b and the job is now: ' || status || coalesce(' (' || last_error || ')', '') from public.agent_jobs where id='44444444-0000-0000-0000-000000000001';
+select 'V23 once failed, a new job may be queued: ' || public.try($q$insert into public.agent_jobs(kind,ref_id) values ('sourcing_research','11111111-0000-0000-0000-000000000001')$q$);
+select 'V24 RLS on all seven tables: ' || count(*) filter (where relrowsecurity) || ' of ' || count(*) from pg_class where relname in ('sourcing_requests','suppliers','supplier_contacts','supplier_facts','sourcing_shortlist','outreach_drafts','agent_jobs');
+select 'V25 the web roles can read the tables: ' || coalesce(string_agg(distinct grantee || ':' || table_name, ', '), 'none') from information_schema.role_table_grants where grantee in ('anon','authenticated') and table_name in ('sourcing_requests','suppliers','supplier_contacts','supplier_facts','sourcing_shortlist','outreach_drafts','agent_jobs');
+drop function public.try(text);
