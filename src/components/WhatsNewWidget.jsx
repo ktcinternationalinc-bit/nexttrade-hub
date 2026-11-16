@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TB',
+    date: '2026-11-16',
+    title: 'Profitability: a product name can only exist once — same name means merged',
+    items: [
+      'If you forgot a description when you made a product, tick it and save it under the SAME name again. It is added to the existing product; a second product with that name is never made.',
+      'Capitals, spaces and punctuation do not matter: “Texas Seconds”, “TEXAS  SECONDS” and “texas seconds” are the same name.',
+      'Renaming a product to a name another product already has merges the two into one.',
+      'Any products that already had the same name are shown as ONE product right away, under the name of the oldest one, with all their descriptions and supplier links together.',
+      'Nothing is deleted: the extra group is switched off and the move is written to the audit trail.',
+      'By product is tidier: only the product names show at first. Click a product to see the names that make it up; click a name to see its shipments. The arrow symbol and the “original description” labels are gone.',
+      'Where part of an amount is missing, the known amount is shown with a small “part missing” note under it, instead of “unknown (+$… known)”.',
+      { superAdminOnly: true, text: 'No SQL. assemble: groups canonicalised by nameKey(display_name), oldest created_at wins, names de-duplicated per canonical group. Route: sameNameGroups / consolidate / idsSharingName; group_save without id adds to the oldest same-name group and folds in the rest; rename onto an existing name consolidates; remove_name and dissolve act on all same-name ids. Audit pl_group_merged_by_name.' },
+    ],
+  },
+  {
     version: 'v55.83-TA',
     date: '2026-11-16',
     title: 'Profitability: tons added, and merged products show one top line with the descriptions underneath',

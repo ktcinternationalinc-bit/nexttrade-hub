@@ -73,7 +73,7 @@ export default function ProfitabilityTab(props) {
   function act(payload, okMsg) {
     setBusy(true);
     return call(payload).then(function (j) {
-      if (j && j.ok) { if (okMsg) { toast.success(okMsg); } load(); return true; }
+      if (j && j.ok) { if (j.message || okMsg) { toast.success(j.message || okMsg); } load(); return true; } // TB — the server says when it merged into an existing product
       toast.error((j && j.error) || 'Not saved.'); setBusy(false); return false;
     });
   }
@@ -84,7 +84,10 @@ export default function ProfitabilityTab(props) {
   var th = { background: '#0f172a', color: '#ffffff' };
   var inp = { background: '#ffffff', color: INK, border: '1px solid #94a3b8' };
   function money(row, f) {
-    if (row.unknown_fields && row.unknown_fields.indexOf(f) >= 0) { return <span style={{ color: '#b45309', fontWeight: 800 }}>{'unknown' + ((Number(row[f]) || 0) !== 0 ? ' (+$' + fmt(row[f]) + ' known)' : '')}</span>; }
+    if (row.unknown_fields && row.unknown_fields.indexOf(f) >= 0) { // v55.83-TB (Max: "looks so awful") — the known amount plainly, a small note that part is missing
+      if ((Number(row[f]) || 0) === 0) { return <span style={{ color: '#b45309', fontWeight: 700 }}>missing</span>; }
+      return <span>{'$' + fmt(row[f])}<div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>part missing</div></span>;
+    }
     return '$' + fmt(row[f]);
   }
   function cellMoney(v) { return v === null || v === undefined ? <span style={{ color: '#b45309', fontWeight: 800 }}>unknown</span> : '$' + fmt(v); }
@@ -176,9 +179,8 @@ export default function ProfitabilityTab(props) {
   function rowTds(r, isInvoice, isOpen, sub) {
     var pc = sub ? 'px-2 py-1 text-right tabular-nums' : 'px-2 py-1.5 text-right tabular-nums';
     return [
-      <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={sub ? { paddingLeft: 30 } : {}}>{(isOpen ? '▾ ' : '▸ ') + (sub ? '↳ ' : '') + r.label}
-        {!sub && r.grouped && <span className="ml-1 px-1 rounded text-[9px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81' }}>{'MERGED · ' + r.name_list.length + ' names'}</span>}
-        {sub && <span className="ml-1 text-[9px]" style={{ color: SUB }}>original description</span>}
+      <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={sub ? { paddingLeft: 26 } : {}}>{(isOpen ? '▾ ' : '▸ ') + r.label}
+        {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
         {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && <div style={{ color: '#b45309', fontWeight: 800 }}>some weights missing</div>}</td>,
       <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{money(r, 'goods_revenue')}</td>,
@@ -212,14 +214,21 @@ export default function ProfitabilityTab(props) {
         <thead><tr>{[firstCol, 'Pounds', 'Goods revenue', 'Avg $ / lb', 'Transport charged', 'Goods cost', 'Avg cost / lb', 'Commission', 'Inbound allowance', 'Outbound transport', 'Brokerage', 'Bonded', 'Total cost', 'Profit', 'Transport profit', ''].map(function (h, i) { return <th key={h + i} className={'px-2 py-1.5 font-bold sticky top-0 ' + (i === 0 ? 'text-left' : 'text-right')} style={th}>{h}</th>; })}</tr></thead>
         <tbody>{rows.map(function (r, i) {
           var isOpen = open === view + ':' + r.key;
+          // v55.83-TB (Max: "should be all showing high level names .. drill down to see each name below it .. and further drill down
+          // to the shipments for each name") — closed by default; open a merged product → its descriptions; open a description → its shipments
           var subs = r.grouped ? (subsOf[r.key] || []) : [];
-          var out = [<tr key={r.key} onClick={function () { setOpen(isOpen ? null : view + ':' + r.key); }} style={{ background: isOpen ? '#e0f2fe' : (subs.length ? '#eef2ff' : (i % 2 ? '#f8fafc' : '#ffffff')), color: INK, borderTop: subs.length ? '2px solid #a5b4fc' : '1px solid ' + LINE, cursor: 'pointer' }}>{rowTds(r, isInvoice, isOpen, false)}</tr>];
-          subs.forEach(function (s0) {
-            var sOpen = open === view + ':' + s0.key;
-            out.push(<tr key={s0.key} onClick={function () { setOpen(sOpen ? null : view + ':' + s0.key); }} style={{ background: sOpen ? '#e0f2fe' : '#fafbff', color: '#334155', borderTop: '1px dashed #c7d2fe', cursor: 'pointer' }}>{rowTds(s0, false, sOpen, true)}</tr>);
-            if (sOpen) { out.push(detailRow(s0.key, s0, (data.cells || []).filter(function (c) { return c.product_key === s0.parent && c.name_key === s0.name_key; }), false)); }
-          });
-          if (isOpen) { out.push(detailRow(r.key, r, (data.cells || []).filter(function (c) { return (view === 'product' ? c.product_key : view === 'customer' ? c.customer : c.invoice_id) === r.key; }), isInvoice)); }
+          var openSub = subs.some(function (s0) { return open === view + ':' + s0.key; });
+          var expanded = isOpen || openSub;
+          var out = [<tr key={r.key} onClick={function () { setOpen(expanded ? null : view + ':' + r.key); }} style={{ background: expanded ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE, cursor: 'pointer' }}>{rowTds(r, isInvoice, expanded, false)}</tr>];
+          if (expanded && subs.length) {
+            subs.forEach(function (s0) {
+              var sOpen = open === view + ':' + s0.key;
+              out.push(<tr key={s0.key} onClick={function () { setOpen(sOpen ? view + ':' + r.key : view + ':' + s0.key); }} style={{ background: sOpen ? '#dbeafe' : '#f8fafc', color: '#334155', borderTop: '1px solid #e2e8f0', cursor: 'pointer' }}>{rowTds(s0, false, sOpen, true)}</tr>);
+              if (sOpen) { out.push(detailRow(s0.key, s0, (data.cells || []).filter(function (c) { return c.product_key === s0.parent && c.name_key === s0.name_key; }), false)); }
+            });
+          } else if (isOpen) {
+            out.push(detailRow(r.key, r, (data.cells || []).filter(function (c) { return (view === 'product' ? c.product_key : view === 'customer' ? c.customer : c.invoice_id) === r.key; }), isInvoice));
+          }
           return out;
         })}
         {rows.length === 0 && <tr><td colSpan={16} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoices in this period.</td></tr>}</tbody>
@@ -247,7 +256,7 @@ export default function ProfitabilityTab(props) {
 
       <div className="rounded-lg p-3 mb-3" style={box}>
         <div className="text-[13px] font-extrabold mb-1">2 · What we call things when we SELL — set the unit, and put the same product under one name</div>
-        <div className="text-[11px] mb-2" style={{ color: SUB }}>An invoice line has a quantity but no unit, so the Hub must be told once per description whether it is sold in pounds, kilograms, tons, yards or linear metres. Tick descriptions that are the same product and give them one name. This changes the report only; the invoices keep their own wording.</div>
+        <div className="text-[11px] mb-2" style={{ color: SUB }}>Typing a name that already exists ADDS the ticked descriptions to that product — you never get two products with the same name. An invoice line has a quantity but no unit, so the Hub must be told once per description whether it is sold in pounds, kilograms, tons, yards or linear metres. Tick descriptions that are the same product and give them one name. This changes the report only; the invoices keep their own wording.</div>
         <div className="flex gap-2 items-center flex-wrap mb-2">
           <input value={nameQ} onChange={function (e) { setNameQ(e.target.value); }} placeholder="find a description…" className="nt-light px-2 py-1 rounded text-[12px]" style={Object.assign({ width: 220 }, inp)} />
           <span className="text-[11px] font-bold" style={{ color: SUB }}>{picked.length + ' ticked'}</span>
@@ -367,7 +376,7 @@ export default function ProfitabilityTab(props) {
       <div className="flex gap-1.5 flex-wrap mb-2">
         {[['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice'], ['setup', '⚙ Names, units and supplier links']].map(function (v) {
           return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
-        <span className="text-[11px] self-center" style={{ color: SUB }}>A merged product shows ONE top line with the totals and averages, and its original descriptions underneath. Click any line to see the invoices, releases, bills and calculations behind it.</span>
+        <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>
       </div>
       {view === 'product' && viewTable(data.by_product || [], 'Product', false)}
       {view === 'customer' && viewTable(data.by_customer || [], 'Customer', false)}

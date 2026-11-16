@@ -55,7 +55,7 @@ export async function POST(req) {
       var setup;
       try {
         setup = {
-          groups: await fetchAll(function () { return db.from('pl_product_groups').select('id, display_name, active'); }),
+          groups: await fetchAll(function () { return db.from('pl_product_groups').select('id, display_name, active, created_at'); }),
           groupNames: await fetchAll(function () { return db.from('pl_group_names').select('id, group_id, source, name_key, raw_name, active'); }),
           nameUnits: await fetchAll(function () { return db.from('pl_name_units').select('name_key, raw_name, unit'); }),
           lineUnits: await fetchAll(function () { return db.from('pl_line_units').select('invoice_item_id, unit'); }),
@@ -92,7 +92,55 @@ export async function POST(req) {
     var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);
     if (!pe || pe.ok !== true) { return bad('This needs the "P&L: Edit Product Costs" permission — grant it in Settings → Module Access.', 403); }
     var now = new Date().toISOString();
-    function fail(e) { return bad(missingTable(e && e.message) ? SQL_HINT : ((e && e.message) || 'Not saved.'), 400); }
+    function fail(e) {
+      var m = String((e && e.message) || '');
+      // v55.83-TB (Max: "selecting ton is not being saved") — the database still has the OLD unit list until the script is run again
+      if (/violates check constraint/i.test(m) && /unit/i.test(m)) { return bad('NOT SAVED — the database does not accept this unit yet. Run sql/v55-83-SY-profitability.sql in Supabase once more (it now allows kilograms and tons), then choose the unit again.', 400); }
+      return bad(missingTable(m) ? SQL_HINT : (m || 'Not saved.'), 400);
+    }
+    // v55.83-TB — every active group whose name is the same as nm (capitals, spaces and punctuation ignored), oldest first
+    async function sameNameGroups(nm) {
+      var k = nameKey(nm); if (!k) { return { list: [] }; }
+      var r = await db.from('pl_product_groups').select('id, display_name, created_at').eq('active', true);
+      if (r.error) { return { error: r.error }; }
+      var list = (r.data || []).filter(function (g) { return nameKey(g.display_name) === k; }).sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)); });
+      return { list: list };
+    }
+    // move every description and supplier link of the groups in fromIds into toId, then switch those groups off (nothing is erased)
+    async function consolidate(fromIds, toId) {
+      var moved = 0;
+      for (var ci = 0; ci < fromIds.length; ci++) {
+        var fid = fromIds[ci]; if (!fid || fid === toId) { continue; }
+        var nr = await db.from('pl_group_names').select('id, source, name_key, raw_name').eq('group_id', fid).eq('active', true);
+        if (nr.error) { return { error: nr.error }; }
+        var rowsN = nr.data || [];
+        for (var cj = 0; cj < rowsN.length; cj++) {
+          var n0 = rowsN[cj];
+          var offN = await db.from('pl_group_names').update({ active: false, removed_by: userId, removed_at: now }).eq('id', n0.id); // first, so an invoice name is never in two groups at once
+          if (offN.error) { return { error: offN.error }; }
+          var hasN = await db.from('pl_group_names').select('id').eq('group_id', toId).eq('source', n0.source).eq('name_key', n0.name_key).eq('active', true).limit(1);
+          if (hasN.error) { return { error: hasN.error }; }
+          if (!hasN.data || !hasN.data.length) {
+            var insN = await db.from('pl_group_names').insert({ group_id: toId, source: n0.source, name_key: n0.name_key, raw_name: n0.raw_name, created_by: userId });
+            if (insN.error) { return { error: insN.error }; }
+            moved++;
+          }
+        }
+        var offG = await db.from('pl_product_groups').update({ active: false, updated_by: userId, updated_at: now }).eq('id', fid);
+        if (offG.error) { return { error: offG.error }; }
+        await audit(db, userId, 'pl_group_merged_by_name', 'pl_product_group', fid, { into: toId, names_moved: moved });
+      }
+      return { moved: moved };
+    }
+    // all the group ids that share a group's name (so un-linking or un-grouping covers duplicates made before TB too)
+    async function idsSharingName(groupId) {
+      var g0 = await db.from('pl_product_groups').select('id, display_name').eq('id', groupId).maybeSingle();
+      if (g0.error) { return { error: g0.error }; }
+      if (!g0.data) { return { ids: [groupId] }; }
+      var sn = await sameNameGroups(g0.data.display_name); if (sn.error) { return { error: sn.error }; }
+      var ids = sn.list.map(function (x) { return x.id; }); if (ids.indexOf(groupId) < 0) { ids.push(groupId); }
+      return { ids: ids };
+    }
 
     // group_save: create a group or add names to one. An invoice description sits in ONE group, so it is moved, not copied.
     if (action === 'group_save') {
@@ -102,11 +150,28 @@ export async function POST(req) {
       var gid = body.id || null;
       if (!gid && gName.length < 2) { return bad('Type the name to show for this product (at least 2 characters).'); }
       if (!gid && !invN.length) { return bad('Tick at least one sales description to put in the group.'); }
+      var mergedMsg = null;
+      if (!gid) {
+        // a group with this name already exists → ADD to it (the oldest), and fold in any other same-name duplicates
+        var same0 = await sameNameGroups(gName); if (same0.error) { return fail(same0.error); }
+        if (same0.list.length) {
+          gid = same0.list[0].id;
+          var c0 = await consolidate(same0.list.slice(1).map(function (x) { return x.id; }), gid); if (c0.error) { return fail(c0.error); }
+          mergedMsg = 'A product called “' + same0.list[0].display_name + '” already exists — the ticked descriptions were ADDED to it' + (same0.list.length > 1 ? ', and ' + (same0.list.length - 1) + ' other group(s) with the same name were merged into it' : '') + '.';
+        }
+      }
       if (gid) {
         var gCur = await db.from('pl_product_groups').select('id, display_name, active').eq('id', gid).maybeSingle();
         if (gCur.error) { return fail(gCur.error); }
         if (!gCur.data || gCur.data.active === false) { return bad('That group no longer exists.', 404); }
-        if (gName && gName !== gCur.data.display_name) {
+        var sameR = (gName && nameKey(gName) !== nameKey(gCur.data.display_name)) ? await sameNameGroups(gName) : { list: [] };
+        if (sameR.error) { return fail(sameR.error); }
+        if (sameR.list.length) {
+          // renamed to a name another group already has → merge into that (older) group
+          var cR = await consolidate([gid].concat(sameR.list.slice(1).map(function (x) { return x.id; })), sameR.list[0].id); if (cR.error) { return fail(cR.error); }
+          mergedMsg = '“' + gCur.data.display_name + '” was merged into the existing product “' + sameR.list[0].display_name + '”.';
+          gid = sameR.list[0].id;
+        } else if (gName && gName !== gCur.data.display_name) {
           var gUp = await db.from('pl_product_groups').update({ display_name: gName.substring(0, 120), updated_by: userId, updated_at: now }).eq('id', gid).select('id');
           if (gUp.error) { return fail(gUp.error); }
           await audit(db, userId, 'pl_group_renamed', 'pl_product_group', gid, { from: gCur.data.display_name, to: gName });
@@ -141,20 +206,22 @@ export async function POST(req) {
         }
       }
       await audit(db, userId, 'pl_group_names_added', 'pl_product_group', gid, { invoice_names: invN, bill_names: billN, added: added });
-      return NextResponse.json({ ok: true, id: gid, added: added, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, id: gid, added: added, message: mergedMsg || undefined, api_build_marker: API_BUILD_MARKER });
     }
     // group_remove_name / group_dissolve: links are switched off, never erased
     if (action === 'group_remove_name') {
       var src = body.source === 'bill' ? 'bill' : 'invoice';
-      var rm = await db.from('pl_group_names').update({ active: false, removed_by: userId, removed_at: now }).eq('group_id', body.group_id).eq('source', src).eq('name_key', String(body.name_key || '')).eq('active', true).select('id');
+      var shR = await idsSharingName(body.group_id); if (shR.error) { return fail(shR.error); }
+      var rm = await db.from('pl_group_names').update({ active: false, removed_by: userId, removed_at: now }).in('group_id', shR.ids).eq('source', src).eq('name_key', String(body.name_key || '')).eq('active', true).select('id');
       if (rm.error) { return fail(rm.error); }
       await audit(db, userId, 'pl_group_name_removed', 'pl_product_group', body.group_id, { source: src, name_key: body.name_key });
       return NextResponse.json({ ok: true, removed: (rm.data || []).length, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'group_dissolve') {
-      var ds = await db.from('pl_product_groups').update({ active: false, updated_by: userId, updated_at: now }).eq('id', body.id).select('id, display_name');
+      var shD = await idsSharingName(body.id); if (shD.error) { return fail(shD.error); }
+      var ds = await db.from('pl_product_groups').update({ active: false, updated_by: userId, updated_at: now }).in('id', shD.ids).select('id, display_name');
       if (ds.error) { return fail(ds.error); }
-      var dn = await db.from('pl_group_names').update({ active: false, removed_by: userId, removed_at: now }).eq('group_id', body.id).eq('active', true).select('id');
+      var dn = await db.from('pl_group_names').update({ active: false, removed_by: userId, removed_at: now }).in('group_id', shD.ids).eq('active', true).select('id');
       if (dn.error) { return fail(dn.error); }
       await audit(db, userId, 'pl_group_dissolved', 'pl_product_group', body.id, { names_released: (dn.data || []).length });
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });

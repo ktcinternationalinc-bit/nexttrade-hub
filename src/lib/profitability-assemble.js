@@ -29,12 +29,23 @@ export function assembleProfitability(d) {
   // ── the set-up a person made ──
   var factors = { units: Object.assign({}, DEFAULT_UNIT_FACTORS) };
   (d.factors || []).forEach(function (f) { var u = unitKey(f.unit); if (u && Number(f.pounds_per_unit) > 0) { factors.units[u] = Number(f.pounds_per_unit); } });
-  var groupById = {}; (d.groups || []).forEach(function (g) { if (g.active !== false) { groupById[g.id] = { id: g.id, name: g.display_name, invoice_names: [], bill_names: [] }; } });
-  var groupOfInvoiceName = {}; var billKeysOfGroup = {};
+  // v55.83-TB (Max, Nov 16: "if we merge later with the same name to a group that we forgot to add in the first place, just merge
+  // any and all with the same Name") — groups whose names are the same (ignoring capitals, spaces and punctuation) are ONE product.
+  // The OLDEST group is the one shown; the others' descriptions and supplier links are added to it.
+  var groupById = {}; var canonOf = {}; var canonByName = {};
+  (d.groups || []).filter(function (g) { return g.active !== false; }).sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)); }).forEach(function (g) {
+    var k = nameKey(g.display_name) || ('id:' + g.id);
+    if (!canonByName[k]) { canonByName[k] = g.id; groupById[g.id] = { id: g.id, name: g.display_name, invoice_names: [], bill_names: [], merged_group_ids: [] }; }
+    else { groupById[canonByName[k]].merged_group_ids.push(g.id); }
+    canonOf[g.id] = canonByName[k];
+  });
+  var groupOfInvoiceName = {}; var billKeysOfGroup = {}; var seenName = {};
   (d.groupNames || []).forEach(function (n) {
-    if (n.active === false || !groupById[n.group_id]) { return; }
-    if (n.source === 'invoice') { groupOfInvoiceName[n.name_key] = groupById[n.group_id]; groupById[n.group_id].invoice_names.push({ key: n.name_key, name: n.raw_name }); }
-    else { (billKeysOfGroup[n.group_id] = billKeysOfGroup[n.group_id] || []).push(n.name_key); groupById[n.group_id].bill_names.push({ key: n.name_key, name: n.raw_name }); }
+    var gid = canonOf[n.group_id];
+    if (n.active === false || !gid || !groupById[gid]) { return; }
+    var sk = gid + '|' + n.source + '|' + n.name_key; if (seenName[sk]) { return; } seenName[sk] = true; // the same name in two same-name groups counts once
+    if (n.source === 'invoice') { groupOfInvoiceName[n.name_key] = groupById[gid]; groupById[gid].invoice_names.push({ key: n.name_key, name: n.raw_name }); }
+    else { (billKeysOfGroup[gid] = billKeysOfGroup[gid] || []).push(n.name_key); groupById[gid].bill_names.push({ key: n.name_key, name: n.raw_name }); }
   });
   var unitOfName = {}; (d.nameUnits || []).forEach(function (u) { unitOfName[u.name_key] = u.unit; });
   var unitOfLine = {}; (d.lineUnits || []).forEach(function (u) { unitOfLine[u.invoice_item_id] = u.unit; });
