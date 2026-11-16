@@ -139,7 +139,7 @@ var TODAY = new Date().toISOString().substring(0, 10);
   check('E5 (pin): new server code keeps the house rules — var only, no template strings', !/\b(let|const)\s/.test(newCode) && newCode.indexOf('`') < 0);
   var wn = R('src/components/WhatsNewWidget.jsx');
   check('E6 (pin): What’s New has v55.83-SQ in plain words with one technical line', /version: 'v55\.83-SQ'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SQ'"), wn.indexOf("version: 'v55.83-SP'"))));
-  check('E7 (pin): the build badge is at v55.83-SQ or later (v55.83-SR realign)', />v55\.83-S[Q-Z]<\/span>/.test(R('src/app/page.jsx')));
+  check('E7 (pin): the build badge is at v55.83-SQ or later (v55.83-SR realign)', />v55\.83-(?:S[Q-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx')));
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });

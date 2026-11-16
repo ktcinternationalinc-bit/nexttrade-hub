@@ -106,7 +106,7 @@ check('H3 (pin): the steps are explained in plain words, including what to do wh
 var lib = R('src/lib/bill-dup-scan.js');
 check('G10 (pin): house rules in the new code — var only, no template strings, no pop-ups', !/\b(let|const)\s/.test(lib) && lib.indexOf('`') < 0 && !/window\.(prompt|confirm|alert)/.test(lib) && !/window\.(prompt|confirm|alert)\([^)]*dup/i.test(tab));
 var wn = R('src/components/WhatsNewWidget.jsx');
-check('G11 (pin): What’s New has v55.83-SV with one technical line; badge at SV or later', /version: 'v55\.83-SV'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SV'"), wn.indexOf("version: 'v55.83-SU'"))) && />v55\.83-S[V-Z]<\/span>/.test(R('src/app/page.jsx')));
+check('G11 (pin): What’s New has v55.83-SV with one technical line; badge at SV or later', /version: 'v55\.83-SV'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SV'"), wn.indexOf("version: 'v55.83-SU'"))) && />v55\.83-(?:S[V-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx')));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

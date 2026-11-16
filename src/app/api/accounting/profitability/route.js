@@ -39,7 +39,7 @@ async function fetchAll(buildQ) {
 }
 function missingTable(msg) { return /pl_[a-z_]+/.test(String(msg || '')) && /does not exist|schema cache|not find/i.test(String(msg || '')); }
 function bad(msg, status) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: status || 400 }); }
-function unitOk(u) { return u === 'lb' || u === 'kg' || u === 'yd' || u === 'lm'; } // v55.83-SZ — + kilograms
+function unitOk(u) { return u === 'lb' || u === 'kg' || u === 't' || u === 'yd' || u === 'lm'; } // v55.83-SZ kilograms · v55.83-TA tons // v55.83-SZ — + kilograms
 
 export async function POST(req) {
   var db = admin();
@@ -162,7 +162,7 @@ export async function POST(req) {
     // the unit of a sales description (applies to every line with that description) — or of one invoice line
     if (action === 'set_name_unit') {
       var names = Array.isArray(body.names) ? body.names : [body.name];
-      if (!unitOk(body.unit)) { return bad('Pick the unit: pounds, kilograms, yards or linear metres.'); }
+      if (!unitOk(body.unit)) { return bad('Pick the unit: pounds, kilograms, tons, yards or linear metres.'); }
       var rowsU = names.map(function (n) { return { name_key: nameKey(n), raw_name: String(n || '').trim().substring(0, 300), unit: body.unit, updated_by: userId, updated_at: now }; }).filter(function (r) { return !!r.name_key; });
       if (!rowsU.length) { return bad('No description given.'); }
       var upU = await db.from('pl_name_units').upsert(rowsU, { onConflict: 'name_key' });
@@ -176,7 +176,7 @@ export async function POST(req) {
         var dl = await db.from('pl_line_units').delete().eq('invoice_item_id', body.invoice_item_id); // a set-up override only; the invoice line itself is untouched
         if (dl.error) { return fail(dl.error); }
       } else {
-        if (!unitOk(body.unit)) { return bad('Pick the unit: pounds, kilograms, yards or linear metres.'); }
+        if (!unitOk(body.unit)) { return bad('Pick the unit: pounds, kilograms, tons, yards or linear metres.'); }
         var upL = await db.from('pl_line_units').upsert({ invoice_item_id: body.invoice_item_id, unit: body.unit, updated_by: userId, updated_at: now }, { onConflict: 'invoice_item_id' });
         if (upL.error) { return fail(upL.error); }
       }
@@ -185,7 +185,7 @@ export async function POST(req) {
     }
     if (action === 'set_factor') {
       var fv = Number(body.pounds_per_unit);
-      if (body.unit !== 'yd' && body.unit !== 'lm') { return bad('Only yards and linear metres have a weight to set. A kilogram is always 2.20462 lb.'); }
+      if (body.unit !== 'yd' && body.unit !== 'lm') { return bad('Only yards and linear metres have a weight to set. A kilogram is always 2.20462 lb and a ton is always 2,204.62 lb.'); }
       if (!(fv > 0) || fv > 1000) { return bad('Pounds per unit must be above zero.'); }
       var prevF = await db.from('pl_unit_factors').select('pounds_per_unit').eq('unit', body.unit).maybeSingle();
       var upF = await db.from('pl_unit_factors').upsert({ unit: body.unit, pounds_per_unit: fv, updated_by: userId, updated_at: now }, { onConflict: 'unit' });

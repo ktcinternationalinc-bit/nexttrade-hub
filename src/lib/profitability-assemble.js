@@ -140,12 +140,19 @@ export function assembleProfitability(d) {
     if (!c.group_id && c.base_cost === null) { c.flags.push('not_grouped_no_cost_source'); }
   });
   var cells = full.cells.filter(function (c) { return periodIds[c.invoice_id]; });
+  cells.forEach(function (c) { c.name_key = nameKey(c.description); });
   var inPeriodFlag = function (f) { return !f.invoice_id || periodIds[f.invoice_id]; };
   flags = flags.concat(full.flags.filter(inPeriodFlag));
   unallocated = unallocated.concat(full.unallocated.filter(function (u) { return !u.invoice_id || periodIds[u.invoice_id]; }));
 
   var byProduct = summarize(cells, function (c) { return c.product_key; }, function (c) { return c.product; });
   byProduct.forEach(function (r) { r.grouped = r.key.indexOf('g:') === 0; });
+  // v55.83-TA (Max, Nov 16: "merged with all numbers aggregated as one line with the averages showing on top line and underlying
+  // values below it") — the same cells summed per ORIGINAL description inside each merged product. The lines underneath always
+  // add up to the top line, because both are sums of the very same cells.
+  var byProductName = summarize(cells.filter(function (c) { return c.product_key.indexOf('g:') === 0; }), function (c) { return c.product_key + '||' + c.name_key; }, function (c) { return String(c.description || '').trim(); });
+  byProductName.forEach(function (r) { var ix = r.key.indexOf('||'); r.parent = r.key.substring(0, ix); r.name_key = r.key.substring(ix + 2); });
+  byProductName.sort(function (a, b) { return b.goods_revenue - a.goods_revenue; });
   var byCustomer = summarize(cells, function (c) { return c.customer; });
   var byInvoice = summarize(cells, function (c) { return c.invoice_id; }, function (c) { return c.invoice; });
   var invMeta = {}; engineInvoices.forEach(function (i) { invMeta[i.id] = { id: i.id, number: i.number, date: i.date, customer: i.customer, basis: i.basis, suggested_basis: i._suggest, embedded_transport: i.embedded_transport, releases: i.releases.map(function (k) { return { key: k, raw: relRaw[k] || k }; }) }; });
@@ -159,9 +166,9 @@ export function assembleProfitability(d) {
 
   return {
     period: { from: from || null, to: to || null }, totals: totals,
-    by_product: byProduct.sort(sortRev), by_customer: byCustomer.sort(sortRev), by_invoice: byInvoice.sort(function (a, b) { return String((b.invoice && b.invoice.date) || '').localeCompare(String((a.invoice && a.invoice.date) || '')); }),
+    by_product: byProduct.sort(sortRev), by_product_names: byProductName, by_customer: byCustomer.sort(sortRev), by_invoice: byInvoice.sort(function (a, b) { return String((b.invoice && b.invoice.date) || '').localeCompare(String((a.invoice && a.invoice.date) || '')); }),
     cells: cells, flags: flags, unallocated: unallocated,
-    reconciled: { product: reconcile(cells, byProduct).ok, customer: reconcile(cells, byCustomer).ok, invoice: reconcile(cells, byInvoice).ok },
+    reconciled: { product: reconcile(cells, byProduct).ok, product_names: reconcile(cells.filter(function (c) { return c.product_key.indexOf('g:') === 0; }), byProductName).ok, customer: reconcile(cells, byCustomer).ok, invoice: reconcile(cells, byInvoice).ok },
     groups: Object.keys(groupById).map(function (k) { return groupById[k]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }),
     invoice_names: Object.keys(invNames).map(function (k) { return invNames[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; }),
     bill_names: Object.keys(billNames).map(function (k) { var o = billNames[k]; return { key: o.key, name: o.name, lines: o.lines, qty: o.qty, cost: o.cost, units: Object.keys(o.units), vendors: Object.keys(o.vendors), last_date: o.last_date }; }).sort(function (a, b) { return b.cost - a.cost; }),

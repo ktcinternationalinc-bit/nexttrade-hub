@@ -36,6 +36,6 @@ check('B5: section headings and "all caught up" carry their own background, so t
 check('B6: no browser pop-ups', !/window\.(prompt|confirm|alert)\(/.test(BH));
 var wn = R('src/components/WhatsNewWidget.jsx');
 check('B7: What’s New has v55.83-SS with one technical line', /version: 'v55\.83-SS'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SS'"), wn.indexOf("version: 'v55.83-SR'"))));
-check('B8: the build badge is at v55.83-SS or later (v55.83-ST realign)', />v55\.83-S[S-Z]<\/span>/.test(R('src/app/page.jsx')));
+check('B8: the build badge is at v55.83-SS or later (v55.83-ST realign)', />v55\.83-(?:S[S-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx')));
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

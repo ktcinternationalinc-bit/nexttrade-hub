@@ -110,7 +110,7 @@ var DS = require(path.join(root, 'src/lib/duplicates-server.js'));
   var libsAll = R('src/lib/duplicates-server.js'); var libs = libsAll.substring(libsAll.indexOf('export async function autoTwinCheck'));
   check('D4: new server code keeps the house rules — var only, no template strings, no pop-ups', libs.length > 200 && !/\b(let|const)\s/.test(libs) && libs.indexOf('`') < 0 && !/window\.(prompt|confirm|alert)\(/.test(ui) && !/window\.(prompt|confirm|alert)\(/.test(bt.substring(bt.indexOf('function paidByChips'), bt.indexOf('function wireChip'))));
   var wn = R('src/components/WhatsNewWidget.jsx');
-  check('D5: What’s New has v55.83-SU with one technical line; badge at SU', /version: 'v55\.83-SU'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SU'"), wn.indexOf("version: 'v55.83-ST'"))) && />v55\.83-S[U-Z]<\/span>/.test(R('src/app/page.jsx'))); // v55.83-SV realign: SU or later
+  check('D5: What’s New has v55.83-SU with one technical line; badge at SU', /version: 'v55\.83-SU'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SU'"), wn.indexOf("version: 'v55.83-ST'"))) && />v55\.83-(?:S[U-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx'))); // v55.83-SV realign: SU or later
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });

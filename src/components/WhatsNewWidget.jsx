@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TA',
+    date: '2026-11-16',
+    title: 'Profitability: tons added, and merged products show one top line with the descriptions underneath',
+    items: [
+      'Merged products: the top line now carries the totals and the averages (price per pound and cost per pound, in bold), and the original descriptions are listed right underneath it, each with its own pounds, revenue, average price, costs and profit. The lines underneath always add up to the top line.',
+      'Click the top line to see every invoice line of the merged product; click one of the descriptions underneath to see only its invoice lines.',
+      'Tons added: a description or an invoice line can be sold in tons. 1 ton = 1,000 kg = 2,204.62 lb (a metric ton, not a 2,000 lb US ton). Supplier bills in tons convert the same way.',
+      'Database: run sql/v55-83-SY-profitability.sql again after this update. It now also allows tons. It is safe to run more than once and removes nothing.',
+      { superAdminOnly: true, text: 'profitability.js TON_TO_LB 2204.62, unitKey t/mt/ton(s)/tonne(s)/metric ton(s) → t. assemble: cells get name_key; by_product_names = summarize of grouped cells by product_key||name_key with parent; reconciled.product_names. ProfitabilityTab: rowTds / detailRow; sub-rows under grouped products. SQL unit CHECKs + t, seeded 2204.62. Badge-pin regexes in SP…SY tests widened to accept the T series.' },
+    ],
+  },
+  {
     version: 'v55.83-SZ',
     date: '2026-11-16',
     title: 'Profitability: kilograms added — everything is converted to pounds',

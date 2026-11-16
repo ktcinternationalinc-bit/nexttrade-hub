@@ -146,7 +146,7 @@ var TODAY = new Date().toISOString().substring(0, 10);
   check('D7 (pin): the P&L switch is per block and shows bills · service fee · waiting for bills', /var bk = b\.key \|\| b\.payer;/.test(ps) && /remainderRows\(rtm\)\.forEach/.test(ps) && /waiting for bills \$/.test(ps) && /one professional-fees line/.test(ps));
   var wn = R('src/components/WhatsNewWidget.jsx');
   check('D8 (pin): What’s New has v55.83-SR in plain words with one technical line', /version: 'v55\.83-SR'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SR'"), wn.indexOf("version: 'v55.83-SQ'"))));
-  check('D9 (pin): the build badge is at v55.83-SR or later (v55.83-SS realign)', />v55\.83-S[R-Z]<\/span>/.test(R('src/app/page.jsx')));
+  check('D9 (pin): the build badge is at v55.83-SR or later (v55.83-SS realign)', />v55\.83-(?:S[R-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx')));
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });

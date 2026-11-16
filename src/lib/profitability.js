@@ -19,7 +19,9 @@ export var PRICING_BASES = ['EXW', 'CNF', 'TRUCKING_INCLUDED'];
 // Business reporting weights (Max): not a physical conversion between yards and metres.
 // Kilograms are a real conversion (Max, Nov 16: "1 kg is 2.20462 lbs - convert everything to LBS"); yards and linear metres are business weights.
 export var KG_TO_LB = 2.20462;
-export var DEFAULT_UNIT_FACTORS = { lb: 1, kg: KG_TO_LB, yd: 2.5, lm: 2.5 };
+// Max, Nov 16: "also need to add sold by tons. 1 ton = 1000 kgs or 2204.62 lbs" — a METRIC ton (tonne), never a 2,000 lb US ton.
+export var TON_TO_LB = 2204.62;
+export var DEFAULT_UNIT_FACTORS = { lb: 1, kg: KG_TO_LB, t: TON_TO_LB, yd: 2.5, lm: 2.5 };
 
 function cents(x) { return Math.round((Number(x) || 0) * 100); }
 function money(c) { return Math.round(c) / 100; }
@@ -34,6 +36,7 @@ export function unitKey(u) {
   var t = String(u || '').toLowerCase().replace(/[^a-z]/g, '');
   if (t === 'lb' || t === 'lbs' || t === 'pound' || t === 'pounds') { return 'lb'; }
   if (t === 'kg' || t === 'kgs' || t === 'kilo' || t === 'kilos' || t === 'kilogram' || t === 'kilograms' || t === 'kilogramme' || t === 'kilogrammes') { return 'kg'; }
+  if (t === 't' || t === 'mt' || t === 'ton' || t === 'tons' || t === 'tonne' || t === 'tonnes' || t === 'metricton' || t === 'metrictons' || t === 'metrictonne' || t === 'metrictonnes') { return 't'; }
   if (t === 'yd' || t === 'yds' || t === 'yard' || t === 'yards') { return 'yd'; }
   if (t === 'lm' || t === 'm' || t === 'meter' || t === 'meters' || t === 'metre' || t === 'metres' || t === 'linearmeter' || t === 'linearmeters' || t === 'linearmetre' || t === 'linearmetres' || t === 'lmeter') { return 'lm'; }
   return '';

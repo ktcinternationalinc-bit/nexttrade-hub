@@ -106,7 +106,7 @@ function fakeDb(rows, log) {
   check('E3 (pin): when the one-time setup is missing, clicking a company shows the steps on the screen', /if \(!flagReady\) \{ setSqlHelp\(true\); return; \}/.test(ui) && /Not switched on yet — click for the one-time setup/.test(ui) && /One-time setup to turn on the RTM Capital \/ NextTrade Industries buttons/.test(ui) && /Open supabase\.com/.test(ui));
   check('E4 (pin): before saving, one sentence says exactly what the rule will do', /var ruleSummary = /.test(ui) && /This rule: every bank line containing/.test(ui) && /is marked as money sent to /.test(ui));
   var wn = R('src/components/WhatsNewWidget.jsx');
-  check('D7 (pin): What’s New has v55.83-SW with one technical line; badge at SW or later; SX is listed', /version: 'v55\.83-SW'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SW'"), wn.indexOf("version: 'v55.83-SV'"))) && />v55\.83-S[W-Z]<\/span>/.test(R('src/app/page.jsx')) && /version: 'v55\.83-SX'/.test(wn));
+  check('D7 (pin): What’s New has v55.83-SW with one technical line; badge at SW or later; SX is listed', /version: 'v55\.83-SW'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SW'"), wn.indexOf("version: 'v55.83-SV'"))) && />v55\.83-(?:S[W-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx')) && /version: 'v55\.83-SX'/.test(wn));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
