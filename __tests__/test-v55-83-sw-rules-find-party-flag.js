@@ -96,12 +96,17 @@ function fakeDb(rows, log) {
   var ui = R('src/components/ExpenseRulesTab.jsx');
   check('D1 (pin): a Find box that narrows the rules by description, category or company', /🔎 Find/.test(ui) && /var shownRules = rules\.filter/.test(ui) && /String\(r0\.third_party_payer \|\| ''\)\)\.toLowerCase\(\)\.indexOf\(findKey\)/.test(ui));
   check('D2 (pin): "find it in the bank lines" shows the real descriptions, and one click turns a found text into a new rule', /find it in the bank lines/.test(ui) && /testRule\(null, findQ\)/.test(ui) && /for a new rule<\/button>/.test(ui));
-  check('D3 (pin): a new rule can pick a category and / or "sent to" a company', /and \/ or/.test(ui) && /'🏢 sent to ' \+ x\.name/.test(ui) && /\(!nr\.classification && !nr\.third_party_payer\)/.test(ui));
+  check('D3 (pin): a new rule can pick a category and / or "sent to" a company', /pick one, or both/.test(ui) && /Mark it as money we SENT TO/.test(ui) && /'🏢 sent to ' \+ x\.name/.test(ui) && /\(!nr\.classification && !nr\.third_party_payer\)/.test(ui));
   check('D4 (pin): the rules table shows the company, and editing a rule can change it', /Category \/ company/.test(ui) && /'🏢 sent to ' \+ r\.third_party_payer/.test(ui) && /third_party_payer: editRule\.third_party_payer \|\| ''/.test(ui));
   check('D5 (pin): until the SQL is run the company choice is switched off and says what to run', /disabled=\{!flagReady\}/.test(ui) && /sql\/v55-83-SW-rule-party-flag\.sql/.test(ui));
   check('D6 (pin): house rules in the new server code — var only, no template strings', !/\b(let|const)\s/.test(srv.substring(srv.indexOf('export async function partyFlagRows'))) && srv.substring(srv.indexOf('export async function partyFlagRows')).indexOf('`') < 0);
+  // E. v55.83-SX — "make it user friendly": the companies are buttons you can always see, and the setup steps are on the screen
+  check('E1 (pin): the new rule is two numbered steps in plain words', /➕ Make a new rule/.test(ui) && /1 · When the bank description contains/.test(ui) && /2 · Then do this — pick one, or both/.test(ui) && /Give it the category/.test(ui));
+  check('E2 (pin): RTM / NextTrade are buttons that are always visible — never a greyed-out dropdown with jargon', /\(onP \? '✓ ' : ''\) \+ '🏢 ' \+ x\.name/.test(ui) && !/company mark — needs SQL/.test(ui));
+  check('E3 (pin): when the one-time setup is missing, clicking a company shows the steps on the screen', /if \(!flagReady\) \{ setSqlHelp\(true\); return; \}/.test(ui) && /Not switched on yet — click for the one-time setup/.test(ui) && /One-time setup to turn on the RTM Capital \/ NextTrade Industries buttons/.test(ui) && /Open supabase\.com/.test(ui));
+  check('E4 (pin): before saving, one sentence says exactly what the rule will do', /var ruleSummary = /.test(ui) && /This rule: every bank line containing/.test(ui) && /is marked as money sent to /.test(ui));
   var wn = R('src/components/WhatsNewWidget.jsx');
-  check('D7 (pin): What’s New has v55.83-SW with one technical line; badge at SW or later', /version: 'v55\.83-SW'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SW'"), wn.indexOf("version: 'v55.83-SV'"))) && />v55\.83-S[W-Z]<\/span>/.test(R('src/app/page.jsx')));
+  check('D7 (pin): What’s New has v55.83-SW with one technical line; badge at SW or later; SX is listed', /version: 'v55\.83-SW'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-SW'"), wn.indexOf("version: 'v55.83-SV'"))) && />v55\.83-S[W-Z]<\/span>/.test(R('src/app/page.jsx')) && /version: 'v55\.83-SX'/.test(wn));
 
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);

@@ -122,7 +122,7 @@ ok('6: category_verified appears in ZERO money-math files (never excludes an exp
 // ── 7. UI ──
 var ui = R('src/components/ExpenseRulesTab.jsx');
 ok('7a: 🏷 tab has add-category, new-rule form, ▶ apply now, learned/manual chips, hit counts',
-  /new category…/.test(ui) && /\+ new rule/.test(ui) && /▶ Apply rules now/.test(ui) &&
+  /new category…/.test(ui) && /✓ Save this rule/.test(ui) /* v55.83-SX realign: was “+ new rule” */ && /▶ Apply rules now/.test(ui) &&
   /🧠 learned/.test(ui) && /✍ manual/.test(ui));
 ok('7b: Verified view = To verify / ✓ Verified / All, stamp wording explicit, verify disabled without a category',
   /'unverified', 'verified', 'all'/.test(ui) && /it never removes the expense from any total/.test(ui) &&

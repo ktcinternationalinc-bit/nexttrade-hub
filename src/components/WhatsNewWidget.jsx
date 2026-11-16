@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SX',
+    date: '2026-11-16',
+    title: 'Categories & Rules: making a rule is now two plain steps, with RTM and NextTrade as buttons',
+    items: [
+      'Why: the RTM / NextTrade choice was a greyed-out dropdown that said “company mark — needs SQL (SW)”. Nobody could tell what it was or how to turn it on.',
+      'Making a rule is now a box with two numbered steps. Step 1: the words the bank writes on the line. Step 2: what to do — give it a category, mark it as money we sent to a company, or both.',
+      'RTM Capital and NextTrade Industries are now buttons you can always see. Click one to pick it, click again to un-pick it.',
+      'If the one-time setup has not been done, an orange button says so. Clicking it, or either company, shows the six steps right there on the screen.',
+      'Before you save, one sentence says exactly what the rule will do, for example: every bank line containing “rtm capital” is marked as money sent to RTM Capital.',
+      'Buttons were renamed in plain words: “Show me the lines this catches” (was “test first”) and “Save this rule” (was “+ new rule”).',
+      'Stats: the Month, Invoiced and Bills entered columns in the month-by-month table could not be read (dark text on a dark background). The panel now stays white, so every number is readable.',
+      { superAdminOnly: true, text: 'No SQL of its own (still needs sql/v55-83-SW-rule-party-flag.sql for the company mark). ExpenseRulesTab only: the new-rule row is replaced by a two-step box; party buttons call setSqlHelp when flag_ready is false; ruleSummary sentence. No server change.' },
+    ],
+  },
+  {
     version: 'v55.83-SW',
     date: '2026-11-16',
     title: 'Categories & Rules: find a description, and a rule can mark a line as sent to RTM or NextTrade',

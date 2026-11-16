@@ -39,6 +39,7 @@ export default function ExpenseRulesTab(props) {
   var sFq = useState(''); var findQ = sFq[0]; var setFindQ = sFq[1];
   var sPt = useState([]); var parties = sPt[0]; var setParties = sPt[1];
   var sFr = useState(true); var flagReady = sFr[0]; var setFlagReady = sFr[1];
+  var sSh = useState(false); var sqlHelp = sSh[0]; var setSqlHelp = sSh[1]; // v55.83-SX — the one-time setup steps, shown on the screen
   var s8 = useState(null); var needsSql = s8[0]; var setNeedsSql = s8[1];
   var s9 = useState({}); var catDraft = s9[0]; var setCatDraft = s9[1];
   // v55.83-QV (Max, Nov 8 11:16) — test / edit / remove rules
@@ -257,6 +258,12 @@ export default function ExpenseRulesTab(props) {
   var activeCats = cats.filter(function (c) { return c.active !== false; });
   var labelOf = {}; cats.forEach(function (c) { labelOf[c.key] = c.label; });
   // v55.83-SW — the rules shown: removed ones only when asked, then narrowed by the find box (description, category or company)
+  var ruleReady = nr.match_text.trim().length >= 3 && (!!nr.classification || !!nr.third_party_payer);
+  var ruleParts = [];
+  if (nr.classification) { ruleParts.push('gets the category “' + (labelOf[nr.classification] || nr.classification) + '”'); }
+  if (nr.third_party_payer) { ruleParts.push('is marked as money sent to ' + nr.third_party_payer + ' (money-out lines only)'); }
+  var ruleSummary = nr.match_text.trim().length < 3 ? 'Step 1: type at least 3 characters the bank writes on the line.'
+    : (!ruleParts.length ? 'Step 2: pick a category, a company, or both.' : 'This rule: every bank line containing “' + nr.match_text.trim() + '” ' + ruleParts.join(' and ') + '.');
   var findKey = findQ.trim().toLowerCase();
   var shownRules = rules.filter(function (r0) { return showRemoved || r0.active !== false; }).filter(function (r0) {
     if (!findKey) { return true; }
@@ -314,28 +321,59 @@ export default function ExpenseRulesTab(props) {
     {/* ② Rules */}
     <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
       <div className="flex gap-2 items-center flex-wrap mb-2">
-        <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>🤖 Rules — "contains X → category Y"</div>
+        <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>🤖 Rules — when a bank line contains certain words, the Hub fills it in for you</div>
         <div className="flex-1" />
         <button onClick={applyNow} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply rules now</button>
       </div>
-      <div className="flex gap-1.5 flex-wrap items-center mb-2">
-        <input value={nr.match_text} onChange={function (e) { setNr(Object.assign({}, nr, { match_text: e.target.value })); }} placeholder="bank line contains… (e.g. shell oil)"
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 220 }} />
-        <span className="text-[11px] font-bold" style={{ color: '#64748b' }}>→</span>
-        <select value={nr.classification} onChange={function (e) { setNr(Object.assign({}, nr, { classification: e.target.value })); }}
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
-          <option value="">category…</option>
-          {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
-        </select>
-        <span className="text-[11px] font-bold" style={{ color: '#64748b' }}>and / or</span>
-        <select value={nr.third_party_payer} disabled={!flagReady} title={flagReady ? 'Mark matching MONEY-OUT lines as sent to this company (the same as the 🏢 button on a bank line)' : 'Run sql/v55-83-SW-rule-party-flag.sql in Supabase to turn this on'} onChange={function (e) { setNr(Object.assign({}, nr, { third_party_payer: e.target.value })); }}
-          className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
-          <option value="">{flagReady ? 'not sent to a company' : 'company mark — needs SQL (SW)'}</option>
-          {parties.map(function (x) { return <option key={x.name} value={x.name}>{'🏢 sent to ' + x.name}</option>; })}
-        </select>
-        <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)) ? 0.5 : 1 }}>+ new rule</button>
-        <button onClick={function () { testRule(null, nr.match_text); }} disabled={busy || nr.match_text.trim().length < 3} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || nr.match_text.trim().length < 3) ? 0.5 : 1 }}>🔍 test first</button>
-        <label className="flex items-center gap-1 text-[10px] font-bold ml-2" style={{ color: '#64748b' }}><input type="checkbox" checked={showRemoved} onChange={function (e) { setShowRemoved(e.target.checked); }} /> show removed rules</label>
+      {/* v55.83-SX (Max, Nov 16: "where am I seeing anything dealing with RTM and Nextrade — make it user friendly") — the new rule,
+          as two numbered steps in plain words; the companies are BUTTONS you can always see, and when the one-time setup has not
+          been done the screen says so and shows the steps instead of a greyed-out box. */}
+      <div className="rounded-xl p-3 mb-2" style={{ background: '#f8fafc', border: '2px solid #0f766e' }}>
+        <div className="text-[13px] font-extrabold mb-2" style={{ color: '#0f172a' }}>➕ Make a new rule</div>
+        <div className="flex gap-2 items-center flex-wrap mb-3">
+          <span className="text-[12px] font-extrabold" style={{ color: '#0f172a' }}>1 · When the bank description contains</span>
+          <input value={nr.match_text} onChange={function (e) { setNr(Object.assign({}, nr, { match_text: e.target.value })); }} placeholder="a word the bank writes, e.g. rtm capital"
+            className="px-2 py-1.5 rounded-lg border border-slate-300 text-[12px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 260 }} />
+          <button onClick={function () { testRule(null, nr.match_text); }} disabled={busy || nr.match_text.trim().length < 3} title="See which bank lines this text would catch BEFORE saving" className="px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || nr.match_text.trim().length < 3) ? 0.5 : 1 }}>🔍 Show me the lines this catches</button>
+        </div>
+        <div className="text-[12px] font-extrabold mb-1" style={{ color: '#0f172a' }}>2 · Then do this — pick one, or both</div>
+        <div className="flex gap-2 items-center flex-wrap mb-1.5 pl-3">
+          <span className="text-[12px] font-bold" style={{ color: '#334155', minWidth: 215 }}>Give it the category</span>
+          <select value={nr.classification} onChange={function (e) { setNr(Object.assign({}, nr, { classification: e.target.value })); }}
+            className="px-2 py-1.5 rounded-lg border border-slate-300 text-[12px] nt-light" style={{ color: '#0f172a', background: '#ffffff' }}>
+            <option value="">no category — or pick a category…</option>
+            {activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+          </select>
+        </div>
+        <div className="flex gap-2 items-center flex-wrap mb-2 pl-3">
+          <span className="text-[12px] font-bold" style={{ color: '#334155', minWidth: 215 }}>Mark it as money we SENT TO</span>
+          {parties.map(function (x) {
+            var onP = nr.third_party_payer === x.name;
+            return <button key={x.name} onClick={function () { if (!flagReady) { setSqlHelp(true); return; } setNr(Object.assign({}, nr, { third_party_payer: onP ? '' : x.name })); }}
+              title={'Marks matching MONEY-OUT lines as sent to ' + x.name + ' — the same as the 🏢 button on a bank line'}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={onP ? { background: '#1d4ed8', color: '#ffffff', border: '2px solid #1d4ed8' } : { background: '#ffffff', color: '#1e3a8a', border: '2px solid #93c5fd', opacity: flagReady ? 1 : 0.7 }}>{(onP ? '✓ ' : '') + '🏢 ' + x.name}</button>;
+          })}
+          {nr.third_party_payer ? <button onClick={function () { setNr(Object.assign({}, nr, { third_party_payer: '' })); }} className="px-2 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕ neither</button> : null}
+          {!flagReady && <button onClick={function () { setSqlHelp(!sqlHelp); }} className="px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold" style={{ background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }}>⚠ Not switched on yet — click for the one-time setup</button>}
+        </div>
+        {sqlHelp && !flagReady && <div className="rounded-lg p-3 mb-2 ml-3 text-[12px]" style={{ background: '#fffbeb', color: '#78350f', border: '1px solid #f59e0b' }}>
+          <div className="font-extrabold mb-1">One-time setup to turn on the RTM Capital / NextTrade Industries buttons</div>
+          <div>1. Open supabase.com in your browser and sign in.</div>
+          <div>2. Click the Hub’s project.</div>
+          <div>3. In the left menu click “SQL Editor”, then “New query”.</div>
+          <div>4. On this computer open the file <b>sql/v55-83-SW-rule-party-flag.sql</b> (inside the nexttrade-hub folder) with Notepad. Select all, copy, paste it into the query box.</div>
+          <div>5. Click “Run”. It should say Success.</div>
+          <div>6. Come back here and reload the page. The two company buttons then work.</div>
+          <div className="mt-1">It only adds one column to the rules table. Nothing is removed, and category rules work with or without it.</div>
+        </div>}
+        <div className="flex gap-2 items-center flex-wrap pt-2" style={{ borderTop: '1px solid #e2e8f0' }}>
+          <span className="text-[12px] font-bold" style={{ color: ruleReady ? '#065f46' : '#92400e' }}>{ruleSummary}</span>
+          <div className="flex-1" />
+          <button onClick={addRule} disabled={busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: (busy || nr.match_text.trim().length < 3 || (!nr.classification && !nr.third_party_payer)) ? 0.5 : 1 }}>✓ Save this rule</button>
+        </div>
+      </div>
+      <div className="flex items-center mb-2">
+        <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#64748b' }}><input type="checkbox" checked={showRemoved} onChange={function (e) { setShowRemoved(e.target.checked); }} /> show removed rules</label>
       </div>
       {preview && <div className="rounded-lg p-2 mb-2" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
         <div className="flex gap-2 items-center flex-wrap mb-1">
@@ -368,11 +406,11 @@ export default function ExpenseRulesTab(props) {
         </div>}
       </div>}
       <div className="flex gap-1.5 flex-wrap items-center mb-2 rounded-lg p-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-        <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>🔎 Find</span>
+        <span className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>🔎 Find a rule you already have</span>
         <input value={findQ} onChange={function (e) { setFindQ(e.target.value); }} placeholder="type part of a description, category or company…"
           className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 280 }} />
         <span className="text-[10px] font-bold" style={{ color: '#64748b' }}>{findQ.trim() ? shownRules.length + ' of ' + rules.filter(function (r0) { return showRemoved || r0.active !== false; }).length + ' rule(s)' : 'filters the rules below as you type'}</span>
-        <button onClick={function () { testRule(null, findQ); }} disabled={busy || findQ.trim().length < 3} title="Show the bank lines whose description contains this text" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || findQ.trim().length < 3) ? 0.5 : 1 }}>🔍 find it in the bank lines</button>
+        <button onClick={function () { testRule(null, findQ); }} disabled={busy || findQ.trim().length < 3} title="Show the bank lines whose description contains this text" className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#e0e7ff', color: '#312e81', opacity: (busy || findQ.trim().length < 3) ? 0.5 : 1 }}>🔍 or find this text in the bank lines</button>
         {findQ && <button onClick={function () { setFindQ(''); }} className="px-2 py-1 rounded-lg text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>clear</button>}
       </div>
       {rules.length === 0 ? <div className="text-[11px]" style={{ color: '#64748b' }}>No rules yet — they appear here automatically the first time you categorize an expense, or add one above.</div> :

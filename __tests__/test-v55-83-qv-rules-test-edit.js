@@ -36,7 +36,7 @@ ok('4: every rule row has 🔍 test, ✏ edit (inline text + category), 🗑 rem
   /🔍 test<\/button>/.test(ui) && /✏ edit<\/button>/.test(ui) && /🗑 remove<\/button>/.test(ui) && /↺ restore<\/button>/.test(ui) &&
   /show removed rules/.test(ui) && /Transactions it already categorized KEEP their category/.test(ui));
 ok('5: "🔍 test first" on the new-rule form — see what a text catches BEFORE saving it',
-  /testRule\(null, nr\.match_text\)/.test(ui) && /🔍 test first/.test(ui));
+  /testRule\(null, nr\.match_text\)/.test(ui) && /🔍 Show me the lines this catches/.test(ui)); // v55.83-SX realign: was “🔍 test first”
 ok('6: remove stays non-destructive — still deactivate (no hard delete anywhere in the route)',
   er.indexOf('.delete(') < 0);
 console.log('');

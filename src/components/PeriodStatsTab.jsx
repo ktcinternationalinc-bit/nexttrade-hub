@@ -208,7 +208,7 @@ export default function PeriodStatsTab(props) {
   var inv = (data && data.invoices) || null;
   var bl = (data && data.bills) || null;
   var dV = (data && data.vis) || VS; // v55.83-RE — the server's decision wins
-  return <div className="bg-white rounded-xl border border-slate-200 p-3">
+  return <div className="rounded-xl p-3" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #e2e8f0' }}>{/* v55.83-SX (Max, Nov 16: "the font under month can't be seen") — the dark theme repaints the bg-white class (with !important), so that class is gone and the white panel is set inline so dark text is never on a dark background */}
     <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900">📉 Stats — invoices & bills</div>
