@@ -14,6 +14,7 @@ import NexttradeReconciliation from './NexttradeReconciliation';
 import OpenBalancesTab from './OpenBalancesTab';
 import SalesReportTab from './SalesReportTab';
 import PnLTab from './PnLTab';
+import ProfitabilityTab from './ProfitabilityTab'; // v55.83-SY — profitability by product / customer / invoice (not the cash report)
 import BusinessBooksTab from './BusinessBooksTab';
 import BankReviewTab from './BankReviewTab';
 import PurchaseOrdersTab from './PurchaseOrdersTab';
@@ -82,7 +83,7 @@ export default function AccountingTab(props) {
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
     ['journals', '✍️ Journal entries'], // v55.83-SL — written by one person, approved by another, then in the ledger
     ['monthend', '📅 Month-end'], // v55.83-SK — reconcile each bank account to its statement, then close the month
-    ['period_stats', '📉 Stats'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
+    ['period_stats', '📉 Stats & Income Statement (cash)'], // v55.83-PH — Jun 1 → : invoices & bills, monthly breakdown
     ['categories', '🏷 Categories & Rules'], // v55.83-PI — own categories, learned rules, verified stamp
     ['all_txns', '📑 All Transactions'], // v55.83-PW — every account, sort/filter/bulk-categorize
     ['clickbooks_reports', '📊 Financial Reports'], // v55.83-PB — P&L / balance sheet / GL from the real ledger
@@ -96,7 +97,8 @@ export default function AccountingTab(props) {
     ['recon', '🔎 Order Reconciliation'], // v55.83-NV — moved from Admin: it is accounting work
     ['balances', '💰 Open Balances'], // v55.83-OJ — who owes what, overdue in orange
     ['sales_report', '📈 Sales Report'], // v55.83-ON — by product + customer, avg price, shipping separate
-    ['pnl', '📊 P&L'], // v55.83-OO — effective-dated costs, profit per product/invoice, own permissions
+    ['profitability', '📊 Profitability (product · customer · invoice)'], // v55.83-SY — actual bill costs, transportation charged vs paid, by release
+    ['pnl', '📊 P&L (typed costs)'], // v55.83-OO — effective-dated costs, profit per product/invoice, own permissions
     ['all_invoices', '📚 All Invoices'], // v55.83-OQ — US/Egypt split, open+closed+drafts, nothing hidden
     ['proformas', '📄 Proformas'],
     ['purchaseorders', '📦 Purchase Orders'],
@@ -125,7 +127,7 @@ export default function AccountingTab(props) {
     ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
     ['🧾 SELLING — customers & what they owe', ['invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
     ['🛒 BUYING — vendors & what we owe', ['waiting', 'bills', 'wires', 'purchaseorders']],
-    ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'pnl']],
+    ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
     ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports', 'journals']],
     ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
@@ -205,6 +207,7 @@ export default function AccountingTab(props) {
       {sub === 'balances' && <OpenBalancesTab {...props} />}
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
+      {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} /></div>}
       {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}

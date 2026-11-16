@@ -25,7 +25,7 @@ ok('3: disputed bills excluded from open totals but reported separately',
 ok('4: net per month = collected − bills paid',
   /m\.net = r2\(m\.collected - m\.bills_paid\)/.test(br));
 ok('5: tab wired with Jun 1 default + CSV + permission gate + graceful denial',
-  at.indexOf("['period_stats', '\ud83d\udcc9 Stats']") >= 0 &&
+  at.indexOf("['period_stats', '\ud83d\udcc9 Stats & Income Statement (cash)']") >= 0 && // v55.83-SY realign: the button now names the cash income statement
   /useState\('2026-06-01'\)/.test(st) && /period-stats-/.test(st) && /data\.denied/.test(st));
 ok('6: every card is clickable and returns its exact underlying rows with a sum-to-the-cent footer',
   /drills: \{ invoiced: rowsInvoiced, collected: rowsCollected, collected_on_period: rowsCollectedCohort, open_invoices: rowsOpenInv/.test(br) && // (PP added the cohort drill)

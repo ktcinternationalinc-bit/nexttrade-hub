@@ -75,7 +75,7 @@ ok('OO11: both permissions are grantable in Settings → Permissions (catalog en
   /key: 'pnl\.view',/.test(st) && /key: 'pnl\.edit_costs',/.test(st) &&
   /P&L: Edit Product Costs/.test(st));
 ok('OO12: the tab lives under Accounting; SQL is idempotent with 4 RLS policies',
-  /\['pnl', '📊 P&L'\]/.test(at) && /CREATE TABLE IF NOT EXISTS product_costs/.test(sq) &&
+  /\['pnl', '📊 P&L \(typed costs\)'\]/.test(at) /* v55.83-SY realign: renamed so it is not mistaken for the new profitability report */ && /CREATE TABLE IF NOT EXISTS product_costs/.test(sq) &&
   (sq.match(/CREATE POLICY/g) || []).length === 4);
 
 if (failed.length) { console.log('FAILED (' + failed.length + '):'); failed.forEach(function (x) { console.log('  - ' + x); }); process.exit(1); }

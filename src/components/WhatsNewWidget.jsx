@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-SY',
+    date: '2026-11-16',
+    title: 'New report: Profitability by product, customer and invoice',
+    items: [
+      'Accounting → REPORTS · SALES & CUSTOMERS has a new button: “Profitability (product · customer · invoice)”. It answers “did this make money?” It is NOT the cash report — it is dated by invoice date and includes unpaid invoices and bills. For money actually received and paid, the Stats button is now called “Stats & Income Statement (cash)”.',
+      'Same product, different names: tick the descriptions that are one product, give them the name you want, and they report as one line. Click the line to see every original description, invoice, release and calculation. The invoices themselves are not changed.',
+      'Everything is in pounds. 1 yard = 2.5 lb and 1 linear metre = 2.5 lb (you can change these). Because an invoice line has no unit, you set the unit once per description; one invoice line can be set differently when needed. The original quantity, unit and price stay visible.',
+      'Goods cost comes from the supplier bills you link to a product — first a bill on the same release, otherwise bills in the 90 days before the invoice, otherwise the last purchase before it. A sale is charged the cost per pound × its own pounds, never a whole bill. Commission is the amount recorded on the NexPac bill, not a blanket percentage.',
+      'Pricing basis per invoice: EXW, CNF or trucking included. For CNF and trucking included you enter the transportation inside the price; it is taken out of the goods price and shown as transportation revenue, never added on top.',
+      'Transportation charged to the customer (revenue) and transportation we paid (outbound trucking and shipping bills, by release number) are separate columns, with transportation profit shown apart. A bill is split across the goods on its release by pounds.',
+      'Other columns: a standard inbound allowance of $0.02 per pound (labelled, not a real payment), brokerage and bonded. Brokerage and bonded go to Houston releases only (release numbers starting 1002-); Canada (1001-) gets none.',
+      'Missing information stays visible: a missing cost or a missing bill shows as “unknown”, never as zero, and a line is not called complete while something it needs is missing. A yellow box lists what is missing and any amount not yet placed on a product.',
+      'One invoice on two releases and one bill covering two releases are both supported. RTM and NextTrade service fees are left out of this report (they stay in the cash report).',
+      'Not included yet: assigning brokerage or bonded bills that have no release number to a list of Houston releases, the side-by-side comparison of the inbound allowance with actual inbound bills, and freezing a cost so that a back-dated bill entered later cannot change an old month.',
+      'Needs one database script: sql/v55-83-SY-profitability.sql. Until it is run the report shows the steps to run it. It only adds tables for your report choices.',
+      { superAdminOnly: true, text: 'ONE SQL: sql/v55-83-SY-profitability.sql (pl_product_groups, pl_group_names, pl_name_units, pl_line_units, pl_unit_factors, pl_invoice_terms, pl_line_release_pounds, pl_release_estimates; RLS read-only, writes via service route). New: lib/profitability.js (pure engine: allocate to the cent, buildCells, resolveCost release→90d window→last purchase→manual→null, splitBillAcrossReleases, houstonPoolAllocation, releaseOrigin 1002=HOUSTON 1001=CANADA, summarize, reconcile), lib/profitability-assemble.js (two-pass: pounds per release, then bills), api/accounting/profitability (pnl.view / pnl.edit_costs; every set-up write audited as pl_*), ProfitabilityTab. Reads invoices/bills only. Outbound = bill_type trucking|shipping AND shipment_direction outbound.' },
+    ],
+  },
+  {
     version: 'v55.83-SX',
     date: '2026-11-16',
     title: 'Categories & Rules: making a rule is now two plain steps, with RTM and NextTrade as buttons',
