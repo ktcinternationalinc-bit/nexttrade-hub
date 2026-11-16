@@ -136,3 +136,6 @@ function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+// v55.83-TI — the 30-hour shipping alert goes to a fixed address list (Settings), not to Hub users
+export async function sendAlertEmail(to, subject, html) { return sendResendEmail(to, subject, html); }

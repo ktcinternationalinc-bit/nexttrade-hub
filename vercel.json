@@ -43,6 +43,14 @@
     {
       "path": "/api/commercial/worker",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/accounting/order-monitor?job=deadline",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/accounting/order-monitor?job=nightly",
+      "schedule": "30 7 * * *"
     }
   ]
 }

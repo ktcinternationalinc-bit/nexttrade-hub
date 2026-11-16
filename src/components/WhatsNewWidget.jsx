@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TI',
+    date: '2026-11-16',
+    title: '🚚 Orders: every warehouse order’s stage, what is missing, invoice, deposit, the 30-hour deadline — and a report per order',
+    items: [
+      { text: 'Accounting → Selling → 🚚 Orders lists every open warehouse order with its stage and, separately, what blocks it: missing checklist items, a missing or wrongly linked KTC invoice, a deposit not received, the 30-hour deadline. “Open report” shows the timeline, readiness, the missing list and the next action.' },
+      { text: 'Deposits: Received only when payments matched to the order’s invoice — or matched straight to the order (deposits paid on a proforma) — reach the deposit amount. Partial stays incomplete. “Not required” needs a note.' },
+      { text: '30-hour rule: an order must reach Shipping In Process 30 hours before its Load Date and time (New York time). Checked every 15 minutes; one alert per order and scheduled time to support@, hsaad@ and Jasmine@ktcus.com — alerts start OFF until the owner switches them on.' },
+      { text: 'Overnight review at 2:30 am New York: rechecks everything and, when switched on, closes orders that meet every condition (all requirements, invoices paid, forwarder and trucker bills paid) — also in Nextrade. Keep open / close anyway / not applicable need a reason and are kept with the name.' },
+      { superAdminOnly: true, text: 'v55.83-TI: SQL = HUB-SQL-ALL (Part 3). New route /api/accounting/order-monitor (crons ?job=deadline */15, ?job=nightly 07:30 UTC; POST ping from Nextrade with X-Hub-Feed-Token). Permissions orders.monitor / orders.manage. lib/order-lifecycle.js (54 tests). Nextrade staging: new SIP fields shipping_doc_type / order_payment_type, load_date DATETIME, conditional ACID/BL/bank/CargoX/obsolete, feed requirements + status_history, POST /api/hub-feed/close-order.' }
+    ]
+  },
+  {
     version: 'v55.83-TH',
     date: '2026-11-16',
     title: 'Wires show READY when both have signed · bills are paid only from a bank line · undo a payment · history in plain words',

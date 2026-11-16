@@ -14,6 +14,7 @@ import NexttradeReconciliation from './NexttradeReconciliation';
 import OpenBalancesTab from './OpenBalancesTab';
 import SalesReportTab from './SalesReportTab';
 import PnLTab from './PnLTab';
+import OrderMonitorTab from './OrderMonitorTab'; // v55.83-TI — order lifecycle, exceptions, deposits, 30-hour deadline
 import ProfitabilityTab from './ProfitabilityTab'; // v55.83-SY — profitability by product / customer / invoice (not the cash report)
 import BusinessBooksTab from './BusinessBooksTab';
 import BankReviewTab from './BankReviewTab';
@@ -94,6 +95,7 @@ export default function AccountingTab(props) {
     ['ledger', '📑 Customer Ledger'],
     ['customers', '👤 Customers'],
     ['invoices', '🧾 Invoices'],
+    ['orders', '🚚 Orders — stage & what is missing'], // v55.83-TI (Max, Nov 16)
     ['recon', '🔎 Order Reconciliation'], // v55.83-NV — moved from Admin: it is accounting work
     ['balances', '💰 Open Balances'], // v55.83-OJ — who owes what, overdue in orange
     ['sales_report', '📈 Sales Report'], // v55.83-ON — by product + customer, avg price, shipping separate
@@ -125,7 +127,7 @@ export default function AccountingTab(props) {
   // 11:19). Same tabs, same permissions — only the arrangement changed.
   var TAB_GROUPS = [
     ['📥 DAILY WORK — handle the money', ['books_home', 'all_txns', 'review', 'categories']],
-    ['🧾 SELLING — customers & what they owe', ['invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
+    ['🧾 SELLING — customers & what they owe', ['orders', 'invoices', 'all_invoices', 'proformas', 'recon', 'customers', 'arhistory', 'ledger', 'balances']],
     ['🛒 BUYING — vendors & what we owe', ['waiting', 'bills', 'wires', 'purchaseorders']],
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
@@ -159,7 +161,7 @@ export default function AccountingTab(props) {
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'journals' || bossA || mp['journals.prepare'] === true || mp['journals.approve'] === true) && (t[0] !== 'waiting' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'journals' || bossA || mp['journals.prepare'] === true || mp['journals.approve'] === true) && (t[0] !== 'waiting' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true) && (t[0] !== 'orders' || bossA || mp['orders.monitor'] === true || mp['orders.manage'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">
@@ -207,6 +209,7 @@ export default function AccountingTab(props) {
       {sub === 'balances' && <OpenBalancesTab {...props} />}
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
+      {sub === 'orders' && <div className="p-3"><OrderMonitorTab {...props} /></div>}
       {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} /></div>}
       {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
