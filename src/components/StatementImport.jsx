@@ -9,6 +9,7 @@
 // The file is parsed IN THE BROWSER (no upload of the raw file); only clean
 // rows go to the server, which dedupes against everything already stored —
 // re-importing the same file adds nothing, overlap with Plaid is skipped.
+import { COMPANIES } from '../lib/companies'; // v55.83-TW
 import React, { useState } from 'react';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -79,6 +80,7 @@ function guessCol(headers, cands, avoid) {
 }
 
 export default function StatementImport(props) {
+  var COMPANY_LIST = [COMPANIES.ktc, COMPANIES.nextrade, COMPANIES.rtm]; // v55.83-TW — the account form always asks which company
   var userProfile = props.userProfile;
   var canUse = props.canUse === true;
   var s1 = useState(false); var open = s1[0]; var setOpen = s1[1];
@@ -102,7 +104,7 @@ export default function StatementImport(props) {
   function createManual() {
     if (!newAcct) { return; }
     setBusy(true); setErr('');
-    api({ action: 'create_manual_account', institution: newAcct.institution, name: newAcct.name, mask: newAcct.mask }).then(function (j) {
+    api({ action: 'create_manual_account', institution: newAcct.institution, name: newAcct.name, mask: newAcct.mask, wave_business_id: newAcct.company, account_type: newAcct.card ? 'credit' : 'bank' }).then(function (j) {
       if (j && j.ok && j.account) {
         var a = j.account;
         setTargets(function (prev) {
@@ -234,13 +236,16 @@ export default function StatementImport(props) {
         <option value="">these rows belong to account…</option>
         {targets.map(function (a) { return <option key={a.plaid_account_id} value={a.plaid_account_id}>{a.institution} · {a.name}{a.mask ? ' •' + a.mask : ''}{a.connection_status === 'archived' ? ' (archived link)' : a.connection_status === 'manual' ? ' (manual — CSV only)' : ''}</option>; })}
       </select>
-      {!newAcct && <button onClick={function () { setNewAcct({ institution: '', name: '', mask: '' }); }} title="A bank Plaid can't connect yet (e.g. PNC)? Add it here, then import its CSV. If Plaid connects it later, the same last-4 is recognized and nothing doubles."
+      {!newAcct && <button onClick={function () { setNewAcct({ institution: '', name: '', mask: '', company: props.companyId || '', card: false }); }} title="A bank Plaid can't connect yet (e.g. PNC)? Add it here, then import its CSV. If Plaid connects it later, the same last-4 is recognized and nothing doubles."
         className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff' }}>➕ account not in the list (e.g. PNC)</button>}
     </div>
     {newAcct && <div className="flex gap-2 items-center flex-wrap mb-2 rounded-lg p-2" style={{ background: '#f0fdfa', border: '1px solid #99f6e4' }}>
       <span className="text-[10px] font-extrabold" style={{ color: '#134e4a' }}>New manual account:</span>
       <input value={newAcct.institution} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { institution: e.target.value })); }} placeholder="Bank (e.g. PNC)" className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light" style={{ width: 120 }} />
       <input value={newAcct.name} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { name: e.target.value })); }} placeholder="Account name (e.g. Business Checking)" className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light" style={{ width: 210 }} />
+      {/* v55.83-TW — which company the account belongs to (always picked, never assumed) and bank vs credit card */}
+      <select value={newAcct.company || ''} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { company: e.target.value })); }} disabled={!!props.companyId} className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light"><option value="">Company…</option>{COMPANY_LIST.map(function (c) { return <option key={c.id} value={c.id}>{c.label}</option>; })}</select>
+      <select value={newAcct.card ? 'credit' : 'bank'} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { card: e.target.value === 'credit' })); }} className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light"><option value="bank">Bank account</option><option value="credit">Credit card</option></select>
       <input value={newAcct.mask} onChange={function (e) { setNewAcct(Object.assign({}, newAcct, { mask: e.target.value })); }} placeholder="Last 4 digits" maxLength={4} className="px-1.5 py-1 rounded border border-slate-300 text-[10px] nt-light" style={{ width: 90 }} />
       <button onClick={createManual} disabled={busy} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#0f766e', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Add account ✓</button>
       <button onClick={function () { setNewAcct(null); }} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>cancel</button>

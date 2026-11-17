@@ -10,6 +10,7 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks'; // v55.83-SR
+import { periodAdjustments } from '../../../../lib/party-money'; // v55.83-TX
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -1832,6 +1833,43 @@ export async function POST(req) {
           if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, kind: kindOf(key6), count: 0, total: 0 }; }
           byCat[key6].count++; byCat[key6].total = r2(byCat[key6].total + amt6);
         });
+        // v55.83-TX (Max, Nov 17) — NextTrade / RTM payments split into bills · extra fee · ADVANCE. An advance is NOT spending:
+        // it leaves the payment's category for a not-P&L 'advance held' row. Later, part of it used to pay bills or turned into
+        // a fee becomes a professional fee in the period it happened; a fee turned back into advance leaves professional fees.
+        var ptSplits = {}; var advNote = null; var profKeyP = null;
+        Object.keys(catLabels || {}).forEach(function (kP) { if (!profKeyP && /professional/i.test(String(catLabels[kP] || kP))) { profKeyP = kP; } });
+        try {
+          // the COMPLETE ledger, page by page in a stable order (Supabase returns at most 1,000 rows a request) — never a capped list
+          var pmE = { data: [], error: null };
+          for (var pmPg = 0; pmPg < 500; pmPg++) {
+            var pmR = await db.from('party_money_entries').select('id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date').order('id', { ascending: true }).range(pmPg * 1000, pmPg * 1000 + 999);
+            if (pmR.error) { pmE = { data: null, error: pmR.error }; break; }
+            pmE.data = pmE.data.concat(pmR.data || []);
+            if (!pmR.data || pmR.data.length < 1000) { break; }
+            if (pmPg === 499) { pmE = { data: null, error: { message: 'more than 500,000 advance entries' } }; }
+          }
+          if (pmE.error) { if (!/does not exist|schema cache|Could not find/i.test(pmE.error.message || '')) { advNote = 'Advances could not be read (' + pmE.error.message + ') — this report counts NextTrade / RTM payments in full.'; } }
+          else {
+            var lcP = {}; var ldP = {};
+            spTx.forEach(function (tP) { lcP[tP.id] = tP.transfer_group_id || tP.classification === 'transfer' ? 'transfer' : (tP.classification || null); ldP[tP.id] = tP.posted_date || tP.date; });
+            (pmE.data || []).forEach(function (eP) { if (eP.kind === 'payment_split' && eP.bank_transaction_id && Object.prototype.hasOwnProperty.call(ldP, eP.bank_transaction_id)) { var sp0 = ptSplits[eP.bank_transaction_id] || (ptSplits[eP.bank_transaction_id] = { fee: 0, advance: 0 }); sp0[eP.bucket] = r2(sp0[eP.bucket] + Number(eP.amount)); } });
+            // only splits whose bank line is in this report (a line the report leaves out never moves money between its rows)
+            var pmUse = (pmE.data || []).filter(function (eP) { return eP.kind !== 'payment_split' || Object.prototype.hasOwnProperty.call(ldP, eP.bank_transaction_id); });
+            var adjP = periodAdjustments(pmUse, pFrom, pTo, lcP, ldP);
+            Object.keys(adjP.advance_out_of_category).forEach(function (kA) {
+              var vA = adjP.advance_out_of_category[kA];
+              if (kA === 'uncategorized') { unc.total = r2(unc.total - vA); return; }
+              if (kA === 'transfer') { trf.total = r2(trf.total - vA); return; }
+              if (byCat[kA]) { byCat[kA].total = r2(byCat[kA].total - vA); }
+            });
+            if (adjP.advance_held > 0.005) { byCat.__party_advance = { key: '__party_advance', label: 'Advance to NextTrade / RTM (held — an asset, not spending)', kind: 'not_pnl', count: 0, total: adjP.advance_held }; }
+            if (Math.abs(adjP.professional_fee_change) > 0.005) {
+              var pk0 = profKeyP || '__professional_fees_adv';
+              if (!byCat[pk0]) { byCat[pk0] = { key: pk0, label: catLabels[pk0] || 'Professional fees', kind: 'expense', count: 0, total: 0 }; }
+              byCat[pk0].total = r2(byCat[pk0].total + adjP.professional_fee_change); byCat[pk0].from_advances = adjP.professional_fee_change;
+            }
+          }
+        } catch (eAdv) { advNote = 'Advances could not be read — this report counts NextTrade / RTM payments in full.'; }
         var catRows = Object.values(byCat).sort(function (a6, b6) { return b6.total - a6.total; });
         var catRowsIn = Object.values(byCatIn).sort(function (a7, b7) { return b7.total - a7.total; });
         var notPnlOut = { count: 0, total: 0 }; var deductible = 0;
@@ -1870,7 +1908,7 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo });
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: profKeyP || '__professional_fees_adv' }); // TX: + advances / extra fees
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
@@ -1879,7 +1917,7 @@ export async function POST(req) {
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
-          taxable_income: taxable, not_pnl_in: notPnlIn };
+          taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote };
       } catch (eSp) { spend = null; }
       var psPayload = {
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },

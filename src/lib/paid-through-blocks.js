@@ -30,10 +30,14 @@ export function buildPaidThroughBlocks(o) {
   (o.parties || []).forEach(function (party) {
     var pk = partyKeyOf(party.name);
     ['advance', 'provider'].forEach(function (era) {
-      var payTotal = 0, payCount = 0, payByCat = {}; var feesBooked = 0, waiting = 0; var mine = [];
+      var payTotal = 0, payCount = 0, payByCat = {}; var feesBooked = 0, waiting = 0; var mine = []; var advanceHeld = 0;
+      var splits = o.splits || {}; // v55.83-TX — { bank line id: { fee, advance } } split off by a person (party_money_entries)
       (o.lines || []).forEach(function (t) {
         if (partyKeyOf(t.payer) !== pk || !inP(t.date) || eraOf(party, t.date) !== era) { return; }
-        var a = r2(t.amount); payTotal = r2(payTotal + a); payCount++; mine.push(t);
+        // v55.83-TX — an ADVANCE split off this payment is not spending: it leaves the line's category (the server moves it to
+        // a not-P&L 'advance held' row in both views), so the block counts only the rest of the payment
+        var spA = splits[t.id] ? r2(splits[t.id].advance) : 0; if (spA) { advanceHeld = r2(advanceHeld + spA); }
+        var a = r2(r2(t.amount) - spA); payTotal = r2(payTotal + a); payCount++; mine.push(t);
         var k = t.classification || 'uncategorized';
         if (!payByCat[k]) { payByCat[k] = { key: k, label: catLabels[k] || k, total: 0 }; }
         payByCat[k].total = r2(payByCat[k].total + a);
@@ -48,14 +52,27 @@ export function buildPaidThroughBlocks(o) {
         allocByCat[k].count++; allocByCat[k].total = r2(allocByCat[k].total + am); allocTotal = r2(allocTotal + am);
         if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am }); }
       });
-      if (!(payCount > 0 || allocTotal > 0)) { return; }
+      // v55.83-TX — bills paid FROM THE ADVANCE in the period: in the tax view they are professional fees (the server adds them
+      // to that line); the real-cost view moves them into the bills' real categories (payments_by_cat out, allocations in)
+      var advByCat = {}, advApplied = 0;
+      (o.pays || []).forEach(function (p) {
+        if (p.method !== 'advance' || p.voided === true || !inP(p.paid_date)) { return; }
+        var b = (o.billById || {})[p.bill_id];
+        if (!b || partyKeyOf(b.paid_via) !== pk || eraOf(party, p.paid_date) !== era) { return; }
+        var k = b.category || 'uncategorized'; var am = r2(p.amount);
+        if (!advByCat[k]) { advByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
+        advByCat[k].count++; advByCat[k].total = r2(advByCat[k].total + am); advApplied = r2(advApplied + am);
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: (b.bill_number || '—') + ' · from the advance', category: k, amount: am }); }
+      });
+      if (!(payCount > 0 || allocTotal > 0 || advApplied > 0)) { return; }
       // bills / service fee / waiting — line by line, only for lines from provider_from on
       mine.forEach(function (t) {
         if (!isSplitLine(party, t.date)) { return; }
         var used = 0; (o.pays || []).forEach(function (p) { if (p.bank_transaction_id === t.id && p.voided !== true) { used += Number(p.amount) || 0; } });
         var fee = 0; (o.requests || []).forEach(function (w) { if (w.bank_transaction_id === t.id && w.status === 'attached' && w.funding_txn_id) { fee += Number(w.fee_amount) || 0; } });
-        feesBooked = r2(feesBooked + fee);
-        waiting = r2(waiting + Math.max(0, r2(Number(t.amount) - used - fee)));
+        var spT = splits[t.id] || {}; var spFee = r2(spT.fee); var spAdv = r2(spT.advance); // v55.83-TX
+        feesBooked = r2(feesBooked + fee + spFee);
+        waiting = r2(waiting + Math.max(0, r2(Number(t.amount) - used - fee - spFee - spAdv)));
       });
       var remainder = r2(payTotal - allocTotal);
       var twoEras = party.kind === 'affiliate' && !!party.provider_from;
@@ -66,7 +83,16 @@ export function buildPaidThroughBlocks(o) {
         payments_by_cat: Object.keys(payByCat).map(function (k) { return payByCat[k]; }),
         allocations_by_cat: Object.keys(allocByCat).map(function (k) { return allocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
         allocations_total: allocTotal, service_fee: remainder,
-        fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows };
+        fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows,
+        advance_held: advanceHeld, advance_applied: advApplied }; // v55.83-TX
+      if (advApplied > 0) {
+        var profKey = o.profKey || 'professional_fees';
+        blk.payments_by_cat.push({ key: profKey, label: catLabels[profKey] || 'Professional fees', total: advApplied, from_advance: true });
+        Object.keys(advByCat).forEach(function (k) {
+          var hitA = blk.allocations_by_cat.filter(function (x) { return x.key === k; })[0];
+          if (hitA) { hitA.total = r2(hitA.total + advByCat[k].total); hitA.count += advByCat[k].count; } else { blk.allocations_by_cat.push(advByCat[k]); }
+        });
+      }
       out.push(blk);
     });
   });

@@ -10,6 +10,9 @@ import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
+import RepeatingBillsPanel from './RepeatingBillsPanel'; // v55.83-TV
+import NextradeBillsPanel from './NextradeBillsPanel'; // v55.83-TW
+import AdvancesPanel from './AdvancesPanel'; // v55.83-TX
 import BillDocViewer, { BillDocToggle } from './BillDocViewer'; // v55.83-SN — the actual bill, on the screen
 import WireQuickView from './WireQuickView'; // v55.83-SU — open the wire / request that paid a bill
 import PayablesPanel from './PayablesPanel'; // v55.83-SJ
@@ -443,6 +446,8 @@ export default function BillsTab(props) {
           style={filter === f ? { background: '#1e293b', color: '#ffffff' } : (f === 'duplicates' && dupN > 0 ? { background: '#e9d5ff', color: '#3b0764', border: '1px solid #7e22ce' } : { background: '#f1f5f9', color: '#334155' })}>{f === 'duplicates' ? '⚠ POSSIBLE DUPLICATES (' + dupN + ')' : f.toUpperCase()}</button>;
       })}
       <button onClick={function () { setPanel(panel === 'rules' ? null : 'rules'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'rules' ? { background: '#312e81', color: '#ffffff' } : { background: '#eef2ff', color: '#312e81', border: '1px solid #c7d2fe' }}>📏 Price rules</button>
+      <button onClick={function () { setPanel(panel === 'repeating' ? null : 'repeating'); }} title="Bills that come back every week / month / 3 months / year — set up once, the Hub makes each bill on its date" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'repeating' ? { background: '#9a3412', color: '#ffffff' } : { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' }}>🔁 Repeating bills</button>{/* v55.83-TV */}
+      <button onClick={function () { setPanel(panel === 'nextrade' ? null : 'nextrade'); }} title="KTC bills made from Nextrade expenses — owed to Nextrade" className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'nextrade' ? { background: '#1e3a8a', color: '#ffffff' } : { background: '#eff6ff', color: '#1e3a8a', border: '1px solid #93c5fd' }}>🟦 Nextrade bills</button>{/* v55.83-TW */}
       <button onClick={function () { setPanel(panel === 'reports' ? null : 'reports'); }} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={panel === 'reports' ? { background: '#14532d', color: '#ffffff' } : { background: '#f0fdf4', color: '#14532d', border: '1px solid #86efac' }}>📊 Reports</button>
       {canManage && <button onClick={function () { if (fileInputRef.current) { fileInputRef.current.click(); } }} disabled={busy || reading}
         className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#7c3aed', color: '#ffffff' }}>{reading ? 'Reading…' : '📷 Import bill(s)'}</button>}
@@ -473,6 +478,9 @@ export default function BillsTab(props) {
       {(typeF || dirF || priceF || sortBy !== 'due') && <button onClick={function () { setTypeF(''); setDirF(''); setPriceF(''); setSortBy('due'); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear</button>}
       <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length + ' bill(s)'}</span>
     </div>
+    {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}
+    {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} />}
+    {panel === 'repeating' && <RepeatingBillsPanel userProfile={userProfile} canManage={canManage} cats={cats} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {panel === 'rules' && <PriceRulesPanel api={api} toast={toast} onClose={function () { setPanel(null); }} onChanged={load} />}
     {/* v55.83-SJ — what we owe by age + bills on the books before they are paid */}
     {panel === 'reports' && <PayablesPanel bills={(data && data.bills) || []} userId={userProfile && userProfile.id} />}

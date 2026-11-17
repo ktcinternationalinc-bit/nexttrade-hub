@@ -60,5 +60,7 @@ export function scopeIfRegistered(rows, businessId, registry, includeLegacyHint)
   (registry || []).forEach(function (b) { if (b && b.wave_business_id === businessId) { sel = b; } });
   if (!sel) { return rows; }
   var includeLegacy = sel.is_production !== false;
+  // v55.83-TW — Nextrade / RTM never take old untagged (KTC) rows: their books start empty and only hold their own lines
+  if (businessId === 'NEXTRADE_BOOKS' || businessId === 'RTM_BOOKS') { includeLegacy = false; }
   return scopeToBusiness(rows, businessId, includeLegacy);
 }

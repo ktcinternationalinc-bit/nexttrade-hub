@@ -26,6 +26,7 @@ import JournalEntriesTab from './JournalEntriesTab'; // v55.83-SL
 import MonthEndTab from './MonthEndTab'; // v55.83-SK
 import WaitingTab from './WaitingTab'; // v55.83-SI
 import BillsTab from './BillsTab';
+import CompanyBooksTab from './CompanyBooksTab'; // v55.83-TW
 import CashForecastTab from './CashForecastTab';
 import PeriodStatsTab from './PeriodStatsTab';
 import ExpenseRulesTab from './ExpenseRulesTab'; // v55.83-PI
@@ -79,6 +80,8 @@ export default function AccountingTab(props) {
     ['dashboard', '📊 Dashboard'],
     ['books_home', '🏦 Books'], // v55.83-PB — ONE home: cash in/out, match queues, bills due
     ['waiting', '🔔 Waiting for me'], // v55.83-SI — master plan build 2: what needs this person in Bills and Wires, and what is stuck
+    ['nextrade', '🟦 Nextrade'], // v55.83-TW — Nextrade's own books (no Wave)
+    ['rtm', '🟪 RTM'], // v55.83-TW — RTM's own books (no Wave)
     ['bills', '💸 Bills'], // v55.83-PB — vendor bills (AP): what we owe, pay from the bank feed
     ['wires', '🏦 Wires'], // v55.83-RG — wires sent: audit + AI + two-person sign-off, click → every bill paid
     ['forecast', '📈 Forecast'], // v55.83-PD — 30/60/90 in vs out, shortages, click-through drill
@@ -132,6 +135,7 @@ export default function AccountingTab(props) {
     ['📊 REPORTS · SALES & CUSTOMERS', ['dashboard', 'sales_report', 'profitability', 'pnl']],
     ['📊 REPORTS · MONEY & CASH', ['period_stats', 'forecast', 'monthend']],
     ['📊 REPORTS · LEDGER (ClickBooks)', ['clickbooks_reports', 'journals']],
+    ['🏢 OTHER COMPANIES — their own books', ['nextrade', 'rtm']], // v55.83-TW (Max: three separate companies)
     ['⚙️ SYSTEM — rarely touched', ['company', 'wavehub', 'clickbooks_admin', 'audit']],
   ];
   // v55.83-RE (Max, Nov 8 15:12) — P1 "Accounting Access" is REQUIRED before
@@ -161,7 +165,7 @@ export default function AccountingTab(props) {
       <div className="p-3 border-b border-slate-800">
         {TAB_GROUPS.map(function (g) {
           var keep = {};
-          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'journals' || bossA || mp['journals.prepare'] === true || mp['journals.approve'] === true) && (t[0] !== 'waiting' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true) && (t[0] !== 'orders' || bossA || mp['orders.monitor'] === true || mp['orders.manage'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
+          tabs.filter(function (t) { return hubAllows(t[0]) && (t[0] !== 'clickbooks_reports' || (reportsEnabled && canClickbooks)) && (t[0] !== 'clickbooks_admin' || (clickbooksEnabled && financialAccess.isVerifiedSuperAdmin === true)) && (t[0] !== 'bills' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true) && (t[0] !== 'journals' || bossA || mp['journals.prepare'] === true || mp['journals.approve'] === true) && (t[0] !== 'waiting' || bossA || mp['bills.view'] === true || mp['bills.manage'] === true || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true) && (t[0] !== 'wires' || isSuper || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'))) && (t[0] !== 'forecast' || acctV.access) && (t[0] !== 'period_stats' || acctV.access) && (t[0] !== 'categories' || bossA || mp['bank.classify'] === true) && (t[0] !== 'all_txns' || bossA || mp['bank.classify'] === true) && (t[0] !== 'audit' || bossA || mp['audit.view'] === true) && (t[0] !== 'nextrade' || isSuper || mp['company.nextrade.view'] === true || mp['company.nextrade.manage'] === true) && (t[0] !== 'rtm' || isSuper || mp['company.rtm.view'] === true || mp['company.rtm.manage'] === true) && (t[0] !== 'orders' || bossA || mp['orders.monitor'] === true || mp['orders.manage'] === true); }).forEach(function (t2) { keep[t2[0]] = t2[1]; });
           var items = g[1].filter(function (k) { return keep[k]; });
           if (!items.length) { return null; }
           return <div key={g[0]} className="mb-1.5">
@@ -177,7 +181,7 @@ export default function AccountingTab(props) {
           </div>;
         })}
       </div>
-      {sub !== 'books_home' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
+      {sub !== 'books_home' && sub !== 'nextrade' && sub !== 'rtm' && sub !== 'bills' && sub !== 'wires' && sub !== 'waiting' && sub !== 'monthend' && sub !== 'journals' && sub !== 'forecast' && sub !== 'period_stats' && sub !== 'categories' && sub !== 'all_txns' && sub !== 'clickbooks_reports' && sub !== 'clickbooks_admin' && <div className="px-3 pt-3">
         <WaveBusinessFilter onChange={function (b) { setWaveKey(b || ''); }} />
       </div>}
       {/* v55.83-SO — the obvious way back after a quick jump, or after arriving from another part of the Hub */}
@@ -191,6 +195,8 @@ export default function AccountingTab(props) {
       {alive('waiting') && <div className="p-3" style={shown('waiting')}><WaitingTab {...props} onGo={goFrom} /></div>}
       {sub === 'monthend' && <div className="p-3"><MonthEndTab /></div>}
       {sub === 'journals' && <div className="p-3"><JournalEntriesTab /></div>}
+      {sub === 'nextrade' && <div className="p-3"><CompanyBooksTab key="nextrade" company="nextrade" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.nextrade.manage'] === true} /></div>}
+      {sub === 'rtm' && <div className="p-3"><CompanyBooksTab key="rtm" company="rtm" userProfile={props.userProfile} toast={props.toast} canManage={isSuper || mp['company.rtm.manage'] === true} /></div>}
       {sub === 'bills' && <div className="p-3"><BillsTab {...props} /></div>}
       {sub === 'wires' && <div className="p-3"><WiresTab {...props} /></div>}
       {alive('forecast') && <div className="p-3" style={shown('forecast')}><CashForecastTab {...props} onGo={goFrom} /></div>}

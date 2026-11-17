@@ -71,6 +71,8 @@ async function runPull(request) {
     try { var b = await request.clone().json(); if (b && b.includeProduction === true) { includeProduction = true; } } catch (eBody) {}
   }
   var businesses = includeProduction ? allBusinesses : allBusinesses.filter(function (x) { return x.is_production === false; });
+  // v55.83-TW — Nextrade and RTM have no Wave business: never pulled from Wave
+  businesses = businesses.filter(function (x) { return x.wave_business_id !== 'NEXTRADE_BOOKS' && x.wave_business_id !== 'RTM_BOOKS'; });
   if (businesses.length === 0) {
     return Response.json({ ok: true, message: includeProduction ? 'No registered Wave businesses to pull.' : 'No TEST Wave businesses to pull (production excluded — add ?includeProduction=true to include it).', results: [] });
   }

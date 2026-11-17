@@ -473,6 +473,12 @@ const ACTION_PERMS = [
   { key: 'bills.view',    label: 'Bills: View',    desc: 'See vendor bills (what the company owes) and the cash-flow view.' },
   { key: 'bills.manage',  label: 'Bills: Manage',  desc: 'Add/edit/void bills and record bill payments. Implies view.' },
   { key: 'bills.price_rules', label: 'Bills: Price rules', desc: 'Enter expected prices of products / services and commission rules; the Hub checks every bill against them and flags differences for a person.' },
+  // v55.83-TW / TX — Nextrade and RTM own books, and NextTrade / RTM advances
+  { key: 'company.nextrade.view', label: 'Nextrade books: View', desc: 'Accounting → 🟦 Nextrade: see Nextrade’s own bank and credit-card lines, categories and rules. Balances and totals still need their own permissions.' },
+  { key: 'company.nextrade.manage', label: 'Nextrade books: Manage', desc: 'Categorize Nextrade lines (an expense makes a KTC bill at once), edit Nextrade’s categories, rules and the category mapping to KTC. Implies view.' },
+  { key: 'company.rtm.view', label: 'RTM books: View', desc: 'Accounting → 🟪 RTM: see RTM’s own lines, categories and rules.' },
+  { key: 'company.rtm.manage', label: 'RTM books: Manage', desc: 'Categorize RTM lines and edit RTM’s categories and rules. Implies view.' },
+  { key: 'advances.manage', label: 'Advances & fees: Manage 💰', desc: 'Split a payment to NextTrade / RTM into extra fee and advance, pay their bills from the advance, turn advance into fee and back. An advance holding money from a private account also needs “Bank: See private accounts”. Only the super admin can switch this on.' },
   { key: 'journals.prepare', label: 'Journals: Write', desc: 'Write a journal entry (accrual, correction, re-class) and send it for approval.' },
   { key: 'journals.approve', label: 'Journals: Approve', desc: 'Approve or reject a journal entry someone else wrote; approving posts it to the ledger.' },
   { key: 'wires.view',    label: 'Wires: View',    desc: 'Open the 🏦 Wires portal: every wire sent to vendors, its audit, and all the bills it paid. Needs ClickBooks access.' },
@@ -534,7 +540,7 @@ const ACTION_PERMS = [
 ];
 
 // v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)
-const SENSITIVE_PERMS_UI = { 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true };
+const SENSITIVE_PERMS_UI = { 'advances.manage': true, 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true };
 // v55.83-TP — one click sets a person up as ACCOUNTING STAFF: enter + validate invoices and bills, see what is owed, see bank lines
 // (amounts included) to match and prepare wires. Never: profit / margin, money totals, bank balances, private accounts, undo matches.
 const ACCOUNTING_STAFF_PRESET = ['accounting.clickbooks.access', 'accounting.wavehub.access', 'accounting.view_invoicing', 'invoice.view', 'invoice.create',

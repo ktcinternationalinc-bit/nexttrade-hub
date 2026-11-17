@@ -25,6 +25,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-QS
 import { US_WAVE_BUSINESS_ID } from '../../../../lib/business-of';
+import { companyById } from '../../../../lib/companies'; // v55.83-TW
 import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ
 
 function db() {
@@ -72,9 +73,13 @@ export async function POST(req) {
       var nameM = String(body.name || '').trim().substring(0, 80);
       var maskM = String(body.mask || '').replace(/[^0-9]/g, '').slice(-4);
       if (!instM) { return NextResponse.json({ ok: false, error: 'Type the bank name (e.g. PNC).' }, { status: 400 }); }
+      // v55.83-TW — the company is always picked on the screen (KTC / Nextrade / RTM); a request without one is refused, never put under KTC
+      var compM = companyById(body.wave_business_id);
+      if (!compM) { return NextResponse.json({ ok: false, error: 'Pick the company this account belongs to (KTC, Nextrade or RTM).' }, { status: 400 }); }
+      var isCardM = body.account_type === 'credit'; // v55.83-TW — a credit card account (its statement rows say in/out themselves)
       if (maskM.length !== 4) { return NextResponse.json({ ok: false, error: 'Type the LAST 4 digits of the account — that is how a later Plaid connection is recognized as the same account (no duplicates).' }, { status: 400 }); }
       // same bank + same last-4 already exists → reuse it, never a second copy
-      var exM = await d.from('plaid_accounts').select('plaid_account_id, name, mask, connection_id').eq('mask', maskM);
+      var exM = await d.from('plaid_accounts').select('plaid_account_id, name, mask, connection_id, wave_business_id').eq('mask', maskM);
       var instTokM = (instM.toLowerCase().match(/[a-z0-9]+/) || [''])[0];
       if (!exM.error && exM.data && exM.data.length) {
         var exConns = await d.from('bank_connections').select('id, institution_name').in('id', exM.data.map(function (r) { return r.connection_id; }));
@@ -83,10 +88,11 @@ export async function POST(req) {
           var t0 = (String(c0.institution_name || '').toLowerCase().match(/[a-z0-9]+/) || [''])[0];
           if (t0 && t0 === instTokM) { exM.data.forEach(function (a0) { if (a0.connection_id === c0.id && !exHit) { exHit = a0; } }); }
         });
+        if (exHit && exHit.wave_business_id && exHit.wave_business_id !== compM.id) { var otherC = companyById(exHit.wave_business_id); return NextResponse.json({ ok: false, error: 'That bank + last 4 is already in the Hub under ' + (otherC ? otherC.label : 'another company') + ' — one account belongs to one company. Nothing was added.' }, { status: 409 }); } // v55.83-TW
         if (exHit) { return NextResponse.json({ ok: true, existing: true, account: { plaid_account_id: exHit.plaid_account_id, name: exHit.name, mask: exHit.mask }, note: 'That account is already in the hub — importing into it.' }); }
       }
       var uid = crypto.randomUUID();
-      var connRowM = { plaid_item_id: 'manual-' + uid, access_token: 'manual-no-plaid', institution_name: instM, status: 'manual', wave_business_id: body.wave_business_id || US_WAVE_BUSINESS_ID };
+      var connRowM = { plaid_item_id: 'manual-' + uid, access_token: 'manual-no-plaid', institution_name: instM, status: 'manual', wave_business_id: compM.id };
       var connM = await d.from('bank_connections').insert(connRowM).select('id').single();
       if (connM.error && /status|check/i.test(connM.error.message || '')) { // a status rule refuses 'manual' → store as active; the manual- id prefix still keeps Plaid away
         connRowM.status = 'active';
@@ -94,9 +100,9 @@ export async function POST(req) {
       }
       if (connM.error) { return NextResponse.json({ ok: false, error: 'Could not create the account: ' + connM.error.message }, { status: 400 }); }
       var acctId = 'manual-acct-' + uid;
-      var accM = await d.from('plaid_accounts').insert({ connection_id: connM.data.id, plaid_account_id: acctId, name: nameM || (instM + ' account'), official_name: nameM || null, mask: maskM, type: 'depository', subtype: 'checking', iso_currency: 'USD', is_read_only: true, wave_business_id: body.wave_business_id || US_WAVE_BUSINESS_ID, updated_at: new Date().toISOString() });
+      var accM = await d.from('plaid_accounts').insert({ connection_id: connM.data.id, plaid_account_id: acctId, name: nameM || (instM + ' account'), official_name: nameM || null, mask: maskM, type: isCardM ? 'credit' : 'depository', subtype: isCardM ? 'credit card' : 'checking', iso_currency: 'USD', is_read_only: true, wave_business_id: compM.id, updated_at: new Date().toISOString() });
       if (accM.error) { return NextResponse.json({ ok: false, error: 'Could not create the account: ' + accM.error.message }, { status: 400 }); }
-      await audit(d, userId, 'manual_account_created', 'plaid_account', acctId, { institution: instM, name: nameM, mask: maskM });
+      await audit(d, userId, 'manual_account_created', 'plaid_account', acctId, { institution: instM, name: nameM, mask: maskM, company: compM.label, credit_card: isCardM });
       return NextResponse.json({ ok: true, created: true, account: { plaid_account_id: acctId, name: nameM || (instM + ' account'), mask: maskM, institution: instM } });
     }
 

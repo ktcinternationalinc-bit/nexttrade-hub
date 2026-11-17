@@ -33,6 +33,48 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TX',
+    date: '2026-11-17',
+    title: 'Paying NextTrade / RTM — bills, an extra fee and an ADVANCE, with a running advance balance',
+    items: [
+      { text: 'Accounting → 💸 Bills now shows a yellow strip with how much advance NextTrade and RTM are holding, always visible. Press "💼 Advances & fees" to work with it.' },
+      { text: 'Split a payment already sent to NextTrade or RTM: the bills it covers stay as today, and the rest can be an extra professional fee and / or an ADVANCE (money they hold for later — not an expense).' },
+      { text: 'Nothing happens by itself: a person chooses to pay one of their bills from the advance ("Pay from the advance"), or to turn part of the advance into a fee, or a fee back into advance (a reason is required). Every move is kept with who, when and why — the original is never erased.' },
+      { text: 'Private accounts: once any money from a private bank account is in NextTrade’s or RTM’s advance, that company’s whole advance history and balance are hidden from anyone not allowed to see private accounts (later moves could reveal the private amount), and they cannot move that advance. Advance balances also need the “Bank & Financial Summary” permission.' },
+      { text: 'The advance can never go below zero, even if two people click at the same moment; one click moves money once.' },
+      { text: 'Reports: an advance is not spending. When it pays bills or becomes a fee, it shows as professional fees in the tax view and as the bills’ real categories (plus the fee) in the real-cost view; both views still give the same total. Needs one SQL (v55-83-TX-advances-fees.sql, after the TO one).' },
+      { text: 'Technical: party_money_entries (append-only trigger, request_id unique) + hub_party_money(action, party, amount, fee, bank_txn, bill, reason, actor, request_id) — advisory locks hub-party:/hub-bank-line:, balance checks before and after, apply = vendor_bill_payments method advance (TO guard), REVOKE from anon/authenticated; /api/accounting/advances (verifiedCaller + advances.manage, money only via rpc); paid-through-blocks splits/advance_held/advance_applied; period_stats __party_advance not_pnl row + professional_fee_change. Test test-v55-83-tx-advances-fees.js.', superAdminOnly: true }
+    ]
+  },
+  {
+    version: 'v55.83-TW',
+    date: '2026-11-17',
+    title: 'Nextrade and RTM get their own books; Nextrade expenses become KTC bills at once',
+    items: [
+      { text: 'Accounting → 🟦 Nextrade and 🟪 RTM (under "OTHER COMPANIES"): each company’s own bank and credit-card lines, its own categories, its own rules, month totals and CSV export. Nothing is shared with KTC.' },
+      { text: 'Connect their banks or cards with Plaid: Bank → 🔗 Connect a bank → pick Nextrade or RTM. Or add an account from a statement file — the account form now asks which company and whether it is a bank account or a credit card (it no longer puts accounts under KTC by itself).' },
+      { text: 'Nextrade: categorize a money-out line as an expense and a KTC bill is made at once — full amount, due at the end of that month, "Created from Nextrade", paid via NextTrade. Set once which KTC category each Nextrade category becomes: 🟦 Nextrade → 🔁 Category mapping → KTC.' },
+      { text: 'One KTC bill per Nextrade line, ever. If KTC already has an open bill for the same vendor and amount within 10 days (for example the repeating rent bill), the Nextrade line is attached to it instead of making a second one.' },
+      { text: 'Payroll lines make no bill (the repeating "Warehouse staff" bill covers payroll) and show as "Warehouse staff" — no names. Money KTC sends Nextrade is "Money from KTC (transfer in)", never income.' },
+      { text: 'Safety (from Codex’s review): a line’s category, its KTC bill and the link between them are saved together in one step — if anything fails, nothing is saved, so no half-made bill is ever left behind. Account balances need the “Bank: View Account Balances” permission and month totals need “Bank & Financial Summary”; seeing Nextrade or RTM alone does not show them. Lines in private bank accounts stay hidden.' },
+      { text: 'Changing a line’s category updates its KTC bill; taking the expense off voids the bill (never deleted) and picking an expense again brings the same bill back. A bill that already has money on it, or is on a wire, is never voided — the change is refused and says why. See them in 💸 Bills → 🟦 Nextrade bills. Needs one SQL (v55-83-TW-company-books.sql).' },
+      { text: 'Technical: companies NEXTRADE_BOOKS / RTM_BOOKS (registry rows, placeholder for every Wave push, excluded from Wave pull, no legacy-null rows in scopeIfRegistered); company_categories / company_rules / bank_transactions.company_category (KTC expense_categories + us_expense_rules untouched); company_category_map; company_bill_links unique per source line + one active line per bill; src/lib/nextrade-bills-server.js syncNextradeBill runs BEFORE the category write; /api/accounting/company-books (verifiedCaller, company.<x>.view/manage). Test test-v55-83-tw-company-books.js.', superAdminOnly: true }
+    ]
+  },
+  {
+    version: 'v55.83-TV',
+    date: '2026-11-17',
+    title: 'Repeating bills — set up once, the Hub makes each bill on its date',
+    items: [
+      { text: 'Accounting → 💸 Bills → 🔁 Repeating bills: a bill that comes back every week, month, 3 months or year (for example the monthly "Warehouse staff" bill). Type the vendor, amount, category, release # if any, how often, the first date and an optional last date.' },
+      { text: 'The Hub makes each bill by itself every morning, 7 days before its date (you can change the number of days on each one). Each bill gets its own number, like AUTO-WAREHOUSES-20261201, and the note "🔁 Repeating bill".' },
+      { text: 'Every bill goes through the same duplicate check as a bill typed by hand. One that looks like a duplicate is NOT made — it shows on the repeating bill with the reason, and a person can press "These are different — make it anyway".' },
+      { text: 'Only one bill per repeating bill per date, ever — even if two people press "Make due bills now" at the same moment. If the Hub was down for a few days, it catches up with one bill per missed date.' },
+      { text: '⏸ Pause (no bills for the paused time), ▶ Resume, ✏ Edit (changes future bills only) and ⏹ Stop. A stopped one stays on the list with every bill it made. Nothing is deleted. Needs one SQL (v55-83-TV-repeating-bills.sql).' },
+      { text: 'Technical: recurring_bills + recurring_bill_runs (unique per repeating bill + date) and vendor_bills.recurring_id/recurring_date (unique); daily cron /api/accounting/bills/repeating guarded by CRON_SECRET (fails closed); writes via verifiedCaller + Bills: Manage; test test-v55-83-tv-repeating-bills.js (48 checks, in-memory DB with the SQL unique rules).', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-TZ',
     date: '2026-11-17',
     title: 'An EXW invoice with an overweight surcharge saves again',
