@@ -142,8 +142,7 @@ export default function WarehouseShippingPanel(props) {
       {totalsLine && <div>{'Shipped since ' + data.backfill_from + ', shipping expense in use: ' + totalsLine + '. The warehouse does not record a currency — USD is assumed, not confirmed.'}</div>}
       <div>{'Shipping expense = freight + trucking. A wire in "Closed" replaces the quote only when it looks like this order’s payment; otherwise the quote stays and the order is listed in the review queue. A missing part stays missing — never zero.'}</div>
       <div className="mt-1 flex gap-2 items-center flex-wrap">
-        <span style={{ fontWeight: 800, color: props.warehouseOn ? '#166534' : '#92400e' }}>{props.warehouseOn ? '✓ The P&L numbers USE these costs (where no Hub bill covers them).' : 'The P&L numbers do NOT use these costs yet — they are shown for checking.'}</span>
-        <Btn onClick={function () { setSwitch(!props.warehouseOn); }}>{props.warehouseOn ? 'Stop using them' : 'Use them in the P&L (super admin)'}</Btn>
+        <span style={{ fontWeight: 800, color: '#166534' }}>{'✓ Used automatically in the P&L as the ESTIMATE until the trucking / shipping bill is in the Hub. The bill then replaces it, and any difference between the warehouse figure and the bill is flagged (see ⚖ Estimate vs Final).'}</span>
       </div>
     </div>
     {show && <div className="mt-2 flex gap-2 items-center flex-wrap text-[11px]">

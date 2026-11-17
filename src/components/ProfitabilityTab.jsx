@@ -26,6 +26,7 @@ var FLAG_WORDS = {
   unit_unknown: 'Unit not set (pounds, kilograms, tons, yards or linear metres)',
   cost_missing: 'Goods cost missing',
   cost_manual: 'Goods cost typed by hand',
+  cost_assumed_before_first_purchase: 'Sold before our first supplier bill for it — cost taken from the first 90 days of purchases on record (assumed bought earlier at that price)', // v55.83-TJ
   purchase_line_without_cost: 'A linked supplier bill line has no cost on it',
   no_bill_description_linked: 'No supplier bill description linked to this product',
   not_grouped_no_cost_source: 'Not in a product group, so no cost source',
@@ -41,6 +42,7 @@ var FLAG_WORDS = {
   two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)',
   warehouse_cost_not_usable: 'The warehouse has this release but its shipping cost cannot be used yet (a part is missing, or two orders share the release)', // v55.83-TG
   basis_not_stated_on_invoice: 'The invoice does not say CNF or EXW — basis guessed by the rule, please check', // v55.83-TG
+  basis_assumed_from_shipping_line: 'The invoice has a shipping line, so shipping is taken as charged on that line — NOT inside the goods price (Max’s rule). Set CNF/EXW on the invoice to confirm', // v55.83-TJ
   basis_exw_without_shipping_line: 'EXW, but the invoice has no shipping charge line and the warehouse shows shipping costs', // v55.83-TG
   basis_set_differs_from_invoice_text: 'The basis set in the Hub differs from what the invoice text says (CNF / EXW)', // v55.83-TG
   basis_invoice_says_both_cnf_and_exw: 'The invoice text mentions both CNF and EXW', // v55.83-TG
@@ -113,6 +115,35 @@ export default function ProfitabilityTab(props) {
     }
     return '$' + fmt(row[f]);
   }
+  // v55.83-TJ (Max, Nov 17: "not sure what these messages mean. they need to be more meaningful and maybe link us directly to where
+  // we make the update or change") — every reason a cost is missing, in plain words, with a button that opens the exact place to fix it
+  function costHelp(w) {
+    var why = String(w.why || ''); var first = (why.match(/first one: ([0-9-]+)/) || [])[1] || '';
+    var sold = w.first_sale ? (w.sales > 1 ? 'Sold from ' : 'Sold on ') + w.first_sale : 'Sold';
+    if (why === 'unit not set') { return { text: 'We don’t know if this is sold by the lb, kg or ton, so it has no pounds.', fix: 'Set the unit', go: 'names' }; }
+    if (why === 'not in a product group') { return { text: 'This description is not part of a product yet, so no supplier bills are tied to it.', fix: 'Put it in a product', go: 'names' }; }
+    if (why === 'no supplier description linked') { return { text: 'Nobody has said which supplier bills are what we pay for this product.', fix: 'Link supplier bills', go: 'link' }; }
+    if (why === 'a linked supplier bill line has no cost') { return { text: 'One of its supplier bill lines has no amount, so the cost can’t be worked out.', fix: 'See its supplier bills', go: 'group' }; }
+    if (why === 'a weight on the invoice is missing') { return { text: 'Another line on the same invoice has no unit, so the invoice can’t be split by weight.', fix: 'Set the unit', go: 'names' }; }
+    if (why.indexOf('have no bill lines') >= 0) { return { text: 'The supplier descriptions linked to it have no bills in the Hub yet.', fix: 'Link other supplier bills', go: 'link' }; }
+    if (why.indexOf('have no unit') >= 0) { return { text: 'Its supplier bill lines don’t say lb, kg or ton.', fix: 'See its supplier bills', go: 'group' }; }
+    if (why.indexOf('no linked purchase dated on or before') >= 0) { return { text: sold + ', but the first supplier bill we have for it is dated ' + (first || '?') + ' — there is no purchase before the sale to take the cost from. Link the older supplier bill, or type a cost per lb.', fix: 'Link an older bill or type a cost', go: 'group' }; }
+    return { text: why, fix: 'Open the set-up', go: 'names' };
+  }
+  function goFix(go, gid, name) {
+    setView('setup'); setOpen(null);
+    if (go === 'names' && name) { setNameQ(name); }
+    if (go === 'link' && gid) { setLinkFor(gid); setBillPick({}); setBillQ(''); }
+    var target = go === 'names' ? 'pl-setup-names' : (gid ? 'pl-group-' + gid : 'pl-setup-groups');
+    setTimeout(function () { var el = document.getElementById(target); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); el.style.outline = '3px solid #f59e0b'; setTimeout(function () { el.style.outline = ''; }, 3000); } }, 200);
+  }
+  function costHelpBlock(list, fallbackGid) {
+    if (!list || !list.length) { return null; }
+    return <div className="text-left" style={{ color: '#92400e', fontSize: 10, lineHeight: 1.25, minWidth: 200, maxWidth: 260, whiteSpace: 'normal' }}>{list.slice(0, 3).map(function (w, ix) {
+      var h = costHelp(w); var gid = w.group_id || fallbackGid || null;
+      return <div key={ix} className="mt-1"><b>{w.sales > 1 ? w.sales + ' sales: ' : ''}</b>{h.text}
+        {canEdit && <div><button onClick={function (e) { e.stopPropagation(); goFix(h.go, gid, (w.names || [])[0]); }} className="mt-0.5 px-1.5 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff', fontSize: 10 }}>{'→ ' + h.fix}</button></div>}</div>; })}</div>;
+  }
   function cellMoney(v) { return v === null || v === undefined ? <span style={{ color: '#b45309', fontWeight: 800 }}>unknown</span> : '$' + fmt(v); }
   function statusChip(row) {
     if (row.complete) { return <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#d1fae5', color: '#065f46' }}>COMPLETE</span>; }
@@ -136,11 +167,11 @@ export default function ProfitabilityTab(props) {
             <td className="px-1.5 py-1 text-right">{cellMoney(c.goods_revenue)}{!c.goods_price_confirmed && <div style={{ color: '#b45309' }}>not confirmed</div>}</td>
             <td className="px-1.5 py-1 text-right">{c.pounds > 0 && c.goods_revenue !== null && c.goods_price_confirmed ? fmt4(c.goods_revenue / c.pounds) : '—'}</td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.transport_revenue)}<div style={{ color: SUB }}>{c.transport_source || ''}</div></td>
-            <td className="px-1.5 py-1 text-right">{cellMoney(c.base_cost)}<div style={{ color: c.cost_missing_reason ? '#92400e' : SUB }}>{c.base_cost_per_lb !== null ? fmt4(c.base_cost_per_lb) + ' / lb' : (c.cost_missing_reason || '')}</div></td>
+            <td className="px-1.5 py-1 text-right">{cellMoney(c.base_cost)}<div style={{ color: SUB }}>{c.base_cost_per_lb !== null ? fmt4(c.base_cost_per_lb) + ' / lb' : ''}</div>{c.cost_missing_reason ? costHelpBlock([{ why: c.cost_missing_reason, sales: 1, group_id: c.group_id, first_sale: c.invoice_date, names: [c.description] }]) : null}</td>
             <td className="px-1.5 py-1" title={(c.cost_sources || []).map(function (s) { return (s.vendor || '') + ' ' + (s.bill_number || '') + ' · ' + (s.bill_date || '') + ' · ' + s.description + ' · ' + fmt0(s.pounds) + ' lb · $' + (s.cost === null ? '?' : fmt(s.cost)); }).join('\n')}>
               {c.cost_method === 'manual' ? <span style={{ color: '#7c2d12', fontWeight: 700 }}>{'typed by hand (' + (c.cost_level || 'sale') + ')' + (c.cost_note ? ' — ' + c.cost_note : '')}</span> : null}
-              {c.cost_method === 'manual' ? null : c.cost_method === 'release' ? 'bill on the same release' : c.cost_method === 'window' ? 'bills in the 90 days before' : c.cost_method === 'last_purchase' ? 'last purchase before' : c.cost_method === 'manual' ? 'typed by hand' : <span style={{ color: '#b45309' }}>none</span>}
-              {canEdit && c.line_id && c.pounds !== null && (c.base_cost === null || (c.cost_method === 'manual' && c.cost_level === 'sale')) && <div className="mt-0.5 flex gap-1 items-center flex-wrap" onClick={function (e) { e.stopPropagation(); }}>
+              {c.cost_method === 'manual' ? null : c.cost_method === 'release' ? 'bill on the same release' : c.cost_method === 'window' ? 'bills in the 90 days before' : c.cost_method === 'last_purchase' ? 'last purchase before' : c.cost_method === 'assumed_earliest' ? <span style={{ color: '#7c2d12', fontWeight: 700 }}>{'assumed: sold before our first bill (' + (c.cost_first_purchase || '?') + ') — price of the first 90 days'}</span> : c.cost_method === 'manual' ? 'typed by hand' : <span style={{ color: '#b45309' }}>none</span>}
+              {canEdit && c.line_id && c.pounds !== null && (c.base_cost === null || c.cost_method === 'assumed_earliest' || (c.cost_method === 'manual' && c.cost_level === 'sale')) && <div className="mt-0.5 flex gap-1 items-center flex-wrap" onClick={function (e) { e.stopPropagation(); }}>
                 <span>$</span><input value={draft['lc:' + c.line_id] !== undefined ? draft['lc:' + c.line_id] : (c.cost_method === 'manual' ? String(c.base_cost_per_lb) : '')} onChange={function (e) { d('lc:' + c.line_id, e.target.value); }} placeholder="cost / lb" className="nt-light rounded px-1 text-[10px]" style={Object.assign({ width: 64 }, inp)} title="Goods cost per POUND for this sale" />
                 <span>+</span><input value={draft['lm:' + c.line_id] !== undefined ? draft['lm:' + c.line_id] : (c.cost_method === 'manual' ? String(c.commission_per_lb || 0) : '')} onChange={function (e) { d('lm:' + c.line_id, e.target.value); }} placeholder="comm. / lb" className="nt-light rounded px-1 text-[10px]" style={Object.assign({ width: 64 }, inp)} title="Commission per pound (0 if none)" />
                 <button disabled={busy || !data.manual_costs_ready} onClick={function () { act({ action: 'set_manual_cost', level: 'line', invoice_item_id: c.line_id, cost_per_lb: draft['lc:' + c.line_id] === undefined ? (c.cost_method === 'manual' ? c.base_cost_per_lb : '') : draft['lc:' + c.line_id], commission_per_lb: draft['lm:' + c.line_id] === undefined ? (c.cost_method === 'manual' ? c.commission_per_lb : '') : draft['lm:' + c.line_id] }, 'Cost for this sale saved (typed by hand).'); }} className="px-1.5 rounded text-[10px] font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }} title={data.manual_costs_ready ? 'Save this cost for this sale only. Leave the cost empty and save to remove it.' : 'Run sql/v55-83-SY-profitability.sql in Supabase once more to turn this on'}>save</button>
@@ -292,17 +323,17 @@ export default function ProfitabilityTab(props) {
     return [
       <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={Object.assign({ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', minWidth: 220, maxWidth: 300 }, sub ? { paddingLeft: 26 } : {})}>{(isOpen ? '▾ ' : '▸ ') + r.label}
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
-        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
+        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'shipping_line_rule' ? ' (assumed — shipping line on the invoice, not in the price)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && <div style={{ color: '#b45309', fontWeight: 800 }}>some weights missing</div>}</td>,
       <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{money(r, 'goods_revenue')}</td>,
       <td key="c3" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#065f46' }}>{r.avg_goods_price_per_lb === null ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_goods_price_per_lb)}</td>,
       <td key="c4" className={pc}>{money(r, 'transport_revenue')}</td>,
-      <td key="c5" className={pc} title={(r.cost_missing_why || []).map(function (w) { return w.sales + ' sale(s): ' + w.why; }).join('\n')}>{money(r, 'base_cost')}{(r.cost_missing_why || []).length > 0 && <div style={{ color: '#92400e', fontSize: 9, lineHeight: 1.2 }}>{r.cost_missing_why.slice(0, 2).map(function (w) { return w.sales + ': ' + w.why; }).join(' · ')}</div>}</td>,
+      <td key="c5" className={pc} title={(r.cost_missing_why || []).map(function (w) { return w.sales + ' sale(s): ' + w.why; }).join('\n')}>{money(r, 'base_cost')}{costHelpBlock(r.cost_missing_why, r.key.indexOf('g:') === 0 ? r.key.substring(2) : (r.parent && r.parent.indexOf('g:') === 0 ? r.parent.substring(2) : null))}</td>,
       <td key="c6" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#7f1d1d' }}>{fmt4(r.avg_base_cost_per_lb)}</td>,
       <td key="c6b" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#7f1d1d' }} title="(goods cost + commission + inbound allowance) ÷ pounds">{r.avg_all_cost_per_lb === null || r.avg_all_cost_per_lb === undefined ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_all_cost_per_lb)}</td>,
       <td key="c7" className={pc}>{money(r, 'commission')}</td>,
       <td key="c8" className={pc}>{money(r, 'inbound_allowance')}</td>,
-      <td key="c9" className={pc}>{money(r, 'outbound_cost')}</td>,
+      <td key="c9" className={pc}>{money(r, 'outbound_cost')}{r.unknown_fields && r.unknown_fields.indexOf('outbound_cost') >= 0 && <div className="text-left" style={{ color: '#92400e', fontSize: 10, lineHeight: 1.25, minWidth: 170, whiteSpace: 'normal' }}>No trucking / shipping bill or estimate for its release yet.<div><button onClick={function (e) { e.stopPropagation(); setView('containers'); setOpen(null); }} className="mt-0.5 px-1.5 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff', fontSize: 10 }}>→ Open Containers</button></div></div>}</td>,
       <td key="c10" className={pc}>{money(r, 'brokerage')}</td>,
       <td key="c11" className={pc}>{money(r, 'bonded')}</td>,
       <td key="c12" className={pc}>{'$' + fmt(r.total_cost)}{r.unknown_fields.length > 0 && <div style={{ color: '#b45309', fontWeight: 800 }}>not all known</div>}</td>,
@@ -367,8 +398,8 @@ export default function ProfitabilityTab(props) {
         </div>
       </div>
 
-      <div className="rounded-lg p-3 mb-3" style={box}>
-        <div className="text-[13px] font-extrabold mb-1">2 · What we call things when we SELL — set the unit, and put the same product under one name</div>
+      <div id="pl-setup-names" className="rounded-lg p-3 mb-3" style={box}>
+        <div className="text-[13px] font-extrabold mb-1">2 ·What we call things when we SELL — set the unit, and put the same product under one name</div>
         <div className="text-[11px] mb-2" style={{ color: SUB }}>Typing a name that already exists ADDS the ticked descriptions to that product — you never get two products with the same name. An invoice line has a quantity but no unit, so the Hub must be told once per description whether it is sold in pounds, kilograms, tons, yards or linear metres. Tick descriptions that are the same product and give them one name. This changes the report only; the invoices keep their own wording.</div>
         <div className="flex gap-2 items-center flex-wrap mb-2">
           <input value={nameQ} onChange={function (e) { setNameQ(e.target.value); }} placeholder="find a description…" className="nt-light px-2 py-1 rounded text-[12px]" style={Object.assign({ width: 220 }, inp)} />
@@ -402,8 +433,8 @@ export default function ProfitabilityTab(props) {
           </table></div>
       </div>
 
-      <div className="rounded-lg p-3" style={box}>
-        <div className="text-[13px] font-extrabold mb-1">3 · Product groups — the name shown, and the SUPPLIER BILL descriptions that are its cost</div>
+      <div id="pl-setup-groups" className="rounded-lg p-3" style={box}>
+        <div className="text-[13px] font-extrabold mb-1">3 ·Product groups — the name shown, and the SUPPLIER BILL descriptions that are its cost</div>
         <div className="text-[11px] mb-2" style={{ color: SUB }}>Linking a supplier description says “this is what we pay for that product”. The cost of a sale is then taken from those bill lines only: first a bill on the same release, otherwise bills dated in the 90 days before the invoice, otherwise the last purchase before it. A sale is charged the cost per pound × its own pounds, never a whole bill. Names that merely look alike are never assumed to be the same product.</div>
         {(data.groups || []).length === 0 && <div className="text-[11px]" style={{ color: SUB }}>No groups yet. Tick descriptions in section 2 and save a group.</div>}
         {(data.groups || []).map(function (g) {
@@ -411,7 +442,7 @@ export default function ProfitabilityTab(props) {
           var bq = billQ.trim().toLowerCase();
           var linked = {}; g.bill_names.forEach(function (x) { linked[x.key] = true; });
           var cand = (data.bill_names || []).filter(function (b0) { return !linked[b0.key] && (!bq || (b0.name + ' ' + b0.vendors.join(' ')).toLowerCase().indexOf(bq) >= 0); }).slice(0, 200);
-          return <div key={g.id} className="rounded-lg p-2 mb-2" style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: INK }}>
+          return <div key={g.id} id={'pl-group-' + g.id} className="rounded-lg p-2 mb-2" style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: INK }}>
             <div className="flex gap-2 items-center flex-wrap mb-1">
               <input value={draft[nk] !== undefined ? draft[nk] : g.name} disabled={!canEdit} onChange={function (e) { d(nk, e.target.value); }} className="nt-light px-2 py-1 rounded text-[12px] font-extrabold" style={Object.assign({ width: 280 }, inp)} />
               {canEdit && draft[nk] !== undefined && draft[nk].trim() !== g.name && <Btn bg="#047857" color="#ffffff" onClick={function () { act({ action: 'group_save', id: g.id, display_name: draft[nk] }, 'Name changed on the report.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[nk]; setDraft(o); } }); }}>save name</Btn>}
@@ -428,7 +459,7 @@ export default function ProfitabilityTab(props) {
                 {canEdit && <Btn disabled={!data.manual_costs_ready} onClick={function () { act({ action: 'set_manual_cost', level: 'group', group_id: g.id, cost_per_lb: draft[kc] === undefined ? (gc ? gc.cost_per_lb : '') : draft[kc], commission_per_lb: draft[km] === undefined ? (gc ? gc.commission_per_lb : '') : draft[km] }, 'Default cost saved for ' + g.name + ' (typed by hand).').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[kc]; delete o[km]; setDraft(o); } }); }}>save</Btn>}
                 <span className="text-[10px]" style={{ color: SUB }}>{data.manual_costs_ready ? 'Used only for sales with no cost from a linked bill; shown as “typed by hand”. A cost typed on one sale wins over this. Empty + save removes it.' : 'Run sql/v55-83-SY-profitability.sql once more to turn this on.'}</span></div>;
             })()}
-            {g.link_stats && g.bill_names.length > 0 && <div className="text-[10px] mb-1" style={{ color: g.link_stats.usable ? '#065f46' : '#92400e' }}>{g.link_stats.usable ? g.link_stats.usable + ' supplier bill line(s) can be used for cost; the earliest is dated ' + g.link_stats.first + '. Sales before that date have no cost.' : (g.link_stats.lines ? '⚠ The ' + g.link_stats.lines + ' linked supplier bill line(s) have no unit (lb / kg / ton …), so they cannot be turned into a cost per pound. Open those bills on the Bills screen and fill in the unit on each line.' : '⚠ No supplier bill in the Hub has a line with these descriptions yet.')}</div>}
+            {g.link_stats && g.bill_names.length > 0 && <div className="text-[10px] mb-1" style={{ color: g.link_stats.usable ? '#065f46' : '#92400e' }}>{g.link_stats.usable ? g.link_stats.usable + ' supplier bill line(s) can be used for cost; the earliest is dated ' + g.link_stats.first + '. Sales before that date use the price of the first 90 days of purchases (assumed bought earlier).' : (g.link_stats.lines ? '⚠ The ' + g.link_stats.lines + ' linked supplier bill line(s) have no unit (lb / kg / ton …), so they cannot be turned into a cost per pound. Open those bills on the Bills screen and fill in the unit on each line.' : '⚠ No supplier bill in the Hub has a line with these descriptions yet.')}</div>}
             <div className="text-[11px]"><b>Cost comes from supplier bill lines called:</b> {g.bill_names.length === 0 ? <span className="font-extrabold" style={{ color: '#b45309' }}>nothing linked — the goods cost of this product shows as MISSING</span> : g.bill_names.map(function (x) { var bn = (data.bill_names || []).filter(function (b0) { return b0.key === x.key; })[0]; var okU = bn && bn.usable_lines > 0; return <span key={x.key} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded mr-1 mb-1" style={okU ? { background: '#d1fae5', color: '#065f46' } : { background: '#fef3c7', color: '#78350f', border: '1px solid #f59e0b' }} title={bn ? bn.lines + ' bill line(s), ' + bn.usable_lines + ' with a unit' + (bn.unit_from_name ? ' (unit read from the description)' : '') : 'no bill line with this description'}>{x.name}<span style={{ fontSize: 9, fontWeight: 700 }}>{bn ? ' · ' + bn.lines + ' line(s)' + (okU ? '' : ' · ⚠ no unit') : ' · ⚠ no bill lines'}</span>{canEdit && <button onClick={function () { act({ action: 'group_remove_name', group_id: g.id, source: 'bill', name_key: x.key }, 'Unlinked.'); }} title="Unlink this supplier description" style={{ fontWeight: 900 }}>✕</button>}</span>; })}</div>
             {isLink && <div className="mt-2 rounded p-2" style={{ background: '#ffffff', border: '1px solid #94a3b8' }}>
               <div className="flex gap-2 items-center flex-wrap mb-1">

@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TJ',
+    date: '2026-11-17',
+    title: 'Profitability — a shipping line on the invoice means shipping is not inside the goods price',
+    items: [
+      { text: 'When an invoice has a shipping or trucking line with an amount, the Profitability report now treats the goods price as goods only, and the shipping line as what we charged for shipping. Example: AMERICA 1756 — goods $10,544.25, trucking charged $2,000.' },
+      { text: 'Nobody has to set CNF or EXW first for this. If the invoice text says CNF it is CNF with a separate shipping line, otherwise EXW. The invoice is marked for review so someone can still set it on the invoice form.' },
+      { text: 'Those invoices are now also checked for the 7% rule: what we charged for shipping must be at least our trucking/shipping cost + 7%.' },
+      { text: 'A sale dated before our first supplier bill for that product now gets a cost: we assume it was bought earlier at the price of the first 90 days of purchases on record. It is labelled “assumed”.' },
+      { text: 'You can type the price yourself instead — for one sale (open the row, “Cost from” column) or for the whole product (⚙ Names, units and supplier links → the product). A typed price always wins over the assumption.' },
+      { text: 'Missing costs now say in plain words what is wrong, with a button that takes you straight to the place to fix it (set the unit, link supplier bills, type a cost, or open Containers for a missing trucking/shipping bill).' },
+      { text: 'The Nextrade warehouse shipping and trucking figures are now used in the P&L automatically as the estimate — no switch to press. When the bill is in the Hub it replaces the estimate, and any difference is flagged.' },
+      { text: 'Order alert emails link to the Hub at nexttrade-hub.vercel.app.' }
+    ]
+  },
+  {
     version: 'v55.83-TI',
     date: '2026-11-16',
     title: '🚚 Orders: every warehouse order’s stage, what is missing, invoice, deposit, the 30-hour deadline — and a report per order',

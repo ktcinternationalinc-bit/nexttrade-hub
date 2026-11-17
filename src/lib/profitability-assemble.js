@@ -91,6 +91,16 @@ export function assembleProfitability(d) {
     var tBasis = t.basis || custBasis[i.accounting_customer_id] || null; var tSource = t.basis ? 'invoice' : (custBasis[i.accounting_customer_id] ? 'customer' : null);
     // v55.83-TG — the shipping terms chosen ON THE INVOICE are the one value (same row); they decide the basis
     if (t.shipping_terms && basisOfTerms(t.shipping_terms)) { tBasis = basisOfTerms(t.shipping_terms); tSource = 'invoice_form'; }
+    // v55.83-TJ (Max, Nov 17: "if there is a shipping line then assume it is exw or cnf with shipping NOT included in the price and
+    // cost of the goods") — an invoice with a shipping line that carries an amount: the goods price is goods only and the shipping is
+    // charged on that line. Not set by anyone → EXW, or CNF when the invoice text says CNF. Only "CNF included" chosen on the form
+    // overrides it. Noted on the invoice, so a person can still set it differently.
+    var hasShipLine = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; });
+    var saidText = statedBasis(text); var effTerms = t.shipping_terms || null;
+    if (hasShipLine && t.shipping_terms !== 'CNF_INCLUDED') {
+      if (!tBasis) { tBasis = saidText === 'CNF' ? 'CNF' : 'EXW'; tSource = 'shipping_line_rule'; flags.push({ kind: 'basis_assumed_from_shipping_line', invoice: i.invoice_number, invoice_id: i.id, basis: tBasis }); }
+      if (!effTerms) { effTerms = tBasis === 'EXW' ? 'EXW' : ((tBasis === 'CNF' || tBasis === 'TRUCKING_INCLUDED') ? 'CNF_SEPARATE' : null); }
+    }
     var charged = false;
     if (warehouseOn) {
       charged = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; });
@@ -107,7 +117,7 @@ export function assembleProfitability(d) {
     }
     return { id: i.id, number: i.invoice_number, date: String(i.invoice_date || '').substring(0, 10), customer: (d.customerNames || {})[i.accounting_customer_id] || '(unknown customer)',
       customer_id: i.accounting_customer_id || null, basis: tBasis, basis_source: tSource, charged_transport: charged,
-      shipping_terms: t.shipping_terms || null, shipping_cost_estimate: t.shipping_cost_estimate === undefined || t.shipping_cost_estimate === null ? null : Number(t.shipping_cost_estimate),
+      shipping_terms: t.shipping_terms || null, effective_terms: effTerms, has_shipping_line: hasShipLine, shipping_cost_estimate: t.shipping_cost_estimate === undefined || t.shipping_cost_estimate === null ? null : Number(t.shipping_cost_estimate),
       embedded_transport: t.embedded_transport === undefined ? null : t.embedded_transport, manual_embedded: t.embedded_transport !== undefined && t.embedded_transport !== null && t.embedded_transport !== '', releases: relsOfInv[i.id].map(function (r) { return r.key; }), lines: lines,
       _suggest: suggestBasis(text, lines.some(function (l) { return isTransportLine(l.description); })) };
   });
@@ -133,9 +143,11 @@ export function assembleProfitability(d) {
     var keys = cell.group_id ? (billKeysOfGroup[cell.group_id] || []) : [];
     // nothing linked on purpose = no cost from bills; similar names are never assumed to be the same product
     var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors }) : null;
-    if (fromBills && !fromBills.cost_unknown && fromBills.base_per_lb !== null) { return fromBills; }
     // v55.83-TE — only now a cost typed by hand: this sale's own, else the product's default
     var m = (cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
+    // v55.83-TJ — a cost a person typed wins over the "bought before our first bill" assumption
+    if (fromBills && !fromBills.cost_unknown && fromBills.base_per_lb !== null && !(fromBills.method === 'assumed_earliest' && m && Number(m.x.cost_per_lb) > 0)) { return fromBills; }
+    m =(cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
     if (m && Number(m.x.cost_per_lb) > 0) { return { base_per_lb: Number(m.x.cost_per_lb), commission_per_lb: Number(m.x.commission_per_lb) || 0, method: 'manual', level: m.level, note: m.x.note || null, sources: [] }; }
     return fromBills;
   }
@@ -240,14 +252,14 @@ export function assembleProfitability(d) {
     if (shareBad[iv.id] || !(shareOf[iv.id] > 0)) { return; }
     if (iv.releases.some(function (k) { return outbound[k] && outbound[k].partial; })) { return; } // v55.83-TG — a part of the shipping cost is missing: not separated
     if (warehouseOn && iv.charged_transport) { return; } // v55.83-TG — CNF WITH a shipping line: the shipping is charged on that line, not inside the price
-    if (iv.shipping_terms === 'CNF_SEPARATE') { return; } // v55.83-TG — chosen on the invoice: shipping is on its own line, the price is goods only
+    if (iv.effective_terms === 'CNF_SEPARATE') { return; } // v55.83-TG/TJ — chosen on the invoice, or a shipping line is on it: shipping is on its own line, the price is goods only
     iv.embedded_transport = shareOf[iv.id]; iv.embedded_source = (shareKind[iv.id] === 'estimate' ? 'container cost (estimate)' : 'container cost') + (iv.basis_source === 'inferred' ? ' — CNF inferred by rule, estimated' : ''); // v55.83-TG
     usedContainerCost++;
   });
   // v55.83-TG (Max, Nov 16) — what we CHARGE for shipping must be at least our shipping cost + 7% on "CNF with a separate shipping
   // line", and on EXW when a shipping line was added. EXW with no shipping line must have no shipping cost of ours.
   engineInvoices.forEach(function (iv) {
-    var t2 = iv.shipping_terms; if (t2 !== 'CNF_SEPARATE' && t2 !== 'EXW') { return; }
+    var t2 = iv.effective_terms; if (t2 !== 'CNF_SEPARATE' && t2 !== 'EXW') { return; }
     var chargedAmt = r2(iv.lines.reduce(function (s, l) { return s + ((l.transport === true || (l.transport !== false && isTransportLine(l.description))) ? (Number(l.amount) || 0) : 0); }, 0));
     var cost = shareBad[iv.id] ? null : (shareOf[iv.id] || 0);
     var kindC = shareKind[iv.id] === 'estimate' ? 'estimate' : 'bill';
@@ -295,8 +307,15 @@ export function assembleProfitability(d) {
   var byInvoice = summarize(cells, function (c) { return c.invoice_id; }, function (c) { return c.invoice; });
   // count the reasons behind every row's missing cost (same keys as the rows themselves)
   function whyMissing(rows, keyFn) {
-    var m = {}; cells.forEach(function (c) { if (!c.cost_missing_reason) { return; } var k = keyFn(c); var o = m[k] || (m[k] = {}); o[c.cost_missing_reason] = (o[c.cost_missing_reason] || 0) + 1; });
-    rows.forEach(function (r) { var o = m[r.key]; r.cost_missing_why = o ? Object.keys(o).map(function (w) { return { why: w, sales: o[w] }; }).sort(function (a, b) { return b.sales - a.sales; }) : []; });
+    // v55.83-TJ (Max, Nov 17: "messages need to be more meaningful and link us directly to where we make the change") — each reason
+    // also carries the product group it is about (when it is one group), the earliest sale date and the description, so the screen can
+    // say it in plain words and open the exact place to fix it
+    var m = {}; cells.forEach(function (c) { if (!c.cost_missing_reason) { return; } var k = keyFn(c); var o = m[k] || (m[k] = {});
+      var e = o[c.cost_missing_reason] || (o[c.cost_missing_reason] = { sales: 0, groups: {}, first_sale: '', names: {} });
+      e.sales++; if (c.group_id) { e.groups[c.group_id] = true; } e.names[String(c.description || '').trim()] = true;
+      var dt = String(c.invoice_date || '').substring(0, 10); if (dt && (!e.first_sale || dt < e.first_sale)) { e.first_sale = dt; } });
+    rows.forEach(function (r) { var o = m[r.key]; r.cost_missing_why = o ? Object.keys(o).map(function (w) { var e = o[w]; var gs = Object.keys(e.groups);
+      return { why: w, sales: e.sales, group_id: gs.length === 1 ? gs[0] : null, first_sale: e.first_sale || null, names: Object.keys(e.names).slice(0, 5) }; }).sort(function (a, b) { return b.sales - a.sales; }) : []; });
   }
   whyMissing(byProduct, function (c) { return c.product_key; }); whyMissing(byProductName, function (c) { return c.product_key + '||' + c.name_key; });
   whyMissing(byCustomer, function (c) { return c.customer; }); whyMissing(byInvoice, function (c) { return c.invoice_id; });

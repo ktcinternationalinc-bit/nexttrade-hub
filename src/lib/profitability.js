@@ -207,6 +207,16 @@ export function resolveCost(q, billLines, opts) {
       var last = before.map(function (x) { return String(x.l.bill_date).substring(0, 10); }).sort().pop();
       return rate(before.filter(function (x) { return String(x.l.bill_date).substring(0, 10) === last; }), 'last_purchase');
     }
+    // v55.83-TJ (Max, Nov 17: "if not linked purchase date before this sale then assume was purchased before and use the same purchase
+    // price that was done in [the first] 90 days ... that was ever recorded") — the sale is older than every purchase in the Hub: take the
+    // quantity-weighted cost of the linked purchases in the first 90 days on record. Labelled as an assumption.
+    var dated = cand.filter(function (x) { return !isNaN(Date.parse(String(x.l.bill_date || '').substring(0, 10) + 'T00:00:00Z')); });
+    if (dated.length) {
+      var firstD = dated.map(function (x) { return String(x.l.bill_date).substring(0, 10); }).sort()[0];
+      var f0 = Date.parse(firstD + 'T00:00:00Z'); var f1 = f0 + windowDays * 86400000;
+      var early = dated.filter(function (x) { var t = Date.parse(String(x.l.bill_date).substring(0, 10) + 'T00:00:00Z'); return t >= f0 && t <= f1; });
+      var ra = rate(early, 'assumed_earliest'); ra.window_days = windowDays; ra.first_purchase = firstD; return ra;
+    }
   }
   if (q.manual && q.manual.base_per_lb !== null && q.manual.base_per_lb !== undefined && q.manual.base_per_lb !== '' && Number(q.manual.base_per_lb) > 0) {
     return { base_per_lb: Number(q.manual.base_per_lb) || 0, commission_per_lb: Number(q.manual.commission_per_lb) || 0, method: 'manual', pounds_bought: 0, sources: [], note: q.manual.note || null };
@@ -353,6 +363,7 @@ export function buildCells(input) {
     c.inbound_allowance = c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null;
     if (c.base_cost === null) { c.flags.push('cost_missing'); }
     if (c.cost_method === 'manual') { c.flags.push('cost_manual'); }
+    if (c.cost_method === 'assumed_earliest') { c.flags.push('cost_assumed_before_first_purchase'); c.cost_first_purchase = cost.first_purchase || null; }
     if (c.outbound_kind === 'unknown') { c.flags.push('outbound_bill_missing'); }
     if (c.outbound_kind === 'estimate') { c.flags.push('outbound_estimate'); }
     var known = cents(c.goods_revenue) + cents(c.transport_revenue) - cents(c.base_cost) - cents(c.commission) - cents(c.inbound_allowance) - cents(c.outbound_cost) - cents(c.brokerage) - cents(c.bonded);

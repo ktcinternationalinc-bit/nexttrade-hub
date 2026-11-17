@@ -103,9 +103,9 @@ export async function POST(req) {
       // v55.83-TG — shipping costs synced from the Nextrade warehouse: always shown on Containers, used in the numbers only when the switch is on
       var whRows = []; var whOn = false; var whNote = null;
       try {
-        var whS = await db.from('pl_warehouse_settings').select('value').eq('key', 'use_in_pnl').maybeSingle();
-        if (whS.error) { throw new Error(whS.error.message); }
-        whOn = !!(whS.data && whS.data.value === true);
+        // v55.83-TJ (Max, Nov 17: "use the estimate in the Nextrade warehouse system ... until we get the verified value from the actual
+        // bill and flag if there are any differences") — always used; no switch. A Hub bill always replaces it; differences are flagged.
+        whOn = true;
         var whA = await db.from('pl_warehouse_settings').select('value').eq('key', 'active_source').maybeSingle(); if (whA.error) { throw new Error(whA.error.message); }
         var whSource = whA.data ? whA.data.value : 'nextrade-staging';
         whRows = await fetchAll(function () { return db.from('pl_warehouse_shipping').select('id, section, order_id, release_number, release_key, status, superseded, conflict, cost_status, freight_used, freight_kind, trucking_used, trucking_kind, freight_estimate, freight_final, trucking_estimate, trucking_final, manual_freight, manual_trucking, combined_used, bill_checks, flags, source_link').eq('source', whSource).eq('superseded', false).eq('in_latest_feed', true); });
