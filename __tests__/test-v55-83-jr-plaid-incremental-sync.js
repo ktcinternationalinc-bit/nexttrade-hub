@@ -60,11 +60,15 @@ ok('9: SQL adds the incremental markers to bank_connections',
 
 // --- JT (Codex JR follow-up): backfill UX in the connect flow + admin deep re-pull + no silent marker loss ---
 ok('JT1: Connect modal has an explicit backfill-window control (1mo/3mo/6mo/1yr/cy/all/custom) before Plaid Link',
-  /How far back to pull history on connect/.test(bank) &&
+  /* TT realign (Max, Nov 17): the window now sits under "Which transactions to bring in", continue-from-last-date is the default */
+  /Which transactions to bring in/.test(bank) && /Continue from the last date already in the Hub/.test(bank) && /Pull a period I choose/.test(bank) &&
   /<option value="cy">Current year/.test(bank) && /<option value="all">All available/.test(bank) && /<option value="custom">Custom start date/.test(bank) &&
   /backfillStartDate\(\)/.test(bank));
-ok('JT2: connect sends the chosen backfill date + first sync is a full backfill (deepPull)',
-  /initial_backfill_start_date: _bfStart/.test(bank) && /syncTransactions\(exData\.connection\.id, 0, true\)/.test(bank));
+// TT realign (Max, Nov 17: "start from the last date ... or for the period that is requested"): a full backfill on the first
+// sync ONLY when "Pull a period I choose" is picked; otherwise the server continues from the Hub's last date.
+ok('JT2 (→TT): connect sends the chosen backfill date; first sync is a full backfill only for "Pull a period I choose"',
+  /initial_backfill_start_date: _bfStart/.test(bank) && /syncTransactions\(exData\.connection\.id, 0, connectFrom === 'period'\)/.test(bank) &&
+  /useState\('continue'\)/.test(bank) && /if \(!effStart && hn\.date\) \{ continuedFrom = hn\.date;/.test(route));
 ok('JT3: Re-pull history is admin-only (canViewAllAccounts) with a confirm showing the silo + start/end dates',
   /canViewAllAccounts && \(/.test(bank) && /Re-pull history for ' \+ \(c\.institution_name/.test(bank) && /syncTransactions\(c\.id, 0, true\)/.test(bank));
 ok('JT4: route reports markers_persisted + the UI warns when they did NOT save (no silent fallback)',

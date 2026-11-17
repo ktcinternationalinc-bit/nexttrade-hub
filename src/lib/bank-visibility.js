@@ -69,6 +69,15 @@ export async function readBankVisibilityForIdentity(db, authUserId, env) {
 export async function authorizeBankVisibility(request, createClient, env) {
   var access = await authorizeBankIdentity(request, createClient, env);
   var capabilities = await readBankVisibilityForIdentity(access.db, access.authUserId, env);
+  // v55.83-TS (Max, Nov 17: "im a super admin why wouldn't i see it" — Month-end refused him) — the fixed id list in
+  // HUB_SUPER_ADMIN_AUTH_USER_IDS did not hold his current sign-in. The profile here comes from the VERIFIED session
+  // (never a browser-sent id), so its super_admin role counts the same as everywhere else in the Hub.
+  if (!capabilities.isVerifiedSuperAdmin && access.profileId) {
+    try {
+      var pr = await access.db.from('users').select('role').eq('id', access.profileId).maybeSingle();
+      if (pr && !pr.error && pr.data && pr.data.role === 'super_admin') { capabilities = { canViewFullDashboard: true, canViewBankBalances: true, isVerifiedSuperAdmin: true }; }
+    } catch (_) { /* keep the narrower answer */ }
+  }
   return Object.assign({}, access, capabilities);
 }
 
@@ -107,6 +116,13 @@ export function projectPlaidAccountMetadata(accounts) {
 function capabilitiesOf(access) {
   return { canViewFullDashboard: access.canViewFullDashboard, canViewBankBalances: access.canViewBankBalances, isVerifiedSuperAdmin: access.isVerifiedSuperAdmin };
 }
+// v55.83-TS (Codex QA 17 Nov) — ONE rule for who is super admin everywhere in this file: the server Auth-ID allowlist, OR a
+// verified profile whose Hub role is super_admin (the same rule authorizeBankVisibility uses), so the grants list never disagrees.
+async function roleSuperProfileIds(db) {
+  var out = {};
+  try { var r = await db.from('users').select('id').eq('role', 'super_admin'); if (!r.error) { (r.data || []).forEach(function (u) { out[u.id] = true; }); } } catch (_) { /* allowlist only */ }
+  return out;
+}
 async function listMappedProfiles(db) {
   var result = await db.rpc('bank_visibility_list_profiles');
   if (result.error || !Array.isArray(result.data)) reject('Verified bank permission targets could not be loaded. Check the database migration.', 503);
@@ -132,9 +148,9 @@ export function createBankVisibilityHandlers(createClient, env) {
       var result = await access.db.from('financial_visibility_permissions').select('auth_user_id,can_view_dashboard,can_view_bank_balances');
       if (result.error) reject('Financial visibility permissions could not be loaded.', 503);
       var granted = new Map((result.data || []).map(function (p) { return [p.auth_user_id.toLowerCase(), p]; }));
-      var supers = bankSuperAdminIds(env);
+      var supers = bankSuperAdminIds(env); var roleSupers = await roleSuperProfileIds(access.db);
       var rows = profiles.map(function (profile) {
-        var id = profile.auth_user_id.toLowerCase(), isSuper = supers.includes(id);
+        var id = profile.auth_user_id.toLowerCase(), isSuper = supers.includes(id) || roleSupers[profile.profile_id] === true;
         var grant = granted.get(id);
         return { profileId: profile.profile_id, authUserId: id, name: profile.name || '', email: profile.email || '',
           canViewFullDashboard: isSuper || grant?.can_view_dashboard === true,
@@ -158,8 +174,8 @@ export function createBankVisibilityHandlers(createClient, env) {
       var targets = profiles.filter(function (p) { return p.profile_id === body.profileId; });
       if (targets.length !== 1) reject('This profile does not resolve to one active, verified Auth identity.', 409);
       var target = targets[0];
-      if (bankSuperAdminIds(env).includes(target.auth_user_id.toLowerCase()))
-        reject('Super-admin access is managed by the server Auth-ID allowlist.', 409);
+      if (bankSuperAdminIds(env).includes(target.auth_user_id.toLowerCase()) || (await roleSuperProfileIds(access.db))[target.profile_id] === true)
+        reject('A super admin always sees everything — their access is not changed here.', 409);
       // One database transaction changes the grant and appends its audit event.
       // Re-resolve the profile within that transaction to reject changed targets.
       var saved = await access.db.rpc('bank_visibility_set_grant', {

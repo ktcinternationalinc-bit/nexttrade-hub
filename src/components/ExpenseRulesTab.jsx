@@ -174,7 +174,7 @@ export default function ExpenseRulesTab(props) {
         body: JSON.stringify({ action: 'classify', bank_transaction_id: t.id, patch: patch, user_id: userProfile && userProfile.id }) });
     }).then(function (r) { return r.json(); }).then(function (j) {
       if (j && (j.ok || j.success)) {
-        toast.success('Categorized — rule remembered.'); loadExpenses(filter); loadAll();
+        toast.success('Categorized — rule remembered.'); if (j.look_alikes && j.look_alikes.error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes.error, { duration: 9000 }); } /* v55.83-TZ */ loadExpenses(filter); loadAll();
         if (cls === 'transfer' && !t.transfer_group_id) { openPair(t); } // v55.83-PR — picking "transfer" immediately offers the other leg
       }
       else { toast.error((j && j.error) || 'Could not categorize.'); }

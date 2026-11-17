@@ -70,8 +70,8 @@ ok('3b: a MANUAL rule is never silently retargeted by the learner; needs_clarifi
   /row\.source === 'manual'\) \{ return \{ kept_manual: row\.id \};/.test(srv) &&
   /classification === 'needs_clarification'\) \{ return \{ skipped: 'no_classification' \};/.test(srv));
 var bw = R('src/app/api/accounting/bank-write/route.js');
-ok('3c: bank-write classify LEARNS on every human expense categorization, fail-soft, out-direction only',
-  /import \{ learnRule, waveAccountForCategory \}/.test(bw) && /cRes\.data\[0\]\.direction === 'out'/.test(bw) && // (PZ widened the import for the Wave ride-along)
+ok('3c (TR, Max Nov 17: money in learns too): bank-write classify LEARNS on every human categorization, fail-soft, in or out',
+  /import \{ learnRule, waveAccountForCategory, applyRuleToAll, applyLookAlikes \}/.test(bw) && /* TR realign (Codex QA 17 Nov): look-alikes go through applyLookAlikes */ /cRes\.data\[0\]\.direction === 'out' \|\| cRes\.data\[0\]\.direction === 'in'/.test(bw) && // (PZ widened the import for the Wave ride-along; TR adds applyRuleToAll)
   /learnRule\(db, \(cRes\.data\[0\]\.merchant_name \|\| ''\) \+ ' ' \+ \(cRes\.data\[0\]\.name \|\| ''\), cPatch\.classification, by\)/.test(bw));
 
 // ── 4. Applying: rules only ever FILL BLANKS ──

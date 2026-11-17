@@ -9,7 +9,7 @@
 // Permission is enforced in code (assertPermission). SWC-safe: var + string concat.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { learnRule, waveAccountForCategory } from '../../../../lib/expense-rules-server'; // v55.83-PI/PZ — remember picks + Wave ride-along
+import { learnRule, waveAccountForCategory, applyRuleToAll, applyLookAlikes } from '../../../../lib/expense-rules-server'; // v55.83-PI/PZ — remember picks + Wave ride-along
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI — who did what, when (append-only, fail-soft)
 import { assertPermission } from '../../../../lib/server-permissions';
 import { authorizeBankIdentity, bankSuperAdminIds, readBankJson, BankVisibilityError, bankVisibilityErrorResponse } from '../../../../lib/bank-visibility';
@@ -447,12 +447,26 @@ export async function POST(req) {
       // future... rules automatically saved and updated if i manually change
       // something." Every human categorization of an EXPENSE upserts a learned
       // rule keyed on the merchant. Fail-soft: learning never blocks the save.
-      var learn = null;
-      if (cPatch.classification && cRes.data[0] && cRes.data[0].direction === 'out') {
+      // v55.83-TR (Max, Nov 17: "anytime we update a category, for the same description or key words of the description, it
+      // automatically ... creates a rule and updates the category") — money IN learns too, and the rule is APPLIED RIGHT AWAY to every
+      // look-alike that has no category or got its category from a rule. A category a person picked by hand, or one marked verified,
+      // is never changed (that stays the person's call, from Categories & Rules → "apply to all").
+      var learn = null; var lookAlikes = null;
+      if (cPatch.classification && cRes.data[0] && (cRes.data[0].direction === 'out' || cRes.data[0].direction === 'in')) {
         learn = await learnRule(db, (cRes.data[0].merchant_name || '') + ' ' + (cRes.data[0].name || ''), cPatch.classification, by);
+        var ruleId = learn && (learn.learned || learn.updated || learn.kept);
+        if (ruleId && ruleId !== true && cPatch.classification !== 'transfer') { // a transfer needs its other side paired by a person
+          try {
+            var rr = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active').eq('id', ruleId).maybeSingle();
+            if (!rr.error && rr.data && rr.data.active !== false && rr.data.classification === cPatch.classification) {
+              lookAlikes = await applyLookAlikes(db, ruleId, cPatch.classification, by); // Codex QA 17 Nov: auto_apply, protected lines, Wave mapping (applyRuleToAll, overwrite_people: false, inside)
+              if (lookAlikes && !lookAlikes.error && lookAlikes.applied > 0) { await audit(db, by, 'rule_applied_on_categorize', 'expense_rule', String(rr.data.id), { match_text: rr.data.match_text, classification: rr.data.classification, updated: lookAlikes.applied, left_people: lookAlikes.left_people || 0 }); }
+            }
+          } catch (eLA) { lookAlikes = { error: (eLA && eLA.message) || 'not applied' }; } // the save itself already succeeded
+        }
       }
       await audit(db, by, 'bank_classify', 'bank_transaction', body.bank_transaction_id, { classification: cPatch.classification, wave_account_id: cPatch.wave_account_id || null }); // v55.83-QI
-      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, wave_auto_category: waveAuto, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, row: cRes.data[0], auto_review_stripped: autoReviewStripped, rule_learned: learn, look_alikes: lookAlikes ? { updated: lookAlikes.applied || 0, left_people: lookAlikes.left_people || 0, matches: lookAlikes.matches || 0, error: lookAlikes.error || null } : null, wave_auto_category: waveAuto, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── match_invoice: link a deposit to an invoice (the core workflow) ──

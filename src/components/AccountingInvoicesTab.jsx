@@ -481,6 +481,8 @@ export default function AccountingInvoicesTab(props) {
 
   function locked(row) { return isInvoice() && getInvStatus(row) === 'approved'; }
 
+  // v55.83-TZ (Yasmeen, Nov 17: "the system will not allow me to save") — why Save stopped, in red next to the button (the pop-up alone was missed)
+  var sSb = useState(''); var saveBlock = sSb[0]; var setSaveBlock = sSb[1];
   function save() {
     if (!mayEdit) { toast.error('You do not have permission to edit.'); return; }
     if (editing !== 'new' && locked(editing)) { toast.error('Approved invoice is locked. Reopen to edit.'); return; }
@@ -492,7 +494,8 @@ export default function AccountingInvoicesTab(props) {
     var shipCheck = null;
     if (isInvoice()) {
       shipCheck = checkShippingTerms(hdr.shipping_terms, hdr.shipping_cost_estimate, clean.map(function (it) { return { description: it.description, amount: itemTotal(it) }; }), isTransportLine);
-      if (!shipCheck.ok) { toast.error(shipCheck.error); return; }
+      if (!shipCheck.ok) { toast.error(shipCheck.error); setSaveBlock(shipCheck.error); return; } // TZ — also shown by the Save button
+      setSaveBlock('');
       if (shipCheck.warnings.length && typeof window !== 'undefined' && !window.confirm('Please check before saving:\n\n- ' + shipCheck.warnings.join('\n- ') + '\n\nSave anyway? (It will also show on the profit report as a warning.)')) { return; }
     }
     setBusy(true);
@@ -1006,6 +1009,7 @@ export default function AccountingInvoicesTab(props) {
           </div>
           {mayEdit && !locked(editing) && (
             <div className="flex gap-2 flex-wrap">
+              {saveBlock && <span className="text-[11px] font-bold mr-2" style={{ color: '#fca5a5', maxWidth: 520 }}>⛔ Not saved: {saveBlock}</span>}
               <button onClick={save} disabled={busy} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
               <button onClick={function () { setEditing(null); }} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-bold">Cancel</button>
               {isInvoice() && editing !== 'new' && invActions(editing).canSubmit && <button onClick={function () { var row = editing; setApproval(row, 'internal_review'); }} disabled={busy} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold">Submit for Review</button>}

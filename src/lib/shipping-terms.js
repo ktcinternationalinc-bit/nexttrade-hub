@@ -30,6 +30,12 @@ function num(v) { if (v === null || v === undefined || String(v).trim() === '') 
 
 // What the invoice form must hold before it can be saved. lines = [{ description, amount }]; isShippingLine(desc) = the
 // report's own shipping-line test. Returns { ok, error, warnings[], value: { shipping_terms, shipping_cost_estimate } }.
+// v55.83-TZ (Yasmeen, Nov 17: EXW invoice for Elite with an "Overweight surcharge" line would not save; Max: "KTC does not pay
+// anything" for it) — an overweight charge is still counted as shipping charged in the profit report, but on EXW a line that is
+// ONLY an overweight charge (no freight / trucking / shipping / delivery words) does not mean we ship, so it needs no shipping cost.
+var FREIGHT_WORDS = /ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل/i;
+export function isOverweightOnlyLine(description) { var d = String(description || ''); return /over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
+
 export function checkShippingTerms(terms, cost, lines, isShippingLine) {
   var warnings = [];
   if (SHIPPING_TERMS.indexOf(terms) < 0) { return { ok: false, error: 'Pick the shipping terms: EXW, CNF in the price, or CNF with a separate shipping line.' }; }
@@ -43,6 +49,11 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
   }
   if (terms === 'EXW') {
     // Max: EXW = no shipping by us, so no shipping included — or, if we DO add a separate shipping line, it must cover cost + 7%
+    // TZ: overweight-only lines are a charge KTC does not pay for — they never require a shipping cost on EXW
+    var realShip = shipLines.filter(function (l) { return !isOverweightOnlyLine(l.description); });
+    if (!realShip.length && shipLines.length && (c === null || c === 0)) {
+      return { ok: true, warnings: warnings, value: { shipping_terms: 'EXW', shipping_cost_estimate: null } };
+    }
     if (!shipLines.length) {
       if (c) { return { ok: false, error: 'EXW with no shipping line means we do not handle shipping, so there is no shipping cost. Clear the cost, add the shipping line, or pick CNF.' }; }
       return { ok: true, warnings: warnings, value: { shipping_terms: 'EXW', shipping_cost_estimate: null } };

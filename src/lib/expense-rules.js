@@ -15,6 +15,9 @@ export function merchantKey(name) {
   s = s.replace(/[#*]\s*\d+/g, ' ');                // #1234 / *9876 refs
   s = s.replace(/\b\w*\d{3,}\w*\b/g, ' ');          // tokens with long digit runs (card/ref/store ids)
   s = s.replace(/[^a-z& ]+/g, ' ');                 // punctuation + stray digits → space
+  // v55.83-TR (Max, Nov 17) — month names change every bill ("PSEG … NOV" / "PSEG … DEC"): never part of the key, so the same
+  // payee matches month after month. ("may" and "march" are kept: they can be real business names.)
+  s = s.replace(/\b(jan|january|feb|february|mar|apr|april|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/g, ' ');
   s = s.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
   if (!s) { return null; }
   var toks = s.split(' ').slice(0, 4);

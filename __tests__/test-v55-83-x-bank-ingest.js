@@ -19,7 +19,9 @@ ok(/!t\.pending && t\.pending_transaction_id/.test(lib),'supersede targets poste
 
 // --- route ---
 ok(/onConflict: 'plaid_transaction_id'/.test(route),'idempotent upsert on plaid id (dedupe)');
-ok(/from\('bank_transactions'\)\.delete\(\)\.in\('plaid_transaction_id', superseded\)/.test(route),'route removes superseded pending rows');
+// TU realign (Max, Nov 17 — pending lines settled; never-delete rule): superseded pending rows are filed away through the
+// duplicates log (restorable) by settlePendingLines — run for real in test-v55-83-tu-pending-settle.js
+ok(/settlePendingLines\(supabase, \{ rawTxns: rawTxns/.test(route) && /supersededPendingIds\(rawTxns\)/.test(route),'route settles superseded pending rows (filed away, restorable)');
 ok(/mapPlaidTransaction/.test(route)&&/supersededPendingIds/.test(route),'route uses the pure mapper');
 ok(route.indexOf('`')<0,'route has NO template literals (SWC rule)');
 ok(!/\b(const|let)\s/.test(route.replace(/\/\/.*$/gm,'')),'route uses var only');

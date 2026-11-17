@@ -6,6 +6,7 @@ import { hubNewestForConnection } from '../../../../lib/bank-continue'; // v55.8
 import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ — new bank lines → sent wires matched, bills PAID
 import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU — the duplicate check runs by itself after a sync
 import { privateScope, dropPrivate } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
+import { settlePendingLines, oldestPendingDate } from '../../../../lib/pending-settle-server'; // v55.83-TU — pending lines settled every sync
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -71,6 +72,12 @@ export async function POST(req) {
     try { var hn = await hubNewestForConnection(supabase, conn); otherTwinAccts = hn.others || []; if (!effStart && hn.date) { continuedFrom = hn.date; effStart = new Date(new Date(hn.date).getTime() - OVERLAP_DAYS * 86400000).toISOString().split('T')[0]; } } catch (eHN) { continuedFrom = null; }
     if (!effStart && conn.initial_backfill_start_date) { effStart = String(conn.initial_backfill_start_date).split('T')[0]; }
     if (!effStart) { effStart = thirtyAgo; }
+    // v55.83-TU (Max, Nov 17) — reach back to the oldest line still PENDING on the Hub for this link (max 90 days), so this sync
+    // learns what became of it (posted, or dropped by the bank). Lines already on the Hub are never doubled (upsert by bank id).
+    var ownAccts = [];
+    try { var oa = await supabase.from('plaid_accounts').select('plaid_account_id').eq('connection_id', conn.id); ownAccts = ((oa && oa.data) || []).map(function (a) { return a.plaid_account_id; }).filter(Boolean); } catch (eOA) { ownAccts = []; }
+    var oldestPend = await oldestPendingDate(supabase, ownAccts, 90);
+    if (oldestPend && oldestPend < effStart) { effStart = oldestPend; }
     var effEnd = end_date || today;
 
     // PAGE through /transactions/get until we've fetched every transaction in the window (Plaid caps a
@@ -216,12 +223,16 @@ export async function POST(req) {
       synced = rows.length;
     }
 
-    // Remove pending rows that have now posted (avoid double-count).
+    // v55.83-TU — pending lines that have POSTED (or that the bank dropped) are settled: a person's category / review moves to
+    // the posted line and the pending copy is filed away in the duplicates log (restorable) — never deleted outright, never
+    // double-counted. A pending line carrying accounting work is left for a person. (Was: a hard delete of the pending row.)
     var superseded = supersededPendingIds(rawTxns);
-    if (superseded.length > 0) {
-      try { await supabase.from('bank_transactions').delete().in('plaid_transaction_id', superseded); }
-      catch (e) { console.warn('[plaid] supersede cleanup failed:', (e && e.message) || e); }
-    }
+    var pendingSettled = null;
+    try {
+      var acctSet = {}; ownAccts.forEach(function (a) { acctSet[a] = true; }); rawTxns.forEach(function (t) { if (t && t.account_id) { acctSet[t.account_id] = true; } });
+      var reported = {}; (acctsFromPlaid || []).forEach(function (a1) { if (a1 && a1.account_id) { reported[a1.account_id] = true; } }); // only accounts the bank reported THIS sync
+      pendingSettled = await settlePendingLines(supabase, { rawTxns: rawTxns, accountIds: Object.keys(acctSet), windowStart: effStart, windowEnd: effEnd, reportedAccounts: reported, budgetMs: 6000 });
+    } catch (ePS) { pendingSettled = null; }
 
     // v55.83-RZ (Max: "when the wire is actually sent and you see a transaction for that amount ... automatically match") —
     // fail-soft: a matcher problem never fails the bank sync.
@@ -263,6 +274,7 @@ export async function POST(req) {
       duplicates_removed: dupCheck ? dupCheck.removed : 0, duplicates_to_review: dupCheck ? dupCheck.to_review : 0, // v55.83-SU
       synced: synced,
       superseded: superseded.length,
+      pending_settled: pendingSettled, // v55.83-TU
       accounts: projectPlaidAccountMetadata(acctsFromPlaid),
       total: totalAvail,
       pages: pageGuard,

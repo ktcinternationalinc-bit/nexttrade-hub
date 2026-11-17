@@ -34,6 +34,15 @@ function rtmAdjust(cats0, rtm) {
     .filter(function (c) { return Math.abs(c.total) > 0.004 || c.via_rtm || c.rtm_out; })
     .sort(function (x, y) { return y.total - x.total; });
 }
+// v55.83-TS (Max, Nov 17: "uncategorized -235,000 — what is that") — money sent to a paid-through company (NextTrade, RTM
+// Capital) with NO category was taken out under a made-up "uncategorized" category: a -$235,000 row with nothing behind it,
+// counted as an expense on the Income Statement. It is the SAME money as the ⚠ Uncategorized row, so it is folded back there.
+function foldUnc(cats) {
+  var shift = 0;
+  var out = (cats || []).filter(function (c) { if (c.key === 'uncategorized') { shift += Number(c.total) || 0; return false; } return true; });
+  out.uncShift = Math.round(shift * 100) / 100;
+  return out;
+}
 function nd(x) { return (x === null || x === undefined) ? '—' : '$' + (Number(x) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-PO
 function fmt(n) { if (n == null) { return '•••'; } return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } // v55.83-QI — masked totals render as •••
 var TODAY = new Date().toISOString().substring(0, 10);
@@ -59,16 +68,67 @@ export default function PeriodStatsTab(props) {
   // v55.83-RB — a RELATED company (NextTrade) defaults to the real-cost view:
   // money sent ahead of its costs is an advance, not spending. RTM stays on the
   // one-line tax view by default (Max's decision). Either can be switched.
-  function ptIsOn(b) { var bk = b.key || b.payer; return ptOn[bk] === undefined ? b.kind === 'affiliate' : ptOn[bk] === true; } // v55.83-SR — one switch per block (a company can have a before / from block)
-  function ptAdjust(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (ptIsOn(b0)) { out = rtmAdjust(out, b0); } }); return out; }
+  function ptIsOn(b) { var bk = b.key || b.payer; return ptOn[bk] === undefined ? true : ptOn[bk] === true; } // v55.83-TS (Max, Nov 17: "NextTrade as well as RTM Capital will have this real-cost view") — real-cost is the default for every paid-through company; each still has its switch // v55.83-SR — one switch per block (a company can have a before / from block)
+  function ptAdjust(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (ptIsOn(b0)) { out = rtmAdjust(out, b0); } }); return foldUnc(out); }
   // the accountant pack: related companies ALWAYS real-cost (advances are not deductible), RTM always one line
-  function taxCats(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (b0.kind === 'affiliate') { out = rtmAdjust(out, b0); } }); return out; }
+  function taxCats(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (b0.kind === 'affiliate') { out = rtmAdjust(out, b0); } }); return foldUnc(out); }
+  // the ⚠ Uncategorized spending total AFTER paid-through money is shown as the bills it paid (screen view / accountant view)
+  function uncOutView() { var u = data && data.spending && data.spending.uncategorized; if (!u) { return 0; } return Math.max(0, Math.round((Number(u.total) + ptAdjust(data.spending.categories).uncShift) * 100) / 100); }
+  function uncOutTax() { var u = data && data.spending && data.spending.uncategorized; if (!u) { return 0; } return Math.max(0, Math.round((Number(u.total) + taxCats(data.spending.categories).uncShift) * 100) / 100); }
   var ptOnNames = ptBlocks().filter(function (b1) { return ptIsOn(b1); }).map(function (b2) { return b2.payer; });
   var sIn = useState(null); var inCat = sIn[0]; var setInCat = sIn[1]; // v55.83-PV — income-by-category drill
   var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1]; // v55.83-PS
   var s3 = useState(null); var data = s3[0]; var setData = s3[1];
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState(null); var drill = s5[0]; var setDrill = s5[1]; // {key, title, unitWho}
+  // v55.83-TS (Max, Nov 17: "for uncategorized i should be able to select category from right there" + "same description should
+  // fill up automatically creating the rule and saving") — the SAME save as All Transactions (expense-rules bulk_classify,
+  // single pick): it learns a rule from the description's key words and fills every look-alike at once.
+  var canPick = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin')) || modulePerms['bank.classify'] === true;
+  var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
+  var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
+  function erApi(action, payload) {
+    return fetch('/api/accounting/expense-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, payload: payload || {}, user_id: userProfile && userProfile.id }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
+      .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
+  }
+  useEffect(function () {
+    if (!canPick || catList || (spCat !== '' && inCat !== '')) { return; }
+    erApi('list').then(function (j) { setCatList(j && j.ok ? (j.categories || []).filter(function (c) { return c.active !== false; }) : []); });
+  }, [spCat, inCat]); // eslint-disable-line
+  function pickCat(r, key) {
+    if (!key || !r || !r.id) { return; }
+    if (key === '__new__') {
+      var nm = window.prompt('New category name (created as an EXPENSE type — change the type later in 🏷 Categories & Rules):');
+      if (!nm || !nm.trim()) { return; }
+      erApi('save_category', { label: nm.trim(), kind: 'expense' }).then(function (jc) {
+        var newKey = jc && (jc.key || (jc.category && jc.category.key));
+        if (jc && jc.ok && newKey) { setCatList(null); pickCat(r, newKey); }
+        else { toast.error((jc && jc.error) || 'Could not create the category.'); }
+      });
+      return;
+    }
+    setSaving(function (m) { var n = Object.assign({}, m); n[r.id] = true; return n; });
+    erApi('bulk_classify', { ids: [r.id], classification: key, single_pick: true }).then(function (j) {
+      if (j && j.ok && j.updated > 0) {
+        var more = Number(j.look_alikes_updated) || 0; var left = Number(j.look_alikes_left_people) || 0;
+        toast.success('Saved' + (j.rules_learned ? ' — rule learned' : '') + (more ? ' — ' + more + ' more with the same description filled in' : '') +
+          (left ? ' (' + left + ' a person already categorized were left as they are)' : '') + '.' + (j.look_alikes_error ? ' ⚠ ' + j.look_alikes_error : ''));
+        load(from, to);
+      } else { toast.error((j && j.error) || 'Nothing was saved — reload the page and try again.'); }
+    }).finally(function () { setSaving(function (m) { var n = Object.assign({}, m); delete n[r.id]; return n; }); });
+  }
+  function catPicker(r) {
+    if (!canPick || !r.id) { return null; }
+    if (saving[r.id]) { return <span className="text-[9px] font-bold" style={{ color: '#475569' }}>saving…</span>; }
+    return <select value="" onChange={function (e) { pickCat(r, e.target.value); }} className="text-[10px] rounded px-1 py-0.5"
+      style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 190 }}>
+      <option value="">{catList ? '— pick a category —' : 'loading…'}</option>
+      {(catList || []).filter(function (c) { return c.key !== 'needs_clarification'; }).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
+      {catList && <option value="__new__">＋ new category…</option>}
+    </select>;
+  }
 
   function load(f, t) {
     setBusy(true);
@@ -162,7 +222,7 @@ export default function PeriodStatsTab(props) {
         var dedP = 0; (taxCats(data.spending.categories) || []).forEach(function (c) { if (c.kind !== 'not_pnl' && c.key !== 'transfer' && c.key !== 'uncategorized') { dedP += Number(c.total) || 0; } });
         sp.push('"DEDUCTIBLE SPENDING (P&L categories only; advances to related companies excluded)",,,' + dedP.toFixed(2));
       }
-      if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + Number(data.spending.uncategorized.total).toFixed(2)); }
+      if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + uncOutTax().toFixed(2)); }
       if (data.spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + data.spending.transfers.count + ',' + Number(data.spending.transfers.total).toFixed(2)); }
       sp.push('"REAL SPENDING (transfers excluded)",,' + Number(data.spending.real_spending).toFixed(2));
       dl('tax-pack-7-spending-by-category-' + tag + '.csv', sp);
@@ -197,7 +257,7 @@ export default function PeriodStatsTab(props) {
       isCsv.push('"Other expenses",-' + oexP.toFixed(2));
       isCsv.push('"NET PROFIT (cash basis)",' + (revP - cogsP - expP + oinP - oexP).toFixed(2));
       if (data.spending.in_uncategorized && data.spending.in_uncategorized.total > 0.005) { isCsv.push('"WARNING: uncategorized deposits OUTSIDE this statement",' + data.spending.in_uncategorized.total.toFixed(2)); }
-      if (data.spending.uncategorized && data.spending.uncategorized.total > 0.005) { isCsv.push('"WARNING: uncategorized spending OUTSIDE this statement",' + data.spending.uncategorized.total.toFixed(2)); }
+      if (uncOutTax() > 0.005) { isCsv.push('"WARNING: uncategorized spending OUTSIDE this statement",' + uncOutTax().toFixed(2)); }
       dl('tax-pack-12-income-statement-cash-basis-' + tag + '.csv', isCsv);
     }
     var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
@@ -354,6 +414,11 @@ export default function PeriodStatsTab(props) {
               <td className="py-1 pr-2 font-bold" style={{ color: '#9a3412' }}>⚠ Uncategorized — needs a category</td>
               <td className="py-1 pr-2 text-right tabular-nums">{data.spending.uncategorized.count}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#9a3412' }}>${fmt(data.spending.uncategorized.total)}</td><td /></tr>}
+            {/* TS (Codex QA 17 Nov) — the ⚠ row shows the SAME total as the lines listed under it; the money sent to the paid-through
+                company is taken off on its own visible line, so every row on screen still adds up to the totals below. */}
+            {ptAdjust(data.spending.categories).uncShift < -0.004 && <tr style={{ background: '#fff7ed', borderBottom: '1px solid #f1f5f9' }}>
+              <td className="py-1 pr-2 text-[10px] font-bold" style={{ color: '#9a3412' }}>&nbsp;&nbsp;− of which sent to {ptOnNames.join(' / ')} with no category (shown above as the bills it paid)</td><td />
+              <td className="py-1 pr-2 text-right font-extrabold tabular-nums text-[10px]" style={{ color: '#9a3412' }}>−${fmt(Math.abs(ptAdjust(data.spending.categories).uncShift))}</td><td /></tr>}
             {data.spending.transfers && data.spending.transfers.count > 0 && <tr style={{ cursor: 'pointer', background: '#eff6ff' }} onClick={function () { setSpCat(spCat === 'transfer' ? null : 'transfer'); }}>
               <td className="py-1 pr-2 font-bold" style={{ color: '#1e40af' }}>↔ Transfers between own accounts — NOT spending</td>
               <td className="py-1 pr-2 text-right tabular-nums">{data.spending.transfers.count}</td>
@@ -374,12 +439,15 @@ export default function PeriodStatsTab(props) {
         </table>
         {spCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
           <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
+            {spCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any line — it is saved at once, a rule is learned from the description, and every other line with the same description is filled in too.</td></tr>}
+            {(data.spending.rows || []).filter(function (r) { return spCat === 'transfer' ? r.category === 'transfer' : r.category === spCat; }).length === 0 && <tr><td className="py-1 text-[10px]" style={{ color: '#64748b' }}>No transactions to list for this line.</td></tr>}
             {(data.spending.rows || []).filter(function (r) { return spCat === 'transfer' ? r.category === 'transfer' : r.category === spCat; }).map(function (r, i) {
-              return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+              return <tr key={r.id || i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                 <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
                 <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
                 <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#7f1d1d' }}>-${fmt(r.amount)}</td>
-                <td className="py-0.5 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td></tr>;
+                <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
+                {spCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}</tr>;
             })}
           </tbody></table>
         </div>}
@@ -446,7 +514,7 @@ export default function PeriodStatsTab(props) {
           var op = r2x(gross - exp2);
           var net = r2x(op + oin - oex);
           var uncIn2 = (data.spending.in_uncategorized && data.spending.in_uncategorized.total) || 0;
-          var uncOut2 = (data.spending.uncategorized && data.spending.uncategorized.total) || 0;
+          var uncOut2 = uncOutView(); // v55.83-TS — after paid-through money is shown as its bills
           function line(lbl, val, strong, color) {
             return <div className="flex text-[11px] py-0.5" style={{ borderBottom: strong ? '2px solid #cbd5e1' : '1px solid #f1f5f9', color: color || '#0f172a', fontWeight: strong ? 800 : 500 }}>
               <span className="flex-1">{lbl}</span><span className="tabular-nums">{(val < 0 ? '−$' : '$') + fmt(Math.abs(val))}</span></div>;
@@ -469,12 +537,15 @@ export default function PeriodStatsTab(props) {
         })()}
         {inCat !== null && <div className="mt-1 rounded p-1.5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
             <table className="w-full text-[10px]"><tbody style={{ color: '#0f172a' }}>
+              {inCat === '' && canPick && <tr><td colSpan={5} className="pb-1 text-[9px] font-bold" style={{ color: '#9a3412' }}>Pick a category on any deposit — saved at once, a rule is learned, and deposits with the same description are filled in too. (A customer payment is best matched to its invoice in Bank Review.)</td></tr>}
+              {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).length === 0 && <tr><td className="py-1 text-[10px]" style={{ color: '#64748b' }}>No transactions to list for this line.</td></tr>}
               {(data.spending.in_rows || []).filter(function (r) { return inCat === 'transfer' ? r.category === 'transfer' : r.category === inCat; }).map(function (r, i) {
-                return <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                return <tr key={r.id || i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td className="py-0.5 pr-2 whitespace-nowrap">{r.date}</td>
                   <td className="py-0.5 pr-2 font-semibold">{String(r.who).substring(0, 60)}</td>
                   <td className="py-0.5 pr-2 text-right font-extrabold tabular-nums" style={{ color: '#065f46' }}>+${fmt(r.amount)}</td>
-                  <td className="py-0.5 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td></tr>;
+                  <td className="py-0.5 pr-2 text-[9px]" style={{ color: '#64748b' }}>{r.paired ? '↔ paired transfer' : ''}</td>
+                  {inCat === '' && <td className="py-0.5 text-right">{catPicker(r)}</td>}</tr>;
               })}
             </tbody></table>
           </div>}

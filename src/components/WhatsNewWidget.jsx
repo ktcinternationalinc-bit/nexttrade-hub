@@ -33,6 +33,72 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TZ',
+    date: '2026-11-17',
+    title: 'An EXW invoice with an overweight surcharge saves again',
+    items: [
+      { text: 'An EXW invoice with an “Overweight surcharge” line (and no freight or trucking line) no longer asks for a shipping cost. KTC pays nothing for that charge, so Save just works. The surcharge still counts as shipping charged on the profit report.' },
+      { text: 'If Save is blocked for any reason, the reason now shows in red right next to the Save button, not only in a short pop-up.' },
+      { text: 'Safety (from QA): categorizing a line never spreads to look-alikes when the Hub cannot check which accounts are private. Your pick still saves and the message says why. Settling pending lines also refuses when the FINAL line falls in a closed month, and only exactly the same pair counts as already done.' }
+    ]
+  },
+  {
+    version: 'v55.83-TU',
+    date: '2026-11-17',
+    title: 'Pending bank lines are settled at every sync',
+    items: [
+      { text: 'When a pending line posts, the posted line takes over the category, verified mark and reviewed status you gave the pending one. The pending copy is filed away (kept on file, restorable), so nothing is counted twice and no work is lost.' },
+      { text: 'A pending line the bank no longer lists (a cancelled hold, or one that posted under a new reference) is filed away the same way.' },
+      { text: 'Each sync reaches back to the oldest line still pending (up to 90 days) to find out what became of it.' },
+      { text: 'A pending line already matched to an invoice, bill or transfer is never filed away automatically. The sync message tells you to check it in Bank Review.' },
+      { text: 'Safety (from QA): filing away and copying your category happen as one step. If filing is refused (for example a closed month), neither line changes. A verified mark is only copied when the final line is the same money (amount, direction, currency, company) and has no different category. Needs the TU SQL; until it is run, pending lines are left exactly as they are and the sync message says so.' },
+      { text: 'Also from QA: a bank link with several accounts continues from each account’s own last date, and a “still preparing” retry keeps the period you chose. Categorizing a line no longer spreads to look-alikes in private accounts, transfer-linked, pending or duplicate lines, or through a rule set to not apply automatically, and look-alikes get the category’s Wave account. On Stats, the ⚠ Uncategorized total matches its list, with the paid-through part on its own minus line. The access screen now shows the super admin the same way the bank screens treat them.' }
+    ]
+  },
+  {
+    version: 'v55.83-TT',
+    date: '2026-11-17',
+    title: 'Linking a bank continues from the last date already in the Hub',
+    items: [
+      { text: 'Bank → Connect a bank now asks “Which transactions to bring in”. The default is “Continue from the last date already in the Hub”: for an account the Hub already has (same account number ending), only transactions from its newest date onward come in, with a week of overlap. Anything already there is ignored, never doubled.' },
+      { text: 'For an account the Hub has never had, it starts from the date you pick (1 month, 3 months, current year, a custom date…).' },
+      { text: 'Or choose “Pull a period I choose” to bring in exactly the period you want. After connecting, the message says the date it continued from.' },
+      { text: 'Before this, connecting always pulled the whole chosen window again (3 months by default), even when the Hub already had those transactions.' }
+    ]
+  },
+  {
+    version: 'v55.83-TS',
+    date: '2026-11-17',
+    title: 'Pick a category right on the Stats screen; the −$235,000 line explained and fixed',
+    items: [
+      { text: 'Stats & Income Statement → click “⚠ Uncategorized — needs a category” (or “⚠ Uncategorized deposits”): every line now has a category dropdown. Picking one saves it at once, learns a rule from the description, and fills every other line with the same description — then the totals refresh.' },
+      { text: 'The odd “uncategorized −$235,000” line is gone. It was money sent to NextTrade / RTM Capital that has no category: the real-cost view took it out under a made-up line with nothing behind it, and the Income Statement counted that line as a negative expense (expenses showed $235,000 too low). It is now taken off the real ⚠ Uncategorized total instead, with a note saying how much.' },
+      { text: 'NextTrade and RTM Capital both open in the real-cost view by default; each still has its switch.' },
+      { text: 'Month-end (and the other bank-balance screens) now recognise the super admin from the signed-in profile, so the super admin is no longer refused.' }
+    ]
+  },
+  {
+    version: 'v55.83-TR',
+    date: '2026-11-17',
+    title: 'Categorize once — the same payee follows straight away',
+    items: [
+      { text: 'When you pick or change a category on a transaction (All Transactions, Bank Review, Categories & Rules), the Hub saves a rule from the key words of the description and applies it RIGHT AWAY to every other transaction with the same key words — no waiting for the next sync. The message tells you how many were updated.' },
+      { text: 'It updates look-alikes that have no category yet or got theirs from a rule. A category a person picked by hand, or one marked verified, is never changed. “Transfer” is never spread (its other side must be paired).' },
+      { text: 'Money IN now learns rules too, not only money out. Month names (“NOV”, “DEC”…) are no longer part of the key words, so the same bill matches every month.' }
+    ]
+  },
+  {
+    version: 'v55.83-TQ',
+    date: '2026-11-17',
+    title: 'Add a bank transaction by hand · search and sort on All Invoices',
+    items: [
+      { text: 'Accounting → 📚 All Invoices: a 🔍 search box (invoice #, customer, release number, date, status or an amount) and every column heading sorts when clicked — click again to reverse.' },
+      { text: 'Accounting → All Transactions → “➕ Add transaction”: pick the account, date, money in or out, amount and description (check number optional). It is saved like a bank line, marked “entered by hand” with your name, and goes in the audit trail.' },
+      { text: 'Only the super admin, or people the super admin switches on with “Bank: Add transactions by hand” (Settings → Module Access). Admins do not get it from their role.' },
+      { text: 'If the account already has a line on that date for the same amount, the Hub asks first. Clicking twice adds it once. When the bank later sends the same transaction, the duplicate check keeps one. A private account can only be added to by people who can see it.' }
+    ]
+  },
+  {
     version: 'v55.83-TP',
     date: '2026-11-17',
     title: 'Team permissions — only the super admin sees everything; private bank accounts',

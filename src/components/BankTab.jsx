@@ -31,6 +31,11 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // v55.83-JT — explicit Plaid BACKFILL window chosen in the Connect flow (and used by Deep re-pull).
   const [backfillWin, setBackfillWin] = useState('90');   // 30/90/180/365/cy/all/custom (days or 'cy'/'all')
   const [backfillCustom, setBackfillCustom] = useState(''); // explicit start date when backfillWin==='custom'
+  // v55.83-TT (Max, Nov 17: "when linking accounts you should know the last date in the account and start from that going forward ...
+  // there should be a selection to do this or for the period that is requested") — 'continue' (default): the first pull starts at the
+  // newest transaction the Hub already has for the same real account (server: hubNewestForConnection, 7-day overlap, duplicates
+  // ignored); the window below is used ONLY when the Hub has nothing for that account yet. 'period': pull exactly the chosen period.
+  const [connectFrom, setConnectFrom] = useState('continue');
   const [showOtherSilos, setShowOtherSilos] = useState(false); // v55.83-JY — collapse cross-silo connections (admin diagnostics)
   const [siloSel, setSiloSel] = useState(''); // v55.83-KG — Bank-page silo switcher (mirrors the active accounting silo)
   const [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JE admin visibility window
@@ -48,6 +53,10 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // v55.83-TP (Max, Nov 17) — 🔒 PRIVATE accounts: only the super admin sees / changes the mark; the database hides the
   // account's transactions from everyone without "Bank: See private accounts".
   const [privAcc, setPrivAcc] = useState({}); const [privNote, setPrivNote] = useState('');
+  // v55.83-TS (Max, Nov 17: "i get a popup but then nothing happens on the screen") — the answer used to land in the banner at the
+  // TOP of the page, out of view. It now shows right next to the account's button.
+  const [privMsg, setPrivMsg] = useState({});
+  const putPrivMsg = (id, m) => { setPrivMsg(function (p) { var n = Object.assign({}, p); n[id] = m; return n; }); };
   const privCall = async (payload) => {
     const { supabase } = await import('../lib/supabase');
     const headers = await bankSessionHeaders(supabase, true);
@@ -62,9 +71,10 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     var on = !privAcc[a.plaid_account_id];
     if (!window.confirm(on ? 'Make account ··' + (a.mask || a.plaid_account_id) + ' PRIVATE? Its transactions will be hidden from everyone except you and people you give "Bank: See private accounts".' : 'Make account ··' + (a.mask || a.plaid_account_id) + ' visible to the team again?')) { return; }
     privCall({ action: 'set', plaid_account_id: a.plaid_account_id, private: on }).then(function (j) {
-      if (j && j.ok) { setPrivAcc(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = on; return n; }); setNotice(on ? 'Account is now private.' : 'Account is visible to the team again.'); }
-      else { setError((j && j.error) || 'Could not change it.'); }
-    }).catch(function (e) { setError((e && e.message) || 'Could not change it.'); });
+      if (j && j.ok) { setPrivAcc(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = on; return n; }); putPrivMsg(a.plaid_account_id, { ok: true, text: on ? '✓ Now private — the team no longer sees its transactions.' : '✓ Visible to the team again.' }); }
+      else { putPrivMsg(a.plaid_account_id, { ok: false, text: '⛔ Not changed: ' + ((j && j.error) || 'the server refused.') }); }
+    }).catch(function (e) { putPrivMsg(a.plaid_account_id, { ok: false, text: '⛔ Not changed: ' + ((e && e.message) || 'could not reach the server.') }); });
+    putPrivMsg(a.plaid_account_id, { ok: true, text: 'saving…' });
   };
   const canViewAllAccounts = isSuperAdmin || (userProfile && (userProfile.role === 'admin' || userProfile.role === 'owner')) || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
@@ -258,7 +268,9 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           }
           await loadData();
           // Auto-sync after connecting: a first connect should pull the full chosen backfill window.
-          if (exData.connection?.id) await syncTransactions(exData.connection.id, 0, true);
+          // TT — 'continue' sends NO start date, so the server starts from the last date already in the Hub (or, for an account
+          // the Hub has never seen, from the window saved at connect). 'period' pulls exactly the requested period.
+          if (exData.connection?.id) await syncTransactions(exData.connection.id, 0, connectFrom === 'period');
           } catch (exchangeError) {
             setError(exchangeError && exchangeError.message || 'The bank connection could not be completed. Sign in and try again.');
           }
@@ -323,7 +335,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
         setSyncing(false);
         if (attempt < 3) {
           setNotice((data.message || 'Plaid is still preparing your transactions.') + ' Retrying automatically… (' + (attempt + 1) + '/3)');
-          setTimeout(() => { syncTransactions(connId, attempt + 1); }, 15000);
+          setTimeout(() => { syncTransactions(connId, attempt + 1, deepPull); }, 15000); // TT (Codex QA 17 Nov) — the retry keeps the chosen period
         } else {
           setNotice('Plaid is still preparing your transactions. This can take a few minutes on the first connection — click Sync again shortly.');
         }
@@ -351,6 +363,14 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       if (win.start) { msg += ' Pulled ' + (win.incremental ? 'forward from ' : 'from ') + win.start + ' → ' + (win.end || 'today') + '.'; }
       if (data.continued_from) { msg += ' Continued from the last transaction already on the Hub (' + data.continued_from + ') — the full history was NOT pulled again. Use “Re-pull history” only if you want it all.'; }
       if (data.newest_posted_date) { msg += ' Newest posted: ' + data.newest_posted_date + '.'; }
+      // v55.83-TU — what happened to the pending lines
+      var ps = data.pending_settled || null;
+      if (ps && (ps.posted_replaced || ps.dropped || ps.needs_person)) {
+        msg += ' Pending lines: ' + (ps.posted_replaced ? ps.posted_replaced + ' posted (replaced by the final line' + (ps.carried ? ', category kept' : '') + ')' : '') +
+          (ps.dropped ? (ps.posted_replaced ? ', ' : '') + ps.dropped + ' no longer listed by the bank (filed away, restorable)' : '') +
+          (ps.needs_person ? ((ps.posted_replaced || ps.dropped) ? ', ' : '') + ps.needs_person + ' carry a match — check them in Bank Review' : '') + '.';
+      }
+      if (ps && ps.needs_sql) { msg += ' ⚠ Pending lines were NOT settled (nothing changed): ' + (ps.sql_hint || 'a database step is missing.'); }
       // v55.83-SU — the duplicate check ran by itself
       if (Number(data.duplicates_removed) > 0) { msg += ' 🧹 ' + data.duplicates_removed + ' line(s) that arrived a second time through another connection of the same account were removed automatically (kept on file — “Check for duplicates” → removed list → Restore).'; }
       if (Number(data.duplicates_to_review) > 0) { msg += ' 🔍 ' + data.duplicates_to_review + ' possible duplicate(s) need a person — press “Check for duplicates”.'; }
@@ -505,7 +525,16 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
               )}
               {/* v55.83-JT — explicit BACKFILL window chosen BEFORE opening Plaid Link. */}
               <div className="mt-3 border-t border-slate-200 pt-3">
-                <label className="block text-[12px] font-bold text-slate-700 mb-1">How far back to pull history on connect</label>
+                <label className="block text-[12px] font-bold text-slate-700 mb-1">Which transactions to bring in</label>
+                <label className="flex items-start gap-2 text-[12px] text-slate-800 mb-1 cursor-pointer">
+                  <input type="radio" name="connectFrom" checked={connectFrom === 'continue'} onChange={function () { setConnectFrom('continue'); }} className="mt-0.5" />
+                  <span><b>Continue from the last date already in the Hub</b> (recommended) — for an account the Hub already has, only transactions from its newest date onward come in (a week of overlap; anything already there is ignored, never doubled).</span>
+                </label>
+                <label className="flex items-start gap-2 text-[12px] text-slate-800 mb-2 cursor-pointer">
+                  <input type="radio" name="connectFrom" checked={connectFrom === 'period'} onChange={function () { setConnectFrom('period'); }} className="mt-0.5" />
+                  <span><b>Pull a period I choose</b> — brings in exactly the period below, even if older lines are already in the Hub (duplicates are still ignored).</span>
+                </label>
+                <div className="text-[11px] font-bold text-slate-600 mb-1">{connectFrom === 'continue' ? 'For an account the Hub has never had, start from:' : 'Period to pull:'}</div>
                 <select value={backfillWin} onChange={function (e) { setBackfillWin(e.target.value); }} className="w-full border border-slate-300 rounded px-2 py-2 text-sm">
                   <option value="30">Last 1 month</option>
                   <option value="90">Last 3 months</option>
@@ -518,7 +547,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                 {backfillWin === 'custom' && (
                   <input type="date" value={backfillCustom} onChange={function (e) { setBackfillCustom(e.target.value); }} className="mt-2 border border-slate-300 rounded px-2 py-1 text-sm" />
                 )}
-                <div className="text-[11px] text-slate-500 mt-1">Will pull transactions from <b>{backfillStartDate()}</b> to today. You can pull more later with “Deep re-pull history”. Normal Sync afterward is incremental (pulls forward automatically).</div>
+                <div className="text-[11px] text-slate-500 mt-1">{connectFrom === 'continue' ? <span>Accounts already in the Hub: from their <b>last date</b> to today. New accounts: from <b>{backfillStartDate()}</b> to today. After connecting, the message shows the date it continued from.</span> : <span>Will pull transactions from <b>{backfillStartDate()}</b> to today.</span>} You can pull more later with “Deep re-pull history”. Normal Sync afterward is incremental (pulls forward automatically).</div>
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl p-3">
@@ -671,6 +700,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                             {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
                             <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
                             {isSuperAdmin && <button type="button" onClick={function () { togglePrivate(a); }} title={privNote || 'Only you (and people you give “Bank: See private accounts”) see a private account’s transactions'} className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded" style={privAcc[a.plaid_account_id] ? { background: '#7f1d1d', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{privAcc[a.plaid_account_id] ? '🔒 Private' : 'Make private'}</button>}
+                            {privMsg[a.plaid_account_id] && <span className="ml-2 text-[10px] font-bold" style={{ color: privMsg[a.plaid_account_id].ok ? '#065f46' : '#991b1b' }}>{privMsg[a.plaid_account_id].text}</span>}
                           </div>
                           <div className="flex items-center gap-1">
                             <span className={'text-[10px] ' + (_stale ? 'text-amber-700 font-bold' : 'text-slate-500')}>{cnt} txn{cnt === 1 ? '' : 's'}{newestD ? (' · newest ' + newestD + (_stale ? ' ⚠ ' + _agoDays + 'd ago — Sync or Reconnect' : '')) : ' · none yet'}</span>

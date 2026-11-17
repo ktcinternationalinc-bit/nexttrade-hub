@@ -10,6 +10,11 @@
 
 var DAY = 86400000;
 
+// where a bank line came from (Codex QA 17 Nov: hand entries were labelled "Bank feed")
+export function isHandId(id) { return /^manual-hand-/.test(String(id || '')); }
+export function isFeedId(id) { return !!id && !/^manual-/.test(String(id)); }
+export function sourceLabel(id) { if (isHandId(id)) { return 'Entered by hand'; } if (/^manual-/.test(String(id || ''))) { return 'Uploaded statement'; } return id ? 'Bank feed' : 'Uploaded or typed in'; }
+
 export function dupText(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80); }
 export function dupCents(t) {
   var v = t && t.amount_abs != null ? Number(t.amount_abs) : Math.abs(Number(t && t.amount) || 0);
@@ -60,7 +65,9 @@ export function assessPair(a, b) {
   var ta = dupText(a.name || a.merchant_name), tb = dupText(b.name || b.merchant_name);
   var sameText = !!ta && ta === tb;
   var sameLink = String(a.account_id || '') === String(b.account_id || '');
-  var bothFeed = !!a.plaid_transaction_id && !!b.plaid_transaction_id;
+  // v55.83-TQ (Codex QA 17 Nov) — a line typed in by hand ('manual-hand-…') or uploaded ('manual-…') is NOT a bank-feed line
+  var bothFeed = isFeedId(a.plaid_transaction_id) && isFeedId(b.plaid_transaction_id);
+  var oneByHand = isHandId(a.plaid_transaction_id) !== isHandId(b.plaid_transaction_id);
 
   if (!sameLink) {
     // the same real account reached through two connections (or a feed and an uploaded statement)
@@ -76,6 +83,15 @@ export function assessPair(a, b) {
     return { kind: 'likely', why: 'Same account, amount and description ' + (gap === 0 ? 'on the same day' : 'one day apart') + ', and at least one was typed in or uploaded — it looks like it was brought in twice.' };
   }
   if (sameText && gap >= 5) { return { recurring: true }; }
+  // a line ENTERED BY HAND and the bank's own copy: the descriptions usually differ, so same account + amount + in/out within
+  // 3 days is shown for a person to check. Only ever "possible" — never removed automatically (two real payments can match).
+  // the explanation names the REAL sources (Codex 20:45: a hand entry next to an uploaded statement line is not "the bank's copy")
+  if (oneByHand && gap <= 3) {
+    var other = isHandId(a.plaid_transaction_id) ? b.plaid_transaction_id : a.plaid_transaction_id;
+    var when = gap === 0 ? 'on the same day' : gap + ' day' + (gap === 1 ? '' : 's') + ' apart';
+    var src = sourceLabel(other).toLowerCase();
+    return { kind: 'possible', why: 'One line was entered by hand and the other is from the ' + (isFeedId(other) ? 'bank feed' : src) + ', same account and amount ' + when + ', different descriptions — ' + (isFeedId(other) ? 'possibly the bank\'s copy of the hand entry' : 'possibly the same transaction recorded twice') + '. Check before removing one.' };
+  }
   return null;
 }
 
@@ -155,7 +171,7 @@ export function findDuplicates(rows, opts) {
           id: t.id, date: dupDate(t), account: ra.label || 'Account', bank: ra.bank || '', link: ra.link || '', link_archived: ra.archived === true,
           description: t.name || t.merchant_name || '', counterparty: t.merchant_name || '', check_number: t.check_number || '',
           amount: dupCents(t) / 100, direction: t.direction, currency: t.iso_currency || 'USD',
-          source: t.plaid_transaction_id ? 'Bank feed' : 'Uploaded or typed in', source_id: t.plaid_transaction_id ? String(t.plaid_transaction_id).slice(-8) : '',
+          source: sourceLabel(t.plaid_transaction_id), source_id: t.plaid_transaction_id ? String(t.plaid_transaction_id).slice(-8) : '',
           category: t.classification || '', review_status: t.review_status || 'unreviewed', verified: t.category_verified === true,
           matched_invoice: !!t.matched_invoice_id, transfer: !!t.transfer_group_id, protected: !!prot[t.id], created_at: t.created_at || '',
         };

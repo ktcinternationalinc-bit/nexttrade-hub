@@ -180,7 +180,7 @@ export default function BooksHomeTab(props) {
       return fetch('/api/accounting/bank-write', { method: 'POST', headers: h,
         body: JSON.stringify({ action: 'classify', bank_transaction_id: t.id, patch: patch, user_id: userProfile && userProfile.id }) });
     }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j && (j.ok || j.success)) { toast.success('Categorized.'); loadQueues(); }
+      if (j && (j.ok || j.success)) { toast.success('Categorized.'); if (j.look_alikes && j.look_alikes.error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes.error, { duration: 9000 }); } /* v55.83-TZ */ loadQueues(); }
       else { toast.error((j && j.error) || 'Could not categorize.'); }
     }).catch(function (e) { toast.error('Could not categorize: ' + ((e && e.message) || 'network')); })
       .finally(function () { setBusy(false); });

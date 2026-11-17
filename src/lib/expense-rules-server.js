@@ -114,7 +114,7 @@ export function ruleBucket(t, ruleCls) {
   if (t.category_source === 'rule') { return t.classification === ruleCls ? 'same' : 'rule'; }
   return t.classification === ruleCls ? 'same' : 'human';
 }
-async function batchSet(db, ids, cls, mode) {
+async function batchSet(db, ids, cls, mode, outIds) {
   var n = 0;
   for (var i = 0; i < ids.length; i += 200) {
     var chunk = ids.slice(i, i + 200);
@@ -123,12 +123,12 @@ async function batchSet(db, ids, cls, mode) {
     if (mode === 'blank') { q = q.is('classification', null); }           // re-check: never race a person
     else if (mode === 'rule') { q = q.eq('category_source', 'rule'); }
     var r = await q.select('id');
-    if (!r.error && r.data) { n += r.data.length; }
+    if (!r.error && r.data) { n += r.data.length; if (outIds) { r.data.forEach(function (x) { outIds.push(x.id); }); } }
   }
   return n;
 }
 export async function previewRule(db, matchText, ruleCls) {
-  var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status');
+  var got = await pageBankRows(db, 'id, date, posted_date, amount_abs, direction, name, merchant_name, classification, category_source, category_verified, review_status, account_id, transfer_group_id, pending');
   if (got.error) { return { error: got.error }; }
   var probe = { match_text: matchText };
   var hits = got.rows.filter(function (t) { return ruleMatches(probe, rowText(t)); });
@@ -182,9 +182,20 @@ export async function applyRuleToAll(db, rule, opts) {
   if (rule.classification) {
     var pv = await previewRule(db, rule.match_text, rule.classification);
     if (pv.error) { return { error: pv.error }; }
-    var ids = function (arr) { return arr.map(function (t) { return t.id; }); };
-    var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank');
-    var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule');
+    // v55.83-TR (Codex QA 17 Nov) — when a person's single pick spreads to look-alikes, a line in a PRIVATE account, one side of a
+    // paired transfer, a pending line and a duplicate copy are never touched (they stay a person's call)
+    var keep = function (t) { return true; };
+    if (o.lookAlike) {
+      var priv = await privateAccountSet(db);
+      // Codex QA 17 Nov (recheck P1) — privacy unknown → ZERO look-alike changes (fail closed), with a visible reason
+      if (!priv) { return { error: 'Could not check which bank accounts are private, so no look-alike lines were changed. (Your own pick was saved.)', private_unknown: true, applied: 0 }; }
+      keep = function (t) { return !t.transfer_group_id && t.pending !== true && t.review_status !== 'duplicate' && !priv[t.account_id]; };
+      res.skipped_protected = pv.hits.filter(function (t) { return !keep(t); }).length;
+    }
+    var ids = function (arr) { return arr.filter(keep).map(function (t) { return t.id; }); };
+    res.ids = [];
+    var a1 = await batchSet(db, ids(pv.buckets.blank), rule.classification, 'blank', res.ids);
+    var a2 = await batchSet(db, ids(pv.buckets.rule), rule.classification, 'rule', res.ids);
     var a3 = o.overwrite_people === true ? await batchSet(db, ids(pv.buckets.human), rule.classification, 'any') : 0;
     res.applied = a1 + a2 + a3; res.filled_blank = a1; res.retargeted = a2; res.overwrote_people = a3; res.matches = pv.hits.length;
     res.already_right = pv.buckets.same.length; res.left_people = o.overwrite_people === true ? 0 : pv.buckets.human.length;
@@ -199,6 +210,47 @@ export async function applyRuleToAll(db, rule, opts) {
     await db.from('us_expense_rules').update({ hit_count: (Number(rule.hit_count) || 0) + res.applied + res.flagged, last_hit_at: new Date().toISOString() }).eq('id', rule.id);
   }
   return res;
+}
+
+// accounts marked 🔒 private (sql/v55-83-TP-permissions.sql). Codex QA 17 Nov (recheck P1): FAIL CLOSED — a read error, a thrown
+// error or the column not existing yet returns null ("unknown"), never "no private accounts".
+export async function privateAccountSet(db) {
+  try {
+    var r = await db.from('plaid_accounts').select('plaid_account_id').eq('is_private', true);
+    if (!r || r.error) { return null; }
+    var out = {}; (r.data || []).forEach(function (a) { out[a.plaid_account_id] = true; });
+    return out;
+  } catch (e) { return null; }
+}
+
+// v55.83-TR (Max, Nov 17 + Codex QA 17 Nov) — ONE place for "a person categorized a line → the learned rule fills its look-alikes":
+// only an ACTIVE rule switched to apply automatically (auto_apply) and for the same category; never "transfer"; protected lines
+// skipped (private account, paired transfer, pending, duplicate); and the category's Wave account rides onto the look-alikes it
+// updated exactly as on the picked line (only where no Wave account is set and the line was never synced).
+export async function applyLookAlikes(db, ruleId, cls, by) {
+  var out = { applied: 0, left_people: 0, matches: 0, wave_set: 0, skipped: null, skipped_protected: 0 };
+  if (!ruleId || ruleId === true || !cls || cls === 'transfer') { out.skipped = 'not_applicable'; return out; }
+  var rr = await db.from('us_expense_rules').select('id, match_text, classification, hit_count, active, auto_apply').eq('id', ruleId).maybeSingle();
+  if (rr.error || !rr.data) { out.skipped = 'rule_not_found'; return out; }
+  if (rr.data.active === false) { out.skipped = 'rule_inactive'; return out; }
+  if (rr.data.auto_apply === false) { out.skipped = 'auto_apply_off'; return out; }
+  if (rr.data.classification !== cls) { out.skipped = 'rule_other_category'; return out; }
+  var ap = await applyRuleToAll(db, rr.data, { overwrite_people: false, by: by, lookAlike: true });
+  if (!ap || ap.error) { out.error = (ap && ap.error) || 'not applied'; return out; }
+  out.applied = ap.applied || 0; out.left_people = ap.left_people || 0; out.matches = ap.matches || 0; out.skipped_protected = ap.skipped_protected || 0;
+  if (ap.ids && ap.ids.length) {
+    try {
+      var wl = await waveAccountForCategory(db, cls);
+      if (wl && wl.wave_account_id) {
+        for (var i = 0; i < ap.ids.length; i += 200) {
+          var w = await db.from('bank_transactions').update({ wave_account_id: wl.wave_account_id, wave_account_name: wl.wave_account_name, category_status: 'pending_wave_sync' })
+            .in('id', ap.ids.slice(i, i + 200)).is('wave_account_id', null).is('wave_transaction_id', null).neq('category_status', 'synced').select('id');
+          if (!w.error) { out.wave_set += (w.data || []).length; }
+        }
+      }
+    } catch (eW) { /* Wave stays empty — never blocks the save */ }
+  }
+  return out;
 }
 
 export async function applyExpenseRules(db, limit) {

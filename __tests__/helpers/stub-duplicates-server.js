@@ -1,0 +1,1 @@
+module.exports={autoTwinCheck:function(){return global.__twin();}};

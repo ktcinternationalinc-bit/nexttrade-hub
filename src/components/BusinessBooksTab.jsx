@@ -31,6 +31,10 @@ export default function BusinessBooksTab(props) {
   var [to, setTo] = useState('');
   var [preset, setPreset] = useState('Jun 1 →');
   var [statusFilter, setStatusFilter] = useState('all'); // all | open | paid | draft
+  // v55.83-TQ (Max, Nov 17: "i need a search and sort here") — search any column; click a column heading to sort by it
+  var [q, setQ] = useState('');
+  var [sortK, setSortK] = useState('inv_date');
+  var [sortD, setSortD] = useState(-1); // -1 = newest / largest first
   var [mInv, setMInv] = useState(null);     // v55.83-QM (Max 15:33 "add the matching... on this location as well") — {invoice, invoice_open, candidates}
   var [mAmt2, setMAmt2] = useState({});
   var [mBusy, setMBusy] = useState(false);
@@ -107,7 +111,7 @@ export default function BusinessBooksTab(props) {
     var isWaveDraft = i.wave_status === 'DRAFT';
     if (rowCur === activeCur && !isWaveDraft) { tInvoiced = r2(tInvoiced + total); tPaidAmt = r2(tPaidAmt + paid); if (bal > 0.005) { tOpen = r2(tOpen + bal); } }
     if (rowCur !== activeCur) { otherCurCount += 1; }
-    rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, cur: rowCur, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub' });
+    rows.push({ id: i.id, num: i.invoice_number || '(no number)', cust: custName[i.accounting_customer_id] || '', inv_date: idt, due_date: i.due_date || '', total: total, paid: paid, balance: bal, status: st, cur: rowCur, in_wave: !!i.wave_invoice_id, source: i.source === 'wave_import' ? 'Wave' : 'Hub', rel: String(i.release_number || i.po_so_number || '') });
   });
   raw.pays.forEach(function (p) {
     if (isPaymentVoid(p)) { return; }
@@ -119,8 +123,20 @@ export default function BusinessBooksTab(props) {
     if (!parent || bizOfInv(parent) !== biz || (parent.currency || 'USD') !== activeCur) { return; }
     paidInPeriod = r2(paidInPeriod + (Number(p.amount) || 0));
   });
-  rows.sort(function (a, b) { return (a.inv_date || '') < (b.inv_date || '') ? 1 : -1; });
+  var NUMERIC = { total: 1, paid: 1, balance: 1 };
+  rows.sort(function (a, b) {
+    var x = a[sortK], y = b[sortK];
+    if (NUMERIC[sortK]) { x = Number(x) || 0; y = Number(y) || 0; } else { x = String(x == null ? '' : x).toLowerCase(); y = String(y == null ? '' : y).toLowerCase(); }
+    if (x === y) { return (a.inv_date || '') < (b.inv_date || '') ? 1 : -1; }
+    return (x < y ? -1 : 1) * sortD;
+  });
+  var qq = q.trim().toLowerCase(); var qNum = Number(qq.replace(/[$,\s]/g, ''));
   var shown = rows.filter(function (r) {
+    if (qq) {
+      var hay = [r.num, r.cust, r.rel, r.inv_date, r.due_date, r.status, r.source].join(' ').toLowerCase();
+      var amtHit = qNum > 0 && [r.total, r.paid, r.balance].some(function (v) { return Math.abs((Number(v) || 0) - qNum) < 0.005 || String((Number(v) || 0).toFixed(2)).indexOf(qq.replace(/[$,\s]/g, '')) >= 0; });
+      if (hay.indexOf(qq) < 0 && !amtHit) { return false; }
+    }
     if (statusFilter === 'open') { return r.status === 'UNPAID' || r.status === 'PARTIAL'; }
     if (statusFilter === 'paid') { return r.status === 'PAID'; }
     if (statusFilter === 'draft') { return r.status === 'DRAFT'; }
@@ -206,11 +222,16 @@ export default function BusinessBooksTab(props) {
             className="px-2 py-1 rounded text-[10px] font-extrabold"
             style={act ? { background: '#0369a1', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{f[1]}</button>;
         })}
+        <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="🔍 search invoice #, customer, release, amount…" className="ml-2 px-2 py-1 rounded border border-slate-300 text-[11px] nt-light" style={{ width: 260, background: '#ffffff', color: '#0f172a' }} />
+        {q && <button onClick={function () { setQ(''); }} className="px-1.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕</button>}
         <span className="text-[10px] text-slate-500 self-center ml-1">{shown.length} invoice(s) — Hub-entered and Wave-pushed alike, nothing hidden{otherCurCount ? ' · ' + otherCurCount + ' in another currency (listed with own symbol, excluded from the money cards)' : ''}</span>
       </div>
-      <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 480 }}>
+      <div className="overflow-auto rounded border border-slate-200 nt-solid-head" style={{ maxHeight: 480 }}>
         <table className="w-full text-[11px]">
-          <thead><tr>{['Invoice', 'Customer', 'Inv date', 'Due date', 'Total', 'Paid', 'Balance', 'Status', 'Source', 'In Wave', ''].map(function (h, hi) { return <th key={hi} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
+          <thead><tr>{[['num', 'Invoice'], ['cust', 'Customer'], ['inv_date', 'Inv date'], ['due_date', 'Due date'], ['total', 'Total'], ['paid', 'Paid'], ['balance', 'Balance'], ['status', 'Status'], ['source', 'Source'], ['in_wave', 'In Wave'], ['', '']].map(function (h, hi) {
+            var on = h[0] && sortK === h[0];
+            return <th key={hi} className="px-2 py-1 text-left font-bold sticky top-0" style={Object.assign({}, th, h[0] ? { cursor: 'pointer', userSelect: 'none' } : {})} title={h[0] ? 'Click to sort by ' + h[1] + (on ? ' (click again to reverse)' : '') : ''}
+              onClick={h[0] ? function () { if (sortK === h[0]) { setSortD(-sortD); } else { setSortK(h[0]); setSortD(NUMERIC[h[0]] || h[0] === 'inv_date' || h[0] === 'due_date' ? -1 : 1); } } : undefined}>{h[1]}{on ? (sortD > 0 ? ' ▲' : ' ▼') : ''}</th>; })}</tr></thead>
           <tbody>{shown.map(function (r, i) {
             return (
               <tr key={r.id} className="border-t border-slate-200" style={{ background: i % 2 ? '#f8fafc' : '#fff', color: '#0f172a' }}>

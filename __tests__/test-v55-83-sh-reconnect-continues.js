@@ -27,6 +27,17 @@ console.log('SH — a reconnected bank continues from the last transaction on th
   check('2: an ARCHIVED duplicate link is not counted (its lines are not shown), and another bank with the same last-4 is never mixed in', a.others.indexOf('arch-6338') < 0 && a.others.indexOf('pnc-6338') < 0);
   var b = await C.hubNewestForConnection(db, { id: 'fresh' });
   check('3: a bank that was never on the Hub has nothing to continue from → the normal first pull', b.date === null && b.others.length === 0, b);
+  // TT (Codex QA 17 Nov) — a link holding SEVERAL accounts: each continues from its own newest line; one account the Hub has
+  // never had → no continue date (normal first window), so it is never skipped
+  db.t.bank_connections.push({ id: 'mix', institution_name: 'Chase', status: 'active' }, { id: 'old2', institution_name: 'Chase', status: 'active' });
+  db.t.plaid_accounts.push({ plaid_account_id: 'mix-6338', mask: '6338', connection_id: 'mix' }, { plaid_account_id: 'mix-1111', mask: '1111', connection_id: 'mix' }, { plaid_account_id: 'old2-1111', mask: '1111', connection_id: 'old2' });
+  db.t.bank_transactions.push({ id: 't5', account_id: 'old2-1111', date: '2026-09-15' });
+  var m = await C.hubNewestForConnection(db, { id: 'mix' });
+  check('TT1: two accounts in one link → start from the OLDER of their newest lines (09-15), not the newest overall (11-04)', m.date === '2026-09-15' && m.by_account['mix-6338'] === '2026-11-04' && m.by_account['mix-1111'] === '2026-09-15', m);
+  db.t.plaid_accounts.push({ plaid_account_id: 'mix-2222', mask: '2222', connection_id: 'mix' });
+  var m2 = await C.hubNewestForConnection(db, { id: 'mix' });
+  check('TT2: one account of the link was never on the Hub → no continue date (normal first window) so it is not skipped', m2.date === null && m2.by_account['mix-2222'] === null, m2);
+  check('TT3: the "still preparing" retry keeps the chosen period', /syncTransactions\(connId, attempt \+ 1, deepPull\)/.test(R('src/components/BankTab.jsx')));
   var T = R('src/app/api/plaid/transactions/route.js');
   check('4: the sync uses it only when no start date was asked for and the link has no finished sync — and backs up 7 days for late postings', T.indexOf('if (!effStart && hn.date) { continuedFrom = hn.date; effStart = new Date(new Date(hn.date).getTime() - OVERLAP_DAYS * 86400000)') > 0 &&
     T.indexOf('hubNewestForConnection(supabase, conn)') < T.indexOf('if (!effStart && conn.initial_backfill_start_date)') && T.indexOf('if (!effStart && conn.last_successful_posted_date)') < T.indexOf('hubNewestForConnection(supabase, conn)'));

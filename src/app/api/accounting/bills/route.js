@@ -1817,7 +1817,7 @@ export async function POST(req) {
             // when nobody also set a classification on it.
             totIn = r2(totIn + amt6);
             var keyI = isTrf ? 'transfer' : (t6.matched_invoice_id ? 'customer_payment' : (t6.classification || null));
-            if (inRows.length < 500) { inRows.push({ date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id }); }
+            if (inRows.length < 500 || (!keyI && inRows.length < 3000)) { inRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: keyI || '', paired: !!t6.transfer_group_id }); } // v55.83-TS — id lets Stats save a category right on the row; uncategorized rows are never cut by the cap
             if (isTrf) { trfIn.count++; trfIn.total = r2(trfIn.total + amt6); return; }
             if (!keyI) { uncIn.count++; uncIn.total = r2(uncIn.total + amt6); return; }
             if (!byCatIn[keyI]) { byCatIn[keyI] = { key: keyI, label: catLabels[keyI] || keyI, kind: kindOf(keyI), count: 0, total: 0 }; }
@@ -1826,7 +1826,7 @@ export async function POST(req) {
           }
           totOut = r2(totOut + amt6);
           var key6 = isTrf ? 'transfer' : (t6.classification || null);
-          if (spRows.length < 500) { spRows.push({ date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id }); }
+          if (spRows.length < 500 || (!key6 && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id }); } // v55.83-TS
           if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
           if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
           if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, kind: kindOf(key6), count: 0, total: 0 }; }

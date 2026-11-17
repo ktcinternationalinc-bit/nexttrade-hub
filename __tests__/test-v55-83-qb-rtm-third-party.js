@@ -72,7 +72,7 @@ ok('4b: rtmAdjust conserves every total by construction: −payments + covered b
 // NextTrade's unspent advance is not deductible, so the pack runs taxCats() (affiliates real-cost,
 // RTM still one line). Realigned, not dropped.
 ok('4c (QY→RB): the switches apply to the spending table AND the income statement; the accountant TAX PACK keeps RTM one line and takes NextTrade advances out',
-  ps.split('ptAdjust(data.spending.categories)').length === 3 && // (QY)
+  ps.split('ptAdjust(data.spending.categories)').length >= 3 && // (QY; TS adds the ⚠ Uncategorized fold — same function, more uses)
   /' — BREAKDOWN ON: ' \+ ptOnNames\.join/.test(ps) &&
   /\(taxCats\(data\.spending\.categories\) \|\| \[\]\)\.forEach\(function \(c\) \{ if \(c\.kind === 'cogs'\) \{ cogsP \+= c\.total; \}/.test(ps) &&
   /if \(b0\.kind === 'affiliate'\) \{ out = rtmAdjust\(out, b0\); \}/.test(ps));

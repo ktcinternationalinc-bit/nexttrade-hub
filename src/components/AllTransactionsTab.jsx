@@ -26,6 +26,23 @@ export default function AllTransactionsTab(props) {
   var canUse = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin')) || modulePerms['bank.classify'] === true;
   var toast = props.toast || { success: function () {}, error: function () {} };
   var onGo = props.onGo || function () {};
+  // v55.83-TQ (Max, Nov 17) — ➕ Add a transaction by hand: super admin, or someone the super admin switched on (never a role)
+  var canAddTx = isSuperAdmin || modulePerms['bank.add_transactions'] === true;
+  var sAdd = useState(null); var addF = sAdd[0]; var setAddF = sAdd[1]; // null = closed
+  var sAddA = useState([]); var addAccts = sAddA[0]; var setAddAccts = sAddA[1];
+  function txApi(payload) { return hubFetch('/api/accounting/manual-transaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); }); }
+  function openAdd() { setAddF({ plaid_account_id: '', date: new Date().toISOString().substring(0, 10), direction: 'out', amount: '', description: '', check_number: '', request_id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10), dup: null }); txApi({ action: 'accounts' }).then(function (j) { if (j && j.ok) { setAddAccts(j.accounts || []); } else { toast.error((j && j.error) || 'Could not load the accounts.'); } }); }
+  function saveAdd(confirmDup) {
+    var f = addF; if (!f) { return; }
+    setBusy(true);
+    txApi({ action: 'add', plaid_account_id: f.plaid_account_id, date: f.date, direction: f.direction, amount: f.amount, description: f.description, check_number: f.check_number, request_id: f.request_id, confirm_duplicate: confirmDup === true }).then(function (j) {
+      if (j && j.ok) { toast.success(j.already_added ? 'That transaction was already added.' : 'Transaction added — categorize or match it in the list.'); setAddF(null); load(); return; }
+      if (j && j.possible_duplicates) { setAddF(Object.assign({}, f, { dup: j.error })); return; }
+      // TQ (Codex QA 17 Nov) — saved earlier with different details: keep the form; "Add as a new line" gets a fresh id
+      if (j && j.changed_after_save) { setAddF(Object.assign({}, f, { dup: null, changed: j.error })); return; }
+      toast.error((j && j.error) || 'Not added.');
+    }).finally(function () { setBusy(false); });
+  }
 
   var s1 = useState(null); var data = s1[0]; var setData = s1[1];
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
@@ -147,7 +164,8 @@ export default function AllTransactionsTab(props) {
     api('bulk_classify', { ids: selIds, classification: bulkCat }).then(function (j) {
       if (j && j.ok) {
         if (bulkCat === 'transfer') { toast.success('Marked ' + j.updated + ' as TRANSFERS — they never count as income or spending in any report; click ↔ on a row to pair its other leg.'); }
-        else { toast.success('Category applied to ' + j.updated + ' transaction(s); ' + (j.rules_learned || 0) + ' rule(s) learned' + (j.wave_updated ? '; Wave category set on ' + j.wave_updated + ' (queued to sync)' : '; no compatible Wave account — Wave left empty') + '.'); }
+        else { toast.success('Category applied to ' + j.updated + ' transaction(s); ' + (j.rules_learned || 0) + ' rule(s) learned' + (j.look_alikes_updated ? '; ' + j.look_alikes_updated + ' similar transaction(s) updated too' : '') + (j.wave_updated ? '; Wave category set on ' + j.wave_updated + ' (queued to sync)' : '; no compatible Wave account — Wave left empty') + '.'); }
+        if (j.look_alikes_error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes_error, { duration: 9000 }); } // v55.83-TZ (Codex 19:55): a refused spread is said on every screen
         load();
       }
       else { toast.error((j && j.error) || 'Bulk update failed.'); }
@@ -248,7 +266,8 @@ export default function AllTransactionsTab(props) {
       if (j && j.ok) {
         patchRow(t.id, { classification: key, _saving: false, _saved: true });
         if (key === 'transfer') { toast.success('Marked as a TRANSFER — never income, never spending in any report.'); openTransfer(t); }
-        else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + ((j.reviewed || 0) > 0 ? ' · marked reviewed → reaches the ClickBooks ledger within 15 min' : '') + '.'); }
+        else { toast.success('Category saved' + ((j.rules_learned || 0) > 0 ? ' · rule learned for next time' : '') + (j.look_alikes_updated ? ' · ' + j.look_alikes_updated + ' similar transaction(s) updated too' : '') + (j.look_alikes_left_people ? ' · ' + j.look_alikes_left_people + ' set by hand left as they are' : '') + (j.wave_updated ? ' · Wave category set (queued to sync)' : ' · no compatible Wave account — Wave left empty') + ((j.reviewed || 0) > 0 ? ' · marked reviewed → reaches the ClickBooks ledger within 15 min' : '') + '.'); }
+        if (j.look_alikes_error) { toast.error('Look-alike lines NOT updated: ' + j.look_alikes_error, { duration: 9000 }); } // v55.83-TZ (Codex 19:55): a refused spread is said on every screen
         quietReload();
       } else { patchRow(t.id, { classification: before, _saving: false }); toast.error((j && j.error) || 'Could not save the category.'); }
     }).finally(function () { setRowBusy(function (m) { var n = Object.assign({}, m); delete n[t.id]; return n; }); });
@@ -438,6 +457,22 @@ export default function AllTransactionsTab(props) {
   }
 
   return <div className="flex flex-col gap-2">
+    {canAddTx && !addF && <div className="flex justify-end"><button type="button" onClick={openAdd} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={{ background: '#047857', color: '#ffffff' }} title="Add one bank transaction by hand (when the bank or a statement does not have it)">➕ Add transaction</button></div>}
+    {canAddTx && addF && <div className="rounded-xl p-3 grid gap-2" style={{ background: '#f0fdf4', border: '1px solid #86efac', color: '#14532d' }}>
+      <div className="flex items-center gap-2"><b className="text-[13px]">➕ Add a transaction by hand</b><div className="flex-1" /><button type="button" onClick={function () { setAddF(null); }} className="text-[12px] underline">cancel</button></div>
+      <div className="flex flex-wrap gap-2 items-center text-[12px]">
+        <select value={addF.plaid_account_id} onChange={function (e) { setAddF(Object.assign({}, addF, { plaid_account_id: e.target.value, dup: null })); }} className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a', minWidth: 220 }}><option value="">— account —</option>{addAccts.map(function (a) { return <option key={a.plaid_account_id} value={a.plaid_account_id}>{a.label}</option>; })}</select>
+        <input type="date" value={addF.date} onChange={function (e) { setAddF(Object.assign({}, addF, { date: e.target.value, dup: null })); }} className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a' }} />
+        <select value={addF.direction} onChange={function (e) { setAddF(Object.assign({}, addF, { direction: e.target.value, dup: null })); }} className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a' }}><option value="out">Money OUT</option><option value="in">Money IN</option></select>
+        <span>$</span><input value={addF.amount} onChange={function (e) { setAddF(Object.assign({}, addF, { amount: e.target.value, dup: null })); }} placeholder="amount" className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a', width: 110 }} />
+        <input value={addF.description} onChange={function (e) { setAddF(Object.assign({}, addF, { description: e.target.value, dup: null })); }} placeholder="description — who paid / who was paid, what for" className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a', flex: '1 1 260px' }} />
+        <input value={addF.check_number} onChange={function (e) { setAddF(Object.assign({}, addF, { check_number: e.target.value })); }} placeholder="check # (optional)" className="px-2 py-1 rounded border nt-light" style={{ background: '#ffffff', color: '#0f172a', width: 120 }} />
+        <button type="button" disabled={busy} onClick={function () { saveAdd(false); }} className="px-3 py-1 rounded-lg font-extrabold" style={{ background: '#047857', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>Add</button>
+      </div>
+      {addF.dup && <div className="text-[12px] font-bold" style={{ color: '#9a3412' }}>{'⚠ ' + addF.dup} <button type="button" disabled={busy} onClick={function () { saveAdd(true); }} className="ml-2 px-2 py-0.5 rounded font-extrabold" style={{ background: '#9a3412', color: '#ffffff' }}>Yes — it is a different transaction, add it</button></div>}
+      {addF.changed && <div className="text-[12px] font-bold" style={{ color: '#991b1b' }}>{'⛔ ' + addF.changed} <button type="button" disabled={busy} onClick={function () { setAddF(Object.assign({}, addF, { changed: null, request_id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10) })); }} className="ml-2 px-2 py-0.5 rounded font-extrabold" style={{ background: '#991b1b', color: '#ffffff' }}>Make it a new line (then press Add)</button></div>}
+      <div className="text-[11px]" style={{ color: '#166534' }}>It is saved like a bank line (marked “entered by hand” with your name), then categorize or match it in the list as usual. If the bank later sends it with the SAME date, amount and in/out on this account, the bank’s copy is skipped. If its date differs by a few days, both stay and Check for duplicates lists the pair for you to decide — nothing is removed on its own.</div>
+    </div>}
     {wireView && <WireQuickView wire={wireView} userProfile={userProfile} onClose={function () { setWireView(null); }} />}
     <DuplicateCheckPanel userProfile={userProfile} toast={toast} onChanged={function () { load(); }} />
     <div className="rounded-xl p-3" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>

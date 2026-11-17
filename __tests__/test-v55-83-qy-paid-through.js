@@ -32,7 +32,7 @@ ok('3: reports are PER company — payments attributed by the company on the ban
   /spend = \{ rtm: rtmBlk, paid_through: ptBlocks,/.test(bills));
 ok('4: Stats — one tax/real-cost switch PER company (default tax view for all); totals identical; the remainder line uses the company\'s own label',
   /var sRt = useState\(\{\}\); var ptOn = sRt\[0\]/.test(ps) && /function ptAdjust\(cats0\)/.test(ps) &&
-  ps.split('ptAdjust(data.spending.categories)').length === 3 &&
+  ps.split('ptAdjust(data.spending.categories)').length >= 3 && /* TS: the ⚠ Uncategorized fold adds uses of the same function */
   /* v55.83-SR realign — the per-company blocks moved, sum for sum, into src/lib/paid-through-blocks.js (run for real in test-v55-83-sr-*) */ /label: b\.remainder_label \|\| 'RTM service fee/.test(R('src/lib/paid-through-blocks.js')) && /remainderRows\(rtm\)\.forEach/.test(ps));
 ok('5: match popup — RTM radio AND a 🏭 NextTrade radio; the panel switches company, picks only THAT company\'s bills, and labels the rest as fee (RTM) or advance (NextTrade)',
   /openRtm\(t2, 'NextTrade Industries'\)/.test(at) && /billsApi\(\{ action: 'rtm_open_bills', payer: p0 \}\)/.test(at) &&

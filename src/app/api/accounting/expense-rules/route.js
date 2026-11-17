@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
-import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
+import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, applyLookAlikes, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
 import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
@@ -372,16 +372,30 @@ export async function POST(req) {
         .update({ classification: clsB, category_source: 'classification' })
         .in('id', idsB).select('id, direction, merchant_name, name');
       if (updB.error) { return NextResponse.json({ ok: false, error: updB.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
-      var learnedB2 = 0; var seenKeys = {};
+      var learnedB2 = 0; var seenKeys = {}; var ruleIdsB = [];
       var rowsB = updB.data || [];
       for (var bi = 0; bi < rowsB.length && learnedB2 < 50; bi++) {
         var tB = rowsB[bi];
-        if (tB.direction !== 'out') { continue; }
+        if (tB.direction !== 'out' && tB.direction !== 'in') { continue; } // v55.83-TR — money in learns too
         var textB = (tB.merchant_name || '') + ' ' + (tB.name || '');
         if (seenKeys[textB]) { continue; }
         seenKeys[textB] = true;
         var lr = await learnRule(db, textB, clsB, by);
         if (lr && (lr.learned || lr.updated)) { learnedB2++; }
+        var lrId = lr && (lr.learned || lr.updated || lr.kept);
+        if (lrId && lrId !== true && ruleIdsB.indexOf(lrId) < 0) { ruleIdsB.push(lrId); }
+      }
+      // v55.83-TR (Max, Nov 17: "anytime we update a category ... it automatically updates that") — the rule is applied RIGHT AWAY
+      // to look-alikes with no category or a category from a rule (never a person's hand-picked or verified one). Up to 10 rules per
+      // save; the 15-minute sync covers the rest. Not for "transfer" (a transfer needs its other side paired by a person).
+      var lookB = 0; var leftPeopleB = 0; var lookErrB = null;
+      if (clsB !== 'transfer') {
+        for (var ri = 0; ri < ruleIdsB.length && ri < 10; ri++) {
+          try {
+            var apB = await applyLookAlikes(db, ruleIdsB[ri], clsB, by); // Codex QA 17 Nov: auto_apply, protected lines, Wave mapping
+            if (apB && !apB.error) { lookB += apB.applied || 0; leftPeopleB += apB.left_people || 0; } else if (apB && apB.error && !lookErrB) { lookErrB = apB.error; } // Codex recheck: a refused spread is SAID
+          } catch (eAB) { /* the save itself already succeeded */ }
+        }
       }
       // v55.83-PZ (Max): bulk categorization updates the WAVE side too —
       // the category's Wave account (explicit link, or exact-name match
@@ -406,8 +420,8 @@ export async function POST(req) {
       // it reaches the ClickBooks ledger. Bulk picks never change review status.
       var reviewedB = [];
       if (idsB.length === 1 && body.payload && body.payload.single_pick === true) { reviewedB = await autoReviewIfComplete(db, idsB, by); }
-      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, wave_updated: waveSet, reviewed: reviewedB.length }); // v55.83-QI
-      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, api_build_marker: API_BUILD_MARKER });
+      await audit(db, by, 'bulk_categorized', 'bank_transactions', String(rowsB.length) + ' rows', { classification: clsB, rules_learned: learnedB2, look_alikes_updated: lookB, wave_updated: waveSet, reviewed: reviewedB.length }); // v55.83-QI
+      return NextResponse.json({ ok: true, updated: rowsB.length, rules_learned: learnedB2, look_alikes_updated: lookB, look_alikes_left_people: leftPeopleB, look_alikes_error: lookErrB, wave_updated: waveSet, wave_how: waveHow, reviewed: reviewedB.length, api_build_marker: API_BUILD_MARKER });
     }
 
     // ── all_transactions: every account, one table — sort/filter server-side

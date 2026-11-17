@@ -27,9 +27,23 @@ export async function hubNewestForConnection(db, conn) {
     }
     out.others = ((pr && pr.data) || []).filter(function (r) { return live[r.connection_id]; }).map(function (r) { return r.plaid_account_id; });
     if (!out.others.length) { return out; }
-    var nq = await db.from('bank_transactions').select('date').in('account_id', out.others).order('date', { ascending: false }).limit(1);
-    var d = nq && nq.data && nq.data[0] && nq.data[0].date;
-    out.date = d ? String(d).substring(0, 10) : null;
+    // v55.83-TT (Codex QA 17 Nov) — PER ACCOUNT, not one newest date for the whole link: each account of this link continues from
+    // ITS OWN newest line on the Hub; the link starts from the OLDEST of those, and if ANY account of the link has nothing on the
+    // Hub yet, there is no continue date at all (the normal first window), so a new or older account is never skipped.
+    var liveSet = {}; out.others.forEach(function (x) { liveSet[x] = true; });
+    out.by_account = {};
+    var oldest = null; var anyMissing = false;
+    for (var i = 0; i < own.length; i++) {
+      var twins = (tw[own[i]] || []).filter(function (t) { return t !== own[i] && liveSet[t]; });
+      var dA = null;
+      if (twins.length) {
+        var nq = await db.from('bank_transactions').select('date').in('account_id', twins).order('date', { ascending: false }).limit(1);
+        dA = nq && nq.data && nq.data[0] && nq.data[0].date ? String(nq.data[0].date).substring(0, 10) : null;
+      }
+      out.by_account[own[i]] = dA;
+      if (!dA) { anyMissing = true; } else if (!oldest || dA < oldest) { oldest = dA; }
+    }
+    out.date = anyMissing ? null : oldest;
   } catch (e) { /* fail-soft: no continue point → the normal first pull */ }
   return out;
 }

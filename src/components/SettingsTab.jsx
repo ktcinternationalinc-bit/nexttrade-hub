@@ -499,6 +499,7 @@ const ACTION_PERMS = [
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
   { key: 'bank.view_private',            label: 'Bank: See private accounts 🔒',  desc: 'See the transactions of bank accounts the super admin marked PRIVATE (Bank → account → Make private). Only the super admin can switch this on.' }, // v55.83-TP
+  { key: 'bank.add_transactions',        label: 'Bank: Add transactions by hand 🔒', desc: 'Add a single bank transaction by hand (All Transactions → ➕ Add transaction) when the bank or a statement does not have it. Only the super admin can switch this on.' }, // v55.83-TQ
   { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
   { key: 'accounting.view_underlying',  label: 'Accounting: Open Cards (rows only) — RETIRED', desc: 'No longer used (v55.83-RE). Card navigation now follows the card\'s own group: P1 cards (Expected, Bills Due, Late, Overdue) and P3 cards (Invoiced, Paid, Still Open, Collected) open their records; P2 cards need P2.' },
   { key: 'audit.view',                  label: 'Audit: View Trail',              desc: 'See the 🧾 Audit Trail — who categorized, matched, created, paid, validated what and when. Append-only; nobody can edit or delete audit rows. Super admins always can. (v55.83-QI)' },
@@ -533,7 +534,7 @@ const ACTION_PERMS = [
 ];
 
 // v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)
-const SENSITIVE_PERMS_UI = { 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true };
+const SENSITIVE_PERMS_UI = { 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true };
 // v55.83-TP — one click sets a person up as ACCOUNTING STAFF: enter + validate invoices and bills, see what is owed, see bank lines
 // (amounts included) to match and prepare wires. Never: profit / margin, money totals, bank balances, private accounts, undo matches.
 const ACCOUNTING_STAFF_PRESET = ['accounting.clickbooks.access', 'accounting.wavehub.access', 'accounting.view_invoicing', 'invoice.view', 'invoice.create',
