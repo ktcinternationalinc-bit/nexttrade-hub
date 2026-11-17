@@ -13,6 +13,7 @@
 // • Permission: bank.classify (same permission that categorizes in Bank
 //   Review); super admin always.
 import { NextResponse } from 'next/server';
+import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
@@ -449,6 +450,10 @@ export async function POST(req) {
       if (txA.error && /advance_flag/.test(txA.error.message || '')) { txA = await pageTx(selColsA + ', third_party_payer'); } // QF SQL not run yet
       if (txA.error && /third_party_payer/.test(txA.error.message || '')) { txA = await pageTx(selColsA); } // QB SQL not run yet
       if (txA.error) { return NextResponse.json({ ok: false, error: txA.error.message, api_build_marker: API_BUILD_MARKER }, { status: 400 }); }
+      // v55.83-TP — a PRIVATE account's lines are left out for anyone who may not see them (fails closed)
+      var scopeA = await privateScope(db, userId);
+      if (scopeA.error) { return NextResponse.json({ ok: false, error: scopeA.error + ' — nothing is shown rather than a private line.', api_build_marker: API_BUILD_MARKER }, { status: 503 }); }
+      txA.data = dropPrivate(txA.data, scopeA);
       // v55.83-QF (Max 12:08: "should be signified as partial matched or
       // split full or split partial or unmatched") — how much of each txn is
       // applied, summed from BOTH payment ledgers (invoice payments for
@@ -524,6 +529,7 @@ export async function POST(req) {
           if (rO.error) { break; }
           (rO.data || []).forEach(function (o7) {
             if (o7.review_status === 'duplicate') { return; }
+            if (isPrivateRow(o7, scopeA)) { return; } // TP
             var lab = acMap[o7.account_id] || '(account)';
             var cur7 = outsideBy[lab] || { account: lab, lines: 0, first: o7.date, last: o7.date };
             cur7.lines++; if (o7.date < cur7.first) { cur7.first = o7.date; } if (o7.date > cur7.last) { cur7.last = o7.date; }

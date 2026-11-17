@@ -15,6 +15,7 @@ import { audit } from '../../../../lib/audit-server';
 import { sendAlertEmail } from '../../../../lib/notify-server';
 import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFAULT, reconcileReleases } from '../../../../lib/order-lifecycle';
 import { relKey, isTransportLine } from '../../../../lib/profitability';
+import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 
 export const maxDuration = 60;
 var API_BUILD_MARKER = 'v55.83-TI-order-monitor';
@@ -335,10 +336,12 @@ export async function POST(req) {
     }
     if (action === 'deposit_candidates') {
       // money IN on the US accounts, settled, with what is still free (not matched to invoices and not linked to orders)
-      var q = db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, direction, pending').eq('direction', 'in').neq('pending', true);
+      var q = db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, direction, pending, account_id').eq('direction', 'in').neq('pending', true);
       var amt = Number(String(body.amount || '').replace(/[$,\s]/g, '')); if (amt > 0) { q = q.gte('amount_abs', r2(amt - 0.5)).lte('amount_abs', r2(amt + 0.5)); }
       var tq = String(body.q || '').replace(/[%,()]/g, ' ').trim(); if (tq) { q = q.or('name.ilike.%' + tq + '%,merchant_name.ilike.%' + tq + '%'); }
       var lr = await q.order('date', { ascending: false }).limit(100); if (lr.error) { return bad(lr.error.message, 500); }
+      var scopeD = await privateScope(db, userId); if (scopeD.error) { return bad(scopeD.error + ' — no bank lines shown.', 503); } // v55.83-TP
+      lr.data = dropPrivate(lr.data, scopeD);
       var ids = (lr.data || []).map(function (t) { return t.id; });
       var usedInv = ids.length ? await inChunks(db, 'accounting_invoice_payments', 'bank_transaction_id, amount, voided', 'bank_transaction_id', ids) : [];
       var usedLnk = []; try { usedLnk = ids.length ? await inChunks(db, 'order_deposit_links', 'bank_transaction_id, amount, voided', 'bank_transaction_id', ids) : []; } catch (eL) { usedLnk = []; }

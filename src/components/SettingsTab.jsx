@@ -498,6 +498,7 @@ const ACTION_PERMS = [
   { key: 'bank.view',                   label: 'Bank: View Transactions',        desc: 'See bank transactions in Bank Review & Matching (names/dates). Account balances are a SEPARATE permission below.' },
   { key: 'bank.see_amounts',            label: 'Bank: See Amounts',              desc: 'See bank transaction amounts. Without this, transaction amounts are masked.' },
   { key: 'bank.view_all_accounts',      label: 'Bank: View All Accounts',        desc: 'See/switch to any bank account in the silo (and the "All accounts" view) and see all bank connections. Without this, the user is locked to the silo default account.' },
+  { key: 'bank.view_private',            label: 'Bank: See private accounts 🔒',  desc: 'See the transactions of bank accounts the super admin marked PRIVATE (Bank → account → Make private). Only the super admin can switch this on.' }, // v55.83-TP
   { key: 'bank.connections',            label: 'Bank: Manage Connections',       desc: 'Connect/reconnect banks via Plaid, Deep re-pull history, archive duplicate links, move accounts between silos. Super admins always can. (v55.83-QB)' },
   { key: 'accounting.view_underlying',  label: 'Accounting: Open Cards (rows only) — RETIRED', desc: 'No longer used (v55.83-RE). Card navigation now follows the card\'s own group: P1 cards (Expected, Bills Due, Late, Overdue) and P3 cards (Invoiced, Paid, Still Open, Collected) open their records; P2 cards need P2.' },
   { key: 'audit.view',                  label: 'Audit: View Trail',              desc: 'See the 🧾 Audit Trail — who categorized, matched, created, paid, validated what and when. Append-only; nobody can edit or delete audit rows. Super admins always can. (v55.83-QI)' },
@@ -531,6 +532,13 @@ const ACTION_PERMS = [
   { key: 'purchase_orders.edit',            label: 'ACCT-007 - Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders. NOTE: for launch back-compat, "Invoices: Create/Edit" also currently grants this until roles are assigned.' },
 ];
 
+// v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)
+const SENSITIVE_PERMS_UI = { 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true };
+// v55.83-TP — one click sets a person up as ACCOUNTING STAFF: enter + validate invoices and bills, see what is owed, see bank lines
+// (amounts included) to match and prepare wires. Never: profit / margin, money totals, bank balances, private accounts, undo matches.
+const ACCOUNTING_STAFF_PRESET = ['accounting.clickbooks.access', 'accounting.wavehub.access', 'accounting.view_invoicing', 'invoice.view', 'invoice.create',
+  'accounting.customers.view', 'accounting.customers.edit', 'bills.view', 'bills.manage', 'bank.view', 'bank.see_amounts', 'bank.view_all_accounts', 'bank.classify',
+  'payments.match', 'wires.view', 'wires.prepare', 'orders.monitor', 'ar.view_invoice_balances', 'ar.view_overdue', 'ar.view_upcoming_due'];
 const NOTIF_TYPES = [
   { v: 'ticket_assigned', l: 'Ticket Assigned / تعيين تذكرة' },
   { v: 'ticket_status', l: 'Ticket Status Changed / تغيير حالة التذكرة' },
@@ -1105,6 +1113,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   };
 
   const togglePermission = async (userId, module, displayedHasAccess) => {
+    if (SENSITIVE_PERMS_UI[module] && !isSuperAdmin && !displayedHasAccess) { if (toast) toast.error('Only the super admin can switch on “' + module + '”.'); return; } // v55.83-TP
     // These grants use the verified-super-admin API, never the legacy map.
     if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
       if (toast) toast.error('Use Settings → 🏦 Banking & Accounting Access to change these permissions.');
@@ -1654,7 +1663,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         Module / Permission
                       </th>
                       {nonSuperUsers.map(u => (
-                        <th key={u.id} className="px-2 py-2 text-center text-[10px] font-bold min-w-[80px]">{u.name}</th>
+                        <th key={u.id} className="px-2 py-2 text-center text-[10px] font-bold min-w-[80px]">{u.name}
+                          <div><button type="button" title="Switch on everything an accounting staff member needs (invoices, bills, bank lines for matching, wires prep). Never profit, money totals, balances or private accounts." onClick={async () => { if (!window.confirm('Set ' + u.name + ' up as Accounting Staff? This switches ON: ' + ACCOUNTING_STAFF_PRESET.join(', ') + '. Nothing is switched off.')) { return; } for (const k of ACCOUNTING_STAFF_PRESET) { const cur = !!(permissions[u.id] && permissions[u.id][k]); if (!cur) { await togglePermission(u.id, k, false); } } }} className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-800 hover:bg-indigo-200">＋ Accounting Staff</button></div></th>
                       ))}
                     </tr>
                   </thead>

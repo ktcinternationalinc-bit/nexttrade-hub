@@ -48,7 +48,9 @@ export function acctAccess(isSuperAdmin, mp, role, hub) {
     access: access,
     ktc: ktc,
     wave: wave,
-    fin: access && (all || m[P2] === true),
+    // v55.83-TP (Max, Nov 17) — money totals (bank balance, came in / went out, net) are SENSITIVE: only the super admin or an
+    // explicit grant; an owner / admin role no longer implies them.
+    fin: access && (isSuperAdmin === true || m[P2] === true),
     inv: access && (all || m[P3] === true),
     ops: access,
   };

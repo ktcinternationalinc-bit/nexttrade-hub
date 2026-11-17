@@ -28,7 +28,8 @@ import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { bankLineRemaining, checkBankPayment } from '../../../../lib/bill-bank-pay'; // v55.83-TH
 import { addAuditSubjects, billName, bankName } from '../../../../lib/audit-subjects-server'; // v55.83-TH
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
-import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TO (Codex P1: verified identity for money actions)
+import { verifiedCaller } from '../../../../lib/verified-caller';
+import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts // v55.83-TO (Codex P1: verified identity for money actions)
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 
@@ -677,7 +678,7 @@ export async function POST(req) {
 
     // ── v55.83-TH — money-out bank lines a bill can be paid from, with what is still free on each (search by text / amount / dates)
     if (action === 'bank_lines_for_bills') {
-      var qB = db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, pending, direction, wave_business_id')
+      var qB = db.from('bank_transactions').select('id, date, posted_date, amount_abs, name, merchant_name, pending, direction, wave_business_id, account_id')
         .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').neq('pending', true);
       if (isDate(body.from)) { qB = qB.gte('date', body.from); }
       if (isDate(body.to)) { qB = qB.lte('date', body.to); }
@@ -687,6 +688,8 @@ export async function POST(req) {
       if (txtB) { var safeB = txtB.replace(/[%,()]/g, ' ').trim(); if (safeB) { qB = qB.or('name.ilike.%' + safeB + '%,merchant_name.ilike.%' + safeB + '%'); } }
       var lb = await qB.order('date', { ascending: false }).limit(150);
       if (lb.error) { throw new Error(lb.error.message); }
+      var scopeB = await privateScope(db, userId); if (scopeB.error) { return NextResponse.json({ error: scopeB.error + ' — no bank lines shown.' }, { status: 503 }); } // TP
+      lb.data = dropPrivate(lb.data, scopeB);
       var lIds = (lb.data || []).map(function (t) { return t.id; });
       var lPays = lIds.length ? await db.from('vendor_bill_payments').select('bank_transaction_id, amount, voided').in('bank_transaction_id', lIds) : { data: [] };
       if (lPays.error) { return NextResponse.json({ error: 'Could not read what is already paid from these bank lines (' + lPays.error.message + ') — no free amounts are shown rather than wrong ones.' }, { status: 503 }); } // TO — fail closed

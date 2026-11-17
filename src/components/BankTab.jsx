@@ -45,6 +45,27 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
   // v55.83-GJ — without bank.view_all_accounts, staff are locked to the silo default account and
   // can't pick "All accounts" or see other silos' connections.
   const isSuperAdmin = !!(userProfile && userProfile.role === 'super_admin');
+  // v55.83-TP (Max, Nov 17) — 🔒 PRIVATE accounts: only the super admin sees / changes the mark; the database hides the
+  // account's transactions from everyone without "Bank: See private accounts".
+  const [privAcc, setPrivAcc] = useState({}); const [privNote, setPrivNote] = useState('');
+  const privCall = async (payload) => {
+    const { supabase } = await import('../lib/supabase');
+    const headers = await bankSessionHeaders(supabase, true);
+    const r = await fetch('/api/accounting/private-accounts', { method: 'POST', headers: headers, body: JSON.stringify(payload) });
+    return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+  };
+  useEffect(function () {
+    if (!isSuperAdmin) { return; }
+    privCall({ action: 'list' }).then(function (j) { if (j && j.ok) { var m = {}; (j.private || []).forEach(function (id) { m[id] = true; }); setPrivAcc(m); setPrivNote(j.setup_needed ? j.sql_hint : ''); } }).catch(function () {});
+  }, [isSuperAdmin]); // eslint-disable-line
+  const togglePrivate = (a) => {
+    var on = !privAcc[a.plaid_account_id];
+    if (!window.confirm(on ? 'Make account ··' + (a.mask || a.plaid_account_id) + ' PRIVATE? Its transactions will be hidden from everyone except you and people you give "Bank: See private accounts".' : 'Make account ··' + (a.mask || a.plaid_account_id) + ' visible to the team again?')) { return; }
+    privCall({ action: 'set', plaid_account_id: a.plaid_account_id, private: on }).then(function (j) {
+      if (j && j.ok) { setPrivAcc(function (p) { var n = Object.assign({}, p); n[a.plaid_account_id] = on; return n; }); setNotice(on ? 'Account is now private.' : 'Account is visible to the team again.'); }
+      else { setError((j && j.error) || 'Could not change it.'); }
+    }).catch(function (e) { setError((e && e.message) || 'Could not change it.'); });
+  };
   const canViewAllAccounts = isSuperAdmin || (userProfile && (userProfile.role === 'admin' || userProfile.role === 'owner')) || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
   // v55.83-JX — connection-level assign via the service-role route (RLS-proof + schema-safe; the old
@@ -649,6 +670,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
                             <span className="font-semibold">{nm}</span>{a.mask ? <span className="font-mono text-slate-600"> ··{a.mask}</span> : null}
                             {a.subtype ? <span className="text-[10px] text-slate-400"> · {a.subtype}</span> : null}
                             <span className="ml-2 text-[10px] text-slate-500">→ silo: <span className="font-semibold">{bizLabel(a.wave_business_id)}</span></span>
+                            {isSuperAdmin && <button type="button" onClick={function () { togglePrivate(a); }} title={privNote || 'Only you (and people you give “Bank: See private accounts”) see a private account’s transactions'} className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded" style={privAcc[a.plaid_account_id] ? { background: '#7f1d1d', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{privAcc[a.plaid_account_id] ? '🔒 Private' : 'Make private'}</button>}
                           </div>
                           <div className="flex items-center gap-1">
                             <span className={'text-[10px] ' + (_stale ? 'text-amber-700 font-bold' : 'text-slate-500')}>{cnt} txn{cnt === 1 ? '' : 's'}{newestD ? (' · newest ' + newestD + (_stale ? ' ⚠ ' + _agoDays + 'd ago — Sync or Reconnect' : '')) : ' · none yet'}</span>

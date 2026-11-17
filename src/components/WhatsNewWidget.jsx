@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TP',
+    date: '2026-11-17',
+    title: 'Team permissions — only the super admin sees everything; private bank accounts',
+    items: [
+      { text: 'Admins and owners no longer see profit, margin, money totals (came in / went out / net) or bank balances just because of their role. Only the super admin sees them automatically; anyone else needs the switch turned on by the super admin.' },
+      { text: 'Only the super admin can switch ON “P&L: See profit & margin”, “P2 · Bank & Financial Summary” and the new “Bank: See private accounts”. Anyone may switch them off.' },
+      { text: 'A switch turned OFF now always means off, even if the person’s role would normally allow it. “Payments: Match” no longer also allows undoing a match — that is its own switch.' },
+      { text: 'Private bank accounts: Bank → Connections → an account → “Make private” (super admin only). Its transactions disappear for everyone except the super admin and people given “Bank: See private accounts”, on every screen. Needs one SQL (v55-83-TP-permissions.sql).' },
+      { text: 'Settings → Module Access → “＋ Accounting Staff” under a person’s name switches on what accounting staff need: invoices, bills, customers, bank lines with amounts for matching, wire preparation, orders — never profit, totals, balances or private accounts.' }
+    ]
+  },
+  {
     version: 'v55.83-TO',
     date: '2026-11-17',
     title: 'Safety fixes from Codex’s review — bill payments, deposits and closing orders',

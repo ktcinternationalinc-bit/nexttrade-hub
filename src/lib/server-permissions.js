@@ -36,7 +36,8 @@ var PERMISSION_ALIASES = {
   // role wildcards never confer this protected capability.
   'bank_balances.view': [],
   'payments.match': ['Payments: Match', 'payments.match'],
-  'payments.unmatch': ['Payments: Unmatch', 'payments.unmatch', 'Payments: Match', 'payments.match'],
+  // v55.83-TP (Codex QA, Max Nov 17) — undoing a match is its OWN decision: 'match' no longer grants 'unmatch'
+  'payments.unmatch': ['Payments: Unmatch', 'payments.unmatch'],
   'payments.mark_manual_done': ['Payments: Mark Manual Done', 'payments.mark_manual_done'],
   'categories.apply': ['Categories: Apply', 'categories.apply', 'Bank: Classify', 'bank.classify'],
   // ----- Wave sync authority (granular, per action) -----
@@ -82,6 +83,10 @@ var ROLE_DEFAULTS = {
   viewer: ['invoices.view', 'customers.view']
 };
 
+// v55.83-TP (Max, Nov 17: "an admin should also have restrictions unless he is the super admin") — these are NEVER granted by a
+// role (owner / admin / any default): only the super admin, or a person Max switched on explicitly.
+export var SENSITIVE_PERMS = { 'pnl.view_margin': 1, 'accounting.view_totals': 1, 'bank_balances.view': 1, 'bank.view_private': 1, 'permissions.grant_sensitive': 1 };
+export function isSensitivePerm(perm) { return SENSITIVE_PERMS[perm] === 1; }
 function aliasesFor(perm) { return PERMISSION_ALIASES[perm] || [perm]; }
 
 function mpHas(mpMap, perm) {
@@ -94,6 +99,7 @@ function mpHas(mpMap, perm) {
 
 function roleHas(role, perm) {
   if (!role) { return false; }
+  if (SENSITIVE_PERMS[perm] === 1) { return false; } // TP — never from a role
   var list = ROLE_DEFAULTS[role];
   if (!list) { return false; }
   if (list.indexOf('*') >= 0) { return true; }
@@ -103,8 +109,8 @@ function roleHas(role, perm) {
 // Loads the user's role + module_permissions and returns a resolver.
 export async function loadUserPermissions(db, userId) {
   var role = null;
-  var mpMap = {};
-  if (!userId) { return { role: null, isSuperAdmin: false, mp: mpMap }; }
+  var mpMap = {}; var denyMap = {};
+  if (!userId) { return { role: null, isSuperAdmin: false, mp: mpMap, deny: denyMap }; }
   try {
     var uRes = await db.from('users').select('id, role').eq('id', userId).limit(1);
     var u = uRes && uRes.data && uRes.data[0];
@@ -114,9 +120,9 @@ export async function loadUserPermissions(db, userId) {
     var mpRes = await db.from('module_permissions').select('module_name, has_access').eq('user_id', userId);
     var rows = (mpRes && mpRes.data) || [];
     var i;
-    for (i = 0; i < rows.length; i++) { if (rows[i].has_access === true) { mpMap[rows[i].module_name] = true; } }
-  } catch (eM) { mpMap = {}; }
-  return { role: role, isSuperAdmin: role === 'super_admin', mp: mpMap };
+    for (i = 0; i < rows.length; i++) { if (rows[i].has_access === true) { mpMap[rows[i].module_name] = true; } else if (rows[i].has_access === false) { denyMap[rows[i].module_name] = true; } }
+  } catch (eM) { mpMap = {}; denyMap = {}; }
+  return { role: role, isSuperAdmin: role === 'super_admin', mp: mpMap, deny: denyMap };
 }
 
 export function userHasPermission(ctx, perm) {
@@ -124,7 +130,9 @@ export function userHasPermission(ctx, perm) {
   if (perm === 'bank_balances.view') { return ctx.bankVisibility?.canViewBankBalances === true; }
   if (ctx.isSuperAdmin === true) { return true; }       // super_admin = all
   if (mpHas(ctx.mp, perm)) { return true; }              // explicit grant
-  if (roleHas(ctx.role, perm)) { return true; }          // temporary role default
+  // v55.83-TP (Codex QA) — a switch turned OFF for this person denies, even when their role's default would allow it
+  if (ctx.deny && ctx.deny[perm] === true) { return false; }
+  if (roleHas(ctx.role, perm)) { return true; }          // temporary role default (never a sensitive permission)
   return false;
 }
 

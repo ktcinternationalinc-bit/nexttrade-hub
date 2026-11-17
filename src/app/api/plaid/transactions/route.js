@@ -5,6 +5,7 @@ import { accountTwins } from '../../../../lib/account-twins-server'; // v55.83-Q
 import { hubNewestForConnection } from '../../../../lib/bank-continue'; // v55.83-SH
 import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-RZ — new bank lines → sent wires matched, bills PAID
 import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU — the duplicate check runs by itself after a sync
+import { privateScope, dropPrivate } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -292,6 +293,10 @@ export async function GET(req) {
     if (reviewStatus) query = query.eq('review_status', reviewStatus);
     var r = await query.limit(500);
     if (r.error) return plaidJson({ error: r.error.message }, { status: 500 });
+    // v55.83-TP (Codex QA, Max Nov 17) — a PRIVATE account's lines only for the super admin / people granted 'bank.view_private'
+    var scopeP = await privateScope(supabase, access.profileId);
+    if (scopeP.error) return plaidJson({ error: scopeP.error + ' — nothing is shown rather than a private line.' }, { status: 503 });
+    r.data = dropPrivate(r.data, scopeP);
     return plaidJson({ transactions: r.data });
   } catch (e) {
     return plaidError(e);
