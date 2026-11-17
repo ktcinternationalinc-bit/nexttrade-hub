@@ -85,5 +85,57 @@ var unl = A.assembleProfitability(Object.assign({}, early, { groupNames: [early.
 var w0 = (unl.by_product[0].cost_missing_why || [])[0] || {};
 check('a missing-cost reason carries its product group, sale date and description (for the → fix button)', w0.why === 'no supplier description linked' && w0.group_id === 'g1' && w0.first_sale === '2026-05-01' && w0.names[0] === 'FORTIS BY KGs', w0);
 
+console.log('TK — total cost without outbound shipping; goods profit + transport profit = total profit');
+// 1756-like: goods 10,544.25 + trucking line 2,000; trucker bill 1,500; supplier cost $0.18/lb; Houston release → $200 bonded
+var tk = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true,
+  groups: [{ id: 'gf', display_name: 'Fortis', active: true, created_at: '2026-01-01' }],
+  groupNames: [{ group_id: 'gf', source: 'invoice', name_key: 'fortis material by tons', raw_name: 'FORTIS MATERIAL BY TONS', active: true }, { group_id: 'gf', source: 'bill', name_key: 'fortis scrap', raw_name: 'Fortis Scrap', active: true }],
+  bills: [{ id: 'pb', bill_number: 'F-9', vendor_name: 'Fortis', bill_type: 'purchase', release_number: '', total_amount: 18000, record_status: 'active', bill_date: '2026-09-01' },
+          { id: 'tb', bill_number: 'TR-9', vendor_name: 'Trucker', bill_type: 'trucking', shipment_direction: 'outbound', release_number: '1002-1166', total_amount: 1500, record_status: 'active', bill_date: '2026-10-05' }],
+  billLines: [{ bill_id: 'pb', line_kind: 'item', description: 'Fortis Scrap', qty: 100000, unit: 'lb', cost_amount: 18000, commission_amount: 2000 }] }));
+var row = tk.by_product[0]; var cl = tk.cells[0];
+var expectCost = Math.round((cl.base_cost + cl.commission + cl.inbound_allowance + cl.brokerage + cl.bonded) * 100) / 100;
+check('total cost = goods cost + commission + inbound + brokerage + bonded — NOT the 1,500 trucking', row.total_cost === expectCost && cl.bonded === 200, { row: row.total_cost, expect: expectCost });
+check('goods profit = goods revenue − total cost', row.goods_profit === Math.round((10544.25 - expectCost) * 100) / 100 && cl.goods_profit === row.goods_profit && row.goods_profit_known === true, row);
+check('transport profit = 2,000 charged − 1,500 trucking bill = 500', row.transport_profit === 500);
+check('total profit = goods profit + transport profit', Math.abs(row.profit - (row.goods_profit + row.transport_profit)) < 0.011, { p: row.profit, g: row.goods_profit, t: row.transport_profit });
+// CNF with the shipping inside the price and no shipping line → the container cost is taken out of the price; transport profit 0
+var cnfIn = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, items: [base.items[0]], terms: [{ invoice_id: 'i1', shipping_terms: 'CNF_INCLUDED' }],
+  bills: [{ id: 'tb', bill_number: 'TR-9', vendor_name: 'Trucker', bill_type: 'trucking', shipment_direction: 'outbound', release_number: '1002-1166', total_amount: 1500, record_status: 'active', bill_date: '2026-10-05' }] }));
+var ci = cnfIn.by_product[0];
+check('CNF included, no shipping line: 1,500 shipping taken out of the price (goods 9,044.25) and transport profit = 0', ci.goods_revenue === 9044.25 && ci.transport_revenue === 1500 && ci.transport_profit === 0, ci);
+
+console.log('TL — trucking and freight each on their own; typed per release, the bill wins; bond only when not paper / foil');
+var truckBill = { id: 'tb', bill_number: 'TR-9', vendor_name: 'Trucker', bill_type: 'trucking', shipment_direction: 'outbound', release_number: '1002-1166', total_amount: 1500, record_status: 'active', bill_date: '2026-10-05' };
+var shipBill = { id: 'sb', bill_number: 'FF-9', vendor_name: 'Forwarder', bill_type: 'shipping', shipment_direction: 'outbound', release_number: '1002-1166', total_amount: 3000, record_status: 'active', bill_date: '2026-10-06' };
+var onlyTruck = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [truckBill] }));
+var ot = onlyTruck.by_product[0];
+check('only a trucking bill → trucking $1,500 shown, freight none yet (not "missing everything")', ot.trucking_cost === 1500 && ot.unknown_fields.indexOf('freight_cost') >= 0 && ot.unknown_fields.indexOf('trucking_cost') < 0, ot);
+check('…transport profit uses what is known: 2,000 − 1,500 = 500', ot.transport_profit === 500, ot);
+var typedF = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [truckBill], partEstimates: [{ release_key: '10021166', part: 'freight', amount: 2500 }] }));
+var tf = typedF.by_product[0];
+check('freight typed for the release (2,500) + trucking bill (1,500) → both shown; outbound 4,000 as ESTIMATE', tf.trucking_cost === 1500 && tf.freight_cost === 2500 && tf.outbound_cost === 4000 && typedF.cells[0].outbound_kind === 'estimate', tf);
+check('Containers shows the typed freight', typedF.containers[0].parts.freight.estimate === 2500 && typedF.containers[0].parts.freight.estimate_from === 'typed in the Hub' && typedF.containers[0].parts.freight.typed === 2500, typedF.containers[0].parts.freight);
+var billWins = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [truckBill, shipBill], partEstimates: [{ release_key: '10021166', part: 'freight', amount: 2500 }] }));
+var bw = billWins.by_product[0];
+check('the freight bill (3,000) overrides the typed 2,500 → final 4,500', bw.freight_cost === 3000 && bw.outbound_cost === 4500 && billWins.cells[0].outbound_kind === 'actual', bw);
+check('…and the difference typed → bill is shown on Containers (+500)', billWins.containers[0].parts.freight.difference === 500 && billWins.containers[0].parts.freight.differs === true, billWins.containers[0].parts.freight);
+var whR = { id: 'w1', release_key: '10021166', release_number: '1002-1166', superseded: false, section: 'main', order_id: 7, source_link: 'x', freight_used: 3475, freight_kind: 'estimate', trucking_used: 1850, trucking_kind: 'estimate', manual_freight: null, manual_trucking: null };
+var whT = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], warehouseRows: [whR], partEstimates: [{ release_key: '10021166', part: 'trucking', amount: 1700 }] }));
+var wt = whT.by_product[0];
+check('typed trucking (1,700) wins over Nextrade (1,850); Nextrade freight 3,475 still used', wt.trucking_cost === 1700 && wt.freight_cost === 3475, wt);
+var whOnlyF = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], warehouseRows: [Object.assign({}, whR, { trucking_used: null })] }));
+var wf = whOnlyF.by_product[0];
+check('Nextrade has freight but not trucking → freight 3,475 shown, trucking none yet', wf.freight_cost === 3475 && wf.unknown_fields.indexOf('trucking_cost') >= 0, wf);
+var paper = A.assembleProfitability(Object.assign({}, base, { warehouseOn: false, items: [{ id: 'l1', invoice_id: 'i1', description: 'Release Paper', quantity: 24.81, unit_price: 425 }], nameUnits: [{ name_key: 'release paper', unit: 'ton' }] }));
+check('Houston container with paper only → no $200 bond', paper.cells[0].bonded === 0, paper.cells[0]);
+var foil = A.assembleProfitability(Object.assign({}, base, { warehouseOn: false, items: [{ id: 'l1', invoice_id: 'i1', description: 'Aluminium Foil rolls', quantity: 24.81, unit_price: 425 }], nameUnits: [{ name_key: 'aluminium foil rolls', unit: 'ton' }] }));
+check('Houston container with foil only → no $200 bond', foil.cells[0].bonded === 0, foil.cells[0]);
+var fortisB = A.assembleProfitability(Object.assign({}, base, { warehouseOn: false }));
+check('Houston container with Fortis (not paper / foil) → $200 bond', fortisB.cells[0].bonded === 200, fortisB.cells[0]);
+var mixed = A.assembleProfitability(Object.assign({}, base, { warehouseOn: false, items: [base.items[0], { id: 'l3', invoice_id: 'i1', description: 'Release Paper', quantity: 1, unit_price: 100 }], nameUnits: [{ name_key: 'fortis material by tons', unit: 'ton' }, { name_key: 'release paper', unit: 'ton' }] }));
+check('mixed container (Fortis + paper) → $200 bond on the container', Math.round(mixed.cells.reduce(function (s0, c) { return s0 + c.bonded; }, 0)) === 200, mixed.cells.map(function (c) { return c.bonded; }));
+check('paper / foil words: “Paper”, “papers”, “Foil”, “foils” yes; “Paperboard”, “Fortis” no', A.isPaperOrFoil('Release Paper') && A.isPaperOrFoil('PAPERS') && A.isPaperOrFoil('foil') && A.isPaperOrFoil('Foils') && !A.isPaperOrFoil('Paperboard') && !A.isPaperOrFoil('Fortis'));
+
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

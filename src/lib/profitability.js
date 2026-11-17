@@ -373,12 +373,14 @@ export function buildCells(input) {
       c.goods_revenue !== null && c.transport_revenue !== null && c.brokerage !== null && c.bonded !== null && c.goods_price_confirmed && !!c.release &&
       c.flags.indexOf('allocation_unresolved_missing_weight') < 0 && c.flags.indexOf('purchase_line_without_cost') < 0;
     c.transport_profit = c.outbound_cost === null ? null : r2(c.transport_revenue - c.outbound_cost);
+    c.goods_profit = (c.goods_revenue === null || c.base_cost === null || c.commission === null || c.inbound_allowance === null || c.brokerage === null || c.bonded === null) ? null
+      : r2(c.goods_revenue - c.base_cost - c.commission - c.inbound_allowance - c.brokerage - c.bonded); // v55.83-TK
   });
   return { cells: cells, flags: flags, unallocated: unallocated };
 }
 
 // Sum cells by any key. Averages are ALWAYS total ÷ total pounds — never an average of averages.
-var SUM_FIELDS = ['invoiced', 'goods_revenue', 'transport_revenue', 'base_cost', 'commission', 'inbound_allowance', 'outbound_cost', 'brokerage', 'bonded', 'profit'];
+var SUM_FIELDS = ['invoiced', 'goods_revenue', 'transport_revenue', 'base_cost', 'commission', 'inbound_allowance', 'outbound_cost', 'brokerage', 'bonded', 'profit', 'trucking_cost', 'freight_cost'];
 export function summarize(cells, keyFn, labelFn) {
   var map = {}; var order = [];
   (cells || []).forEach(function (c) {
@@ -404,7 +406,13 @@ export function summarize(cells, keyFn, labelFn) {
     // v55.83-TC (Max, Nov 16: "Avg Cost All / LB - adding the commission and inbound allowance") — goods cost + commission + inbound
     // allowance, ÷ pounds. Only when all three are fully known and every weight is there; otherwise no average is shown.
     row.avg_all_cost_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.pounds) : null;
-    row.total_cost = r2(row.base_cost + row.commission + row.inbound_allowance + row.outbound_cost + row.brokerage + row.bonded);
+    // v55.83-TK (Max, Nov 17: "the total cost is everything except for the shipping ... there should be a transportation profit and then
+    // the goods profit") — total cost = goods cost + commission + inbound allowance + brokerage + bonded (NOT outbound shipping).
+    // Goods profit = goods revenue − total cost. Transport profit = transport charged − outbound shipping. Profit = the two together.
+    row.total_cost = r2(row.base_cost + row.commission + row.inbound_allowance + row.brokerage + row.bonded);
+    row.total_cost_known = !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance && !row.unknown.brokerage && !row.unknown.bonded;
+    row.goods_profit = r2(row.goods_revenue - row.total_cost);
+    row.goods_profit_known = row.total_cost_known && !row.unknown.goods_revenue;
     row.transport_profit = row.unknown.outbound_cost ? null : r2(row.transport_revenue - row.outbound_cost);
     row.invoice_count = Object.keys(row.invoices).length; row.release_list = Object.keys(row.releases).sort(); row.name_list = Object.keys(row.names).sort();
     delete row.invoices; delete row.releases; delete row.names;

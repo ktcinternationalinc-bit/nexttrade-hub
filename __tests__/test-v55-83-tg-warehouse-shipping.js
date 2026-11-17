@@ -159,7 +159,9 @@ check('switch OFF: basis not inferred', off.by_invoice[0].invoice.basis === null
 var est = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [] }));
 check('no Hub bills: 3475 final + 1850 quote = 5325 as an ESTIMATE', est.containers[0].status === 'warehouse_estimate' && est.containers[0].shipping_estimate === 5325, est.containers[0]);
 var typed = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], estimates: [{ release_key: '10021156', outbound_estimate: 6000 }] }));
-check('an estimate a person typed wins over the warehouse', typed.containers[0].status === 'estimate' && typed.containers[0].shipping_estimate === 6000);
+check('TK (Max, Nov 17): the warehouse figure wins over an older estimate typed in the Hub (no manual updates)', typed.containers[0].status === 'warehouse_estimate' && typed.containers[0].shipping_estimate === 5325, typed.containers[0]);
+var typedNoWh = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], warehouseRows: [], estimates: [{ release_key: '10021156', outbound_estimate: 6000 }] }));
+check('TK: a typed estimate is only a fallback when the warehouse has nothing', typedNoWh.containers[0].status === 'estimate' && typedNoWh.containers[0].shipping_estimate === 6000, typedNoWh.containers[0]);
 var exw = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], items: base.items.concat([{ id: 'l2', invoice_id: 'i1', description: 'Ocean freight', quantity: 1, unit_price: 5000 }]) }));
 check('shipping charge line with an amount → EXW (TJ: Max’s shipping-line rule)', exw.by_invoice[0].invoice.basis === 'EXW' && exw.by_invoice[0].invoice.basis_source === 'shipping_line_rule', exw.by_invoice[0].invoice);
 var conflict = A.assembleProfitability(Object.assign({}, base, { warehouseOn: true, bills: [], terms: [{ invoice_id: 'i1', basis: 'CNF' }], items: base.items.concat([{ id: 'l2', invoice_id: 'i1', description: 'Ocean freight', quantity: 1, unit_price: 5000 }]) }));

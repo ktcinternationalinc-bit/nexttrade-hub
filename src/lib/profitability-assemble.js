@@ -21,6 +21,8 @@ export function splitReleases(text) {
   });
   return out;
 }
+// v55.83-TL — paper / foil goods carry no bond charge (Max, Nov 17)
+export function isPaperOrFoil(text) { return /\bpapers?\b|\bfoils?\b/i.test(String(text || '')); }
 function isLive(i) { var st = i.record_status; return st !== 'void' && st !== 'cancelled' && st !== 'archived' && st !== 'deleted'; }
 function lineName(it) { return String(it.wave_product_name || it.description || '').trim() || '(no description)'; }
 
@@ -195,31 +197,55 @@ export function assembleProfitability(d) {
     });
   });
   Object.keys(truckCount).forEach(function (rel) { if (truckCount[rel] > 1) { flags.push({ kind: 'two_trucking_bills_on_one_release', release: relRaw[rel] || rel, count: truckCount[rel], bills: (outbound[rel].bills || []).filter(function (x) { return x.type === 'trucking'; }).map(function (x) { return x.bill_number; }) }); } });
-  Object.keys(relKnown).forEach(function (rel) { if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = BONDED_PER_HOUSTON_RELEASE; } }); // v55.83-TC
-  Object.keys(estimateOf).forEach(function (rel) { if (relKnown[rel]) { var o = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] }); o.estimate = estimateOf[rel]; } });
-  // v55.83-TG — warehouse freight + trucking fill what the Hub's own bills do not cover. A bill already in the Hub is never added
-  // twice; an estimate a person typed wins; a release with a part missing stays 'missing' (a missing part is never zero).
-  var whUsed = {};
-  if (warehouseOn) {
-    Object.keys(relKnown).forEach(function (rel) {
-      if (estimateOf[rel] !== undefined || !whByRel[rel]) { return; }
-      var o = outbound[rel]; var types = {}; ((o && o.bills) || []).forEach(function (b) { types[b.type] = true; });
-      if (types.shipping && types.trucking) { return; }
-      var w = warehouseOutboundForRelease(whByRel[rel], types);
-      if (!w.usable) {
-        flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: w.why });
-        // Codex 16 Nov (P1): the warehouse says a part is missing, so a partial Hub bill must NOT read as the complete cost.
-        // The known amount is kept, but as an ESTIMATE (never complete), and it is not used to separate a CNF price.
-        if (o && o.actual !== null && o.actual !== undefined) { o.estimate = o.actual; o.actual = null; o.partial = true; }
-        return;
+  // v55.83-TC — $200 bonded per Houston (1002-) shipment. v55.83-TL (Max, Nov 17: "anything coming out of the USA that's not paper or
+  // [foil] should have a $200 bond charge on that container") — a container carrying only paper / foil has no bond charge.
+  var noBondRel = {};
+  p1.cells.forEach(function (c) { if (!c.release) { return; } if (!isPaperOrFoil(c.description) && !isPaperOrFoil(c.product)) { noBondRel[c.release] = false; } else if (noBondRel[c.release] === undefined) { noBondRel[c.release] = true; } });
+  Object.keys(relKnown).forEach(function (rel) { if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = noBondRel[rel] === true ? 0 : BONDED_PER_HOUSTON_RELEASE; } });
+  // v55.83-TL (Max, Nov 17: "trucking is its own type of business ... add columns for the trucking and the freight forwarding or
+  // shipping, two different columns. So when you have one number, you can show it ... we should manually be able to enter it, and
+  // then it gets overridden if you have a bill ... for that specific release number") — per release, EACH PART on its own:
+  //   1 the Hub bill for that part (trucking bill / shipping bill) = final
+  //   2 a figure typed in the Hub for that part (this release)
+  //   3 Nextrade "Shipping In Progress" (estimate)
+  // A part with nothing stays empty; the other part is still shown and used. Older typed totals are used only when no part is known.
+  function numOrNull(v) { return v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : r2(v); }
+  var typedPart = {}; (d.partEstimates || []).forEach(function (e) { var o = typedPart[e.release_key] || (typedPart[e.release_key] = {}); var v = numOrNull(e.amount); if (v !== null && (e.part === 'trucking' || e.part === 'freight')) { o[e.part] = { amount: v, note: e.note || null }; } });
+  var whUsed = {}; var partsUsed = {};
+  Object.keys(relKnown).forEach(function (rel) {
+    var o = outbound[rel] || { actual: null, estimate: null, bills: [] };
+    var wRows = warehouseOn ? (whByRel[rel] || []).filter(function (w) { return w.section === 'main' && !w.superseded; }) : [];
+    if (wRows.length > 1) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: 'release on several warehouse orders' }); }
+    var wRow = wRows.length === 1 && !wRows[0].conflict ? wRows[0] : null;
+    if (wRows.length === 1 && wRows[0].conflict) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: 'test order or release on two warehouse orders' }); }
+    function part(name, billType) {
+      var bl = (o.bills || []).filter(function (b) { return b.type === billType; });
+      if (bl.length) { return { amount: r2(bl.reduce(function (s0, b) { return s0 + (b.share !== undefined ? b.share : b.amount); }, 0)), kind: 'bill', from: 'bill ' + bl.map(function (b) { return b.bill_number; }).join(', ') }; }
+      var tp = typedPart[rel] && typedPart[rel][name]; if (tp) { return { amount: tp.amount, kind: 'manual', from: 'typed in the Hub' + (tp.note ? ' — ' + tp.note : '') }; }
+      if (wRow) {
+        var wm = numOrNull(wRow['manual_' + name]); if (wm !== null) { return { amount: wm, kind: 'manual', from: 'typed correction (warehouse)' }; }
+        var u = numOrNull(wRow[name + '_used']); if (u !== null) { return { amount: u, kind: wRow[name + '_kind'] === 'own_transport' ? 'own_transport' : 'estimate', from: wRow[name + '_kind'] === 'own_transport' ? 'customer’s own transport (Nextrade)' : 'Nextrade Shipping In Progress' }; }
       }
-      whUsed[rel] = w;
-      var oo = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] });
-      var total = r2((oo.actual || 0) + w.amount);
-      if (w.final) { oo.actual = total; } else { oo.actual = null; oo.estimate = total; } // partly provisional = the whole release is an estimate
-      oo.warehouse = { amount: w.amount, final: w.final, freight: w.freight, trucking: w.trucking, order_id: w.row.order_id, link: w.row.source_link };
-    });
-  }
+      return null;
+    }
+    var t = part('trucking', 'trucking'); var f = part('freight', 'shipping');
+    var pu = { trucking: t, freight: f, legacy_total: null };
+    partsUsed[rel] = pu;
+    if (!t && !f) {
+      if (estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel]))) { var lo = outbound[rel] || (outbound[rel] = o); lo.actual = null; lo.estimate = r2(estimateOf[rel]); pu.legacy_total = lo.estimate; }
+      return;
+    }
+    var oo = outbound[rel] || (outbound[rel] = o);
+    var amt = r2((t ? t.amount : 0) + (f ? f.amount : 0));
+    var known = [t, f].filter(function (x) { return !!x; });
+    var allBill = known.every(function (x) { return x.kind === 'bill'; });
+    // Codex 16 Nov (P1) kept: when Nextrade has the order and says a part is still missing, a bill for the other part is not "complete"
+    var partial = !!wRow && (!t || !f);
+    if (allBill && !partial) { oo.actual = amt; oo.estimate = null; } else { oo.actual = null; oo.estimate = amt; }
+    oo.partial = partial;
+    if (wRow && known.some(function (x) { return x.kind !== 'bill' && x.from.indexOf('Nextrade') >= 0; })) { whUsed[rel] = { final: false, amount: amt, row: wRow }; oo.warehouse = { amount: amt, final: false, order_id: wRow.order_id, link: wRow.source_link }; }
+    if (partial) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: (!t ? 'trucking' : 'freight') + ' missing in the warehouse — the other part is used' }); }
+  });
 
   // v55.83-TG — the shipping cost typed ON THE INVOICE: an ESTIMATE, used only when the release has no bill, no typed release
   // estimate and no warehouse figure. A bill always replaces it (Max: "Final confirmed value is based on bill").
@@ -275,6 +301,17 @@ export function assembleProfitability(d) {
     var ro = c.release ? releaseOrigin(relRaw[c.release] || c.release, '') : { origin: '', source: 'no release' };
     c.release_raw = c.release ? (relRaw[c.release] || c.release) : ''; c.origin = ro.origin; c.origin_source = ro.source;
     c.outbound_bills = c.release && outbound[c.release] ? outbound[c.release].bills : [];
+    // v55.83-TL — this sale's share of the release's TRUCKING and FREIGHT, each on its own (same pounds share as the outbound total).
+    // freight = outbound − trucking, so the two always add up to the outbound column exactly.
+    var pu = c.release ? partsUsed[c.release] : null; var ob0 = c.release ? outbound[c.release] : null;
+    var relTot = ob0 ? (ob0.actual !== null && ob0.actual !== undefined ? ob0.actual : ob0.estimate) : null;
+    c.trucking_cost = null; c.freight_cost = null; c.trucking_kind = pu && pu.trucking ? pu.trucking.kind : null; c.freight_kind = pu && pu.freight ? pu.freight.kind : null;
+    c.trucking_from = pu && pu.trucking ? pu.trucking.from : null; c.freight_from = pu && pu.freight ? pu.freight.from : null;
+    if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
+      var tAmt = pu.trucking ? pu.trucking.amount : 0;
+      if (pu.trucking) { c.trucking_cost = r2(c.outbound_cost * tAmt / relTot); }
+      if (pu.freight) { c.freight_cost = r2(c.outbound_cost - (c.trucking_cost || 0)); }
+    } else if (pu && relTot === 0 && c.outbound_cost === 0) { if (pu.trucking) { c.trucking_cost = 0; } if (pu.freight) { c.freight_cost = 0; } }
     if (c.group_id && !(billKeysOfGroup[c.group_id] || []).length) { c.flags.push('no_bill_description_linked'); }
     if (!c.group_id && c.base_cost === null) { c.flags.push('not_grouped_no_cost_source'); }
     // v55.83-TE (Max, Nov 16: "why does the second not have an avg cost") — say WHY a cost is missing, one reason per sale
@@ -343,7 +380,7 @@ export function assembleProfitability(d) {
         o.lines++; o.invoiced = r2(o.invoiced + l.amount); }); });
       return Object.keys(t).map(function (k) { return t[k]; }).sort(function (a, b) { return b.invoiced - a.invoiced; });
     })(),
-    kinds_ready: d.kinds_ready !== false, customer_terms_ready: d.customer_terms_ready !== false, manual_costs_ready: d.manual_costs_ready !== false, group_costs: d.groupCosts || [],
+    kinds_ready: d.kinds_ready !== false, customer_terms_ready: d.customer_terms_ready !== false, manual_costs_ready: d.manual_costs_ready !== false, part_estimates_ready: d.part_estimates_ready === true, group_costs: d.groupCosts || [],
     customer_basis: d.customerTerms || [],
     // v55.83-TE — every container (release) in the period with its shipping cost, so a missing one can be filled in one place
     containers: (function () {
@@ -363,7 +400,9 @@ export function assembleProfitability(d) {
           var bl = (ob.bills || []).filter(function (b) { return b.type === billType; });
           var bill = bl.length ? r2(bl.reduce(function (s, b) { return s + (b.share !== undefined ? b.share : b.amount); }, 0)) : null;
           var est = null; var from = null;
-          if (wRow) {
+          var typed = typedPart[k] && typedPart[k][name] ? typedPart[k][name].amount : null; // v55.83-TL — typed in the Hub for this part
+          if (typed !== null) { est = typed; from = 'typed in the Hub'; }
+          else if (wRow) {
             var man = wRow['manual_' + name];
             if (man !== null && man !== undefined && man !== '') { est = r2(man); from = 'typed correction'; }
             else if (wRow[name + '_estimate'] !== null && wRow[name + '_estimate'] !== undefined) { est = r2(wRow[name + '_estimate']); from = 'warehouse quote'; }
@@ -373,7 +412,7 @@ export function assembleProfitability(d) {
           }
           var wire = wRow && wRow[name + '_final'] !== null && wRow[name + '_final'] !== undefined ? r2(wRow[name + '_final']) : null;
           var diff = bill !== null && est !== null ? r2(bill - est) : null;
-          return { estimate: est, estimate_from: from, bill: bill, bills: bl.map(function (b) { return { bill_number: b.bill_number, vendor: b.vendor, date: b.bill_date, amount: b.share !== undefined ? b.share : b.amount }; }),
+          return { estimate: est, estimate_from: from, typed: typed, bill: bill, bills: bl.map(function (b) { return { bill_number: b.bill_number, vendor: b.vendor, date: b.bill_date, amount: b.share !== undefined ? b.share : b.amount }; }),
             used: bill !== null ? bill : est, status: bill !== null ? 'final_billed' : (est !== null ? 'estimate' : 'missing'),
             difference: diff, differs: diff !== null && Math.abs(diff) > 1, warehouse_payment: wire, payment_differs_from_bill: wire !== null && bill !== null && Math.abs(wire - bill) > 1 };
         }

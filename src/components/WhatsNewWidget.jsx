@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TL',
+    date: '2026-11-17',
+    title: 'Profitability — trucking and freight in their own columns; type them per container; no bond charge on paper or foil',
+    items: [
+      { text: 'Outbound is now two columns: Trucking (our cost) and Freight / shipping (our cost). When only one is known, it is shown and used — the other says “none yet”.' },
+      { text: 'For each part of each container: the bill in the Hub is used first (final); otherwise an amount typed in Containers; otherwise the figure from Nextrade Shipping In Progress. A bill always replaces a typed amount.' },
+      { text: 'Type trucking or freight for one container in 🚢 Containers (the “type $” box under each part).' },
+      { text: 'The $200 bond charge applies to Houston (1002-) containers except when the container carries only paper or foil.' }
+    ]
+  },
+  {
+    version: 'v55.83-TK',
+    date: '2026-11-17',
+    title: 'Profitability — goods profit and transport profit shown separately; outbound shipping only from Nextrade or the bill',
+    items: [
+      { text: 'Total cost is now goods cost + commission + inbound allowance + brokerage + bonded — outbound shipping is no longer in it.' },
+      { text: 'New Goods profit column (goods revenue − total cost), then Outbound transport (our cost), Transport profit (transport charged − outbound) and Total profit (both together).' },
+      { text: 'Outbound transport is taken straight from Nextrade “Shipping In Progress” until the trucking / shipping bill is in the Hub; the bill then replaces it and any difference is flagged. The boxes for typing it by hand are gone.' },
+      { text: 'CNF with the shipping inside the price: our shipping cost is taken out of the goods price, so transport profit is $0.' }
+    ]
+  },
+  {
     version: 'v55.83-TJ',
     date: '2026-11-17',
     title: 'Profitability — a shipping line on the invoice means shipping is not inside the goods price',

@@ -81,6 +81,9 @@ export async function POST(req) {
         // v55.83-TE — costs typed by hand (the report still runs before these tables exist)
         try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note'); }); setup.manual_costs_ready = true; }
         catch (eMC) { if (!missingTable(eMC && eMC.message)) { throw eMC; } setup.lineCosts = []; setup.groupCosts = []; setup.manual_costs_ready = false; }
+        // v55.83-TL — trucking / freight typed per release (the report still runs before this table exists)
+        try { setup.partEstimates = await fetchAll(function () { return db.from('pl_release_part_estimates').select('release_key, part, amount, note'); }); setup.part_estimates_ready = true; }
+        catch (ePE) { if (!missingTable(ePE && ePE.message)) { throw ePE; } setup.partEstimates = []; setup.part_estimates_ready = false; }
       } catch (eS) {
         if (missingTable(eS && eS.message)) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
         throw eS;
@@ -358,6 +361,18 @@ export async function POST(req) {
       if (delR.error) { return fail(delR.error); }
       if (rowsR.length) { var insR = await db.from('pl_line_release_pounds').insert(rowsR); if (insR.error) { return fail(insR.error); } }
       await audit(db, userId, 'pl_line_release_pounds_set', 'accounting_invoice_item', body.invoice_item_id, { pounds: body.pounds });
+      return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
+    }
+    // v55.83-TL (Max, Nov 17) — trucking or freight typed for ONE release; a bill for that part on that release always overrides it.
+    // Clearing keeps the row (amount empty) — nothing is deleted; every change is in the audit trail.
+    if (action === 'set_part_estimate') {
+      var pk = relKey(body.release); if (!pk) { return bad('The release number is required.'); }
+      var part = body.part === 'trucking' || body.part === 'freight' ? body.part : null; if (!part) { return bad('Choose trucking or freight.'); }
+      var pv = null;
+      if (body.amount !== '' && body.amount !== null && body.amount !== undefined) { pv = Number(String(body.amount).replace(/[$,\s]/g, '')); if (isNaN(pv) || pv < 0) { return bad('The amount must be a number, zero or more.'); } }
+      var upP = await db.from('pl_release_part_estimates').upsert({ release_key: pk, part: part, amount: pv, note: String(body.note || '').substring(0, 300) || null, updated_by: userId, updated_at: now }, { onConflict: 'release_key,part' });
+      if (upP.error) { return /pl_release_part_estimates/.test(String(upP.error.message)) ? bad('Run sql/v55-83-TL-trucking-freight.sql in Supabase first.') : fail(upP.error); }
+      await audit(db, userId, 'pl_part_estimate_set', 'release', pk, { part: part, amount: pv, note: body.note || null });
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'set_estimate') {
