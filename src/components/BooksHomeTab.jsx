@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { groupBillsDue, agingDrillRows } from '../lib/books-home-view'; // v55.83-SS / ST
 import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { CLASSIFICATIONS } from '../lib/bank-permissions';
 import { bestRule } from '../lib/expense-rules'; // v55.83-PI — suggest from learned rules
@@ -58,7 +59,7 @@ export default function BooksHomeTab(props) {
   ];
 
   function billsApi(payload) {
-    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json(); });
   }

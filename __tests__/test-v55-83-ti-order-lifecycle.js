@@ -149,5 +149,32 @@ check('release mentioned only in an invoice’s notes → in_notes', st(9) === '
 check('order: problems first (none), the Wave P.O./S.O. group last', rec[0].state === 'none' && rec[rec.length - 1].state === 'po_so_only');
 check('a P.O./S.O. invoice is never suggested as "no release number"', !rec.some(function (x) { return x.suggestions.some(function (i) { return i.id === 'b'; }); }));
 
+
+console.log('TO — Codex 16 Nov P1s on closure');
+var ordC = { id: 5, status: 'end_stage', country: 'India', shipped_date: '2026-11-02', customer_name: 'Original Customer' };
+var mism = L.evaluateOrder({ order: ordC, rows: full, invoices: [Object.assign({}, paidInv[0], { customer_name: 'Different Buyer' })], invoicePayments: [{ bank_transaction_id: 'x', amount: 100 }], bills: paidBills }, NOW);
+check('TO: invoice for a DIFFERENT customer → NOT auto-closable (was eligible before)', mism.closure.eligible === false && mism.closure.missing.some(function (m) { return /is for Different Buyer/.test(m); }), mism.closure);
+var unsync = L.evaluateOrder({ order: ordC, rows: full, invoices: [Object.assign({}, paidInv[0], { customer_name: 'Original Customer', wave_sync_status: 'pending_sync' })], invoicePayments: [{ bank_transaction_id: 'x', amount: 100 }], bills: paidBills }, NOW);
+check('TO: invoice reopened and not re-sent to Wave → NOT auto-closable', unsync.closure.eligible === false && unsync.closure.missing.some(function (m) { return /not re-sent to Wave/.test(m); }), unsync.closure);
+var forcedM = L.closureCheck({ status: 'end_stage' }, [], { state: 'current', current: [], blocking_flags: ['Invoice X is for B, the order is for A'] }, paidBills, false, [], { kind: 'force_close', reason: 'checked with Max', by_name: 'Max' });
+check('TO: a person’s "close anyway" still passes them, and keeps them listed', forcedM.eligible === true && forcedM.forced === true && forcedM.missing.some(function (m) { return /is for B/.test(m); }));
+var exwUnpaid = L.evaluateOrder({ order: ordC, rows: full, invoices: paidInv, invoicePayments: [{ bank_transaction_id: 'x', amount: 100 }], bills: [{ bill_type: 'shipping', total: 500, paid: 0, number: 'F9' }, { bill_type: 'trucking', total: 200, paid: 0, number: 'T9' }], exw: true }, NOW);
+check('TO: EXW but unpaid freight 500 + trucking 200 on the release → NOT eligible (EXW never waives a known bill)', exwUnpaid.closure.eligible === false && exwUnpaid.closure.missing.filter(function (m) { return /F9|T9/.test(m); }).length === 2, exwUnpaid.closure.missing);
+var exwOne = L.evaluateOrder({ order: ordC, rows: full, invoices: paidInv, invoicePayments: [{ bank_transaction_id: 'x', amount: 100 }], bills: [{ bill_type: 'trucking', total: 200, paid: 200, number: 'T9' }], exw: true }, NOW);
+check('TO: confirmed EXW (no shipping by us), the one known trucking bill paid, no freight bill → eligible', exwOne.closure.eligible === true, exwOne.closure.missing);
+var notExw = L.evaluateOrder({ order: ordC, rows: full, invoices: paidInv, invoicePayments: [{ bank_transaction_id: 'x', amount: 100 }], bills: [], exw: false }, NOW);
+check('TO: not confirmed EXW (unknown responsibility) and no bills → NOT eligible (missing ≠ not applicable)', notExw.closure.eligible === false && notExw.closure.missing.filter(function (m) { return /^no (forwarder|trucker)/.test(m); }).length === 2, notExw.closure.missing);
+var srcR = require('fs').readFileSync(path.join(root, 'src/app/api/accounting/order-monitor/route.js'), 'utf8');
+check('TO static: EXW is confirmed only when chosen on the form AND the invoice has no shipping line', /i\.terms === 'EXW' && !shipLineInv\[i\.id\]/.test(srcR) && /isTransportLine\(it\.wave_product_name \|\| it\.description\)/.test(srcR));
+check('TO static: link_deposit fails closed on the invoice-payment read and maps the database guard to 409', /if \(uI\.error\) \{ return bad\('Could not read the invoice payments/.test(srcR) && /HUB_GUARD:/.test(srcR) && /request_id: reqL/.test(srcR));
+check('TO static: a closure is recorded as PENDING first, then Nextrade, then the outcome; a failed record = failure', /status: 'pending', request_id: requestId/.test(srcR) && /status: nx\.ok \? 'succeeded' : 'failed'/.test(srcR) && /could not record the outcome/.test(srcR) && /Nextrade was not asked/.test(srcR));
+check('TO static: closing uses its OWN token (NEXTRADE_CLOSE_TOKEN), never the read token', /X-Hub-Close-Token/.test(srcR) && /NEXTRADE_CLOSE_TOKEN/.test(srcR) && !/closeUrl, \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json', 'X-Hub-Feed-Token'/.test(srcR));
+check('TO static: an alert is CLAIMED (sending_at) before it is emailed; a failed send releases the claim', /update\(\{ sending_at: new Date\(\)\.toISOString\(\) \}\)\.eq\('id', ex\.data\.id\)\.is\('sent_at', null\)\.is\('sending_at', null\)/.test(srcR) && /sending_at: null/.test(srcR));
+
+var dlU = L.deadlineState({ id: 9, status: 'preload' }, { load_date: '2026-11-18 00:00:00', load_time_known: 0 }, [], NOW);
+check('TO: a legacy load date (time not known) → no timed deadline, says why', dlU.state === 'no_schedule' && /no confirmed time/.test(dlU.words), dlU);
+var dlK = L.deadlineState({ id: 9, status: 'preload' }, { load_date: '2026-11-18 09:00:00', load_time_known: 1 }, [], NOW);
+check('TO: a load date WITH a confirmed time → the 30-hour rule runs', dlK.state !== 'no_schedule', dlK);
+
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

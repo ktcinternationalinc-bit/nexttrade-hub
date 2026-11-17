@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from 'react';
 import DuplicateCheckPanel from './DuplicateCheckPanel'; // v55.83-SO
 import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import WireQuickView from './WireQuickView'; // v55.83-RM
 
@@ -160,7 +161,7 @@ export default function AllTransactionsTab(props) {
     var isBill = t.direction === 'out'; // v55.83-PW (Max 11:02): spending matches to BILLS the same way
     setBusy(true);
     if (!keepOpen) { setMQ(q || ''); }
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: isBill ? 'bill_match_candidates' : 'deposit_match_candidates', bank_transaction_id: t.id, q: q || '', user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -177,7 +178,7 @@ export default function AllTransactionsTab(props) {
     if (!(amt > 0)) { toast.error('Enter the amount to apply.'); return; }
     setBusy(true);
     // record_payment: overpay + over-allocation + settled-out guards live server-side.
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'record_payment', bill_id: cand.bill_id, amount: amt, paid_date: mPanel.txn.posted_date || mPanel.txn.date, bank_transaction_id: mPanel.txn.id, user_id: userProfile && userProfile.id }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && (j.ok || !j.error)) { setMErr(''); toast.success('Bill ' + cand.ref + ' paid $' + fmt(amt) + ' ✓ — popup stays open: match more or ✕ when done (the rest can wait).'); openMatch(mPanel.src, mQ, true); load(); }
@@ -262,7 +263,7 @@ export default function AllTransactionsTab(props) {
     var vend = String(t.merchant_name || t.name || '').trim();
     if (!vend) { toast.error('This transaction has no merchant name — add the bill in the Bills tab instead.'); return; }
     setBusy(true);
-    fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'save_bill', user_id: userProfile && userProfile.id,
         bill: { vendor_name: vend, bill_date: t.posted_date || t.date, total_amount: t.amount_abs,
           bill_number: 'BANK-' + String(t.posted_date || t.date || '').replace(/-/g, '') + '-' + String(t.id || '').replace(/-/g, '').substring(0, 6).toUpperCase(), // v55.83-RN — RL made the bill # required; a bill made from a bank line is numbered from it
@@ -270,7 +271,7 @@ export default function AllTransactionsTab(props) {
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (!j || !j.id) { throw new Error((j && j.error) || 'Could not create the bill.'); }
-        return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'record_payment', bill_id: j.id, amount: t.amount_abs,
             paid_date: t.posted_date || t.date, bank_transaction_id: t.id, user_id: userProfile && userProfile.id }) })
           .then(function (r2) { return r2.json(); })
@@ -290,7 +291,7 @@ export default function AllTransactionsTab(props) {
   // and rtm_flag only stamps the transaction. Tax reports keep ONE
   // professional-fee line; the Stats radio shows the real categories.
   function billsApi(payload) {
-    return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return hubFetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) })
       .then(function (r) { return r.json(); });
   }

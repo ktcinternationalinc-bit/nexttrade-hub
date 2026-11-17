@@ -38,7 +38,9 @@ export default function OrderMonitorTab(props) {
   function call(payload) {
     return supabase.auth.getSession().then(function (sres) {
       var token = sres && sres.data && sres.data.session ? sres.data.session.access_token : '';
-      return fetch('/api/accounting/order-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, payload)) });
+      // v55.83-TO — one request id per click for the actions that write money / close an order (a retry never does it twice)
+      var rid = (payload && (payload.action === 'link_deposit' || payload.action === 'close_order') && !payload.request_id) ? { request_id: 'om-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10) } : {};
+      return fetch('/api/accounting/order-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, rid, payload)) });
     }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
@@ -106,7 +108,7 @@ export default function OrderMonitorTab(props) {
         <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="release, order, customer, country…" className="px-2 py-1 rounded-lg text-[11px] nt-light" style={{ border: '1px solid ' + LINE, width: 220, color: INK, background: '#ffffff' }} />
         <span className="text-[11px]" style={{ color: SUB }}>{shown.length + ' of ' + rows.length + ' open orders'}</span>
       </div>
-      <div className="overflow-auto" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
+      <div className="overflow-auto nt-solid-head" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
         <table className="w-full text-[11px]" style={{ minWidth: 1080 }}>
           <thead><tr>{['Release · order', 'Customer · destination', 'Scheduled / shipped', 'Stage', 'Readiness', 'Invoice', 'Deposit', 'Outstanding · next action', ''].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-semibold sticky top-0" style={{ background: BG, color: SUB, borderBottom: '1px solid ' + LINE }}>{h}</th>; })}</tr></thead>
           <tbody>{shown.map(function (r) {
@@ -281,7 +283,7 @@ function ReconView(p) {
       {(g === 'po_so_only' || g === 'all') && poIds.length > 0 && d.can_edit_invoices && <Btn dark disabled={p.busy} onClick={function () { p.copyRelease(poIds).then(function (ok) { if (ok) { load(); } }); }}>{'Copy P.O./S.O. → Release # on all ' + poIds.length}</Btn>}
     </div>
     <div className="px-3 pb-2 text-[11px]" style={{ color: SUB }}>Wave invoices keep the release in their P.O./S.O. field — those count as linked (last group). The Release Number on the invoice is what the profit report uses, so copying it across is worth doing; it fills only an empty Release Number and is recorded in the audit trail.</div>
-    <div className="overflow-auto" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
+    <div className="overflow-auto nt-solid-head" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
       <table className="w-full text-[11px]" style={{ minWidth: 1000 }}>
         <thead><tr>{['Release · order', 'Customer', 'Date', 'Warehouse status', 'What is wrong', 'Fix it'].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-semibold sticky top-0" style={{ background: BG, color: SUB, borderBottom: '1px solid ' + LINE }}>{h}</th>; })}</tr></thead>
         <tbody>{shown.map(function (r) {

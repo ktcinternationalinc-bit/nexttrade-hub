@@ -28,6 +28,7 @@ import { audit } from '../../../../lib/audit-server'; // v55.83-QI
 import { bankLineRemaining, checkBankPayment } from '../../../../lib/bill-bank-pay'; // v55.83-TH
 import { addAuditSubjects, billName, bankName } from '../../../../lib/audit-subjects-server'; // v55.83-TH
 import { billWireStates, wireStateWords } from '../../../../lib/bill-wire-state'; // v55.83-RZ
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TO (Codex P1: verified identity for money actions)
 import { autoReviewIfComplete } from '../../../../lib/bank-allocation-server'; // v55.83-QZ2 — review fix
 import { maskCashflow, maskPeriodStats, maskForecast } from '../../../../lib/accounting-access'; // v55.83-RE — unified accounting permissions
 
@@ -233,6 +234,27 @@ export async function POST(req) {
     var action = body.action;
     var userId = body.user_id;
     if (!userId) { return NextResponse.json({ error: 'user_id required' }, { status: 400 }); }
+    // v55.83-TO (Codex QA 16 Nov, P1) — the actions that MOVE MONEY act only for the verified signed-in person (bearer token);
+    // a user_id in the request that is not that person is refused.
+    var MONEY_ACTIONS = { record_payment: 1, void_payment: 1, pay_bills_from_bank: 1, bank_lines_for_bills: 1 };
+    if (MONEY_ACTIONS[action]) {
+      var whoM = await verifiedCaller(req, body, createClient);
+      if (whoM.error) { return NextResponse.json({ error: whoM.error }, { status: whoM.status || 401 }); }
+      userId = whoM.userId;
+    }
+    // the database guards (sql/v55-83-TO-payment-guards.sql) lock the bank line and the bill and refuse any over-payment, for every
+    // writer at once. Until they are installed, no bill payment is written here.
+    async function guardsReady() { try { var gR0 = await db.rpc('hub_payment_guards_installed'); return !gR0.error && gR0.data === true; } catch (eG0) { return false; } }
+    var GUARD_OFF = 'Paying bills is switched off until the payment safety update is installed: run sql/v55-83-TO-payment-guards.sql in Supabase (SQL Editor). It makes sure a bank line or a bill can never be paid twice, even when two people click at the same moment.';
+    function guardErr(e) {
+      var m0 = String((e && e.message) || '');
+      if (/HUB_GUARD:/.test(m0)) { return NextResponse.json({ error: 'Not saved — ' + m0.replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ' Nothing was paid. Refresh: someone may have just paid from it.' }, { status: 409 }); }
+      if ((e && e.code === '23505') || /_request/.test(m0)) { return null; } // the same click arrived twice — the first one stands
+      return NextResponse.json({ error: 'Not saved (' + (m0 || 'database error') + '). Nothing was paid.' }, { status: 500 });
+    }
+    function readFail(what, e) { return NextResponse.json({ error: 'Could not read ' + what + ' (' + ((e && e.message) || 'error') + ') — nothing was paid. Try again in a moment.' }, { status: 503 }); }
+    function missingRel(e) { return /does not exist|schema cache|Could not find the table/i.test(String((e && e.message) || '')); }
+    function reqIdOf(b0) { var v0 = b0 && typeof b0.request_id === 'string' ? b0.request_id.trim() : ''; return v0.length >= 8 ? v0.substring(0, 80) : null; }
 
     var WRITE_ACTIONS = { pay_bills_from_bank: 1, bank_lines_for_bills: 1, save_bill: 1, void_bill: 1, record_payment: 1, void_payment: 1, extract_bill: 1, validate_bill: 1, reopen_validation: 1, dispute_bill: 1, resolve_dispute: 1, rtm_flag: 1, advance_flag: 1, ingest_bill_file: 1, delete_bill: 1, save_lines: 1, price_check: 1, save_validation_progress: 1, price_rule_save: 1, price_rule_off: 1, commission_rule_save: 1, attach_bill_file: 1, dismiss_bill_dup: 1 }; // RQ: lines + price rules — v55.83-QB/QF/QG
     // v55.83-PW (Max, 10:56): three clear LEVELS. Writes still need
@@ -551,12 +573,17 @@ export async function POST(req) {
       if (!billId || !(pAmt > 0) || !isDate(body.paid_date)) {
         return NextResponse.json({ error: 'bill_id, positive amount and paid_date (YYYY-MM-DD) are required.' }, { status: 400 });
       }
+      if (!(await guardsReady())) { return NextResponse.json({ error: GUARD_OFF }, { status: 503 }); }
+      var reqIdR = reqIdOf(body);
+      if (reqIdR) { var dupR = await db.from('vendor_bill_payments').select('id').eq('request_id', reqIdR).eq('bill_id', billId).limit(1); if (dupR.error) { return readFail('earlier payments', dupR.error); } if (dupR.data && dupR.data.length) { return NextResponse.json({ ok: true, payment_id: dupR.data[0].id, already_recorded: true }); } }
       var bRow = await db.from('vendor_bills').select('id, record_status, total_amount, vendor_name').eq('id', billId).maybeSingle();
-      if (bRow.error || !bRow.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
+      if (bRow.error) { return readFail('the bill', bRow.error); }
+      if (!bRow.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
       if (bRow.data.record_status !== 'active') { return NextResponse.json({ error: 'This bill is void.' }, { status: 409 }); }
       // v55.83-RH (Max 16:04) — a bill on a prepared wire is paid BY THAT WIRE (when its bank line is attached), never twice by hand
       try {
         var onWire = await db.from('wire_package_lines').select('package_id').eq('bill_id', billId).eq('is_open', true).limit(1);
+        if (onWire.error && !missingRel(onWire.error)) { return readFail('the wires this bill is on', onWire.error); } // TO — fail closed
         if (!onWire.error && onWire.data && onWire.data.length) {
           var wpk = await db.from('wire_packages').select('seq, status').eq('id', onWire.data[0].package_id).maybeSingle();
           if (wpk && wpk.data && wpk.data.status !== 'cancelled') {
@@ -565,7 +592,7 @@ export async function POST(req) {
         }
       } catch (eWp) { /* RH SQL not run yet — nothing to guard */ }
       var exPays = await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').eq('bill_id', billId);
-      if (exPays.error) { throw new Error(exPays.error.message); }
+      if (exPays.error) { return readFail('what is already paid on this bill', exPays.error); } // TO — fail closed
       var bal = billOpenBalance(bRow.data, exPays.data || []);
       if (pAmt > bal.open + 0.005) {
         return NextResponse.json({ error: 'That overpays the bill — open balance is ' + bal.open.toFixed(2) + '.' }, { status: 409 });
@@ -576,16 +603,19 @@ export async function POST(req) {
       if (!bankId) { return NextResponse.json({ error: 'Pick the bank transaction that paid this bill. A payment cannot be recorded without its bank line.' }, { status: 400 }); }
       if (bankId) {
         var tx = await db.from('bank_transactions').select('id, direction, pending, amount_abs, iso_currency, wave_business_id').eq('id', bankId).maybeSingle();
-        if (tx.error || !tx.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+        if (tx.error) { return readFail('the bank transaction', tx.error); }
+        if (!tx.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
         if (tx.data.direction !== 'out') { return NextResponse.json({ error: 'A bill is paid by MONEY OUT — that bank transaction is money in.' }, { status: 409 }); }
         if (tx.data.pending === true) { return NextResponse.json({ error: 'That bank transaction is still pending — link it once it settles.' }, { status: 409 }); }
         if (pAmt > (Number(tx.data.amount_abs) || 0) + 0.005) { return NextResponse.json({ error: 'Payment is larger than the bank transaction (' + r2(tx.data.amount_abs).toFixed(2) + ').' }, { status: 409 }); }
         try {
           var sw = await db.from('wire_packages').select('seq, approved_total, payee_name').eq('status', 'sent');
+          if (sw.error && !missingRel(sw.error)) { return readFail('the prepared wires', sw.error); } // TO — fail closed
           var hitW = ((sw && sw.data) || []).filter(function (w) { return Math.abs(r2(w.approved_total) - r2(tx.data.amount_abs)) <= 0.005; })[0];
           if (hitW) { return NextResponse.json({ error: 'This bank line (' + r2(tx.data.amount_abs).toFixed(2) + ') looks like prepared wire WP-' + String(hitW.seq || 0).padStart(4, '0') + ' to ' + hitW.payee_name + ', which is waiting for it — attach it in 🏦 Wires instead.' }, { status: 409 }); }
         } catch (eSw) { /* RH SQL not run yet */ }
         var already = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bank_transaction_id', bankId);
+        if (already.error) { return readFail('what is already paid from that bank line', already.error); } // TO — fail closed
         var used = 0; (already.data || []).forEach(function (p) { if (p.voided !== true) { used += Number(p.amount) || 0; } });
         if (used + pAmt > (Number(tx.data.amount_abs) || 0) + 0.005) {
           return NextResponse.json({ error: 'That bank transaction is already allocated to bills for ' + r2(used).toFixed(2) + ' — only ' + r2(tx.data.amount_abs - used).toFixed(2) + ' remains.' }, { status: 409 });
@@ -593,9 +623,13 @@ export async function POST(req) {
       }
       var pIns = await db.from('vendor_bill_payments').insert({
         bill_id: billId, amount: pAmt, paid_date: body.paid_date,
-        bank_transaction_id: bankId, method: String(body.method || '').trim() || null, created_by: userId,
+        bank_transaction_id: bankId, method: String(body.method || '').trim() || null, created_by: userId, request_id: reqIdR,
       }).select('id').maybeSingle();
-      if (pIns.error) { throw new Error(pIns.error.message); }
+      if (pIns.error) {
+        var gE = guardErr(pIns.error); if (gE) { return gE; }
+        var dupR2 = await db.from('vendor_bill_payments').select('id').eq('request_id', reqIdR).eq('bill_id', billId).limit(1);
+        return NextResponse.json({ ok: true, payment_id: dupR2.data && dupR2.data[0] ? dupR2.data[0].id : null, already_recorded: true });
+      }
       // v55.83-QZ2 (review fix) — a bank payment matched to bills used to stay
       // UNCATEGORIZED: the P&L showed it as uncategorized and it never reached
       // the ClickBooks ledger. When the bank row has NO category yet and every
@@ -608,7 +642,7 @@ export async function POST(req) {
       if (bankId && String(body.method || '').trim() !== 'rtm') {
         try { carried = await carryBillCategory(db, bankId, userId); } catch (eCB) { carried = null; }
       }
-      await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', billId, { amount: pAmt, paid_date: body.paid_date, bank_transaction_id: bankId, method: String(body.method || '').trim() || null, category_carried: carried, partial: pAmt < bal.open - 0.005, open_after: r2(bal.open - pAmt) }); // v55.83-QI · TH
+      await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', billId, { payment_id: pIns.data && pIns.data.id, amount: pAmt, paid_date: body.paid_date, bank_transaction_id: bankId, method: String(body.method || '').trim() || null, category_carried: carried, partial: pAmt < bal.open - 0.005, open_after: r2(bal.open - pAmt) }); // v55.83-QI · TH
       return NextResponse.json({ ok: true, payment_id: pIns.data && pIns.data.id, category_carried: carried });
     }
 
@@ -655,6 +689,7 @@ export async function POST(req) {
       if (lb.error) { throw new Error(lb.error.message); }
       var lIds = (lb.data || []).map(function (t) { return t.id; });
       var lPays = lIds.length ? await db.from('vendor_bill_payments').select('bank_transaction_id, amount, voided').in('bank_transaction_id', lIds) : { data: [] };
+      if (lPays.error) { return NextResponse.json({ error: 'Could not read what is already paid from these bank lines (' + lPays.error.message + ') — no free amounts are shown rather than wrong ones.' }, { status: 503 }); } // TO — fail closed
       var byTx = {}; ((lPays && lPays.data) || []).forEach(function (p) { (byTx[p.bank_transaction_id] = byTx[p.bank_transaction_id] || []).push(p); });
       var linesB = (lb.data || []).map(function (t) { var rm = bankLineRemaining(t.amount_abs, byTx[t.id] || []); return { id: t.id, date: t.posted_date || t.date, amount: rm.amount, used: rm.used, remaining: rm.remaining, name: String(t.merchant_name || t.name || '').substring(0, 60), label: bankName(t) }; });
       if (body.only_free !== false) { linesB = linesB.filter(function (x) { return x.remaining > 0.005; }); }
@@ -666,26 +701,34 @@ export async function POST(req) {
     if (action === 'pay_bills_from_bank') {
       var bkId = body.bank_transaction_id || null; var picksP = Array.isArray(body.bills) ? body.bills : [];
       if (!bkId) { return NextResponse.json({ error: 'Pick the bank transaction that paid these bills.' }, { status: 400 }); }
+      if (!(await guardsReady())) { return NextResponse.json({ error: GUARD_OFF }, { status: 503 }); }
+      var reqIdP = reqIdOf(body);
+      if (reqIdP) { var dupP = await db.from('vendor_bill_payments').select('id, bill_id, amount').eq('request_id', reqIdP); if (dupP.error) { return readFail('earlier payments', dupP.error); } if (dupP.data && dupP.data.length) { return NextResponse.json({ ok: true, paid: dupP.data.length, already_recorded: true }); } }
       var bk = await db.from('bank_transactions').select('id, date, posted_date, direction, pending, amount_abs, name, merchant_name, wave_business_id').eq('id', bkId).maybeSingle();
-      if (bk.error || !bk.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+      if (bk.error) { return readFail('the bank transaction', bk.error); }
+      if (!bk.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
       var bkPays = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bank_transaction_id', bkId);
+      if (bkPays.error) { return readFail('what is already paid from that bank line', bkPays.error); } // TO — fail closed (Codex P1)
       var bkRem = bankLineRemaining(bk.data.amount_abs, (bkPays && bkPays.data) || []);
       var pIdsP = picksP.map(function (x) { return x && x.bill_id; }).filter(Boolean);
       var bRowsP = pIdsP.length ? await db.from('vendor_bills').select('id, vendor_name, bill_number, total_amount, record_status').in('id', pIdsP) : { data: [] };
       var bPaysP = pIdsP.length ? await db.from('vendor_bill_payments').select('id, bill_id, amount, voided').in('bill_id', pIdsP) : { data: [] };
+      if (bRowsP.error) { return readFail('the bills', bRowsP.error); }
+      if (bPaysP.error) { return readFail('what is already paid on these bills', bPaysP.error); } // TO — fail closed (Codex P1)
       var onWireP = {};
-      try { var wlP = pIdsP.length ? await db.from('wire_package_lines').select('bill_id, package_id').in('bill_id', pIdsP).eq('is_open', true) : { data: [] }; var wpIds = ((wlP && wlP.data) || []).map(function (x) { return x.package_id; }); var wpR = wpIds.length ? await db.from('wire_packages').select('id, seq, status').in('id', wpIds) : { data: [] }; var wpBy = {}; ((wpR && wpR.data) || []).forEach(function (w) { wpBy[w.id] = w; }); ((wlP && wlP.data) || []).forEach(function (x) { var w = wpBy[x.package_id]; if (w && w.status !== 'cancelled') { onWireP[x.bill_id] = 'WP-' + String(w.seq || 0).padStart(4, '0'); } }); } catch (eWP) { /* RH SQL not run */ }
+      try { var wlP = pIdsP.length ? await db.from('wire_package_lines').select('bill_id, package_id').in('bill_id', pIdsP).eq('is_open', true) : { data: [] }; if (wlP.error && !missingRel(wlP.error)) { return readFail('the wires these bills are on', wlP.error); } var wpIds = ((wlP && wlP.data) || []).map(function (x) { return x.package_id; }); var wpR = wpIds.length ? await db.from('wire_packages').select('id, seq, status').in('id', wpIds) : { data: [] }; if (wpR.error && !missingRel(wpR.error)) { return readFail('the wires these bills are on', wpR.error); } var wpBy = {}; ((wpR && wpR.data) || []).forEach(function (w) { wpBy[w.id] = w; }); ((wlP && wlP.data) || []).forEach(function (x) { var w = wpBy[x.package_id]; if (w && w.status !== 'cancelled') { onWireP[x.bill_id] = 'WP-' + String(w.seq || 0).padStart(4, '0'); } }); } catch (eWP) { /* RH SQL not run */ }
       var billByP = {}; ((bRowsP && bRowsP.data) || []).forEach(function (b) { billByP[b.id] = b; });
       var paysByP = {}; ((bPaysP && bPaysP.data) || []).forEach(function (x) { (paysByP[x.bill_id] = paysByP[x.bill_id] || []).push(x); });
       var rowsP = picksP.map(function (x) { var b = billByP[x.bill_id]; var open = b ? billOpenBalance(b, paysByP[x.bill_id] || []).open : 0; return { bill_id: x.bill_id, amount: r2(x.amount), open: open, active: !!b && b.record_status === 'active', on_wire: onWireP[x.bill_id] || null, label: b ? billName(b) : 'A bill that was not found' }; });
       var chkP = checkBankPayment({ amount_abs: bk.data.amount_abs, direction: bk.data.direction, pending: bk.data.pending }, bkRem.used, rowsP);
       if (!chkP.ok) { return NextResponse.json({ error: chkP.errors.join(' '), errors: chkP.errors }, { status: 409 }); }
       var paidOnP = isDate(body.paid_date) ? body.paid_date : String(bk.data.posted_date || bk.data.date || '').substring(0, 10);
-      var insP = await db.from('vendor_bill_payments').insert(rowsP.map(function (x) { return { bill_id: x.bill_id, amount: x.amount, paid_date: paidOnP, bank_transaction_id: bkId, method: 'bank', created_by: userId }; })).select('id, bill_id, amount');
-      if (insP.error) { throw new Error(insP.error.message); }
+      var insP = await db.from('vendor_bill_payments').insert(rowsP.map(function (x) { return { bill_id: x.bill_id, amount: x.amount, paid_date: paidOnP, bank_transaction_id: bkId, method: 'bank', created_by: userId, request_id: reqIdP }; })).select('id, bill_id, amount');
+      if (insP.error) { var gEP = guardErr(insP.error); if (gEP) { return gEP; } return NextResponse.json({ ok: true, already_recorded: true }); } // the database guard re-checks everything under a lock (TO)
       var carriedP = null; try { carriedP = await carryBillCategory(db, bkId, userId); } catch (eCP) { carriedP = null; }
       for (var ip = 0; ip < rowsP.length; ip++) {
-        await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', rowsP[ip].bill_id, { amount: rowsP[ip].amount, paid_date: paidOnP, bank_transaction_id: bkId, method: 'bank', partial: rowsP[ip].amount < rowsP[ip].open - 0.005, open_after: r2(rowsP[ip].open - rowsP[ip].amount) });
+        var pidP = ((insP.data || []).filter(function (x) { return x.bill_id === rowsP[ip].bill_id; })[0] || {}).id || null;
+        await audit(db, userId, 'bill_payment_recorded', 'vendor_bill', rowsP[ip].bill_id, { payment_id: pidP, amount: rowsP[ip].amount, paid_date: paidOnP, bank_transaction_id: bkId, method: 'bank', partial: rowsP[ip].amount < rowsP[ip].open - 0.005, open_after: r2(rowsP[ip].open - rowsP[ip].amount) });
       }
       await audit(db, userId, 'bill_payments_from_bank', 'bank_transaction', bkId, { bills: rowsP.length, total: chkP.total, left: chkP.left_after, bank_transaction_id: bkId, category_carried: carriedP });
       return NextResponse.json({ ok: true, paid: (insP.data || []).length, total: chkP.total, left_on_bank_line: chkP.left_after, category_carried: carriedP });
@@ -699,12 +742,16 @@ export async function POST(req) {
       var hPayIds = ((hPays && hPays.data) || []).map(function (x) { return x.id; });
       try {
         var hA = await db.from('hub_audit_log').select('at, actor_id, action, entity, entity_id, details').eq('entity', 'vendor_bill').eq('entity_id', String(body.id)).order('at', { ascending: false }).limit(200);
-        ((hA && hA.data) || []).forEach(function (r) { hRows.push(r); });
-        if (hPayIds.length) { var hB = await db.from('hub_audit_log').select('at, actor_id, action, entity, entity_id, details').eq('entity', 'vendor_bill_payment').in('entity_id', hPayIds.map(String)).limit(200); ((hB && hB.data) || []).forEach(function (r) { hRows.push(r); }); }
+        ((hA && hA.data) || []).forEach(function (r) { r._src = 'hub'; hRows.push(r); });
+        if (hPayIds.length) { var hB = await db.from('hub_audit_log').select('at, actor_id, action, entity, entity_id, details').eq('entity', 'vendor_bill_payment').in('entity_id', hPayIds.map(String)).limit(200); ((hB && hB.data) || []).forEach(function (r) { r._src = 'hub'; hRows.push(r); }); }
       } catch (eHA) { /* QI SQL not run */ }
-      try { var hE = await db.from('vendor_bill_events').select('created_at, actor_id, kind, details').eq('bill_id', body.id).limit(200); ((hE && hE.data) || []).forEach(function (e) { hRows.push({ at: e.created_at, actor_id: e.actor_id, action: 'bill_' + e.kind, entity: 'vendor_bill', entity_id: body.id, details: e.details }); }); } catch (eHE) { /* none */ }
+      try { var hE = await db.from('vendor_bill_events').select('created_at, actor_id, kind, details').eq('bill_id', body.id).limit(200); ((hE && hE.data) || []).forEach(function (e) { hRows.push({ at: e.created_at, actor_id: e.actor_id, action: 'bill_' + e.kind, entity: 'vendor_bill', entity_id: body.id, details: e.details, _src: 'events' }); }); } catch (eHE) { /* none */ }
       // the same action recorded twice (hub log + bill events) within a minute shows once
-      var seenH = {}; hRows = hRows.filter(function (r) { var k = r.action + '|' + String(r.at || '').substring(0, 16) + '|' + (r.actor_id || ''); if (seenH[k]) { return false; } seenH[k] = true; return true; });
+      // v55.83-TO (Codex P2) — only the SAME event written to both logs collapses: a bill-events row is dropped when the hub log has the
+      // same action, actor, minute and amount. Two real events (two payments, two undos in one minute) are never merged.
+      var hubKeys = {}; hRows.forEach(function (r) { if (r._src === 'hub') { var a0 = r.details && r.details.amount !== undefined ? String(r.details.amount) : ''; hubKeys[r.action + '|' + String(r.at || '').substring(0, 16) + '|' + (r.actor_id || '') + '|' + a0] = true; } });
+      hRows = hRows.filter(function (r) { if (r._src !== 'events') { return true; } var a1 = r.details && r.details.amount !== undefined ? String(r.details.amount) : ''; return !hubKeys[r.action + '|' + String(r.at || '').substring(0, 16) + '|' + (r.actor_id || '') + '|' + a1]; });
+      hRows.forEach(function (r) { delete r._src; });
       hRows.sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
       var hIds = {}; hRows.forEach(function (r) { if (r.actor_id) { hIds[r.actor_id] = true; } });
       var hNames = {}; var hIdl = Object.keys(hIds);

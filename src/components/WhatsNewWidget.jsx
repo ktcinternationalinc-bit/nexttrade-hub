@@ -33,6 +33,33 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TO',
+    date: '2026-11-17',
+    title: 'Safety fixes from Codex’s review — bill payments, deposits and closing orders',
+    items: [
+      { text: 'A bank line or a bill can no longer be paid beyond its amount — even when two people click at the same moment, and from any screen (Bills, All Transactions, wires). The database itself checks it. Needs one SQL (v55-83-TO-payment-guards.sql); until it is run, paying bills is switched off with a message saying so.' },
+      { text: 'If the Hub cannot read what was already paid, it now refuses to pay instead of assuming nothing was paid. A double click or a retry after a lost connection pays once.' },
+      { text: 'Paying bills and undoing payments now act only for the person who is signed in.' },
+      { text: 'Bill history shows two real payments made in the same minute as two lines.' },
+      { text: 'Orders: an order is not closed automatically when its invoice is for a different customer or was changed and not re-sent to Wave; EXW no longer skips unpaid freight or trucking bills; matching a deposit is checked the same safe way; a closure is recorded before Nextrade is asked; a 30-hour alert can never be emailed twice. Alerts and automatic closing are still OFF.' },
+      { text: 'Nextrade (staging): closing an order from the Hub has its own password and is switched off until you turn it on; old load dates without a time no longer trigger a 30-hour alert.' }
+    ]
+  },
+  {
+    version: 'v55.83-TN',
+    date: '2026-11-17',
+    title: 'Profitability — P&L by week, month, quarter or year, goods and transportation side by side, by release (1001 / 1002 / 1003)',
+    items: [
+      { text: 'New button on 📊 Profitability: “📅 P&L by period (goods · transport)”. One line per week, month, quarter or year (by invoice date), with a total.' },
+      { text: 'Goods: revenue, goods cost (goods + commission + inbound + brokerage + bonded), goods profit, margin and profit per pound. Transportation: charged, trucking, freight and transport profit. Then total profit.' },
+      { text: 'Quick dates: This week, This month, This quarter, This year — or any dates at the top. Choose releases: All, 1001- (Canada), 1002- (Houston), 1003-, or other. CSV download.' },
+      { text: 'Freight and trucking can be pre-filled from the MasterReport wire amounts (one-time SQL); a bill for the release still replaces them.' },
+      { text: 'Brokerage and bonded are one column now (they are the same cost): $200 per Houston container. A bonded / brokerage bill that names exactly that one release replaces the $200; a bill with no release or several releases is only listed for comparison, never added on top.' },
+      { text: 'Table headings on Profitability and Orders stay solid white while you scroll, so rows no longer show through them.' },
+      { text: 'CNF with the shipping inside the price: Goods revenue now shows the invoice amount on top and, in red below it, the goods revenue after taking the shipping out — the one used for $/lb and the goods profit.' }
+    ]
+  },
+  {
     version: 'v55.83-TM',
     date: '2026-11-17',
     title: 'Orders — releases with no KTC invoice (since June 2026), and every invoice problem links to its fix',

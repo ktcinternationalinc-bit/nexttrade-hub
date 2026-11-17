@@ -362,6 +362,12 @@ td {
 }
 tr:hover td { background: rgba(56,189,248,0.04); }
 thead { background: transparent !important; }
+/* v55.83-TN (Max, Nov 17: "the top defining column should be a solid white background so this does not happen") — tables marked
+   nt-solid-head keep a SOLID header that stays on top while the rows scroll under it (the rule above makes headers see-through). */
+.nt-solid-head th { background: #ffffff !important; color: #334155 !important; z-index: 2; box-shadow: inset 0 -1px 0 #cbd5e1; }
+.nt-solid-head th.nt-th-goods { background: #dcfce7 !important; color: #052e16 !important; }
+.nt-solid-head th.nt-th-transport { background: #e0f2fe !important; color: #0c2a5e !important; }
+.nt-solid-head thead { position: sticky; top: 0; z-index: 3; }
 tbody tr { border-color: var(--border-glass) !important; }
 
 /* ===== MODAL ===== */

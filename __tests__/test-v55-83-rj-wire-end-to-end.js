@@ -34,11 +34,13 @@ db.hooks = { wire_package_lines: { update: function (row, p) { var pk = db.t.wir
 var orig = Module._resolveFilename;
 Module._resolveFilename = function (req, parent) {
   if (req === '@supabase/supabase-js') { return mockPath; }
+  if (/lib[\/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } // v55.83-TO
   return orig.apply(this, arguments);
 };
 var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
 require('fs').writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
 global.__db = db;
+db.rpcs = Object.assign({}, db.rpcs || {}, { hub_payment_guards_installed: function () { return true; } }); // v55.83-TO — the payment guards count as installed here
 var route = require(path.join(root, 'src/app/api/accounting/wire-packages/route.js'));
 var bills = require(path.join(root, 'src/app/api/accounting/bills/route.js'));
 // superseded (v55.83-RY, Max Nov 10 00:11: "view each bill and close the bill as you check before you approve it and sign it"):

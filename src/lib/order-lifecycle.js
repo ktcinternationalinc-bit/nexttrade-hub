@@ -121,8 +121,10 @@ export function invoiceState(order, invoices) {
   var poOnly = (invoices || []).filter(function (i) { return i.po_so_only; });
   var flags = [];
   poOnly.filter(function (i) { return (i.record_status || 'active') === 'active'; }).forEach(function (i) { flags.push('Invoice ' + i.number + ' has this release in its P.O./S.O. field (as Wave invoices do) — its Release Number is empty'); });
-  current.forEach(function (i) { if (i.wave_sync_status === 'pending_sync' || i.wave_sync_status === 'failed') { flags.push('Invoice ' + i.number + ' was reopened/changed and is not re-sent to Wave'); } });
-  live.forEach(function (i) { if (i.customer_name && order && order.customer_name && !sameCustomer(i.customer_name, order.customer_name)) { flags.push('Invoice ' + i.number + ' is for ' + i.customer_name + ', the order is for ' + order.customer_name); } });
+  // v55.83-TO (Codex QA 16 Nov, P1) — these two exceptions BLOCK automatic closure (only a person's 'close anyway' passes them)
+  var blocking = [];
+  current.forEach(function (i) { if (i.wave_sync_status === 'pending_sync' || i.wave_sync_status === 'failed') { var w0 = 'Invoice ' + i.number + ' was reopened/changed and is not re-sent to Wave'; flags.push(w0); blocking.push(w0); } });
+  live.forEach(function (i) { if (i.customer_name && order && order.customer_name && !sameCustomer(i.customer_name, order.customer_name)) { var w1 = 'Invoice ' + i.number + ' is for ' + i.customer_name + ', the order is for ' + order.customer_name; flags.push(w1); blocking.push(w1); } });
   var state; var words;
   if (current.length) { state = 'current'; words = current.map(function (i) { return i.number; }).join(', ') + (current.length > 1 ? ' (several invoices — partial shipments or a split)' : ''); }
   else if (review.length) { state = 'in_approval'; words = review.map(function (i) { return i.number; }).join(', ') + ' — in approval'; }
@@ -130,7 +132,7 @@ export function invoiceState(order, invoices) {
   else if (gone.length) { state = 'cancelled_only'; words = 'only cancelled / void invoices: ' + gone.map(function (i) { return i.number; }).join(', '); }
   else { state = rank >= R_SHIPPED ? 'missing_overdue' : 'awaiting'; words = rank >= R_SHIPPED ? 'No KTC invoice on this release — overdue (shipped)' : 'Awaiting invoice (not shipped yet)'; }
   var severe = state === 'missing_overdue' || ((state === 'cancelled_only' || state === 'draft_only') && rank >= R_SHIPPED);
-  return { state: state, words: words, current: current, all: byRel, review_only: poOnly, cancelled: gone, flags: flags, severe: severe };
+  return { state: state, words: words, current: current, all: byRel, review_only: poOnly, cancelled: gone, flags: flags, blocking_flags: blocking, severe: severe };
 }
 export function sameCustomer(a, b) {
   function core(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(inc|llc|ltd|limited|co|corp|company|the|sa|sarl)\b/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -172,6 +174,9 @@ export function deadlineState(order, sip, history, nowMs) {
   var sched = sip && has(sip.load_date) ? String(sip.load_date) : null;
   if (rank >= R_SHIPPED) { return { state: 'shipped', scheduled: sched }; }
   if (!sched) { return { state: 'no_schedule', words: 'No load date and time yet — the 30-hour rule cannot be checked' }; }
+  // v55.83-TO (Codex QA 16 Nov) — a load date saved before times were kept reads as midnight; Nextrade now says whether the time is
+  // real (load_time_known). Unknown time = no timed deadline (never a made-up midnight alert).
+  if (sip && sip.load_time_known !== undefined && sip.load_time_known !== null && Number(sip.load_time_known) !== 1) { return { state: 'no_schedule', scheduled: sched, words: 'Load date ' + sched.substring(0, 10) + ' has no confirmed time — set the load time in Nextrade for the 30-hour rule' }; }
   var schedMs = nyLocalToUtcMs(sched); var deadMs = schedMs - DEADLINE_HOURS * 3600000;
   var reached = null;
   (history || []).forEach(function (h) { if (stageRank(h.changed_to) >= R_SIP) { var t = nyLocalToUtcMs(h.created_at); if (t !== null && (reached === null || t < reached)) { reached = t; } } });
@@ -199,14 +204,15 @@ export function closureCheck(order, items, invoice, bills, exw, blockers, overri
   var inv = invoice || {};
   if (inv.state !== 'current') { miss.push('no current KTC invoice'); }
   else { inv.current.forEach(function (i) { if (r2(i.total) - r2(i.paid) > 0.005) { miss.push('invoice ' + i.number + ' not fully paid ($' + r2(r2(i.total) - r2(i.paid)).toFixed(2) + ' open)'); } }); }
-  if (!exw) {
-    ['shipping', 'trucking'].forEach(function (t) {
-      var bl = (bills || []).filter(function (b) { return b.bill_type === t && (b.record_status || 'active') === 'active'; });
-      var word = t === 'shipping' ? 'forwarder (freight) bill' : 'trucker bill';
-      if (!bl.length) { miss.push('no ' + word + ' on this release'); return; }
-      bl.forEach(function (b) { if (r2(b.total) - r2(b.paid) > 0.005) { miss.push(word + ' ' + (b.number || '') + ' not paid by a posted payment'); } });
-    });
-  }
+  (inv.blocking_flags || []).forEach(function (f) { miss.push(f); }); // v55.83-TO (Codex P1)
+  // v55.83-TO (Codex QA 16 Nov, P1) — EXW never waives a KNOWN bill: every forwarder / trucker bill on the release must be paid.
+  // Only a MISSING bill is excused, and only when it is confirmed that we handled no shipping (`exw` = confirmed, see the route).
+  ['shipping', 'trucking'].forEach(function (t) {
+    var bl = (bills || []).filter(function (b) { return b.bill_type === t && (b.record_status || 'active') === 'active'; });
+    var word = t === 'shipping' ? 'forwarder (freight) bill' : 'trucker bill';
+    if (!bl.length) { if (!exw) { miss.push('no ' + word + ' on this release'); } return; }
+    bl.forEach(function (b) { if (r2(b.total) - r2(b.paid) > 0.005) { miss.push(word + ' ' + (b.number || '') + ' not paid by a posted payment'); } });
+  });
   (blockers || []).forEach(function (b) { miss.push(b); });
   var ov = override || {};
   if (ov.kind === 'keep_open') { return { eligible: false, held: true, missing: miss, words: 'Kept open by ' + (ov.by_name || 'a person') + ': ' + (ov.reason || '') }; }

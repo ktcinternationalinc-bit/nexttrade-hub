@@ -161,7 +161,7 @@ export function assembleProfitability(d) {
   Object.keys(relBad).forEach(function (k) { delete relPounds[k]; });
   var relKnown = {}; p1.cells.forEach(function (c) { if (c.release) { relKnown[c.release] = true; } });
 
-  var outbound = {}; var brokerage = {}; var bonded = {}; var truckCount = {}; var actualBonded = [];
+  var outbound = {}; var brokerage = {}; var bonded = {}; var bondBill = {}; var bondBillInfo = {}; var bondedFrom = {}; var truckCount = {}; var actualBonded = [];
   function addShare(map, rel, amount, bill, field) {
     if (field) { var o = map[rel] || (map[rel] = { actual: null, estimate: null, bills: [] }); o.actual = r2((o.actual || 0) + amount); o.bills.push(bill); }
     else { map[rel] = r2((map[rel] || 0) + amount); }
@@ -176,7 +176,18 @@ export function assembleProfitability(d) {
     if (type === 'bonded_brokerage') {
       var isBonded = /bond/i.test(String(b.vendor_name || ''));
       // v55.83-TC — bonded is the standard $200 per Houston shipment; actual bonded bills are listed for comparison, never added on top
-      if (isBonded) { if (inPeriod({ invoice_date: b.bill_date })) { actualBonded.push(info); } return; }
+      // v55.83-TN (Max, Nov 17: 'no need for brokerage column as bonded are the same thing') — a brokerage bill IS the bond cost, so it is
+      // listed for comparison only, like a bonded bill; the standard $200 per Houston container is what goes into the P&L (never both).
+      // v55.83-TN (Max, Nov 17: "the actual brokerage bills for a specific release can override the $200, but only if sure; otherwise keep
+      // 200") — SURE = the bill names exactly ONE release, it is a Houston (1002-) release, and that release is in this report. Then the
+      // bill amount REPLACES the $200 for that container. A bill with no release, several releases or a non-Houston release is listed for
+      // comparison only and the $200 stays.
+      if (rels.length === 1 && mineRels.length === 1 && releaseOrigin(rels[0].raw, '').origin === 'HOUSTON') {
+        var bk = rels[0].key; bondBill[bk] = r2((bondBill[bk] || 0) + amount); (bondBillInfo[bk] = bondBillInfo[bk] || []).push(info);
+        return;
+      }
+      if (inPeriod({ invoice_date: b.bill_date })) { actualBonded.push(Object.assign({ why_not_used: !rels.length ? 'no release number' : (rels.length > 1 ? 'covers several releases' : 'not a Houston release') }, info)); }
+      return;
       if (!rels.length) { if (inPeriod({ invoice_date: b.bill_date })) { unallocated.push({ what: isBonded ? 'bonded_pool' : 'brokerage_pool', bill: b.bill_number, vendor: b.vendor_name, bill_date: b.bill_date, amount: amount, why: 'no release number on this bill — it must be assigned to Houston releases by a person' }); } return; }
       if (!mineRels.length) { return; }
       var notHouston = rels.filter(function (r) { return releaseOrigin(r.raw, '').origin !== 'HOUSTON'; });
@@ -201,7 +212,10 @@ export function assembleProfitability(d) {
   // [foil] should have a $200 bond charge on that container") — a container carrying only paper / foil has no bond charge.
   var noBondRel = {};
   p1.cells.forEach(function (c) { if (!c.release) { return; } if (!isPaperOrFoil(c.description) && !isPaperOrFoil(c.product)) { noBondRel[c.release] = false; } else if (noBondRel[c.release] === undefined) { noBondRel[c.release] = true; } });
-  Object.keys(relKnown).forEach(function (rel) { if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = noBondRel[rel] === true ? 0 : BONDED_PER_HOUSTON_RELEASE; } });
+  Object.keys(relKnown).forEach(function (rel) {
+    if (bondBill[rel] !== undefined) { bonded[rel] = bondBill[rel]; bondedFrom[rel] = 'bill ' + bondBillInfo[rel].map(function (x) { return x.bill_number; }).join(', '); return; } // a bill for this one container wins
+    if (releaseOrigin(relRaw[rel] || rel, '').origin === 'HOUSTON') { bonded[rel] = noBondRel[rel] === true ? 0 : BONDED_PER_HOUSTON_RELEASE; bondedFrom[rel] = noBondRel[rel] === true ? 'none — paper / foil' : 'standard $200'; }
+  });
   // v55.83-TL (Max, Nov 17: "trucking is its own type of business ... add columns for the trucking and the freight forwarding or
   // shipping, two different columns. So when you have one number, you can show it ... we should manually be able to enter it, and
   // then it gets overridden if you have a bill ... for that specific release number") — per release, EACH PART on its own:
@@ -303,6 +317,7 @@ export function assembleProfitability(d) {
     c.outbound_bills = c.release && outbound[c.release] ? outbound[c.release].bills : [];
     // v55.83-TL — this sale's share of the release's TRUCKING and FREIGHT, each on its own (same pounds share as the outbound total).
     // freight = outbound − trucking, so the two always add up to the outbound column exactly.
+    c.bonded_from = c.release ? (bondedFrom[c.release] || null) : null; // v55.83-TN — standard $200, none (paper / foil) or the bill
     var pu = c.release ? partsUsed[c.release] : null; var ob0 = c.release ? outbound[c.release] : null;
     var relTot = ob0 ? (ob0.actual !== null && ob0.actual !== undefined ? ob0.actual : ob0.estimate) : null;
     c.trucking_cost = null; c.freight_cost = null; c.trucking_kind = pu && pu.trucking ? pu.trucking.kind : null; c.freight_kind = pu && pu.freight ? pu.freight.kind : null;

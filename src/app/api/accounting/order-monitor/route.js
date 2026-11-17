@@ -14,7 +14,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { sendAlertEmail } from '../../../../lib/notify-server';
 import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFAULT, reconcileReleases } from '../../../../lib/order-lifecycle';
-import { relKey } from '../../../../lib/profitability';
+import { relKey, isTransportLine } from '../../../../lib/profitability';
 
 export const maxDuration = 60;
 var API_BUILD_MARKER = 'v55.83-TI-order-monitor';
@@ -34,7 +34,7 @@ function feedConfig() {
   var host = ''; try { host = new URL(url).host; } catch (e) { return { error: 'NEXTRADE_FEED_URL is not a web address.' }; }
   var live = !/nextrade-staging\.com$/i.test(host);
   if (live && String(process.env.NEXTRADE_FEED_ALLOW_LIVE || '') !== 'yes') { return { error: 'The feed points at the LIVE warehouse; that needs Max’s go-ahead (NEXTRADE_FEED_ALLOW_LIVE=yes).' }; }
-  return { url: url, token: token, host: host, source: live ? 'nextrade-live' : 'nextrade-staging', closeUrl: url.replace(/\/shipping\/?$/, '/close-order') };
+  return { url: url, token: token, host: host, source: live ? 'nextrade-live' : 'nextrade-staging', closeUrl: url.replace(/\/shipping\/?$/, '/close-order'), closeToken: String(process.env.NEXTRADE_CLOSE_TOKEN || '').trim() }; // TO — closing has its OWN token (Codex P1), never the read token
 }
 async function fetchFeed(cfg) {
   var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
@@ -67,6 +67,9 @@ async function loadAll(db, opts) {
   var pays = await fetchAll(function () { return db.from('accounting_invoice_payments').select('accounting_invoice_id, amount, bank_transaction_id, voided'); });
   var paysBy = {}; pays.forEach(function (p) { if (p.voided !== true) { (paysBy[p.accounting_invoice_id] = paysBy[p.accounting_invoice_id] || []).push(p); } });
   var termsBy = {}; try { (await fetchAll(function () { return db.from('pl_invoice_terms').select('invoice_id, shipping_terms'); })).forEach(function (t) { termsBy[t.invoice_id] = t.shipping_terms || null; }); } catch (eT) { termsBy = {}; }
+  // v55.83-TO (Codex QA 16 Nov, P1) — an EXW invoice that still carries a shipping line means we DID handle shipping: not a waiver
+  var exwIds = Object.keys(termsBy).filter(function (k) { return termsBy[k] === 'EXW'; }); var shipLineInv = {};
+  if (exwIds.length) { (await inChunks(db, 'accounting_invoice_items', 'invoice_id, description, wave_product_name, quantity, unit_price', 'invoice_id', exwIds)).forEach(function (it) { var amtI = (Number(it.quantity) || 0) * (Number(it.unit_price) || 0); if (amtI > 0 && isTransportLine(it.wave_product_name || it.description)) { shipLineInv[it.invoice_id] = true; } }); }
   var bills = await fetchAll(function () { return db.from('vendor_bills').select('id, bill_number, vendor_name, release_number, bill_type, shipment_direction, record_status, total_amount').in('bill_type', ['shipping', 'trucking']); });
   var bpays = bills.length ? await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', bills.map(function (b) { return b.id; })) : [];
   var bPaid = {}; bpays.forEach(function (p) { if (p.voided !== true) { bPaid[p.bill_id] = r2((bPaid[p.bill_id] || 0) + (Number(p.amount) || 0)); } });
@@ -96,7 +99,7 @@ async function loadAll(db, opts) {
     var invPays = []; var imported = 0;
     liveInv.forEach(function (i) { (paysBy[i.id] || []).forEach(function (p) { invPays.push({ bank_transaction_id: p.bank_transaction_id, amount: p.amount }); }); var raw = invs.filter(function (x) { return x.id === i.id; })[0]; imported += Number(raw && raw.wave_imported_paid) || 0; });
     var cur = liveInv.filter(function (i) { return i.approval_status === 'approved'; });
-    var exw = cur.length > 0 && cur.every(function (i) { return i.terms === 'EXW'; });
+    var exw = cur.length > 0 && cur.every(function (i) { return i.terms === 'EXW' && !shipLineInv[i.id]; }); // TO — confirmed: EXW chosen on the form, no shipping line
     var blockers = [];
     if (rk && mainRelCount[rk] > 1) { blockers.push('this release number is on ' + mainRelCount[rk] + ' warehouse orders'); }
     if (/^\s*test\b/i.test(String(o.customer_name || ''))) { blockers.push('test order on the warehouse copy'); }
@@ -139,9 +142,12 @@ async function runDeadline(db, kind) {
       if (up.data && up.data.length) { newOnes++; }
       var ex = await db.from('order_alerts').select('id, sent_at, resolved_at').eq('source', all.cfg.source).eq('alert_key', d.alert_key).maybeSingle();
       if (enabled && ex.data && !ex.data.sent_at && !ex.data.resolved_at) {
+        // v55.83-TO (Codex QA) — CLAIM the alert first: only the check that sets sending_at sends it; if the claim fails, nobody sends
+        var claim = await db.from('order_alerts').update({ sending_at: new Date().toISOString() }).eq('id', ex.data.id).is('sent_at', null).is('sending_at', null).select('id');
+        if (claim.error || !claim.data || !claim.data.length) { continue; }
         var em = alertEmail(ev, ev.links.hub + (ev.links.nextrade ? ' · order in Nextrade: ' + ev.links.nextrade : ''));
         var res = await sendAlertEmail(to, em.subject, em.html);
-        await db.from('order_alerts').update(res && res.sent ? { sent_at: new Date().toISOString(), recipients: to, send_error: null } : { send_error: (res && res.reason) || 'not sent' }).eq('id', ex.data.id);
+        await db.from('order_alerts').update(res && res.sent ? { sent_at: new Date().toISOString(), recipients: to, send_error: null } : { send_error: (res && res.reason) || 'not sent', sending_at: null }).eq('id', ex.data.id);
         if (res && res.sent) { sent++; } else { sendErr++; }
       }
     }
@@ -164,12 +170,28 @@ async function runDeadline(db, kind) {
 }
 
 // ── close one order: in Nextrade first (staging unless Max allowed live), then recorded in the Hub ──
-async function closeInNextrade(cfg, orderId, reason, byName, mode) {
+async function closeInNextrade(cfg, orderId, reason, byName, mode, requestId, expectedUpdatedAt) {
   try {
-    var res = await fetch(cfg.closeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, body: JSON.stringify({ order_id: orderId, reason: reason, closed_by_name: byName, mode: mode }), cache: 'no-store' });
+    var res = await fetch(cfg.closeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Close-Token': cfg.closeToken || '', Accept: 'application/json' }, body: JSON.stringify({ order_id: orderId, reason: reason, closed_by_name: byName, mode: mode, request_id: requestId, source: cfg.source, expected_updated_at: expectedUpdatedAt || null }), cache: 'no-store' });
     var j = await res.json().catch(function () { return null; });
     return { ok: !!(res.ok && j && j.ok), status: res.status, body: j };
   } catch (e) { return { ok: false, status: 0, body: { error: (e && e.message) || 'network' } }; }
+}
+// v55.83-TO (Codex QA 16 Nov, P1) — durable closure: pending row first (unique request id), then Nextrade, then the outcome. If the
+// Hub cannot record the intent, Nextrade is not asked. If it cannot record the outcome, the closure is reported as FAILED.
+async function closeTracked(db, cfg, ev, mode, reason, byId, byName, requestId) {
+  var o = ev.order;
+  if (!cfg.closeToken) { return { ok: false, error: 'Closing in Nextrade is not set up yet (NEXTRADE_CLOSE_TOKEN in Vercel) — nothing was closed.' }; }
+  var pend =await db.from('order_closures').insert({ source: cfg.source, order_id: o.id, release_number: o.release_number, mode: mode, reason: reason, closed_by: byId || null, written_to_nextrade: false, status: 'pending', request_id: requestId, open_exceptions: ev.closure.missing || [] }).select('id').single();
+  if (pend.error) {
+    var prev = await db.from('order_closures').select('id, status, nextrade_response').eq('request_id', requestId).maybeSingle();
+    if (!prev.error && prev.data && prev.data.status === 'succeeded') { return { ok: true, repeat: true }; }
+    return { ok: false, error: 'The Hub could not record the closure first (' + pend.error.message + ') — Nextrade was not asked. ' + (/status|request_id/.test(pend.error.message) ? 'Run sql/v55-83-TO-payment-guards.sql.' : '') };
+  }
+  var nx = await closeInNextrade(cfg, o.id, reason, byName, mode, requestId, o.updated_at || null);
+  var fin = await db.from('order_closures').update({ status: nx.ok ? 'succeeded' : 'failed', written_to_nextrade: nx.ok, nextrade_response: nx.body }).eq('id', pend.data.id).select('id');
+  if (fin.error || !fin.data || !fin.data.length) { return { ok: false, error: 'Nextrade answered ' + (nx.ok ? 'closed' : 'not closed') + ', but the Hub could not record the outcome — check this order.' }; }
+  return { ok: nx.ok, error: nx.ok ? null : ((nx.body && nx.body.error) || ('HTTP ' + nx.status)) };
 }
 async function runNightly(db, kind, byId) {
   var run = await db.from('order_review_runs').insert({ kind: kind }).select('id').single();
@@ -193,9 +215,8 @@ async function runNightly(db, kind, byId) {
       if (!autoOn) { continue; }
       var mode = ev.closure.forced ? 'override' : 'auto';
       var reason = ev.closure.forced ? ev.closure.words : 'All applicable requirements met, invoices paid, forwarder and trucker bills paid (overnight review).';
-      var nx = await closeInNextrade(all.cfg, o.id, reason, 'KTC Hub overnight review', mode);
-      await db.from('order_closures').insert({ source: all.cfg.source, order_id: o.id, release_number: o.release_number, mode: mode, reason: reason, closed_by: byId || null, written_to_nextrade: nx.ok, nextrade_response: nx.body, open_exceptions: ev.closure.missing || [] });
-      if (nx.ok) { s.closed.push(o.release_number || String(o.id)); } else { s.close_failures.push((o.release_number || o.id) + ': ' + ((nx.body && nx.body.error) || ('HTTP ' + nx.status))); }
+      var nx = await closeTracked(db, all.cfg, ev, mode, reason, byId, 'KTC Hub overnight review', 'nightly:' + run.data.id + ':' + o.id);
+      if (nx.ok) { s.closed.push(o.release_number || String(o.id)); } else { s.close_failures.push((o.release_number || o.id) + ': ' + (nx.error || 'failed')); }
     }
     await db.from('order_review_runs').update({ finished_at: new Date().toISOString(), ok: s.close_failures.length === 0, summary: s, error: s.close_failures.length ? s.close_failures.length + ' closure(s) failed' : null }).eq('id', run.data.id);
     return { ok: true, summary: s };
@@ -328,17 +349,21 @@ export async function POST(req) {
     if (action === 'link_deposit') {
       var txId = body.bank_transaction_id; var la = r2(body.amount);
       if (!(oid > 0) || !txId || !(la > 0)) { return bad('Pick the order, the bank transaction and the amount.'); }
+      var reqL = typeof body.request_id === 'string' && body.request_id.length >= 8 ? body.request_id.substring(0, 80) : null;
+      if (reqL) { var dupL = await db.from('order_deposit_links').select('id').eq('request_id', reqL).maybeSingle(); if (dupL.error && !missingTable(dupL.error.message)) { return bad('Could not read earlier matches (' + dupL.error.message + ') — nothing was matched.', 503); } if (dupL.data) { return NextResponse.json({ ok: true, id: dupL.data.id, already_recorded: true }); } }
       var tx = await db.from('bank_transactions').select('id, amount_abs, direction, pending').eq('id', txId).maybeSingle();
-      if (tx.error || !tx.data) { return bad('Bank transaction not found.', 404); }
+      if (tx.error) { return bad('Could not read the bank transaction (' + tx.error.message + ') — nothing was matched.', 503); }
+      if (!tx.data) { return bad('Bank transaction not found.', 404); }
       if (tx.data.direction !== 'in') { return bad('A deposit is money IN — that bank transaction is money out.', 409); }
       if (tx.data.pending === true) { return bad('That bank transaction is still pending.', 409); }
       var uI = await db.from('accounting_invoice_payments').select('amount, voided').eq('bank_transaction_id', txId);
       var uL = await db.from('order_deposit_links').select('amount, voided').eq('bank_transaction_id', txId);
+      if (uI.error) { return bad('Could not read the invoice payments on that bank line (' + uI.error.message + ') — nothing was matched.', 503); } // TO (Codex P1)
       if (uL.error) { return bad(missingTable(uL.error.message) ? SQL_HINT : uL.error.message, 500); }
       var usedT = 0; ((uI.data || []).concat(uL.data || [])).forEach(function (p) { if (p.voided !== true) { usedT += Number(p.amount) || 0; } });
       if (la > r2(Number(tx.data.amount_abs) - usedT) + 0.005) { return bad('Only $' + r2(Number(tx.data.amount_abs) - usedT).toFixed(2) + ' of this bank transaction is still free.', 409); }
-      var insL = await db.from('order_deposit_links').insert({ source: src, order_id: oid, release_number: body.release_number || null, bank_transaction_id: txId, amount: la, note: String(body.note || '').trim() || null, linked_by: userId }).select('id').single();
-      if (insL.error) { return bad(insL.error.message, 500); }
+      var insL = await db.from('order_deposit_links').insert({ source: src, order_id: oid, release_number: body.release_number || null, bank_transaction_id: txId, amount: la, note: String(body.note || '').trim() || null, linked_by: userId, request_id: reqL }).select('id').single();
+      if (insL.error) { var mL = String(insL.error.message || ''); if (/HUB_GUARD:/.test(mL)) { return bad('Not matched — ' + mL.replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ' Refresh: someone may have just used it.', 409); } return bad(/request_id/.test(mL) ? 'Run sql/v55-83-TO-payment-guards.sql first.' : mL, 500); }
       await audit(db, userId, 'order_deposit_linked', 'warehouse_order', String(oid), { bank_transaction_id: txId, amount: la, release: body.release_number || null, note: body.note || null });
       return NextResponse.json({ ok: true, id: insL.data.id });
     }
@@ -372,10 +397,10 @@ export async function POST(req) {
       var evC = oneC.orders[0]; if (!evC) { return bad('That order is not in the warehouse list.', 404); }
       if (evC.order.status === 'closed') { return bad('It is already closed in the warehouse.', 409); }
       var uN = await db.from('users').select('name, email').eq('id', userId).maybeSingle();
-      var nxC = await closeInNextrade(oneC.cfg, oid, rc, (uN.data && (uN.data.name || uN.data.email)) || 'Hub user', 'manual');
-      await db.from('order_closures').insert({ source: oneC.cfg.source, order_id: oid, release_number: evC.order.release_number, mode: 'manual', reason: rc, closed_by: userId, written_to_nextrade: nxC.ok, nextrade_response: nxC.body, open_exceptions: evC.closure.missing || [] });
-      await audit(db, userId, 'order_closed_manually', 'warehouse_order', String(oid), { reason: rc, release: evC.order.release_number, written_to_nextrade: nxC.ok, open_exceptions: (evC.closure.missing || []).length });
-      if (!nxC.ok) { return bad('Recorded in the Hub, but Nextrade did not close it: ' + ((nxC.body && nxC.body.error) || ('HTTP ' + nxC.status)), 502); }
+      var reqC = typeof body.request_id === 'string' && body.request_id.length >= 8 ? body.request_id.substring(0, 80) : ('manual:' + oid + ':' + Date.now());
+      var nxC = await closeTracked(db, oneC.cfg, evC, 'manual', rc, userId, (uN.data && (uN.data.name || uN.data.email)) || 'Hub user', reqC);
+      await audit(db, userId, 'order_closed_manually', 'warehouse_order', String(oid), { reason: rc, release: evC.order.release_number, written_to_nextrade: nxC.ok, open_exceptions: (evC.closure.missing || []).length, request_id: reqC });
+      if (!nxC.ok) { return bad('Not closed: ' + (nxC.error || 'Nextrade did not close it'), 502); }
       return NextResponse.json({ ok: true, open_exceptions: evC.closure.missing || [] });
     }
     if (action === 'run_now') {
