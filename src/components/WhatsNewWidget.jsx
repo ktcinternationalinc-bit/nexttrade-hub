@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UA',
+    date: '2026-11-17',
+    title: 'The new Nextrade, RTM, repeating bills and advances screens are easy to read',
+    items: [
+      { text: 'The category boxes, dates, search and every other box on Accounting → 🟦 Nextrade / 🟪 RTM, 💸 Bills → 🔁 Repeating bills and the 💼 advances panel now show dark text on white (they were washed out by the dark theme). The transaction tables use bigger, darker text.' },
+      { text: 'Technical: inputs/selects on CompanyBooksTab, RepeatingBillsPanel, AdvancesPanel use the existing .nt-light class (globals.css); table text 11px → 13px with a darker header.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-TX',
     date: '2026-11-17',
     title: 'Paying NextTrade / RTM — bills, an extra fee and an ADVANCE, with a running advance balance',

@@ -12,7 +12,7 @@ import { KIND_WORDS } from '../lib/party-money';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function newId() { try { if (typeof crypto !== 'undefined' && crypto.randomUUID) { return crypto.randomUUID(); } } catch (e) { /* older browser */ } return 'r' + Date.now().toString(36) + Math.random().toString(36).substring(2, 12); }
-var inp = 'px-2 py-1 rounded border text-[11px]';
+var inp = 'px-2 py-1 rounded border text-[11px] nt-light'; // v55.83-UA — nt-light: dark text on white even under the dark theme (globals.css)
 var inpS = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 
 export default function AdvancesPanel(props) {

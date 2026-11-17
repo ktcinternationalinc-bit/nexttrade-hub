@@ -12,7 +12,7 @@ function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFract
 function todayStr() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 var STATUS = { active: { t: '● Active', bg: '#dcfce7', fg: '#14532d' }, paused: { t: '⏸ Paused', bg: '#fef9c3', fg: '#713f12' }, stopped: { t: '⏹ Stopped', bg: '#e2e8f0', fg: '#334155' } };
 var box = { background: '#ffffff', color: '#0f172a', border: '1px solid #fdba74' };
-var inp = 'px-2 py-1 rounded border text-[11px]';
+var inp = 'px-2 py-1 rounded border text-[11px] nt-light'; // v55.83-UA — nt-light: dark text on white even under the dark theme (globals.css)
 var inpStyle = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 
 export default function RepeatingBillsPanel(props) {

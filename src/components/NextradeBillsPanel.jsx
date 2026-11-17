@@ -33,7 +33,7 @@ export default function NextradeBillsPanel(props) {
       <button onClick={props.onClose} className="px-2 py-1 rounded-lg text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>✕ Close</button>
     </div>
     {err && <div className="text-[11px] p-2 rounded mb-2" style={{ background: '#fef2f2', color: '#991b1b' }}>{err}</div>}
-    <div style={{ overflowX: 'auto' }}><table className="w-full text-[11px]"><thead><tr style={{ background: '#eff6ff' }}>
+    <div style={{ overflowX: 'auto' }}><table className="w-full text-[13px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#dbeafe', color: '#1e293b' }}>
       <th className="p-1 text-left">Bill #</th><th className="p-1 text-left">Vendor</th><th className="p-1 text-left">Due</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">KTC category</th><th className="p-1 text-left">From the Nextrade line</th><th className="p-1 text-left">Status</th></tr></thead>
       <tbody>{list.map(function (r) {
         var b = r.bill || {}; var l = r.line || {};

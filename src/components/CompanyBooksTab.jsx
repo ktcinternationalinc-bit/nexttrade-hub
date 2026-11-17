@@ -12,7 +12,7 @@ import StatementImport from './StatementImport';
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 var panel = { background: '#ffffff', color: '#0f172a', border: '1px solid #e2e8f0' };
-var inp = 'px-2 py-1 rounded border text-[11px]';
+var inp = 'px-2 py-1 rounded border text-[11px] nt-light'; // v55.83-UA — nt-light: dark text on white even under the dark theme (globals.css)
 var inpS = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 function btn(bg, fg) { return { background: bg, color: fg }; }
 var KTC_BILL_WORDS = { created: '🧾 KTC bill made', attached: '🔗 attached to a KTC bill' };
@@ -124,7 +124,7 @@ export default function CompanyBooksTab(props) {
         <button disabled={busy || !bulkCat} onClick={function () { setCategory(selIds, bulkCat === '__clear' ? null : bulkCat); setBulkCat(''); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>Save</button>
       </div>}
       <div style={{ overflowX: 'auto' }}>
-        <table className="w-full text-[11px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#f1f5f9' }}>
+        <table className="w-full text-[13px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#e2e8f0', color: '#1e293b' }}>
           <th className="p-1">{canManage && <input type="checkbox" checked={shown.length > 0 && shown.every(function (l) { return sel[l.id]; })} onChange={function (e) { var n = {}; if (e.target.checked) { shown.forEach(function (l) { n[l.id] = true; }); } setSel(n); }} />}</th>
           <th className="p-1 text-left">Date</th><th className="p-1 text-left">Account</th><th className="p-1 text-left">Description</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">Category</th>{comp.key === 'nextrade' && <th className="p-1 text-left">KTC bill</th>}</tr></thead>
           <tbody>{shown.map(function (l) {
@@ -151,7 +151,7 @@ export default function CompanyBooksTab(props) {
         <button onClick={function () { exportCsv([['category', 'kind'].concat(totals.months).concat(['total'])].concat(totals.rows.map(function (r) { return [r.label, r.kind].concat(totals.months.map(function (m) { return r.byMonth[m] || 0; })).concat([r.total]); })), comp.key + '-totals-' + from + '-to-' + to + '.csv'); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
       </div>
       <div className="text-[10px] mb-1" style={{ color: '#64748b' }}>Transfers (own money moving, money from KTC, card payments) are listed but never counted as income or spending.</div>
-      <div style={{ overflowX: 'auto' }}><table className="text-[11px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#f1f5f9' }}><th className="p-1 text-left">Category</th>{totals.months.map(function (m) { return <th key={m} className="p-1 text-right">{m}</th>; })}<th className="p-1 text-right">Total</th></tr></thead>
+      <div style={{ overflowX: 'auto' }}><table className="text-[13px]" style={{ color: '#0f172a' }}><thead><tr style={{ background: '#e2e8f0', color: '#1e293b' }}><th className="p-1 text-left">Category</th>{totals.months.map(function (m) { return <th key={m} className="p-1 text-right">{m}</th>; })}<th className="p-1 text-right">Total</th></tr></thead>
         <tbody>{totals.rows.map(function (r) { return <tr key={r.key} style={{ borderTop: '1px solid #e2e8f0', color: r.kind === 'transfer' ? '#64748b' : '#0f172a' }}><td className="p-1">{r.label}{r.kind === 'transfer' ? ' ↔' : ''}</td>{totals.months.map(function (m) { return <td key={m} className="p-1 text-right whitespace-nowrap">{r.byMonth[m] ? fmt(r.byMonth[m]) : ''}</td>; })}<td className="p-1 text-right font-bold whitespace-nowrap">{fmt(r.total)}</td></tr>; })}</tbody></table></div>
     </div>}
 
