@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-TM',
+    date: '2026-11-17',
+    title: 'Orders — releases with no KTC invoice (since June 2026), and every invoice problem links to its fix',
+    items: [
+      { text: 'New on 🚚 Orders: “🔎 Releases with no KTC invoice”. Every Nextrade warehouse order (main and obsolete) since the date you pick whose release number is on no active KTC invoice — grouped: no invoice at all, only in an invoice’s notes, only on cancelled invoices, no release number in Nextrade. CSV download.' },
+      { text: 'Each row has its fix: ＋ New invoice, ✏ open the invoice to type the release, a likely invoice of the same customer that has no release number, or the order in Nextrade.' },
+      { text: '“Wrongly linked” is gone. Wave invoices keep the release in their P.O./S.O. field — that now counts as linked. Their Release Number is empty, so a “copy to Release #” button (one or all) fills it; the profit report reads Release Number.' },
+      { text: 'Invoice numbers on the Orders list and in the order report open the invoice in the editor.' }
+    ]
+  },
+  {
     version: 'v55.83-TL',
     date: '2026-11-17',
     title: 'Profitability — trucking and freight in their own columns; type them per container; no bond charge on paper or foil',

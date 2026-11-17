@@ -45,7 +45,8 @@ var inv = function (o) { return Object.assign({ id: 'i', number: 'INV-1', record
 check('approved + active = current', L.invoiceState({ status: 'preload' }, [inv({})]).state === 'current');
 check('only a draft → "draft only"', L.invoiceState({ status: 'preload' }, [inv({ approval_status: 'draft' })]).state === 'draft_only');
 check('only void → "cancelled only"', L.invoiceState({ status: 'shipped' }, [inv({ record_status: 'void' })]).state === 'cancelled_only');
-check('release only in the PO/SO field → wrongly linked', L.invoiceState({ status: 'shipped' }, [inv({ po_so_only: true })]).state === 'po_so_only');
+var poS = L.invoiceState({ status: 'shipped' }, [inv({ po_so_only: true })]);
+check('TM: release only in the P.O./S.O. field (the Wave way) → LINKED (current), with a note that Release Number is empty', poS.state === 'current' && !poS.severe && poS.flags.some(function (f) { return /Release Number is empty/.test(f); }), poS);
 check('none before shipping → awaiting (not an alarm)', L.invoiceState({ status: 'preload' }, []).state === 'awaiting' && !L.invoiceState({ status: 'preload' }, []).severe);
 check('none after shipping → missing, overdue (an alarm)', L.invoiceState({ status: 'shipped' }, []).state === 'missing_overdue' && L.invoiceState({ status: 'shipped' }, []).severe);
 check('a void invoice + an approved one → current (the void one is history)', L.invoiceState({ status: 'shipped' }, [inv({ record_status: 'void', number: 'INV-0' }), inv({})]).state === 'current');
@@ -112,6 +113,41 @@ check('an N/A override on one item counts as N/A, with who and why', item(L.eval
 console.log('alert email');
 var em = L.alertEmail(L.evaluateOrder({ order: { id: 1733, release_number: '1002-1201', customer_name: 'Example A', country: 'Egypt', status: 'preload' }, rows: { preload: { deposit_amount: '12500' }, shipping_in_process: { load_date: '2026-11-17 09:00:00' } } }, NOW), 'https://hub.ktcus.com/?order=1733');
 check('subject names the release; body has customer, time, stage, what is missing and the link', /1002-1201/.test(em.subject) && /Example A/.test(em.text) && /2026-11-17 09:00 New York time/.test(em.text) && /Pre-load Ready/.test(em.text) && /Waiting for deposit/.test(em.text) && /hub\.ktcus\.com/.test(em.html));
+
+
+console.log('TM — releases from the warehouse with no KTC invoice, since June 2026');
+var ORD = [
+  { source: 'main', id: 1, release_number: '1002-1166', customer_name: 'FADI ALSARAG', status: 'shipped', shipped_date: '2026-10-06', created_at: '2026-09-01' },
+  { source: 'main', id: 2, release_number: '1002-1170', customer_name: 'Acme Plastics', status: 'shipped', shipped_date: '2026-10-10', created_at: '2026-09-01' },
+  { source: 'main', id: 3, release_number: '1002-1171', customer_name: 'Acme Plastics', status: 'pending', created_at: '2026-10-20' },
+  { source: 'main', id: 4, release_number: '1002-1172', customer_name: 'Beta Co', status: 'shipped', shipped_date: '2026-09-01' },
+  { source: 'main', id: 5, release_number: '', customer_name: 'Gamma', status: 'shipped', shipped_date: '2026-08-01' },
+  { source: 'main', id: 6, release_number: '1002-0900', customer_name: 'Old', status: 'closed', shipped_date: '2026-04-01' },
+  { source: 'main', id: 7, release_number: '1002-1180', customer_name: 'Cancel Co', status: 'cancelled', shipped_date: '2026-10-01' },
+  { source: 'main', id: 8, release_number: '1002-1181', customer_name: 'Test customer', status: 'shipped', shipped_date: '2026-10-01' },
+  { source: 'obsolete', id: 90, release_number: '1001-0555', customer_name: 'Delta', status: 'shipped', shiped_date: null, load_date: '2026-07-15' },
+  { source: 'main', id: 9, release_number: '1002-1190', customer_name: 'Notes Co', status: 'shipped', shipped_date: '2026-10-02' }
+];
+var INV = [
+  { id: 'a', invoice_number: 'AMERICA 1756', release_number: '1002-1166', record_status: 'active', approval_status: 'approved', invoice_date: '2026-10-06', customer_name: 'FADI ALSARAG' },
+  { id: 'b', invoice_number: 'W-200', release_number: null, po_so_number: '1002-1170', record_status: 'active', approval_status: 'approved', invoice_date: '2026-10-10', customer_name: 'Acme Plastics' },
+  { id: 'c', invoice_number: 'W-201', release_number: '', po_so_number: '', record_status: 'active', approval_status: 'approved', invoice_date: '2026-10-25', customer_name: 'Acme Plastics Inc', total_amount: 5000 },
+  { id: 'd', invoice_number: 'V-9', release_number: '1002-1172', record_status: 'void', approval_status: 'approved', invoice_date: '2026-09-01', customer_name: 'Beta Co' },
+  { id: 'e', invoice_number: 'N-1', release_number: '', po_so_number: '', notes: 'Release 1002-1190 per booking', record_status: 'active', approval_status: 'approved', invoice_date: '2026-10-03', customer_name: 'Someone else' }
+];
+var rec = L.reconcileReleases(ORD, INV, '2026-06-01');
+function st(id) { var r = rec.filter(function (x) { return x.order_id === id; })[0]; return r ? r.state : 'not listed'; }
+check('linked by Release Number → not listed', st(1) === 'not listed');
+check('linked only by P.O./S.O. (Wave) → listed as po_so_only (the copy group), with the invoice', st(2) === 'po_so_only' && rec.filter(function (x) { return x.order_id === 2; })[0].po_so[0].number === 'W-200');
+check('nothing carries it → none, with the same-customer invoice that has no release as a suggestion', st(3) === 'none' && rec.filter(function (x) { return x.order_id === 3; })[0].suggestions[0].number === 'W-201');
+check('only a void invoice carries it → cancelled_only', st(4) === 'cancelled_only');
+check('warehouse order with no release number → no_release', st(5) === 'no_release');
+check('before June 2026 → not listed', st(6) === 'not listed');
+check('cancelled order → not listed; test order → not listed', st(7) === 'not listed' && st(8) === 'not listed');
+check('obsolete order counted by its load date', st(90) === 'none');
+check('release mentioned only in an invoice’s notes → in_notes', st(9) === 'in_notes' && rec.filter(function (x) { return x.order_id === 9; })[0].in_notes[0].number === 'N-1');
+check('order: problems first (none), the Wave P.O./S.O. group last', rec[0].state === 'none' && rec[rec.length - 1].state === 'po_so_only');
+check('a P.O./S.O. invoice is never suggested as "no release number"', !rec.some(function (x) { return x.suggestions.some(function (i) { return i.id === 'b'; }); }));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

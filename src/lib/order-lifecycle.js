@@ -110,7 +110,9 @@ export function requirementItems(ctx) {
 // invoices = [{ id, number, release_number, po_so_only (bool), record_status, approval_status, wave_sync_status, customer_name, total, paid }]
 export function invoiceState(order, invoices) {
   var rank = stageRank((order || {}).status);
-  var byRel = (invoices || []).filter(function (i) { return !i.po_so_only; });
+  // v55.83-TM (Max, Nov 17: 'what does wrongly linked mean') — a release found only in an invoice's P.O./S.O. field is how Wave invoices
+  // carry it, so it COUNTS as linked. It is noted (Release Number empty) with a one-click copy; it is never called 'wrongly linked'.
+  var byRel = (invoices || []).slice();
   var live = byRel.filter(function (i) { return (i.record_status || 'active') === 'active'; });
   var current = live.filter(function (i) { return i.approval_status === 'approved'; });
   var review = live.filter(function (i) { return i.approval_status === 'internal_review'; });
@@ -118,19 +120,19 @@ export function invoiceState(order, invoices) {
   var gone = byRel.filter(function (i) { return ['void', 'cancelled', 'archived', 'deleted'].indexOf(i.record_status) >= 0; });
   var poOnly = (invoices || []).filter(function (i) { return i.po_so_only; });
   var flags = [];
+  poOnly.filter(function (i) { return (i.record_status || 'active') === 'active'; }).forEach(function (i) { flags.push('Invoice ' + i.number + ' has this release in its P.O./S.O. field (as Wave invoices do) — its Release Number is empty'); });
   current.forEach(function (i) { if (i.wave_sync_status === 'pending_sync' || i.wave_sync_status === 'failed') { flags.push('Invoice ' + i.number + ' was reopened/changed and is not re-sent to Wave'); } });
   live.forEach(function (i) { if (i.customer_name && order && order.customer_name && !sameCustomer(i.customer_name, order.customer_name)) { flags.push('Invoice ' + i.number + ' is for ' + i.customer_name + ', the order is for ' + order.customer_name); } });
   var state; var words;
   if (current.length) { state = 'current'; words = current.map(function (i) { return i.number; }).join(', ') + (current.length > 1 ? ' (several invoices — partial shipments or a split)' : ''); }
   else if (review.length) { state = 'in_approval'; words = review.map(function (i) { return i.number; }).join(', ') + ' — in approval'; }
   else if (draft.length) { state = 'draft_only'; words = draft.map(function (i) { return i.number; }).join(', ') + ' — draft only, not issued'; }
-  else if (poOnly.length) { state = 'po_so_only'; words = poOnly.map(function (i) { return i.number; }).join(', ') + ' carries this release only in its PO/SO field — wrongly linked'; }
   else if (gone.length) { state = 'cancelled_only'; words = 'only cancelled / void invoices: ' + gone.map(function (i) { return i.number; }).join(', '); }
   else { state = rank >= R_SHIPPED ? 'missing_overdue' : 'awaiting'; words = rank >= R_SHIPPED ? 'No KTC invoice on this release — overdue (shipped)' : 'Awaiting invoice (not shipped yet)'; }
-  var severe = state === 'missing_overdue' || ((state === 'po_so_only' || state === 'cancelled_only' || state === 'draft_only') && rank >= R_SHIPPED);
+  var severe = state === 'missing_overdue' || ((state === 'cancelled_only' || state === 'draft_only') && rank >= R_SHIPPED);
   return { state: state, words: words, current: current, all: byRel, review_only: poOnly, cancelled: gone, flags: flags, severe: severe };
 }
-function sameCustomer(a, b) {
+export function sameCustomer(a, b) {
   function core(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(inc|llc|ltd|limited|co|corp|company|the|sa|sarl)\b/g, ' ').replace(/\s+/g, ' ').trim(); }
   var x = core(a); var y = core(b); if (!x || !y) { return true; }
   if (x === y || x.indexOf(y) >= 0 || y.indexOf(x) >= 0) { return true; }
@@ -281,4 +283,57 @@ export function alertEmail(ev, link) {
   var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
   var html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#14202e">' + lines.map(function (l) { return l === '' ? '<br>' : (/^Open the order: /.test(l) ? 'Open the order: <a href="' + esc(link) + '">' + esc(link) + '</a><br>' : esc(l) + '<br>'); }).join('') + '</div>';
   return { subject: subject, text: lines.join('\n'), html: html };
+}
+
+// ── v55.83-TM (Max, Nov 17: "Need a reconciliation of orders release numbers from NT warehouse that do not have a linked KTC
+// invoice from June 2026 on") — every warehouse order (main + obsolete) active since `since`, whose release number is NOT in the
+// Release Number field of any active KTC invoice. Each row says why and offers what would fix it:
+//   none           — nothing carries it → create the invoice, or add the release to one of the suggested invoices
+//   cancelled_only — only void / cancelled invoices carry it → a new invoice is needed (or the cancellation was a mistake)
+//   no_release     — the warehouse order has no release number at all → fill it in Nextrade
+//   in_notes       — no invoice field carries it, but an invoice's notes / memo mention it → put it in that invoice's Release Number
+//   po_so_only     — LINKED the Wave way (the P.O./S.O. field) but Release Number is empty → one click copies it (the P&L reads Release Number)
+// suggestions: active invoices of the same customer with NO release number, dated within 45 days of the order.
+// orders: [{ source, id, release_number, customer_name, status, shipped_date, load_date, created_at, link }]
+// invoices: [{ id, invoice_number, release_number, po_so_number, record_status, approval_status, invoice_date, customer_name, total_amount }]
+export function reconcileReleases(orders, invoices, since) {
+  var from = String(since || '2026-06-01').substring(0, 10);
+  var byRel = {}; var byPo = {}; var noRel = [];
+  (invoices || []).forEach(function (i) {
+    var rs = releasesOf(i.release_number); rs.forEach(function (k) { (byRel[k] = byRel[k] || []).push(i); });
+    releasesOf(i.po_so_number).forEach(function (k) { (byPo[k] = byPo[k] || []).push(i); });
+    if (!rs.length && !releasesOf(i.po_so_number).length && (i.record_status || 'active') === 'active') { noRel.push(i); }
+  });
+  function isLive(i) { return (i.record_status || 'active') === 'active'; }
+  function day(s) { var m = String(s || '').match(/^(\d{4}-\d{2}-\d{2})/); return m ? m[1] : ''; }
+  function brief(i) { return { id: i.id, number: i.invoice_number, date: day(i.invoice_date), customer: i.customer_name || null, total: Number(i.total_amount) || 0, approval: i.approval_status || null, record_status: i.record_status || 'active' }; }
+  var out = [];
+  (orders || []).forEach(function (o) {
+    if (o.status === 'cancelled') { return; }
+    if (/^\s*test\b/i.test(String(o.customer_name || ''))) { return; }
+    var dt = day(o.shipped_date) || day(o.load_date) || day(o.created_at);
+    var dk = day(o.shipped_date) ? 'shipped' : (day(o.load_date) ? 'load date' : 'created');
+    if (!dt || dt < from) { return; }
+    var ks = releasesOf(o.release_number);
+    var row = { source: o.source || 'main', order_id: o.id, release_number: o.release_number || '', customer: o.customer_name || '', status: o.status || '', date: dt, date_kind: dk, link: o.link || null, po_so: [], cancelled: [], suggestions: [] };
+    if (!ks.length) { row.state = 'no_release'; row.words = 'The warehouse order has no release number — fill it in Nextrade'; out.push(row); return; }
+    var on = []; var seen = {};
+    ks.forEach(function (k) { (byRel[k] || []).forEach(function (i) { if (!seen[i.id]) { seen[i.id] = true; on.push(i); } }); });
+    if (on.some(isLive)) { return; } // linked: an active invoice carries the release
+    var po = []; var seenP = {};
+    ks.forEach(function (k) { (byPo[k] || []).forEach(function (i) { if (isLive(i) && !seenP[i.id]) { seenP[i.id] = true; po.push(i); } }); });
+    row.po_so = po.map(brief); row.cancelled = on.map(brief);
+    var noteHits = po.length ? [] : (invoices || []).filter(function (i) { if (!isLive(i) || !i.notes) { return false; } var nk = String(i.notes).toUpperCase().replace(/[^A-Z0-9]/g, ''); return ks.some(function (k) { return k.length >= 6 && nk.indexOf(k) >= 0; }); });
+    row.in_notes = noteHits.map(brief);
+    var t0 = Date.parse(dt + 'T00:00:00Z');
+    row.suggestions = noRel.filter(function (i) { var d0 = Date.parse(day(i.invoice_date) + 'T00:00:00Z'); return !isNaN(d0) && Math.abs(d0 - t0) <= 45 * 86400000 && i.customer_name && o.customer_name && sameCustomer(i.customer_name, o.customer_name); })
+      .sort(function (a, b) { return Math.abs(Date.parse(day(a.invoice_date)) - t0) - Math.abs(Date.parse(day(b.invoice_date)) - t0); }).slice(0, 3).map(brief);
+    if (po.length) { row.state = 'po_so_only'; row.words = 'Linked the Wave way: invoice ' + po.map(function (i) { return i.invoice_number; }).join(', ') + ' has it in the P.O./S.O. field — its Release Number is empty (the profit report reads Release Number)'; }
+    else if (noteHits.length) { row.state = 'in_notes'; row.words = 'Not in any invoice field, but the notes of ' + noteHits.map(function (i) { return i.invoice_number; }).join(', ') + ' mention it'; }
+    else if (on.length) { row.state = 'cancelled_only'; row.words = 'Only void / cancelled invoices carry it: ' + on.map(function (i) { return i.invoice_number; }).join(', '); }
+    else { row.state = 'none'; row.words = row.suggestions.length ? 'No invoice carries this release — maybe one of the invoices below (same customer, no release number)' : 'No KTC invoice carries this release'; }
+    out.push(row);
+  });
+  var rank = { none: 0, in_notes: 1, cancelled_only: 2, no_release: 3, po_so_only: 4 };
+  return out.sort(function (a, b) { return rank[a.state] - rank[b.state] || String(b.date).localeCompare(String(a.date)); });
 }

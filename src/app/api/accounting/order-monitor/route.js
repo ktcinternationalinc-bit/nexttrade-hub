@@ -13,7 +13,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { sendAlertEmail } from '../../../../lib/notify-server';
-import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFAULT } from '../../../../lib/order-lifecycle';
+import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFAULT, reconcileReleases } from '../../../../lib/order-lifecycle';
 import { relKey } from '../../../../lib/profitability';
 
 export const maxDuration = 60;
@@ -86,10 +86,13 @@ async function loadAll(db, opts) {
     if (opts && opts.orderId && Number(o.id) !== Number(opts.orderId)) { return; }
     var rk = relKey(o.release_number); var sg = stagesBy[o.id] || {}; var rows = {};
     Object.keys(sg).forEach(function (st) { rows[st] = latestRow(sg[st]); });
-    var invList = (rk ? (invByRel[rk] || []) : []).map(function (i) { var p = (paysBy[i.id] || []).reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0); return { id: i.id, number: i.invoice_number, record_status: i.record_status || 'active', approval_status: i.approval_status, wave_sync_status: i.wave_sync_status, customer_name: custName[i.accounting_customer_id] || null, total: r2(i.total_amount), paid: r2(p + (Number(i.wave_imported_paid) || 0)), date: i.invoice_date, terms: termsBy[i.id] || null }; });
+    // v55.83-TM — Wave invoices carry the release in their P.O./S.O. field (the Hub pushes it there; Wave imports keep it there), so a
+    // P.O./S.O. match COUNTS as linked; it is only noted that Release Number is empty (one click copies it).
+    function invObj(i, poOnly) { var p = (paysBy[i.id] || []).reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0); return { id: i.id, number: i.invoice_number, record_status: i.record_status || 'active', approval_status: i.approval_status, wave_sync_status: i.wave_sync_status, customer_name: custName[i.accounting_customer_id] || null, total: r2(i.total_amount), paid: r2(p + (Number(i.wave_imported_paid) || 0)), date: i.invoice_date, terms: termsBy[i.id] || null, po_so_only: !!poOnly }; }
+    var invList = (rk ? (invByRel[rk] || []) : []).map(function (i) { return invObj(i, false); });
     var have = {}; invList.forEach(function (i) { have[i.id] = true; });
-    (rk ? (poByRel[rk] || []) : []).forEach(function (i) { if (!have[i.id]) { invList.push({ id: i.id, number: i.invoice_number, po_so_only: true, record_status: i.record_status || 'active', approval_status: i.approval_status }); } });
-    var liveInv = invList.filter(function (i) { return !i.po_so_only && i.record_status === 'active'; });
+    (rk ? (poByRel[rk] || []) : []).forEach(function (i) { if (!have[i.id]) { have[i.id] = true; invList.push(invObj(i, true)); } });
+    var liveInv = invList.filter(function (i) { return i.record_status === 'active'; });
     var invPays = []; var imported = 0;
     liveInv.forEach(function (i) { (paysBy[i.id] || []).forEach(function (p) { invPays.push({ bank_transaction_id: p.bank_transaction_id, amount: p.amount }); }); var raw = invs.filter(function (x) { return x.id === i.id; })[0]; imported += Number(raw && raw.wave_imported_paid) || 0; });
     var cur = liveInv.filter(function (i) { return i.approval_status === 'approved'; });
@@ -112,7 +115,8 @@ function rowOf(ev) {
   var o = ev.order;
   return { id: o.id, release_number: o.release_number, customer: o.customer_name, country: o.country, warehouse: o.warehouse_name, stage: ev.stage, stage_label: ev.stage_label,
     scheduled: ev.deadline.scheduled || null, shipped_date: o.shipped_date || null, deadline: { state: ev.deadline.state, hours_left: ev.deadline.hours_left === undefined ? null : Math.round(ev.deadline.hours_left * 10) / 10, short_notice: !!ev.deadline.short_notice },
-    readiness: ev.readiness, invoice: { state: ev.invoice.state, words: ev.invoice.words, severe: ev.invoice.severe, numbers: ev.invoice.all.map(function (i) { return i.number; }) },
+    readiness: ev.readiness, invoice: { state: ev.invoice.state, words: ev.invoice.words, severe: ev.invoice.severe, numbers: ev.invoice.all.map(function (i) { return i.number; }), flags: ev.invoice.flags || [],
+      items: ev.invoice.all.map(function (i) { return { id: i.id, number: i.number, po_so_only: !!i.po_so_only, approval_status: i.approval_status || null, record_status: i.record_status || 'active' }; }) },
     deposit: { status: ev.deposit.status, words: ev.deposit.words, blocked: ev.deposit.blocked }, outstanding: ev.outstanding.map(function (i) { return i.label; }),
     next_action: ev.next_action, closable: ev.closure.eligible, shipped_outstanding: ev.shipped_outstanding, links: ev.links };
 }
@@ -234,6 +238,43 @@ export async function POST(req) {
     var canManage = !!((await assertPermission(db, userId, 'orders.manage', req)) || {}).ok;
     var isSuper = !!(gv.ctx && gv.ctx.isSuperAdmin);
 
+    // v55.83-TM (Max, Nov 17) — warehouse releases since June 2026 with no KTC invoice carrying them, each with the way to fix it
+    if (action === 'reconcile') {
+      var allR = await loadAll(db); if (allR.error) { return bad(allR.error, 503); }
+      var since = /^\d{4}-\d{2}-\d{2}$/.test(String(body.since || '')) ? body.since : '2026-06-01';
+      var siteR = String(allR.feed.site || allR.cfg.host || '').replace(/^https?:\/\//, '');
+      var ordR = allR.orders.map(function (ev) { var o = ev.order; return { source: 'main', id: o.id, release_number: o.release_number, customer_name: o.customer_name, status: o.status, shipped_date: o.shipped_date, load_date: ev.deadline && ev.deadline.scheduled ? ev.deadline.scheduled : null, created_at: o.created_at, link: ev.links && ev.links.nextrade }; })
+        .concat((allR.feed.obsolete_orders || []).map(function (o) { return { source: 'obsolete', id: o.id, release_number: o.release_number, customer_name: o.customer_name, status: o.status, shipped_date: o.shiped_date, load_date: o.load_date, created_at: o.created_at, link: null }; }));
+      var invR = await fetchAll(function () { return db.from('accounting_invoices').select('id, invoice_number, release_number, po_so_number, accounting_customer_id, total_amount, record_status, approval_status, invoice_date, notes, source'); });
+      var cIds = {}; invR.forEach(function (i) { if (i.accounting_customer_id) { cIds[i.accounting_customer_id] = true; } });
+      var cRows = Object.keys(cIds).length ? await inChunks(db, 'accounting_customers', 'id, company_name, contact_name', 'id', Object.keys(cIds)) : [];
+      var cName = {}; cRows.forEach(function (c) { cName[c.id] = c.company_name || c.contact_name || null; });
+      invR.forEach(function (i) { i.customer_name = cName[i.accounting_customer_id] || null; });
+      var recRows = reconcileReleases(ordR, invR, since);
+      var canEditInv = !!((await assertPermission(db, userId, 'invoices.edit', req)) || {}).ok;
+      return NextResponse.json({ ok: true, rows: recRows, since: since, source: allR.cfg.source, site: siteR || null, orders_checked: ordR.length, can_edit_invoices: canEditInv, generated_at: allR.generated_at, api_build_marker: API_BUILD_MARKER });
+    }
+    // v55.83-TM — copy a Wave invoice's P.O./S.O. (the release) into its EMPTY Release Number. Never overwrites; never touches Wave
+    // (Wave already has the same number as its P.O.). Every copy is in the audit trail.
+    if (action === 'copy_release_from_po') {
+      var ge = await assertPermission(db, userId, 'invoices.edit', req);
+      if (!ge.ok) { return bad('This needs the "Invoices: Edit" permission.', 403); }
+      var ids = (Array.isArray(body.invoice_ids) ? body.invoice_ids : [body.invoice_id]).filter(function (x) { return typeof x === 'string' && x.length > 10; }).slice(0, 500);
+      if (!ids.length) { return bad('Choose the invoice.'); }
+      var src = await inChunks(db, 'accounting_invoices', 'id, invoice_number, release_number, po_so_number, record_status', 'id', ids);
+      var done = []; var skipped = [];
+      for (var ci = 0; ci < src.length; ci++) {
+        var iv = src[ci];
+        if (String(iv.release_number || '').trim()) { skipped.push({ number: iv.invoice_number, why: 'already has a release number' }); continue; }
+        if (!releasesOf(iv.po_so_number).length) { skipped.push({ number: iv.invoice_number, why: 'its P.O./S.O. does not look like a release number' }); continue; }
+        var upI = await db.from('accounting_invoices').update({ release_number: String(iv.po_so_number).trim() }).eq('id', iv.id).or('release_number.is.null,release_number.eq.').select('id');
+        if (upI.error) { return bad('Not saved: ' + upI.error.message, 500); }
+        if (!upI.data || !upI.data.length) { skipped.push({ number: iv.invoice_number, why: 'changed by someone else meanwhile' }); continue; }
+        await audit(db, userId, 'invoice_release_copied_from_po', 'accounting_invoice', iv.id, { invoice: iv.invoice_number, release_number: String(iv.po_so_number).trim(), from: 'P.O./S.O. field' });
+        done.push(iv.invoice_number);
+      }
+      return NextResponse.json({ ok: true, copied: done, skipped: skipped, api_build_marker: API_BUILD_MARKER });
+    }
     if (action === 'report') {
       var all = await loadAll(db); if (all.error) { return bad(all.error, 503); }
       var rows = all.orders.filter(function (ev) { return body.include_closed === true || (ev.order.status !== 'closed' && ev.order.status !== 'cancelled'); }).map(rowOf);
@@ -255,7 +296,7 @@ export async function POST(req) {
         var al = await db.from('order_alerts').select('kind, alert_key, first_seen_at, sent_at, recipients, send_error, resolved_at, resolved_why').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('first_seen_at', { ascending: false }).limit(20); extra.alerts = al.data || [];
         var cl = await db.from('order_closures').select('mode, reason, closed_at, written_to_nextrade, open_exceptions').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('closed_at', { ascending: false }).limit(10); extra.closures = cl.data || [];
       }
-      return NextResponse.json({ ok: true, report: Object.assign(rowOf(ev), { items: ev.items, invoices: ev.invoice.all.concat(ev.invoice.review_only), invoice_flags: ev.invoice.flags, deposit: ev.deposit, deadline: ev.deadline, closure: ev.closure, groups: ev.groups, bills: ev.bills, overrides: ev.overrides, deposit_links: ev.deposit_links }), extra: extra, source: one.cfg.source, can_manage: canManage, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, report: Object.assign(rowOf(ev), { items: ev.items, invoices: ev.invoice.all, invoice_flags: ev.invoice.flags, deposit: ev.deposit, deadline: ev.deadline, closure: ev.closure, groups: ev.groups, bills: ev.bills, overrides: ev.overrides, deposit_links: ev.deposit_links }), extra: extra, source: one.cfg.source, can_manage: canManage, api_build_marker: API_BUILD_MARKER });
     }
     if (!canManage && ['set_deposit_status', 'link_deposit', 'unlink_deposit', 'override', 'end_override', 'close_order', 'run_now', 'deposit_candidates'].indexOf(action) >= 0) { return bad('This needs the "Orders: Manage" permission — Settings → Module Access.', 403); }
     var cfgM = feedConfig(); if (cfgM.error) { return bad(cfgM.error, 503); }

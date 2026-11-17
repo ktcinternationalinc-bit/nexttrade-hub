@@ -11,7 +11,7 @@ var S = { done: ['#157347', '#e3f4ea'], prog: ['#1f5fbf', '#e6eefb'], wait: ['#a
 var STAGES = [['pending', 'Order created'], ['preload', 'Pre-load Ready'], ['shipping_in_process', 'Shipping In Process'], ['shipped', 'Shipped'], ['post_loading_documentation', 'Post-loading docs'], ['end_stage', 'End stage'], ['closed', 'Closed']];
 var STATUS_WORDS = { done: 'Completed', missing: 'Missing', waiting: 'Waiting', na: 'Not applicable' };
 var INV_KEY = { current: 'done', in_approval: 'wait', draft_only: 'wait', awaiting: 'na', po_so_only: 'blocked', cancelled_only: 'blocked', missing_overdue: 'blocked' };
-var INV_WORDS = { current: 'Current', in_approval: 'In approval', draft_only: 'Draft only', awaiting: 'Awaiting invoice', po_so_only: 'Wrongly linked', cancelled_only: 'Cancelled only', missing_overdue: 'Missing — overdue' };
+var INV_WORDS = { current: 'Current', in_approval: 'In approval', draft_only: 'Draft only', awaiting: 'Awaiting invoice', po_so_only: 'In P.O./S.O. only', cancelled_only: 'Cancelled only', missing_overdue: 'Missing — overdue' };
 var DEP_KEY = { received: 'done', partial: 'blocked', not_received: 'blocked', not_required: 'na', unknown: 'wait' };
 var DEP_WORDS = { received: 'Received', partial: 'Partly received', not_received: 'Not received', not_required: 'Not required', unknown: 'Amount not set' };
 var DL_WORDS = { on_track: 'on track', due_soon: 'deadline soon', missed: '30-h deadline missed', overdue_unshipped: 'scheduled time passed', short_notice: 'short notice', reached: 'reached in time', reached_late: 'reached late', shipped: 'shipped', no_schedule: 'no load date/time', not_applicable: '' };
@@ -33,6 +33,7 @@ export default function OrderMonitorTab(props) {
   var s7 = useState(null); var rep = s7[0]; var setRep = s7[1];
   var s8 = useState({}); var form = s8[0]; var setForm = s8[1];
   var s9 = useState(false); var showSet = s9[0]; var setShowSet = s9[1];
+  var s10 = useState('orders'); var view = s10[0]; var setView = s10[1]; // v55.83-TM — 'orders' | 'recon'
 
   function call(payload) {
     return supabase.auth.getSession().then(function (sres) {
@@ -47,6 +48,10 @@ export default function OrderMonitorTab(props) {
     load();
     try { var m = String(window.location.search || '').match(/[?&]order=(\d+)/); if (m) { openOrder(Number(m[1])); } } catch (e) { /* no deep link */ }
   }, []); // eslint-disable-line
+  // v55.83-TM (Max, Nov 17: "links should lead to something to fix it") — open an invoice in the editor / start a new one
+  function openInvoice(id) { try { window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e) {} if (props.onGo) { props.onGo('invoices'); } }
+  function newInvoice() { if (props.onGo) { props.onGo('invoices'); } else { toast.error('Open Accounting → Invoices → + New invoice.'); } }
+  function copyRelease(ids) { setBusy(true); return call({ action: 'copy_release_from_po', invoice_ids: ids }).then(function (j) { if (j && j.ok) { toast.success((j.copied.length ? 'Release Number filled on ' + j.copied.join(', ') + '.' : 'Nothing copied.') + (j.skipped.length ? ' Skipped: ' + j.skipped.map(function (x) { return x.number + ' (' + x.why + ')'; }).join('; ') : '')); load(); return true; } toast.error((j && j.error) || 'Not saved.'); return false; }).finally(function () { setBusy(false); }); }
   function act(payload, okMsg) { setBusy(true); return call(payload).then(function (j) { if (j && j.ok) { toast.success(okMsg); setForm({}); if (openId) { openOrder(openId); } load(); return true; } toast.error((j && j.error) || 'It did not go through.'); return false; }).finally(function () { setBusy(false); }); }
 
   if (!data) { return <div className="rounded-xl p-4" style={{ background: '#ffffff', border: '1px solid ' + LINE, color: INK }}>{err ? <div className="text-[12px] font-bold" style={{ color: '#b42318' }}>{'⛔ ' + err}</div> : <div className="text-[12px]" style={{ color: SUB }}>Reading the warehouse and the Hub…</div>}</div>; }
@@ -66,6 +71,14 @@ export default function OrderMonitorTab(props) {
   var k = { dead: rows.filter(function (r) { return ['missed', 'overdue_unshipped', 'due_soon', 'short_notice'].indexOf(r.deadline.state) >= 0; }).length, inv: rows.filter(function (r) { return r.invoice.state === 'missing_overdue'; }).length,
     dep: rows.filter(function (r) { return r.deposit.blocked; }).length, shipped: rows.filter(function (r) { return r.shipped_outstanding; }).length, close: rows.filter(function (r) { return r.closable; }).length };
   var runs = data.runs || {}; var set = data.settings || {};
+  // the invoice cell: each invoice opens in the editor; a missing one has + New invoice; a P.O./S.O.-only one has a one-click copy
+  function invFix(inv, rel) {
+    var items = inv.items || [];
+    return <div className="grid gap-0.5 mt-0.5">
+      {items.map(function (i) { return <div key={i.id} className="flex items-center gap-1 flex-wrap"><button type="button" onClick={function () { openInvoice(i.id); }} className="underline font-bold" style={{ color: '#0f5c8c', background: 'none', border: 0, padding: 0 }} title="Open this invoice in the editor">{'✏ ' + i.number}</button>{i.po_so_only && <span style={{ color: S.wait[0] }}>{'in P.O./S.O. only'}</span>}{i.po_so_only && i.record_status === 'active' && <button type="button" disabled={busy} onClick={function () { copyRelease([i.id]); }} className="px-1.5 rounded text-[10px] font-bold" style={{ background: S.wait[0], color: '#ffffff', border: 0 }} title={'Copy ' + rel + ' from its P.O./S.O. into its empty Release Number'}>copy to Release #</button>}</div>; })}
+      {(inv.state === 'missing_overdue' || inv.state === 'awaiting' || inv.state === 'cancelled_only') && <button type="button" onClick={newInvoice} className="px-1.5 py-0.5 rounded text-[10px] font-bold justify-self-start" style={{ background: inv.state === 'awaiting' ? '#ffffff' : S.blocked[0], color: inv.state === 'awaiting' ? INK : '#ffffff', border: '1px solid ' + (inv.state === 'awaiting' ? LINE : S.blocked[0]) }}>{'＋ New invoice for ' + (rel || 'this order')}</button>}
+    </div>;
+  }
 
   return <div className="grid gap-3" style={{ color: INK }}>
     <div className="rounded-xl" style={{ background: '#ffffff', border: '1px solid ' + LINE }}>
@@ -75,12 +88,15 @@ export default function OrderMonitorTab(props) {
         <div className="flex-1" />
         <span className="text-[11px]" style={{ color: SUB }}>{'Overnight review: ' + (runs.last_ok_nightly ? when(runs.last_ok_nightly) + ' ✓' : 'not run yet') + ' · 30-hour check: ' + (runs.last_ok_deadline ? when(runs.last_ok_deadline) : 'not run yet') + ' · alerts ' + (set.alerts_enabled === true ? 'ON' : 'OFF')}</span>
         {runs.nightly && runs.nightly.ok === false && <span className="text-[11px] font-bold" style={{ color: '#b42318' }}>{'⛔ last review failed: ' + (runs.nightly.error || '')}</span>}
+        <Btn dark={view === 'recon'} onClick={function () { setView(view === 'recon' ? 'orders' : 'recon'); }}>{view === 'recon' ? '← Back to orders' : '🔎 Releases with no KTC invoice'}</Btn>
         <Btn onClick={load} disabled={busy}>{busy ? 'Reading…' : '↻ Refresh'}</Btn>
         {data.is_super_admin && <Btn onClick={function () { setShowSet(!showSet); }}>⚙ Alerts & closing</Btn>}
       </div>
       {!data.tables_ready && <div className="px-3 py-2 text-[12px] font-bold" style={{ background: '#fdf1df', color: '#a35a00' }}>{'Deposit decisions, overrides, alerts and the overnight review need one SQL first: ' + data.sql_hint}</div>}
       {data.history_in_feed === false && <div className="px-3 py-1.5 text-[11px]" style={{ background: '#fdf1df', color: '#a35a00' }}>The warehouse is not sending its stage history yet (the Nextrade update is not on this copy), so “reached in time / late” cannot be told yet.</div>}
       {showSet && <SettingsBox set={set} busy={busy} act={act} />}
+      {view === 'recon' && <ReconView call={call} openInvoice={openInvoice} newInvoice={newInvoice} copyRelease={copyRelease} busy={busy} />}
+      {view === 'orders' && <div>
       <div className="grid gap-2 p-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         {[[k.dead, '30-hour deadline missed or due', 'blocked'], [k.inv, 'Shipped — missing invoice', 'blocked'], [k.dep, 'Waiting for deposit — blocked', 'wait'], [k.shipped, 'Shipped — outstanding requirements', 'wait'], [k.close, 'Ready to close', 'done']].map(function (x) {
           return <div key={x[1]} className="rounded-lg px-3 py-2" style={{ border: '1px solid ' + (x[0] && x[2] === 'blocked' ? S.blocked[0] : LINE) }}><div className="text-[22px] font-extrabold tabular-nums" style={{ color: x[0] ? S[x[2]][0] : INK }}>{x[0]}</div><div className="text-[11px]" style={{ color: SUB }}>{x[1]}</div></div>; })}
@@ -101,15 +117,16 @@ export default function OrderMonitorTab(props) {
               <td className="px-2 py-1.5 whitespace-nowrap">{r.scheduled ? nd(r.scheduled) : '—'}<div style={{ color: ['missed', 'overdue_unshipped'].indexOf(r.deadline.state) >= 0 ? S.blocked[0] : (r.deadline.state === 'due_soon' || r.deadline.state === 'short_notice' ? S.wait[0] : SUB), fontWeight: 600 }}>{r.shipped_date ? 'shipped ' + nd(r.shipped_date) : (DL_WORDS[r.deadline.state] || '') + (r.deadline.state === 'due_soon' && r.deadline.hours_left != null ? ' (' + Math.max(0, Math.round(r.deadline.hours_left)) + ' h)' : '')}</div></td>
               <td className="px-2 py-1.5"><Pill k={r.stage === 'closed' ? 'done' : 'prog'}>{r.stage_label}</Pill></td>
               <td className="px-2 py-1.5"><Pill k={r.readiness.key}>{r.readiness.words}</Pill></td>
-              <td className="px-2 py-1.5"><Pill k={INV_KEY[r.invoice.state] || 'na'}>{INV_WORDS[r.invoice.state] || r.invoice.state}</Pill><div style={{ color: SUB }}>{(r.invoice.numbers || []).join(', ')}</div></td>
+              <td className="px-2 py-1.5"><Pill k={INV_KEY[r.invoice.state] || 'na'}>{INV_WORDS[r.invoice.state] || r.invoice.state}</Pill>{invFix(r.invoice, r.release_number)}</td>
               <td className="px-2 py-1.5"><Pill k={DEP_KEY[r.deposit.status] || 'na'}>{DEP_WORDS[r.deposit.status] || r.deposit.status}</Pill></td>
               <td className="px-2 py-1.5" style={{ maxWidth: 320 }}>{r.outstanding.length > 0 && <div style={{ color: S.blocked[0] }}>{r.outstanding.slice(0, 4).join(' · ') + (r.outstanding.length > 4 ? ' · +' + (r.outstanding.length - 4) + ' more' : '')}</div>}<div style={{ color: SUB }}>{r.next_action ? 'Next: ' + r.next_action : ''}</div></td>
               <td className="px-2 py-1.5"><Btn onClick={function () { openOrder(r.id); setTimeout(function () { try { document.getElementById('nt-order-report').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 80); }}>Open report</Btn></td></tr>; })}
             {shown.length === 0 && <tr><td colSpan={9} className="px-3 py-4 text-center" style={{ color: SUB }}>No order matches this filter.</td></tr>}</tbody>
         </table>
       </div>
+      </div>}
     </div>
-    <div id="nt-order-report">{openId && <OrderReport rep={rep} canManage={data.can_manage} busy={busy} act={act} call={call} form={form} setForm={setForm} onClose={function () { setOpenId(null); setRep(null); }} />}</div>
+    <div id="nt-order-report">{openId && <OrderReport rep={rep} openInvoice={openInvoice} canManage={data.can_manage} busy={busy} act={act} call={call} form={form} setForm={setForm} onClose={function () { setOpenId(null); setRep(null); }} />}</div>
   </div>;
 }
 
@@ -158,7 +175,7 @@ function OrderReport(p) {
       </div></div>
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '1px solid ' + LINE }}><span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: SUB }}>Deposit</span><Pill k={DEP_KEY[r.deposit.status] || 'na'}>{DEP_WORDS[r.deposit.status]}</Pill>{bar(r.deposit.required ? Math.min(r.deposit.matched, r.deposit.required) : (r.deposit.status === 'received' || r.deposit.status === 'not_required' ? 1 : 0), r.deposit.required || 1, DEP_KEY[r.deposit.status] || 'na')}<span className="text-[11px]">{r.deposit.words}</span></div>
-        <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '1px solid ' + LINE }}><span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: SUB }}>Invoice</span><Pill k={INV_KEY[r.invoice.state] || 'na'}>{INV_WORDS[r.invoice.state]}</Pill><span className="text-[11px]">{r.invoice.words}</span>{(j.report.invoice_flags || []).map(function (x) { return <span key={x} className="text-[11px]" style={{ color: S.wait[0] }}>{'⚠ ' + x}</span>; })}</div>
+        <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '1px solid ' + LINE }}><span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: SUB }}>Invoice</span><Pill k={INV_KEY[r.invoice.state] || 'na'}>{INV_WORDS[r.invoice.state]}</Pill><span className="text-[11px]">{r.invoice.words}</span>{(r.invoice.items || []).map(function (i) { return <button key={i.id} type="button" onClick={function () { p.openInvoice(i.id); }} className="text-[11px] underline font-bold justify-self-start" style={{ color: '#0f5c8c', background: 'none', border: 0, padding: 0 }}>{'✏ Open invoice ' + i.number}</button>; })}{(j.report.invoice_flags || []).map(function (x) { return <span key={x} className="text-[11px]" style={{ color: S.wait[0] }}>{'⚠ ' + x}</span>; })}</div>
         <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '1px solid ' + LINE }}><span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: SUB }}>Shipping readiness</span><Pill k="prog">{r.groups.shipping.done + ' of ' + r.groups.shipping.total + ' applicable'}</Pill>{bar(r.groups.shipping.done, r.groups.shipping.total, 'prog')}<span className="text-[11px]" style={{ color: SUB }}>{r.groups.shipping.na + ' not applicable, not counted'}</span></div>
         <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '1px solid ' + LINE }}><span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: SUB }}>Documents</span><Pill k="wait">{r.groups.documents.done + ' of ' + r.groups.documents.total + ' applicable'}</Pill>{bar(r.groups.documents.done, r.groups.documents.total, 'wait')}<span className="text-[11px]" style={{ color: SUB }}>{r.groups.documents.na + ' not applicable, not counted'}</span></div>
       </div>
@@ -216,6 +233,75 @@ function OrderReport(p) {
           }}>Confirm</Btn>
           <Btn onClick={function () { p.setForm({}); }}>Cancel</Btn></div>}
       </div>}
+    </div>
+  </div>;
+}
+
+// v55.83-TM (Max, Nov 17: "Need a reconciliation of orders release numbers from NT warehouse that do not have a linked KTC invoice
+// from June 2026 on ... links should lead to something to fix it") — every warehouse order (main + obsolete) since the date whose
+// release is on no active KTC invoice, grouped by what is wrong, each with the button that fixes it.
+var REC_GROUPS = [['none', 'No invoice at all', 'blocked'], ['in_notes', 'Only in an invoice’s notes', 'wait'], ['cancelled_only', 'Only on cancelled / void invoices', 'blocked'], ['no_release', 'No release number in Nextrade', 'wait'], ['po_so_only', 'Linked the Wave way (P.O./S.O.) — Release # empty', 'prog']];
+function ReconView(p) {
+  var s1 = useState(null); var d = s1[0]; var setD = s1[1];
+  var s2 = useState('2026-06-01'); var since = s2[0]; var setSince = s2[1];
+  var s3 = useState('problems'); var g = s3[0]; var setG = s3[1];
+  var s4 = useState(''); var err = s4[0]; var setErr = s4[1];
+  var s5 = useState(''); var q = s5[0]; var setQ = s5[1];
+  function load(sv) { setD(null); setErr(''); p.call({ action: 'reconcile', since: sv || since }).then(function (j) { if (j && j.ok) { setD(j); } else { setErr((j && j.error) || 'Could not build the reconciliation.'); } }); }
+  useEffect(function () { load(); }, []); // eslint-disable-line
+  if (err) { return <div className="px-3 py-3 text-[12px] font-bold" style={{ color: S.blocked[0] }}>{'⛔ ' + err}</div>; }
+  if (!d) { return <div className="px-3 py-3 text-[12px]" style={{ color: SUB }}>Comparing every warehouse release with the KTC invoices…</div>; }
+  var rows = d.rows || [];
+  var cnt = {}; rows.forEach(function (r) { cnt[r.state] = (cnt[r.state] || 0) + 1; });
+  var t = q.trim().toLowerCase();
+  var shown = rows.filter(function (r) { if (g === 'problems' ? r.state === 'po_so_only' : (g !== 'all' && r.state !== g)) { return false; } return !t || (r.release_number + ' ' + r.order_id + ' ' + r.customer).toLowerCase().indexOf(t) >= 0; });
+  var poIds = rows.filter(function (r) { return r.state === 'po_so_only'; }).reduce(function (a, r) { return a.concat(r.po_so.map(function (i) { return i.id; })); }, []);
+  function csv() {
+    var head = ['Release', 'Order', 'Source', 'Customer', 'Date', 'Date kind', 'Warehouse status', 'Problem', 'Invoices (P.O./S.O.)', 'Cancelled invoices', 'Invoices whose notes mention it', 'Possible invoices (same customer, no release)'];
+    var lines = [head].concat(shown.map(function (r) { return [r.release_number, r.order_id, r.source, r.customer, r.date, r.date_kind, r.status, r.words, r.po_so.map(function (i) { return i.number; }).join(' '), r.cancelled.map(function (i) { return i.number; }).join(' '), (r.in_notes || []).map(function (i) { return i.number; }).join(' '), r.suggestions.map(function (i) { return i.number + ' ' + i.date; }).join(' | ')]; }));
+    var text = lines.map(function (l) { return l.map(function (c) { var v = String(c === null || c === undefined ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');
+    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'releases-without-ktc-invoice-since-' + d.since + '.csv'; a.click();
+  }
+  function invBtn(i, label) { return <button key={i.id} type="button" onClick={function () { p.openInvoice(i.id); }} className="underline font-bold" style={{ color: '#0f5c8c', background: 'none', border: 0, padding: 0 }} title="Open this invoice in the editor">{(label || '✏ ') + i.number}</button>; }
+  return <div style={{ borderTop: '1px solid ' + LINE }}>
+    <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ background: '#fbfcfd' }}>
+      <b className="text-[13px]">🔎 Warehouse releases with no KTC invoice</b>
+      <span className="text-[11px]" style={{ color: SUB }}>since</span>
+      <input type="date" value={since} onChange={function (e) { setSince(e.target.value); }} className="px-2 py-0.5 rounded text-[11px] nt-light" style={{ border: '1px solid ' + LINE, color: INK, background: '#ffffff' }} />
+      <Btn onClick={function () { load(since); }}>Check again</Btn>
+      <span className="text-[11px]" style={{ color: SUB }}>{d.orders_checked + ' warehouse orders read (main + obsolete). Date = shipped, else load date, else created. Cancelled and test orders are left out.'}</span>
+      <div className="flex-1" />
+      <Btn onClick={csv}>⬇ CSV</Btn>
+    </div>
+    <div className="flex flex-wrap gap-1.5 px-3 py-2 items-center">
+      {[['problems', 'Needs an invoice or a fix', 'blocked']].concat(REC_GROUPS).concat([['all', 'Everything', 'na']]).map(function (x) {
+        var n = x[0] === 'problems' ? rows.filter(function (r) { return r.state !== 'po_so_only'; }).length : x[0] === 'all' ? rows.length : (cnt[x[0]] || 0);
+        return <button key={x[0]} type="button" onClick={function () { setG(x[0]); }} className="px-3 py-1 rounded-full text-[11px] font-bold" style={g === x[0] ? { background: INK, color: '#ffffff' } : { background: '#ffffff', color: n && x[2] === 'blocked' ? S.blocked[0] : INK, border: '1px solid ' + LINE }}>{x[1] + ' · ' + n}</button>; })}
+      <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="release, order, customer…" className="px-2 py-1 rounded-lg text-[11px] nt-light" style={{ border: '1px solid ' + LINE, width: 200, color: INK, background: '#ffffff' }} />
+      {(g === 'po_so_only' || g === 'all') && poIds.length > 0 && d.can_edit_invoices && <Btn dark disabled={p.busy} onClick={function () { p.copyRelease(poIds).then(function (ok) { if (ok) { load(); } }); }}>{'Copy P.O./S.O. → Release # on all ' + poIds.length}</Btn>}
+    </div>
+    <div className="px-3 pb-2 text-[11px]" style={{ color: SUB }}>Wave invoices keep the release in their P.O./S.O. field — those count as linked (last group). The Release Number on the invoice is what the profit report uses, so copying it across is worth doing; it fills only an empty Release Number and is recorded in the audit trail.</div>
+    <div className="overflow-auto" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
+      <table className="w-full text-[11px]" style={{ minWidth: 1000 }}>
+        <thead><tr>{['Release · order', 'Customer', 'Date', 'Warehouse status', 'What is wrong', 'Fix it'].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-semibold sticky top-0" style={{ background: BG, color: SUB, borderBottom: '1px solid ' + LINE }}>{h}</th>; })}</tr></thead>
+        <tbody>{shown.map(function (r) {
+          var grp = REC_GROUPS.filter(function (x) { return x[0] === r.state; })[0] || ['', r.state, 'na'];
+          return <tr key={r.source + ':' + r.order_id} style={{ borderBottom: '1px solid ' + LINE, boxShadow: grp[2] === 'blocked' ? 'inset 3px 0 0 ' + S.blocked[0] : 'none' }}>
+            <td className="px-2 py-1.5"><b style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>{r.release_number || '—'}</b><div style={{ color: SUB }}>{(r.source === 'obsolete' ? 'obsolete order ' : 'order ') + r.order_id}{r.link && <a href={r.link} target="_blank" rel="noreferrer" style={{ color: '#0f5c8c', marginLeft: 6 }}>Nextrade ↗</a>}</div></td>
+            <td className="px-2 py-1.5">{r.customer || '—'}</td>
+            <td className="px-2 py-1.5 whitespace-nowrap">{nd(r.date)}<div style={{ color: SUB }}>{r.date_kind}</div></td>
+            <td className="px-2 py-1.5">{r.status || '—'}</td>
+            <td className="px-2 py-1.5" style={{ maxWidth: 320 }}><Pill k={grp[2]}>{grp[1]}</Pill><div className="mt-0.5">{r.words}</div></td>
+            <td className="px-2 py-1.5"><div className="grid gap-1 justify-items-start">
+              {r.state === 'po_so_only' && r.po_so.map(function (i) { return <div key={i.id} className="flex gap-1 items-center flex-wrap">{invBtn(i)}{d.can_edit_invoices && <button type="button" disabled={p.busy} onClick={function () { p.copyRelease([i.id]).then(function (ok) { if (ok) { load(); } }); }} className="px-1.5 rounded text-[10px] font-bold" style={{ background: S.prog[0], color: '#ffffff', border: 0 }}>copy to Release #</button>}</div>; })}
+              {r.state === 'in_notes' && (r.in_notes || []).map(function (i) { return <div key={i.id}>{invBtn(i, '✏ Open ')}<span style={{ color: SUB }}>{' — type ' + r.release_number + ' in Release Number'}</span></div>; })}
+              {r.state === 'cancelled_only' && r.cancelled.map(function (i) { return <div key={i.id}>{invBtn(i, 'See cancelled ')}</div>; })}
+              {(r.state === 'none' || r.state === 'cancelled_only' || r.state === 'in_notes') && r.suggestions.length > 0 && <div className="grid gap-0.5"><span style={{ color: SUB }}>Maybe one of these (same customer, no release number) — open it and type the release:</span>{r.suggestions.map(function (i) { return <div key={i.id}>{invBtn(i)}<span style={{ color: SUB }}>{' · ' + nd(i.date) + ' · $' + fmt(i.total)}</span></div>; })}</div>}
+              {(r.state === 'none' || r.state === 'cancelled_only') && <button type="button" onClick={p.newInvoice} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: S.blocked[0], color: '#ffffff', border: 0 }}>{'＋ New invoice for ' + (r.release_number || 'this order')}</button>}
+              {r.state === 'no_release' && (r.link ? <a href={r.link} target="_blank" rel="noreferrer" className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: S.wait[0], color: '#ffffff' }}>Open the order in Nextrade — fill the release ↗</a> : <span style={{ color: SUB }}>Fill the release number on this order in Nextrade.</span>)}
+            </div></td></tr>; })}
+          {shown.length === 0 && <tr><td colSpan={6} className="px-3 py-4 text-center" style={{ color: SUB }}>Nothing in this group.</td></tr>}</tbody>
+      </table>
     </div>
   </div>;
 }
