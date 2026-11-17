@@ -19,7 +19,7 @@ import { relKey } from '../../../../lib/profitability';
 export const maxDuration = 60;
 var API_BUILD_MARKER = 'v55.83-TI-order-monitor';
 var SQL_HINT = 'Run sql/v55-83-TI-order-monitor.sql in Supabase first.';
-var HUB_URL = 'https://hub.ktcus.com';
+var HUB_URL = 'https://nexttrade-hub.vercel.app'; // the Hub's real address (hub.ktcus.com was never connected)
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function bad(msg, st) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: st || 400 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
