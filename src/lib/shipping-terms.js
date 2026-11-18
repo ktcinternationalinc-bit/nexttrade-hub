@@ -37,7 +37,10 @@ var FREIGHT_WORDS = /ship|freight|forward|truck|deliver|courier|cartage|drayage|
 // v55.83-UE (Max, Nov 18: "maa kirpa ... is a CNF where the shipping is included in the price. but we have a surcharge which should just be
 // an additional income to the transport") — a SURCHARGE line (overweight, fuel surcharge…) that names no freight / trucking / shipping /
 // delivery is an extra charge on top, not the shipping itself. On CNF-included it does not turn the invoice into "shipping on a separate line".
-export function isSurchargeOnlyLine(description) { var d = String(description || ''); return /surcharge|over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
+// v55.83-UE (Max, Nov 18: "any word that says surcharge is just shipping income and it is still considered cnf and the transportation
+// cost is to be removed from price of goods") — ANY line with the word surcharge ("Freight surcharge", "Shipping surcharge" too) is extra
+// transport income; the invoice stays CNF with the shipping inside the price. An overweight line with no freight words counts the same.
+export function isSurchargeOnlyLine(description) { var d = String(description || ''); return /surcharge/i.test(d) || (/over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d)); }
 export function isOverweightOnlyLine(description) { var d = String(description || ''); return /over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
 
 export function checkShippingTerms(terms, cost, lines, isShippingLine) {

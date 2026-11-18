@@ -5,7 +5,8 @@
 -- Codex QA 18 Nov 12:20 + Max 18 Nov: EXACTLY the two Maa Kirpa customer ids (refuses unless both are found), backs up BOTH the customer default and the
 -- invoice terms (and which invoices had no terms row), protected backups kept across reruns, and the SAME "is this a real
 -- freight line" test as the Profitability engine: the line's Wave product name or description, freight / trucking / shipping /
--- delivery / demurrage / chassis words in English or Arabic (a surcharge or overweight line alone is NOT freight), or a name
+-- delivery / demurrage / chassis words in English or Arabic (ANY line with the word "surcharge" — Max Nov 18: "any word that says
+-- surcharge is just shipping income and it is still considered cnf" — and an overweight line alone are NOT freight), or a name
 -- marked "transport" by a person (a name marked "goods" never counts).
 -- Only invoices in KTC's books (US Wave business) are changed; an invoice with no company set is HELD and listed, never assumed KTC.
 -- Nothing is deleted. Safe to run more than once.
@@ -21,7 +22,7 @@ WITH lines AS (
 ), freight AS (
   SELECT DISTINCT l.invoice_id FROM lines l
   LEFT JOIN public.pl_name_kinds k ON k.name_key = btrim(regexp_replace(lower(l.nm), '[^a-z0-9&]+', ' ', 'g'))
-  WHERE l.amt > 0 AND (k.kind = 'transport' OR (coalesce(k.kind, '') <> 'goods' AND l.nm ~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل)' AND NOT (l.nm ~* '(surcharge|over[ -]?weight)' AND l.nm !~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل)')))
+  WHERE l.amt > 0 AND (k.kind = 'transport' OR (coalesce(k.kind, '') <> 'goods' AND l.nm ~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل)' AND NOT (l.nm ~* 'surcharge' OR (l.nm ~* 'over[ -]?weight' AND l.nm !~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل)'))))
 )
 SELECT i.invoice_number, i.invoice_date, c.company_name, t.shipping_terms AS now_terms,
        CASE WHEN i.wave_business_id IS NULL OR btrim(i.wave_business_id) = '' THEN 'HELD: no company set on this invoice (tell Claude if it is KTC)'
@@ -64,7 +65,7 @@ BEGIN
   ), freight AS (
     SELECT DISTINCT l.invoice_id FROM lines l
     LEFT JOIN public.pl_name_kinds k ON k.name_key = btrim(regexp_replace(lower(l.nm), '[^a-z0-9&]+', ' ', 'g'))
-    WHERE l.amt > 0 AND (k.kind = 'transport' OR (coalesce(k.kind, '') <> 'goods' AND l.nm ~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل)' AND NOT (l.nm ~* '(surcharge|over[ -]?weight)' AND l.nm !~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل)')))
+    WHERE l.amt > 0 AND (k.kind = 'transport' OR (coalesce(k.kind, '') <> 'goods' AND l.nm ~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل)' AND NOT (l.nm ~* 'surcharge' OR (l.nm ~* 'over[ -]?weight' AND l.nm !~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل)'))))
   )
   SELECT i.id AS invoice_id, (t.invoice_id IS NOT NULL) AS had_row, to_jsonb(t) AS row_data
   FROM public.accounting_invoices i

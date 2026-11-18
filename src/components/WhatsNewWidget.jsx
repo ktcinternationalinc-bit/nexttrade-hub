@@ -50,7 +50,7 @@ export const BUILD_HISTORY = [
     title: 'Maa Kirpa: CNF with the shipping in the price, plus a surcharge',
     items: [
       { text: 'A CNF customer whose shipping is inside the price (Maa Kirpa) stays “CNF — shipping included” even when the invoice has a surcharge line (for example “Overweight surcharge”). The container’s shipping cost still comes out of the goods price, and the surcharge counts as extra transport income, so transport profit shows the surcharge instead of a loss.' },
-      { text: 'Only a line that names freight, trucking, shipping or delivery means the shipping is charged on its own line. A surcharge alone does not.' },
+      { text: 'Any line with the word “surcharge” (Overweight, Fuel, Freight or Shipping surcharge) is extra shipping income: the invoice stays CNF and the shipping cost still comes out of the goods price. Only a freight / trucking / shipping / delivery line WITHOUT the word surcharge means the shipping is charged on its own line.' },
       { text: 'On the invoice form, “CNF included” with a surcharge line saves without the “looks like a separate shipping charge” warning.' },
       { text: 'One-time SQL sets every Maa Kirpa invoice to CNF included (a copy of the old settings is kept); invoices with a real freight line are listed for you to check.' }
     ]

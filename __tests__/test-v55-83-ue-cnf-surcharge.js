@@ -44,8 +44,11 @@ check('a person chose "CNF, separate line" on the form → their choice is kept 
 var exw = A.assembleProfitability(Object.assign({}, base, { customerTerms: [], terms: [{ invoice_id: 'i1', shipping_terms: 'EXW' }] }));
 check('EXW customer with a surcharge → not touched by this rule', inv(exw).basis === 'EXW' && cell(exw).goods_revenue === 10000 && cell(exw).transport_revenue === 150, inv(exw));
 
-check('surcharge-only words: "Overweight surcharge" / "Fuel surcharge" yes; "Trucking surcharge" / "Shipping surcharge" no',
-  ST.isSurchargeOnlyLine('Overweight surcharge') && ST.isSurchargeOnlyLine('Fuel surcharge') && !ST.isSurchargeOnlyLine('Trucking surcharge') && !ST.isSurchargeOnlyLine('Shipping surcharge'));
+// Max, Nov 18: "any word that says surcharge is just shipping income and it is still considered cnf"
+check('ANY line with "surcharge" is a surcharge (Overweight / Fuel / Trucking / Shipping / Freight surcharge); overweight alone too; "Ocean freight" is not',
+  ['Overweight surcharge', 'Fuel surcharge', 'Trucking surcharge', 'Shipping surcharge', 'Freight surcharge', 'SURCHARGE', 'Overweight'].every(function (d) { return ST.isSurchargeOnlyLine(d); }) && !ST.isSurchargeOnlyLine('Ocean freight') && !ST.isSurchargeOnlyLine('Overweight freight'));
+var frs = A.assembleProfitability(Object.assign({}, base, { items: [base.items[0], { id: 'l3', invoice_id: 'i1', description: 'Freight surcharge', quantity: 1, unit_price: 150 }] }));
+check('Maa Kirpa + "Freight surcharge" → still CNF included: goods 9,200, transport 950 (800 inside the price + 150), transport profit 150', cell(frs).goods_revenue === 9200 && cell(frs).transport_revenue === 950 && cell(frs).transport_profit === 150, cell(frs));
 var w = ST.checkShippingTerms('CNF_INCLUDED', '800', [{ description: 'Paper', amount: 10000 }, { description: 'Overweight surcharge', amount: 150 }], require(path.join(root, 'src/lib/profitability.js')).isTransportLine);
 check('invoice form: CNF included + a surcharge saves with NO "looks like a separate shipping charge" warning', w.ok === true && w.warnings.length === 0, w);
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
