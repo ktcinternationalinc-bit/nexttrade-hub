@@ -34,6 +34,7 @@ function makeEnv(rows, opts) {
           else { rows.forEach(function (x) { if (match(x, f) && f.ins[1].indexOf(x[f.ins[0]]) >= 0) { x.has_access = f.val.has_access; } }); out = { error: null }; }
         }
         else if (f.op === 'update') { rows.forEach(function (x) { if (x.id === (f.eqs[0] || [])[1] || match(x, f)) { x.has_access = f.val.has_access; } }); out = { error: null }; }
+        else if (opts.failReread === 'throw') { return Promise.reject(new Error('offline')).then(res, rej); }
         else if (opts.failReread) { out = { data: null, error: { message: 'offline' } }; }
         else { out = { data: rows.filter(function (x) { return match(x, f); }).map(function (x) { return { module_name: x.module_name, has_access: x.has_access }; }), error: null }; }
         return Promise.resolve(out).then(res, rej);
@@ -71,6 +72,14 @@ function server(rows, uid, perm) { var mp = {}, deny = {}; rows.filter(function 
   var before = JSON.stringify(e3.rows);
   await e3.toggle('u', 'invoice.create', false);
   check('…and no more changes are allowed for that person until the page is reloaded', JSON.stringify(e3.rows) === before && e3.st.toasts.some(function (t) { return /Reload the page/.test(t); }));
+  var e4 = makeEnv([{ id: 'r1', user_id: 'u', module_name: 'Invoice: Create', has_access: true }], { failSecond: true, failReread: 'throw' });
+  await e4.toggle('u', 'invoice.create', true);
+  check('Codex 18:29: a re-read that THROWS is treated the same (flagged, warned)', e4.st.stale.u === true && e4.st.toasts.some(function (t) { return /may have saved/.test(t); }), e4.st);
+  var e5 = makeEnv(JSON.parse(JSON.stringify(e4.rows)), {});
+  check('Codex 18:29: after a reload the page shows what is really saved (= server)', page(e5.st.perms.u, 'invoice.create') === server(e5.rows, 'u', 'invoices.create') && !e5.st.stale.u, e5.rows);
+  await e5.toggle('u', 'invoice.create', page(e5.st.perms.u, 'invoice.create'));
+  await e5.toggle('u', 'invoice.create', page(e5.st.perms.u, 'invoice.create'));
+  check('Codex 18:29: …and changes work again after the reload; page and server agree', page(e5.st.perms.u, 'invoice.create') === server(e5.rows, 'u', 'invoices.create') && e5.st.toasts.filter(function (t) { return /^ok:/.test(t); }).length === 2, e5.st);
   var panel = fs.readFileSync(path.join(root, 'src/components/BankingAccessPanel.jsx'), 'utf8');
   check('the Banking & Accounting Access page shows the red "may be only partly saved" warning for that person', panel.indexOf('(props.staleUsers || {})[u.id]') >= 0 && panel.indexOf('only partly saved') >= 0);
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
