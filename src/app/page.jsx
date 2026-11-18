@@ -403,7 +403,14 @@ function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave,
 // ============================================
 // MAIN APP
 // ============================================
+// v55.83-UK (Max, Nov 18: Nextrade "Save and use it" — "it has NO message. nothing happens") — App read the toast context
+// ABOVE itself while rendering the ToastProvider INSIDE itself, so its `toast` was always the silent fallback and every
+// screen that gets toast from App (all of Accounting) showed no success or error message. The provider now wraps App.
 export default function App() {
+  return <ToastProvider><HubApp /></ToastProvider>;
+}
+
+function HubApp() {
   const { canViewFullDashboard: seeFullDashboard, canViewBankBalances: seeBankBalances } = useBankVisibility();
   // Auth
   const [user, setUser] = useState(null);
@@ -5481,7 +5488,6 @@ export default function App() {
   // RENDER
   // ==========================================
   return (
-    <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
     {/* v55.42 — VOICE DISABLED.
         VoiceController (the "Hey Nadia" wake-word listener with the
@@ -5581,7 +5587,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-UG</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-UK</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -15857,6 +15863,5 @@ export default function App() {
     </div>
     </div>
     </ErrorBoundary>
-    </ToastProvider>
   );
 }

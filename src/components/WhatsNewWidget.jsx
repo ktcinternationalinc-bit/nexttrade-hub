@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UK',
+    date: '2026-11-18',
+    title: 'Messages are back on the Accounting screens; “Are you sure?” boxes really ask',
+    items: [
+      { text: 'Saving, errors and warnings on Accounting screens (Nextrade / RTM books, Bills, Advances, Profitability, P&L, Sales Report and others) showed NO message — a button seemed to do nothing. Every one of them now shows its green / red message again.' },
+      { text: 'Some “Are you sure?” questions on the main page (Undo Import, Delete Check, Delete Reminder, Merge Customers, Unlink, Move Subcategory) were answered YES automatically without asking. They now open a real box and wait for your answer.' },
+      { text: 'Technical: the message provider now wraps the whole app (it was mounted inside it, so the app read an empty context and fell back to a silent stand-in).' },
+    ],
+  },
+  {
     version: 'v55.83-UG',
     date: '2026-11-18',
     title: 'Only the super admin has everything; every switch in one place; rules run by themselves',
