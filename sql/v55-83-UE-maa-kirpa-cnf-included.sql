@@ -7,6 +7,7 @@
 -- freight line" test as the Profitability engine: the line's Wave product name or description, freight / trucking / shipping /
 -- delivery / demurrage / chassis words in English or Arabic (a surcharge or overweight line alone is NOT freight), or a name
 -- marked "transport" by a person (a name marked "goods" never counts).
+-- Only invoices in KTC's books (US Wave business) are changed; an invoice with no company set is HELD and listed, never assumed KTC.
 -- Nothing is deleted. Safe to run more than once.
 -- ═══════════════════════════════════════════════════════════════════════════
 
@@ -23,10 +24,12 @@ WITH lines AS (
   WHERE l.amt > 0 AND (k.kind = 'transport' OR (coalesce(k.kind, '') <> 'goods' AND l.nm ~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|overweight|over-weight|surcharge|demurrage|detention|chassis|شحن|توصيل)' AND NOT (l.nm ~* '(surcharge|over[ -]?weight)' AND l.nm !~* '(ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل)')))
 )
 SELECT i.invoice_number, i.invoice_date, c.company_name, t.shipping_terms AS now_terms,
-       CASE WHEN f.invoice_id IS NOT NULL THEN 'left as is (has a real freight line)'
+       CASE WHEN i.wave_business_id IS NULL OR btrim(i.wave_business_id) = '' THEN 'HELD: no company set on this invoice (tell Claude if it is KTC)'
+            WHEN i.wave_business_id <> 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk' THEN 'skipped: not in KTC''s books'
+            WHEN f.invoice_id IS NOT NULL THEN 'left as is (has a real freight line)'
             WHEN t.shipping_terms = 'CNF_INCLUDED' THEN 'already CNF included'
             ELSE 'will become CNF included' END AS step2_does,
-       t.embedded_transport AS shipping_typed_by_hand_kept
+       t.embedded_transport AS shipping_typed_by_hand_kept, i.id AS invoice_id, c.id AS customer_id, i.wave_business_id AS books
 FROM public.accounting_invoices i
 JOIN public.accounting_customers c ON c.id = i.accounting_customer_id
 LEFT JOIN public.pl_invoice_terms t ON t.invoice_id = i.id
@@ -67,6 +70,7 @@ BEGIN
   FROM public.accounting_invoices i
   LEFT JOIN public.pl_invoice_terms t ON t.invoice_id = i.id
   WHERE i.accounting_customer_id = ANY (custs)
+    AND i.wave_business_id = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk'   -- KTC's books only (Codex QA 19:59); no company set = held, never assumed
     AND i.id NOT IN (SELECT invoice_id FROM freight)
     AND t.shipping_terms IS DISTINCT FROM 'CNF_INCLUDED';
   SELECT count(*) INTO n_change FROM ue_targets;
@@ -86,7 +90,9 @@ BEGIN
     SELECT invoice_id, 'CNF', 'CNF_INCLUDED', 'v55.83-UE (Max: Maa Kirpa CNF, shipping in the price; surcharge = transport income)' FROM ue_targets
   ON CONFLICT (invoice_id) DO UPDATE SET basis = 'CNF', shipping_terms = 'CNF_INCLUDED', updated_by = EXCLUDED.updated_by, updated_at = now();
 
-  RAISE NOTICE 'Done: both Maa Kirpa customers — % invoice(s) set to CNF included. Copies saved at %.', n_change, run;
+  RAISE NOTICE 'Done: both Maa Kirpa customers — % KTC invoice(s) set to CNF included. Held (no company set): %. Skipped (other company): %. Copies saved at %.', n_change,
+    (SELECT count(*) FROM public.accounting_invoices WHERE accounting_customer_id = ANY (custs) AND (wave_business_id IS NULL OR btrim(wave_business_id) = '')),
+    (SELECT count(*) FROM public.accounting_invoices WHERE accounting_customer_id = ANY (custs) AND wave_business_id <> 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk'), run;
 END $$;
 
 -- check after step 2
