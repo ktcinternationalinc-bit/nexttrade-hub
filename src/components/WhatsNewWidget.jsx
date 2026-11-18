@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UN',
+    date: '2026-11-18',
+    title: 'Fix: staff with ClickBooks (or Wave) switched on can open Accounting again',
+    items: [
+      { text: 'Since v55.83-UG some staff were refused with “This needs Accounting Access (P1)” even though ClickBooks was ON for them. Their old “Accounting Access (both hubs)” switch was OFF — which Settings itself tells you to do — and the new “an OFF switch always wins” rule wrongly let that retired switch block them.' },
+      { text: 'Now: ClickBooks or Wave ON = they can open Accounting. The old switch only matters for someone with neither book switched on. Turning a book OFF still closes that book.' }
+    ]
+  },
+  {
     version: 'v55.83-UL',
     date: '2026-11-18',
     title: 'Profitability: Texas Cardboard comes free, so Stock Paper has a cost again',

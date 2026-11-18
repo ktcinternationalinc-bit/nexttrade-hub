@@ -68,6 +68,14 @@ export function permFamily(perm) {
 // onMap / offMap: { name: true }. Returns true / false / null (not set).
 export function effectiveSwitch(onMap, offMap, perm) {
   var fam = permFamily(perm); var i;
+  // v55.83-UN (Max, Nov 18: employee refused "Accounting Access (P1)") — 'accounting.view' = "may open Accounting at all" = EITHER book.
+  // A book switch that is ON (ClickBooks or Wave, by the same rule as that book) wins over the RETIRED both-hubs row being OFF:
+  // Settings itself says "turn ClickBooks / Wave on, then turn the old one off". With no book ON, the old row decides as before.
+  if (perm === 'accounting.view') {
+    if (effectiveSwitch(onMap, offMap, 'accounting.clickbooks.access') === true || effectiveSwitch(onMap, offMap, 'accounting.wavehub.access') === true) { return true; }
+    if (offMap && offMap['accounting.view'] === true) { return false; }
+    return onMap && onMap['accounting.view'] === true ? true : null;
+  }
   for (i = 0; i < fam.length; i++) { if (offMap && offMap[fam[i]] === true) { return false; } }
   var g = grantNames(perm);
   for (i = 0; i < g.length; i++) { if (onMap && onMap[g[i]] === true) { return true; } }
