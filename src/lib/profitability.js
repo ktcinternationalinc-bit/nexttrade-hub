@@ -185,7 +185,10 @@ export function resolveCost(q, billLines, opts) {
     var rawCost = (l.cost_amount !== null && l.cost_amount !== undefined && l.cost_amount !== '') ? l.cost_amount : l.amount;
     var costN = (rawCost === null || rawCost === undefined || rawCost === '') ? NaN : Number(rawCost);
     var commRaw = l.commission_amount; var commN = (commRaw === null || commRaw === undefined || commRaw === '') ? 0 : Number(commRaw);
-    cand.push({ l: l, lb: lb, cost: costN, comm: commN, bad: !(costN > 0) || isNaN(commN) || commN < 0 });
+    // v55.83-UL (Max, Nov 18: "Texas cardboard come at a 0 cost for us") — ONLY a supplier description marked FREE counts an exact $0 as a
+    // real zero cost. Every other $0 line stays UNKNOWN (a missing price is never turned into $0).
+    var freeZero = costN === 0 && !!(o.freeNameKeys && o.freeNameKeys[nameKey(l.description)] === true);
+    cand.push({ l: l, lb: lb, cost: costN, comm: commN, free: freeZero, bad: (!(costN > 0) && !freeZero) || isNaN(commN) || commN < 0 });
   });
   function rate(rows, method) {
     var lb = 0, cost = 0, comm = 0; var bad = rows.filter(function (x) { return x.bad; });

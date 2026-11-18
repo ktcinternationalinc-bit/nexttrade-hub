@@ -147,10 +147,12 @@ export function assembleProfitability(d) {
     costLines.forEach(function (l) { if (!want[nameKey(l.description)]) { return; } st.lines++; if (billLineUnit(l)) { st.usable++; var dt = String(l.bill_date || '').substring(0, 10); if (dt && (!st.first || dt < st.first)) { st.first = dt; } } });
     linkStats[g] = st; });
   function groupOf(desc) { return groupOfInvoiceName[nameKey(desc)] || null; }
+  // v55.83-UL — supplier descriptions that come FREE (Max: Texas Cardboard): their $0 is a real zero cost
+  var freeNameKeys = {}; (d.freeBillNames || []).forEach(function (f) { if (f && f.name_key && f.active !== false) { freeNameKeys[f.name_key] = true; } });
   function costOf(inv, cell) {
     var keys = cell.group_id ? (billKeysOfGroup[cell.group_id] || []) : [];
     // nothing linked on purpose = no cost from bills; similar names are never assumed to be the same product
-    var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors }) : null;
+    var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors, freeNameKeys: freeNameKeys }) : null;
     // v55.83-TE — only now a cost typed by hand: this sale's own, else the product's default
     var m = (cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
     // v55.83-TJ — a cost a person typed wins over the "bought before our first bill" assumption

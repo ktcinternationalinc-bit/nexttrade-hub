@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UL',
+    date: '2026-11-18',
+    title: 'Profitability: Texas Cardboard comes free, so Stock Paper has a cost again',
+    items: [
+      { text: 'A $0 line on a supplier bill usually means the price is missing, so the product’s cost shows as unknown rather than a guess. Texas Cardboard Paper (NexPac) really comes at $0, so it now counts as free pounds in the Stock Paper cost (about $0.05 per lb) instead of blocking it.' },
+      { text: 'Only descriptions on the “free” list work this way. Any other $0 line still shows the cost as unknown.' },
+      { text: 'Technical: needs sql/v55-83-UL-free-supplier-names.sql (new table pl_free_bill_names, server-only). resolveCost treats an exact $0 on a listed name_key as a real zero cost; blank, negative and unlisted $0 stay unknown.' }
+    ]
+  },
+  {
+  },
+  {
     version: 'v55.83-UH',
     date: '2026-11-18',
     title: 'Sourcing desk: every action now checks who is really signed in',

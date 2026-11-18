@@ -50,6 +50,9 @@ export async function loadProfitabilityInput(db) {
     // v55.83-TL — trucking / freight typed per release (the report still runs before this table exists)
     try { setup.partEstimates = await fetchAll(function () { return db.from('pl_release_part_estimates').select('release_key, part, amount, note'); }); setup.part_estimates_ready = true; }
     catch (ePE) { if (!missingTable(ePE && ePE.message)) { throw ePE; } setup.partEstimates = []; setup.part_estimates_ready = false; }
+    // v55.83-UL — supplier descriptions that come free ($0 = a real zero cost); the report still runs before this table exists
+    try { setup.freeBillNames = await fetchAll(function () { return db.from('pl_free_bill_names').select('name_key, raw_name, active'); }); setup.free_names_ready = true; }
+    catch (eFN) { if (!missingTable(eFN && eFN.message)) { throw eFN; } setup.freeBillNames = []; setup.free_names_ready = false; }
   } catch (eS) {
     if (missingTable(eS && eS.message)) { return { setup_needed: true }; }
     throw eS;
