@@ -78,13 +78,8 @@ BEGIN
 
   -- copies first (every run keeps its own copy, marked with its time)
   INSERT INTO public.hub_backup_ue_invoice_terms (run_at, invoice_id, had_row, row_data) SELECT run, invoice_id, had_row, row_data FROM ue_targets;
-  INSERT INTO public.hub_backup_ue_customer_terms (run_at, customer_id, had_row, row_data)
-    SELECT run, c.id, (ct.customer_id IS NOT NULL), to_jsonb(ct) FROM unnest(custs) AS c(id) LEFT JOIN public.pl_customer_terms ct ON ct.customer_id = c.id;
-
-  -- Maa Kirpa's usual basis = CNF
-  INSERT INTO public.pl_customer_terms (customer_id, customer_name, basis, updated_by)
-    SELECT id, company_name, 'CNF', 'v55.83-UE (Max: Maa Kirpa is CNF, shipping in the price)' FROM public.accounting_customers WHERE id = ANY (custs)
-  ON CONFLICT (customer_id) DO UPDATE SET basis = 'CNF', updated_by = EXCLUDED.updated_by, updated_at = now();
+  -- Codex QA 20:04: Maa Kirpa's customer-wide "usual basis" is NOT changed here — it would also change held / other-company invoices.
+  -- That is a separate, optional step (sql/v55-83-UE-maa-kirpa-customer-default.sql) only if Max approves it.
 
   -- its invoices → CNF, shipping included (embedded_transport typed by hand is not touched)
   INSERT INTO public.pl_invoice_terms (invoice_id, basis, shipping_terms, updated_by)
