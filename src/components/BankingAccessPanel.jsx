@@ -144,14 +144,17 @@ export default function BankingAccessPanel(props) {
   var u = users.filter(function (x) { return x.id === sel; })[0] || null;
   var boss = !!(u && u.role === 'super_admin'); // v55.83-UG (Max, Nov 18) — only the super admin has everything; admins / owners use their switches
   var g = u ? grantFor(u) : null;
-  var books = u && (boss || has(u, 'accounting.clickbooks.access') || has(u, 'accounting.wavehub.access') || has(u, 'accounting.view'));
-  var ktc = u && (boss || has(u, 'accounting.clickbooks.access') || has(u, 'accounting.view'));
+  // v55.83-UN (Codex 21:25) — each book by its OWN effective switch (the shared rule already lets the old both-hubs row open a book when that
+  // book is not switched OFF); the old row itself is shown only when it is really stored ON
+  function legacyOn(x) { return (permissions[x.id] || {})['accounting.view'] === true; }
+  var books = u && (boss || has(u, 'accounting.clickbooks.access') || has(u, 'accounting.wavehub.access'));
+  var ktc = u && (boss || has(u, 'accounting.clickbooks.access'));
 
   function summary(x) {
     if (x.role === 'super_admin') { return 'everything (super admin)'; }
     var on = []; var cnt = 0;
-    if (has(x, 'accounting.clickbooks.access') || has(x, 'accounting.view')) { on.push('ClickBooks'); }
-    if (has(x, 'accounting.wavehub.access') || has(x, 'accounting.view')) { on.push('Wave'); }
+    if (has(x, 'accounting.clickbooks.access')) { on.push('ClickBooks'); }
+    if (has(x, 'accounting.wavehub.access')) { on.push('Wave'); }
     BANKING_KEYS.forEach(function (k) { if (k.indexOf('accounting.') !== 0 && has(x, k)) { cnt += 1; } });
     if (has(x, 'accounting.view_totals')) { on.push('totals'); }
     var gx = grantFor(x); if (gx && gx.canViewBankBalances) { on.push('balances'); }
@@ -181,7 +184,7 @@ export default function BankingAccessPanel(props) {
         <div className="text-[15px] font-extrabold mb-2" style={{ color: INK }}>{u.name || u.email}<span className="text-[11px] font-bold ml-2" style={{ color: MUTED }}>{u.role}</span></div>
         {boss && <div className="rounded-lg p-2 mb-3 text-[12px] font-bold" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46' }}>{'As ' + u.role + ', ' + (u.name || 'they') + ' already has every switch below (except Bank balances / the financial overview, which are super-admin grants).'}</div>}
         {!boss && !books && <div className="rounded-lg p-2 mb-3 text-[12px] font-bold" style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#78350f' }}>⚠ Turn on ClickBooks or Wave Hub in group 1 first — the other switches do nothing until then.</div>}
-        {!boss && has(u, 'accounting.view') && <div className="rounded-lg p-2 mb-3 text-[12px]" style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', color: SUB }}>
+        {!boss && legacyOn(u) && <div className="rounded-lg p-2 mb-3 text-[12px]" style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', color: SUB }}>
           They still have the old “Accounting Access (both hubs)” switch, which counts as BOTH books. Turn ClickBooks / Wave on above as needed, then <Switch on={true} label="turn the old one off" onClick={function () { toggle(u.id, 'accounting.view', true); }} /></div>}
         {BANKING_GROUPS.map(function (grp) {
           return <div key={grp.title} className="rounded-xl p-3 mb-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>

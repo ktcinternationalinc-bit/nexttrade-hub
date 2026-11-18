@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UO',
+    date: '2026-11-18',
+    title: 'Banking & Accounting Access shows each book exactly as it works',
+    items: [
+      { text: 'Someone with ClickBooks ON and Wave OFF now shows “ClickBooks” only (it could say “ClickBooks · Wave”). What they could actually do was already right; only the page’s wording was wrong.' },
+      { text: 'The note about the old “Accounting Access (both hubs)” switch appears only when that switch is really ON for the person.' }
+    ]
+  },
+  {
     version: 'v55.83-UN',
     date: '2026-11-18',
     title: 'Fix: staff with ClickBooks (or Wave) switched on can open Accounting again',
