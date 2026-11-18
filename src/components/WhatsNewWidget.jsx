@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UI',
+    date: '2026-11-18',
+    title: 'Profitability looks cleaner: one revenue number, details on hover, a scroll bar on top and a full-screen table',
+    items: [
+      { text: 'Goods revenue shows ONE number. For CNF prices a small “CNF” tag marks it; hover it to see the invoice amount, the shipping taken out of the price and the result.' },
+      { text: '“part missing”, “known part only”, “some weights missing” and similar words are now a small amber dot next to the number — hover the dot for the explanation. A fully missing amount shows as an amber dash.' },
+      { text: 'A missing cost shows one small “⚠ …” button (for example “⚠ Set the unit”) instead of a paragraph; hover it for every reason, click it to go where you fix it.' },
+      { text: 'A scroll bar sits on TOP of the table to move left / right, and “⤢ Full screen” shows the table on the whole window (Esc or “✕ Exit full screen” to go back).' },
+      { text: 'Column headings are short; hover a heading for exactly what it counts. The totals are white cards with a coloured edge. The “not the cash report” note is one line with “About this report”.' },
+      { text: 'Nothing in the numbers changed — this is only how the screen looks.' },
+    ],
+  },
+  {
     version: 'v55.83-UD',
     date: '2026-11-18',
     title: 'Paying NextTrade: pick the bills a payment covers, plus fee and advance, in one step; starting balance; warehouse staff billed to KTC',
