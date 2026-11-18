@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { assertPermission } from '../../../lib/server-permissions';
+import { verifiedCaller } from '../../../lib/verified-caller'; // v55.83-UH
 import { audit } from '../../../lib/audit-server';
 import { validateRequest, requestLabel, nameKey, websiteKey, ROLES, STAGES, isDate, outreachDraft, draftLeaks, SEARCHES_PER_RUN } from '../../../lib/sourcing';
 import { monthUsage, integrationHealth, runNextJob } from '../../../lib/sourcing-server';
@@ -40,7 +41,13 @@ async function names(db, ids) {
 export async function POST(req) {
   try {
     var body = {}; try { body = await req.json(); } catch (eB) { body = {}; }
-    var action = String(body.action || ''); var userId = body.user_id || null;
+    var action = String(body.action || '');
+    // v55.83-UH (Codex 18 Nov 12:40, P1): WHO is calling comes from the verified sign-in token, checked BEFORE any
+    // permission, data or action work. A body.user_id that is not the signed-in person is refused and never used.
+    // Every action below (listing, research, approval, sending, audit) uses only this verified identity.
+    var who = await verifiedCaller(req, body, createClient);
+    if (!who || who.error || !who.userId) { return fail((who && who.error) || 'Sign in again — your sign-in could not be verified.', (who && who.status) || 401); }
+    var userId = who.userId;
     var db = admin();
     var g = await assertPermission(db, userId, 'commercial.access', req);
     if (!g || !g.ok) { return fail('The Sourcing desk needs the “Commercial: Sourcing desk” permission — ask an admin in Settings.', 403); }

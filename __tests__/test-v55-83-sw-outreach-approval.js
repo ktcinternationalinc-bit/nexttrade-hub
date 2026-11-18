@@ -76,7 +76,7 @@ var uploads = [];
 db.storage = { from: function (b) { return { upload: function (p, c, o) { uploads.push({ bucket: b, path: p, size: c.length, type: o && o.contentType }); return Promise.resolve({ error: null }); } }; } };
 var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
 fs.writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
-var orig = Module._resolveFilename; Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } return orig.apply(this, arguments); };
+var orig = Module._resolveFilename; Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } if (/lib[/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } /* v55.83-UH realign: the route now verifies the sign-in; the in-memory test stands in for it */ return orig.apply(this, arguments); };
 global.__db = db;
 // the simulated mail server
 var outbox = []; var smtpMode = 'ok';

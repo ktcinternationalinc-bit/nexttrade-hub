@@ -88,7 +88,7 @@ function setup() { db.rpcs = { agent_job_claim: claimStandIn }; db.hooks = { age
 var mockPath = path.join(__dirname, 'helpers', 'mock-supabase-js.js');
 fs.writeFileSync(mockPath, 'module.exports={createClient:function(){return global.__db;}};');
 var orig = Module._resolveFilename;
-Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } return orig.apply(this, arguments); };
+Module._resolveFilename = function (req) { if (req === '@supabase/supabase-js') { return mockPath; } if (/lib[/]verified-caller(.js)?$/.test(req)) { return path.join(__dirname, 'helpers', 'stub-verified-caller.js'); } /* v55.83-UH realign: the route now verifies the sign-in; the in-memory test stands in for it */ return orig.apply(this, arguments); };
 setup();
 var SS = require(path.join(root, 'src/lib/sourcing-server.js'));
 var route = require(path.join(root, 'src/app/api/commercial/route.js'));

@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UH',
+    date: '2026-11-18',
+    title: 'Sourcing desk: every action now checks who is really signed in',
+    items: [
+      { text: '🔒 Security fix found by Codex (QA): the 🧭 Sourcing desk trusted the person named by the screen instead of checking the sign-in. Now every action — seeing suppliers, starting paid web research, approving and sending a supplier email — first checks your sign-in with the server, and only then your switches.' },
+      { text: 'Someone who is not signed in, or who names another person, is refused and sees nothing. An approval and its email are recorded under the person who is really signed in.' },
+      { text: 'Nothing else on the desk changes. Supplier email sending stays off until the mailbox is added.' },
+      { text: 'Technical: /api/commercial POST resolves the caller with verifiedCaller (bearer token → Supabase getUser → bank_visibility_profile_for_identity → one active Hub profile) BEFORE any permission/data/action work; a body.user_id that differs is refused 403 and never used; userId for assertPermission, approved_by, sendApproved actorId and audit = the verified profile only. SourcingDeskTab calls through hubFetch (sends the token). Worker route unchanged (CRON_SECRET only). Test __tests__/test-v55-83-uh-commercial-verified-caller.js runs the real handler + real verified-caller/bank-visibility/server-permissions (25/25; the same test against the old route fails 17, including an anonymous approve-and-send). No SQL.', superAdminOnly: true },
+    ]
+  },
+  {
     version: 'v55.83-UK',
     date: '2026-11-18',
     title: 'Messages are back on the Accounting screens; “Are you sure?” boxes really ask',

@@ -9,6 +9,7 @@
 // when it is not connected.
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-UH
 import { COMPANIES, DIRECTIONS, STAGES, ROLES } from '../lib/sourcing';
 
 var INK = '#0f172a', SUB = '#334155', MUTED = '#64748b';
@@ -43,7 +44,8 @@ export default function SourcingDeskTab(props) {
   var s15 = useState(null); var mailTest = s15[0]; var setMailTest = s15[1];
 
   function api(body) {
-    return fetch('/api/commercial', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, body)) })
+    // v55.83-UH — hubFetch sends the signed-in person's token; the server acts only for that person
+    return hubFetch('/api/commercial', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, body)) })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
