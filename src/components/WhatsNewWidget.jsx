@@ -33,6 +33,36 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UD',
+    date: '2026-11-18',
+    title: 'Paying NextTrade: pick the bills a payment covers, plus fee and advance, in one step; starting balance; warehouse staff billed to KTC',
+    items: [
+      { text: 'Accounting → 💸 Bills → 💼 Advances & fees: each payment sent to NextTrade (or RTM) has “Pay bills / fee / advance”. Tick the bills it pays (the amount starts at what is still open), type an extra fee and / or an advance, and Confirm — all saved together or nothing. It shows what is left on the payment.' },
+      { text: '🟦 Nextrade bills: every bill still owed has a “Pay ▸” button. It opens Advances & fees with that bill ticked; press “Pay bills / fee / advance” on the payment it comes from, or “Pay from the advance” to pay it from money NextTrade already holds.' },
+      { text: 'Possible payments: KTC money-out lines with “NextTrade” (or “RTM”) in the description that are not marked yet are listed with “This is a payment to …”.' },
+      { text: 'Starting balance (money NextTrade / RTM already hold for KTC from before the Hub): built and tested, but switched OFF until Max decides how using it counts in the cash / tax view.' },
+      { text: 'Warehouse staff payroll on the Nextrade books now makes a KTC bill (KTC pays it), like every other Nextrade expense. Any Nextrade category can say “KTC pays this” or not (Nextrade → Categories → ✏ Edit). Earlier payroll lines: Nextrade → Transactions → 🧾 Make the missing KTC bills. If you also have a repeating “Warehouse staff” bill, pause it so the wages are not billed twice.' },
+      { text: 'Bills → Show: new “validated + not validated” filter (✓ Validated / Not validated).' },
+      { text: 'P&L, Profitability and the Sales Report now keep employees to the history window set in Settings (only the super admin sees all-time), checked on the server.' },
+      { text: 'Profitability → P&L by period (and the Profit tiles): Total profit is now always goods profit + transport profit. Before, a line whose cost was not known yet still counted its whole revenue as profit, so the total came out far above the two. Those lines now add nothing to profit until their cost is known, and their revenue is shown under the total (“X line(s) / $Y revenue not counted until their cost is known”).' },
+      { text: '📊 P&L now uses the same costs as the Profitability report: average cost, COGS, profit and margin come from the supplier bills, so they are no longer blank. CNF sales show the goods price with the shipping inside it taken out; shipping is shown separately.' },
+      { text: 'P&L: ✅ Confirmed / 🟡 Tentative / All. A sale is Confirmed when its cost comes from the bills plus your standard allowances (inbound per lb, $200 bonded per Houston container — each row says when they are included), with the actual shipping bill and every weight and the CNF/EXW basis known; anything else is Tentative and each row says what is missing. A cost typed under 💲 Product costs is used only where no bill cost exists, and that sale shows as Tentative.' },
+      { text: 'Sales Report → By customer: open a customer and every invoice (each shipment) is listed with its product sales, pounds and shipping — click one to see the invoice. The table headings no longer cover the first row.' },
+      { text: 'Technical: needs sql/v55-83-UD-pay-nextrade.sql (after UB). hub_party_allocate (one locked step: company → payment → bills; never spends a payment twice; private accounts read live) and hub_party_opening; company_categories.makes_ktc_bill.' },
+    ]
+  },
+  {
+    version: 'v55.83-UB',
+    date: '2026-11-17',
+    title: 'Nextrade and RTM: transfers paired like QuickBooks, and new categories right from the dropdown',
+    items: [
+      { text: 'Accounting → 🟦 Nextrade / 🟪 RTM → 📋 Transactions: press ↔ next to a line that is money moving between the company’s own accounts (checking → savings, or paying its credit card). The Hub shows the other side — same amount, another of the company’s accounts, within 10 days (or search wider) — and “Pair as transfer” links the two as ONE transfer: never income, never spending. Paying the company’s own credit card is filed as “Credit card payment”.' },
+      { text: 'A paired line shows “↔ … with <the other account>, <date>” and an Unpair button. A paired line cannot be given another category until it is unpaired. If a Nextrade line had wrongly made a KTC bill, pairing it voids that bill in the same step (kept, not deleted) — unless money was already recorded on the bill, then nothing changes and the Hub says why.' },
+      { text: '➕ New category… is now inside every category dropdown: type the name, pick its direction (money out only, money in only, or both) and kind, and it is saved and used on that line at once. Each line’s dropdown only shows the categories that fit its direction; the Categories tab shows and edits the direction too. Needs one SQL (v55-83-UB-company-transfers.sql).' },
+      { text: 'Technical: company_categories.direction (any/in/out); hub_company_categorize now refuses a wrong-direction category and re-categorizing a paired line; hub_company_pair_transfer / hub_company_unpair_transfer (one transaction, advisory locks in id order, FOR UPDATE, voids a KTC bill via categorize); company-books transfer_candidates (KTC rules: same cents, opposite direction, other real account, same company, no duplicates, private hidden). Tests: test-v55-83-ub-company-transfers.mjs 29 (real Postgres), two-session 8/8.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-UA',
     date: '2026-11-17',
     title: 'The new Nextrade, RTM, repeating bills and advances screens are easy to read',

@@ -193,7 +193,8 @@ var happy = simulatedAI([
   var page = R('src/app/page.jsx'); var st = R('src/components/SettingsTab.jsx'); var vj = JSON.parse(R('vercel.json'));
   check('F6 (pin): the tab shows only with its switch; the two switches are in Settings; the worker timer every 5 minutes', /if \(t\.id === 'sourcing'\) \{ return modulePerms\['commercial\.access'\] === true; \}/.test(page) && /\{tab === 'sourcing' && \(/.test(page) && /key: 'commercial\.access'/.test(st) && /key: 'commercial\.research'/.test(st) && vj.crons.some(function (c) { return c.path === '/api/commercial/worker' && c.schedule === '*/5 * * * *'; }));
   var wn = R('src/components/WhatsNewWidget.jsx');
-  check('F7 (pin): What’s New has v55.83-SV with one technical line; badge at SV', /version: 'v55\.83-TF'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && /Sourcing desk/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && />v55\.83-(?:T[F-Z])<\/span>/.test(page)); // v55.83-TF realign: the web chat's SV was merged onto the live line as TF (SV was already used there)
+  check('F7 (pin): What’s New has v55.83-SV with one technical line; badge at SV', /version: 'v55\.83-TF'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && /Sourcing desk/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && />v55\.83-(?:T[F-Z]|[U-Z][A-Z])<\/span>/.test(page)); // v55.83-TF realign: the web chat's SV was merged onto the live line as TF (SV was already used there)
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });
+// v55.83-UB realign: badge letters now run past T (UA, UB …)

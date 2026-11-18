@@ -15,6 +15,7 @@ var panel = { background: '#ffffff', color: '#0f172a', border: '1px solid #e2e8f
 var inp = 'px-2 py-1 rounded border text-[11px] nt-light'; // v55.83-UA — nt-light: dark text on white even under the dark theme (globals.css)
 var inpS = { background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1' };
 function btn(bg, fg) { return { background: bg, color: fg }; }
+var DIR_WORDS = { any: 'money in or out', 'in': 'money in only', out: 'money out only' }; // v55.83-UB
 var KTC_BILL_WORDS = { created: '🧾 KTC bill made', attached: '🔗 attached to a KTC bill' };
 
 export default function CompanyBooksTab(props) {
@@ -41,6 +42,7 @@ export default function CompanyBooksTab(props) {
   var s17 = useState(null); var ruleForm = s17[0]; var setRuleForm = s17[1];
   var s18 = useState(''); var sqlMissing = s18[0]; var setSqlMissing = s18[1];
   var s19 = useState({}); var kinds = s19[0]; var setKinds = s19[1];
+  var s20 = useState(null); var rowPanel = s20[0]; var setRowPanel = s20[1]; // v55.83-UB — { id, mode: 'newcat' | 'transfer', ... } under one row
 
   function api(payload) {
     return hubFetch('/api/accounting/company-books', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -78,6 +80,37 @@ export default function CompanyBooksTab(props) {
       loadLines();
     }).finally(function () { setBusy(false); });
   }
+  // v55.83-UB (Max: 'add categories on the fly and give it a direction') — make the category, then put this line in it
+  function addCategoryForLine(l, f) {
+    setBusy(true);
+    api({ action: 'save_category', category: Object.assign({ label: f.label, kind: f.kind, direction: f.direction, is_payroll: f.is_payroll === true }, f.makes_ktc_bill === true || f.makes_ktc_bill === false ? { makes_ktc_bill: f.makes_ktc_bill } : {}) }).then(function (j) {
+      if (!j || !j.ok) { toast.error((j && j.error) || 'Not saved.'); setBusy(false); return; }
+      setRowPanel(null);
+      return loadCats().then(function () { setBusy(false); setCategory([l.id], j.key); });
+    }, function () { setBusy(false); });
+  }
+  // v55.83-UB (Max: 'transfer … should work the same way as KTC … link the transfer to the transfer from the other account, like QuickBooks')
+  function openTransfer(l, manual, q) {
+    setRowPanel({ id: l.id, mode: 'transfer', loading: true, manual: !!manual, q: q || '', cands: [] });
+    api({ action: 'transfer_candidates', line_id: l.id, manual: !!manual, q: q || '' }).then(function (j) {
+      if (j && j.ok) { setRowPanel({ id: l.id, mode: 'transfer', loading: false, manual: !!manual, q: q || '', cands: j.candidates || [] }); }
+      else { toast.error((j && j.error) || 'Could not look for the other side.'); setRowPanel(null); }
+    });
+  }
+  function pair(l, c) {
+    setBusy(true);
+    api({ action: 'pair_transfer', a: l.id, b: c.id }).then(function (j) {
+      if (j && j.ok) { toast.success('Paired as a transfer (' + ((j.result && j.result.category) === 'card_payment' ? 'credit card payment' : 'between own accounts') + ') — never income or spending.'); setRowPanel(null); loadLines(); }
+      else { toast.error((j && j.error) || 'Not paired.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function unpair(l) {
+    setBusy(true);
+    api({ action: 'unpair_transfer', transfer_group_id: l.transfer_group_id }).then(function (j) {
+      if (j && j.ok) { toast.success('Unpaired — both lines are not categorized again.'); loadLines(); } else { toast.error((j && j.error) || 'Not unpaired.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  function catsFor(l) { return cats.filter(function (c) { return (c.active || c.key === l.company_category) && (!c.direction || c.direction === 'any' || c.direction === l.direction || c.key === l.company_category); }); }
   function exportCsv(rowsOut, name) {
     var csv = rowsOut.map(function (r) { return r.map(function (c) { var s = String(c == null ? '' : c); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(','); }).join('\n');
     var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = name; a.click();
@@ -115,6 +148,7 @@ export default function CompanyBooksTab(props) {
           <option value="uncat">Not categorized yet</option><option value="all">All lines</option>{cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
         <input className={inp} style={inpS} placeholder="Find (description or amount)" value={q} onChange={function (e) { setQ(e.target.value); }} />
         {canManage && <button onClick={function () { setBusy(true); api({ action: 'apply_rules', from: from, to: to }).then(function (j) { if (j && j.ok) { toast.success(j.categorized + ' line(s) categorized by the rules' + (j.problems && j.problems.length ? ' · ' + j.problems.length + ' not: ' + j.problems[0] : '')); } else { toast.error((j && j.error) || 'Not done.'); } loadLines(); }).finally(function () { setBusy(false); }); }} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#ede9fe', '#5b21b6')}>📏 Apply rules to uncategorized</button>}
+        {canManage && comp.key === 'nextrade' && <button onClick={function () { setBusy(true); api({ action: 'missing_bills' }).then(function (j) { if (!j || !j.ok) { toast.error((j && j.error) || 'Not done.'); setBusy(false); return; } if (!j.count) { toast.success('Every line in a "KTC pays this" category already has its KTC bill.'); setBusy(false); return; } if (!window.confirm(j.count + ' earlier line(s) are in a category KTC pays (e.g. Warehouse staff) but have no KTC bill yet. Make their KTC bills now (one per line, owed to Nextrade)?')) { setBusy(false); return; } api({ action: 'make_missing_bills' }).then(function (k) { if (k && k.ok) { toast.success(k.made + ' KTC bill(s) made' + (k.left ? ' · ' + k.left + ' left — press again' : '')); } else { toast.error((k && k.error) || 'Not done.'); } loadLines(); }).finally(function () { setBusy(false); }); }); }} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#dbeafe', '#1e3a8a')}>🧾 Make the missing KTC bills</button>}
         <button onClick={function () { exportCsv([['date', 'account', 'description', 'in/out', 'amount', 'category', 'KTC bill']].concat(shown.map(function (l) { return [l.date, l.account_label, l.name, l.direction, l.amount_abs, l.company_category ? (catByKey[l.company_category] || {}).label || l.company_category : '', l.ktc_bill ? l.ktc_bill.mode : '']; })), comp.key + '-transactions-' + from + '-to-' + to + '.csv'); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
         <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length} line(s)</span>
       </div>
@@ -128,17 +162,50 @@ export default function CompanyBooksTab(props) {
           <th className="p-1">{canManage && <input type="checkbox" checked={shown.length > 0 && shown.every(function (l) { return sel[l.id]; })} onChange={function (e) { var n = {}; if (e.target.checked) { shown.forEach(function (l) { n[l.id] = true; }); } setSel(n); }} />}</th>
           <th className="p-1 text-left">Date</th><th className="p-1 text-left">Account</th><th className="p-1 text-left">Description</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">Category</th>{comp.key === 'nextrade' && <th className="p-1 text-left">KTC bill</th>}</tr></thead>
           <tbody>{shown.map(function (l) {
-            return <tr key={l.id} style={{ borderTop: '1px solid #e2e8f0' }}>
+            var panel = rowPanel && rowPanel.id === l.id ? rowPanel : null;
+            return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0' }}>
               <td className="p-1">{canManage && <input type="checkbox" checked={!!sel[l.id]} onChange={function (e) { var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
               <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? ' ⏳' : ''}</td>
               <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}</td>
               <td className="p-1">{l.name}</td>
               <td className="p-1 text-right whitespace-nowrap font-bold" style={{ color: l.direction === 'in' ? '#166534' : '#991b1b' }}>{l.direction === 'in' ? '+' : '−'}{fmt(l.amount_abs)}</td>
-              <td className="p-1">{canManage
-                ? <select className={inp} style={inpS} value={l.company_category || ''} disabled={busy} onChange={function (e) { setCategory([l.id], e.target.value || null); }}><option value="">— not categorized —</option>{cats.filter(function (c) { return c.active || c.key === l.company_category; }).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
-                : ((catByKey[l.company_category] || {}).label || '—')}{l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>
+              <td className="p-1">
+                {l.transfer_group_id
+                  ? <span className="text-[12px] font-bold" style={{ color: '#1e40af' }}>↔ {(catByKey[l.company_category] || {}).label || 'Transfer'}{l.transfer_with ? <span className="font-normal" style={{ color: '#334155' }}> · {l.transfer_with.private ? 'with a private account' : 'with ' + l.transfer_with.account_label + ', ' + l.transfer_with.date}</span> : null}{canManage ? <button onClick={function () { unpair(l); }} disabled={busy} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#fee2e2', color: '#991b1b' }}>Unpair</button> : null}</span>
+                  : canManage
+                    ? <span className="inline-flex items-center gap-1"><select className={inp} style={inpS} value={l.company_category || ''} disabled={busy} onChange={function (e) { if (e.target.value === '__new') { setRowPanel({ id: l.id, mode: 'newcat', label: '', direction: l.direction, kind: l.direction === 'in' ? 'income' : 'expense', is_payroll: false }); return; } setCategory([l.id], e.target.value || null); }}><option value="">— not categorized —</option>{catsFor(l).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__new">➕ New category…</option></select>
+                      <button onClick={function () { openTransfer(l, false, ''); }} disabled={busy} title="This is money moving between two of the company's own accounts (or paying its credit card): find the other side and pair them as ONE transfer — never income or spending" className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔</button></span>
+                    : ((catByKey[l.company_category] || {}).label || '—')}
+                {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>
               {comp.key === 'nextrade' && <td className="p-1 text-[10px]">{l.ktc_bill ? KTC_BILL_WORDS[l.ktc_bill.mode] || '' : ''}</td>}
-            </tr>;
+            </tr>
+            {panel && panel.mode === 'newcat' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#f8fafc' }}>
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-[11px] font-extrabold">➕ New category for this line:</span>
+                <input autoFocus className={inp} style={inpS} placeholder="Name (e.g. Electricity)" value={panel.label} onChange={function (e) { setRowPanel(Object.assign({}, panel, { label: e.target.value })); }} />
+                <select className={inp} style={inpS} value={panel.direction} onChange={function (e) { setRowPanel(Object.assign({}, panel, { direction: e.target.value })); }}><option value="out">Money out only</option><option value="in">Money in only</option><option value="any">Money in or out</option></select>
+                <select className={inp} style={inpS} value={panel.kind} onChange={function (e) { setRowPanel(Object.assign({}, panel, { kind: e.target.value })); }}>{Object.keys(kinds).map(function (k) { return <option key={k} value={k}>{kinds[k]}</option>; })}</select>
+                {panel.kind === 'expense' && <label className="text-[10px] font-bold"><input type="checkbox" checked={panel.is_payroll === true} onChange={function (e) { setRowPanel(Object.assign({}, panel, { is_payroll: e.target.checked })); }} /> payroll</label>}
+                {comp.key === 'nextrade' && panel.direction !== 'in' && <select className={inp} style={inpS} title="Does KTC pay this? Yes = each line makes a KTC bill (owed to Nextrade)" value={panel.makes_ktc_bill === true ? 'yes' : panel.makes_ktc_bill === false ? 'no' : 'usual'} onChange={function (e) { setRowPanel(Object.assign({}, panel, { makes_ktc_bill: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : null })); }}><option value="usual">KTC pays this? usual rule (expenses yes, payroll no)</option><option value="yes">KTC pays this — make a KTC bill</option><option value="no">KTC does not pay this — no bill</option></select>}
+                <button disabled={busy || String(panel.label).trim().length < 2} onClick={function () { addCategoryForLine(l, panel); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>💾 Save and use it</button>
+                <button onClick={function () { setRowPanel(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Cancel</button>
+              </div></td></tr>}
+            {panel && panel.mode === 'transfer' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#eff6ff' }}>
+              <div className="text-[11px] font-extrabold mb-1" style={{ color: '#1e3a8a' }}>↔ The other side of this transfer — money {l.direction === 'out' ? 'IN' : 'OUT'} of another {comp.label} account{panel.manual ? ' (any amount, 90 days)' : ', same amount, within 10 days'}:</div>
+              {panel.loading ? <div className="text-[11px]">Looking…</div> : null}
+              {!panel.loading && !panel.cands.length && <div className="text-[11px]" style={{ color: '#475569' }}>Nothing found. Is the other account connected? Try searching wider:</div>}
+              {panel.cands.map(function (c) { return <div key={c.id} className="flex items-center gap-2 text-[12px] py-0.5" style={{ borderTop: '1px solid #dbeafe' }}>
+                <span className="whitespace-nowrap">{c.date}</span><span className="whitespace-nowrap">{c.is_card ? '💳 ' : '🏦 '}{c.account_label}</span><span>{c.name}</span>
+                <span className="font-bold whitespace-nowrap" style={{ color: c.direction === 'in' ? '#166534' : '#991b1b' }}>{c.direction === 'in' ? '+' : '−'}{fmt(c.amount_abs)}</span>{!c.same_amount ? <span className="text-[10px]" style={{ color: '#b45309' }}>different amount</span> : null}
+                <div className="flex-1" /><button disabled={busy || !c.same_amount} onClick={function () { pair(l, c); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1e40af', color: '#ffffff', opacity: c.same_amount ? 1 : 0.4 }}>Pair as transfer</button></div>; })}
+              <div className="flex gap-2 items-center mt-2">
+                <input className={inp} style={inpS} placeholder="Search other lines (text or amount)" value={panel.q} onChange={function (e) { setRowPanel(Object.assign({}, panel, { q: e.target.value })); }} />
+                <button disabled={busy} onClick={function () { openTransfer(l, true, panel.q); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>Search wider (90 days)</button>
+                <button onClick={function () { setRowPanel(null); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#f1f5f9', color: '#334155' }}>Close</button>
+              </div>
+              <div className="text-[10px] mt-1" style={{ color: '#475569' }}>Only the same amount can be paired (like KTC). Money to or from KTC or RTM is not a transfer between {comp.label}'s own accounts — use “Money from KTC”.</div>
+            </td></tr>}
+            </React.Fragment>;
           })}</tbody></table>
       </div>
       {lines && !shown.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>Nothing to show for these dates and filters.</div>}
@@ -156,17 +223,19 @@ export default function CompanyBooksTab(props) {
     </div>}
 
     {view === 'categories' && <div>
-      {canManage && !catForm && <button onClick={function () { setCatForm({ label: '', kind: 'expense', is_payroll: false, sort: 100 }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New category</button>}
+      {canManage && !catForm && <button onClick={function () { setCatForm({ label: '', kind: 'expense', is_payroll: false, sort: 100, direction: 'out' }); }} className="px-2 py-1 rounded text-[11px] font-extrabold mb-2" style={btn('#0f172a', '#ffffff')}>➕ New category</button>}
       {catForm && <div className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
         <input className={inp} style={inpS} placeholder="Name (e.g. Electricity)" value={catForm.label} onChange={function (e) { setCatForm(Object.assign({}, catForm, { label: e.target.value })); }} />
+        <select className={inp} style={inpS} value={catForm.direction || 'any'} onChange={function (e) { setCatForm(Object.assign({}, catForm, { direction: e.target.value })); }}><option value="out">Money out only</option><option value="in">Money in only</option><option value="any">Money in or out</option></select>
         <select className={inp} style={inpS} value={catForm.kind} onChange={function (e) { setCatForm(Object.assign({}, catForm, { kind: e.target.value })); }}>{Object.keys(kinds).map(function (k) { return <option key={k} value={k}>{kinds[k]}</option>; })}</select>
-        {catForm.kind === 'expense' && <label className="text-[10px] font-bold"><input type="checkbox" checked={catForm.is_payroll === true} onChange={function (e) { setCatForm(Object.assign({}, catForm, { is_payroll: e.target.checked })); }} /> payroll (no KTC bill, shown as "Warehouse staff")</label>}
+        {catForm.kind === 'expense' && <label className="text-[10px] font-bold"><input type="checkbox" checked={catForm.is_payroll === true} onChange={function (e) { setCatForm(Object.assign({}, catForm, { is_payroll: e.target.checked })); }} /> payroll (shown as "Warehouse staff")</label>}
+        {comp.key === 'nextrade' && catForm.direction !== 'in' && <select className={inp} style={inpS} title="Does KTC pay this? Yes = each line makes a KTC bill (owed to Nextrade)" value={catForm.makes_ktc_bill === true ? 'yes' : catForm.makes_ktc_bill === false ? 'no' : 'usual'} onChange={function (e) { setCatForm(Object.assign({}, catForm, { makes_ktc_bill: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : null })); }}><option value="usual">KTC pays this? usual rule (expenses yes, payroll no)</option><option value="yes">KTC pays this — make a KTC bill</option><option value="no">KTC does not pay this — no bill</option></select>}
         <button disabled={busy} onClick={function () { setBusy(true); api({ action: 'save_category', category: catForm }).then(function (j) { if (j && j.ok) { toast.success('Saved' + (j.note ? ' — ' + j.note : '')); setCatForm(null); loadCats(); } else { toast.error((j && j.error) || 'Not saved.'); } }).finally(function () { setBusy(false); }); }} className="px-2 py-1 rounded text-[10px] font-extrabold" style={btn('#0f172a', '#ffffff')}>💾 Save</button>
         <button onClick={function () { setCatForm(null); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>Cancel</button>
       </div>}
       {cats.map(function (c) { return <div key={c.key} className="flex items-center gap-2 text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0', opacity: c.active ? 1 : 0.5 }}>
-        <span className="font-bold">{c.label}</span><span style={{ color: '#64748b' }}>{kinds[c.kind] || c.kind}{c.is_payroll ? ' · payroll' : ''}{c.active ? '' : ' · switched off'}</span><div className="flex-1" />
-        {canManage && <button onClick={function () { setCatForm({ id: c.id, label: c.label, kind: c.kind, is_payroll: c.is_payroll, sort: c.sort }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#eff6ff', '#1d4ed8')}>✏ Edit</button>}
+        <span className="font-bold">{c.label}</span><span style={{ color: '#64748b' }}>{DIR_WORDS[c.direction || 'any']} · {kinds[c.kind] || c.kind}{c.is_payroll ? ' · payroll' : ''}{comp.key === 'nextrade' && c.makes_ktc_bill === true ? ' · KTC pays this (KTC bill)' : ''}{comp.key === 'nextrade' && c.makes_ktc_bill === false ? ' · no KTC bill' : ''}{c.active ? '' : ' · switched off'}</span><div className="flex-1" />
+        {canManage && <button onClick={function () { setCatForm({ id: c.id, label: c.label, kind: c.kind, is_payroll: c.is_payroll, sort: c.sort, direction: c.direction || 'any', makes_ktc_bill: c.makes_ktc_bill === true ? true : c.makes_ktc_bill === false ? false : null }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#eff6ff', '#1d4ed8')}>✏ Edit</button>}
         {canManage && <button onClick={function () { api({ action: 'category_active', id: c.id, active: !c.active }).then(function (j) { if (j && j.ok) { loadCats(); } else { toast.error((j && j.error) || 'Not saved.'); } }); }} className="px-2 py-0.5 rounded text-[10px] font-bold" style={btn('#f1f5f9', '#334155')}>{c.active ? 'Switch off' : 'Switch on'}</button>}
       </div>; })}
     </div>}
@@ -202,7 +271,7 @@ export default function CompanyBooksTab(props) {
       <div className="text-[11px] mb-2" style={{ color: '#475569' }}>Set once per Nextrade expense category: which KTC category its KTC bill gets. Bills already made without a KTC category get it when you save.</div>
       {(mapping.rows || []).filter(function (c) { return ['expense', 'cogs', 'other_expense'].indexOf(c.kind) >= 0; }).map(function (c) { return <div key={c.key} className="flex items-center gap-2 text-[11px] py-1" style={{ borderTop: '1px solid #e2e8f0' }}>
         <span className="font-bold" style={{ minWidth: 200 }}>{c.label}</span>
-        {c.is_payroll ? <span style={{ color: '#64748b' }}>payroll — no KTC bill (the repeating "Warehouse staff" bill covers it)</span>
+        {(typeof c.makes_ktc_bill === 'boolean' ? !c.makes_ktc_bill : c.is_payroll) ? <span style={{ color: '#64748b' }}>no KTC bill for this category (Categories → ✏ Edit → "KTC pays this" to change)</span>
           : <select className={inp} style={inpS} disabled={!canManage || busy} value={c.ktc_category || ''} onChange={function (e) { setBusy(true); api({ action: 'save_mapping', category_key: c.key, ktc_category: e.target.value || null }).then(function (j) { if (j && j.ok) { toast.success('Saved' + (j.bills_filled ? ' · ' + j.bills_filled + ' bill(s) filled in' : '')); loadView('mapping'); } else { toast.error((j && j.error) || 'Not saved.'); } }).finally(function () { setBusy(false); }); }}>
             <option value="">— KTC category not set —</option>{(mapping.ktc_categories || []).map(function (k) { return <option key={k.key} value={k.key}>{k.label}</option>; })}</select>}
       </div>; })}

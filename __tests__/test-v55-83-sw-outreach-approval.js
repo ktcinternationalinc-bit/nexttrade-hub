@@ -219,7 +219,8 @@ function raw(o) { var b = '----b' + Math.random().toString(36).slice(2);
   check('F6 (pin): the screen — approval inbox, approve “this version”, send back, try again with the Sent-folder check, no pop-ups, fields readable', /Waiting for approval \(/.test(ui) && /Approve and send this version/.test(ui) && /I checked — it is not there/.test(ui) && /Test the mailbox \(sends nothing\)/.test(ui) && !/window\.(prompt|confirm|alert)\(/.test(ui) && (ui.match(/<(input|select|textarea)(?![^>]*type="(file|checkbox)")[^>]*>/g) || []).every(function (x) { return /className=\{inp/.test(x); }));
   check('F7 (pin): the approval switch is in Settings; the worker sends approved mail, reads replies and prepares follow-ups', /key: 'commercial\.approve'/.test(R('src/components/SettingsTab.jsx')) && /mailCycle\(db/.test(R('src/app/api/commercial/worker/route.js')));
   var wn = R('src/components/WhatsNewWidget.jsx');
-  check('F8 (pin): What’s New has v55.83-SW with one technical line; badge at SW', /version: 'v55\.83-TF'/.test(wn) && /info@ktcus\.com/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && />v55\.83-(?:T[F-Z])<\/span>/.test(R('src/app/page.jsx'))); // v55.83-TF realign: the web chat's SW was merged onto the live line as TF
+  check('F8 (pin): What’s New has v55.83-SW with one technical line; badge at SW', /version: 'v55\.83-TF'/.test(wn) && /info@ktcus\.com/.test(wn.substring(wn.indexOf("version: 'v55.83-TF'"), wn.indexOf("version: 'v55.83-TE'"))) && />v55\.83-(?:T[F-Z]|[U-Z][A-Z])<\/span>/.test(R('src/app/page.jsx'))); // v55.83-TF realign: the web chat's SW was merged onto the live line as TF
   console.log('\n' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.log('CRASH', e && e.stack); process.exit(1); });
+// v55.83-UB realign: badge letters now run past T (UA, UB …)

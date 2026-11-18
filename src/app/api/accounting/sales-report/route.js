@@ -14,6 +14,7 @@
 // Permission: ar.view_invoice_balances via the proven assertPermission ladder
 // (super admin passes everything automatically).
 import { NextResponse } from 'next/server';
+import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
@@ -56,6 +57,9 @@ export async function POST(req) {
     if (!perm || perm.ok !== true) {
       return NextResponse.json({ error: 'This needs the "AR: View Invoice Balances" permission — grant it in Settings → Module Access.' }, { status: 403 });
     }
+    // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
+    var vwin = await windowFloorFor(db, perm.ctx); if (vwin.error) { return NextResponse.json({ error: vwin.error }, { status: 503 }); }
+    body.date_from = clampFrom(body.date_from, vwin.floor);
     var df = body.date_from || null; var dt = body.date_to || null;
 
     var inv = await fetchAll(function () {
@@ -113,6 +117,8 @@ export async function POST(req) {
     var products = {}; var customers = {}; var custProd = {};
     var shippingRevenue = 0; var shippingLines = 0; var productRevenue = 0; var itemCount = 0; var poundsTotal = 0; var noUnitLines = 0;
     var usdInvoiceSet = {};
+    var invAgg = {}; // v55.83-UD (Max, Nov 18: "click on an invoice by the customer — each shipment — to see it")
+    function ia(id) { return invAgg[id] || (invAgg[id] = { product: 0, shipping: 0, pounds: 0 }); }
     items.forEach(function (it) {
       var parent = invById[it.invoice_id];
       if (!parent || usdIds[it.invoice_id] !== true) { return; } // USD tables only; non-USD reported separately
@@ -134,6 +140,7 @@ export async function POST(req) {
         if (!customers[cid]) { customers[cid] = { customer: cname, revenue: 0, qty: 0, shipping: 0, invSet: {} }; }
         customers[cid].shipping = r2(customers[cid].shipping + amount);
         customers[cid].invSet[it.invoice_id] = true;
+        ia(it.invoice_id).shipping = r2(ia(it.invoice_id).shipping + amount);
         return;
       }
 
@@ -154,6 +161,7 @@ export async function POST(req) {
       customers[cid].revenue = r2(customers[cid].revenue + amount);
       customers[cid].qty = r2(customers[cid].qty + qty);
       customers[cid].invSet[it.invoice_id] = true;
+      ia(it.invoice_id).product = r2(ia(it.invoice_id).product + amount); if (lb !== null) { ia(it.invoice_id).pounds += lb; }
 
       var ck = cid + '||' + pkey;
       if (!custProd[ck]) { custProd[ck] = { customer: cname, product: plabel, qty: 0, revenue: 0, pounds: 0, poundsMissing: false }; }
@@ -177,7 +185,10 @@ export async function POST(req) {
     })).sort(function (a, b) { return b.revenue - a.revenue; });
     var customerRows = Object.keys(customers).map(function (k) {
       var c = customers[k];
-      return { customer: c.customer, revenue: c.revenue, qty: c.qty, shipping: c.shipping, invoices: Object.keys(c.invSet).length };
+      // each invoice (shipment) of this customer, newest first — the screen opens it on a click
+      var list = Object.keys(c.invSet).map(function (iid) { var iv = invById[iid] || {}; var ag = invAgg[iid] || { product: 0, shipping: 0, pounds: 0 }; return { id: iid, invoice_number: iv.invoice_number || null, invoice_date: iv.invoice_date || null, product: ag.product, shipping: ag.shipping, pounds: Math.round(ag.pounds), total: Number(iv.total_amount) || 0 }; })
+        .sort(function (a, b) { return String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')); });
+      return { customer: c.customer, revenue: c.revenue, qty: c.qty, shipping: c.shipping, invoices: Object.keys(c.invSet).length, invoice_list: list.slice(0, 200) };
     }).sort(function (a, b) { return b.revenue - a.revenue; });
     var custProdRows = withAvg(Object.keys(custProd).map(function (k) { return custProd[k]; }))
       .sort(function (a, b) { return b.revenue - a.revenue; }).slice(0, 2000);

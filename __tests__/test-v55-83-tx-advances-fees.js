@@ -76,7 +76,7 @@ check('SQL: additive only', !/drop table|delete from/i.test(sql));
 
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/advances/route.js'), 'utf8');
 check('route: verified signed-in person + "advances.manage" for every move', /verifiedCaller\(req, body, createClient\)/.test(route) && /'advances\.manage'/.test(route) && /MONEY\[action\] && !canMove/.test(route));
-check('route: refuses until the SQL is installed; money moved only by the database function', /hub_party_money_installed/.test(route) && /db\.rpc\('hub_party_money'/.test(route) && !/from\('party_money_entries'\)\.insert/.test(route) && !/from\('vendor_bill_payments'\)\.insert/.test(route));
+check('route: refuses until the SQL is installed; money moved only by the database function', /hub_party_money_installed/.test(route) && /(db\.rpc\(|rpcOnceMore\(db, )'hub_party_money'/.test(route) && !/from\('party_money_entries'\)\.insert/.test(route) && !/from\('vendor_bill_payments'\)\.insert/.test(route));
 check('route: private bank accounts (live TP) hidden from the payments list; the private-money rule (incl. splitting a private line) is enforced by the database inside the move', route.indexOf('dropPrivate(ln.data, scope)') >= 0 && route.indexOf('p_hidden_accounts: hiddenArr') >= 0 && fs.readFileSync(path.join(root, 'sql/v55-83-TX-advances-fees.sql'), 'utf8').indexOf('that bank line is in a private account') >= 0);
 check('route: a click id is required', /missing click id/.test(route));
 check('route: SWC-safe', route.indexOf('`') < 0 && !/=>/.test(route));
@@ -86,5 +86,41 @@ check('P&L: says so when advances cannot be read (never silently)', /advance_not
 var tab = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
 check('Bills screen: advance balances always visible', /<AdvancesPanel/.test(tab));
 
+// v55.83-UD (Codex 11:40) — a starting balance (money sent before the Hub, already booked then) is used FIRST and is never a new fee
+(function () {
+  var E = [
+    { id: 'o1', party: 'NextTrade Industries', bucket: 'advance', amount: 1000, kind: 'opening_balance', entry_date: '2026-10-01', created_at: '2026-11-18T10:00:00Z' },
+    { id: 's1', party: 'NextTrade Industries', bucket: 'advance', amount: 500, kind: 'payment_split', bank_transaction_id: 'L1', entry_date: '2026-11-05', created_at: '2026-11-05T10:00:00Z' },
+    { id: 'a1', party: 'NextTrade Industries', bucket: 'advance', amount: -800, kind: 'apply_to_bill', entry_date: '2026-11-10', created_at: '2026-11-10T10:00:00Z' },
+    { id: 'a2', party: 'NextTrade Industries', bucket: 'advance', amount: -400, kind: 'apply_to_bill', entry_date: '2026-11-12', created_at: '2026-11-12T10:00:00Z' },
+    { id: 'f1', party: 'NextTrade Industries', bucket: 'advance', amount: -100, kind: 'advance_to_fee', action_id: 'X', entry_date: '2026-11-13', created_at: '2026-11-13T10:00:00Z' },
+    { id: 'f2', party: 'NextTrade Industries', bucket: 'fee', amount: 100, kind: 'advance_to_fee', action_id: 'X', entry_date: '2026-11-13', created_at: '2026-11-13T10:00:00Z' }
+  ];
+  var adj = M.periodAdjustments(E, '2026-11-01', '2026-11-30', { L1: 'professional_fees' }, { L1: '2026-11-05' });
+  check('UD: starting balance $1,000 used first: $800 bill = none counted; $400 bill = $200 from it + $200 counted; the $100 fee counts in full', adj.used_from_opening === 1000 && adj.applied_to_bills === 200 && adj.fee_from_advance === 100 && adj.professional_fee_change === 300, adj);
+  var adjOct = M.periodAdjustments(E, '2026-10-01', '2026-10-31', {}, {});
+  check('UD: entering the starting balance itself changes nothing in the cash / tax view', adjOct.professional_fee_change === 0 && adjOct.advance_held === 0, adjOct);
+})();
+// v55.83-UD (Codex 12:20) — opening-funded money keeps that character through BOTH directions
+(function () {
+  var NT = 'NextTrade Industries';
+  function e(id, bucket, amount, kind, date, extra) { return Object.assign({ id: id, party: NT, bucket: bucket, amount: amount, kind: kind, entry_date: date, created_at: date + 'T10:00:00Z' }, extra || {}); }
+  function pair(id, kind, amt, date) { return kind === 'advance_to_fee' ? [e(id + 'a', 'advance', -amt, kind, date, { action_id: id }), e(id + 'f', 'fee', amt, kind, date, { action_id: id })] : [e(id + 'f', 'fee', -amt, kind, date, { action_id: id }), e(id + 'a', 'advance', amt, kind, date, { action_id: id })]; }
+  var rt = [e('o', 'advance', 1000, 'opening_balance', '2026-10-01')].concat(pair('x1', 'advance_to_fee', 100, '2026-11-02'), pair('x2', 'fee_to_advance', 100, '2026-11-03'), [e('ap', 'advance', -1000, 'apply_to_bill', '2026-11-04')]);
+  var a1 = M.periodAdjustments(rt, '2026-11-01', '2026-11-30', {}, {});
+  check('UD round trip (Codex case): $1,000 starting balance → $100 fee → back → $1,000 bill paid: the professional fee does not move at all', a1.professional_fee_change === 0 && a1.applied_to_bills === 0 && a1.fee_from_advance === 0 && a1.fee_back_to_advance === 0, a1);
+  var cp = [e('o', 'advance', 1000, 'opening_balance', '2026-10-01')].concat(pair('y1', 'advance_to_fee', 100, '2026-11-20'), pair('y2', 'fee_to_advance', 100, '2026-12-05'));
+  var nov = M.periodAdjustments(cp, '2026-11-01', '2026-11-30', {}, {}); var dec = M.periodAdjustments(cp, '2026-12-01', '2026-12-31', {}, {});
+  check('UD round trip across months: November 0 and December 0', nov.professional_fee_change === 0 && dec.professional_fee_change === 0, [nov, dec]);
+  var nf = [e('s', 'fee', 100, 'payment_split', '2026-11-01', { bank_transaction_id: 'L9' })].concat(pair('z1', 'fee_to_advance', 100, '2026-11-10'));
+  var a3 = M.periodAdjustments(nf, '2026-11-01', '2026-11-30', {}, { L9: '2026-11-01' });
+  check('UD a NEW fee (from a payment) turned back into advance still reverses the fee (−100)', a3.fee_back_to_advance === 100 && a3.professional_fee_change === -100, a3);
+  var mx = [e('o', 'advance', 1000, 'opening_balance', '2026-10-01'), e('s', 'advance', 500, 'payment_split', '2026-11-01', { bank_transaction_id: 'L8' })].concat(pair('m1', 'advance_to_fee', 1200, '2026-11-05'), pair('m2', 'fee_to_advance', 300, '2026-11-06'));
+  var a4 = M.periodAdjustments(mx, '2026-11-01', '2026-11-30', {}, { L8: '2026-11-01' });
+  check('UD mixed + partial: 1,200 to fee = 1,000 from the starting balance + 200 new (counted 200); 300 back = the 200 new first (−200) + 100 of the old (0) → net 0', a4.fee_from_advance === 200 && a4.fee_back_to_advance === 200 && a4.professional_fee_change === 0, a4);
+  var co = [e('o', 'advance', 1000, 'opening_balance', '2026-10-01'), e('c', 'advance', -400, 'opening_balance', '2026-10-02'), e('s', 'advance', 500, 'payment_split', '2026-11-01', { bank_transaction_id: 'L7' }), e('ap', 'advance', -800, 'apply_to_bill', '2026-11-04')];
+  var a5 = M.periodAdjustments(co, '2026-11-01', '2026-11-30', {}, { L7: '2026-11-01' });
+  check('UD correction: starting balance 1,000 − 400 = 600; an $800 bill = 600 old + 200 counted', a5.applied_to_bills === 200 && a5.professional_fee_change === 200, a5);
+})();
 console.log('\nTX advances: ' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

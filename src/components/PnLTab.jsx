@@ -5,6 +5,8 @@
 //   • P&L (pnl.view): revenue − cost per product and per invoice for a period
 //     (default June 1, 2026 →). Uncosted products are flagged amber, never
 //     guessed into the margin. Shipping stays out of COGS.
+// v55.83-UD (Max, Nov 18) — the numbers now come from the PROFITABILITY cost engine (costs from the purchase bills, CNF shipping
+//   taken out of the price), split CONFIRMED (bill costs + standard allowances) vs TENTATIVE (missing data, reasons shown). Typed costs fill gaps only.
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase'; // v55.83-TG
 
@@ -27,6 +29,7 @@ export default function PnLTab(props) {
   var s7 = useState({}); var draft = s7[0]; var setDraft = s7[1];
   var s8 = useState(null); var histOpen = s8[0]; var setHistOpen = s8[1];
   var s9 = useState(false); var showCosts = s9[0]; var setShowCosts = s9[1];
+  var s10 = useState('all'); var mode = s10[0]; var setMode = s10[1]; // v55.83-UD: all / confirmed / tentative
 
   function iso(d) { return d.toISOString().substring(0, 10); }
   function agoDays(n) { var d = new Date(); d.setDate(d.getDate() - n); return iso(d); }
@@ -82,7 +85,6 @@ export default function PnLTab(props) {
   if (!canView && !canEditCosts) {
     return <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 font-bold">Restricted — the P&L needs the "P&L: View" permission (Settings → Module Access).</div>;
   }
-  var tt = rep && rep.totals;
   var th = { background: '#0f172a', color: '#fff' };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-3">
@@ -141,73 +143,101 @@ export default function PnLTab(props) {
       )}
 
       {busy && !rep && <div className="text-xs text-slate-500 p-2">Computing the P&amp;L…</div>}
-      {tt && (
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-2">
-          <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Revenue (USD)</div><div className="text-lg font-black">{fmt(tt.revenue)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: '#fee2e2', color: '#450a0a' }}><div className="text-[10px] font-bold">COGS</div><div className="text-lg font-black">{fmt(tt.cogs)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: tt.gross_profit >= 0 ? '#dcfce7' : '#fee2e2', color: tt.gross_profit >= 0 ? '#052e16' : '#450a0a' }}><div className="text-[10px] font-bold">Gross profit</div><div className="text-lg font-black">{tt.gross_profit === undefined ? '🔒 hidden' : fmt(tt.gross_profit)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Margin</div><div className="text-lg font-black">{tt.margin_pct === undefined ? '🔒 hidden' : tt.margin_pct != null ? tt.margin_pct + '%' : '—'}</div><div className="text-[9px]">on costed revenue</div></div>
-          <div className="rounded-lg p-2" style={{ background: '#e0f2fe', color: '#0c2a5e' }}><div className="text-[10px] font-bold">Shipping (separate)</div><div className="text-lg font-black">{fmt(tt.shipping_revenue)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: tt.uncosted_revenue ? '#ffedd5' : '#dcfce7', color: tt.uncosted_revenue ? '#431407' : '#052e16' }}><div className="text-[10px] font-bold">Uncosted revenue</div><div className="text-lg font-black">{fmt(tt.uncosted_revenue)}</div><div className="text-[9px]">{tt.uncosted_lines} line(s) missing a cost</div></div>
+      {rep && rep.views && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+          {[['confirmed', '✅ Confirmed', 'bill costs + the standard allowances (inbound per lb, $200 bonded); actual shipping bill; every weight and basis known', '#dcfce7', '#052e16'], ['tentative', '🟡 Tentative (missing data)', 'something is missing or an estimate / typed cost was used', '#fef9c3', '#422006'], ['all', 'All', 'confirmed + tentative', '#f1f5f9', '#0f172a']].map(function (m) {
+            var t0 = rep.views[m[0]].totals; var on = mode === m[0];
+            return <button key={m[0]} onClick={function () { setMode(m[0]); }} className="rounded-lg p-2 text-left" style={{ background: m[3], color: m[4], border: on ? '2px solid #0f172a' : '2px solid transparent' }}>
+              <div className="text-[11px] font-extrabold">{m[1]}{on ? ' ◂ showing' : ''}</div>
+              <div className="text-[11px]">Revenue <b>{fmt(t0.revenue)}</b> · COGS <b>{fmt(t0.cogs)}</b></div>
+              <div className="text-[11px]">Profit <b>{t0.gross_profit === undefined ? '🔒' : fmt(t0.gross_profit)}</b> · Margin <b>{t0.margin_pct === undefined ? '🔒' : t0.margin_pct != null ? t0.margin_pct + '%' : '—'}</b> · {t0.lines} sale line(s)</div>
+              <div className="text-[9px] mt-0.5">{m[2]}</div>
+            </button>;
+          })}
         </div>
       )}
-      {rep && rep.uncosted_products && rep.uncosted_products.length > 0 && (
-        <div className="text-[11px] font-bold p-2 rounded mb-3" style={{ background: '#ffedd5', color: '#431407' }}>
-          ⚠️ Not in the margin until costed: {rep.uncosted_products.slice(0, 8).map(function (u) { return u.product + ' (' + fmt(u.revenue) + ')'; }).join(' · ')}{rep.uncosted_products.length > 8 ? ' · +' + (rep.uncosted_products.length - 8) + ' more' : ''} — open 💲 Product costs and enter them with the right effective date.
-        </div>
-      )}
-
-      {rep && (
-        <div className="mb-3">
-          <div className="text-[12px] font-extrabold text-slate-800 mb-1">🧵 P&amp;L by product</div>
-          <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 340 }}>
-            <table className="w-full text-[11px]">
-              <thead><tr>{['Product', 'Qty', 'Revenue', 'Avg price', 'Avg cost', 'COGS', 'Profit', 'Margin'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
-              <tbody>{(rep.products || []).map(function (p, i) {
-                return (
-                  <tr key={p.product + i} className="border-t border-slate-200" style={{ background: p.uncosted_revenue ? '#fff7ed' : (i % 2 ? '#f8fafc' : '#fff'), color: '#0f172a' }}>
-                    <td className="px-2 py-1 font-bold">{p.product}{p.uncosted_revenue ? ' ⚠️' : ''}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(p.qty)}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(p.revenue)}</td>
-                    <td className="px-2 py-1 text-right font-mono">{p.avg_sale_price != null ? fmt(p.avg_sale_price) : '—'}</td>
-                    <td className="px-2 py-1 text-right font-mono">{p.avg_cost != null ? fmt(p.avg_cost) : '—'}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(p.cogs)}</td>
-                    <td className={'px-2 py-1 text-right font-mono font-black ' + (p.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{p.profit === undefined ? '🔒' : fmt(p.profit)}</td>
-                    <td className="px-2 py-1 text-right font-bold">{p.margin_pct === undefined ? '🔒' : p.margin_pct != null ? p.margin_pct + '%' : '—'}</td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
+      {rep && rep.views && <div className="flex gap-1 items-center mb-2"><span className="text-[10px] font-bold text-slate-600">Show:</span>{[['all', 'All'], ['confirmed', '✅ Confirmed'], ['tentative', '🟡 Tentative']].map(function (m) { return <button key={m[0]} onClick={function () { setMode(m[0]); }} className="px-2 py-0.5 rounded text-[10px] font-extrabold" style={mode === m[0] ? { background: '#0f172a', color: '#fff' } : { background: '#f1f5f9', color: '#334155' }}>{m[1]}</button>; })}</div>}
+      {(function () {
+        var v = rep ? (rep.views ? rep.views[mode] : rep) : null;
+        if (!v) { return null; }
+        var tt = v.totals;
+        function badge(r) {
+          if (!r.status) { return null; }
+          var st = r.status === 'confirmed' ? { t: '✅ confirmed', bg: '#dcfce7', fg: '#065f46' } : r.status === 'partly' ? { t: '◐ partly confirmed', bg: '#fef9c3', fg: '#713f12' } : { t: '🟡 tentative', bg: '#fef3c7', fg: '#92400e' };
+          var why = (r.reasons || []).map(function (x) { return x.why + ' (' + x.sales + ')'; }).join(' · ');
+          var allw = (r.allowances || []).map(function (x) { return x.what; }).join(' · ');
+          return <span><span className="ml-1 px-1 py-0.5 rounded text-[9px] font-extrabold" style={{ background: st.bg, color: st.fg }} title={(why ? why + ' · ' : '') + (allw ? 'includes ' + allw : '')}>{st.t}</span>{allw && r.status === 'confirmed' ? <div className="text-[9px] font-normal" style={{ color: '#475569' }}>includes {allw}</div> : null}{why && r.status !== 'confirmed' ? <div className="text-[9px] font-normal" style={{ color: '#92400e' }}>missing: {why}</div> : null}</span>;
+        }
+        return <div>
+          {tt && (
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-2">
+              <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Revenue (USD, goods{rep.views ? ' — CNF shipping taken out' : ''})</div><div className="text-lg font-black">{fmt(tt.revenue)}</div></div>
+              <div className="rounded-lg p-2" style={{ background: '#fee2e2', color: '#450a0a' }}><div className="text-[10px] font-bold">COGS</div><div className="text-lg font-black">{fmt(tt.cogs)}</div>{rep.views && <div className="text-[9px]">goods + commission + inbound + brokerage + bonded</div>}</div>
+              <div className="rounded-lg p-2" style={{ background: tt.gross_profit >= 0 ? '#dcfce7' : '#fee2e2', color: tt.gross_profit >= 0 ? '#052e16' : '#450a0a' }}><div className="text-[10px] font-bold">Gross profit</div><div className="text-lg font-black">{tt.gross_profit === undefined ? '🔒 hidden' : fmt(tt.gross_profit)}</div></div>
+              <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Margin</div><div className="text-lg font-black">{tt.margin_pct === undefined ? '🔒 hidden' : tt.margin_pct != null ? tt.margin_pct + '%' : '—'}</div><div className="text-[9px]">on costed revenue</div></div>
+              <div className="rounded-lg p-2" style={{ background: '#e0f2fe', color: '#0c2a5e' }}><div className="text-[10px] font-bold">Shipping (separate)</div><div className="text-lg font-black">{fmt(tt.shipping_revenue)}</div>{tt.shipping_cost != null && <div className="text-[9px]">charged · our shipping cost {fmt(tt.shipping_cost)}</div>}</div>
+              <div className="rounded-lg p-2" style={{ background: tt.uncosted_revenue ? '#ffedd5' : '#dcfce7', color: tt.uncosted_revenue ? '#431407' : '#052e16' }}><div className="text-[10px] font-bold">Uncosted revenue</div><div className="text-lg font-black">{fmt(tt.uncosted_revenue)}</div><div className="text-[9px]">{tt.uncosted_lines} line(s) missing a cost</div></div>
+            </div>
+          )}
+          {mode === 'all' && rep.uncosted_products && rep.uncosted_products.length > 0 && (
+            <div className="text-[11px] font-bold p-2 rounded mb-3" style={{ background: '#ffedd5', color: '#431407' }}>
+              ⚠️ Not in the margin until costed: {rep.uncosted_products.slice(0, 8).map(function (u) { return u.product + ' (' + fmt(u.revenue) + (u.reason && rep.views ? ' — ' + u.reason : '') + ')'; }).join(' · ')}{rep.uncosted_products.length > 8 ? ' · +' + (rep.uncosted_products.length - 8) + ' more' : ''} — {rep.views ? 'link its supplier bills in 📊 Profitability (product groups), or' : 'open'} 💲 Product costs and enter them with the right effective date.
+            </div>
+          )}
+          {rep.bills_note && <div className="text-[11px] p-2 rounded mb-2" style={{ background: '#fef2f2', color: '#991b1b' }}>{rep.bills_note}</div>}
+          <div className="mb-3">
+            <div className="text-[12px] font-extrabold text-slate-800 mb-1">🧵 P&amp;L by product</div>
+            <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 380 }}>
+              <table className="w-full text-[11px]">
+                <thead><tr>{['Product', 'Qty', 'Lbs', 'Revenue', 'Avg price', 'Avg price / lb', 'Avg cost', 'Avg cost / lb', 'COGS', 'Profit', 'Margin'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
+                <tbody>{(v.products || []).map(function (p, i) {
+                  var nm = p.label || p.product;
+                  return (
+                    <tr key={nm + i} className="border-t border-slate-200" style={{ background: p.uncosted_revenue ? '#fff7ed' : (p.status && p.status !== 'confirmed' ? '#fefce8' : (i % 2 ? '#f8fafc' : '#fff')), color: '#0f172a' }}>
+                      <td className="px-2 py-1 font-bold">{nm}{p.uncosted_revenue ? ' ⚠️' : ''}{badge(p)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(p.qty)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{p.pounds != null ? fmt(p.pounds) : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(p.revenue)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{(p.avg_price != null ? p.avg_price : p.avg_sale_price) != null ? fmt(p.avg_price != null ? p.avg_price : p.avg_sale_price) : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{p.avg_price_per_lb != null ? Number(p.avg_price_per_lb).toFixed(4) : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{p.avg_cost != null ? fmt(p.avg_cost) : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{p.avg_cost_per_lb != null ? Number(p.avg_cost_per_lb).toFixed(4) : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(p.cogs)}</td>
+                      <td className={'px-2 py-1 text-right font-mono font-black ' + (p.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{p.profit === undefined ? '🔒' : fmt(p.profit)}</td>
+                      <td className="px-2 py-1 text-right font-bold">{p.margin_pct === undefined ? '🔒' : p.margin_pct != null ? p.margin_pct + '%' : '—'}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
-
-      {rep && (
-        <div>
-          <div className="text-[12px] font-extrabold text-slate-800 mb-1">🧾 P&amp;L by invoice</div>
-          <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 420 }}>
-            <table className="w-full text-[11px]">
-              <thead><tr>{['Invoice', 'Customer', 'Date', 'Revenue', 'COGS', 'Profit', 'Margin', 'Shipping', 'Uncosted'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
-              <tbody>{(rep.invoices || []).map(function (b, i) {
-                return (
-                  <tr key={b.invoice + i} className="border-t border-slate-200" style={{ background: b.uncosted_revenue ? '#fff7ed' : (i % 2 ? '#f8fafc' : '#fff'), color: '#0f172a' }}>
-                    <td className="px-2 py-1 font-bold font-mono">{b.invoice}</td>
-                    <td className="px-2 py-1 truncate">{b.customer}</td>
-                    <td className="px-2 py-1">{b.invoice_date || '—'}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(b.revenue)}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(b.cogs)}</td>
-                    <td className={'px-2 py-1 text-right font-mono font-black ' + (b.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{b.profit === undefined ? '🔒' : fmt(b.profit)}</td>
-                    <td className="px-2 py-1 text-right font-bold">{b.margin_pct === undefined ? '🔒' : b.margin_pct != null ? b.margin_pct + '%' : '—'}</td>
-                    <td className="px-2 py-1 text-right font-mono">{fmt(b.shipping)}</td>
-                    <td className="px-2 py-1 text-right font-mono">{b.uncosted_revenue ? fmt(b.uncosted_revenue) : ''}</td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
+          <div>
+            <div className="text-[12px] font-extrabold text-slate-800 mb-1">🧾 P&amp;L by invoice</div>
+            <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 420 }}>
+              <table className="w-full text-[11px]">
+                <thead><tr>{['Invoice', 'Customer', 'Date', 'Revenue', 'COGS', 'Profit', 'Margin', 'Shipping', 'Uncosted'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
+                <tbody>{(v.invoices || []).map(function (b, i) {
+                  var no = b.label || b.invoice;
+                  return (
+                    <tr key={no + i} className="border-t border-slate-200" style={{ background: b.uncosted_revenue ? '#fff7ed' : (b.status && b.status !== 'confirmed' ? '#fefce8' : (i % 2 ? '#f8fafc' : '#fff')), color: '#0f172a' }}>
+                      <td className="px-2 py-1 font-bold font-mono">{no}{badge(b)}</td>
+                      <td className="px-2 py-1 truncate">{b.customer}</td>
+                      <td className="px-2 py-1">{b.invoice_date || '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(b.revenue)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(b.cogs)}</td>
+                      <td className={'px-2 py-1 text-right font-mono font-black ' + (b.profit < 0 ? 'text-rose-700' : 'text-emerald-700')}>{b.profit === undefined ? '🔒' : fmt(b.profit)}</td>
+                      <td className="px-2 py-1 text-right font-bold">{b.margin_pct === undefined ? '🔒' : b.margin_pct != null ? b.margin_pct + '%' : '—'}</td>
+                      <td className="px-2 py-1 text-right font-mono">{fmt(b.shipping_charged != null ? b.shipping_charged : b.shipping)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{b.uncosted_revenue ? fmt(b.uncosted_revenue) : ''}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">{rep.source}</div>
           </div>
-          <div className="text-[10px] text-slate-500 mt-1">{rep.source}</div>
-        </div>
-      )}
+        </div>;
+      })()}
     </div>
   );
 }

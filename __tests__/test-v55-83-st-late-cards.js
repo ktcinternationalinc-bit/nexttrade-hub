@@ -32,6 +32,7 @@ check('B1 (pin): the screen uses that helper; TOTAL OVERDUE asks for all four la
 check('B2 (pin): a tap on a late card scrolls to its rows (they open inside the “Late & upcoming” strip further down)', /fcRef\.current\.scrollIntoView/.test(BH) && /ref=\{fcRef\}/.test(BH));
 check('B3 (pin): up to 300 rows shown, and it says the Σ still covers all of them', /var shown = all\.slice\(0, 300\);/.test(BH) && /the Σ above still covers all of them/.test(BH));
 var wn = R('src/components/WhatsNewWidget.jsx');
-check('B4 (pin): What’s New has v55.83-ST with one technical line; badge at ST', /version: 'v55\.83-ST'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-ST'"), wn.indexOf("version: 'v55.83-SS'"))) && />v55\.83-(?:S[T-Z]|T[A-Z])<\/span>/.test(R('src/app/page.jsx'))); // v55.83-SU realign: ST or later
+check('B4 (pin): What’s New has v55.83-ST with one technical line; badge at ST', /version: 'v55\.83-ST'/.test(wn) && /superAdminOnly: true/.test(wn.substring(wn.indexOf("version: 'v55.83-ST'"), wn.indexOf("version: 'v55.83-SS'"))) && />v55\.83-(?:S[T-Z]|[T-Z][A-Z])<\/span>/.test(R('src/app/page.jsx'))); // v55.83-SU realign: ST or later
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);
+// v55.83-UB realign: badge letters now run past T (UA, UB …) — the badge checks accept T–Z

@@ -12,15 +12,23 @@
 // • Non-USD invoices are excluded from the USD P&L and listed separately.
 // • TWO special permissions: pnl.edit_costs to enter/change costs,
 //   pnl.view to see the P&L (super admin passes both automatically).
+// v55.83-UD (Max, Nov 18) — 'report' now runs on the PROFITABILITY cost engine (costs from the purchase bills, merged names,
+//   pounds, CNF shipping taken out of the price) and splits every sale into CONFIRMED (bill costs + standard allowances) or TENTATIVE (missing data,
+//   with the reasons). A cost typed here (product_costs) is used only where the engine has none — and makes that sale tentative.
+//   'report_typed' is the older view on typed costs only (kept, unchanged).
 import { NextResponse } from 'next/server';
+import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server'; // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
 import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
 import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { createClient } from '@supabase/supabase-js';
 import { normalizeProductKey, pickCost, groupCosts } from '../../../../lib/product-cost';
 import { businessOfInvoice } from '../../../../lib/business-of';
+import { loadProfitabilityInput } from '../../../../lib/profitability-load-server'; // v55.83-UD — the same data as Profitability
+import { assembleProfitability } from '../../../../lib/profitability-assemble'; // v55.83-UD — the same cost engine
+import { buildConfirmedPnl } from '../../../../lib/pnl-confirmed'; // v55.83-UD — confirmed vs tentative
 
-var API_BUILD_MARKER = 'v55.83-OO-pnl';
+var API_BUILD_MARKER = 'v55.83-UD-pnl';
 var PAGE = 1000; var MAX_ROWS = 20000;
 
 function admin() {
@@ -82,6 +90,10 @@ export async function POST(req) {
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     if (!pv || pv.ok !== true) { return NextResponse.json({ error: 'This needs the "P&L: View" permission — grant it in Settings → Module Access.' }, { status: 403 }); }
 
+    // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
+    var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return NextResponse.json({ error: vwin.error }, { status: 503 }); }
+    body.date_from = clampFrom(body.date_from, vwin.floor);
+
     var costRowsAll = await fetchAll(function () { return db.from('product_costs').select('id, product_key, product_label, cost_per_unit, effective_from, notes, created_at').order('effective_from', { ascending: false }); });
     var costsByKey = groupCosts(costRowsAll);
 
@@ -95,20 +107,45 @@ export async function POST(req) {
         var kL = normalizeProductKey(nameL);
         if (!seen[kL]) { seen[kL] = nameL; }
       });
+      // v55.83-UD (Codex 12:15 / 12:30) — the same history-window rule for EVERY product row: the cost in effect now is shown; only
+      // changes dated inside the window are listed; an earlier start date shows as 'before <first day>'.
+      function costRow(label, k, extra) {
+        var all = (costsByKey[k] || []).slice().sort(function (a, b) { return a.effective_from < b.effective_from ? 1 : -1; });
+        var since = all.length ? all[0].effective_from : null; var histW = all;
+        if (vwin.floor) { histW = all.filter(function (h) { return String(h.effective_from || '') >= vwin.floor; }); if (since && String(since) < vwin.floor) { since = 'before ' + vwin.floor; } }
+        return Object.assign({ product: label, product_key: k, current_cost: all.length ? all[0].cost_per_unit : null, current_since: since, history: histW }, extra || {});
+      }
       var productsOut = Object.keys(seen).map(function (k) {
-        var hist = (costsByKey[k] || []).slice().sort(function (a, b) { return a.effective_from < b.effective_from ? 1 : -1; });
-        return { product: seen[k], product_key: k, current_cost: hist.length ? hist[0].cost_per_unit : null, current_since: hist.length ? hist[0].effective_from : null, history: hist };
+        return costRow(seen[k], k);
+        // v55.83-UD — an employee with a history window sees the cost in effect now, and only the changes made inside the window
       }).sort(function (a, b) { return a.product.localeCompare(b.product); });
       // Costs entered for products not (yet) seen on any invoice still show.
       Object.keys(costsByKey).forEach(function (k) {
         if (seen[k]) { return; }
-        var hist2 = costsByKey[k].slice().sort(function (a, b) { return a.effective_from < b.effective_from ? 1 : -1; });
-        productsOut.push({ product: hist2[0].product_label || k, product_key: k, current_cost: hist2[0].cost_per_unit, current_since: hist2[0].effective_from, history: hist2, not_on_invoices: true });
+        var top2 = costsByKey[k].slice().sort(function (a, b) { return a.effective_from < b.effective_from ? 1 : -1; })[0];
+        productsOut.push(costRow(top2.product_label || k, k, { not_on_invoices: true }));
       });
       return NextResponse.json({ ok: true, products: productsOut, api_build_marker: API_BUILD_MARKER });
     }
 
     if (action === 'report') {
+      var ld = await loadProfitabilityInput(db);
+      if (ld.setup_needed) { return NextResponse.json({ error: 'The P&L uses the Profitability set-up: run sql/v55-83-SY-profitability.sql in Supabase once.' }, { status: 409 }); }
+      var eng = assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null }, ld.input));
+      var metas = {}; (eng.by_invoice || []).forEach(function (r) { if (r.invoice) { metas[r.key] = r.invoice; } });
+      var views = buildConfirmedPnl({ cells: eng.cells || [], invoiceMeta: metas, costsByKey: costsByKey, pickCost: pickCost, normalizeProductKey: normalizeProductKey });
+      var trim = function (v) { return { totals: v.totals, products: v.products.slice(0, 500), invoices: v.invoices.slice(0, 800) }; }
+      var uncP = views.all.products.filter(function (r) { return r.uncosted_revenue > 0; }).map(function (r) { return { product: r.label, revenue: r.uncosted_revenue, reason: (r.reasons.filter(function (x) { return x.why.indexOf('no cost') === 0; })[0] || { why: 'no cost' }).why }; });
+      var seeE = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginE = !!(seeE && seeE.ok === true);
+      var outE = { ok: true, engine: 'profitability', can_see_margin: marginE, period: eng.period || null,
+        views: { all: trim(views.all), confirmed: trim(views.confirmed), tentative: trim(views.tentative) },
+        totals: views.all.totals, uncosted_products: uncP, bills_note: ld.billsNote, warehouse_note: ld.whNote,
+        source: 'Profitability cost engine: costs from the purchase bills (+ commission, inbound allowance, brokerage, bonded); CNF shipping taken out of the price; a P&L-typed cost only where no bill cost exists · CONFIRMED = bill costs + the standard allowances (inbound per lb, $200 bonded per Houston container), no estimate or missing data; TENTATIVE = something missing or estimated · margin on COSTED revenue only',
+        api_build_marker: API_BUILD_MARKER };
+      return NextResponse.json(marginE ? outE : stripProfit(outE));
+    }
+
+    if (action === 'report_typed') {
       var df = body.date_from || null; var dt = body.date_to || null;
       var inv = await fetchAll(function () {
         var q = db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, record_status, currency, source, wave_invoice_id, wave_business_id').order('invoice_date', { ascending: false });

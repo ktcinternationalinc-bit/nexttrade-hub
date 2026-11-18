@@ -12,6 +12,8 @@
 // It NEVER writes to an invoice, a bill, inventory or the ledger.
 // Permissions: pnl.view to see it, pnl.edit_costs to change the set-up (super admin passes both).
 import { NextResponse } from 'next/server';
+import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-server';
+import { projectForWindow } from '../../../../lib/profitability-window'; // v55.83-UD: no bill records older than the window // v55.83-UD: employees see only their history window
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
@@ -21,6 +23,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-TG
 import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibility'; // v55.83-TG
 import { nameKey, relKey, PRICING_BASES } from '../../../../lib/profitability';
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
+import { loadProfitabilityInput } from '../../../../lib/profitability-load-server'; // v55.83-UD — shared with the P&L
 
 var API_BUILD_MARKER = 'v55.83-SY-profitability';
 var PAGE = 1000; var MAX_ROWS = 40000;
@@ -56,68 +59,20 @@ export async function POST(req) {
     var pv = await assertPermission(db, userId, 'pnl.view', req);
     if (!pv || pv.ok !== true) { return bad('This needs the "P&L: View" permission — grant it in Settings → Module Access.', 403); }
 
+    // v55.83-UD (Codex 12:00 P1) — employees see ONLY the permitted history window; super admin sees all-time. Fails closed.
+    var vwin = await windowFloorFor(db, pv.ctx); if (vwin.error) { return bad(vwin.error, 503); }
+    body.date_from = clampFrom(body.date_from, vwin.floor);
+
     if (action === 'report') {
-      var setup;
-      try {
-        setup = {
-          groups: await fetchAll(function () { return db.from('pl_product_groups').select('id, display_name, active, created_at'); }),
-          groupNames: await fetchAll(function () { return db.from('pl_group_names').select('id, group_id, source, name_key, raw_name, active'); }),
-          nameUnits: await fetchAll(function () { return db.from('pl_name_units').select('name_key, raw_name, unit'); }),
-          lineUnits: await fetchAll(function () { return db.from('pl_line_units').select('invoice_item_id, unit'); }),
-          factors: await fetchAll(function () { return db.from('pl_unit_factors').select('unit, pounds_per_unit, note'); }),
-          terms: await fetchAll(function () { return db.from('pl_invoice_terms').select('invoice_id, basis, embedded_transport'); }),
-          lineReleasePounds: await fetchAll(function () { return db.from('pl_line_release_pounds').select('invoice_item_id, release_key, pounds'); }),
-          estimates: await fetchAll(function () { return db.from('pl_release_estimates').select('release_key, outbound_estimate, note'); })
-        };
-        // v55.83-TG — the shipping terms chosen on the invoice (same row; works before the new columns exist)
-        try { setup.terms = await fetchAll(function () { return db.from('pl_invoice_terms').select('invoice_id, basis, embedded_transport, shipping_terms, shipping_cost_estimate'); }); setup.shipping_terms_ready = true; }
-        catch (eST) { setup.shipping_terms_ready = false; }
-        // v55.83-TD — a person's "shipping charge / product" marks (the report still runs before this table exists)
-        try { setup.nameKinds = await fetchAll(function () { return db.from('pl_name_kinds').select('name_key, raw_name, kind'); }); setup.kinds_ready = true; }
-        catch (eK) { if (!missingTable(eK && eK.message)) { throw eK; } setup.nameKinds = []; setup.kinds_ready = false; }
-        // v55.83-TE — customers' usual pricing basis (the report still runs before this table exists)
-        try { setup.customerTerms = await fetchAll(function () { return db.from('pl_customer_terms').select('customer_id, customer_name, basis'); }); setup.customer_terms_ready = true; }
-        catch (eCT) { if (!missingTable(eCT && eCT.message)) { throw eCT; } setup.customerTerms = []; setup.customer_terms_ready = false; }
-        // v55.83-TE — costs typed by hand (the report still runs before these tables exist)
-        try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note'); }); setup.manual_costs_ready = true; }
-        catch (eMC) { if (!missingTable(eMC && eMC.message)) { throw eMC; } setup.lineCosts = []; setup.groupCosts = []; setup.manual_costs_ready = false; }
-        // v55.83-TL — trucking / freight typed per release (the report still runs before this table exists)
-        try { setup.partEstimates = await fetchAll(function () { return db.from('pl_release_part_estimates').select('release_key, part, amount, note'); }); setup.part_estimates_ready = true; }
-        catch (ePE) { if (!missingTable(ePE && ePE.message)) { throw ePE; } setup.partEstimates = []; setup.part_estimates_ready = false; }
-      } catch (eS) {
-        if (missingTable(eS && eS.message)) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
-        throw eS;
-      }
-      var inv = await fetchAll(function () {
-        return db.from('accounting_invoices').select('id, invoice_number, accounting_customer_id, invoice_date, total_amount, record_status, currency, source, wave_invoice_id, wave_business_id, release_number').order('invoice_date', { ascending: false });
-      });
-      var custNames = {}; var custTag = {};
-      try {
-        var cs = await fetchAll(function () { return db.from('accounting_customers').select('id, company_name, contact_name, business_tag'); });
-        cs.forEach(function (c) { custNames[c.id] = c.company_name || c.contact_name || ''; if (c.business_tag) { custTag[c.id] = c.business_tag; } });
-      } catch (eC) { /* names only */ }
-      inv = inv.filter(function (i) { return businessOfInvoice(i, custTag) === 'US'; });
-      var items = await fetchAll(function () { return db.from('accounting_invoice_items').select('id, invoice_id, description, quantity, unit_price, wave_product_name'); });
-      var bills = []; var billLines = []; var billsNote = null;
-      try {
-        bills = await fetchAll(function () { return db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, record_status, bill_type, shipment_direction, release_number'); });
-        billLines = await fetchAll(function () { return db.from('vendor_bill_lines').select('id, bill_id, line_kind, description, qty, unit, unit_price, amount, cost_amount, commission_amount'); });
-      } catch (eB) { billsNote = 'The bills could not be read (' + ((eB && eB.message) || 'error') + ') — every cost shows as missing.'; }
-      // v55.83-TG — shipping costs synced from the Nextrade warehouse: always shown on Containers, used in the numbers only when the switch is on
-      var whRows = []; var whOn = false; var whNote = null;
-      try {
-        // v55.83-TJ (Max, Nov 17: "use the estimate in the Nextrade warehouse system ... until we get the verified value from the actual
-        // bill and flag if there are any differences") — always used; no switch. A Hub bill always replaces it; differences are flagged.
-        whOn = true;
-        var whA = await db.from('pl_warehouse_settings').select('value').eq('key', 'active_source').maybeSingle(); if (whA.error) { throw new Error(whA.error.message); }
-        var whSource = whA.data ? whA.data.value : 'nextrade-staging';
-        whRows = await fetchAll(function () { return db.from('pl_warehouse_shipping').select('id, section, order_id, release_number, release_key, status, superseded, conflict, cost_status, freight_used, freight_kind, trucking_used, trucking_kind, freight_estimate, freight_final, trucking_estimate, trucking_final, manual_freight, manual_trucking, combined_used, bill_checks, flags, source_link').eq('source', whSource).eq('superseded', false).eq('in_latest_feed', true); });
-      } catch (eW) { whRows = []; whOn = false; whNote = /pl_warehouse/.test(String(eW && eW.message)) ? 'Warehouse shipping costs are not set up yet (sql/v55-83-TG-warehouse-shipping.sql).' : 'Warehouse shipping costs could not be read (' + ((eW && eW.message) || 'error') + ') — the report runs without them.'; }
-      var out = assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null, invoices: inv, items: items, customerNames: custNames, bills: bills, billLines: billLines, windowDays: 90, warehouseRows: whRows, warehouseOn: whOn }, setup));
+      // v55.83-UD — the data is loaded by the shared loader (the P&L uses the very same one), unchanged from before
+      var ld = await loadProfitabilityInput(db);
+      if (ld.setup_needed) { return NextResponse.json({ ok: true, setup_needed: true, setup_message: SQL_HINT, api_build_marker: API_BUILD_MARKER }); }
+      var billsNote = ld.billsNote; var whNote = ld.whNote;
+      var out = projectForWindow(assembleProfitability(Object.assign({ date_from: body.date_from || null, date_to: body.date_to || null }, ld.input)), vwin.floor);
       var canEdit = await assertPermission(db, userId, 'pnl.edit_costs', req);
       // v55.83-TG (Max) — profit / margin only for people with 'P&L: See profit & margin' (super admin always)
       var seeM = await assertPermission(db, userId, MARGIN_PERMISSION, req); var marginOk = !!(seeM && seeM.ok === true);
-      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
+      return NextResponse.json(Object.assign({ ok: true, can_edit: !!(canEdit && canEdit.ok === true), can_see_margin: marginOk, bills_note: billsNote, warehouse_note: whNote, window_floor: vwin.floor, api_build_marker: API_BUILD_MARKER }, marginOk ? out : stripProfit(out)));
     }
 
     // ── everything below changes the REPORT SET-UP only ──

@@ -4,6 +4,7 @@
 // revenue, AVERAGE PRICE per product, shipping separated. Click a customer to
 // see exactly which products they bought and at what average price.
 import React, { useState, useEffect } from 'react';
+import InvoicePeek from './InvoicePeek'; // v55.83-UD — click an invoice (shipment) of a customer to see it
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -16,6 +17,7 @@ export default function SalesReportTab(props) {
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var s5 = useState('Jun 1 →'); var preset = s5[0]; var setPreset = s5[1];
   var s6 = useState(null); var openCust = s6[0]; var setOpenCust = s6[1];
+  var s6p = useState(null); var peekId = s6p[0]; var setPeekId = s6p[1];
   var s7 = useState(null); var openProd = s7[0]; var setOpenProd = s7[1]; // v55.83-TE — open a merged product to see its names
 
   function iso(d) { return d.toISOString().substring(0, 10); }
@@ -89,7 +91,7 @@ export default function SalesReportTab(props) {
             <button onClick={function () { csvOf(data.products, ['product', 'pounds', 'revenue', 'avg_price_per_lb', 'invoices'], 'sales-by-product.csv'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
           </div>
           <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 340 }}>
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[11px] nt-solid-head">
               <thead><tr>{['Product', 'Pounds (lb)', 'Revenue', 'Avg $ / lb', 'Invoices'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
               <tbody>{(data.products || []).map(function (p, i) {
                 var po = openProd === p.product + i; var hasNames = p.grouped && (p.names || []).length > 0;
@@ -124,7 +126,7 @@ export default function SalesReportTab(props) {
             <button onClick={function () { csvOf(data.customers, ['customer', 'revenue', 'qty', 'shipping', 'invoices'], 'sales-by-customer.csv'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
           </div>
           <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 420 }}>
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[11px] nt-solid-head">
               <thead><tr>{['Customer', 'Product revenue', 'Qty', 'Shipping', 'Invoices'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
               <tbody>{(data.customers || []).map(function (c, i) {
                 var open = openCust === c.customer;
@@ -149,12 +151,26 @@ export default function SalesReportTab(props) {
                       </tr>
                     );
                   });
+                  // v55.83-UD — each invoice (shipment): click to see it
+                  rows.push(<tr key={c.customer + '::invh'} style={{ background: '#e0f2fe', color: '#0c2a5e' }}><td colSpan={5} className="px-2 py-1 pl-6 text-[10px] font-extrabold">Invoices (each shipment) — click one to see it</td></tr>);
+                  (c.invoice_list || []).forEach(function (iv) {
+                    rows.push(
+                      <tr key={c.customer + '::inv::' + iv.id} onClick={function () { setPeekId(iv.id); }} className="border-t border-slate-100 cursor-pointer hover:bg-sky-100" style={{ background: '#ffffff', color: '#0c2a5e' }}>
+                        <td className="px-2 py-1 pl-6"><span className="underline font-bold" style={{ color: '#1d4ed8' }}>{iv.invoice_number || 'invoice'}</span> <span className="text-slate-500">{iv.invoice_date || ''}</span></td>
+                        <td className="px-2 py-1 text-right font-mono">{fmt(iv.product)}</td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-500">{iv.pounds ? Number(iv.pounds).toLocaleString('en-US') + ' lb' : ''}</td>
+                        <td className="px-2 py-1 text-right font-mono">{fmt(iv.shipping)}</td>
+                        <td className="px-2 py-1 text-right text-[10px] font-bold" style={{ color: '#1d4ed8' }}>open ▸</td>
+                      </tr>
+                    );
+                  });
                 }
                 return rows;
               })}</tbody>
             </table>
           </div>
           <div className="text-[10px] text-slate-500 mt-1">{data.source}</div>
+          {peekId && <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} />}
         </div>
       )}
     </div>

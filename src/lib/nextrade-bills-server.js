@@ -26,7 +26,10 @@ function addDays(s, n) { var d = dayNo(s); return d === null ? null : new Date((
 export function wantsBill(line, cat) {
   if (!line || !cat) { return false; }
   if (line.direction !== 'out') { return false; }           // money in (refund, money from KTC) never makes a bill
-  if (cat.is_payroll === true) { return false; }            // payroll → the repeating "Warehouse staff" bill
+  // v55.83-UD (Max, Nov 18: "warehouse staff is also a bill KTC has to pay") — a category can say "KTC pays this" or not;
+  // when it says nothing (null) the old rule stands. Must match hub_company_categorize (sql/v55-83-UD-pay-nextrade.sql).
+  if (typeof cat.makes_ktc_bill === 'boolean') { return cat.makes_ktc_bill; }
+  if (cat.is_payroll === true) { return false; }            // payroll (old rule) → no bill
   return isExpenseKind(cat.kind);
 }
 
@@ -99,6 +102,9 @@ export async function prepareCategorize(db, line, cat, ctx) {
   // the new bill (used only if nothing is attached and the line has no bill yet) — duplicate check first, like every way
   // a bill enters the Hub
   var row = nextradeBillRow(line, c.ktcCategory, payload.party, c.actorId, c.accountLabel);
+  // v55.83-UD (Codex 11:40) — a payroll line never carries a name onto the KTC side: the KTC bill says "Warehouse staff" only (as the
+  // Nextrade screens do), and no description from the bank line goes into its notes.
+  if (cat && cat.is_payroll === true) { row.vendor_name = 'Warehouse staff (Nextrade payroll)'; row.notes = ('Created from Nextrade — warehouse staff payroll, ' + String(line.date).substring(0, 10) + (c.ktcCategory ? '' : ' · needs a KTC category: set it in Accounting → 🟦 Nextrade → Category mapping')).substring(0, 900); }
   var all = await db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, release_number, other_reference, bill_type, record_status').eq('vendor_name', row.vendor_name);
   if (all.error) { return { ok: false, error: 'Could not run the duplicate check (' + all.error.message + ') — nothing changed.' }; }
   var dup = checkOne({ vendor_name: row.vendor_name, bill_number: row.bill_number, bill_date: row.bill_date, total_amount: row.total_amount }, all.data || [], {});

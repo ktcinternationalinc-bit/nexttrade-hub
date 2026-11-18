@@ -266,20 +266,23 @@ export default function ProfitabilityTab(props) {
   function prefixOf(c) { var m0 = String(c.release_raw || '').match(/^\s*(\d{4})\s*-/); return m0 ? m0[1] : ''; }
   function periodView() {
     var cells = (data.cells || []).filter(function (c) { var p0 = prefixOf(c); return pPre === 'all' || (pPre === 'other' ? ['1001', '1002', '1003'].indexOf(p0) < 0 : p0 === pPre); });
-    var F = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit'];
+    var F = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
     var hidden = cells.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
     function add(row, c) {
       row.lines++; row.pounds += Number(c.pounds) || 0;
       var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
       var v = { goods_revenue: c.goods_revenue, goods_cost: gc.some(function (x) { return x === null || x === undefined; }) ? null : gc.reduce(function (s0, x) { return s0 + Number(x); }, 0), goods_profit: c.goods_profit,
-        transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit };
+        transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
       F.forEach(function (f) { if (v[f] === null || v[f] === undefined) { row.miss[f] = (row.miss[f] || 0) + 1; } else { row[f] += Math.round(Number(v[f]) * 100); } });
       if (!c.complete) { row.incomplete++; }
+      if (c.uncounted_lines) { row.uncounted++; }
     }
-    function blank(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, miss: {} }; F.forEach(function (f) { r[f] = 0; }); return r; }
+    // v55.83-UD — total profit is ALWAYS goods profit + transport profit (each over the lines whose costs are known)
+    function settle(r) { r.profit = r.goods_profit + r.transport_profit; return r; }
+    function blank(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, miss: {} }; F.forEach(function (f) { r[f] = 0; }); return r; }
     var by = {}; var tot = blank('total', 'Total');
     cells.forEach(function (c) { var b = bucketOf(c.invoice_date, pGran); var r = by[b.key] || (by[b.key] = blank(b.key, b.label)); add(r, c); add(tot, c); });
-    var rows = Object.keys(by).sort().map(function (k) { return by[k]; });
+    var rows = Object.keys(by).sort().map(function (k) { return settle(by[k]); }); settle(tot);
     function cell(r, f, isProfit) {
       if (isProfit && hidden) { return '🔒'; }
       var v = r[f] / 100; var miss = r.miss[f] || 0;
@@ -287,8 +290,8 @@ export default function ProfitabilityTab(props) {
     }
     function pct(a, b) { return hidden ? '🔒' : (b ? (Math.round(a / b * 1000) / 10) + '%' : '—'); }
     function csv() {
-      var head = ['Period', 'Lines', 'Pounds', 'Goods revenue', 'Goods cost (goods + commission + inbound + bonded)', 'Goods profit', 'Goods margin %', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit', 'Lines not complete'];
-      var lines = [head].concat(rows.concat([tot]).map(function (r) { return [r.label, r.lines, Math.round(r.pounds), r.goods_revenue / 100, r.goods_cost / 100, hidden ? '' : r.goods_profit / 100, hidden ? '' : (r.goods_revenue ? Math.round(r.goods_profit / r.goods_revenue * 1000) / 10 : ''), r.transport_revenue / 100, r.trucking_cost / 100, r.freight_cost / 100, hidden ? '' : r.transport_profit / 100, hidden ? '' : r.profit / 100, r.incomplete]; }));
+      var head = ['Period', 'Lines', 'Pounds', 'Goods revenue', 'Goods cost (goods + commission + inbound + bonded)', 'Goods profit', 'Goods margin %', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit (goods + transport)', 'Revenue not counted (cost unknown)', 'Lines not complete'];
+      var lines = [head].concat(rows.concat([tot]).map(function (r) { return [r.label, r.lines, Math.round(r.pounds), r.goods_revenue / 100, r.goods_cost / 100, hidden ? '' : r.goods_profit / 100, hidden ? '' : (r.goods_revenue ? Math.round(r.goods_profit / r.goods_revenue * 1000) / 10 : ''), r.transport_revenue / 100, r.trucking_cost / 100, r.freight_cost / 100, hidden ? '' : r.transport_profit / 100, hidden ? '' : r.profit / 100, r.uncounted_revenue / 100, r.incomplete]; }));
       var text = lines.map(function (l) { return l.map(function (x) { var t0 = String(x === null || x === undefined ? '' : x); return /[",\n]/.test(t0) ? '"' + t0.replace(/"/g, '""') + '"' : t0; }).join(','); }).join('\n');
       var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'pnl-by-' + pGran + '-' + (pPre === 'all' ? 'all' : pPre) + '-' + (from || 'start') + '-to-' + (to || 'today') + '.csv'; a.click();
     }
@@ -326,13 +329,13 @@ export default function ProfitabilityTab(props) {
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'trucking_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'freight_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.transport_profit >= 0 ? '#065f46' : '#7f1d1d' }}>{cell(r, 'transport_profit', true)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.profit >= 0 ? '#065f46' : '#7f1d1d' }}>{cell(r, 'profit', true)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.profit >= 0 ? '#065f46' : '#7f1d1d' }}>{hidden ? '🔒' : <span>{(r.profit < 0 ? '−$' : '$') + fmt(Math.abs(r.profit / 100))}{r.uncounted > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.uncounted + ' line(s) / $' + fmt(r.uncounted_revenue / 100) + ' revenue not counted until their cost is known'}</div>}</span>}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{r.lines}{r.incomplete > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.incomplete + ' not complete'}</div>}</td>
             </tr>; })}
             {rows.length === 0 && <tr><td colSpan={13} className="px-3 py-4 text-center" style={{ color: SUB }}>No sales in these dates for these releases.</td></tr>}</tbody>
         </table>
       </div>
-      <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight. “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
+      <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight. Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
     </div>;
   }
   function estFinalView() {
@@ -632,7 +635,7 @@ export default function ProfitabilityTab(props) {
 
     {tt && <div>
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-2">
-        {[['Goods revenue', money(tt, 'goods_revenue'), '#dcfce7', '#052e16'], ['Transport charged', money(tt, 'transport_revenue'), '#e0f2fe', '#0c2a5e'], ['Goods cost', money(tt, 'base_cost'), '#fee2e2', '#7f1d1d'], ['Commission', money(tt, 'commission'), '#fee2e2', '#7f1d1d'], ['Inbound allowance', money(tt, 'inbound_allowance'), '#ffedd5', '#431407'], ['Outbound transport', money(tt, 'outbound_cost'), '#fee2e2', '#7f1d1d'], [tt.complete ? 'Profit' : 'Profit (known part only)', pf(tt.profit), tt.complete ? '#d1fae5' : '#fef3c7', tt.complete ? '#065f46' : '#78350f']].map(function (k) {
+        {[['Goods revenue', money(tt, 'goods_revenue'), '#dcfce7', '#052e16'], ['Transport charged', money(tt, 'transport_revenue'), '#e0f2fe', '#0c2a5e'], ['Goods cost', money(tt, 'base_cost'), '#fee2e2', '#7f1d1d'], ['Commission', money(tt, 'commission'), '#fee2e2', '#7f1d1d'], ['Inbound allowance', money(tt, 'inbound_allowance'), '#ffedd5', '#431407'], ['Outbound transport', money(tt, 'outbound_cost'), '#fee2e2', '#7f1d1d'], [tt.complete ? 'Profit (goods + transport)' : 'Profit (goods + transport, known lines only)' + (tt.uncounted_lines ? ' — ' + tt.uncounted_lines + ' line(s) / $' + fmt(tt.uncounted_revenue) + ' revenue not counted until their cost is known' : ''), pf(tt.profit), tt.complete ? '#d1fae5' : '#fef3c7', tt.complete ? '#065f46' : '#78350f']].map(function (k) {
           return <div key={k[0]} className="rounded-lg p-2" style={{ background: k[2], color: k[3] }}><div className="text-[10px] font-bold">{k[0]}</div><div className="text-[15px] font-black">{k[1]}</div></div>; })}
       </div>
       <div className="flex gap-2 items-center flex-wrap mb-2 text-[11px]">

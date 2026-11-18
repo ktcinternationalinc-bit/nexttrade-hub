@@ -6,7 +6,7 @@ CREATE TABLE public.wave_business_registry (wave_business_id text PRIMARY KEY, l
 CREATE TABLE public.paid_through_parties (name text PRIMARY KEY, kind text, provider_from date);
 INSERT INTO public.paid_through_parties VALUES ('NextTrade Industries', 'affiliate', '2026-11-15'), ('RTM Capital', 'service_provider', null);
 CREATE TABLE public.bank_transactions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), wave_business_id text, account_id text, direction text,
-  amount_abs numeric, date date, name text, merchant_name text, pending boolean DEFAULT false, third_party_payer text, classification text, review_status text);
+  amount_abs numeric, date date, posted_date date, name text, merchant_name text, pending boolean DEFAULT false, third_party_payer text, classification text, review_status text);
 CREATE TABLE public.vendor_bills (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), wave_business_id text, vendor_name text NOT NULL, bill_number text,
   bill_date date NOT NULL, due_date date, currency text NOT NULL DEFAULT 'USD', total_amount numeric NOT NULL CHECK (total_amount > 0), category text,
   notes text, record_status text NOT NULL DEFAULT 'active', paid_via text, created_by uuid, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
@@ -20,3 +20,6 @@ CREATE TABLE public.wire_package_lines (id uuid PRIMARY KEY DEFAULT gen_random_u
 CREATE TABLE public.wire_packages (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bank_transaction_id uuid, fee_amount numeric, status text);
 CREATE TABLE public.hub_audit_log (id bigserial PRIMARY KEY, actor_id uuid, action text, entity text, entity_id text, details jsonb, created_at timestamptz DEFAULT now());
 CREATE TABLE public.order_alerts (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+ALTER TABLE public.bank_transactions ADD COLUMN transfer_group_id uuid;
+CREATE TABLE public.plaid_accounts (plaid_account_id text PRIMARY KEY, name text, mask text, type text, wave_business_id text);
+ALTER TABLE public.plaid_accounts ADD COLUMN is_private boolean NOT NULL DEFAULT false;

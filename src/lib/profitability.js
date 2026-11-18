@@ -366,8 +366,6 @@ export function buildCells(input) {
     if (c.cost_method === 'assumed_earliest') { c.flags.push('cost_assumed_before_first_purchase'); c.cost_first_purchase = cost.first_purchase || null; }
     if (c.outbound_kind === 'unknown') { c.flags.push('outbound_bill_missing'); }
     if (c.outbound_kind === 'estimate') { c.flags.push('outbound_estimate'); }
-    var known = cents(c.goods_revenue) + cents(c.transport_revenue) - cents(c.base_cost) - cents(c.commission) - cents(c.inbound_allowance) - cents(c.outbound_cost) - cents(c.brokerage) - cents(c.bonded);
-    c.profit = money(known);
     // "Do not label a margin complete while required costs remain missing."
     c.complete = c.base_cost !== null && c.commission !== null && c.pounds !== null && c.pounds > 0 && c.outbound_kind === 'actual' && c.outbound_cost !== null &&
       c.goods_revenue !== null && c.transport_revenue !== null && c.brokerage !== null && c.bonded !== null && c.goods_price_confirmed && !!c.release &&
@@ -375,12 +373,20 @@ export function buildCells(input) {
     c.transport_profit = c.outbound_cost === null ? null : r2(c.transport_revenue - c.outbound_cost);
     c.goods_profit = (c.goods_revenue === null || c.base_cost === null || c.commission === null || c.inbound_allowance === null || c.brokerage === null || c.bonded === null) ? null
       : r2(c.goods_revenue - c.base_cost - c.commission - c.inbound_allowance - c.brokerage - c.bonded); // v55.83-TK
+    // v55.83-UD (Max, Nov 18: "why is the total profit more than goods profit and then we have a loss on transport") — profit is
+    // goods profit + transport profit, each counted only when its costs are known. Before, the revenue of a line with an unknown
+    // cost was counted as profit. The revenue NOT counted yet is kept separately so the screen can say so.
+    c.goods_profit_counted = c.goods_profit === null ? 0 : c.goods_profit;
+    c.transport_profit_counted = c.transport_profit === null ? 0 : c.transport_profit;
+    c.profit = money(cents(c.goods_profit_counted) + cents(c.transport_profit_counted));
+    c.uncounted_revenue = r2((c.goods_profit === null ? Number(c.goods_revenue) || 0 : 0) + (c.transport_profit === null ? Number(c.transport_revenue) || 0 : 0));
+    c.uncounted_lines = c.goods_profit === null || c.transport_profit === null ? 1 : 0;
   });
   return { cells: cells, flags: flags, unallocated: unallocated };
 }
 
 // Sum cells by any key. Averages are ALWAYS total ÷ total pounds — never an average of averages.
-var SUM_FIELDS = ['invoiced', 'goods_revenue', 'transport_revenue', 'base_cost', 'commission', 'inbound_allowance', 'outbound_cost', 'brokerage', 'bonded', 'profit', 'trucking_cost', 'freight_cost'];
+var SUM_FIELDS = ['invoiced', 'goods_revenue', 'transport_revenue', 'base_cost', 'commission', 'inbound_allowance', 'outbound_cost', 'brokerage', 'bonded', 'profit', 'trucking_cost', 'freight_cost', 'goods_profit_counted', 'transport_profit_counted', 'uncounted_revenue', 'uncounted_lines'];
 export function summarize(cells, keyFn, labelFn) {
   var map = {}; var order = [];
   (cells || []).forEach(function (c) {
@@ -411,9 +417,11 @@ export function summarize(cells, keyFn, labelFn) {
     // Goods profit = goods revenue − total cost. Transport profit = transport charged − outbound shipping. Profit = the two together.
     row.total_cost = r2(row.base_cost + row.commission + row.inbound_allowance + row.brokerage + row.bonded);
     row.total_cost_known = !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance && !row.unknown.brokerage && !row.unknown.bonded;
-    row.goods_profit = r2(row.goods_revenue - row.total_cost);
+    // v55.83-UD — goods profit and transport profit are the sums of the lines whose costs are known; profit = the two together
+    row.goods_profit = row.goods_profit_counted;
     row.goods_profit_known = row.total_cost_known && !row.unknown.goods_revenue;
-    row.transport_profit = row.unknown.outbound_cost ? null : r2(row.transport_revenue - row.outbound_cost);
+    row.transport_profit = row.transport_profit_counted; row.transport_profit_known = !row.unknown.outbound_cost;
+    row.uncounted_lines = Math.round(row.uncounted_lines);
     row.invoice_count = Object.keys(row.invoices).length; row.release_list = Object.keys(row.releases).sort(); row.name_list = Object.keys(row.names).sort();
     delete row.invoices; delete row.releases; delete row.names;
     row.unknown_fields = Object.keys(row.unknown); delete row.unknown;

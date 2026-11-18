@@ -61,6 +61,7 @@ export default function BillsTab(props) {
   var s20 = useState('due'); var sortBy = s20[0]; var setSortBy = s20[1];
   var s21 = useState(null); var panel = s21[0]; var setPanel = s21[1]; // 'rules' | 'reports'
   var s22 = useState(''); var priceF = s22[0]; var setPriceF = s22[1];
+  var s22v = useState(''); var valF = s22v[0]; var setValF = s22v[1]; // v55.83-UB: validated / not validated
   // v55.83-RU (Max, Nov 9 21:48: "please save entries when we validate even if we have not yet fully validated. such as just
   // entering the type or the direction") — every entry in the validation panel is saved as it is made
   var s23 = useState(''); var vSaved = s23[0]; var setVSaved = s23[1];
@@ -305,6 +306,7 @@ export default function BillsTab(props) {
     if (typeF && (typeF === 'none' ? !!b.bill_type : b.bill_type !== typeF)) { return false; }
     if (dirF && (dirF === 'none' ? !!b.shipment_direction : b.shipment_direction !== dirF)) { return false; }
     if (priceF && (b.price_check_status || 'not_checked') !== priceF) { return false; }
+    if (valF && (valF === 'validated' ? b.validation_status !== 'validated' : b.validation_status === 'validated')) { return false; }
     return true;
   });
   var TYPE_ORDER = { trucking: 1, shipping: 2, bonded_brokerage: 3, supplier: 4 };
@@ -472,10 +474,12 @@ export default function BillsTab(props) {
         <option value="">inbound + outbound</option><option value="inbound">⬅ Inbound</option><option value="outbound">Outbound ➡</option><option value="none">❔ direction not set</option></select>
       <select className={inp} value={priceF} onChange={function (e) { setPriceF(e.target.value); }} title="Hub price check">
         <option value="">any price check</option><option value="flagged">⚠ price flagged</option><option value="ok">✅ prices OK</option><option value="no_rules">— no rule</option><option value="not_checked">not checked</option></select>
+      <select className={inp} value={valF} onChange={function (e) { setValF(e.target.value); }} title="Validated or not">
+        <option value="">validated + not validated</option><option value="validated">✓ Validated</option><option value="not_validated">Not validated</option></select>
       <span className="text-[10px] font-bold ml-2" style={{ color: '#475569' }}>Sort:</span>
       <select className={inp} value={sortBy} onChange={function (e) { setSortBy(e.target.value); }}>
         <option value="due">due date</option><option value="type">type of bill</option><option value="direction">inbound / outbound</option><option value="vendor">vendor</option><option value="newest">newest bill date</option><option value="amount">largest amount</option></select>
-      {(typeF || dirF || priceF || sortBy !== 'due') && <button onClick={function () { setTypeF(''); setDirF(''); setPriceF(''); setSortBy('due'); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear</button>}
+      {(typeF || dirF || priceF || valF || sortBy !== 'due') && <button onClick={function () { setTypeF(''); setDirF(''); setPriceF(''); setValF(''); setSortBy('due'); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear</button>}
       <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length + ' bill(s)'}</span>
     </div>
     {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}

@@ -13,13 +13,17 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { verifiedCaller } from '../../../../lib/verified-caller';
 import { audit } from '../../../../lib/audit-server';
 import { companyByKey, COMPANY_KINDS, categoryKey, bestCompanyRule, companyTotals, normMatch, NEXTRADE_COMPANY_ID } from '../../../../lib/companies';
-import { categorizeLine, partyName } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
+import { categorizeLine, partyName, wantsBill } from '../../../../lib/nextrade-bills-server'; // v55.83-TW (Codex P1-2): one database function, all or nothing
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
+import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
+import { loadBankAccounts } from '../../../../lib/duplicates-server';
+var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
+var SQL_MISSING_UB = 'Transfers and category directions need one database update first: run sql/v55-83-UB-company-transfers.sql in Supabase (SQL Editor).';
 
 var API_BUILD_MARKER = 'v55.83-TW-company-books';
 export const maxDuration = 60;
 var SQL_MISSING = 'Nextrade and RTM books need one database update first: run sql/v55-83-TW-company-books.sql in Supabase (SQL Editor).';
-var LINE_COLS = 'id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, pending, review_status, wave_business_id, company_category, company_category_source, company_category_at';
+var LINE_COLS = 'id, date, posted_date, amount_abs, direction, account_id, name, merchant_name, pending, review_status, wave_business_id, company_category, company_category_source, company_category_at, transfer_group_id';
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function missingRel(e) { return /does not exist|schema cache|Could not find the table|company_category/i.test(String((e && e.message) || '')); }
@@ -40,7 +44,9 @@ async function pageLines(db, companyId, from, to) {
   return { data: out, capped: true };
 }
 async function loadCats(db, companyId) {
-  var r = await db.from('company_categories').select('id, key, label, kind, is_payroll, active, sort').eq('company_id', companyId).order('sort').order('label');
+  var r = await db.from('company_categories').select('id, key, label, kind, is_payroll, active, sort, direction, makes_ktc_bill').eq('company_id', companyId).order('sort').order('label');
+  if (r.error && /makes_ktc_bill/.test(String(r.error.message || ''))) { r = await db.from('company_categories').select('id, key, label, kind, is_payroll, active, sort, direction').eq('company_id', companyId).order('sort').order('label'); if (!r.error) { (r.data || []).forEach(function (c) { c.makes_ktc_bill = null; }); } }
+  if (r.error && /direction/.test(String(r.error.message || ''))) { r = await db.from('company_categories').select('id, key, label, kind, is_payroll, active, sort').eq('company_id', companyId).order('sort').order('label'); if (!r.error) { (r.data || []).forEach(function (c) { c.direction = 'any'; }); } }
   return r;
 }
 
@@ -77,14 +83,15 @@ export async function POST(req) {
         (lq.data || []).forEach(function (l) { lines[l.id] = l; });
         (pq.data || []).forEach(function (p) { if (p.voided !== true) { paid[p.bill_id] = (paid[p.bill_id] || 0) + (Number(p.amount) || 0); } });
       }
-      var rowsNb = links.map(function (l) { var ln0 = lines[l.source_bank_transaction_id] || null; if (ln0 && isPrivateRow(ln0, scope)) { ln0 = { date: ln0.date, name: '(private account)' }; } return { link: l, bill: bills[l.bill_id] || null, line: ln0, paid: Math.round((paid[l.bill_id] || 0) * 100) / 100 }; });
+      var catsNb = await loadCats(db, NEXTRADE_COMPANY_ID); var payKeys = {}; ((catsNb && catsNb.data) || []).forEach(function (c) { if (c.is_payroll) { payKeys[c.key] = true; } }); // UD: payroll shows as Warehouse staff — no names
+      var rowsNb = links.map(function (l) { var ln0 = lines[l.source_bank_transaction_id] || null; if (ln0 && isPrivateRow(ln0, scope)) { ln0 = { date: ln0.date, name: '(private account)' }; } else if (ln0 && payKeys[l.category_key]) { ln0 = { date: ln0.date, name: 'Warehouse staff', amount_abs: ln0.amount_abs, account_id: ln0.account_id }; } return { link: l, bill: bills[l.bill_id] || null, line: ln0, paid: Math.round((paid[l.bill_id] || 0) * 100) / 100 }; });
       var gTotN = await assertPermission(db, userId, 'accounting.view_totals', req); // the 'still owed' sum is a sensitive total (Codex P1-1)
       return NextResponse.json({ ok: true, rows: rowsNb, can_totals: !!(gTotN && gTotN.ok === true), api_build_marker: API_BUILD_MARKER });
     }
 
     var comp = companyByKey(body.company);
     if (!comp) { return fail('Say which company: Nextrade or RTM.'); }
-    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1 };
+    var WRITES = { set_category: 1, save_category: 1, category_active: 1, save_rule: 1, rule_active: 1, apply_rules: 1, save_mapping: 1, pair_transfer: 1, unpair_transfer: 1, make_missing_bills: 1 };
     var g = await assertPermission(db, userId, WRITES[action] ? comp.managePerm : comp.viewPerm, req);
     if ((!g || g.ok !== true) && !WRITES[action]) { g = await assertPermission(db, userId, comp.managePerm, req); }
     if (!g || g.ok !== true) { return fail('This needs the "' + comp.label + (WRITES[action] ? ': Manage' : ': View') + '" permission — ask the super admin to grant it in Settings.', 403); }
@@ -116,20 +123,28 @@ export async function POST(req) {
       var kind = String(p.kind || 'expense');
       if (!COMPANY_KINDS[kind]) { return fail('Pick what kind of category it is.'); }
       var row = { label: label, kind: kind, is_payroll: p.is_payroll === true && kind === 'expense', sort: Math.max(0, Math.min(999, Number(p.sort) || 100)), updated_by: userId, updated_at: new Date().toISOString() };
+      // v55.83-UB (Max: 'add categories on the fly and give it a direction') — money in, money out, or both
+      var dirC = String(p.direction || 'any'); if (dirC !== 'in' && dirC !== 'out') { dirC = 'any'; } row.direction = dirC;
+      // v55.83-UD — Nextrade only: "KTC pays this (make a KTC bill)": true / false, or null = the usual rule (expenses yes, payroll no)
+      if (comp.key === 'nextrade' && Object.prototype.hasOwnProperty.call(p, 'makes_ktc_bill')) { row.makes_ktc_bill = p.makes_ktc_bill === true ? true : p.makes_ktc_bill === false ? false : null; }
       if (p.id) {
         var cu = await db.from('company_categories').select('id, key, kind, is_payroll, label').eq('id', p.id).eq('company_id', cid).maybeSingle();
         if (cu.error) { return readFail('the category', cu.error); }
         if (!cu.data) { return fail('Category not found in ' + comp.label + '.', 404); }
         var u = await db.from('company_categories').update(row).eq('id', p.id).eq('company_id', cid).select('id');
+        if (u.error && /makes_ktc_bill/.test(String(u.error.message || ''))) { return fail(SQL_MISSING_UD, 409); }
+        if (u.error && /direction/.test(String(u.error.message || ''))) { return fail(SQL_MISSING_UB, 409); }
         if (u.error) { return fail('Not saved (' + u.error.message + ').', 500); }
-        await audit(db, userId, 'company_category_edited', 'company_category', p.id, { company: comp.label, from: { label: cu.data.label, kind: cu.data.kind, is_payroll: cu.data.is_payroll }, to: { label: row.label, kind: row.kind, is_payroll: row.is_payroll } });
+        await audit(db, userId, 'company_category_edited', 'company_category', p.id, { company: comp.label, from: { label: cu.data.label, kind: cu.data.kind, is_payroll: cu.data.is_payroll }, to: { label: row.label, kind: row.kind, is_payroll: row.is_payroll, makes_ktc_bill: row.makes_ktc_bill } });
         // lines already in this category keep it; their KTC bills follow the new kind the next time each is categorized
-        return NextResponse.json({ ok: true, id: p.id, note: (cu.data.kind !== row.kind || cu.data.is_payroll !== row.is_payroll) && comp.key === 'nextrade' ? 'Lines already in this category keep their KTC bills as they are; re-pick the category on a line to update its bill.' : undefined });
+        return NextResponse.json({ ok: true, id: p.id, note: (cu.data.kind !== row.kind || cu.data.is_payroll !== row.is_payroll || row.makes_ktc_bill !== undefined) && comp.key === 'nextrade' ? 'Lines already in this category keep their KTC bills as they are — use "Make the missing KTC bills" (Nextrade → Transactions) or re-pick the category on a line.' : undefined });
       }
       var key = categoryKey(label);
       if (!key) { return fail('Use letters or numbers in the name.'); }
       row.key = key; row.company_id = cid; row.created_by = userId; row.active = true;
       var ci = await db.from('company_categories').insert(row).select('id').maybeSingle();
+      if (ci.error && /makes_ktc_bill/.test(String(ci.error.message || ''))) { return fail(SQL_MISSING_UD, 409); }
+      if (ci.error && /direction/.test(String(ci.error.message || ''))) { return fail(SQL_MISSING_UB, 409); }
       if (ci.error) { return fail(ci.error.code === '23505' ? comp.label + ' already has a category called that.' : missingRel(ci.error) ? SQL_MISSING : 'Not saved (' + ci.error.message + ').', ci.error.code === '23505' ? 409 : 500); }
       await audit(db, userId, 'company_category_created', 'company_category', ci.data.id, { company: comp.label, key: key, label: label, kind: kind, is_payroll: row.is_payroll });
       return NextResponse.json({ ok: true, id: ci.data.id, key: key });
@@ -204,7 +219,16 @@ export async function POST(req) {
       }
       var acR = await db.from('plaid_accounts').select('plaid_account_id, name, mask, type').eq('wave_business_id', cid);
       var accts = {}; ((acR && acR.data) || []).forEach(function (a) { accts[a.plaid_account_id] = a; });
-      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null }); }), categories: catsL.data || [], capped: !!pl.capped });
+      // v55.83-UB — the other leg of each paired transfer (it may be outside the dates shown)
+      var gids = []; linesOut.forEach(function (l) { if (l.transfer_group_id && gids.indexOf(l.transfer_group_id) < 0) { gids.push(l.transfer_group_id); } });
+      var legs = {};
+      for (var gi = 0; gi < gids.length; gi += 200) {
+        var lq = await db.from('bank_transactions').select('id, date, account_id, transfer_group_id, direction').in('transfer_group_id', gids.slice(gi, gi + 200));
+        if (lq.error) { return readFail('the transfer pairs', lq.error); }
+        (lq.data || []).forEach(function (x) { (legs[x.transfer_group_id] = legs[x.transfer_group_id] || []).push(x); });
+      }
+      function otherLeg(l) { if (!l.transfer_group_id) { return null; } var o = (legs[l.transfer_group_id] || []).filter(function (x) { return x.id !== l.id; })[0]; if (!o) { return null; } if (isPrivateRow(o, scope)) { return { private: true }; } var oa = accts[o.account_id] || {}; return { id: o.id, date: o.date, account_label: (oa.name || 'account') + (oa.mask ? ' ••' + oa.mask : '') }; } // (Codex 22:50) a private partner leg: nothing about it is returned
+      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped });
     }
 
     // the KTC side needs: the party name and the Nextrade → KTC category mapping
@@ -224,6 +248,41 @@ export async function POST(req) {
       var res = await categorizeLine(db, line, cat, { actorId: userId, source: source, ktcCategory: cat && nctx ? nctx.map[cat.key] || null : null, party: nctx ? nctx.party : null, accountLabel: label });
       if (!res.ok) { return { id: line.id, ok: false, error: res.error }; }
       return { id: line.id, ok: true, ktc: comp.key === 'nextrade' ? res : undefined };
+    }
+
+    // v55.83-UD — earlier Nextrade lines whose category (now) says KTC pays it, but that have no KTC bill yet (e.g. warehouse
+    // staff payroll categorized before UD). missing_bills lists them; make_missing_bills runs the SAME categorize step on each
+    // (one database function per line — one bill per line ever; nothing else changes). Private lines are left out.
+    async function missingBillLines() {
+      var cm = await loadCats(db, cid); if (cm.error) { return { error: cm.error }; }
+      var billCats = {}; (cm.data || []).forEach(function (c) { if (c.active && wantsBill({ direction: 'out' }, c)) { billCats[c.key] = c; } });
+      var keys = Object.keys(billCats); if (!keys.length) { return { lines: [], cats: billCats }; }
+      var out = [];
+      for (var mp = 0; mp < 30; mp++) {
+        var mr = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).eq('direction', 'out').in('company_category', keys)
+          .or('review_status.is.null,review_status.neq.duplicate').order('date', { ascending: true }).order('id', { ascending: true }).range(mp * 1000, mp * 1000 + 999);
+        if (mr.error) { return { error: mr.error }; }
+        out = out.concat(mr.data || []); if (!mr.data || mr.data.length < 1000) { break; }
+      }
+      var have = {};
+      for (var mi = 0; mi < out.length; mi += 200) {
+        var lkM = await db.from('company_bill_links').select('source_bank_transaction_id, status').in('source_bank_transaction_id', out.slice(mi, mi + 200).map(function (l) { return l.id; })).eq('status', 'active');
+        if (lkM.error) { return { error: lkM.error }; }
+        (lkM.data || []).forEach(function (x) { have[x.source_bank_transaction_id] = true; });
+      }
+      return { lines: dropPrivate(out.filter(function (l) { return !have[l.id] && !l.pending; }), scope), cats: billCats };
+    }
+    if (action === 'missing_bills' || action === 'make_missing_bills') {
+      if (comp.key !== 'nextrade') { return fail('Only Nextrade lines make KTC bills.'); }
+      var mb = await missingBillLines(); if (mb.error) { return readFail('the lines without a KTC bill', mb.error); }
+      if (action === 'missing_bills') { return NextResponse.json({ ok: true, count: mb.lines.length, lines: mb.lines.slice(0, 50).map(function (l) { return { id: l.id, date: l.date, amount: l.amount_abs, category: l.company_category, name: mb.cats[l.company_category] && mb.cats[l.company_category].is_payroll ? 'Warehouse staff' : (l.merchant_name || l.name) }; }) }); }
+      var instM = await db.rpc('hub_company_books_installed'); if (instM.error || instM.data !== true) { return fail(SQL_MISSING, 409); }
+      var nctxM = await nextradeCtx(); if (nctxM.error) { return readFail('the category mapping', nctxM.error); }
+      var doM = mb.lines.slice(0, 100); var resM = [];
+      for (var mj = 0; mj < doM.length; mj++) { resM.push(await categorize(doM[mj], mb.cats[doM[mj].company_category], 'manual', nctxM)); }
+      var badM = resM.filter(function (r) { return !r.ok; });
+      await audit(db, userId, 'nextrade_missing_bills_made', 'company', cid, { tried: doM.length, made: doM.length - badM.length, failed: badM.length });
+      return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
     }
 
     var WRITES_CAT = { set_category: 1, apply_rules: 1 };
@@ -308,6 +367,54 @@ export async function POST(req) {
       if (catsK.error || mpK.error || ktcCats.error) { var eK = catsK.error || mpK.error || ktcCats.error; return missingRel(eK) ? NextResponse.json({ ok: true, rows: [], sql_missing: SQL_MISSING }) : readFail('the mapping', eK); }
       var mK = {}; (mpK.data || []).forEach(function (m) { mK[m.category_key] = m.ktc_category; });
       return NextResponse.json({ ok: true, rows: (catsK.data || []).map(function (c) { return Object.assign({}, c, { ktc_category: mK[c.key] || null }); }), ktc_categories: ktcCats.data || [] });
+    }
+
+    // ── v55.83-UB — TRANSFERS between the company's own accounts, paired like QuickBooks (same rules as KTC's ↔) ──
+    if (action === 'transfer_candidates') {
+      var t0r = await db.from('bank_transactions').select(LINE_COLS).eq('id', body.line_id || '').maybeSingle();
+      if (t0r.error) { return readFail('the line', t0r.error); }
+      var t0 = t0r.data;
+      if (!t0 || t0.wave_business_id !== cid || isPrivateRow(t0, scope)) { return fail('That line is not one of ' + comp.label + '\u2019s lines.', 404); }
+      if (t0.transfer_group_id) { return fail('This line is already paired — unpair it first.', 409); }
+      var manualT = body.manual === true; var spanT = manualT ? 90 : 10;
+      var dT = t0.posted_date || t0.date;
+      var loT = new Date(Date.parse(dT) - spanT * 86400000).toISOString().substring(0, 10); var hiT = new Date(Date.parse(dT) + spanT * 86400000).toISOString().substring(0, 10);
+      var cq = db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).eq('direction', t0.direction === 'out' ? 'in' : 'out')
+        .gte('date', loT).lte('date', hiT).neq('pending', true).is('transfer_group_id', null).or('review_status.is.null,review_status.neq.duplicate').neq('account_id', t0.account_id || '');
+      if (!manualT) { cq = cq.gte('amount_abs', (Number(t0.amount_abs) || 0) - 0.005).lte('amount_abs', (Number(t0.amount_abs) || 0) + 0.005); }
+      var cr = await cq.order('date', { ascending: false }).limit(manualT ? 400 : 20);
+      if (cr.error) { return readFail('the other accounts\u2019 lines', cr.error); }
+      var realT = realAccounts(await loadBankAccounts(db));
+      var candT = dropPrivate(cr.data || [], scope).filter(function (c0) { return realKeyOf(c0.account_id, realT) !== realKeyOf(t0.account_id, realT); });
+      if (manualT) {
+        var qT = String(body.q || '').trim().toLowerCase();
+        if (qT) { candT = candT.filter(function (c) { return (String(c.merchant_name || '') + ' ' + String(c.name || '') + ' ' + Number(c.amount_abs).toFixed(2) + ' ' + String(c.date)).toLowerCase().indexOf(qT) >= 0; }); }
+        var amtT = Number(t0.amount_abs) || 0; candT.sort(function (a1, b1) { return Math.abs(Number(a1.amount_abs) - amtT) - Math.abs(Number(b1.amount_abs) - amtT); }); candT = candT.slice(0, 40);
+      }
+      var acT = await db.from('plaid_accounts').select('plaid_account_id, name, mask, type').eq('wave_business_id', cid);
+      var accT = {}; ((acT && acT.data) || []).forEach(function (a) { accT[a.plaid_account_id] = a; });
+      return NextResponse.json({ ok: true, manual: manualT, line: t0, candidates: candT.map(function (c) { var a = accT[c.account_id] || {}; return Object.assign({}, c, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', same_amount: Math.abs(Number(c.amount_abs) - Number(t0.amount_abs)) <= 0.005 }); }) });
+    }
+    if (action === 'pair_transfer' || action === 'unpair_transfer') {
+      var instT = await db.rpc('hub_company_transfers_installed');
+      if (instT.error || instT.data !== true) { return fail(SQL_MISSING_UB, 409); }
+      var rpcT;
+      if (action === 'pair_transfer') {
+        var ab = await db.from('bank_transactions').select('id, account_id, wave_business_id').in('id', [body.a || '', body.b || '']);
+        if (ab.error) { return readFail('the two lines', ab.error); }
+        if ((ab.data || []).length !== 2 || (ab.data || []).some(function (x) { return x.wave_business_id !== cid || isPrivateRow(x, scope); })) { return fail('Both lines must be ' + comp.label + '\u2019s lines that you can see.', 409); }
+        var realP = realAccounts(await loadBankAccounts(db));
+        if (realKeyOf(ab.data[0].account_id, realP) === realKeyOf(ab.data[1].account_id, realP)) { return fail('Both lines are in the same bank account (two connections of one account) — that is not a transfer.', 409); }
+        rpcT = await db.rpc('hub_company_pair_transfer', { p: { a: body.a, b: body.b, company_id: cid, actor: userId, hidden_accounts: scope.all ? null : Object.keys(scope.hidden || {}), restricted: !scope.all } });
+      } else {
+        rpcT = await db.rpc('hub_company_unpair_transfer', { p: { transfer_group_id: body.transfer_group_id, company_id: cid, actor: userId, hidden_accounts: scope.all ? null : Object.keys(scope.hidden || {}), restricted: !scope.all } }); // checked per leg inside the locked step
+      }
+      if (rpcT.error) {
+        var mT = String(rpcT.error.message || '');
+        if (/HUB_GUARD:/.test(mT)) { return fail(mT.replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ' Nothing was changed.', 409); }
+        return fail('Not saved (' + (mT || 'database error') + '). Nothing was changed.', 500);
+      }
+      return NextResponse.json({ ok: true, result: rpcT.data });
     }
 
     return fail('Unknown action.');

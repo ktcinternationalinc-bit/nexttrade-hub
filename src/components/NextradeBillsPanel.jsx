@@ -20,6 +20,10 @@ export default function NextradeBillsPanel(props) {
       .catch(function (e) { setErr('Could not reach the server (' + ((e && e.message) || 'network') + ').'); });
   }
   useEffect(function () { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // v55.83-UD — "Pay ▸": opens 💼 Advances & fees (above) with this bill ticked; the person picks the payment it comes from
+  function payBill(b) {
+    try { window.dispatchEvent(new CustomEvent('hub-pay-party', { detail: { party: b.paid_via || 'NextTrade Industries', bill_id: b.id, bill_number: b.bill_number } })); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { /* old browser */ }
+  }
   var list = (rows || []).filter(function (r) { return showVoid || r.link.status === 'active'; });
   var open = 0; (rows || []).forEach(function (r) { if (r.link.status === 'active' && r.bill && r.bill.record_status === 'active') { open += Math.max(0, (Number(r.bill.total_amount) || 0) - (r.paid || 0)); } });
   return <div className="rounded-xl p-3 mb-3" style={{ background: '#ffffff', color: '#0f172a', border: '1px solid #93c5fd' }}>
@@ -41,7 +45,7 @@ export default function NextradeBillsPanel(props) {
         return <tr key={r.link.id} style={{ borderTop: '1px solid #e2e8f0', opacity: r.link.status === 'active' ? 1 : 0.5 }}>
           <td className="p-1 whitespace-nowrap">{b.bill_number}{r.link.mode === 'attached' ? ' 🔗' : ''}</td><td className="p-1">{b.vendor_name}</td><td className="p-1 whitespace-nowrap">{b.due_date}</td>
           <td className="p-1 text-right font-bold">{fmt(b.total_amount)}</td><td className="p-1">{b.category || <span style={{ color: '#b45309' }}>not set — Nextrade → Category mapping</span>}</td>
-          <td className="p-1">{l.date} · {l.name}</td><td className="p-1">{st}</td></tr>;
+          <td className="p-1">{l.date} · {l.name}</td><td className="p-1">{st}{st === 'owed to Nextrade' && <button onClick={function () { payBill(b); }} title="Pick the payment sent to NextTrade (or their advance) that pays this bill" className="ml-2 px-2 py-0.5 rounded text-[10px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Pay ▸</button>}</td></tr>;
       })}</tbody></table></div>
     {rows && !list.length && <div className="text-[11px] mt-2" style={{ color: '#64748b' }}>No Nextrade bills yet.</div>}
     <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>🔗 = an existing KTC bill (for example a repeating rent bill) the Nextrade line was attached to, instead of making a second bill.</div>

@@ -1351,8 +1351,19 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, advance: body.clear !== true });
     }
     if (action === 'rtm_flag') {
-      var txR = await db.from('bank_transactions').select('id, direction, pending').eq('id', body.bank_transaction_id).maybeSingle();
+      var txR = await db.from('bank_transactions').select('id, direction, pending, wave_business_id, account_id').eq('id', body.bank_transaction_id).maybeSingle();
       if (txR.error || !txR.data) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+      // v55.83-UD (Codex 11:40) — checked here, not only by what the screen lists: a private line the caller may not see is "not found";
+      // only a settled KTC line in one of KTC's own accounts can be marked as a payment to NextTrade / RTM (clearing a mark is always allowed)
+      var scopeRF = await privateScope(db, userId); if (scopeRF.error) { return NextResponse.json({ error: scopeRF.error + ' — nothing changed.' }, { status: 503 }); }
+      if (isPrivateRow(txR.data, scopeRF)) { return NextResponse.json({ error: 'Bank transaction not found.' }, { status: 404 }); }
+      if (body.clear !== true) {
+        if (txR.data.wave_business_id !== US_WAVE_BUSINESS_ID) { return NextResponse.json({ error: 'Only a KTC bank line can be a payment to a paid-through company.' }, { status: 409 }); }
+        if (txR.data.pending === true) { return NextResponse.json({ error: 'That line is still pending — wait until it settles.' }, { status: 409 }); }
+        var acR = await db.from('plaid_accounts').select('plaid_account_id, wave_business_id').eq('plaid_account_id', txR.data.account_id || '').maybeSingle();
+        if (acR.error) { return NextResponse.json({ error: 'Could not read the bank account (' + acR.error.message + ') — nothing changed.' }, { status: 503 }); }
+        if (!acR.data || acR.data.wave_business_id !== US_WAVE_BUSINESS_ID) { return NextResponse.json({ error: 'That line is not in one of KTC\u2019s own bank accounts.' }, { status: 409 }); }
+      }
       if (txR.data.direction !== 'out') { return NextResponse.json({ error: 'A payment to a paid-through company is MONEY OUT — that transaction is money in.' }, { status: 409 }); }
       // v55.83-QY — the payer must be a registered paid-through company
       var partiesF = await loadParties(db);
@@ -1842,7 +1853,7 @@ export async function POST(req) {
           // the COMPLETE ledger, page by page in a stable order (Supabase returns at most 1,000 rows a request) — never a capped list
           var pmE = { data: [], error: null };
           for (var pmPg = 0; pmPg < 500; pmPg++) {
-            var pmR = await db.from('party_money_entries').select('id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date').order('id', { ascending: true }).range(pmPg * 1000, pmPg * 1000 + 999);
+            var pmR = await db.from('party_money_entries').select('id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date, created_at, action_id').order('id', { ascending: true }).range(pmPg * 1000, pmPg * 1000 + 999);
             if (pmR.error) { pmE = { data: null, error: pmR.error }; break; }
             pmE.data = pmE.data.concat(pmR.data || []);
             if (!pmR.data || pmR.data.length < 1000) { break; }
