@@ -4,13 +4,12 @@
 -- So nobody is locked out, this turns ON, for every admin and owner, the everyday (non-sensitive) switches they had automatically
 -- until now. You then turn OFF what you do not want in Settings → 🏦 Banking & Accounting Access.
 -- The sensitive 🔒 switches (profit & margin, money totals, bank balances, private accounts, add by hand, advances) are NOT turned on.
--- A switch already OFF for a person under ANY of its names stays OFF. Nothing is deleted.
--- Run STEP 1 (v55-83-UG-admin-switches-PREVIEW.sql) first. Safe to run more than once.
+-- A switch already OFF for a person under ANY of its names stays OFF. Nothing is deleted. One self-contained statement per result
+-- (the Supabase SQL editor does not keep temporary tables between statements).
+-- Run STEP 1 (the PREVIEW) first. Safe to run more than once.
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- the switch families: for each name, every name whose OFF turns it off (generated from the Hub's permission-aliases.js)
-CREATE TEMP TABLE ug_fam (name text, member text) ON COMMIT PRESERVE ROWS;
-INSERT INTO ug_fam VALUES
+WITH fam(name, member) AS (VALUES   -- each switch name and every name whose OFF turns it off (from the Hub's permission-aliases.js)
   ('AR: Export', 'AR: Export'),
   ('AR: Export', 'ar.export'),
   ('AR: Full', 'AR: Full'),
@@ -276,9 +275,8 @@ INSERT INTO ug_fam VALUES
   ('wires.prepare', 'wires.prepare'),
   ('wires.send', 'wires.send'),
   ('wires.signoff', 'wires.signoff'),
-  ('wires.view', 'wires.view');
-CREATE TEMP TABLE ug_keys (module_name text) ON COMMIT PRESERVE ROWS;
-INSERT INTO ug_keys VALUES
+  ('wires.view', 'wires.view')
+), keys(module_name) AS (VALUES
   ('accounting.clickbooks.access'), ('accounting.wavehub.access'), ('accounting.view_invoicing'), ('accounting.change_dates'),
   ('accounting.customers.view'), ('accounting.customers.edit'), ('accounting.company_profile.view'), ('accounting.company_profile.edit'),
   ('invoice.view'), ('invoice.create'), ('invoices.view'), ('invoices.create'), ('invoices.edit'), ('invoices.approve'),
@@ -297,23 +295,22 @@ INSERT INTO ug_keys VALUES
   ('purchase_orders.view'), ('purchase_orders.edit'),
   ('wave.sync.view'), ('wave.sync.dry_run'), ('wave.sync.log.view'), ('wave.customers.push'), ('wave.invoices.push'), ('wave.payments.push'),
   ('wave.categories.pull'), ('wave.import.run')
-;
-CREATE TEMP TABLE ug_plan ON COMMIT PRESERVE ROWS AS
-SELECT u.id AS user_id, u.name, u.role, k.module_name
-FROM public.users u CROSS JOIN ug_keys k
-WHERE u.role IN ('admin', 'owner')
-  AND NOT EXISTS (SELECT 1 FROM public.module_permissions mp WHERE mp.user_id = u.id AND mp.module_name = k.module_name)
-  AND NOT EXISTS (   -- the same switch is OFF for this person under any of its names
-    SELECT 1 FROM public.module_permissions mp
-    WHERE mp.user_id = u.id AND mp.has_access = false
-      AND mp.module_name IN (SELECT f.member FROM ug_fam f WHERE f.name = k.module_name));
 
+), plan AS (
+  SELECT u.id AS user_id, u.name, u.role, k.module_name
+  FROM public.users u CROSS JOIN keys k
+  WHERE u.role IN ('admin', 'owner')
+    AND NOT EXISTS (SELECT 1 FROM public.module_permissions mp WHERE mp.user_id = u.id AND mp.module_name = k.module_name)
+    AND NOT EXISTS (   -- the same switch is OFF for this person under any of its names
+      SELECT 1 FROM public.module_permissions mp
+      WHERE mp.user_id = u.id AND mp.has_access = false
+        AND mp.module_name IN (SELECT f.member FROM fam f WHERE f.name = k.module_name))
+)
 INSERT INTO public.module_permissions (user_id, module_name, has_access)
-SELECT user_id, module_name, true FROM ug_plan
+SELECT user_id, module_name, true FROM plan
 ON CONFLICT (user_id, module_name) DO NOTHING;
 
 -- check: how many switches each admin / owner now has ON
 SELECT u.name, u.role, count(*) FILTER (WHERE mp.has_access) AS switches_on
 FROM public.users u LEFT JOIN public.module_permissions mp ON mp.user_id = u.id
 WHERE u.role IN ('admin', 'owner') GROUP BY u.name, u.role ORDER BY u.name;
-DROP TABLE ug_plan; DROP TABLE ug_keys; DROP TABLE ug_fam;
