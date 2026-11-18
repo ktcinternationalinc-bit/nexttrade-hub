@@ -10,6 +10,7 @@ import BusinessEntitiesPanel from './BusinessEntitiesPanel';
 import AccountingVisibilityPanel from './AccountingVisibilityPanel';
 import BankBalancePermissions from './BankBalancePermissions'; // eslint-disable-line no-unused-vars -- v55.83-RI: its two grants now live in BankingAccessPanel
 import BankingAccessPanel, { BANKING_KEYS } from './BankingAccessPanel'; // v55.83-RI
+import { permFamily } from '../lib/permission-aliases'; // v55.83-UG
 import ClickBooksOperatorPermissions from './ClickBooksOperatorPermissions';
 import { PERSONALITIES } from './AIGreeter';
 // v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
@@ -1147,6 +1148,9 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
         res = await supabase.from('module_permissions').insert({ user_id: userId, module_name: module, has_access: newVal });
       }
       if (res && res.error) throw res.error;
+      // v55.83-UG (Codex QA 18:06) — the same switch stored under its other names follows, so OFF really is OFF on the server
+      const others = permFamily(module).filter(function (k) { return k !== module; });
+      if (others.length) { const r2 = await supabase.from('module_permissions').update({ has_access: newVal }).eq('user_id', userId).in('module_name', others); if (r2 && r2.error) throw r2.error; setPermissions(prev => { const nx = { ...(prev[userId] || {}) }; others.forEach(function (k) { if (nx[k] !== undefined) { nx[k] = newVal; } }); return { ...prev, [userId]: nx }; }); }
       if (toast) toast.success((newVal ? 'Granted' : 'Removed') + ': ' + module);
     } catch (err) {
       console.error('[togglePermission]', err);

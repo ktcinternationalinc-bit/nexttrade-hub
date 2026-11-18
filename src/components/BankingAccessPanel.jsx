@@ -10,6 +10,7 @@
 // them. Bank Balances + the company financial overview stay super-admin grants
 // (their own protected table), shown here in the same box.
 import React, { useState, useEffect } from 'react';
+import { effectiveSwitch } from '../lib/permission-aliases'; // v55.83-UG
 import { supabase } from '../lib/supabase';
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import { useBankVisibility, refreshBankVisibility } from '../lib/use-bank-visibility';
@@ -137,7 +138,8 @@ export default function BankingAccessPanel(props) {
       refreshBankVisibility(); setVer(function (v) { return v + 1; });
     } catch (e) { setGErr(e.message); } finally { setSaving(null); }
   }
-  function has(u, key) { return (permissions[u.id] || {})[key] === true; }
+  // v55.83-UG (Codex QA 18:06) — show what the server will actually allow, counting every name of the switch
+  function has(u, key) { var m = permissions[u.id] || {}; var on = {}, off = {}; Object.keys(m).forEach(function (k) { if (m[k] === true) { on[k] = true; } else if (m[k] === false) { off[k] = true; } }); return effectiveSwitch(on, off, key) === true; }
   var shownUsers = users.filter(function (u) { var t = (String(u.name || '') + ' ' + String(u.email || '') + ' ' + String(u.role || '')).toLowerCase(); return !q.trim() || t.indexOf(q.trim().toLowerCase()) >= 0; });
   var u = users.filter(function (x) { return x.id === sel; })[0] || null;
   var boss = !!(u && u.role === 'super_admin'); // v55.83-UG (Max, Nov 18) — only the super admin has everything; admins / owners use their switches

@@ -23,6 +23,13 @@ check('outside accounting / banking an admin is unchanged (e.g. HR / CRM keys st
 check('screens: accounting access for an admin with no switches is OFF; ON for the super admin', AA.acctAccess(false, {}, 'admin', 'ktc').access === false && AA.acctAccess(true, {}, 'super_admin', 'ktc').access === true);
 check('invoice / customer helpers no longer pass an admin by role', !BP.canCreateInvoice(false, {}, 'admin') && !BP.canViewAccountingCustomers(false, {}, 'owner') && BP.canCreateInvoice(false, { 'invoice.create': true }, 'admin'));
 
+function dx(on, off) { return { role: 'admin', isSuperAdmin: false, mp: on || {}, deny: off || {} }; }
+check('Codex 18:06: a canonical switch the SQL turns on works (invoices.edit / approve, customers.view / create)', ['invoices.edit', 'invoices.approve', 'customers.view', 'customers.create'].every(function (k) { var o = {}; o[k] = true; return SP.userHasPermission(dx(o), k); }));
+check('Codex 18:06: an OFF under any name wins over an old ON under another name (server)', !SP.userHasPermission(dx({ 'Invoice: Create': true }, { 'invoice.create': true }), 'invoices.create'));
+check('Codex 18:06: Wave OFF never turns ClickBooks off; the old both-hubs key still opens ClickBooks', SP.userHasPermission(dx({ 'accounting.view': true }, { 'accounting.wavehub.access': true }), 'accounting.clickbooks.access') && !SP.userHasPermission(dx({ 'accounting.view': true }, { 'accounting.wavehub.access': true }), 'accounting.wavehub.access'));
+var PA = require(path.join(root, 'src/lib/permission-aliases.js'));
+check('Settings page and server use the same rule (page shows OFF when the server says no)', PA.effectiveSwitch({ 'Invoice: Create': true }, { 'invoice.create': true }, 'invoice.create') === false);
+check('turning a switch on / off in Settings sets its other names the same way', fs.readFileSync(path.join(root, 'src/components/SettingsTab.jsx'), 'utf8').indexOf('permFamily(module).filter') >= 0);
 var panel = fs.readFileSync(path.join(root, 'src/components/BankingAccessPanel.jsx'), 'utf8');
 check('the Banking & Accounting Access page now has the newer switches (private accounts, add by hand, P&L, margin, invoices, orders, Nextrade / RTM, advances, Sourcing desk)',
   ['bank.view_private', 'bank.add_transactions', 'pnl.view', 'pnl.view_margin', 'invoice.create', 'payments.match', 'orders.manage', 'company.nextrade.manage', 'company.rtm.view', 'advances.manage', 'commercial.access'].every(function (k) { return panel.indexOf("key: '" + k + "'") >= 0; }));

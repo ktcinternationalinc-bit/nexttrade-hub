@@ -40,7 +40,8 @@ export const BUILD_HISTORY = [
       { text: 'Admins and owners no longer get accounting and banking automatically. They have exactly the switches that are ON for them, like everyone else. Only the super admin has everything. (A one-time SQL keeps what admins could do until now as normal switches, so nobody is locked out; turn off what you do not want.)' },
       { text: 'Settings → 🏦 Banking & Accounting Access now has every switch: private accounts, add transactions by hand, P&L and profit & margin, invoices, customers and payments, orders, Nextrade and RTM books, advances, and the Sourcing desk. 🔒 switches only the super admin can turn on.' },
       { text: 'Category rules now run by themselves: right after every bank sync, and every 15 minutes. They fill blank lines only; a category a person picked is never changed. Categories & Rules shows when they last ran and how many lines they filled, in red if they stop.' },
-      { text: 'A wire whose bank amount differs by more than the allowed extra charge can now be accepted only by the super admin.' }
+      { text: 'A wire whose bank amount differs by more than the allowed extra charge can now be accepted only by the super admin.' },
+      { text: 'A switch that is OFF is OFF everywhere: some switches were saved under two or three names, and an old ON under one name could still let someone in. Turning a switch on or off now sets all its names, and Settings shows exactly what the person can do.' }
     ]
   },
   {

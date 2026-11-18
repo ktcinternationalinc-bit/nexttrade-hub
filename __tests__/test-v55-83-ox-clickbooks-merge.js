@@ -51,7 +51,7 @@ ok('2g (PB): Ledgerly is hidden — no tab entry survives',
   at.indexOf("['ledgerly'") < 0);
 
 // ── 3. server-permissions: balances no longer grantable via legacy aliases
-var sp = R('src/lib/server-permissions.js');
+var sp = R('src/lib/server-permissions.js') + R('src/lib/permission-aliases.js'); /* UG realign: the alias table moved to permission-aliases.js */
 ok("3a: 'bank_balances.view' legacy alias list is EMPTY (roles/module rows cannot confer it)",
   /'bank_balances\.view': \[\]/.test(sp));
 ok('3b: balance permission resolves only through authorizeBankVisibility',
