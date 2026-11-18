@@ -1045,6 +1045,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const [showAddMember, setShowAddMember] = useState(false);
   const [f, setF] = useState({});
   const [permissions, setPermissions] = useState({});
+  const [staleUsers, setStaleUsers] = useState({}); // v55.83-UG (Codex QA 18:24) — a save failed half-way and could not be re-read: don't trust or change these switches until reload
   const [notifPrefs, setNotifPrefs] = useState({});
   const [rules, setRules] = useState([]);
   const [expDescs, setExpDescs] = useState([]);
@@ -1121,6 +1122,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   };
 
   const togglePermission = async (userId, module, displayedHasAccess) => {
+    if (staleUsers[userId]) { if (toast) toast.error('This person’s switches may be only partly saved. Reload the page before changing more.'); return; } // v55.83-UG
     if (SENSITIVE_PERMS_UI[module] && !isSuperAdmin && !displayedHasAccess) { if (toast) toast.error('Only the super admin can switch on “' + module + '”.'); return; } // v55.83-TP
     // These grants use the verified-super-admin API, never the legacy map.
     if (['bank.view_account_balances', 'Bank: View Account Balances', 'bank_balances.view', 'dashboard.full', 'Full dashboard access', 'Banking information access'].includes(module)) {
@@ -1156,7 +1158,9 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       console.error('[togglePermission]', err);
       setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: current } })); // revert
       // v55.83-UG (Codex QA 18:19) — a later write may have failed after an earlier one saved: re-read this person's saved switches so the page shows what is really stored
-      try { const rr = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', userId); if (!rr.error && rr.data) { const fresh = {}; rr.data.forEach(function (x) { fresh[x.module_name] = x.has_access; }); setPermissions(prev => ({ ...prev, [userId]: fresh })); } } catch (eR) { /* keep the reverted view */ }
+      let reread = false;
+      try { const rr = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', userId); if (!rr.error && rr.data) { const fresh = {}; rr.data.forEach(function (x) { fresh[x.module_name] = x.has_access; }); setPermissions(prev => ({ ...prev, [userId]: fresh })); reread = true; } } catch (eR) { reread = false; }
+      if (!reread) { setStaleUsers(prev => ({ ...prev, [userId]: true })); if (toast) toast.error('Part of this change may have saved, and the page could not check. Reload the page before changing this person’s switches.'); }
       if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (You may lack rights to edit permissions, or a DB policy is blocking it.)');
     }
   };
@@ -1601,7 +1605,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* v55.83-RI (Max, Nov 9 10:38: "i need all of the banking permissions in one box and easy to understand and use") */}
       {section === 'banking' && (
         <div>
-          <BankingAccessPanel users={nonSuperUsers} permissions={permissions} togglePermission={togglePermission} />
+          <BankingAccessPanel users={nonSuperUsers} permissions={permissions} togglePermission={togglePermission} staleUsers={staleUsers} />
           <div className="text-[12px] font-extrabold mb-2" style={{ color: '#334155' }}>Advanced — ClickBooks admin tools (super admin)</div>
           <ClickBooksOperatorPermissions />
         </div>

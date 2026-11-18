@@ -177,6 +177,7 @@ export default function BankingAccessPanel(props) {
       </div>
       {/* switches */}
       {u && <div style={{ flex: '1 1 480px', minWidth: 0 }}>
+        {(props.staleUsers || {})[u.id] && <div className="rounded-lg px-3 py-2 mb-2 text-[12px] font-bold" style={{ background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>⚠ Some of this person’s switches may be only partly saved, so what you see here may not be right. Reload the page before changing them.</div>}
         <div className="text-[15px] font-extrabold mb-2" style={{ color: INK }}>{u.name || u.email}<span className="text-[11px] font-bold ml-2" style={{ color: MUTED }}>{u.role}</span></div>
         {boss && <div className="rounded-lg p-2 mb-3 text-[12px] font-bold" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46' }}>{'As ' + u.role + ', ' + (u.name || 'they') + ' already has every switch below (except Bank balances / the financial overview, which are super-admin grants).'}</div>}
         {!boss && !books && <div className="rounded-lg p-2 mb-3 text-[12px] font-bold" style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#78350f' }}>⚠ Turn on ClickBooks or Wave Hub in group 1 first — the other switches do nothing until then.</div>}
