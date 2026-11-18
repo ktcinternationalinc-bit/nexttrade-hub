@@ -38,7 +38,7 @@ export var WAVE_SCREENS = ['dashboard', 'review', 'invoices', 'all_invoices', 'p
 
 // hub: 'ktc' | 'wave' | undefined (= either hub)
 export function acctAccess(isSuperAdmin, mp, role, hub) {
-  var all = isSuperAdmin === true || role === 'owner' || role === 'admin';
+  var all = isSuperAdmin === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var m = mp || {};
   var legacy = m[P1] === true;
   var ktc = all || legacy || m[P1_KTC] === true;

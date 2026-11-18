@@ -31,7 +31,7 @@ export default function BillsTab(props) {
   var modulePerms = props.modulePerms || {};
 // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
   // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
-  var bossB = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
+  var bossB = isSuperAdmin; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var canView = bossB || modulePerms['bills.view'] === true || modulePerms['bills.manage'] === true;
   var canManage = bossB || modulePerms['bills.manage'] === true;
   var toast = props.toast || { success: function () {}, error: function () {} };

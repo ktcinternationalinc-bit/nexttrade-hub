@@ -296,3 +296,28 @@ export async function applyExpenseRules(db, limit) {
     return { applied: applied, flagged: flagged, scanned: got.rows.length, rules: rules.length };
   } catch (e) { return { error: (e && e.message) || 'apply failed' }; }
 }
+
+// v55.83-UG (Max, Nov 18: "why does this only work if i click on test? shouldn't it work automatically?") — the rules used to run only
+// inside the ClickBooks background job, which stops when its own settings are missing. Now they run by themselves after every bank
+// sync and on their own 15-minute timer, and each run is recorded so the rules screen can say when it last ran. Blanks only.
+export var RULES_LAST_RUN_KEY = 'expense_rules_last_run';
+export async function runRulesAndRecord(db, source) {
+  var res = null;
+  try { res = await applyExpenseRules(db, 500); } catch (e) { res = { error: (e && e.message) || 'rules failed' }; }
+  var rec = { at: new Date().toISOString(), source: source || 'timer', filled: (res && res.applied) || 0, flagged: (res && res.flagged) || 0,
+    scanned: (res && res.scanned) || 0, error: (res && res.error) || null };
+  // same two shapes as the visibility setting: key/value (jsonb) and the older setting_key/setting_value (text)
+  try {
+    var up = await db.from('app_settings').upsert({ key: RULES_LAST_RUN_KEY, value: rec, setting_key: RULES_LAST_RUN_KEY, setting_value: JSON.stringify(rec), updated_at: rec.at }, { onConflict: 'key' });
+    if (up && up.error && /setting_key|setting_value|column/.test(up.error.message || '')) { await db.from('app_settings').upsert({ key: RULES_LAST_RUN_KEY, value: rec, updated_at: rec.at }, { onConflict: 'key' }); }
+  } catch (eS) { /* recording is best-effort */ }
+  return Object.assign({}, res || {}, { recorded: rec });
+}
+export async function readRulesLastRun(db) {
+  try {
+    var r = await db.from('app_settings').select('*').eq('key', RULES_LAST_RUN_KEY).maybeSingle();
+    if (!r || r.error || !r.data) { return null; }
+    if (r.data.value && r.data.value.at) { return r.data.value; }
+    try { return r.data.setting_value ? JSON.parse(r.data.setting_value) : null; } catch (eJ) { return null; }
+  } catch (e) { return null; }
+}

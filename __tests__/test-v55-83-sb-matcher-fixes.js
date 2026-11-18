@@ -97,7 +97,7 @@ console.log('SB — the matcher only takes a line it can be sure of; everything 
   check('5b: the wire is CLAIMED (one conditional update) before any payment is written, and released if anything fails', SRC.indexOf(".eq('status', 'sent').is('bank_transaction_id', null).select('id')") > 0 && SRC.indexOf('var claim = await') < SRC.indexOf("from('vendor_bill_payments').insert(") && (SRC.match(/await release\(\);/g) || []).length === 2);
   // ── 6. undo a SENT wire: the super admin only (Max: "Number 2 is yes")
   var u8 = await call('u8', { action: 'delete_wire', id: W5, reason: 'sent by mistake — bank recalled it' });
-  check('6a: the owner can no longer undo a sent wire', !u8.ok && /only be undone by the super admin/.test(u8.error) && pkg(W5).status === 'sent', u8);
+  check('6a: the owner can no longer undo a sent wire', /* UG realign (Max, Nov 18: "the admin should not just have access, i need to give him access") */ !u8.ok && (/only be undone by the super admin/.test(u8.error) || /ClickBooks \(KTC Hub\) Access/.test(u8.error)) && pkg(W5).status === 'sent', u8);
   var u9 = await call('u9', { action: 'delete_wire', id: W5, reason: 'sent by mistake — bank recalled it' });
   check('6b: the super admin can', u9.ok && pkg(W5).status === 'reversed', u9);
   // ── 7. recording a past wire: right party, not a future date

@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
+import { readRulesLastRun } from '../../../../lib/expense-rules-server'; // v55.83-UG
 import { applyExpenseRules, waveAccountForCategory, previewRule, applyRuleToAll, applyLookAlikes, rowText, ruleBucket, learnRule, partyFlagRows } from '../../../../lib/expense-rules-server'; // v55.83-RC (+ learnRule: v55.83-RN — its import was lost in RC, so every pick in All Transactions failed after saving)
 import { ruleMatches } from '../../../../lib/expense-rules'; // v55.83-QV — the SAME matcher the 15-minute job uses
 import { audit } from '../../../../lib/audit-server'; // v55.83-QI
@@ -76,7 +77,7 @@ export async function POST(req) {
         flagReady = false;
         rules = await db.from('us_expense_rules').select('id, match_text, classification, auto_apply, active, source, hit_count, last_hit_at, updated_at').order('updated_at', { ascending: false }).limit(1000);
       }
-      return NextResponse.json({ ok: true, categories: cats.data || [], rules: (rules.data || []), parties: await loadRuleParties(db), flag_ready: flagReady, api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, categories: cats.data || [], rules: (rules.data || []), parties: await loadRuleParties(db), flag_ready: flagReady, last_run: await readRulesLastRun(db), api_build_marker: API_BUILD_MARKER });
     }
 
     // ── save_category: create (or relabel) a category ──

@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UG',
+    date: '2026-11-18',
+    title: 'Only the super admin has everything; every switch in one place; rules run by themselves',
+    items: [
+      { text: 'Admins and owners no longer get accounting and banking automatically. They have exactly the switches that are ON for them, like everyone else. Only the super admin has everything. (A one-time SQL keeps what admins could do until now as normal switches, so nobody is locked out; turn off what you do not want.)' },
+      { text: 'Settings → 🏦 Banking & Accounting Access now has every switch: private accounts, add transactions by hand, P&L and profit & margin, invoices, customers and payments, orders, Nextrade and RTM books, advances, and the Sourcing desk. 🔒 switches only the super admin can turn on.' },
+      { text: 'Category rules now run by themselves: right after every bank sync, and every 15 minutes. They fill blank lines only; a category a person picked is never changed. Categories & Rules shows when they last ran and how many lines they filled, in red if they stop.' },
+      { text: 'A wire whose bank amount differs by more than the allowed extra charge can now be accepted only by the super admin.' }
+    ]
+  },
+  {
+    version: 'v55.83-UE',
+    date: '2026-11-18',
+    title: 'Maa Kirpa: CNF with the shipping in the price, plus a surcharge',
+    items: [
+      { text: 'A CNF customer whose shipping is inside the price (Maa Kirpa) stays “CNF — shipping included” even when the invoice has a surcharge line (for example “Overweight surcharge”). The container’s shipping cost still comes out of the goods price, and the surcharge counts as extra transport income, so transport profit shows the surcharge instead of a loss.' },
+      { text: 'Only a line that names freight, trucking, shipping or delivery means the shipping is charged on its own line. A surcharge alone does not.' },
+      { text: 'On the invoice form, “CNF included” with a surcharge line saves without the “looks like a separate shipping charge” warning.' },
+      { text: 'One-time SQL sets every Maa Kirpa invoice to CNF included (a copy of the old settings is kept); invoices with a real freight line are listed for you to check.' }
+    ]
+  },
+  {
     version: 'v55.83-UI',
     date: '2026-11-18',
     title: 'Profitability looks cleaner: one revenue number, details on hover, a scroll bar on top and a full-screen table',

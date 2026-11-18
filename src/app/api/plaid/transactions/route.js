@@ -7,6 +7,7 @@ import { autoMatchSentWires } from '../../../../lib/wire-auto-match'; // v55.83-
 import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU — the duplicate check runs by itself after a sync
 import { privateScope, dropPrivate } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { settlePendingLines, oldestPendingDate } from '../../../../lib/pending-settle-server'; // v55.83-TU — pending lines settled every sync
+import { runRulesAndRecord } from '../../../../lib/expense-rules-server'; // v55.83-UG — category rules run right after every sync
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -243,6 +244,9 @@ export async function POST(req) {
     var dupCheck = null;
     if (synced > 0) { try { dupCheck = await autoTwinCheck(supabase, { actorId: null, budgetMs: 5000 }); } catch (eDC) { dupCheck = null; } }
     if (synced > 0) { try { wireMatch = await autoMatchSentWires(supabase, { actorId: null, budgetMs: 4000 }); } catch (eWM) { wireMatch = null; } }
+    // v55.83-UG — new lines arrive already categorized where a rule matches (blanks only; fail-soft — never blocks the sync)
+    var rulesRun = null;
+    if (synced > 0) { try { rulesRun = await runRulesAndRecord(supabase, 'bank sync'); } catch (eRR) { rulesRun = null; } }
 
     // v55.83-JR — compute the newest posted date overall + per account, and STORE the incremental
     // markers so the next sync pulls forward from here (the cursor for /transactions/get). Stored only
@@ -275,6 +279,7 @@ export async function POST(req) {
       synced: synced,
       superseded: superseded.length,
       pending_settled: pendingSettled, // v55.83-TU
+      rules_filled: rulesRun && !rulesRun.error ? (rulesRun.applied || 0) : null, // v55.83-UG
       accounts: projectPlaidAccountMetadata(acctsFromPlaid),
       total: totalAvail,
       pages: pageGuard,

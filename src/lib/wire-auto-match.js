@@ -64,7 +64,7 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
   var fee = 0;
   if (Math.abs(diff) > 0.005) {
     if (diff > 0 && diff <= AUTO_FEE_MAX + 0.005) { fee = diff; } // an extra charge of up to $50: accepted (Max 00:22), recorded
-    else if (!o.allowDifferent) { return { ok: false, status: 409, error: 'The bank line is $' + r2(t0.amount_abs).toFixed(2) + ' but the wire is $' + r2(pkg.approved_total).toFixed(2) + ' (' + (diff > 0 ? '+' : '') + diff.toFixed(2) + '). More than a $' + AUTO_FEE_MAX + ' extra charge — only a super admin or the owner can accept it, with the reason.' }; }
+    else if (!o.allowDifferent) { return { ok: false, status: 409, error: 'The bank line is $' + r2(t0.amount_abs).toFixed(2) + ' but the wire is $' + r2(pkg.approved_total).toFixed(2) + ' (' + (diff > 0 ? '+' : '') + diff.toFixed(2) + '). More than a $' + AUTO_FEE_MAX + ' extra charge — only the super admin can accept it, with the reason.' }; }
   }
   var lr = await db.from('wire_package_lines').select('*').eq('package_id', pkg.id);
   var lines = (lr && lr.data) || [];

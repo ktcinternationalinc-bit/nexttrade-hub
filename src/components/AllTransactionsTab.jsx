@@ -23,7 +23,7 @@ export default function AllTransactionsTab(props) {
   var modulePerms = props.modulePerms || {};
 // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
   // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
-  var canUse = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin')) || modulePerms['bank.classify'] === true;
+  var canUse = isSuperAdmin || modulePerms['bank.classify'] === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var toast = props.toast || { success: function () {}, error: function () {} };
   var onGo = props.onGo || function () {};
   // v55.83-TQ (Max, Nov 17) — ➕ Add a transaction by hand: super admin, or someone the super admin switched on (never a role)

@@ -448,7 +448,7 @@ export async function POST(req) {
       KEYS.forEach(function (k) { outS.people[k] = []; });
       outS.role = (g1 && g1.ctx && g1.ctx.role) || null;
       usersS.forEach(function (u) {
-        var boss = u.role === 'super_admin' || u.role === 'owner' || u.role === 'admin';
+        var boss = u.role === 'super_admin'; // v55.83-UG — owner / admin are listed only for the switches they were given
         var m = g[u.id] || {}; var p1 = boss || m['accounting.clickbooks.access'] === true || m['accounting.view'] === true;
         KEYS.forEach(function (k) {
           var has = boss || (p1 && m[k] === true);
@@ -794,7 +794,7 @@ export async function POST(req) {
       var tA = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, direction, pending, wave_business_id, review_status, third_party_payer').eq('id', txA).maybeSingle();
       if (tA.error || !tA.data) { return fail('Bank transaction not found.', 404); }
       // more than a $50 extra charge (or less than the wire): only a super admin / the owner, with the reason
-      var isSupA = !!(g1 && g1.ctx && (g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'));
+      var isSupA = !!(g1 && g1.ctx && g1.ctx.isSuperAdmin); // v55.83-UG — only the super admin
       var noteA = String(body.override_note || '').trim().substring(0, 500);
       var diffA = r2(r2(tA.data.amount_abs) - r2(pkg.approved_total));
       var bigDiff = Math.abs(diffA) > 0.005 && !(diffA > 0 && diffA <= AUTO_FEE_MAX + 0.005);

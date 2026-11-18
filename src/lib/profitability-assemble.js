@@ -9,7 +9,7 @@
 //   2. pounds per release are worked out; 3. each transportation / brokerage / bonded bill is split between its releases;
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
 import { warehouseOutboundForRelease, inferBasis, statedBasis, isWarehouseTestRow } from './warehouse-shipping'; // v55.83-TG
-import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge } from './shipping-terms'; // v55.83-TG
+import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge, isSurchargeOnlyLine } from './shipping-terms'; // v55.83-TG (+ UE surcharge rule)
 import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
@@ -99,13 +99,19 @@ export function assembleProfitability(d) {
     // overrides it. Noted on the invoice, so a person can still set it differently.
     var hasShipLine = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; });
     var saidText = statedBasis(text); var effTerms = t.shipping_terms || null;
-    if (hasShipLine && t.shipping_terms !== 'CNF_INCLUDED') {
+    // v55.83-UE (Max, Nov 18) — CNF with the shipping INSIDE the price (e.g. Maa Kirpa) plus a SURCHARGE line: the surcharge is extra
+    // transport income; the invoice stays "CNF, shipping included" and the container's shipping cost still comes out of the goods price.
+    // Only a line that names freight / trucking / shipping / delivery counts as the shipping being charged separately.
+    var hasFreightLine = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0 && !(l.transport !== true && isSurchargeOnlyLine(l.description)); });
+    var surchargeOnCnf = hasShipLine && !hasFreightLine && t.shipping_terms !== 'CNF_SEPARATE' && t.shipping_terms !== 'EXW' && (tBasis === 'CNF' || (!tBasis && saidText === 'CNF'));
+    if (surchargeOnCnf) { if (!tBasis) { tBasis = 'CNF'; tSource = 'invoice_text'; } effTerms = 'CNF_INCLUDED'; }
+    if (hasShipLine && t.shipping_terms !== 'CNF_INCLUDED' && !surchargeOnCnf) {
       if (!tBasis) { tBasis = saidText === 'CNF' ? 'CNF' : 'EXW'; tSource = 'shipping_line_rule'; flags.push({ kind: 'basis_assumed_from_shipping_line', invoice: i.invoice_number, invoice_id: i.id, basis: tBasis }); }
       if (!effTerms) { effTerms = tBasis === 'EXW' ? 'EXW' : ((tBasis === 'CNF' || tBasis === 'TRUCKING_INCLUDED') ? 'CNF_SEPARATE' : null); }
     }
     var charged = false;
     if (warehouseOn) {
-      charged = lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; });
+      charged = surchargeOnCnf ? false : lines.some(function (l) { return (l.transport === true || (l.transport !== false && isTransportLine(l.description))) && l.amount > 0; }); // UE: a surcharge on CNF-included is not 'shipping charged on a line'
       var relKeys = relsOfInv[i.id].map(function (r) { return r.key; });
       var whCost = whHasCost(relKeys);
       var said = statedBasis(text);
@@ -119,7 +125,7 @@ export function assembleProfitability(d) {
     }
     return { id: i.id, number: i.invoice_number, date: String(i.invoice_date || '').substring(0, 10), customer: (d.customerNames || {})[i.accounting_customer_id] || '(unknown customer)',
       customer_id: i.accounting_customer_id || null, basis: tBasis, basis_source: tSource, charged_transport: charged,
-      shipping_terms: t.shipping_terms || null, effective_terms: effTerms, has_shipping_line: hasShipLine, shipping_cost_estimate: t.shipping_cost_estimate === undefined || t.shipping_cost_estimate === null ? null : Number(t.shipping_cost_estimate),
+      shipping_terms: t.shipping_terms || null, effective_terms: effTerms, has_shipping_line: hasShipLine, surcharge_on_cnf: surchargeOnCnf, shipping_cost_estimate: t.shipping_cost_estimate === undefined || t.shipping_cost_estimate === null ? null : Number(t.shipping_cost_estimate),
       embedded_transport: t.embedded_transport === undefined ? null : t.embedded_transport, manual_embedded: t.embedded_transport !== undefined && t.embedded_transport !== null && t.embedded_transport !== '', releases: relsOfInv[i.id].map(function (r) { return r.key; }), lines: lines,
       _suggest: suggestBasis(text, lines.some(function (l) { return isTransportLine(l.description); })) };
   });

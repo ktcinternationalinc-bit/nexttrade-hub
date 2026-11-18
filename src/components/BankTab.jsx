@@ -76,7 +76,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
     }).catch(function (e) { putPrivMsg(a.plaid_account_id, { ok: false, text: '⛔ Not changed: ' + ((e && e.message) || 'could not reach the server.') }); });
     putPrivMsg(a.plaid_account_id, { ok: true, text: 'saving…' });
   };
-  const canViewAllAccounts = isSuperAdmin || (userProfile && (userProfile.role === 'admin' || userProfile.role === 'owner')) || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true);
+  const canViewAllAccounts = isSuperAdmin || !!(modulePerms && modulePerms['bank.view_all_accounts'] === true); /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   const bizLabel = (id) => { if (!id) return 'Unassigned'; const e = bizRegistry.find(b => b.wave_business_id === id); return e ? (e.label || id) : id; };
   // v55.83-JX — connection-level assign via the service-role route (RLS-proof + schema-safe; the old
   // browser write tried assigned_at/assigned_by columns that don't exist on the live table → "Assign failed").
@@ -370,6 +370,7 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
           (ps.dropped ? (ps.posted_replaced ? ', ' : '') + ps.dropped + ' no longer listed by the bank (filed away, restorable)' : '') +
           (ps.needs_person ? ((ps.posted_replaced || ps.dropped) ? ', ' : '') + ps.needs_person + ' carry a match — check them in Bank Review' : '') + '.';
       }
+      if (data.rules_filled > 0) { msg += ' Category rules filled ' + data.rules_filled + ' line(s).'; } // v55.83-UG
       if (ps && ps.needs_sql) { msg += ' ⚠ Pending lines were NOT settled (nothing changed): ' + (ps.sql_hint || 'a database step is missing.'); }
       // v55.83-SU — the duplicate check ran by itself
       if (Number(data.duplicates_removed) > 0) { msg += ' 🧹 ' + data.duplicates_removed + ' line(s) that arrived a second time through another connection of the same account were removed automatically (kept on file — “Check for duplicates” → removed list → Restore).'; }

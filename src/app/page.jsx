@@ -2027,7 +2027,7 @@ export default function App() {
         // super admin keep everything (same as the server).
         // v55.83-RF (Max 15:25) — two switches: ClickBooks (KTC Hub) Access or Wave Hub Access opens the menu
         return modulePerms['accounting.clickbooks.access'] === true || modulePerms['accounting.wavehub.access'] === true ||
-          modulePerms['accounting.view'] === true || userProfile?.role === 'owner' || userProfile?.role === 'admin';
+          modulePerms['accounting.view'] === true; // v55.83-UG — owner / admin open Accounting only with a switch (super admin handled above)
       }
       // v55.83-SV — the Sourcing desk shows only for people given its switch (Max: "Super admin. And those permissioned")
       if (t.id === 'sourcing') { return modulePerms['commercial.access'] === true; }
@@ -5581,7 +5581,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-UI</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-UG</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"

@@ -33,6 +33,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/accounting/expense-rules/job",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/accounting/clickbooks-us/rules-job",
       "schedule": "*/15 * * * *"
     },

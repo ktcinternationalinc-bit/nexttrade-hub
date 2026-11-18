@@ -47,7 +47,7 @@ ok('3b: no bank.view → Bank Review blocked', canViewBank(false, { 'invoice.vie
 
 // ---------- 4. super_admin / admin always pass ----------
 ok('4a: super_admin sees invoices', canViewInvoices(true, {}, null) === true);
-ok('4b: admin role sees invoices without explicit key', canViewInvoices(false, {}, 'admin') === true);
+ok('4b (→UG): an admin sees invoices only with the switch', /* UG realign (Max, Nov 18: "the admin should not just have access, i need to give him access") */ canViewInvoices(false, {}, 'admin') === false && canViewInvoices(false, { 'invoice.view': true }, 'admin') === true);
 
 // ---------- 5. source wiring — doc tabs no longer gate mayView on canViewBank ----------
 function gateUsesBank(file) {

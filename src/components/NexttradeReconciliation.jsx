@@ -295,7 +295,7 @@ export default function NexttradeReconciliation(props) {
     );
   }
 
-  var isAdm = userProfile && (userProfile.role === 'super_admin' || userProfile.role === 'admin');
+  var isAdm = userProfile && userProfile.role === 'super_admin'; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   // v55.83-RG — "Order Recon: Reconcile & Approve" alone shows the saved runs (resolve / reconcile / approve)
   var mpR = props.modulePerms || {};
   if (!isAdm && mpR['recon.signoff'] === true) { return <div className="p-3"><SavedReconciliations userProfile={userProfile} toast={toast} canSave={false} /></div>; }

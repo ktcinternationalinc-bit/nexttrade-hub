@@ -84,7 +84,7 @@ export default function PeriodStatsTab(props) {
   // v55.83-TS (Max, Nov 17: "for uncategorized i should be able to select category from right there" + "same description should
   // fill up automatically creating the rule and saving") — the SAME save as All Transactions (expense-rules bulk_classify,
   // single pick): it learns a rule from the description's key words and fills every look-alike at once.
-  var canPick = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin')) || modulePerms['bank.classify'] === true;
+  var canPick = isSuperAdmin || modulePerms['bank.classify'] === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var sCl = useState(null); var catList = sCl[0]; var setCatList = sCl[1];
   var sSv = useState({}); var saving = sSv[0]; var setSaving = sSv[1];
   function erApi(action, payload) {

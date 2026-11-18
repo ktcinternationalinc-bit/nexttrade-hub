@@ -24,7 +24,9 @@ export default function ExpenseRulesTab(props) {
   var modulePerms = props.modulePerms || {};
 // v55.83-SA (Max, Nov 12 07:27: "Why are people not seeing bills when they have permission") — owner / admin = every switch
   // (the permissions box says "always (admin)" and the server already agrees); the screen gates now say the same.
-  var canUse = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin')) || modulePerms['bank.classify'] === true;
+  // v55.83-UG — when the rules last ran by themselves (after a bank sync or on the 15-minute timer)
+  var sLr = useState(null); var lastRun = sLr[0]; var setLastRun = sLr[1];
+  var canUse = isSuperAdmin || modulePerms['bank.classify'] === true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var toast = props.toast || { success: function () {}, error: function () {} };
 
   var s1 = useState([]); var cats = s1[0]; var setCats = s1[1];
@@ -62,7 +64,7 @@ export default function ExpenseRulesTab(props) {
   }
   function loadAll() {
     api('list').then(function (j) {
-      if (j && j.ok) { setCats(j.categories || []); setRules(j.rules || []); setParties(j.parties || []); setFlagReady(j.flag_ready !== false); setNeedsSql(null); }
+      if (j && j.ok) { setCats(j.categories || []); setRules(j.rules || []); setParties(j.parties || []); setFlagReady(j.flag_ready !== false); setNeedsSql(null); setLastRun(j.last_run || null); }
       else if (j && j.needs_sql) { setNeedsSql(j.error); }
       else if (j) { toast.error(j.error || 'Could not load.'); }
     });
@@ -323,6 +325,7 @@ export default function ExpenseRulesTab(props) {
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <div className="text-sm font-extrabold" style={{ color: '#0f172a' }}>🤖 Rules — when a bank line contains certain words, the Hub fills it in for you</div>
         <div className="flex-1" />
+        {(function () { if (!lastRun || !lastRun.at) { return <span className="text-[11px] font-bold mr-2" style={{ color: '#b45309' }}>Automatic run: not recorded yet (runs after each bank sync and every 15 minutes)</span>; } var mins = Math.round((Date.now() - Date.parse(lastRun.at)) / 60000); var old = mins > 45; return <span className="text-[11px] font-bold mr-2" style={{ color: lastRun.error || old ? '#b91c1c' : '#065f46' }}>{(lastRun.error ? '⚠ Last automatic run failed: ' + lastRun.error + ' · ' : 'Last automatic run: ') + (mins < 1 ? 'just now' : mins < 120 ? mins + ' min ago' : Math.round(mins / 60) + ' h ago') + ' (' + (lastRun.source || 'timer') + ') · ' + (lastRun.filled || 0) + ' line(s) filled' + (old && !lastRun.error ? ' · ⚠ not running on time' : '')}</span>; })()}
         <button onClick={applyNow} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff', opacity: busy ? 0.5 : 1 }}>▶ Apply rules now</button>
       </div>
       {/* v55.83-SX (Max, Nov 16: "where am I seeing anything dealing with RTM and Nextrade — make it user friendly") — the new rule,

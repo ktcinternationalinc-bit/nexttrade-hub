@@ -108,7 +108,7 @@ ok('5d: "then later when the wire is sent ... attach that whole audit to that wi
 ok('5e: a bank amount different from the approved wire is refused — only a super admin, with the reason, may accept it',
   // superseded pin (v55.83-RJ, independent review gap 14): the owner may accept it too
   // superseded pin (v55.83-RZ, Max 00:22 "2 yes"): up to $50 more = an extra charge, accepted (Max 16:37: it goes with the bill, not a bank fee); MORE than that still only a super admin / the owner, with the reason
-  S.indexOf('More than a $' + "' + AUTO_FEE_MAX + '" + ' extra charge — only a super admin or the owner can accept it, with the reason.') > 0 && S.indexOf("g1.ctx.isSuperAdmin || g1.ctx.role === 'owner'") > 0);
+  /* UG realign (Max, Nov 18: "the admin should not just have access, i need to give him access") */ S.indexOf('More than a $' + "' + AUTO_FEE_MAX + '" + ' extra charge — only the super admin can accept it, with the reason.') > 0 && S.indexOf('var isSupA = !!(g1 && g1.ctx && g1.ctx.isSuperAdmin);') > 0);
 ok('5f: RTM / NextTrade wires book exactly like the 🏦 paid-through flow (method rtm + the company on the bank line; NextTrade = advance, auto-reviewed)',
   S.indexOf("pkg.payee_kind === 'vendor' ? 'wire' : 'rtm'") > 0 && S.indexOf('third_party_payer: pkg.payee_name') > 0 && S.indexOf("pkg.payee_kind === 'affiliate'") > 0);
 ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with the date and reference; only for paid-through wires, after sending',

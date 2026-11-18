@@ -22,6 +22,9 @@ export var BANKING_GROUPS = [
   ] },
   { title: '2 · Which money can they see?', items: [
     { key: 'accounting.view_totals', label: 'Money totals', desc: 'Came In, Went Out, Sales, Net Moved, Projected Net. Without it these show “Restricted”.', needsBooks: true },
+    { key: 'pnl.view', label: 'P&L and Profitability', desc: 'Profitability, Sales P&L and Inventory P&L screens: revenue and cost of goods per product, customer and invoice.', needsBooks: true },
+    { key: 'pnl.view_margin', label: 'Profit & margin 🔒', desc: 'The PROFIT and MARGIN numbers on those screens. Without it they show 🔒. Only the super admin can switch this on.', needsBooks: true, sensitive: true },
+    { key: 'pnl.edit_costs', label: 'Edit product costs', desc: 'Type or change product costs (with the date they start). The most sensitive accounting change.', needsBooks: true },
     { key: 'accounting.view_invoicing', label: 'Invoices & collections', desc: 'Invoiced, Paid, Still Open, Collected — and the invoices behind them.', needsBooks: true },
     { special: 'canViewBankBalances', label: 'Bank balances', desc: 'Account balances, trial balance, general ledger, cash flow, bank reconciliation. Super admin grants only.' },
     { special: 'canViewFullDashboard', label: 'Company financial overview & ClickBooks reports', desc: 'The company-wide financial dashboard and the ClickBooks Financial Reports tab. Super admin grants only.' },
@@ -31,7 +34,21 @@ export var BANKING_GROUPS = [
     { key: 'bank.see_amounts', label: 'See transaction amounts', desc: 'Without it, amounts on bank lines are hidden.' },
     { key: 'bank.view_all_accounts', label: 'See every bank account', desc: 'Switch between accounts and see “All accounts”.' },
     { key: 'bank.classify', label: 'Categorize transactions', desc: 'Needed for ClickBooks → All Transactions and Categories & Rules.' },
+    { key: 'bank.view_private', label: 'See private accounts 🔒', desc: 'Bank accounts the super admin marked private (Bank → account → 🔒 Make private). Only the super admin can switch this on.', sensitive: true },
+    { key: 'bank.add_transactions', label: 'Add transactions by hand 🔒', desc: 'All Transactions → ➕ Add transaction, when the bank or a statement does not have it. Only the super admin can switch this on.', sensitive: true },
     { key: 'bank.connections', label: 'Connect / reconnect banks', desc: 'Plaid connections, re-pull history, archive duplicates.' },
+  ] },
+  { title: '3b · Invoices, customers & payments', note: 'Needs Wave Hub (or ClickBooks) in group 1.', items: [
+    { key: 'invoice.view', label: 'See invoices', desc: 'Invoices and proformas, read only.', needsBooks: true },
+    { key: 'invoice.create', label: 'Create / edit invoices', desc: 'Make and change invoices and proformas.', needsBooks: true },
+    { key: 'accounting.customers.view', label: 'See customers', desc: 'Accounting customers (not the CRM).', needsBooks: true },
+    { key: 'accounting.customers.edit', label: 'Add / change customers', desc: 'Create, edit and archive accounting customers.', needsBooks: true },
+    { key: 'payments.match', label: 'Match payments to invoices', desc: 'Match a bank deposit to a customer invoice.', needsBooks: true },
+    { key: 'payments.unmatch', label: 'Undo a payment match', desc: 'Reverse a match. Recorded with the name.', needsBooks: true },
+    { key: 'payments.mark_manual_done', label: 'Mark a payment entered in Wave by hand', desc: 'Clears a queued payment already typed into Wave.', needsBooks: true },
+    { key: 'ar.send_reminders', label: 'Send payment reminders', desc: 'Email customers about what they owe.', needsBooks: true },
+    { key: 'ar.manage_overdue_dashboard', label: 'Manage the overdue list', desc: 'Ignore / un-ignore items on the overdue dashboard.', needsBooks: true },
+    { key: 'accounting.change_dates', label: 'Look beyond the default dates', desc: 'Move the date filters past the defaults. Without it the server limits the range.', needsBooks: true },
   ] },
   { title: '4 · Bills (what we owe)', note: 'Needs ClickBooks (KTC Hub) in group 1.', items: [ // v55.83-SA — Bills is a ClickBooks screen
     { key: 'bills.view', label: 'See bills', desc: 'Vendor bills and what is due.', needsKtc: true },
@@ -49,8 +66,22 @@ export var BANKING_GROUPS = [
     { key: 'journals.prepare', label: 'Write journal entries', desc: 'Write an adjusting entry (accrual, correction, re-class) and send it for approval.', needsKtc: true },
     { key: 'journals.approve', label: 'Approve journal entries', desc: 'Approve or reject an entry someone else wrote. Approving posts it to the ledger.', needsKtc: true },
   ] },
-  { title: '6 · Order reconciliation', items: [
+  { title: '6 · Orders & order reconciliation', items: [
+    { key: 'orders.monitor', label: 'See orders', desc: 'Orders — stage and what is missing, invoice and deposit status, the 30-hour deadline.' },
+    { key: 'orders.manage', label: 'Work orders', desc: 'Match a deposit to an order, override, close an order — each with a reason and the name.' },
     { key: 'recon.signoff', label: 'Reconcile & approve', desc: 'Resolve saved reconciliation lines, mark reconciled, or approve (a different person approves).' },
+  ] },
+  { title: '7 · Nextrade & RTM books', note: 'Their own books — separate from KTC.', items: [
+    { key: 'company.nextrade.view', label: 'See Nextrade books', desc: 'Nextrade’s own bank and card lines, categories and totals.' },
+    { key: 'company.nextrade.manage', label: 'Work Nextrade books', desc: 'Categorize Nextrade lines (an expense makes a KTC bill), rules.' },
+    { key: 'company.rtm.view', label: 'See RTM books', desc: 'RTM’s own bank lines, categories and totals.' },
+    { key: 'company.rtm.manage', label: 'Work RTM books', desc: 'Categorize RTM lines, rules.' },
+    { key: 'advances.manage', label: 'Advances & fees 🔒', desc: 'Split a payment to NextTrade / RTM into fee and advance; use advances on bills. Only the super admin can switch this on.', sensitive: true },
+  ] },
+  { title: '8 · Sourcing desk', note: 'Buying: supplier research and supplier emails.', items: [
+    { key: 'commercial.access', label: 'Use the Sourcing desk', desc: 'See and work sourcing requests and suppliers.' },
+    { key: 'commercial.research', label: 'Start web research', desc: 'Each search is a paid lookup.' },
+    { key: 'commercial.approve', label: 'Approve outgoing emails', desc: 'Nothing goes to a supplier until approved.' },
   ] },
 ];
 export var BANKING_KEYS = (function () { var k = ['accounting.view']; BANKING_GROUPS.forEach(function (g) { g.items.forEach(function (i) { if (i.key) { k.push(i.key); } }); }); return k; })();
@@ -109,13 +140,13 @@ export default function BankingAccessPanel(props) {
   function has(u, key) { return (permissions[u.id] || {})[key] === true; }
   var shownUsers = users.filter(function (u) { var t = (String(u.name || '') + ' ' + String(u.email || '') + ' ' + String(u.role || '')).toLowerCase(); return !q.trim() || t.indexOf(q.trim().toLowerCase()) >= 0; });
   var u = users.filter(function (x) { return x.id === sel; })[0] || null;
-  var boss = !!(u && (u.role === 'owner' || u.role === 'admin'));
+  var boss = !!(u && u.role === 'super_admin'); // v55.83-UG (Max, Nov 18) — only the super admin has everything; admins / owners use their switches
   var g = u ? grantFor(u) : null;
   var books = u && (boss || has(u, 'accounting.clickbooks.access') || has(u, 'accounting.wavehub.access') || has(u, 'accounting.view'));
   var ktc = u && (boss || has(u, 'accounting.clickbooks.access') || has(u, 'accounting.view'));
 
   function summary(x) {
-    if (x.role === 'owner' || x.role === 'admin') { return 'everything (' + x.role + ')'; }
+    if (x.role === 'super_admin') { return 'everything (super admin)'; }
     var on = []; var cnt = 0;
     if (has(x, 'accounting.clickbooks.access') || has(x, 'accounting.view')) { on.push('ClickBooks'); }
     if (has(x, 'accounting.wavehub.access') || has(x, 'accounting.view')) { on.push('Wave'); }
@@ -127,7 +158,7 @@ export default function BankingAccessPanel(props) {
 
   return <section className="nt-paper rounded-xl p-4 mb-5" style={{ border: '2px solid #1e293b' }} aria-label="Banking and accounting access">
     <div className="text-[17px] font-extrabold" style={{ color: INK }}>🏦 Banking & Accounting Access — everything in one place</div>
-    <div className="text-[12px] mt-1 mb-3" style={{ color: SUB }}>Pick a person on the left, switch what they need on the right. Owners, admins and super admins always have everything. A change reaches the person within about 2 minutes (or as soon as they come back to the Hub) — no sign-out needed.</div>
+    <div className="text-[12px] mt-1 mb-3" style={{ color: SUB }}>Pick a person on the left, switch what they need on the right. Only the super admin has everything — everyone else, admins and owners included, has exactly what is switched ON here. 🔒 switches only the super admin can turn on. A change reaches the person within about 2 minutes (or as soon as they come back to the Hub) — no sign-out needed.</div>
     {users.length === 0 ? <div style={{ color: MUTED }}>No team members yet.</div> :
     <div className="flex gap-4 flex-wrap items-start">
       {/* people */}

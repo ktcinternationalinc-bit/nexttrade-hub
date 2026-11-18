@@ -26,9 +26,9 @@ function BankWiresView(props) {
   var mp = props.modulePerms || {};
   var ctxToast = useContext(ToastContext);
   var toast = props.toast || ctxToast || { success: function (m) { try { window.alert(m); } catch (e) {} }, error: function (m) { try { window.alert(m); } catch (e) {} } };
-  var canView = isSuperAdmin || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
-  var canSign = isSuperAdmin || mp['wires.signoff'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
-  var canManageBills = isSuperAdmin || mp['bills.manage'] === true || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
+  var canView = isSuperAdmin || mp['wires.view'] === true || mp['wires.prepare'] === true || mp['wires.signoff'] === true || mp['wires.send'] === true;
+  var canSign = isSuperAdmin || mp['wires.signoff'] === true;
+  var canManageBills = isSuperAdmin || mp['bills.manage'] === true;
 
   var s1 = useState(null); var list = s1[0]; var setList = s1[1];
   var s2 = useState(false); var busy = s2[0]; var setBusy = s2[1];
@@ -241,7 +241,7 @@ export default function WiresTab(props) {
   var mp = props.modulePerms || {};
   var ctxToast = useContext(ToastContext);
   var toast = props.toast || ctxToast || { success: function (m) { try { window.alert(m); } catch (e) {} }, error: function (m) { try { window.alert(m); } catch (e) {} } };
-  var boss = isSuperAdmin || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
+  var boss = isSuperAdmin;
   var perms = { view: boss || mp['wires.view'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true,
     override: boss || mp['wires.override'] === true, // v55.83-RL
     undo: isSuperAdmin === true, /* v55.83-SB — the super admin only (Max Nov 12) */ // v55.83-RL — undoing a SENT wire: super admin / owner only

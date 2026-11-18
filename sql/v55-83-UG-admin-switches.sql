@@ -1,0 +1,135 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- v55.83-UG — ADMINS / OWNERS: keep what they can do today, as normal switches (Max, Nov 18 2026)
+-- "the admin should not just have access, i need to give him access"
+-- From v55.83-UG an admin or owner gets NO accounting / banking access from their role — only the switches that are ON for them.
+-- So nobody is locked out overnight, this turns ON, for every admin and owner, the everyday (non-sensitive) switches they had
+-- automatically until now. Max then turns OFF what he does not want, in Settings → 🏦 Banking & Accounting Access.
+-- The sensitive 🔒 switches (profit & margin, money totals, bank balances, private accounts, add transactions by hand, advances)
+-- are NOT turned on — admins never had those automatically.
+-- A switch already set for a person (ON or OFF) is never changed — and (Codex QA 12:45) a switch that is OFF under ANY of its names
+-- (e.g. invoices.create / invoice.create / "Invoice: Create") is not turned ON under another name either. Nothing is deleted. Safe to run more than once.
+-- Run it BEFORE or right after v55.83-UG goes live.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- who gets them (look at this list first)
+SELECT id, name, email, role FROM public.users WHERE role IN ('admin', 'owner') ORDER BY name;
+
+WITH fam(fam, member) AS (VALUES   -- every switch and its other names (from the Hub's permission list)
+  ('ar.view_summary', 'ar.view_summary'),
+  ('ar.view_summary', 'AR: View Summary'),
+  ('ar.view_summary', 'Finance: View Company Totals'),
+  ('ar.view_summary', 'finance.view_company_totals'),
+  ('ar.view_customer_balances', 'ar.view_customer_balances'),
+  ('ar.view_customer_balances', 'AR: View Customer Balances'),
+  ('ar.view_customer_balances', 'Finance: View All Customer Balances'),
+  ('ar.view_customer_balances', 'finance.view_all_customer_balances'),
+  ('ar.view_invoice_balances', 'ar.view_invoice_balances'),
+  ('ar.view_invoice_balances', 'AR: View Invoice Balances'),
+  ('ar.view_invoice_balances', 'Invoice: View Balance'),
+  ('ar.view_invoice_balances', 'invoice.view_balance'),
+  ('ar.view_overdue', 'ar.view_overdue'),
+  ('ar.view_overdue', 'AR: View Overdue'),
+  ('ar.export', 'ar.export'),
+  ('ar.export', 'AR: Export'),
+  ('ar.full', 'ar.full'),
+  ('ar.full', 'AR: Full'),
+  ('ar.full', 'Finance: Admin'),
+  ('ar.full', 'finance.admin'),
+  ('invoices.view', 'invoices.view'),
+  ('invoices.view', 'Invoice: View'),
+  ('invoices.view', 'invoice.view'),
+  ('invoices.create', 'invoices.create'),
+  ('invoices.create', 'Invoice: Create'),
+  ('invoices.create', 'invoice.create'),
+  ('invoices.edit', 'invoices.edit'),
+  ('invoices.edit', 'Invoice: Edit'),
+  ('invoices.edit', 'invoice.edit'),
+  ('invoices.approve', 'invoices.approve'),
+  ('invoices.approve', 'Invoice: Approve'),
+  ('invoices.approve', 'invoice.approve'),
+  ('customers.view', 'customers.view'),
+  ('customers.view', 'Customer: View'),
+  ('customers.view', 'customer.view'),
+  ('customers.create', 'customers.create'),
+  ('customers.create', 'Customer: Create'),
+  ('customers.create', 'customer.create'),
+  ('bank_transactions.view', 'bank_transactions.view'),
+  ('bank_transactions.view', 'Bank: View Transactions'),
+  ('bank_transactions.view', 'bank.view_transactions'),
+  ('bank_transactions.view', 'Bank: View'),
+  ('bank_transactions.view', 'bank.view'),
+  ('bank_balances.view', 'bank_balances.view'),
+  ('payments.match', 'payments.match'),
+  ('payments.match', 'Payments: Match'),
+  ('payments.unmatch', 'payments.unmatch'),
+  ('payments.unmatch', 'Payments: Unmatch'),
+  ('payments.mark_manual_done', 'payments.mark_manual_done'),
+  ('payments.mark_manual_done', 'Payments: Mark Manual Done'),
+  ('categories.apply', 'categories.apply'),
+  ('categories.apply', 'Categories: Apply'),
+  ('categories.apply', 'Bank: Classify'),
+  ('categories.apply', 'bank.classify'),
+  ('wave.sync.view', 'wave.sync.view'),
+  ('wave.sync.view', 'Wave: Sync View'),
+  ('wave.sync.dry_run', 'wave.sync.dry_run'),
+  ('wave.sync.dry_run', 'Wave: Dry Run'),
+  ('wave.sync.log.view', 'wave.sync.log.view'),
+  ('wave.sync.log.view', 'Wave: Sync Log View'),
+  ('wave.customers.push', 'wave.customers.push'),
+  ('wave.customers.push', 'Wave: Push Customers'),
+  ('wave.invoices.push', 'wave.invoices.push'),
+  ('wave.invoices.push', 'Wave: Push Invoices'),
+  ('wave.payments.push', 'wave.payments.push'),
+  ('wave.payments.push', 'Wave: Push Payments'),
+  ('wave.categories.pull', 'wave.categories.pull'),
+  ('wave.categories.pull', 'Wave: Pull Categories'),
+  ('wave.categories.pull', 'categories.sync_from_wave'),
+  ('wave.import.run', 'wave.import.run'),
+  ('wave.import.run', 'Wave: Import'),
+  ('wave.import.run', 'wave.import'),
+  ('wave.settings.manage', 'wave.settings.manage'),
+  ('wave.settings.manage', 'Wave: Settings Manage'),
+  ('wave.production.push', 'wave.production.push'),
+  ('wave.production.push', 'Wave: Production Push'),
+  ('accounting.view', 'accounting.view'),
+  ('accounting.view', 'accounting.clickbooks.access'),
+  ('accounting.view', 'accounting.wavehub.access'),
+  ('accounting.clickbooks.access', 'accounting.clickbooks.access'),
+  ('accounting.clickbooks.access', 'accounting.view'),
+  ('accounting.wavehub.access', 'accounting.wavehub.access'),
+  ('accounting.wavehub.access', 'accounting.view')
+), keys(module_name) AS (VALUES
+  ('accounting.clickbooks.access'), ('accounting.wavehub.access'), ('accounting.view_invoicing'), ('accounting.change_dates'),
+  ('accounting.customers.view'), ('accounting.customers.edit'), ('accounting.company_profile.view'), ('accounting.company_profile.edit'),
+  ('invoice.view'), ('invoice.create'), ('invoices.view'), ('invoices.create'), ('invoices.edit'), ('invoices.approve'),
+  ('customers.view'), ('customers.create'),
+  ('payments.match'), ('payments.unmatch'), ('payments.mark_manual_done'),
+  ('ar.view_summary'), ('ar.view_customer_balances'), ('ar.view_invoice_balances'), ('ar.view_overdue'), ('ar.view_upcoming_due'), ('ar.export'),
+  ('ar.send_reminders'), ('ar.manage_overdue_dashboard'),
+  ('bank.view'), ('bank.see_amounts'), ('bank.view_all_accounts'), ('bank.classify'), ('bank.connections'),
+  ('bank_transactions.view'), ('categories.apply'),
+  ('bills.view'), ('bills.manage'), ('bills.price_rules'),
+  ('wires.view'), ('wires.prepare'), ('wires.signoff'), ('wires.send'), ('wires.override'),
+  ('journals.prepare'), ('journals.approve'),
+  ('recon.signoff'), ('orders.monitor'), ('orders.manage'),
+  ('pnl.view'), ('pnl.edit_costs'),
+  ('company.nextrade.view'), ('company.nextrade.manage'), ('company.rtm.view'), ('company.rtm.manage'),
+  ('purchase_orders.view'), ('purchase_orders.edit'),
+  ('wave.sync.view'), ('wave.sync.dry_run'), ('wave.sync.log.view'), ('wave.customers.push'), ('wave.invoices.push'), ('wave.payments.push'),
+  ('wave.categories.pull'), ('wave.import.run')
+)
+INSERT INTO public.module_permissions (user_id, module_name, has_access)
+SELECT u.id, k.module_name, true
+FROM public.users u CROSS JOIN keys k
+WHERE u.role IN ('admin', 'owner')
+  AND NOT EXISTS (   -- the same switch is OFF for this person under any of its names
+    SELECT 1 FROM public.module_permissions mp
+    WHERE mp.user_id = u.id AND mp.has_access = false
+      AND (mp.module_name = k.module_name
+        OR mp.module_name IN (SELECT f2.member FROM fam f1 JOIN fam f2 ON f2.fam = f1.fam WHERE f1.member = k.module_name)))
+ON CONFLICT (user_id, module_name) DO NOTHING;
+
+-- check: how many switches each admin / owner now has ON
+SELECT u.name, u.role, count(*) FILTER (WHERE mp.has_access) AS switches_on
+FROM public.users u LEFT JOIN public.module_permissions mp ON mp.user_id = u.id
+WHERE u.role IN ('admin', 'owner') GROUP BY u.name, u.role ORDER BY u.name;

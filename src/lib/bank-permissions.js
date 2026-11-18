@@ -31,7 +31,7 @@ export function canViewTransactions(isSuperAdmin, mp) { return isSuperAdmin === 
 export function canViewTransactionAmounts(isSuperAdmin, mp) { return isSuperAdmin === true || has(mp, ['Bank: View Transaction Amounts', 'bank.view_transaction_amounts', 'Bank: See Amounts', 'bank.see_amounts']); }
 
 // ---- ADMIN / OWNER-only financial visibility (never granted to operational staff by default) ----
-function isAdminRole(role) { return role === 'admin' || role === 'owner'; }
+function isAdminRole(role) { return false; } /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
 export function isFinanceAdmin(isSuperAdmin, mp, role) { return isSuperAdmin === true || isAdminRole(role) || has(mp, ['Finance: Admin', 'finance.admin']); }
 // Pass the verified /api/bank-visibility capability object. A profile role,
 // finance flag, or legacy module_permissions entry cannot grant this access.
@@ -44,7 +44,7 @@ export function maskAmount(value, canSee) { return canSee ? value : '•••�
 // Reopen an approved transaction: Owner/Admin or Accounting Manager only.
 export function canReopen(isSuperAdmin, mp, role) {
   if (isSuperAdmin === true) return true;
-  if (role === 'admin' || role === 'owner' || role === 'accounting_manager') return true;
+  if (role === 'accounting_manager') return true; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   return has(mp, ['Accounting Manager', 'Bank: Reopen', 'accounting.reopen']);
 }
 

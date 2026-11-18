@@ -34,6 +34,10 @@ function num(v) { if (v === null || v === undefined || String(v).trim() === '') 
 // anything" for it) — an overweight charge is still counted as shipping charged in the profit report, but on EXW a line that is
 // ONLY an overweight charge (no freight / trucking / shipping / delivery words) does not mean we ship, so it needs no shipping cost.
 var FREIGHT_WORDS = /ship|freight|forward|truck|deliver|courier|cartage|drayage|شحن|توصيل/i;
+// v55.83-UE (Max, Nov 18: "maa kirpa ... is a CNF where the shipping is included in the price. but we have a surcharge which should just be
+// an additional income to the transport") — a SURCHARGE line (overweight, fuel surcharge…) that names no freight / trucking / shipping /
+// delivery is an extra charge on top, not the shipping itself. On CNF-included it does not turn the invoice into "shipping on a separate line".
+export function isSurchargeOnlyLine(description) { var d = String(description || ''); return /surcharge|over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
 export function isOverweightOnlyLine(description) { var d = String(description || ''); return /over[\s-]?weight/i.test(d) && !FREIGHT_WORDS.test(d); }
 
 export function checkShippingTerms(terms, cost, lines, isShippingLine) {
@@ -67,7 +71,7 @@ export function checkShippingTerms(terms, cost, lines, isShippingLine) {
     if (!shipLines.length) { warnings.push('CNF with a separate shipping line, but no line looks like a shipping charge. Add the shipping line (cost + 7% at least).'); }
     else { markupWarn(); }
   }
-  if (terms === 'CNF_INCLUDED' && shipLines.length) { warnings.push('CNF in the price, but a line looks like a separate shipping charge (“' + shipLines[0].description + '”). Should it be “CNF with a separate line”?'); }
+  if (terms === 'CNF_INCLUDED' && shipLines.some(function (l) { return !isSurchargeOnlyLine(l.description); })) { /* UE: a surcharge on CNF-included is extra transport income, no warning */ warnings.push('CNF in the price, but a line looks like a separate shipping charge (“' + shipLines[0].description + '”). Should it be “CNF with a separate line”?'); }
   return { ok: true, warnings: warnings, value: { shipping_terms: terms, shipping_cost_estimate: c } };
 }
 

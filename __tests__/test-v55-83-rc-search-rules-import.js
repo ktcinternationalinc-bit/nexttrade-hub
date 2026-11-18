@@ -50,8 +50,9 @@ ok('1c: ONE engine — money in AND out, every date, paged past 1,000, never a d
   /\.or\('review_status\.is\.null,review_status\.neq\.duplicate'\)/.test(srv) &&
   !/\.eq\('direction', 'out'\)/.test(srv.split('async function pageBankRows')[1].split('export async function partyFlagRows')[0])); // v55.83-SW realign: the category engine; the RTM / NextTrade marking after it is money-out by nature
 ok('1d: fills every blank (any review status), re-targets earlier rule fills, replaces people\'s picks ONLY when asked; a VERIFIED row is never touched',
-  /var a1 = await batchSet\(db, ids\(pv\.buckets\.blank\), rule\.classification, 'blank'\);/.test(srv) &&
-  /var a2 = await batchSet\(db, ids\(pv\.buckets\.rule\), rule\.classification, 'rule'\);/.test(srv) &&
+  /* TR realign (17 Nov): batchSet also collects the updated ids (res.ids) for the Wave ride-along — same blank/rule modes */
+  /var a1 = await batchSet\(db, ids\(pv\.buckets\.blank\), rule\.classification, 'blank', res\.ids\);/.test(srv) &&
+  /var a2 = await batchSet\(db, ids\(pv\.buckets\.rule\), rule\.classification, 'rule', res\.ids\);/.test(srv) &&
   /var a3 = o\.overwrite_people === true \? await batchSet/.test(srv) &&
   /\.not\('category_verified', 'is', true\); \/\/ a verified row is never touched/.test(srv));
 ok('1e: batched writes (200 per call) — a big apply finishes instead of timing out silently; route budget 60s',

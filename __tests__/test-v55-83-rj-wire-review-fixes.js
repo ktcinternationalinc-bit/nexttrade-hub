@@ -89,7 +89,7 @@ ok('12: 💸 Bills loads and shows the release #, and opens it when editing; a d
 // gap 13 — a failed lookup never looks like "not paid"
 ok('13: lookups throw instead of returning nothing (a paid bill can never look open)', L.indexOf("if (r.error) { throw new Error('Could not read ' + table + ': ' + r.error.message); }") > 0);
 // gap 14 — the owner can accept a bank fee difference
-ok('14: a different bank amount can be accepted by a super admin OR the owner (with the reason)', S.indexOf("g1.ctx.role === 'owner'") > 0);
+ok('14 (→UG): a different bank amount can be accepted ONLY by the super admin (with the reason)', /* UG realign (Max, Nov 18: "the admin should not just have access, i need to give him access") */ S.indexOf('var isSupA = !!(g1 && g1.ctx && g1.ctx.isSuperAdmin);') > 0 && S.indexOf("g1.ctx.role === 'owner'") < 0);
 // gap 15 — older "paid through" spellings
 ok('15: "RTM" on an older bill is RTM Capital; unrelated names are not', W.samePayee('RTM', 'RTM Capital') && W.samePayee('rtm capital ', 'RTM Capital') && !W.samePayee('RTMX', 'RTM Capital') && !W.samePayee('NextTrade Industries', 'RTM Capital') && !W.samePayee('', 'RTM Capital'));
 

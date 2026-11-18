@@ -97,9 +97,15 @@ function mpHas(mpMap, perm) {
   return false;
 }
 
+// v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — accounting & banking come ONLY from
+// the switches Max turns on (or the super admin). An owner / admin role no longer grants any of them; other Hub areas are unchanged.
+var ACCT_PREFIXES = ['bank.', 'bank_transactions.', 'bank_balances.', 'bills.', 'wires.', 'journals.', 'accounting.', 'payments.', 'invoice.', 'invoices.',
+  'customers.', 'ar.', 'pnl.', 'orders.', 'recon.', 'company.', 'advances.', 'commercial.', 'categories.', 'wave.', 'finance.', 'purchase_orders.', 'dashboard.', 'permissions.'];
+export function isAccountingPerm(perm) { var p = String(perm || ''); for (var i = 0; i < ACCT_PREFIXES.length; i++) { if (p.indexOf(ACCT_PREFIXES[i]) === 0) { return true; } } return false; }
 function roleHas(role, perm) {
   if (!role) { return false; }
   if (SENSITIVE_PERMS[perm] === 1) { return false; } // TP — never from a role
+  if ((role === 'owner' || role === 'admin') && isAccountingPerm(perm)) { return false; } // UG — owner / admin: only their switches
   var list = ROLE_DEFAULTS[role];
   if (!list) { return false; }
   if (list.indexOf('*') >= 0) { return true; }

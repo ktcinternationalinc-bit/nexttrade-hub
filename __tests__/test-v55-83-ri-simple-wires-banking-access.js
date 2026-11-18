@@ -56,7 +56,7 @@ ok('3b: the wire screens use it (no dark-glass bg-white cards with dark inline t
 var B = R('src/components/BankingAccessPanel.jsx'); var ST = R('src/components/SettingsTab.jsx');
 ok('4a: Settings has its own “🏦 Banking & Accounting Access” section, second in the row', ST.indexOf("[['roles', 'Team & Roles'], ['banking', '🏦 Banking & Accounting Access']") > 0 && ST.indexOf("section === 'banking'") > 0);
 ok('4b: six plain groups in order: books → money → bank work → bills → wires → order recon', (function () {
-  var t = ['1 · Which books can they open?', '2 · Which money can they see?', '3 · Bank work', '4 · Bills (what we owe)', '5 · Wires', '6 · Order reconciliation'];
+  /* UG realign (Max, Nov 18: "the admin should not just have access, i need to give him access") */ var t = ['1 · Which books can they open?', '2 · Which money can they see?', '3 · Bank work', '3b · Invoices, customers & payments', '4 · Bills (what we owe)', '5 · Wires', '6 · Orders & order reconciliation', '7 · Nextrade & RTM books', '8 · Sourcing desk'];
   var at = -1; return t.every(function (x) { var i = B.indexOf(x); var good = i > at; at = i; return good; });
 })());
 ok('4c: every switch we described is in the box (P1a, P1b, P2, P3, bank balances, overview, bank work, bills, wires, recon)',

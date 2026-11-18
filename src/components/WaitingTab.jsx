@@ -11,7 +11,7 @@ var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 export default function WaitingTab(props) {
   var userProfile = props.userProfile; var mp = props.modulePerms || {};
   var isSuper = props.isSuperAdmin === true || (userProfile && userProfile.role === 'super_admin');
-  var boss = isSuper || (userProfile && (userProfile.role === 'owner' || userProfile.role === 'admin'));
+  var boss = isSuper; /* v55.83-UG (Max, Nov 18: "the admin should not just have access, i need to give him access") — only the super admin bypasses; admins/owners use their switches */
   var perms = { bills: boss || mp['bills.manage'] === true, prepare: boss || mp['wires.prepare'] === true, signoff: boss || mp['wires.signoff'] === true, send: boss || mp['wires.send'] === true };
   var canBills = boss || mp['bills.view'] === true || mp['bills.manage'] === true;
   var canWires = boss || mp['wires.view'] === true || perms.prepare || perms.signoff || perms.send;
