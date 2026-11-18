@@ -43,8 +43,6 @@ export const BUILD_HISTORY = [
     ]
   },
   {
-  },
-  {
     version: 'v55.83-UH',
     date: '2026-11-18',
     title: 'Sourcing desk: every action now checks who is really signed in',
