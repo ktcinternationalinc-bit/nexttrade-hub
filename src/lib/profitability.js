@@ -195,6 +195,8 @@ export function resolveCost(q, billLines, opts) {
     rows.forEach(function (x) { lb += x.lb; if (!x.bad) { cost += x.cost; comm += x.comm; } });
     // one applicable purchase line without a usable cost makes the whole rate unknown — a partial rate would look exact and be wrong
     return { base_per_lb: bad.length ? null : cost / lb, commission_per_lb: bad.length ? null : comm / lb, method: method, pounds_bought: lb,
+      // v55.83-UL (Codex 20:50) — every applicable purchase is on the FREE list: a validated, known $0 cost (not "missing")
+      known_zero: !bad.length && cost === 0 && rows.length > 0 && rows.every(function (x) { return x.free === true; }),
       cost_unknown: bad.length > 0, missing_cost_lines: bad.map(function (x) { return { bill_id: x.l.bill_id, bill_number: x.l.bill_number || null, description: x.l.description }; }),
       sources: rows.map(function (x) { return { bill_id: x.l.bill_id, bill_number: x.l.bill_number || null, vendor: x.l.vendor || null, bill_date: x.l.bill_date || null, description: x.l.description, qty: Number(x.l.qty) || 0, unit: x.l.unit || null, pounds: x.lb, cost: x.bad ? null : r2(x.cost), commission: x.bad ? null : r2(x.comm) }; }) };
   }
@@ -357,7 +359,8 @@ export function buildCells(input) {
     if (!c.release) { c.outbound_cost = null; }
     var cost = (c.pounds !== null && input.costOf) ? input.costOf({ id: c.invoice_id, date: c.invoice_date, releases: c.release ? [c.release] : [] }, c) : null;
     c.cost_method = cost ? cost.method : null; c.cost_level = cost ? (cost.level || null) : null; c.cost_note = cost ? (cost.note || null) : null; c.cost_sources = cost ? (cost.sources || []) : [];
-    var costKnown = !!cost && cost.base_per_lb !== null && cost.base_per_lb !== undefined && Number(cost.base_per_lb) > 0 && !isNaN(Number(cost.commission_per_lb));
+    // v55.83-UL (Codex 20:50) — a $0 cost counts ONLY when resolveCost validated it (every purchase on the free list); any other 0 stays missing
+    var costKnown = !!cost && cost.base_per_lb !== null && cost.base_per_lb !== undefined && (Number(cost.base_per_lb) > 0 || (Number(cost.base_per_lb) === 0 && cost.known_zero === true)) && !isNaN(Number(cost.commission_per_lb));
     c.base_cost_per_lb = costKnown ? r4(cost.base_per_lb) : null; c.commission_per_lb = costKnown ? r4(cost.commission_per_lb) : null;
     c.base_cost = costKnown && c.pounds !== null ? r2(c.pounds * cost.base_per_lb) : null;
     c.commission = costKnown && c.pounds !== null ? r2(c.pounds * cost.commission_per_lb) : null;
