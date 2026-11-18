@@ -47,13 +47,24 @@ export var PERMISSION_ALIASES = {
   'accounting.wavehub.access': ['accounting.wavehub.access', 'accounting.view']
 };
 
-export function permFamily(perm) {
-  var out = [perm]; var a = PERMISSION_ALIASES[perm] || [];
-  for (var i = 0; i < a.length; i++) { if (out.indexOf(a[i]) < 0 && !(a[i] === 'accounting.view' && perm !== 'accounting.view')) { out.push(a[i]); } }
-  if (perm === 'accounting.view') { return ['accounting.view']; }
+// v55.83-UG (Codex QA 18:19) — a name resolves to EVERY switch it belongs to, in both directions (invoice.create ↔ invoices.create ↔
+// 'Invoice: Create'). The old both-hubs key 'accounting.view' never joins ClickBooks and Wave into one switch.
+function canonicalsOf(name) {
+  var out = []; var ks = Object.keys(PERMISSION_ALIASES);
+  for (var i = 0; i < ks.length; i++) { var k = ks[i]; if (k === 'accounting.view' && name !== 'accounting.view') { continue; } if (k === name || PERMISSION_ALIASES[k].indexOf(name) >= 0) { out.push(k); } }
   return out;
 }
-function grantNames(perm) { var out = [perm]; var a = PERMISSION_ALIASES[perm] || []; for (var i = 0; i < a.length; i++) { if (out.indexOf(a[i]) < 0) { out.push(a[i]); } } return out; }
+// every name that can GRANT this switch
+export function grantNames(perm) {
+  var out = [perm]; var cs = canonicalsOf(perm);
+  for (var i = 0; i < cs.length; i++) { var l = [cs[i]].concat(PERMISSION_ALIASES[cs[i]] || []); for (var j = 0; j < l.length; j++) { if (out.indexOf(l[j]) < 0) { out.push(l[j]); } } }
+  return out;
+}
+// every name whose OFF turns this switch off (and that a toggle keeps in step)
+export function permFamily(perm) {
+  if (perm === 'accounting.view') { return ['accounting.view']; }
+  return grantNames(perm).filter(function (n) { return n !== 'accounting.view'; });
+}
 // onMap / offMap: { name: true }. Returns true / false / null (not set).
 export function effectiveSwitch(onMap, offMap, perm) {
   var fam = permFamily(perm); var i;

@@ -1155,6 +1155,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     } catch (err) {
       console.error('[togglePermission]', err);
       setPermissions(prev => ({ ...prev, [userId]: { ...prev[userId], [module]: current } })); // revert
+      // v55.83-UG (Codex QA 18:19) — a later write may have failed after an earlier one saved: re-read this person's saved switches so the page shows what is really stored
+      try { const rr = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', userId); if (!rr.error && rr.data) { const fresh = {}; rr.data.forEach(function (x) { fresh[x.module_name] = x.has_access; }); setPermissions(prev => ({ ...prev, [userId]: fresh })); } } catch (eR) { /* keep the reverted view */ }
       if (toast) toast.error('Could not save permission "' + module + '": ' + ((err && err.message) || 'unknown error') + '. (You may lack rights to edit permissions, or a DB policy is blocking it.)');
     }
   };
