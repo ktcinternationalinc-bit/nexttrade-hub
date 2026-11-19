@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UX',
+    date: '2026-11-19',
+    title: 'Wires: a payment can never use money another open wire holds — also from the same transfer',
+    items: [
+      { text: 'When a wire is matched to its bank line, each bill payment and the closing of that wire line now happen together, in one step. Every payment then gets a final check with no exceptions: payments + amounts still held on open wires can never be more than the bill.' },
+      { text: 'This closes a gap: one transfer to RTM / NextTrade can fund several requests, and a separate payment from that same transfer could still use money another request was holding.' },
+      { superAdminOnly: true, text: 'Technical: run sql/v55-83-US-partial-wires.sql (again if an earlier copy was run): deferred constraint trigger hub_bill_payment_final, hub_wire_line_pay (payment + close in one transaction; bank-then-bill lock order). Postgres 16 proof 33/33.' },
+    ],
+  },
+  {
     version: 'v55.83-UV',
     date: '2026-11-19',
     title: "Wires and bills: payments respect what open wires hold; a paid bill cannot be voided, even at the same moment",

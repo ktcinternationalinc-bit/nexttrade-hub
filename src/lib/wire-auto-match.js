@@ -94,15 +94,24 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
   var made = [];
   for (var j = 0; j < lines.length; j++) {
     var lb = lines[j];
-    var ip = await db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id, amount: r2(lb.amount), paid_date: payDate, bank_transaction_id: t0.id, method: method, created_by: actorId || null }).select('id').single();
+    // v55.83-UW (Codex 05:51) — the payment and the closing of THIS wire line happen in ONE database step (hub_wire_line_pay), so the
+    // database's final check (payments + lines still open ≤ the bill) never sees this wire's own reservation. A database without that
+    // step (sql/v55-83-US-partial-wires.sql not run yet) has no such check either: there the old two-step way is used.
+    var ip = null; var atomic = false;
+    var rp = await db.rpc('hub_wire_line_pay', { p: { line_id: lb.id, paid_date: payDate, bank_transaction_id: t0.id, method: method, actor: actorId || null } });
+    if (rp && rp.error && /hub_wire_line_pay/.test(String(rp.error.message || '')) && /does not exist|Could not find|schema cache|no rpc/i.test(String(rp.error.message || ''))) {
+      ip = await db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id, amount: r2(lb.amount), paid_date: payDate, bank_transaction_id: t0.id, method: method, created_by: actorId || null }).select('id').single();
+    } else if (rp && rp.error) { ip = { error: rp.error };
+    } else if (!rp || !rp.data || rp.data.ok !== true) { ip = { error: { message: 'the wire line could not be paid (' + ((rp && rp.data && rp.data.code) || 'refused') + ')' } };
+    } else { ip = { data: { id: rp.data.payment_id }, error: null }; atomic = true; }
     if (ip.error) {
-      for (var k = 0; k < made.length; k++) { await db.from('vendor_bill_payments').update({ voided: true }).eq('id', made[k].payment_id); }
+      for (var k = 0; k < made.length; k++) { await db.from('vendor_bill_payments').update({ voided: true }).eq('id', made[k].payment_id); if (made[k].atomic) { await db.from('wire_package_lines').update({ is_open: true, payment_id: null }).eq('id', made[k].line_id); } }
       await release();
       return { ok: false, status: 500, error: 'Recording the bill payments failed (' + ip.error.message + ') — the ones already written were voided again; nothing changed.' };
     }
-    made.push({ line_id: lb.id, payment_id: ip.data.id });
+    made.push({ line_id: lb.id, payment_id: ip.data.id, atomic: atomic });
   }
-  for (var m = 0; m < made.length; m++) { await db.from('wire_package_lines').update({ is_open: false, payment_id: made[m].payment_id }).eq('id', made[m].line_id); }
+  for (var m = 0; m < made.length; m++) { if (!made[m].atomic) { await db.from('wire_package_lines').update({ is_open: false, payment_id: made[m].payment_id }).eq('id', made[m].line_id); } }
   var note = String(o.note || '').trim().substring(0, 500) || (fee ? 'extra charge $' + fee.toFixed(2) + ' (the bank line is $' + r2(t0.amount_abs).toFixed(2) + ')' : null);
   var patch = { status: 'attached', bank_transaction_id: t0.id, attached_by: actorId || null, attached_at: new Date().toISOString(), attach_note: note, updated_at: new Date().toISOString() };
   var upA = await db.from('wire_packages').update(Object.assign({}, patch, { bank_fee: fee, matched_auto: !!o.auto })).eq('id', pkg.id).eq('status', 'sent').select('id');

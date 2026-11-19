@@ -94,6 +94,8 @@ function queue(pkgId) { return call(route, { action: 'open_bills', payee_kind: '
   db.t.vendor_bill_payments[0].voided = true;
   var v2 = await call(bills, { action: 'void_bill', id: B, reason: 'duplicate copy' });
   check('once the payment is undone, the bill can be voided', v2.ok === true && db.t.vendor_bills[0].record_status === 'void', v2);
+  var wam = require('fs').readFileSync(path.join(root, 'src/lib/wire-auto-match.js'), 'utf8');
+  check('attaching a wire pays each line through the one-step database function (payment + close together); the two-step way only when that function is not installed', wam.indexOf("db.rpc('hub_wire_line_pay', { p: { line_id: lb.id") > 0 && wam.indexOf('if (!made[m].atomic)') > 0 && wam.indexOf('if (made[k].atomic) { await db.from(\'wire_package_lines\').update({ is_open: true, payment_id: null })') > 0);
   console.log('\nUS partial wires flow: ' + pass + ' passed, ' + failN + ' failed');
   process.exit(failN ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(1); });

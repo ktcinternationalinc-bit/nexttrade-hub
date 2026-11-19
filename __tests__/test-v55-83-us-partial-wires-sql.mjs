@@ -33,7 +33,8 @@ try {
   await db.query(`
     CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;
     CREATE TABLE public.vendor_bills (id uuid PRIMARY KEY, vendor_name text, bill_number text, total_amount numeric(14,2), record_status text DEFAULT 'active');
-    CREATE TABLE public.vendor_bill_payments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bill_id uuid REFERENCES public.vendor_bills(id), amount numeric(14,2), voided boolean, paid_date date, bank_transaction_id uuid);
+    CREATE TABLE public.vendor_bill_payments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bill_id uuid REFERENCES public.vendor_bills(id), amount numeric(14,2), voided boolean, paid_date date, bank_transaction_id uuid, method text, created_by uuid);
+    CREATE ROLE service_role NOLOGIN;
     CREATE TABLE public.wire_packages (id uuid PRIMARY KEY, status text DEFAULT 'draft', bank_transaction_id uuid, funding_txn_id uuid);
     CREATE TABLE public.wire_package_lines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), package_id uuid, bill_id uuid REFERENCES public.vendor_bills(id), amount numeric(14,2), is_open boolean NOT NULL DEFAULT true, payment_id uuid, created_at timestamptz DEFAULT now());
     CREATE UNIQUE INDEX uq_wpkg_line_open_bill ON public.wire_package_lines (bill_id) WHERE is_open;`);
@@ -45,7 +46,7 @@ try {
   var sql = fs.readFileSync(path.join(root, 'sql/v55-83-US-partial-wires.sql'), 'utf8');
   await db.query(sql); var r2 = await db.query(sql);
   var checks = (Array.isArray(r2) ? r2[r2.length - 1] : r2).rows;
-  check('US SQL run twice: its check list says OK on every line (4)', checks.length === 4 && checks.every(function (c) { return c.result === 'OK'; }), checks);
+  check('US SQL run twice: its check list says OK on every line (5)', checks.length === 5 && checks.every(function (c) { return c.result === 'OK'; }), checks);
 
   // the 14277 case: $45,250 bill, $27,885.78 on wire 1, the remaining $17,364.22 on wire 2
   await reset();
@@ -61,11 +62,18 @@ try {
   // a wire is sent: its payment is recorded FIRST, then its line closes (the SP attach order) — must work
   var T1 = '00000000-0000-0000-0000-0000000000f1';
   var early = await q(db, "INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date) VALUES ('" + B + "', 27885.78, '2026-08-05')");
-  check('a payment NOT tied to the wire\'s bank line, while the wires hold the whole bill, is refused (it says how much is held)', /HUB_GUARD: \$44,885\.78 of this bill is held on an open wire — only \$364\.22 can be paid now/.test(early.error || ''), early);
+  check('a payment NOT tied to the wire\'s bank line, while the wires hold the whole bill, is refused (it says how much is held)', /HUB_GUARD: \$44,885\.78 of this bill is held on an open wire/.test(early.error || ''), early);
   await db.query("UPDATE public.wire_packages SET status = 'sent', bank_transaction_id = '" + T1 + "' WHERE id = '" + P1 + "'"); // the wire claims its bank line (attachWire does this first)
-  var pay1 = await q(db, "INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id) VALUES ('" + B + "', 27885.78, '2026-08-05', '" + T1 + "')");
+  var sameBank = await q(db, "INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id) VALUES ('" + B + "', 27885.78, '2026-08-05', '" + T1 + "')");
+  check('a plain payment from the wire\'s OWN bank line, made WITHOUT closing the wire line, is refused too (the bank line is not the wire\'s identity — Codex 05:51)', /HUB_GUARD/.test(sameBank.error || ''), sameBank);
+  var l1 = (await db.query("SELECT id FROM public.wire_package_lines WHERE package_id = '" + P1 + "'")).rows[0].id;
+  var pay1 = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: l1, paid_date: '2026-08-05', bank_transaction_id: T1, method: 'wire' })]);
+  var payRow = (await db.query("SELECT l.is_open, l.payment_id, p.amount FROM public.wire_package_lines l LEFT JOIN public.vendor_bill_payments p ON p.id = l.payment_id WHERE l.id = '" + l1 + "'")).rows[0];
+  check('hub_wire_line_pay: the payment is recorded AND that exact line is closed and linked to it, in one step', !pay1.error && pay1.rows[0].r.ok === true && payRow.is_open === false && Number(payRow.amount) === 27885.78, [pay1, payRow]);
+  var again = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: l1, paid_date: '2026-08-05', bank_transaction_id: T1 })]);
+  check('paying the same line twice → refused (line_closed), no second payment', again.rows && again.rows[0].r.code === 'line_closed' && Number((await db.query("SELECT count(*) AS n FROM public.vendor_bill_payments WHERE bill_id = '" + B + "' AND voided IS NOT TRUE")).rows[0].n) === 1, again);
   var close1 = await q(db, "UPDATE public.wire_package_lines SET is_open = false WHERE package_id = '" + P1 + "'");
-  check('the wire\'s OWN payment (same bank line), recorded while its line is still open, then the line closes — works, in separate steps too', !pay1.error && !close1.error, [pay1, close1]);
+  check('closing an already closed line again changes nothing', !close1.error, close1);
   var a4 = await q(db, line(P3, 364.22));
   check('after wire 1 is paid: $27,885.78 paid + $17,000 open → $364.22 more fits on a third wire', !a4.error, a4);
   var a5 = await q(db, line(P3, 0.01));
@@ -105,7 +113,7 @@ try {
   function spay(amt, txn) { return "INSERT INTO public.vendor_bill_payments (bill_id, amount" + (txn ? ', bank_transaction_id' : '') + ") VALUES ('" + BB1 + "', " + amt + (txn ? ", '" + txn + "'" : '') + ")"; }
   await small(); await q(db, sline(P1, 80));
   var c1 = await q(db, spay(50)); var c2 = await q(db, spay(20));
-  check('$100 bill, $80 on an open wire: a $50 payment is REFUSED (was accepted → $130 committed); $20 is accepted', /HUB_GUARD: \$80\.00 of this bill is held on an open wire — only \$20\.00 can be paid now/.test(c1.error || '') && !c2.error, [c1, c2]);
+  check('$100 bill, $80 on an open wire: a $50 payment is REFUSED (was accepted → $130 committed); $20 is accepted', /HUB_GUARD: \$80\.00 of this bill is held on an open wire/.test(c1.error || '') && !c2.error, [c1, c2]);
   await small(); await q(db, spay(50));
   var c3 = await q(db, sline(P1, 80)); var c4 = await q(db, sline(P1, 50));
   check('the other order: $50 paid first → an $80 wire line is refused, $50 accepted', /HUB_GUARD: only \$50\.00 is left/.test(c3.error || '') && !c4.error, [c3, c4]);
@@ -113,7 +121,24 @@ try {
   await small(); var F1 = '00000000-0000-0000-0000-0000000000f9';
   await db.query("UPDATE public.wire_packages SET funding_txn_id = '" + F1 + "' WHERE id = '" + P2 + "'"); await q(db, sline(P2, 100));
   var c5 = await q(db, spay(100, '00000000-0000-0000-0000-0000000000aa')); var c6 = await q(db, spay(100, F1));
-  check('a funded request: a payment from ANOTHER bank line is refused; the payment from its own transfer is accepted', /HUB_GUARD/.test(c5.error || '') && !c6.error, [c5, c6]);
+  check('a funded request holding the whole bill: a payment from ANOTHER bank line is refused — and so is an independent payment from the SAME transfer (Codex 05:51: 130 against 100 used to commit)', /HUB_GUARD/.test(c5.error || '') && /HUB_GUARD/.test(c6.error || ''), [c5, c6]);
+  await db.query('BEGIN'); var sp1 = await q(db, spay(100, F1)); var sp2 = await q(db, "UPDATE public.wire_package_lines SET is_open = false WHERE package_id = '" + P2 + "'"); var spc = await q(db, 'COMMIT');
+  check('the funded-request step (payment, then its line closed, in ONE transaction) is accepted — the check runs at the end', !sp1.error && !sp2.error && !spc.error, [sp1, sp2, spc]);
+  // two requests drawing on ONE transfer, both holding part of the same $100 bill
+  await small(); await db.query("UPDATE public.wire_packages SET funding_txn_id = '" + F1 + "' WHERE id IN ('" + P1 + "', '" + P2 + "')");
+  await q(db, sline(P1, 40)); await q(db, sline(P2, 60));
+  var la = (await db.query("SELECT id FROM public.wire_package_lines WHERE package_id = '" + P1 + "'")).rows[0].id; var lb2 = (await db.query("SELECT id FROM public.wire_package_lines WHERE package_id = '" + P2 + "'")).rows[0].id;
+  var t1 = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: la, paid_date: '2026-08-05', bank_transaction_id: F1 })]);
+  var t2 = await q(db, spay(10, F1));
+  var t3 = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: lb2, paid_date: '2026-08-05', bank_transaction_id: F1 })]);
+  var endT = (await db.query("SELECT (SELECT coalesce(sum(amount),0) FROM public.vendor_bill_payments WHERE bill_id = '" + BB1 + "' AND voided IS NOT TRUE) AS paid, (SELECT count(*) FROM public.wire_package_lines WHERE bill_id = '" + BB1 + "' AND is_open) AS open")).rows[0];
+  check('two requests on ONE transfer ($40 + $60 of a $100 bill): request 1 pays its own line; an independent $10 from the same transfer is refused while request 2 still holds $60; request 2 pays its line → exactly $100 paid, nothing held', !t1.error && t1.rows[0].r.ok && /HUB_GUARD/.test(t2.error || '') && !t3.error && t3.rows[0].r.ok && Number(endT.paid) === 100 && Number(endT.open) === 0, [t1, t2, t3, endT]);
+  // a close that fails: the payment must not be left behind
+  await small(); await q(db, sline(P1, 80)); var lf = (await db.query("SELECT id FROM public.wire_package_lines WHERE package_id = '" + P1 + "'")).rows[0].id;
+  await db.query("CREATE FUNCTION public.qa_noclose() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN IF NEW.is_open IS FALSE THEN RAISE EXCEPTION 'QA injected close failure'; END IF; RETURN NEW; END $f$; CREATE TRIGGER qa_noclose BEFORE UPDATE ON public.wire_package_lines FOR EACH ROW EXECUTE FUNCTION public.qa_noclose();");
+  var fc = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: lf, paid_date: '2026-08-05' })]);
+  await db.query('DROP TRIGGER qa_noclose ON public.wire_package_lines; DROP FUNCTION public.qa_noclose();');
+  check('if closing the line fails, NO payment is left behind and the line is still open (all or nothing)', /QA injected close failure/.test(fc.error || '') && Number((await db.query("SELECT count(*) AS n FROM public.vendor_bill_payments WHERE bill_id = '" + BB1 + "'")).rows[0].n) === 0 && (await db.query("SELECT is_open FROM public.wire_package_lines WHERE id = '" + lf + "'")).rows[0].is_open === true, fc);
   // race: a payment and a wire line for the same bill at the same moment
   await small();
   await db.query('BEGIN'); var rc1 = await q(db, sline(P1, 80));
