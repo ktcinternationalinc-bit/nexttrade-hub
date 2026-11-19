@@ -30,6 +30,17 @@ export function parseStatementAmount(v) {
   var c = Math.round(Number(s.replace(/,/g, '')) * 100);
   return isFinite(c) ? (neg ? -c : c) : null;
 }
+// v55.83-VG (Codex 19 Nov 16:13 / 16:28, P1) — a figure keeps its mark. "100.00 DR" as a BALANCE is an overdrawn balance (−100);
+// "(100.00)" and "-100.00" too. In an amount column the mark is evidence of direction (DR = money out, CR = money in), never a
+// second minus. → { mag (cents, never negative), mark: 'DR' | 'CR' | 'NEG' | null } or null when the text is not money.
+export function parseStatementFigure(v) {
+  var s0 = String(v || '').trim(); var mark = null;
+  var m = s0.match(/\s*(CR|DR)\.?$/i); if (m) { mark = m[1].toUpperCase(); s0 = s0.substring(0, s0.length - m[0].length).trim(); }
+  var c = parseStatementAmount(s0); if (c === null) { return null; }
+  if (c < 0) { if (mark) { return { mag: -c, mark: 'NEG', mixed: true }; } mark = 'NEG'; c = -c; }
+  return { mag: c, mark: mark };
+}
+function signedBalance(f) { return f === null || f === undefined ? null : ((f.mark === 'DR' || f.mark === 'NEG') ? -f.mag : f.mag); }
 function cluster(values, tol) { // [{ v, ... }] → [{ at, n }] sorted by position
   var out = [];
   values.slice().sort(function (a, b) { return a - b; }).forEach(function (v) {
@@ -44,7 +55,16 @@ function linesOf(items) { // words on one baseline → one line, left to right; 
     var r = rows[rows.length - 1];
     if (r && Math.abs(r.y - it.y) <= 2.5) { r.items.push(it); } else { rows.push({ y: it.y, items: [it] }); }
   });
-  rows.forEach(function (r) { r.items.sort(function (a, b) { return a.x - b.x; }); });
+  rows.forEach(function (r) {
+    r.items.sort(function (a, b) { return a.x - b.x; });
+    var out = [];
+    r.items.forEach(function (it) {
+      var prev = out[out.length - 1];
+      if (prev && /^(CR|DR)\.?$/i.test(it.s) && parseStatementAmount(prev.s) !== null && !/(CR|DR)\.?$/i.test(prev.s) && it.x - prev.r >= -2 && it.x - prev.r <= 30) { prev.s = prev.s + ' ' + it.s.toUpperCase().replace('.', ''); return; }
+      out.push(it);
+    });
+    r.items = out;
+  });
   return rows;
 }
 
@@ -77,13 +97,14 @@ export function statementFromTextItems(pages) {
       var desc = []; var amt = {};
       l.items.slice(1).forEach(function (it) {
         var a = parseStatementAmount(it.s); var c = a !== null && it.x > descX + 20 ? colOf(it) : -1;
-        if (c >= 0) { amt[c] = a; } else if (it.x >= descX - 6) { desc.push(it.s); }
+        if (c >= 0) { amt[c] = parseStatementFigure(it.s); } else if (it.x >= descX - 6) { desc.push(it.s); }
       });
       var text = desc.join(' ').replace(/\s+/g, ' ').trim();
-      var bal = amt[balCol] === undefined ? null : amt[balCol];
+      var bal = amt[balCol] === undefined ? null : signedBalance(amt[balCol]);
       if (/OPENING BALANCE|BALANCE BROUGHT FORWARD|رصيد افتتاحي|الرصيد الافتتاحي/i.test(text)) { if (opening === null && bal !== null) { opening = bal; } cur = null; return; }
       if (/CLOSING BALANCE|BALANCE CARRIED FORWARD|رصيد الاقفال|الرصيد الختامي/i.test(text)) { if (bal !== null) { closing = bal; } cur = null; return; }
-      cur = { date: dt, description: text, a0: amt[0] === undefined || balCol === 0 ? null : amt[0], a1: cols.length === 3 ? (amt[1] === undefined ? null : amt[1]) : null, balance: bal, page: l.page };
+      var f0 = amt[0] === undefined || balCol === 0 ? null : amt[0]; var f1 = cols.length === 3 ? (amt[1] === undefined ? null : amt[1]) : null;
+      cur = { date: dt, description: text, a0: f0 ? f0.mag : null, m0: f0 ? f0.mark : null, a1: f1 ? f1.mag : null, m1: f1 ? f1.mark : null, balance: bal, page: l.page };
       rows.push(cur);
     } else if (Math.abs(first.x - descX) <= 6) {
       // an undated line that STARTS in the description column (a totals line starting at the page edge is not one)
@@ -91,11 +112,11 @@ export function statementFromTextItems(pages) {
       var hasFig = l.items.some(function (it) { return parseStatementAmount(it.s) !== null && colOf(it) >= 0 && it.x > descX + 20; });
       if (/CLOSING BALANCE|BALANCE CARRIED FORWARD|رصيد الاقفال|الرصيد الختامي/i.test(lineText)) {
         // the closing balance printed on its own line, without a date
-        l.items.forEach(function (it) { var a2 = parseStatementAmount(it.s); if (a2 !== null && colOf(it) === balCol) { closing = a2; } });
+        l.items.forEach(function (it) { var a2 = parseStatementFigure(it.s); if (a2 !== null && colOf(it) === balCol) { closing = signedBalance(a2); } });
         cur = null; return;
       }
       if (/OPENING BALANCE|BALANCE BROUGHT FORWARD|رصيد افتتاحي|الرصيد الافتتاحي/i.test(lineText)) {
-        l.items.forEach(function (it) { var a3 = parseStatementAmount(it.s); if (a3 !== null && colOf(it) === balCol && opening === null) { opening = a3; } });
+        l.items.forEach(function (it) { var a3 = parseStatementFigure(it.s); if (a3 !== null && colOf(it) === balCol && opening === null) { opening = signedBalance(a3); } });
         cur = null; return;
       }
       // a continuation line (it may be the first line of the next page): words only, no figure in a money column
@@ -121,7 +142,7 @@ export function statementFromTextItems(pages) {
   }
   // v55.83-VG (Codex 19 Nov 15:48 / 16:03, P1) — PROVED means: exactly ONE reading agrees with the bank's printed balances.
   // If two readings both agree, nothing is proved, and nothing may be imported on a guess.
-  var best; var proved = false; var ambiguous = false;
+  var best; var proved = false; var ambiguous = false; var unsupported = false;
   if (cols.length === 3) {
     var A = run(true); var B = run(false);
     var aFits = A.misses.length === 0 && A.hits > 0; var bFits = B.misses.length === 0 && B.hits > 0;
@@ -129,15 +150,22 @@ export function statementFromTextItems(pages) {
     else if (aFits || bFits) { best = aFits ? A : B; proved = true; }
     else { best = A.misses.length <= B.misses.length ? A : B; proved = false; }
     if (ambiguous) { best = { hits: A.hits, misses: [], signed: rows.map(function () { return null; }), end: null }; }
+    else if (proved) {
+      var outFirst = best === A;
+      rows.forEach(function (r) { var om = outFirst ? r.m0 : r.m1; var im = outFirst ? r.m1 : r.m0; if (om === 'CR' || im === 'DR' || om === 'NEG' || im === 'NEG') { unsupported = true; } });
+    } else { rows.forEach(function (r) { if (r.m0 === 'NEG' || r.m1 === 'NEG') { unsupported = true; } }); }
   } else {
     // one amount column: each run of rows between two printed balances is signed by the ONLY choice of + / − that moves the
     // balance from one printed figure to the next. No choice fits = the bank's figure disagrees. More than one fits = not proved.
     var bal2 = opening; var signed2 = []; var hits2 = 0; var misses2 = []; var pending = [];
+    rows.forEach(function (r) { if (r.m0 === 'NEG') { unsupported = true; } });
     rows.forEach(function (r) {
       pending.push(r);
       if (r.balance !== null && bal2 !== null) {
         var target = r.balance - bal2; var n = pending.length; var found = null; var count = 0;
-        if (n <= 12) { for (var mask = 0; mask < (1 << n) && count < 2; mask++) { var sum = 0; for (var i = 0; i < n; i++) { sum += ((mask >> i) & 1 ? 1 : -1) * (pending[i].a0 || 0); } if (sum === target) { count++; if (found === null) { found = mask; } } } }
+        if (n <= 12) { for (var mask = 0; mask < (1 << n) && count < 2; mask++) { var sum = 0; var allowed = true;
+          for (var i = 0; i < n; i++) { var plus = ((mask >> i) & 1) === 1; var mk = pending[i].m0; if ((mk === 'DR' && plus) || (mk === 'CR' && !plus)) { allowed = false; break; } sum += (plus ? 1 : -1) * (pending[i].a0 || 0); }
+          if (allowed && sum === target) { count++; if (found === null) { found = mask; } } } }
         if (n > 12 || count > 1) { ambiguous = true; pending.forEach(function () { signed2.push(null); }); }
         else if (count === 0) { misses2.push({ date: r.date, description: r.description.substring(0, 60), expected: r.balance / 100, got: null }); pending.forEach(function () { signed2.push(null); }); }
         else { hits2++; pending.forEach(function (pr, i2) { signed2.push(((found >> i2) & 1 ? 1 : -1) * (pr.a0 || 0)); }); }
@@ -162,8 +190,8 @@ export function statementFromTextItems(pages) {
   });
   var check = { rows: tx.length, lines_found: rows.length, pages: (pages || []).length, opening: opening === null ? null : opening / 100, closing: closing === null ? null : closing / 100, total_in: totalIn / 100, total_out: totalOut / 100,
     balances_checked: best.hits + best.misses.length, balances_agree: best.hits, mismatches: best.misses.slice(0, 20), closing_agrees: closingOk, rows_without_a_proved_sign: unresolved.length,
-    direction_proved: proved, two_readings_fit: ambiguous, rows_after_the_last_balance: tailUnchecked, first_date: rows[0].date, last_date: rows[rows.length - 1].date };
-  check.ok = proved && !ambiguous && best.misses.length === 0 && unresolved.length === 0 && closingOk !== false && best.hits > 0 && tailUnchecked === 0;
+    direction_proved: proved, two_readings_fit: ambiguous, unsupported_marks: unsupported, rows_after_the_last_balance: tailUnchecked, first_date: rows[0].date, last_date: rows[rows.length - 1].date };
+  check.ok = proved && !ambiguous && !unsupported && best.misses.length === 0 && unresolved.length === 0 && closingOk !== false && best.hits > 0 && tailUnchecked === 0;
   // ok = the PDF could be read · importable = every row is proved against the bank's own balances. ONLY importable rows may be saved.
   return { ok: true, error: null, importable: check.ok === true, transactions: check.ok === true ? tx : [], read_rows: tx, unresolved: unresolved, check: check };
 }
@@ -174,6 +202,7 @@ export function statementRefusalText(check) {
   var m = function (n) { return n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var why = [];
   if (!check.balances_checked && !check.two_readings_fit) { why.push('the statement prints no running balance to check the rows against'); }
+  if (check.unsupported_marks) { why.push('the statement marks amounts with DR / CR, a minus or brackets in a way that does not agree with the balances, so the direction of those amounts cannot be trusted'); }
   if (check.two_readings_fit) { why.push('the balances fit BOTH ways round, so it cannot be proved which amounts are money in and which are money out'); }
   if (check.mismatches && check.mismatches.length) { why.push(check.mismatches.length + ' printed balance' + (check.mismatches.length === 1 ? ' does' : 's do') + ' not agree with the rows (first: ' + check.mismatches[0].date + ' — the bank prints ' + m(check.mismatches[0].expected) + ')'); }
   if (check.rows_without_a_proved_sign && !check.two_readings_fit) { why.push(check.rows_without_a_proved_sign + ' row' + (check.rows_without_a_proved_sign === 1 ? '' : 's') + ' could not be proved as money in or money out'); }
