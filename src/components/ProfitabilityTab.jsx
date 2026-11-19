@@ -101,6 +101,11 @@ export default function ProfitabilityTab(props) {
     return function () { clearTimeout(t); window.removeEventListener('resize', size); };
   });
   useEffect(function () { if (!full) { return undefined; } function esc(e) { if (e.key === 'Escape') { setFull(false); } } window.addEventListener('keydown', esc); return function () { window.removeEventListener('keydown', esc); }; }, [full]);
+  // v55.83-VQ (Max, Nov 19: in full screen, “type it” / identifying a product "takes me to a screen where I can't move. I'm frozen") —
+  // those buttons open Containers or Set-up, which have no full-screen table and no Exit button, while full screen stayed ON and
+  // kept the page locked. Full screen now ends the moment the view is one that has no full-screen table.
+  var FULL_VIEWS = ['product', 'customer', 'invoice', 'period'];
+  useEffect(function () { if (full && FULL_VIEWS.indexOf(view) < 0) { setFull(false); } }, [view, full]);
   // v55.83-UM (Codex UI P2) — no guard flag: copy the left position only when it differs, so a vertical-only scroll can never
   // swallow the next horizontal move; the copied scroll fires back once, finds the positions equal and stops
   function syncFrom(src, dst) { if (!src.current || !dst.current) { return; } var x = src.current.scrollLeft; if (Math.abs(dst.current.scrollLeft - x) < 1) { return; } dst.current.scrollLeft = x; }
