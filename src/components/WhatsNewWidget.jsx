@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VB',
+    date: '2026-11-19',
+    title: 'Profitability: foam weighs 3 lb per linear metre too',
+    items: [
+      { text: 'Foam sold by the **linear metre** now weighs **3 lb per metre**, the same as foam sold by the yard. Everything else sold by the linear metre stays at 2.5 lb. Foam sold by the kilo, pound or ton keeps its real weight, and a name that says “No Foam” is still not foam.' },
+      { superAdminOnly: true, text: 'Technical: profitability.js foamFactors sets yd and lm to FOAM_LB_PER_YARD (was yd only); no other change. Max 19 Nov, asked whether linear metres too: YES FOAM ALL 3 LBS. Test vb-foam-linear-metres; two UZ foam assertions updated. No SQL.' },
+    ]
+  },
+  {
     version: 'v55.83-VA',
     date: '2026-11-19',
     title: 'Wires: honest messages when matching a wire fails; no lock-up between a funded request and a payment from the same transfer',

@@ -14,7 +14,7 @@ check('the rule: 3 lb per yard', P.FOAM_LB_PER_YARD === 3);
 check('"Foam Laminated", "FOAM-LAMINATED 3MM", "Velvet with foam backing", "foamed PVC" are foam; "Velvet", "Form paper", "" are not',
   ['Foam Laminated', 'FOAM-LAMINATED 3MM', 'Velvet with foam backing', 'foamed PVC'].every(P.isFoamName) && !P.isFoamName('Velvet') && !P.isFoamName('Form paper') && !P.isFoamName('') && !P.isFoamName(null));
 var ff = P.foamFactors({ units: { lb: 1, kg: 2.20462, t: 2204.62, yd: 2.4, lm: 2.6 } });
-check('foam factors: only YARDS become 3; linear metres, pounds, kilos and tons unchanged', ff.units.yd === 3 && ff.units.lm === 2.6 && ff.units.lb === 1 && ff.units.kg === 2.20462 && ff.units.t === 2204.62, ff);
+check('foam factors: yards and linear metres 3 (VB: "YES FOAM ALL 3 LBS"); pounds, kilos and tons unchanged', ff.units.yd === 3 && ff.units.lm === 3 && ff.units.lb === 1 && ff.units.kg === 2.20462 && ff.units.t === 2204.62, ff);
 var orig = { units: { yd: 2.5, lm: 2.5, lb: 1 } }; P.foamFactors(orig);
 check('the general factors are not changed by it (a copy is made)', orig.units.yd === 2.5 && orig.units.lm === 2.5);
 check('no factors given → defaults with yards 3', P.foamFactors().units.yd === 3 && P.foamFactors().units.kg === 2.20462);
@@ -27,7 +27,7 @@ var c1 = cellsOf([{ id: 'a', description: 'Foam Laminated Velvet', qty: 1000, un
 check('1,000 yards of "Foam Laminated Velvet" = 3,000 lb (factor 3)', c1[0].pounds === 3000 && c1[0].unit_factor === 3 && c1[0].foam === true, c1[0]);
 check('1,000 yards of "Plain Velvet" = 2,500 lb (unchanged, factor 2.5)', c1[1].pounds === 2500 && c1[1].unit_factor === 2.5 && c1[1].foam === false, c1[1]);
 var c2 = cellsOf([{ id: 'a', description: 'FOAM 5MM', qty: 100, unit: 'LM', unit_price: 1 }, { id: 'b', description: 'Foam scrap', qty: 100, unit: 'lbs', unit_price: 1 }, { id: 'c', description: 'Foam blocks', qty: 100, unit: 'kg', unit_price: 1 }, { id: 'd', description: 'Foam bales', qty: 1, unit: 'ton', unit_price: 1 }]);
-check('foam in linear metres keeps the general 2.5 (Max said per YARD); foam sold by pounds / kilos / tons keeps its real weight', c2[0].pounds === 250 && c2[1].pounds === 100 && Math.abs(c2[2].pounds - 220.462) < 1e-9 && c2[3].pounds === 2204.62, c2.map(function (c) { return c.pounds; }));
+check('foam in linear metres = 3 lb each (VB); foam sold by pounds / kilos / tons keeps its real weight', c2[0].pounds === 300 && c2[1].pounds === 100 && Math.abs(c2[2].pounds - 220.462) < 1e-9 && c2[3].pounds === 2204.62, c2.map(function (c) { return c.pounds; }));
 var c3 = cellsOf([{ id: 'a', description: 'Foam Laminated', qty: 10, unit: '', unit_price: 1 }]);
 check('foam with NO unit set stays unknown (never guessed as yards)', c3[0].pounds === null && c3[0].flags.indexOf('unit_unknown') >= 0, c3[0]);
 var c4 = cellsOf([{ id: 'a', description: 'Foam Laminated', qty: 1000, unit: 'yd', unit_price: 2 }, { id: 'b', description: 'Plain Velvet', qty: 1000, unit: 'yd', unit_price: 2 }], { factors: { units: { yd: 2.4, lm: 2.4, lb: 1 } } });

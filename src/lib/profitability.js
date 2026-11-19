@@ -64,7 +64,7 @@ export function unitFactor(unit, productKey, factors) {
   return base[u] > 0 ? Number(base[u]) : null;
 }
 // v55.83-UZ (Max, Nov 19 2026: "for foam laminated or anything with foam the weight is 3 LBS per yard") — a LINE that says FOAM
-// weighs 3 lb per yard. Only yards: linear metres, pounds, kilos and tons are not touched (Max said "per yard"; Codex 07:36).
+// weighs 3 lb per yard — and, since v55.83-VB, per linear metre too ("YES FOAM ALL 3 LBS"). Pounds, kilos and tons are not touched.
 // Codex 07:36 (P2): the answer comes ONLY from the line itself — its product name and its description. The name of the merged
 // product group is a label a person can edit, so it never changes a weight: renaming, merging or un-merging leaves pounds alone.
 // "No Foam" / "non-foam" / "without foam" / "w/o foam" in either text means NOT foam, whatever else is written.
@@ -81,7 +81,9 @@ export function isFoamLine(productName, description) {
 export function foamEvidenceConflict(productName, description) { return (saysNoFoam(productName) || saysNoFoam(description)) && (isFoamName(productName) || isFoamName(description)); }
 export function foamFactors(factors) {
   var f = factors || {}; var u = Object.assign({}, f.units || DEFAULT_UNIT_FACTORS);
-  u.yd = FOAM_LB_PER_YARD;
+  // v55.83-VB (Max, Nov 19 2026, asked "linear metres too?": "YES FOAM ALL 3 LBS") — a foam line sold by the yard OR by the linear
+  // metre weighs 3 lb per unit. Pounds, kilos and tons are real weights and stay as they are.
+  u.yd = FOAM_LB_PER_YARD; u.lm = FOAM_LB_PER_YARD;
   return { units: u, byProduct: f.byProduct };
 }
 // v55.83-TE (Max, Nov 16: "why is there no cost when there should be" — Stock Paper linked to "Texas Paper (LBS)" …) — a supplier

@@ -29,7 +29,7 @@ check('isFoamLine: product name OR description says foam', P.isFoamLine('Foam la
 check('"No Foam" in EITHER text wins over foam in the other', !P.isFoamLine('Face Goods- No Foam', 'foam grade A') && !P.isFoamLine('Foam vinyl', 'supplied WITHOUT foam') && !P.isFoamLine('PVC w/o foam', '') && !P.isFoamLine('Non-foam vinyl', 'foam'));
 check('that disagreement is reported (conflict), a clean line is not', P.foamEvidenceConflict('Face Goods- No Foam', 'foam grade A') && P.foamEvidenceConflict('Foam vinyl', 'without foam') && !P.foamEvidenceConflict('Face Goods- No Foam', 'grey') && !P.foamEvidenceConflict('Foam vinyl', 'grey'));
 check('saysNoFoam can be asked twice in a row (no leftover state)', P.saysNoFoam('No Foam') && P.saysNoFoam('No Foam') && !P.saysNoFoam('Foam') && P.saysNoFoam('no foam'));
-check('only YARDS become 3: linear metres, pounds, kilos, tons are unchanged', (function () { var f = P.foamFactors({ units: { lb: 1, kg: 2.20462, t: 2204.62, yd: 2.5, lm: 2.5 } }).units; return f.yd === 3 && f.lm === 2.5 && f.lb === 1 && f.kg === 2.20462 && f.t === 2204.62; })());
+check('yards AND linear metres become 3 (VB); pounds, kilos, tons are unchanged', (function () { var f = P.foamFactors({ units: { lb: 1, kg: 2.20462, t: 2204.62, yd: 2.5, lm: 2.5 } }).units; return f.yd === 3 && f.lm === 3 && f.lb === 1 && f.kg === 2.20462 && f.t === 2204.62; })());
 
 // ── the whole report: rename / merge / un-merge leaves every number alone
 function report(groups, groupNames) {
