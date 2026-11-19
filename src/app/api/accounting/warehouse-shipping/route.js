@@ -24,6 +24,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { authorizeBankIdentity } from '../../../../lib/bank-visibility';
 import { audit } from '../../../../lib/audit-server';
 import { buildRecords, matchInvoices, compareBills, comparable, rowComparable, diffComparable, toRow, BACKFILL_FROM } from '../../../../lib/warehouse-shipping';
+import { warehouseFeedConfig } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
 
 var API_BUILD_MARKER = 'v55.83-TG-warehouse-shipping';
 var PAGE = 1000; var MAX_ROWS = 40000; var STALE_RUN_MINUTES = 10;
@@ -48,13 +49,8 @@ async function fetchAll(buildQ) {
 
 // where the warehouse data comes from. Staging only, unless Max has explicitly allowed live (a separate env value).
 function feedConfig() {
-  var url = String(process.env.NEXTRADE_FEED_URL || '').trim();
-  var token = String(process.env.NEXTRADE_FEED_TOKEN || '').trim();
-  if (!url || !token) { return { error: 'The warehouse feed is not set up yet: NEXTRADE_FEED_URL and NEXTRADE_FEED_TOKEN are missing in Vercel.' }; }
-  var host = ''; try { host = new URL(url).host; } catch (eU) { return { error: 'NEXTRADE_FEED_URL is not a valid web address.' }; }
-  var isStaging = /(^|\.)nextrade-staging\.com$/i.test(host);
-  if (!isStaging && process.env.NEXTRADE_FEED_ALLOW_LIVE !== 'yes') { return { error: 'NEXTRADE_FEED_URL points at ' + host + ', which is not the warehouse staging site. The live warehouse is used only after Max asks for it.' }; }
-  return { url: url, token: token, host: host, source: isStaging ? 'nextrade-staging' : 'nextrade-live' };
+  // v55.83-UU (Codex 05:56) — same approved-address rule as the Orders report (https; staging domain; live only by exact name + Max's go-ahead)
+  return warehouseFeedConfig(process.env);
 }
 async function setting(db, key, dflt) {
   var r = await db.from('pl_warehouse_settings').select('value, updated_by, updated_at').eq('key', key).maybeSingle();
@@ -94,7 +90,7 @@ async function runSync(db, trigger, userId) {
     var feed;
     try {
       var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
-      var res = await fetch(cfg.url, { headers: { 'X-Hub-Feed-Token': cfg.token, 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store' });
+      var res = await fetch(cfg.url, { headers: { 'X-Hub-Feed-Token': cfg.token, 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — no redirect carries the token
       clearTimeout(tm);
       if (!res.ok) { return await failRun('The warehouse answered HTTP ' + res.status + (res.status === 401 ? ' (the token was refused)' : '') + '.'); }
       feed = await res.json();

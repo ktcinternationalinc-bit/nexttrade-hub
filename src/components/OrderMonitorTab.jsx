@@ -9,7 +9,7 @@ import { supabase } from '../lib/supabase';
 var INK = '#14202e'; var SUB = '#5b6676'; var LINE = '#dfe3ea'; var BG = '#f6f7f9';
 var S = { done: ['#157347', '#e3f4ea'], prog: ['#1f5fbf', '#e6eefb'], wait: ['#a35a00', '#fdf1df'], blocked: ['#b42318', '#fde8e6'], na: ['#6b7380', '#eef0f3'] };
 var STAGES = [['pending', 'Order created'], ['preload', 'Pre-load Ready'], ['shipping_in_process', 'Shipping In Process'], ['shipped', 'Shipped'], ['post_loading_documentation', 'Post-loading docs'], ['end_stage', 'End stage'], ['closed', 'Closed']];
-var STATUS_WORDS = { done: 'Completed', missing: 'Missing', waiting: 'Waiting', na: 'Not applicable' };
+var STATUS_WORDS = { done: 'Completed', missing: 'Missing', waiting: 'Waiting', na: 'Not applicable', untracked: 'Not tracked yet' }; // UU
 var INV_KEY = { current: 'done', in_approval: 'wait', draft_only: 'wait', awaiting: 'na', po_so_only: 'blocked', cancelled_only: 'blocked', missing_overdue: 'blocked' };
 var INV_WORDS = { current: 'Current', in_approval: 'In approval', draft_only: 'Draft only', awaiting: 'Awaiting invoice', po_so_only: 'In P.O./S.O. only', cancelled_only: 'Cancelled only', missing_overdue: 'Missing — overdue' };
 var DEP_KEY = { received: 'done', partial: 'blocked', not_received: 'blocked', not_required: 'na', unknown: 'wait' };
@@ -154,6 +154,11 @@ export default function OrderMonitorTab(props) {
       </div>
       {err && <div className="px-3 py-2 text-[12px] font-bold" style={{ background: '#fde8e6', color: '#b42318' }}>{'⚠ The last refresh failed (' + err + ') — the list and the counts below may be out of date. Press ↻ Refresh.'}</div>}
       {!data.tables_ready && <div className="px-3 py-2 text-[12px] font-bold" style={{ background: '#fdf1df', color: '#a35a00' }}>{'Deposit decisions, overrides, alerts and the overnight review need one SQL first: ' + data.sql_hint}</div>}
+      {/* UU — reading the LIVE warehouse: what it does not track yet, and decisions kept from the other copy */}
+      {(data.untracked_fields || []).length > 0 && <div className="px-3 py-1.5 text-[11px]" style={{ background: '#eef0f3', color: '#3b4552' }}>{'This warehouse copy does not track ' + data.untracked_fields.map(function (f) { return ({ shipping_doc_type: 'the shipping document type', order_payment_type: 'the order / payment type', load_time_known: 'whether a load time is real' })[f] || f; }).join(', ') + ' yet. Those items show “Not tracked yet”: never counted as done, and such an order is never ready to close.'}</div>}
+      {data.other_copy && (data.other_copy.unavailable || []).length > 0 && <div className="px-3 py-1.5 text-[11px] font-bold" style={{ background: '#fde8e6', color: '#b42318' }}>{'What was kept from the other warehouse copy could not be checked (' + data.other_copy.unavailable.join(', ') + ') — press ↻ Refresh; do not assume there is none.'}</div>}
+      {data.other_copy && ((data.other_copy.deposit_status || 0) + (data.other_copy.deposit_links || 0) + (data.other_copy.overrides || 0) + (data.other_copy.archived || 0)) > 0 && <div className="px-3 py-1.5 text-[11px] font-bold" style={{ background: '#fdf1df', color: '#a35a00' }}>{'Kept from the other warehouse copy (not used here, nothing deleted): ' + [data.other_copy.deposit_status ? data.other_copy.deposit_status + ' deposit decision(s)' : null, data.other_copy.deposit_links ? data.other_copy.deposit_links + ' deposit link(s) for $' + fmt(data.other_copy.deposit_links_amount) + ' — these still use that bank money until undone' : null, data.other_copy.overrides ? data.other_copy.overrides + ' override(s)' : null, data.other_copy.archived ? data.other_copy.archived + ' archived row(s)' : null].filter(Boolean).join(' · ') + '.'}</div>}
+      {data.closing_allowed === false && data.source === 'nextrade-live' && <div className="px-3 py-1.5 text-[11px]" style={{ background: '#eef0f3', color: '#3b4552' }}>Read-only: the Hub does not close orders in the LIVE warehouse — close them in Nextrade. Keep open / Close anyway are still recorded in the Hub.</div>}
       {data.history_in_feed === false && <div className="px-3 py-1.5 text-[11px]" style={{ background: '#fdf1df', color: '#a35a00' }}>The warehouse is not sending its stage history yet (the Nextrade update is not on this copy), so “reached in time / late” cannot be told yet.</div>}
       {showSet && <SettingsBox set={set} busy={busy} act={act} />}
       {view === 'recon' && <ReconView call={call} openInvoice={openInvoice} newInvoice={newInvoice} copyRelease={copyRelease} busy={busy} />}
@@ -290,15 +295,15 @@ function OrderReport(p) {
         <div className="rounded-lg overflow-hidden" style={{ border: '1px solid ' + LINE }}>
           {STAGES.filter(function (st) { return groups[st[0]]; }).map(function (st) { var g = groups[st[0]]; var ap = g.filter(function (it) { return it.applies; });
             return <div key={st[0]}><div className="flex justify-between px-3 py-1.5 text-[11px] font-bold" style={{ background: BG, borderTop: '1px solid ' + LINE }}><span>{st[1]}</span><span style={{ color: SUB }}>{ap.filter(function (it) { return it.status === 'done'; }).length + ' / ' + ap.length}</span></div>
-              {g.map(function (it) { var key = it.status === 'done' ? 'done' : it.status === 'na' ? 'na' : it.status === 'missing' ? 'blocked' : 'wait';
-                return <div key={it.key} className="flex justify-between gap-2 px-3 py-1.5 text-[12px]" style={{ borderTop: '1px solid ' + LINE }}><span>{it.label}{it.why && <span className="block text-[10px]" style={{ color: SUB }}>{it.why}</span>}</span>
+              {g.map(function (it) { var key = it.status === 'done' ? 'done' : (it.status === 'na' || it.status === 'untracked') ? 'na' : it.status === 'missing' ? 'blocked' : 'wait';
+                return <div key={it.key} title={it.status === 'untracked' ? 'This warehouse copy does not have this field yet' : undefined} className="flex justify-between gap-2 px-3 py-1.5 text-[12px]" style={{ borderTop: '1px solid ' + LINE }}><span>{it.label}{it.why && <span className="block text-[10px]" style={{ color: SUB }}>{it.why}</span>}</span>
                   <span className="flex items-center gap-1">{p.canManage && it.status === 'missing' && <button type="button" title="Mark this requirement not applicable for this order (needs a reason)" onClick={function () { setF({ na: it.key, na_label: it.label, reason: '' }); }} className="text-[10px] underline" style={{ color: SUB, background: 'none', border: 0 }}>N/A?</button>}<Pill k={key}>{STATUS_WORDS[it.status] || it.status}</Pill></span></div>; })}</div>; })}
         </div>
         <div className="grid gap-3 content-start">
           <div className="rounded-lg p-3 grid gap-1.5" style={{ border: '2px solid ' + (missing.length ? S.blocked[0] : S.done[0]) }}><b className="text-[13px]" style={{ color: missing.length ? S.blocked[0] : S.done[0] }}>{missing.length ? 'Missing — ' + missing.length + ' item' + (missing.length === 1 ? '' : 's') : 'Nothing missing for the stages reached'}</b>
             <ol className="text-[12px] grid gap-1" style={{ margin: 0, paddingLeft: 18 }}>{missing.slice(0, 12).map(function (it) { return <li key={it.key}>{it.label}</li>; })}</ol></div>
           {r.next_action && <div className="rounded-lg p-3" style={{ background: INK, color: '#ffffff' }}><div className="text-[10px] uppercase opacity-75">Next action</div><b className="text-[13px]">{r.next_action}</b></div>}
-          <div className="flex flex-wrap gap-2 text-[11px]">{r.links.nextrade && <a href={r.links.nextrade} target="_blank" rel="noreferrer" style={{ color: '#0f5c8c', border: '1px solid ' + LINE, borderRadius: 5, padding: '3px 9px' }}>Order in Nextrade ↗</a>}<a href={r.links.hub} style={{ color: '#0f5c8c', border: '1px solid ' + LINE, borderRadius: 5, padding: '3px 9px' }}>Link to this report</a></div>
+          <div className="flex flex-wrap gap-2 text-[11px]">{j.closing_allowed === false && <span style={{ color: SUB }}>{'Closing from the Hub: off (' + (j.closing_blocked_why || '') + ')'}</span>}{r.links.nextrade && <a href={r.links.nextrade} target="_blank" rel="noreferrer" style={{ color: '#0f5c8c', border: '1px solid ' + LINE, borderRadius: 5, padding: '3px 9px' }}>Order in Nextrade ↗</a>}<a href={r.links.hub} style={{ color: '#0f5c8c', border: '1px solid ' + LINE, borderRadius: 5, padding: '3px 9px' }}>Link to this report</a></div>
           <div className="rounded-lg p-3 grid gap-1 text-[12px]" style={{ border: '1px solid ' + LINE }}><b>Closing</b>
             {j.extra.closures.length > 0 && j.extra.closures.map(function (c, i) { return <div key={i} style={{ color: SUB }}>{'Closed (' + c.mode + ') ' + when(c.closed_at) + (c.written_to_nextrade ? ' — also closed in Nextrade' : ' — NOT closed in Nextrade') + (c.reason ? ': ' + c.reason : '')}</div>; })}
             <div>{r.closure.eligible ? <span style={{ color: S.done[0], fontWeight: 700 }}>{r.closure.forced ? 'Will be closed: ' + r.closure.words : 'Ready — closes automatically in the overnight review (when automatic closing is on).'}</span> : r.closure.held ? <span style={{ color: S.wait[0], fontWeight: 700 }}>{r.closure.words}</span> : <span style={{ color: SUB }}>{'Not ready to close: ' + (r.closure.missing || []).slice(0, 4).join('; ')}</span>}</div>
@@ -318,7 +323,7 @@ function OrderReport(p) {
           <Btn onClick={function () { setF({ mode: 'link', lines: null, reason: '' }); p.call({ action: 'deposit_candidates', q: (r.customer || '').split(' ')[0] }).then(function (x) { p.setForm(function (cur) { return Object.assign({}, cur, { mode: 'link', lines: (x && x.ok) ? x.lines : [] }); }); }); }}>Match a deposit to this order…</Btn>
           <Btn onClick={function () { setF({ mode: 'keep_open', reason: '' }); }}>Keep open…</Btn>
           <Btn onClick={function () { setF({ mode: 'force_close', reason: '' }); }}>Close anyway…</Btn>
-          {r.stage !== 'closed' && <Btn onClick={function () { setF({ mode: 'close_now', reason: '' }); }}>Close now…</Btn>}
+          {r.stage !== 'closed' && j.closing_allowed !== false && <Btn onClick={function () { setF({ mode: 'close_now', reason: '' }); }}>Close now…</Btn>}
         </div>
         {(r.deposit_links || []).map(function (l) { return <div key={l.id} className="text-[11px] flex gap-2 items-center">{'Deposit matched to this order: $' + fmt(l.amount) + (l.note ? ' — ' + l.note : '')}<button type="button" onClick={function () { setF({ mode: 'unlink', link: l, reason: '' }); }} className="underline" style={{ color: S.blocked[0], background: 'none', border: 0 }}>undo</button></div>; })}
         {(r.overrides || []).map(function (o) { return <div key={o.id} className="text-[11px] flex gap-2 items-center">{({ keep_open: 'Kept open', force_close: 'Close anyway', item_na: 'N/A: ' + o.item_key })[o.kind] + ' — ' + o.by_name + ': ' + o.reason}<button type="button" onClick={function () { p.act({ action: 'end_override', id: o.id }, 'Override ended.'); }} className="underline" style={{ color: S.blocked[0], background: 'none', border: 0 }}>end</button></div>; })}
@@ -355,18 +360,22 @@ function ReconView(p) {
   var s3 = useState('problems'); var g = s3[0]; var setG = s3[1];
   var s4 = useState(''); var err = s4[0]; var setErr = s4[1];
   var s5 = useState(''); var q = s5[0]; var setQ = s5[1];
+  var s6 = useState('shipped'); var ph = s6[0]; var setPh = s6[1]; // v55.83-VH — warehouse phase: shipped first (the real alarm)
   function load(sv) { setD(null); setErr(''); p.call({ action: 'reconcile', since: sv || since }).then(function (j) { if (j && j.ok) { setD(j); } else { setErr((j && j.error) || 'Could not build the reconciliation.'); } }); }
   useEffect(function () { load(); }, []); // eslint-disable-line
   if (err) { return <div className="px-3 py-3 text-[12px] font-bold" style={{ color: S.blocked[0] }}>{'⛔ ' + err}</div>; }
   if (!d) { return <div className="px-3 py-3 text-[12px]" style={{ color: SUB }}>Comparing every warehouse release with the KTC invoices…</div>; }
-  var rows = d.rows || [];
+  var allRows = d.rows || [];
+  // VH (Max 19 Nov) — shipped orders with no invoice are kept apart from orders not shipped yet and from other statuses
+  var phCnt = { shipped: 0, not_shipped: 0, other: 0 }; allRows.forEach(function (r) { var k = r.phase || 'other'; phCnt[k] = (phCnt[k] || 0) + 1; });
+  var rows = ph === 'all' ? allRows : allRows.filter(function (r) { return (r.phase || 'other') === ph; });
   var cnt = {}; rows.forEach(function (r) { cnt[r.state] = (cnt[r.state] || 0) + 1; });
   var t = q.trim().toLowerCase();
   var shown = rows.filter(function (r) { if (g === 'problems' ? r.state === 'po_so_only' : (g !== 'all' && r.state !== g)) { return false; } return !t || (r.release_number + ' ' + r.order_id + ' ' + r.customer).toLowerCase().indexOf(t) >= 0; });
   var poIds = rows.filter(function (r) { return r.state === 'po_so_only'; }).reduce(function (a, r) { return a.concat(r.po_so.map(function (i) { return i.id; })); }, []);
   function csv() {
-    var head = ['Release', 'Order', 'Source', 'Customer', 'Date', 'Date kind', 'Warehouse status', 'Problem', 'Invoices (P.O./S.O.)', 'Cancelled invoices', 'Invoices whose notes mention it', 'Possible invoices (same customer, no release)'];
-    var lines = [head].concat(shown.map(function (r) { return [r.release_number, r.order_id, r.source, r.customer, r.date, r.date_kind, r.status, r.words, r.po_so.map(function (i) { return i.number; }).join(' '), r.cancelled.map(function (i) { return i.number; }).join(' '), (r.in_notes || []).map(function (i) { return i.number; }).join(' '), r.suggestions.map(function (i) { return i.number + ' ' + i.date; }).join(' | ')]; }));
+    var head = ['Release', 'Order', 'Source', 'Customer', 'Date', 'Date kind', 'Warehouse status', 'Shipped?', 'Problem', 'Invoices (P.O./S.O.)', 'Cancelled invoices', 'Invoices whose notes mention it', 'Possible invoices (same customer, no release)'];
+    var lines = [head].concat(shown.map(function (r) { return [r.release_number, r.order_id, r.source, r.customer, r.date, r.date_kind, r.status, ({ shipped: 'Shipped', not_shipped: 'Not shipped yet', other: 'Other status' })[r.phase] || 'Other status', r.words, r.po_so.map(function (i) { return i.number; }).join(' '), r.cancelled.map(function (i) { return i.number; }).join(' '), (r.in_notes || []).map(function (i) { return i.number; }).join(' '), r.suggestions.map(function (i) { return i.number + ' ' + i.date; }).join(' | ')]; }));
     var text = lines.map(function (l) { return l.map(function (c) { var v = String(c === null || c === undefined ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');
     var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'releases-without-ktc-invoice-since-' + d.since + '.csv'; a.click();
   }
@@ -380,6 +389,13 @@ function ReconView(p) {
       <span className="text-[11px]" style={{ color: SUB }}>{d.orders_checked + ' warehouse orders read (main + obsolete). Date = shipped, else load date, else created. Cancelled and test orders are left out.'}</span>
       <div className="flex-1" />
       <Btn onClick={csv}>⬇ CSV</Btn>
+    </div>
+    <div className="flex flex-wrap gap-1.5 px-3 pt-2 items-center">
+      <span className="text-[11px] font-bold" style={{ color: SUB }}>Warehouse status:</span>
+      {[['shipped', 'Shipped', 'blocked'], ['not_shipped', 'Not shipped yet', 'wait'], ['other', 'Other statuses', 'na'], ['all', 'All statuses', 'na']].map(function (x) {
+        var n = x[0] === 'all' ? allRows.length : (phCnt[x[0]] || 0);
+        return <button key={x[0]} type="button" onClick={function () { setPh(x[0]); }} className="px-3 py-1 rounded-full text-[11px] font-bold" style={ph === x[0] ? { background: INK, color: '#ffffff' } : { background: '#ffffff', color: n && x[2] === 'blocked' ? S.blocked[0] : INK, border: '1px solid ' + LINE }}>{x[1] + ' · ' + n}</button>; })}
+      <span className="text-[11px]" style={{ color: SUB }}>{ph === 'shipped' ? 'Shipped (or later) with no KTC invoice — these need one now.' : ph === 'not_shipped' ? 'Not shipped yet — an invoice may still come; not an alarm yet.' : ph === 'other' ? 'Any status the Hub does not recognise.' : 'Every status together.'}</span>
     </div>
     <div className="flex flex-wrap gap-1.5 px-3 py-2 items-center">
       {[['problems', 'Needs an invoice or a fix', 'blocked']].concat(REC_GROUPS).concat([['all', 'Everything', 'na']]).map(function (x) {

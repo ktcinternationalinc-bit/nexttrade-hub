@@ -38,8 +38,8 @@ function seed() {
   var db = new FakeDb({ order_report_archive: [{ cols: ['request_id'] }, { cols: ['source', 'order_id'], where: function (r) { return r.restored_at == null; } }] });
   // the fake has no .single() and returns arrays from update…maybeSingle(); give it both, like Supabase
   var orig = db.from;
-  db.from = function (t) { var q = orig(t); q.single = function () { q.single = true; return q; };
-    var ex = q.exec; q.exec = function () { if (typeof q.single === 'function') { q.single = false; } var out = ex.call(q); if (q.single && out && Array.isArray(out.data)) { out.data = out.data[0] || null; } return out; }; return q; };
+  db.from = function (t) { var q = orig(t); q.single = function () { q._one = true; q.one = true; return q; }; q.maybeSingle = function () { q._one = true; q.one = true; return q; }; /* fake-supabase since UM uses .one; Supabase answers null when no row matched */
+    var ex = q.exec; q.exec = function () { var out = ex.call(q); if (q._one && out && Array.isArray(out.data)) { out.data = out.data[0] || null; } return out; }; return q; };
   db.t.users = [{ id: 'u1', name: 'Max', email: 'max@example.test' }];
   db.t.order_report_archive = [];
   return db;
@@ -99,7 +99,7 @@ var MANAGE = { 'accounting.view': true, 'orders.monitor': true, 'orders.manage':
   check('same click id, different ORDER → 409', rX1._status === 409 && /different archive entry/.test(rX1.error), rX1);
   check('same click id, different CHOICE → 409', rX2._status === 409, rX2);
   check('same click id, different NOTE → 409', rX3._status === 409, rX3);
-  process.env.NEXTRADE_FEED_URL = 'https://nextrade.example.com/api/hub/shipping'; process.env.NEXTRADE_FEED_ALLOW_LIVE = 'yes';
+  process.env.NEXTRADE_FEED_URL = 'https://nextradeindustries.com/api/hub-feed/shipping'; process.env.NEXTRADE_FEED_ALLOW_LIVE = 'yes';
   var rX4 = await post({ action: 'archive_row', order_id: 1427, release_number: '1001-1427', choice: 'non_issue', note: 'paid in cash', request_id: 'om-arch-click-1' });
   process.env.NEXTRADE_FEED_URL = 'https://nextrade-staging.com/api/hub/shipping'; delete process.env.NEXTRADE_FEED_ALLOW_LIVE;
   check('same click id, other WAREHOUSE COPY → 409', rX4._status === 409, rX4);

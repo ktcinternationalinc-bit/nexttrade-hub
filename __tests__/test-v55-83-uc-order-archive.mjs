@@ -62,7 +62,7 @@ check('archive inserts (never updates/deletes the order) and is in the audit tra
 check('one click = one entry: request id checked first', /eq\('request_id', reqA\)/.test(R));
 check('put back only fills restored_* on an ACTIVE entry of this warehouse copy, audited', /update\(\{ restored_at: [^}]+\}\)\.eq\('id', body\.id\)\.eq\('source', src\)\.is\('restored_at', null\)/.test(R) && /audit\(db, userId, 'order_report_unarchived'/.test(R));
 check('nothing in the route deletes from the archive', !/order_report_archive'\)\.delete/.test(R));
-check('the report leaves archived rows out of rows (so out of every count) and lists them apart', /var rows = rowsAll\.filter\(function \(r\) \{ return !arch\.map\[String\(r\.id\)\]; \}\);/.test(R) && /rows: rows, archived: archived, archive_ready: arch\.ready/.test(R));
+check('the report leaves archived rows out of rows (so out of every count) and lists them apart', /var rows = rowsAll\.filter\(function \(r\) \{ return !arch\.map\[String\(r\.id\)\]; \}\);/.test(R) && /rows: rows, archived: archived,[^\n]*archive_ready: arch\.ready/.test(R));
 check('a missing archive table does not break the report (says which SQL instead)', /return \{ ready: false, map: \{\} \}/.test(R) && /archive_sql_hint: arch\.ready \? null : ARCHIVE_SQL_HINT/.test(R));
 check('the order report shows the archive history', /extra\.archive = ah\.error \? \[\] : \(ah\.data \|\| \[\]\)/.test(R));
 check('alerts and the overnight review are not filtered by the archive', !/loadArchive/.test(R.substring(R.indexOf('async function runDeadline'), R.indexOf('export async function GET'))));
@@ -82,8 +82,8 @@ check('a retried click that was put back meanwhile is NOT called archived (Codex
 check('a failed refresh is shown on the screen (numbers may be out of date)', /The last refresh failed/.test(T) && /return j; \} setErr/.test(T));
 
 console.log('UC — badge and What\'s New');
-check('badge is v55.83-UC', />v55\.83-UC<\/span>/.test(read('src/app/page.jsx')));
-check('What\'s New starts with v55.83-UC', /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-UC'/.test(read('src/components/WhatsNewWidget.jsx')));
+check('a v55.83 badge is shown (later builds move it on; realigned in UU)', />v55\.83-[A-Z]{2}<\/span>/.test(read('src/app/page.jsx')));
+check('What\'s New still has the v55.83-UC entry (later builds go above it; realigned in UU)', /version: 'v55\.83-UC'/.test(read('src/components/WhatsNewWidget.jsx')));
 
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

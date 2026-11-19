@@ -33,6 +33,28 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VH',
+    date: '2026-11-19',
+    title: 'Orders → Releases with no KTC invoice: shipped orders apart from the ones not shipped yet',
+    items: [
+      { text: 'Accounting → 🚚 Orders → 🔎 Releases with no KTC invoice now has a “Warehouse status” row: Shipped · N, Not shipped yet · N, Other statuses · N, All statuses. It opens on Shipped — a shipped order with no KTC invoice is the real problem; an order not shipped yet may still get its invoice.' },
+      { text: 'The problem groups below (No invoice at all, Only in an invoice’s notes, …) and their counts follow the chosen status. The CSV has a new “Shipped?” column.' },
+      { text: 'Technical: lib/order-lifecycle warehousePhase(o): shipped = stage Shipped or later OR a shipped date; not_shipped = Order created / Pre-load / Shipping In Process; other = unknown status. reconcileReleases rows carry phase.', superAdminOnly: true }
+    ]
+  },
+  {
+    version: 'v55.83-UU',
+    date: '2026-11-19',
+    title: 'Orders report ready for the LIVE warehouse: read-only, honest about what live does not track yet',
+    items: [
+      { text: 'Accounting → 🚚 Orders can now read the LIVE Nextrade warehouse instead of the 14 November staging copy (switched over separately, step by step, with Max). The Hub only READS the warehouse.' },
+      { text: 'Closing an order from the Hub is OFF while it reads the live warehouse — the Close now button is hidden and the overnight review does not close anything. Close orders in Nextrade itself. Keep open / Close anyway are still recorded in the Hub.' },
+      { text: 'The live warehouse does not have “Shipping document type”, “Order / payment type” and “load time known” yet. Those items show “Not tracked yet” (grey): never counted as done, and such an order is never shown as ready to close. BL Received and Final Documents to bank stay required and are judged on their own answer. A load date without a time gets no 30-hour alert.' },
+      { text: 'Decisions made earlier on the staging copy (deposit decisions, deposit links, overrides, archived rows) are KEPT and not used on live; an amber line says how many. Deposit links from staging still use their bank money until someone undoes them — Max decides each one.' },
+      { text: 'Technical: feed capabilities.requirement_columns → untracked fields (absent statement = all present, strict); closingAllowed(cfg) = staging, or live only with NEXTRADE_CLOSE_ALLOW_LIVE=yes, checked in closeTracked + nightly; report.other_copy counts rows with source ≠ active source. Nextrade HubFeedController: capabilities + Cache-Control no-store on every answer.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-VN',
     date: '2026-11-19',
     title: 'New screen: Customers overview — invoiced, paid, received and owed per customer, for any period',

@@ -1,5 +1,5 @@
 // /api/accounting/order-monitor — v55.83-TI (Max, Nov 16 2026). ORDER LIFECYCLE, EXCEPTIONS, DEPOSITS, 30-HOUR ALERT, OVERNIGHT REVIEW.
-// Reads the Nextrade warehouse (read-only feed; staging until Max says production), joins the Hub's invoices / payments / bills by
+// Reads the Nextrade warehouse (read-only feed: staging, or live once Max allows it — Max said "yes production" 19 Nov), joins the Hub's invoices / payments / bills by
 // RELEASE NUMBER, and applies the rules in lib/order-lifecycle.js.
 //   GET  ?job=deadline  — every 15 min (Vercel cron, CRON_SECRET): the 30-hour check + alerts
 //   GET  ?job=nightly   — every night 02:30 New York: full review, automatic closure (when switched on), summary
@@ -17,9 +17,10 @@ import { sendAlertEmail } from '../../../../lib/notify-server';
 import { evaluateOrder, releasesOf, alertEmail, stageRank, ALERT_RECIPIENTS_DEFAULT, reconcileReleases } from '../../../../lib/order-lifecycle';
 import { relKey, isTransportLine } from '../../../../lib/profitability';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
+import { warehouseFeedConfig, feedIdentityProblem } from '../../../../lib/warehouse-feed-config'; // v55.83-UU — approved warehouse addresses only
 
 export const maxDuration = 60;
-var API_BUILD_MARKER = 'v55.83-UC-order-monitor';
+var API_BUILD_MARKER = 'v55.83-UU-order-monitor';
 var SQL_HINT = 'Run sql/v55-83-TI-order-monitor.sql in Supabase first.';
 var ARCHIVE_SQL_HINT = 'Run sql/v55-83-UC-order-report-archive.sql in Supabase first (the Non issue / Corrected archive).';
 var HUB_URL = 'https://nexttrade-hub.vercel.app'; // the Hub's real address (hub.ktcus.com was never connected)
@@ -32,22 +33,38 @@ async function inChunks(db, table, cols, col, ids) { var out = []; for (var i = 
 
 // ── the warehouse feed (same address and token as the shipping-cost sync) ──
 function feedConfig() {
-  var url = String(process.env.NEXTRADE_FEED_URL || '').trim(); var token = String(process.env.NEXTRADE_FEED_TOKEN || '').trim();
-  if (!url || !token) { return { error: 'The warehouse feed is not set up (NEXTRADE_FEED_URL / NEXTRADE_FEED_TOKEN in Vercel).' }; }
-  var host = ''; try { host = new URL(url).host; } catch (e) { return { error: 'NEXTRADE_FEED_URL is not a web address.' }; }
-  var live = !/nextrade-staging\.com$/i.test(host);
-  if (live && String(process.env.NEXTRADE_FEED_ALLOW_LIVE || '') !== 'yes') { return { error: 'The feed points at the LIVE warehouse; that needs Max’s go-ahead (NEXTRADE_FEED_ALLOW_LIVE=yes).' }; }
-  return { url: url, token: token, host: host, source: live ? 'nextrade-live' : 'nextrade-staging', closeUrl: url.replace(/\/shipping\/?$/, '/close-order'), closeToken: String(process.env.NEXTRADE_CLOSE_TOKEN || '').trim() }; // TO — closing has its OWN token (Codex P1), never the read token
+  // v55.83-UU (Codex 05:56) — only an approved https warehouse address; anything else is refused before the token is sent
+  var base = warehouseFeedConfig(process.env); if (base.error) { return { error: base.error }; }
+  var url = base.url; var token = base.token; var host = base.host;
+  return { url: url, token: token, host: host, source: base.source, closeUrl: url.replace(/\/shipping\/?$/, '/close-order'), closeToken: String(process.env.NEXTRADE_CLOSE_TOKEN || '').trim() }; // TO — closing has its OWN token (Codex P1), never the read token
 }
 async function fetchFeed(cfg) {
   var ctl = new AbortController(); var tm = setTimeout(function () { ctl.abort(); }, 40000);
   try {
-    var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store' });
+    var res = await fetch(cfg.url + '?shipped_since=2024-01-01', { headers: { 'X-Hub-Feed-Token': cfg.token, Accept: 'application/json' }, signal: ctl.signal, cache: 'no-store', redirect: 'error' }); // UU (Codex 06:13) — a redirect never carries the token elsewhere
     var j = await res.json().catch(function () { return null; });
     if (!res.ok || !j || j.ok !== true) { throw new Error('The warehouse feed answered ' + res.status + (j && j.error ? ': ' + j.error : '')); }
-    if (j.source && j.source !== cfg.source) { throw new Error('The feed says it is ' + j.source + ', the Hub expected ' + cfg.source + '.'); }
+    var idp = feedIdentityProblem(j, cfg); if (idp) { throw new Error(idp); } // UU — a feed that does not name its copy is refused
     return j;
   } finally { clearTimeout(tm); }
+}
+// v55.83-UU (Codex 05:38) — closing an order in the warehouse is allowed on the STAGING copy only, unless Max separately allows it on
+// live (NEXTRADE_CLOSE_ALLOW_LIVE=yes). Unknown / any other source = refused. Checked on the server for BOTH the Close now button and
+// the overnight automatic closing; the live warehouse also has no close-order route at all.
+function closingAllowed(cfg) {
+  if (!cfg || cfg.error) { return { ok: false, why: 'the warehouse feed is not set up' }; }
+  if (cfg.source === 'nextrade-staging') { return { ok: true }; }
+  if (cfg.source === 'nextrade-live' && String(process.env.NEXTRADE_CLOSE_ALLOW_LIVE || '') === 'yes') { return { ok: true }; }
+  return { ok: false, why: cfg.source === 'nextrade-live' ? 'closing orders from the Hub is switched off for the LIVE warehouse — close it in Nextrade' : 'unknown warehouse copy' };
+}
+// v55.83-UU (Codex 05:38) — which checklist fields this warehouse copy does NOT have, as the copy itself states (feed.capabilities).
+// No statement from the copy = assume every field exists (stricter: a missing value shows as missing, never as done).
+var OPTIONAL_COLUMNS = ['shipping_doc_type', 'order_payment_type', 'load_time_known'];
+function untrackedOf(feed) {
+  var cap = feed && feed.capabilities; var cols = cap && Array.isArray(cap.requirement_columns) ? cap.requirement_columns : null; var out = {};
+  if (!cols || !cols.length) { return out; }
+  OPTIONAL_COLUMNS.forEach(function (c) { if (cols.indexOf(c) < 0) { out[c] = true; } });
+  return out;
 }
 function latestRow(rows) { return rows.slice().sort(function (a, b) { return String(a.updated_at || '').localeCompare(String(b.updated_at || '')) || (Number(a.id) - Number(b.id)); }).pop() || null; }
 
@@ -88,6 +105,7 @@ async function loadAll(db, opts) {
   var names = {}; var idSet = {}; Object.keys(ovr).forEach(function (k) { ovr[k].forEach(function (o) { if (o.set_by) { idSet[o.set_by] = true; } }); });
   if (Object.keys(idSet).length) { try { (await inChunks(db, 'users', 'id, name, email', 'id', Object.keys(idSet))).forEach(function (u) { names[u.id] = u.name || u.email; }); } catch (eU) { /* fail-soft */ } }
   var site = String(feed.site || cfg.host || '').replace(/^https?:\/\//, '');
+  var untracked = untrackedOf(feed); // UU
   var out = [];
   (feed.orders || []).forEach(function (o) {
     if (opts && opts.orderId && Number(o.id) !== Number(opts.orderId)) { return; }
@@ -111,12 +129,12 @@ async function loadAll(db, opts) {
     var closeOv = ovs.filter(function (x) { return x.kind === 'keep_open' || x.kind === 'force_close'; }).sort(function (a, b) { return String(b.set_at).localeCompare(String(a.set_at)); })[0] || null;
     var ev = evaluateOrder({ order: o, rows: rows, history: histBy[o.id] || [], obsolete: !!(Number(o.is_obs_order_included) === 1 || o.is_obs_order_included === true || (rk && obsRel[rk])),
       invoices: invList, invoicePayments: invPays, importedPaid: imported, depositHub: depHub[o.id] || null, depositLinks: (links[o.id] || []).map(function (l) { return { bank_transaction_id: l.bank_transaction_id, amount: l.amount }; }),
-      bills: rk ? (billsByRel[rk] || []) : [], exw: exw, blockers: blockers, closeOverride: closeOv, itemOverrides: ovs.filter(function (x) { return x.kind === 'item_na'; }) }, nowMs);
+      bills: rk ? (billsByRel[rk] || []) : [], exw: exw, blockers: blockers, closeOverride: closeOv, itemOverrides: ovs.filter(function (x) { return x.kind === 'item_na'; }), untracked: untracked }, nowMs);
     ev.links = { nextrade: site ? 'https://' + site + '/admin/orders/edit-order/' + o.id : null, hub: HUB_URL + '/?order=' + o.id };
     ev.bills = rk ? (billsByRel[rk] || []) : []; ev.overrides = ovs; ev.deposit_links = links[o.id] || [];
     out.push(ev);
   });
-  return { cfg: cfg, feed: feed, orders: out, tablesReady: tablesReady, generated_at: new Date(nowMs).toISOString() };
+  return { cfg: cfg, feed: feed, orders: out, tablesReady: tablesReady, untracked: Object.keys(untracked), generated_at: new Date(nowMs).toISOString() };
 }
 // v55.83-UC (Max, Nov 18) — rows marked "Non issue" or "Corrected": the ACTIVE archive entry per order (put back ones are history)
 var ARCHIVE_CHOICES = { non_issue: 'Non issue', corrected: 'Corrected' };
@@ -207,7 +225,7 @@ async function runDeadline(db, kind) {
 // ── close one order: in Nextrade first (staging unless Max allowed live), then recorded in the Hub ──
 async function closeInNextrade(cfg, orderId, reason, byName, mode, requestId, expectedUpdatedAt) {
   try {
-    var res = await fetch(cfg.closeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Close-Token': cfg.closeToken || '', Accept: 'application/json' }, body: JSON.stringify({ order_id: orderId, reason: reason, closed_by_name: byName, mode: mode, request_id: requestId, source: cfg.source, expected_updated_at: expectedUpdatedAt || null }), cache: 'no-store' });
+    var res = await fetch(cfg.closeUrl, { redirect: 'error', method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Close-Token': cfg.closeToken || '', Accept: 'application/json' }, body: JSON.stringify({ order_id: orderId, reason: reason, closed_by_name: byName, mode: mode, request_id: requestId, source: cfg.source, expected_updated_at: expectedUpdatedAt || null }), cache: 'no-store' });
     var j = await res.json().catch(function () { return null; });
     return { ok: !!(res.ok && j && j.ok), status: res.status, body: j };
   } catch (e) { return { ok: false, status: 0, body: { error: (e && e.message) || 'network' } }; }
@@ -216,6 +234,7 @@ async function closeInNextrade(cfg, orderId, reason, byName, mode, requestId, ex
 // Hub cannot record the intent, Nextrade is not asked. If it cannot record the outcome, the closure is reported as FAILED.
 async function closeTracked(db, cfg, ev, mode, reason, byId, byName, requestId) {
   var o = ev.order;
+  var allowC = closingAllowed(cfg); if (!allowC.ok) { return { ok: false, error: 'Not closed: ' + allowC.why + '.' }; } // UU — before anything is recorded or sent
   if (!cfg.closeToken) { return { ok: false, error: 'Closing in Nextrade is not set up yet (NEXTRADE_CLOSE_TOKEN in Vercel) — nothing was closed.' }; }
   var pend =await db.from('order_closures').insert({ source: cfg.source, order_id: o.id, release_number: o.release_number, mode: mode, reason: reason, closed_by: byId || null, written_to_nextrade: false, status: 'pending', request_id: requestId, open_exceptions: ev.closure.missing || [] }).select('id').single();
   if (pend.error) {
@@ -234,8 +253,9 @@ async function runNightly(db, kind, byId) {
   try {
     var all = await loadAll(db); if (all.error) { throw new Error(all.error); }
     var st = await db.from('order_monitor_settings').select('key, value'); var set = {}; ((st && st.data) || []).forEach(function (r) { set[r.key] = r.value; });
-    var autoOn = set.auto_close_enabled === true;
-    var s = { orders: all.orders.length, open: 0, shipped_outstanding: 0, missing_invoice: 0, invoice_problems: 0, deposit_blocked: 0, deadline_missed: 0, eligible: 0, closed: [], close_failures: [], held_open: 0, auto_close_enabled: autoOn, source: all.cfg.source };
+    var closeOk = closingAllowed(all.cfg); // UU — the overnight review never closes when closing is not allowed for this copy
+    var autoOn = set.auto_close_enabled === true && closeOk.ok;
+    var s = { orders: all.orders.length, open: 0, shipped_outstanding: 0, missing_invoice: 0, invoice_problems: 0, deposit_blocked: 0, deadline_missed: 0, eligible: 0, closed: [], close_failures: [], held_open: 0, auto_close_enabled: autoOn, closing_blocked: closeOk.ok ? null : closeOk.why, source: all.cfg.source };
     for (var i = 0; i < all.orders.length; i++) {
       var ev = all.orders[i]; var o = ev.order;
       if (o.status === 'closed' || o.status === 'cancelled') { continue; }
@@ -351,7 +371,25 @@ export async function POST(req) {
         var rDo = await db.from('order_review_runs').select('finished_at').eq('kind', 'deadline').eq('ok', true).order('finished_at', { ascending: false }).limit(1); runs.last_ok_deadline = rDo.data && rDo.data[0] ? rDo.data[0].finished_at : null;
         var sR = await db.from('order_monitor_settings').select('key, value'); ((sR && sR.data) || []).forEach(function (r) { settings[r.key] = r.value; });
       }
-      return NextResponse.json({ ok: true, rows: rows, archived: archived, archive_ready: arch.ready, archive_sql_hint: arch.ready ? null : ARCHIVE_SQL_HINT, source: all.cfg.source, site: all.feed.site || null, generated_at: all.generated_at, tables_ready: all.tablesReady, sql_hint: all.tablesReady ? null : SQL_HINT, runs: runs, settings: settings, can_manage: canManage, is_super_admin: isSuper, history_in_feed: Array.isArray(all.feed.status_history), api_build_marker: API_BUILD_MARKER });
+      // UU (Max 19 Nov) — decisions recorded against the OTHER warehouse copy are kept, never moved or deleted; the screen says how many
+      // UU (Codex 05:56, P1/P2) — SUPER ADMIN ONLY: deposit links can sit on private bank accounts, so the amounts are never shown to
+      // anyone else (no banner at all for them). Every row is read (paged); a table that cannot be read is reported as
+      // "could not be checked", never as zero.
+      var otherCopy = null;
+      if (isSuper) {
+        otherCopy = { deposit_status: null, deposit_links: null, deposit_links_amount: null, overrides: null, archived: null, unavailable: [], archive_not_installed: false };
+        var srcA = all.cfg.source;
+        var countOther = async function (key, buildQ, sumCol) {
+          try { var rowsO = await fetchAll(buildQ); otherCopy[key] = rowsO.length; if (sumCol) { otherCopy[sumCol] = r2(rowsO.reduce(function (t, l) { return t + (Number(l.amount) || 0); }, 0)); } }
+          catch (eO) { if (key === 'archived' && /order_report_archive/.test(String(eO && eO.message)) && /does not exist|schema cache|not find/i.test(String(eO && eO.message))) { otherCopy.archive_not_installed = true; } else { otherCopy.unavailable.push(key); } }
+        };
+        await countOther('deposit_status', function () { return db.from('order_deposit_status').select('order_id').neq('source', srcA).order('order_id', { ascending: true }); });
+        await countOther('deposit_links', function () { return db.from('order_deposit_links').select('id, amount').neq('source', srcA).eq('voided', false).order('id', { ascending: true }); }, 'deposit_links_amount');
+        await countOther('overrides', function () { return db.from('order_monitor_overrides').select('id').neq('source', srcA).eq('active', true).order('id', { ascending: true }); });
+        await countOther('archived', function () { return db.from('order_report_archive').select('id').neq('source', srcA).is('restored_at', null).order('id', { ascending: true }); });
+      }
+      var closeA = closingAllowed(all.cfg);
+      return NextResponse.json({ ok: true, rows: rows, archived: archived, untracked_fields: all.untracked, closing_allowed: closeA.ok, closing_blocked_why: closeA.ok ? null : closeA.why, other_copy: otherCopy, archive_ready: arch.ready, archive_sql_hint: arch.ready ? null : ARCHIVE_SQL_HINT, source: all.cfg.source, site: all.feed.site || null, generated_at: all.generated_at, tables_ready: all.tablesReady, sql_hint: all.tablesReady ? null : SQL_HINT, runs: runs, settings: settings, can_manage: canManage, is_super_admin: isSuper, history_in_feed: Array.isArray(all.feed.status_history), api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'order') {
       var one = await loadAll(db, { orderId: body.order_id }); if (one.error) { return bad(one.error, 503); }
@@ -362,7 +400,8 @@ export async function POST(req) {
         try { var ah = await db.from('order_report_archive').select('choice, note, archived_at, archived_by_name, restored_at, restored_by_name, restore_note').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('archived_at', { ascending: false }).limit(20); extra.archive = ah.error ? [] : (ah.data || []); } catch (eAh) { extra.archive = []; } // UC
         var cl = await db.from('order_closures').select('mode, reason, closed_at, written_to_nextrade, open_exceptions').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('closed_at', { ascending: false }).limit(10); extra.closures = cl.data || [];
       }
-      return NextResponse.json({ ok: true, report: Object.assign(rowOf(ev), { items: ev.items, invoices: ev.invoice.all, invoice_flags: ev.invoice.flags, deposit: ev.deposit, deadline: ev.deadline, closure: ev.closure, groups: ev.groups, bills: ev.bills, overrides: ev.overrides, deposit_links: ev.deposit_links }), extra: extra, source: one.cfg.source, can_manage: canManage, api_build_marker: API_BUILD_MARKER });
+      var closeO = closingAllowed(one.cfg);
+      return NextResponse.json({ ok: true, closing_allowed: closeO.ok, closing_blocked_why: closeO.ok ? null : closeO.why, report: Object.assign(rowOf(ev), { items: ev.items, invoices: ev.invoice.all, invoice_flags: ev.invoice.flags, deposit: ev.deposit, deadline: ev.deadline, closure: ev.closure, groups: ev.groups, bills: ev.bills, overrides: ev.overrides, deposit_links: ev.deposit_links }), extra: extra, source: one.cfg.source, can_manage: canManage, api_build_marker: API_BUILD_MARKER });
     }
     if (!canManage && ['set_deposit_status', 'link_deposit', 'unlink_deposit', 'override', 'end_override', 'close_order', 'run_now', 'deposit_candidates', 'archive_row', 'unarchive_row'].indexOf(action) >= 0) { return bad('This needs the "Orders: Manage" permission — Settings → Module Access.', 403); }
     var cfgM = feedConfig(); if (cfgM.error) { return bad(cfgM.error, 503); }

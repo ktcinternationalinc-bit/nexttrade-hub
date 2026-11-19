@@ -54,14 +54,18 @@ export function requirementItems(ctx) {
   var o = ctx.order || {}; var rows = ctx.rows || {}; var pre = rows.preload || {}; var sip = rows.shipping_in_process || {};
   var shp = rows.shipped || {}; var post = rows.post_loading_documentation || {}; var end = rows.end_stage || {};
   var acid = acidCountry(o.country); var docType = lc(sip.shipping_doc_type); var payType = lc(sip.order_payment_type);
+  // v55.83-UU (Max 19 Nov "yes production"; Codex 05:38) — a field this warehouse copy does not have at all (the copy SAYS so in the
+  // feed's capabilities) is 'untracked': shown as "not tracked on this warehouse copy yet", never done, never missing in red, and it
+  // still blocks closure (closureCheck counts anything that is not done / na). Unknown is never complete.
+  var un = ctx.untracked || {}; var UNTRACKED_WHY = 'not tracked on this warehouse copy yet';
   var items = [];
   function add(stage, key, label, applies, status, why) { items.push({ stage: stage, key: key, label: label, applies: applies, status: applies ? status : 'na', why: why || null }); }
   // Pre-load
   var dep = ctx.deposit || {};
   add('preload', 'deposit', 'Deposit', dep.status !== 'not_required' || !dep.note, dep.status === 'received' || (dep.status === 'not_required' && !!dep.note) ? 'done' : 'missing', dep.words || null);
   // Shipping In Process
-  add('shipping_in_process', 'shipping_doc_type', 'Shipping document type (Original BL / SWB)', true, docType === 'original_bl' || docType === 'swb' ? 'done' : 'missing', 'controls “BL Received”');
-  add('shipping_in_process', 'order_payment_type', 'Order / payment type (CAD / Non-bank)', true, payType === 'cad' || payType === 'non_bank' ? 'done' : 'missing', 'controls “Final Documents to Bank”');
+  add('shipping_in_process', 'shipping_doc_type', 'Shipping document type (Original BL / SWB)', true, un.shipping_doc_type ? 'untracked' : (docType === 'original_bl' || docType === 'swb' ? 'done' : 'missing'), un.shipping_doc_type ? UNTRACKED_WHY : 'controls “BL Received”');
+  add('shipping_in_process', 'order_payment_type', 'Order / payment type (CAD / Non-bank)', true, un.order_payment_type ? 'untracked' : (payType === 'cad' || payType === 'non_bank' ? 'done' : 'missing'), un.order_payment_type ? UNTRACKED_WHY : 'controls “Final Documents to Bank”');
   add('shipping_in_process', 'freight_forwarder', 'Freight Forwarder', true, fieldDone(sip.freight_forwarder));
   add('shipping_in_process', 'best_rate_received', 'Best Rate Received', true, fieldDone(sip.best_rate_received));
   add('shipping_in_process', 'shipping_line', 'Shipping Line', true, fieldDone(sip.shipping_line));
@@ -93,8 +97,9 @@ export function requirementItems(ctx) {
   // End stage
   add('end_stage', 'final_bl_draft_to_customer', 'Final BL Draft submitted to customer and approved', true, selDone(end.final_bl_draft_to_customer));
   add('end_stage', 'release_requested', 'Release requested', true, selDone(end.release_requested));
-  add('end_stage', 'bl_received', 'BL Received', docType !== 'swb', docType ? selDone(end.bl_received) : 'missing', docType === 'original_bl' ? 'applies: Original BL' : (docType === 'swb' ? 'SWB' : 'depends on the document type (not set)'));
-  add('end_stage', 'final_document_to_bank', 'Final Documents submitted to bank', payType !== 'non_bank', payType ? selDone(end.final_document_to_bank) : 'missing', payType === 'cad' ? 'applies: CAD' : (payType === 'non_bank' ? 'Non-bank Order' : 'depends on the payment type (not set)'));
+  // UU — when the copy does not track the document / payment type, these stay REQUIRED and are judged on their own value
+  add('end_stage', 'bl_received', 'BL Received', docType !== 'swb', docType || un.shipping_doc_type ? selDone(end.bl_received) : 'missing', docType === 'original_bl' ? 'applies: Original BL' : (docType === 'swb' ? 'SWB' : (un.shipping_doc_type ? 'required (the document type is ' + UNTRACKED_WHY + ')' : 'depends on the document type (not set)')));
+  add('end_stage', 'final_document_to_bank', 'Final Documents submitted to bank', payType !== 'non_bank', payType || un.order_payment_type ? selDone(end.final_document_to_bank) : 'missing', payType === 'cad' ? 'applies: CAD' : (payType === 'non_bank' ? 'Non-bank Order' : (un.order_payment_type ? 'required (the payment type is ' + UNTRACKED_WHY + ')' : 'depends on the payment type (not set)')));
   add('end_stage', 'final_document_to_customer', 'Final Documents submitted to customer', true, selDone(end.final_document_to_customer));
   add('end_stage', 'final_document_to_cargox', 'Final Documents submitted to CargoX', acid !== 'no', acid === 'unknown' ? 'missing' : selDone(end.final_document_to_cargox), acid === 'yes' ? 'applies: ' + txt(o.country) : (acid === 'unknown' ? 'destination country missing' : null));
   add('end_stage', 'final_payment', 'Final Payment', true, selDone(end.final_payment, ['paid', 'bank_doc']));
@@ -168,7 +173,7 @@ export function depositState(pre, hub, invoicePayments, links, importedPaid) {
 
 // ── the 30-hour deadline ──
 // sip = Shipping In Process row · history = [{ changed_to, created_at }] (New York local times as stored) · nowMs = Date.now()
-export function deadlineState(order, sip, history, nowMs) {
+export function deadlineState(order, sip, history, nowMs, untracked) {
   var o = order || {}; var rank = stageRank(o.status);
   if (o.status === 'cancelled' || rank === R_CLOSED) { return { state: 'not_applicable' }; }
   var sched = sip && has(sip.load_date) ? String(sip.load_date) : null;
@@ -176,6 +181,8 @@ export function deadlineState(order, sip, history, nowMs) {
   if (!sched) { return { state: 'no_schedule', words: 'No load date and time yet — the 30-hour rule cannot be checked' }; }
   // v55.83-TO (Codex QA 16 Nov) — a load date saved before times were kept reads as midnight; Nextrade now says whether the time is
   // real (load_time_known). Unknown time = no timed deadline (never a made-up midnight alert).
+  // UU — a copy without load_time_known: a load date without a real time (00:00 / no time) gets no timed deadline
+  if (untracked && untracked.load_time_known && !hasTime(sched)) { return { state: 'no_schedule', scheduled: sched, words: 'Load date ' + sched.substring(0, 10) + ' has no time on this warehouse copy — the 30-hour rule needs a load time' }; }
   if (sip && sip.load_time_known !== undefined && sip.load_time_known !== null && Number(sip.load_time_known) !== 1) { return { state: 'no_schedule', scheduled: sched, words: 'Load date ' + sched.substring(0, 10) + ' has no confirmed time — set the load time in Nextrade for the 30-hour rule' }; }
   var schedMs = nyLocalToUtcMs(sched); var deadMs = schedMs - DEADLINE_HOURS * 3600000;
   var reached = null;
@@ -225,10 +232,10 @@ export function evaluateOrder(input, nowMs) {
   var x = input || {}; var o = x.order || {}; var rows = x.rows || {};
   var invoice = invoiceState(o, x.invoices || []);
   var deposit = depositState(rows.preload, x.depositHub, x.invoicePayments, x.depositLinks, x.importedPaid);
-  var items = requirementItems({ order: o, rows: rows, obsolete: !!x.obsolete, invoice: invoice, deposit: deposit });
+  var items = requirementItems({ order: o, rows: rows, obsolete: !!x.obsolete, invoice: invoice, deposit: deposit, untracked: x.untracked || {} });
   // Not Applicable chosen by a person on one item (override 'item_na') counts as N/A, with the reason kept
   (x.itemOverrides || []).forEach(function (ov) { items.forEach(function (it) { if (it.key === ov.item_key && it.status !== 'done') { it.status = 'na'; it.applies = false; it.why = 'set N/A by ' + (ov.by_name || 'a person') + ': ' + (ov.reason || ''); } }); });
-  var deadline = deadlineState(o, rows.shipping_in_process, x.history, nowMs);
+  var deadline = deadlineState(o, rows.shipping_in_process, x.history, nowMs, x.untracked || {});
   var rank = stageRank(o.status);
   function group(stages) { var g = items.filter(function (it) { return stages.indexOf(it.stage) >= 0 && it.applies; }); var d = g.filter(function (it) { return it.status === 'done'; }).length; return { done: d, total: g.length, na: items.filter(function (it) { return stages.indexOf(it.stage) >= 0 && !it.applies; }).length }; }
   var outstanding = items.filter(function (it) { return it.applies && it.status === 'missing'; });
@@ -302,6 +309,14 @@ export function alertEmail(ev, link) {
 // suggestions: active invoices of the same customer with NO release number, dated within 45 days of the order.
 // orders: [{ source, id, release_number, customer_name, status, shipped_date, load_date, created_at, link }]
 // invoices: [{ id, invoice_number, release_number, po_so_number, record_status, approval_status, invoice_date, customer_name, total_amount }]
+// v55.83-VH (Max 19 Nov) — where the warehouse order is: 'shipped' (Shipped or any later stage, or a shipped date is recorded),
+// 'not_shipped' (Order created / Pre-load / Shipping In Process, no shipped date), 'other' (any status the Hub does not know).
+export function warehousePhase(o) {
+  var x = o || {}; var r = stageRank(x.status);
+  if (r >= R_SHIPPED || /^\d{4}-\d{2}-\d{2}/.test(String(x.shipped_date || ''))) { return 'shipped'; }
+  if (r >= 0) { return 'not_shipped'; }
+  return 'other';
+}
 export function reconcileReleases(orders, invoices, since) {
   var from = String(since || '2026-06-01').substring(0, 10);
   var byRel = {}; var byPo = {}; var noRel = [];
@@ -321,7 +336,8 @@ export function reconcileReleases(orders, invoices, since) {
     var dk = day(o.shipped_date) ? 'shipped' : (day(o.load_date) ? 'load date' : 'created');
     if (!dt || dt < from) { return; }
     var ks = releasesOf(o.release_number);
-    var row = { source: o.source || 'main', order_id: o.id, release_number: o.release_number || '', customer: o.customer_name || '', status: o.status || '', date: dt, date_kind: dk, link: o.link || null, po_so: [], cancelled: [], suggestions: [] };
+    var row = { phase: warehousePhase(o), // VH
+      source: o.source || 'main', order_id: o.id, release_number: o.release_number || '', customer: o.customer_name || '', status: o.status || '', date: dt, date_kind: dk, link: o.link || null, po_so: [], cancelled: [], suggestions: [] };
     if (!ks.length) { row.state = 'no_release'; row.words = 'The warehouse order has no release number — fill it in Nextrade'; out.push(row); return; }
     var on = []; var seen = {};
     ks.forEach(function (k) { (byRel[k] || []).forEach(function (i) { if (!seen[i.id]) { seen[i.id] = true; on.push(i); } }); });
