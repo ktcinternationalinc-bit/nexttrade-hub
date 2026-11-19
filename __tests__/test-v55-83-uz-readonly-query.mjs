@@ -1,5 +1,5 @@
-// v55.83-VA — the READ-ONLY query for Max's shipping questions, RUN on a real Postgres (PGlite) with the report's own table
-// SQL, then its one JSON is fed to the REAL engine (scripts/va-explain-shipping.js). Never Supabase.
+// v55.83-UZ — the READ-ONLY query for Max's shipping questions, RUN on a real Postgres (PGlite) with the report's own table
+// SQL, then its one JSON is fed to the REAL engine (scripts/uz-explain-shipping.js). Never Supabase.
 // Needs @electric-sql/pglite: set PGLITE_DIR to a folder whose node_modules has it (it is NOT a project dependency).
 import fs from 'fs';
 import path from 'path';
@@ -11,11 +11,11 @@ var PGlite;
 try { PGlite = (await import('file://' + req.resolve('@electric-sql/pglite').replace(/\\/g, '/'))).PGlite; }
 catch (e) { console.log('SKIPPED — @electric-sql/pglite not found (set PGLITE_DIR). Nothing was checked.'); process.exit(2); }
 var cjs = createRequire(import.meta.url);
-var X = cjs(path.join(root, 'scripts/va-explain-shipping.js'));
+var X = cjs(path.join(root, 'scripts/uz-explain-shipping.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1200))); }
 function sql(f) { return fs.readFileSync(path.join(root, 'sql', f), 'utf8'); }
-console.log('VA — read-only shipping questions query (real Postgres)');
+console.log('UZ — read-only shipping questions query (real Postgres)');
 var KTC = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk';
 var db = new PGlite();
 await db.exec(`
@@ -54,7 +54,7 @@ await db.exec(`
   insert into vendor_bills values ('${U()}','ONTREK','IN-12958','2026-09-22',723,'active','shipping','outbound','1002-1160'),
    ('${U()}','ELITE TRUCKER','T-1','2026-08-01',1000,'active','trucking','outbound','1002-1200'), ('${U()}','X','T-2','2026-08-01',5,'active','trucking','outbound','1002-4444');
 `);
-var q = sql('v55-83-VA-readonly-shipping-questions.sql');
+var q = sql('v55-83-UZ-readonly-shipping-questions.sql');
 check('the query only reads (no insert / update / delete / create / alter / drop / grant / truncate)', !/\b(insert|update|delete|create|alter|drop|grant|truncate|revoke)\b/i.test(q.replace(/--.*$/gm, '')));
 var before = (await db.query("select (select count(*) from accounting_invoices)::int a, (select count(*) from pl_release_part_estimates)::int b")).rows[0];
 var res = await db.query(q);

@@ -1,4 +1,4 @@
-// v55.83-VA — "remove freight from elite keep trucking and any surcharge" (Max, Nov 19 2026): the REAL sql file run on a real
+// v55.83-UZ — "remove freight from elite keep trucking and any surcharge" (Max, Nov 19 2026): the REAL sql file run on a real
 // Postgres (PGlite) with the report's own table SQL, then read by the REAL engine. Never Supabase. Needs PGLITE_DIR.
 import fs from 'fs';
 import path from 'path';
@@ -15,15 +15,15 @@ var A = cjs(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1200))); }
 function sql(f) { return fs.readFileSync(path.join(root, 'sql', f), 'utf8'); }
-console.log('VA — Elite pays its own freight (real Postgres)');
+console.log('UZ — Elite pays its own freight (real Postgres)');
 var KTC = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk';
 var ELITE = '1430a750-6d34-4609-8ed0-d4e5c5054a3c'; var OTHER = '00000000-0000-4000-8000-00000000aaaa';
 var KEYS = ['10011541', '10011627', '10021036', '10021059', '10021125', '10021129', '10021130', '10021133', '10021138', '10021144', '10021146', '10021152', '10021154', '10021168', '10021178', '10021183', '10021184', '10021188', '10021195', '10021202', '10021203', '10021204', '10021207', '10021211', '10021212'];
-var full = sql('v55-83-VA-elite-no-freight.sql');
+var full = sql('v55-83-UZ-elite-no-freight.sql');
 var i1 = full.indexOf('-- ── STEP 2'); var i2 = full.indexOf('-- ── STEP 3');
 var step1 = full.substring(0, i1), step2 = full.substring(i1, i2), step3 = full.substring(i2);
 check('the file names exactly the 25 releases, three times (preview, change, check), and no other release', KEYS.every(function (k) { return full.split("'" + k + "'").length === 4; }) && (full.match(/'100[0-9]{4,5}'/g) || []).length === 75);
-check('no DELETE / DROP TABLE / TRUNCATE; the only tables written are pl_release_part_estimates and the backup', !/\b(delete\s+from|drop\s+table|truncate)\b/i.test(full) && (full.match(/INSERT INTO public\.(\w+)/g) || []).every(function (x) { return /pl_release_part_estimates|hub_backup_va_part_estimates/.test(x); }) && !/UPDATE public\./.test(full));
+check('no DELETE / DROP TABLE / TRUNCATE; the only tables written are pl_release_part_estimates and the backup', !/\b(delete\s+from|drop\s+table|truncate)\b/i.test(full) && (full.match(/INSERT INTO public\.(\w+)/g) || []).every(function (x) { return /pl_release_part_estimates|hub_backup_uz_part_estimates/.test(x); }) && !/UPDATE public\./.test(full));
 var n = 0; function U() { n++; return '00000000-0000-4000-8000-' + String(n).padStart(12, '0'); }
 function rel(k) { return k.substring(0, 4) + '-' + k.substring(4); }
 async function fresh() {
@@ -56,17 +56,17 @@ var fr = (await db.query("select release_key, amount::float a from pl_release_pa
 check('step 2: freight is 0 on exactly the 25 Elite releases; 1002-1160 (another customer) keeps 723', fr.length === 26 && fr.filter(function (r) { return r.a === 0; }).length === 25 && fr.filter(function (r) { return r.release_key === '10021160'; })[0].a === 723, fr);
 var tr = (await db.query("select release_key, amount::float a from pl_release_part_estimates where part = 'trucking' order by release_key")).rows;
 check('trucking untouched (1,671.67 / 1,450 / 2,150) and none added', JSON.stringify(tr) === JSON.stringify([{ release_key: '10021160', a: 2150 }, { release_key: '10021178', a: 1671.67 }, { release_key: '10021183', a: 1450 }]), tr);
-var bk = (await db.query('select release_key, had_row, row_data from hub_backup_va_part_estimates order by release_key')).rows;
+var bk = (await db.query('select release_key, had_row, row_data from hub_backup_uz_part_estimates order by release_key')).rows;
 check('copies saved first: 25, and the two that had a figure keep it (1,672 and 1,450)', bk.length === 25 && bk.filter(function (b) { return b.had_row; }).length === 2 && Number(bk.filter(function (b) { return b.release_key === '10021178'; })[0].row_data.amount) === 1672 && Number(bk.filter(function (b) { return b.release_key === '10021183'; })[0].row_data.amount) === 1450, bk.filter(function (b) { return b.had_row; }));
 check('no invoice or invoice line touched', (await db.query('select count(*)::int n from accounting_invoices')).rows[0].n === 26 && (await db.query('select count(*)::int n from accounting_invoice_items')).rows[0].n === 50);
-var priv = (await db.query("select has_table_privilege('authenticated','public.hub_backup_va_part_estimates','select') a, has_table_privilege('anon','public.hub_backup_va_part_estimates','select') b, (select relrowsecurity from pg_class where relname='hub_backup_va_part_estimates') c")).rows[0];
+var priv = (await db.query("select has_table_privilege('authenticated','public.hub_backup_uz_part_estimates','select') a, has_table_privilege('anon','public.hub_backup_uz_part_estimates','select') b, (select relrowsecurity from pg_class where relname='hub_backup_uz_part_estimates') c")).rows[0];
 check('the backup table is protected', priv.a === false && priv.b === false && priv.c === true, priv);
 await db.exec(step2);
-check('run again: nothing changes, no second copy', (await db.query('select count(*)::int n from hub_backup_va_part_estimates')).rows[0].n === 25);
+check('run again: nothing changes, no second copy', (await db.query('select count(*)::int n from hub_backup_uz_part_estimates')).rows[0].n === 25);
 var s3 = (await db.query(step3)).rows;
 check('step 3: 25 rows, all OK', s3.length === 25 && s3.every(function (r) { return r.result === 'OK'; }));
 await db.exec(full);
-check('the WHOLE file pasted at once runs too and changes nothing more', (await db.query('select count(*)::int n from hub_backup_va_part_estimates')).rows[0].n === 25);
+check('the WHOLE file pasted at once runs too and changes nothing more', (await db.query('select count(*)::int n from hub_backup_uz_part_estimates')).rows[0].n === 25);
 
 // the REAL engine: 1002-1178 before = trucking 1,671.67 + freight 1,672; after = trucking only; the surcharge stays as shipping charged
 async function engine(d) {

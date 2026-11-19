@@ -43,7 +43,7 @@ var FLAG_WORDS = {
   two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)',
   warehouse_cost_not_usable: 'The warehouse has this release but its shipping cost cannot be used yet (a part is missing, or two orders share the release)', // v55.83-TG
   basis_not_stated_on_invoice: 'The invoice does not say CNF or EXW — basis guessed by the rule, please check', // v55.83-TG
-  foam_evidence_conflict: 'A line says both “no foam” and foam (product name vs description). It is counted as NOT foam (2.5 lb per yard) — fix the name if it is foam', // v55.83-VA
+  foam_evidence_conflict: 'A line says both “no foam” and foam (product name vs description). It is counted as NOT foam (2.5 lb per yard) — fix the name if it is foam', // v55.83-UZ
   basis_assumed_from_shipping_line:'The invoice has a shipping line, so shipping is taken as charged on that line — NOT inside the goods price (Max’s rule). Set CNF/EXW on the invoice to confirm', // v55.83-TJ
   basis_exw_without_shipping_line: 'EXW, but the invoice has no shipping charge line and the warehouse shows shipping costs', // v55.83-TG
   basis_set_differs_from_invoice_text: 'The basis set in the Hub differs from what the invoice text says (CNF / EXW)', // v55.83-TG

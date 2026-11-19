@@ -1,4 +1,4 @@
-// v55.83-VA — the "KTC Egypt / Moustafa are CNF" SQL, RUN on a real Postgres (PGlite) with the report's own table SQL, then the
+// v55.83-UZ — the "KTC Egypt / Moustafa are CNF" SQL, RUN on a real Postgres (PGlite) with the report's own table SQL, then the
 // result read by the REAL engine. Never Supabase. Needs PGLITE_DIR (a folder whose node_modules has @electric-sql/pglite).
 import fs from 'fs';
 import path from 'path';
@@ -11,12 +11,12 @@ try { PGlite = (await import('file://' + req.resolve('@electric-sql/pglite').rep
 catch (e) { console.log('SKIPPED — @electric-sql/pglite not found (set PGLITE_DIR). Nothing was checked.'); process.exit(2); }
 var cjs = createRequire(import.meta.url);
 cjs(path.join(root, 'node_modules/sucrase/register'));
-var M = cjs(path.join(root, 'scripts/va-make-cnf-sql.js'));
+var M = cjs(path.join(root, 'scripts/uz-make-cnf-sql.js'));
 var A = cjs(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1200))); }
 function sql(f) { return fs.readFileSync(path.join(root, 'sql', f), 'utf8'); }
-console.log('VA — KTC Egypt / Moustafa customers become CNF (real Postgres)');
+console.log('UZ — KTC Egypt / Moustafa customers become CNF (real Postgres)');
 var KTC = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk';
 var n = 0; function U() { n++; return '00000000-0000-4000-8000-' + String(n).padStart(12, '0'); }
 var cEg = U(), cMou = U(), cOther = U(), cEg2 = U();
@@ -56,7 +56,7 @@ var approved = [{ id: cEg, name: 'KTC EGYPT FOR IMPORT AND EXPORT' }, { id: cMou
 var full = M.make(approved);
 check('the written SQL has no template marker left and names both customers (apostrophe doubled)', full.indexOf('/*APPROVED*/') < 0 && full.indexOf("'Moustafa''s Trading'") > 0 && full.split(cEg).length === 4);
 check('the generator refuses a bad id, an empty list, a missing name and a customer listed twice', [[{ id: 'x', name: 'a' }], [], [{ id: cEg, name: ' ' }], [approved[0], approved[0]]].every(function (bad) { try { M.make(bad); return false; } catch (e) { return true; } }));
-check('no DELETE / DROP / TRUNCATE anywhere; the only tables written are pl_customer_terms and the backup', !/\b(delete\s+from|drop\s+table|truncate)\b/i.test(full) && (full.match(/INSERT INTO public\.(\w+)/g) || []).every(function (x) { return /pl_customer_terms|hub_backup_va_customer_terms/.test(x); }) && !/UPDATE public\./.test(full));
+check('no DELETE / DROP / TRUNCATE anywhere; the only tables written are pl_customer_terms and the backup', !/\b(delete\s+from|drop\s+table|truncate)\b/i.test(full) && (full.match(/INSERT INTO public\.(\w+)/g) || []).every(function (x) { return /pl_customer_terms|hub_backup_uz_customer_terms/.test(x); }) && !/UPDATE public\./.test(full));
 var i1 = full.indexOf('-- ── STEP 2'); var i2 = full.indexOf('-- ── STEP 3');
 var step1 = full.substring(0, i1), step2 = full.substring(i1, i2), step3 = full.substring(i2);
 
@@ -72,22 +72,22 @@ check('preview says: in the price / own line (real freight) / surcharge stays in
 await db.exec(step2);
 var ct = (await db.query('select customer_id, basis, customer_name from pl_customer_terms order by customer_name')).rows;
 check('step 2: exactly the two customers are CNF; Elite stays EXW; the unapproved "EGYPT SOMETHING" has no row', ct.length === 3 && ct.filter(function (r) { return r.basis === 'CNF'; }).length === 2 && ct.filter(function (r) { return r.customer_id === cOther; })[0].basis === 'EXW', ct);
-var bk = (await db.query('select customer_id, had_row, row_data from hub_backup_va_customer_terms order by had_row')).rows;
+var bk = (await db.query('select customer_id, had_row, row_data from hub_backup_uz_customer_terms order by had_row')).rows;
 check('copies saved first: KTC Egypt (had no row) and Moustafa (had EXW — kept in the copy)', bk.length === 2 && bk[0].had_row === false && bk[0].customer_id === cEg && bk[1].had_row === true && bk[1].row_data.basis === 'EXW', bk);
 check('no invoice and no invoice setting was touched', (await db.query('select count(*)::int n from pl_invoice_terms')).rows[0].n === 1 && (await db.query("select count(*)::int n from accounting_invoices")).rows[0].n === 8);
-var priv = (await db.query("select has_table_privilege('authenticated','public.hub_backup_va_customer_terms','select') a, has_table_privilege('anon','public.hub_backup_va_customer_terms','select') b, (select relrowsecurity from pg_class where relname='hub_backup_va_customer_terms') c")).rows[0];
+var priv = (await db.query("select has_table_privilege('authenticated','public.hub_backup_uz_customer_terms','select') a, has_table_privilege('anon','public.hub_backup_uz_customer_terms','select') b, (select relrowsecurity from pg_class where relname='hub_backup_uz_customer_terms') c")).rows[0];
 check('the backup table is protected (row security on, no access for signed-in / anonymous users)', priv.a === false && priv.b === false && priv.c === true, priv);
 await db.exec(step2);
-check('run again: nothing changes and no second copy is saved', (await db.query('select count(*)::int n from hub_backup_va_customer_terms')).rows[0].n === 2 && (await db.query("select count(*)::int n from pl_customer_terms where basis='CNF'")).rows[0].n === 2);
+check('run again: nothing changes and no second copy is saved', (await db.query('select count(*)::int n from hub_backup_uz_customer_terms')).rows[0].n === 2 && (await db.query("select count(*)::int n from pl_customer_terms where basis='CNF'")).rows[0].n === 2);
 var s3 = (await db.query(step3)).rows;
 check('step 3: both customers show OK', s3.length === 2 && s3.every(function (r) { return r.result === 'OK' && r.usual_basis === 'CNF'; }), s3);
 await db.exec(full);
-check('the WHOLE file pasted at once runs too (and still changes nothing more)', (await db.query('select count(*)::int n from hub_backup_va_customer_terms')).rows[0].n === 2);
+check('the WHOLE file pasted at once runs too (and still changes nothing more)', (await db.query('select count(*)::int n from hub_backup_uz_customer_terms')).rows[0].n === 2);
 
 // guards — each on a fresh database
 var d2 = await fresh(); await d2.exec("update accounting_customers set company_name = 'KTC EGYPT RENAMED' where id = '" + cEg + "'");
 var stopped = false; try { await d2.exec(step2); } catch (e) { stopped = /STOPPED/.test(String(e.message)); }
-check('a customer whose name changed since Max confirmed → STOPPED, nothing changed (Moustafa still EXW, no copies)', stopped && (await d2.query("select basis from pl_customer_terms where customer_id = '" + cMou + "'")).rows[0].basis === 'EXW' && (await d2.query("select count(*)::int n from pg_class where relname = 'hub_backup_va_customer_terms'")).rows[0].n === 0); // the whole paste rolled back, backup table included
+check('a customer whose name changed since Max confirmed → STOPPED, nothing changed (Moustafa still EXW, no copies)', stopped && (await d2.query("select basis from pl_customer_terms where customer_id = '" + cMou + "'")).rows[0].basis === 'EXW' && (await d2.query("select count(*)::int n from pg_class where relname = 'hub_backup_uz_customer_terms'")).rows[0].n === 0); // the whole paste rolled back, backup table included
 var d3 = await fresh(); var missing = M.make([approved[0], { id: U(), name: 'GHOST' }]);
 stopped = false; try { await d3.exec(missing.substring(missing.indexOf('-- ── STEP 2'), missing.indexOf('-- ── STEP 3'))); } catch (e) { stopped = /STOPPED/.test(String(e.message)); }
 check('a listed customer that does not exist → STOPPED, nothing changed', stopped && (await d3.query("select count(*)::int n from pl_customer_terms where basis='CNF'")).rows[0].n === 0);

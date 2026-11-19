@@ -1,4 +1,4 @@
-// v55.83-VA (Max, Nov 19 2026): "for foam laminated or anything with foam the weight is 3 LBS per yard".
+// v55.83-UZ (Max, Nov 19 2026): "for foam laminated or anything with foam the weight is 3 LBS per yard".
 // Runs the REAL engine (profitability.js + profitability-assemble.js) — pure functions, no database.
 var path = require('path');
 var fs = require('fs');
@@ -8,7 +8,7 @@ var P = require(path.join(root, 'src/lib/profitability.js'));
 var A = require(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
-console.log('VA — anything with foam weighs 3 lb per yard');
+console.log('UZ — anything with foam weighs 3 lb per yard');
 
 check('the rule: 3 lb per yard', P.FOAM_LB_PER_YARD === 3);
 check('"Foam Laminated", "FOAM-LAMINATED 3MM", "Velvet with foam backing", "foamed PVC" are foam; "Velvet", "Form paper", "" are not',

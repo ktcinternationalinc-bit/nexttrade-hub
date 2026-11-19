@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- v55.83-VA · READ-ONLY (changes nothing) — Max's five questions of 19 Nov 2026, ONE result to copy back
+-- v55.83-UZ · READ-ONLY (changes nothing) — Max's five questions of 19 Nov 2026, ONE result to copy back
 --   Elite shipping charges · 1002-1164 (Fadi) · AMERICA 1771 (KTC Egypt) · 1002-1160 ($723) · KTC Egypt / Moustafa customers · foam lines
 -- It only SELECTs. The answer is ONE cell of JSON: click it, copy, paste it to Claude.
 -- ═══════════════════════════════════════════════════════════════════════════

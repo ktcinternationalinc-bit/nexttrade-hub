@@ -1,4 +1,4 @@
-// v55.83-VA (Max, Nov 19 2026): "it is possible that there are more than 1 shipping line on an invoice such as 1002-1153. You are
+// v55.83-UZ (Max, Nov 19 2026): "it is possible that there are more than 1 shipping line on an invoice such as 1002-1153. You are
 // to aggregate the lines for the transport charged." Runs the REAL engine: every shipping line on an invoice is added together.
 var path = require('path');
 var root = path.join(__dirname, '..');
@@ -6,7 +6,7 @@ require(path.join(root, 'node_modules/sucrase/register'));
 var A = require(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
-console.log('VA — several shipping lines on one invoice are added together');
+console.log('UZ — several shipping lines on one invoice are added together');
 function run(items, extra) {
   return A.assembleProfitability(Object.assign({ date_from: '', date_to: '', windowDays: 90, warehouseOn: false, customerNames: { c: 'FADI' }, bills: [], billLines: [], warehouseRows: [],
     invoices: [{ id: 'i1', invoice_number: 'AMERICA 1757', accounting_customer_id: 'c', invoice_date: '2026-07-10', record_status: 'active', currency: 'USD', release_number: '1002-1164' }],

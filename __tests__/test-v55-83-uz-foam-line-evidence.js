@@ -1,4 +1,4 @@
-// v55.83-VA (Codex QA 19 Nov 07:36, P2): foam is decided by the LINE (its product name + description) and by nothing a person can
+// v55.83-UZ (Codex QA 19 Nov 07:36, P2): foam is decided by the LINE (its product name + description) and by nothing a person can
 // rename. "No Foam" always wins. Renaming / merging / un-merging a product group never changes pounds, inbound, shipping split or
 // cost. One rule for Profitability, the Sales Report and the supplier-cost conversion. Runs the REAL engine and the REAL route.
 var path = require('path');
@@ -9,7 +9,7 @@ var P = require(path.join(root, 'src/lib/profitability.js'));
 var A = require(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
-console.log('VA — foam is decided by the line, never by the group label');
+console.log('UZ — foam is decided by the line, never by the group label');
 
 // ── Codex's reproduction: 1,000 yd of "Face Goods- No Foam" on 1002-9001
 function one(groupName) {

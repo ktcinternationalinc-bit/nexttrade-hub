@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- v55.83-VA — ELITE PAPER pays its own freight: freight = $0 on Elite's shipments (Max, Nov 19 2026)
+-- v55.83-UZ — ELITE PAPER pays its own freight: freight = $0 on Elite's shipments (Max, Nov 19 2026)
 -- "Elite is supposed to pay its own." · "remove freight from elite keep trucking and any surcharge"
 --
 -- What it does: for EXACTLY the 25 Elite release numbers listed below (the 25 newest Elite invoices Max's read-only check
@@ -10,7 +10,7 @@
 -- still replace the 0 (a bill always wins).
 -- It refuses to run unless the customer is found with exactly the confirmed name AND every listed release has at least one
 -- live ELITE PAPER invoice and no live invoice of any other customer. A protected copy of every figure it replaces is
--- saved first (hub_backup_va_part_estimates). Safe to run more than once.
+-- saved first (hub_backup_uz_part_estimates). Safe to run more than once.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ── STEP 1 · PREVIEW (read-only — changes nothing). One cell of JSON: copy it to Claude. ─────────────────────────────
@@ -44,9 +44,9 @@ SELECT jsonb_build_object(
 ) AS copy_this_cell_to_claude;
 
 -- ── STEP 2 · THE CHANGE (run only after Max has seen step 1) ───────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS public.hub_backup_va_part_estimates (run_at timestamptz NOT NULL, release_key text NOT NULL, part text NOT NULL, had_row boolean NOT NULL, row_data jsonb);
-ALTER TABLE public.hub_backup_va_part_estimates ENABLE ROW LEVEL SECURITY;   -- no policies: the Supabase SQL editor / server only
-REVOKE ALL ON public.hub_backup_va_part_estimates FROM public, anon, authenticated;
+CREATE TABLE IF NOT EXISTS public.hub_backup_uz_part_estimates (run_at timestamptz NOT NULL, release_key text NOT NULL, part text NOT NULL, had_row boolean NOT NULL, row_data jsonb);
+ALTER TABLE public.hub_backup_uz_part_estimates ENABLE ROW LEVEL SECURITY;   -- no policies: the Supabase SQL editor / server only
+REVOKE ALL ON public.hub_backup_uz_part_estimates FROM public, anon, authenticated;
 
 DO $$
 DECLARE
@@ -55,31 +55,31 @@ BEGIN
   SELECT count(*) INTO n_cust FROM public.accounting_customers c WHERE c.id = elite_id AND coalesce(c.company_name, c.contact_name, '') = 'ELITE PAPER';
   IF n_cust <> 1 THEN RAISE EXCEPTION 'STOPPED: customer ELITE PAPER was not found with exactly that name. Nothing was changed.'; END IF;
 
-  CREATE TEMP TABLE va_listed ON COMMIT DROP AS SELECT * FROM (VALUES ('10011541'), ('10011627'), ('10021036'), ('10021059'), ('10021125'), ('10021129'), ('10021130'), ('10021133'), ('10021138'), ('10021144'), ('10021146'), ('10021152'), ('10021154'),
+  CREATE TEMP TABLE uz_listed ON COMMIT DROP AS SELECT * FROM (VALUES ('10011541'), ('10011627'), ('10021036'), ('10021059'), ('10021125'), ('10021129'), ('10021130'), ('10021133'), ('10021138'), ('10021144'), ('10021146'), ('10021152'), ('10021154'),
     ('10021168'), ('10021178'), ('10021183'), ('10021184'), ('10021188'), ('10021195'), ('10021202'), ('10021203'), ('10021204'), ('10021207'), ('10021211'), ('10021212')) AS l(k);
-  CREATE TEMP TABLE va_inv_rel ON COMMIT DROP AS
+  CREATE TEMP TABLE uz_inv_rel ON COMMIT DROP AS
     SELECT i.accounting_customer_id AS cust, upper(regexp_replace(p.x, '[^A-Za-z0-9]', '', 'g')) AS k
     FROM public.accounting_invoices i
     CROSS JOIN LATERAL regexp_split_to_table(coalesce(i.release_number, ''), '\s*(?:[,;&/+]|\mand\M)\s*', 'i') AS p(x)
     WHERE coalesce(i.record_status, '') NOT IN ('void', 'cancelled', 'archived', 'deleted');
 
   -- every listed release must be Elite's and only Elite's
-  SELECT string_agg(l.k, ', ' ORDER BY l.k) INTO bad FROM va_listed l
-  WHERE NOT EXISTS (SELECT 1 FROM va_inv_rel r WHERE r.k = l.k AND r.cust = elite_id)
-     OR EXISTS (SELECT 1 FROM va_inv_rel r WHERE r.k = l.k AND r.cust IS DISTINCT FROM elite_id);
+  SELECT string_agg(l.k, ', ' ORDER BY l.k) INTO bad FROM uz_listed l
+  WHERE NOT EXISTS (SELECT 1 FROM uz_inv_rel r WHERE r.k = l.k AND r.cust = elite_id)
+     OR EXISTS (SELECT 1 FROM uz_inv_rel r WHERE r.k = l.k AND r.cust IS DISTINCT FROM elite_id);
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'STOPPED: these releases are not only ELITE PAPER''s any more: %. Nothing was changed.', bad; END IF;
 
-  SELECT count(*) INTO n_already FROM va_listed l JOIN public.pl_release_part_estimates e ON e.release_key = l.k AND e.part = 'freight' AND e.amount = 0;
+  SELECT count(*) INTO n_already FROM uz_listed l JOIN public.pl_release_part_estimates e ON e.release_key = l.k AND e.part = 'freight' AND e.amount = 0;
 
   -- copy first — only what this run really changes
-  INSERT INTO public.hub_backup_va_part_estimates (run_at, release_key, part, had_row, row_data)
+  INSERT INTO public.hub_backup_uz_part_estimates (run_at, release_key, part, had_row, row_data)
     SELECT run, l.k, 'freight', (e.release_key IS NOT NULL), to_jsonb(e)
-    FROM va_listed l LEFT JOIN public.pl_release_part_estimates e ON e.release_key = l.k AND e.part = 'freight'
+    FROM uz_listed l LEFT JOIN public.pl_release_part_estimates e ON e.release_key = l.k AND e.part = 'freight'
     WHERE e.release_key IS NULL OR e.amount IS DISTINCT FROM 0;
 
   INSERT INTO public.pl_release_part_estimates (release_key, part, amount, note, updated_by)
-    SELECT l.k, 'freight', 0, 'Elite pays its own freight (Max 19 Nov 2026) — set to 0 by v55.83-VA', 'v55.83-VA'
-    FROM va_listed l
+    SELECT l.k, 'freight', 0, 'Elite pays its own freight (Max 19 Nov 2026) — set to 0 by v55.83-UZ', 'v55.83-UZ'
+    FROM uz_listed l
     WHERE NOT EXISTS (SELECT 1 FROM public.pl_release_part_estimates e WHERE e.release_key = l.k AND e.part = 'freight' AND e.amount = 0)
   ON CONFLICT (release_key, part) DO UPDATE SET amount = 0, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now();
   GET DIAGNOSTICS n_set = ROW_COUNT;

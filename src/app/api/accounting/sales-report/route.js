@@ -147,7 +147,7 @@ export async function POST(req) {
       productRevenue = r2(productRevenue + amount);
       // TE — the MERGED name when the description is in a product group; pounds from the unit set on the description (or the line)
       var gid = groupOfName[nk]; var pkey = gid ? 'g:' + gid : 'n:' + nk; var plabel = gid ? gName[gid] : name;
-      // v55.83-VA (Max, Nov 19: anything with foam weighs 3 lb per yard) — the same rule as Profitability
+      // v55.83-UZ (Max, Nov 19: anything with foam weighs 3 lb per yard) — the same rule as Profitability
       var isFoam = isFoamLine(it.wave_product_name, it.description); // the line's product name + description decide, never the merged group's name (Codex 07:36)
       var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var lb = toPounds(qty, unit, null, isFoam ? foamFactors(factors) : factors);
       if (lb === null) { noUnitLines += 1; } else { poundsTotal += lb; }
