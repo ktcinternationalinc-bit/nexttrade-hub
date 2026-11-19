@@ -318,7 +318,7 @@ export function buildCells(input) {
       var fx = headliner ? headlinerFactors(factors) : (foam ? foamFactors(factors) : factors);
       var lb = toPounds(ln.qty, ln.unit, pKey, fx);
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
-      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, fx: fx });
+      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, headliner: headliner, fx: fx });
     });
 
     // each goods line on its release(s)
@@ -339,7 +339,7 @@ export function buildCells(input) {
         var c = { invoice_id: inv.id, invoice: inv.number, invoice_date: inv.date, customer: inv.customer || null, customer_id: inv.customer_id || null, line_id: gl.ln.id || null,
           description: gl.ln.description, group_id: gl.g ? gl.g.id : null, product: gl.g ? gl.g.name : String(gl.ln.description || '').trim(), product_key: gl.pKey,
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
-          unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
+          unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, headliner: gl.headliner, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
         if (p.lb === null) { c.flags.push('unit_unknown'); }
         cells.push(c); mine.push(c);
       });

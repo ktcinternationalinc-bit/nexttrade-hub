@@ -37,9 +37,10 @@ var CATEGORIES = [
 //   products / customers: [{ name, lines, pounds, goods_profit, transport_profit, profit, missing }] (cents), biggest profit first
 //   total: { goods_profit, transport_profit, profit } (cents) — profit is ALWAYS goods profit + transport profit
 //   hidden: true when the profit figures were not sent to this person (no permission) — then no profit is worked out at all
-export function periodBreakdown(cells) {
+// forceHidden = the server said this person may not see profit (can_see_margin false): hidden even when there are no cells at all.
+export function periodBreakdown(cells, forceHidden) {
   var list = cells || [];
-  var hidden = list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
+  var hidden = forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
   var cats = CATEGORIES.map(function (d) {
     var row = { key: d.key, label: d.label, group: d.group, kind: d.kind, cents: 0, missing: 0, lines: 0 };
     list.forEach(function (c) { var v = c[d.key]; if (!known(v)) { row.missing += 1; return; } row.cents += cents(v); row.lines += 1; });
@@ -76,9 +77,9 @@ var FIX = [
   { key: 'freight_cost', title: 'Freight cost not known', how: 'There is no freight / shipping bill and no estimate for the release of this sale. Enter the estimate, or attach the bill to the release.', go: 'containers', goLabel: 'Open Containers (shipping cost)' },
   { key: 'other', title: 'Not complete', how: 'Something else on this line is missing. Open the invoice to see what.', go: 'invoice', goLabel: 'Open By invoice' }
 ];
-export function linesToFix(cells) {
+export function linesToFix(cells, forceHidden) {
   var list = cells || [];
-  if (list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, rows: [], reasons: [], total: list.length }; }
+  if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, rows: [], reasons: [], total: list.length }; }
   var count = {}; var rows = [];
   list.forEach(function (c) {
     var miss = [];

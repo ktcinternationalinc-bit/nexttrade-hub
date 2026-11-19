@@ -149,6 +149,7 @@ export default function ProfitabilityTab(props) {
   // 13 periods or fewer load by themselves, once per report; more than that wait for the “Load expenses” button (same loader)
   useEffect(function () {
     if (view !== 'period' || pPre !== 'all' || !data || !data.cells) { return; }
+    if (!effFrom) { return; } // no start date: nothing is asked (see expOn)
     if (expAuto.current === expGen.current) { return; }
     if (periodKeys().length > 13) { return; }
     expAuto.current = expGen.current; startExpenses({ ignoreCache: true });
@@ -344,7 +345,9 @@ export default function ProfitabilityTab(props) {
   function periodView() {
     var cells = (data.cells || []).filter(function (c) { var p0 = prefixOf(c); return pPre === 'all' || (pPre === 'other' ? ['1001', '1002', '1003'].indexOf(p0) < 0 : p0 === pPre); });
     var F = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
-    var hidden = cells.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
+    // v55.83-VQ (Codex 22:50 P1) — the server's own answer decides (can_see_margin false), also for a period with no sales at all; the
+    // missing-field check stays as a second lock
+    var hidden = (data && data.can_see_margin === false) || cells.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
     function add(row, c) {
       row.lines++; row.pounds += Number(c.pounds) || 0;
       var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
@@ -375,14 +378,14 @@ export default function ProfitabilityTab(props) {
         var e = expOn ? expOf(r) : null; var isTot = r.key === 'total';
         if (!e || e.status !== 'ok') { return [e && e.from ? e.from + ' to ' + e.to : '', '', '', '', '', '', '', expOn ? (e ? (e.why || e.status) : 'not loaded') : 'expenses are shown with Releases: All']; }
         var f = (hidden || (isTot && !e.complete)) ? { cents: null, complete: false } : finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));
-        return [isTot ? (e.loaded + ' of ' + e.periods + ' periods') : e.from + ' to ' + e.to, e.cols.A.cents / 100, e.cols.C.cents / 100, e.cols.D.cents / 100, e.cols.E.cents / 100, e.cols.unassigned.cents / 100, f.cents === null ? '' : f.cents / 100, f.cents === null ? 'not shown' : (f.complete ? 'yes' : 'known part only')];
+        return [isTot ? (e.loaded + ' of ' + e.periods + ' periods') : e.from + ' to ' + e.to, e.cols.A.cents / 100, e.cols.C.cents / 100, e.cols.D.cents / 100, e.cols.E.cents / 100, e.cols.unassigned.cents / 100, f.cents === null ? '' : f.cents / 100, f.cents === null ? 'not shown' : (f.complete ? 'yes' : (f.assumed !== 0 ? 'provisional — ' + (f.assumed / 100) + ' assumed already inside profit by category name' + (e.cols.unassigned.cents !== 0 ? '; uncategorized not taken off' : '') : 'known part only'))];
       })()); }));
       var text = lines.map(function (l) { return l.map(function (x) { var t0 = String(x === null || x === undefined ? '' : x); return /[",\n]/.test(t0) ? '"' + t0.replace(/"/g, '""') + '"' : t0; }).join(','); }).join('\n');
       var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'pnl-by-' + pGran + '-' + (pPre === 'all' ? 'all' : pPre) + '-' + (from || 'start') + '-to-' + (to || 'today') + '.csv'; a.click();
     }
     function money(c) { return c === null || c === undefined ? '🔒' : (c < 0 ? '−$' : '$') + fmt(Math.abs(c / 100)); }
     function breakdownPanel(r, cs) {
-      var bd = periodBreakdown(cs);
+      var bd = periodBreakdown(cs, hidden);
       function side(group, title, color) {
         return <div style={{ flex: '1 1 320px', minWidth: 300 }}>
           <div className="font-extrabold text-[11px] mb-1" style={{ color: color }}>{title}</div>
@@ -409,7 +412,7 @@ export default function ProfitabilityTab(props) {
         </div>;
       }
       // v55.83-VQ (Max: "what does this mean? how do I go and fix it?") — the lines behind every amber note, why, and where to fix
-      var fx = linesToFix(cs);
+      var fx = linesToFix(cs, hidden);
       function goFix(where, row) { setFull(false); setOpen(null); if (where === 'invoice' && row) { setSearchQ(String(row.invoice || '')); setView('invoice'); if (row.invoice_id) { setOpen('invoice:' + row.invoice_id); } } else { setView(where === 'containers' ? 'containers' : (where === 'invoice' ? 'invoice' : 'setup')); } }
       var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
         <div className="font-extrabold text-[12px]" style={{ color: '#92400e' }}>{'⚠ Lines to fix — ' + fx.rows.length + ' of ' + fx.total + ' sale lines in ' + r.label + ' are missing a cost, so their profit is not counted yet.'}</div>
@@ -435,7 +438,9 @@ export default function ProfitabilityTab(props) {
     }
     // v55.83-VQ — the expense columns. Only with ALL releases: the Income Statement's expenses are the whole company's and cannot
     // be split by release prefix. The Total row adds the periods that have loaded and says so when some have not.
-    var expOn = pPre === 'all'; var EXK = ['A', 'C', 'D', 'E', 'unassigned'];
+    // v55.83-VQ (Codex 22:50 P2) — and only with a FROM date: with no start the periods before the first sale are unknown (a month
+    // with rent and no invoice would be missed), so no expenses and no final figure are worked out at all
+    var expOn = pPre === 'all' && !!effFrom; var EXK = ['A', 'C', 'D', 'E', 'unassigned'];
     var expKeys = rows.filter(function (r0) { return r0.key !== 'zz'; }).map(function (r0) { return r0.key; });
     var totalExp = totalExpenses(expKeys, pExp, expScope);
     function expOf(r) { return r.key === 'total' ? totalExp : pExp[expScope + '|' + r.key]; }
@@ -455,12 +460,13 @@ export default function ProfitabilityTab(props) {
       var f = finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));
       return <span style={{ color: f.cents >= 0 ? '#065f46' : '#7f1d1d' }}>{money(f.cents)}
         {e.cols.unassigned.cents !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'if the uncategorized is all expense: ' + money(f.cents - e.cols.unassigned.cents)}</div>}
+        {f.assumed !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'provisional: ' + money(f.assumed) + ' of supplier / trucker payments assumed already inside profit'}</div>}
         {!f.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>known part only</div>}</span>;
     }
     function expPanel(r) {
-      if (!expOn) { return <div className="text-[11px] mt-2" style={{ color: SUB }}>Expenses and the final P&L are shown with Releases: All (they are the whole company’s and cannot be split by release).</div>; }
+      if (!expOn) { return <div className="text-[11px] mt-2" style={{ color: SUB }}>{pPre !== 'all' ? 'Expenses and the final P&L are shown with Releases: All (they are the whole company’s and cannot be split by release).' : 'Set a From date at the top and press Apply to see expenses and the final P&L — without a start date the months before the first sale cannot be known.'}</div>; }
       var e = expOf(r); if (!e || e.status !== 'ok') { return <div className="text-[11px] mt-2" style={{ color: '#b45309' }}>{e && e.why ? e.why : 'Expenses for this period are loading…'}</div>; }
-      var groups = [['A', 'A · Warehouse / Office'], ['C', 'C · Partner fee'], ['D', 'D · Payroll'], ['E', 'E · Taxes'], ['unassigned', 'Uncategorized expenses — not taken off the profit yet'], ['in_profit', 'Paid to suppliers, truckers, brokers — already inside goods and transport profit, NOT taken off again']];
+      var groups = [['A', 'A · Warehouse / Office'], ['C', 'C · Partner fee'], ['D', 'D · Payroll'], ['E', 'E · Taxes'], ['unassigned', 'Uncategorized expenses — not taken off the profit yet'], ['in_profit', 'Paid to suppliers, truckers, brokers — ASSUMED already inside goods and transport profit (by the category’s name, not checked line by line), so NOT taken off again']];
       return <div className="mt-2">
         <div className="font-extrabold text-[11px] mb-1" style={{ color: '#7c2d12' }}>{'EXPENSES paid ' + e.from + ' → ' + e.to + ' (from the Income Statement, real-cost look)'}</div>
         <div className="flex gap-3 flex-wrap">{groups.map(function (g) { var col = e.cols[g[0]];
@@ -824,7 +830,7 @@ export default function ProfitabilityTab(props) {
     <div className="rounded-lg px-3 py-1.5 mb-3 text-[11px] flex items-center gap-2 flex-wrap" style={{ background: '#f8fafc', color: '#334155', border: '1px solid ' + LINE }}>
       <span><b>Profit view</b> — by invoice date, includes unpaid invoices and bills. Not the cash / tax report.</span>
       <button onClick={function () { setShowAbout(!showAbout); }} className="font-bold underline" style={{ color: '#1d4ed8' }}>{showAbout ? 'Hide details' : 'About this report'}</button>
-      {showAbout && <div className="w-full mt-1"><b>This is NOT the cash report.</b> It answers “did this product, customer or invoice make money?”. It is dated by invoice date and includes unpaid invoices, unpaid bills, a standard inbound allowance of $0.02 per pound (not a real payment) and any estimate, labelled. For money actually received and paid — the tax view — use <b>Accounting → Stats → Income Statement (cash basis)</b>. The two will not match. RTM and NextTrade service fees are left out of this report on purpose; they are in the cash report.</div>}
+      {showAbout && <div className="w-full mt-1"><b>This is NOT the cash report.</b> It answers “did this product, customer or invoice make money?”. It is dated by invoice date and includes unpaid invoices, unpaid bills, a standard inbound allowance of $0.02 per pound (not a real payment) and any estimate, labelled. For money actually received and paid — the tax view — use <b>Accounting → Stats → Income Statement (cash basis)</b>. The two will not match. By product, customer and invoice leave RTM and NextTrade service fees out on purpose; <b>P&L by period</b> brings the expenses in from the Income Statement, and there what is left of the money sent to RTM / NextTrade after the bills it paid is counted under A · Warehouse / Office.</div>}
     </div>
 
     {data && data.setup_needed && <div className="rounded-lg p-3 text-[12px]" style={{ background: '#fffbeb', color: '#78350f', border: '1px solid #f59e0b' }}>

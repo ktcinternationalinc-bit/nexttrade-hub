@@ -73,8 +73,11 @@ export function expenseColumns(cats, uncategorized) {
 // The final figure of a period: total profit − the four expense columns. It is only COMPLETE when nothing is left unassigned
 // and no sale line is missing a cost; otherwise it is the known part and says so.
 export function finalPnl(profitCents, cols, incompleteLines) {
-  if (profitCents === null || profitCents === undefined || !cols) { return { cents: null, complete: false }; }
-  return { cents: profitCents - cols.total, complete: cols.unassigned.cents === 0 && !(incompleteLines > 0) };
+  if (profitCents === null || profitCents === undefined || !cols) { return { cents: null, complete: false, assumed: 0 }; }
+  // v55.83-VQ (Codex 22:50 P2) — `assumed` = money left out ONLY because its category name says supplier / trucker / broker /
+  // commission ("already inside goods and transport profit"). That is an assumption from a name, not a line-by-line check, so a
+  // final figure that rests on it is never called complete.
+  return { cents: profitCents - cols.total, assumed: cols.in_profit.cents, complete: cols.unassigned.cents === 0 && cols.in_profit.cents === 0 && !(incompleteLines > 0) };
 }
 
 // The Income Statement's categories in its real-cost look, exactly as that screen builds them: every paid-through company's
