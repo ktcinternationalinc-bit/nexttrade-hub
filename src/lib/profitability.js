@@ -15,6 +15,15 @@
 // This report never changes an invoice, a bill, inventory or an accounting entry.
 
 export var INBOUND_ALLOWANCE_PER_LB = 0.02;
+// v55.83-UZ (Max, Nov 19 2026: "inbound charges for anything that starts with 1001 or 1003 as an order do NOT have an inbound charge
+// in PNL") — goods on a release numbered 1001-… or 1003-… carry no inbound allowance. Every other release, and a sale with no
+// release number, keeps the standard $0.02 per pound.
+export var NO_INBOUND_PREFIXES = ['1001', '1003'];
+export function releaseHasNoInbound(release) {
+  var raw = String(release || '').trim(); if (!raw) { return false; }
+  var m = raw.match(/^([A-Za-z0-9]+)\s*-/); var pre = m ? m[1].toUpperCase() : raw.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 4);
+  return NO_INBOUND_PREFIXES.indexOf(pre) >= 0;
+}
 // Max, Nov 16: "bonded should add $200 for all shipments from Houston USA" — a STANDARD charge per Houston release (shipment), split
 // across the goods on that release by pounds. Canada and unknown origin get none.
 export var BONDED_PER_HOUSTON_RELEASE = 200;
@@ -53,6 +62,17 @@ export function unitFactor(unit, productKey, factors) {
   if (per && per[u] > 0) { return Number(per[u]); }
   var base = f.units || DEFAULT_UNIT_FACTORS;
   return base[u] > 0 ? Number(base[u]) : null;
+}
+// v55.83-UZ (Max, Nov 19 2026: "for foam laminated or anything with foam the weight is 3 LBS per yard") — a line whose name says
+// FOAM weighs 3 lb per yard (and per linear metre, which this report weighs the same as a yard). Pounds, kilos and tons are real
+// weights and are not touched. The factor is this rule, not the general yard figure a person sets under "Names, units".
+export var FOAM_LB_PER_YARD = 3;
+// "Face Goods- No Foam" (Max's own product names) says there is NO foam: no foam / non-foam / without foam / w/o foam are not foam.
+export function isFoamName(text) { var t = String(text || ''); return /foam/i.test(t.replace(/\b(no|non|without|w\/o)[\s-]*foam/ig, ' ')); }
+export function foamFactors(factors) {
+  var f = factors || {}; var u = Object.assign({}, f.units || DEFAULT_UNIT_FACTORS);
+  u.yd = FOAM_LB_PER_YARD; u.lm = FOAM_LB_PER_YARD;
+  return { units: u, byProduct: f.byProduct };
 }
 // v55.83-TE (Max, Nov 16: "why is there no cost when there should be" — Stock Paper linked to "Texas Paper (LBS)" …) — a supplier
 // bill line whose unit field is empty but whose DESCRIPTION states the unit. This reads what is printed; it does not guess.
@@ -257,9 +277,12 @@ export function buildCells(input) {
       if (isT) { tLines += cents(amt); return; }
       var g = input.groupOf ? input.groupOf(ln.description) : null;
       var pKey = g ? 'g:' + g.id : 'n:' + nameKey(ln.description);
-      var lb = toPounds(ln.qty, ln.unit, pKey, factors);
+      // v55.83-UZ — foam: the line's own name, the text passed by the caller (ln.foam) or the merged product's name says foam
+      var foam = ln.foam === true || isFoamName(ln.description) || (!!g && isFoamName(g.name));
+      var fx = foam ? foamFactors(factors) : factors;
+      var lb = toPounds(ln.qty, ln.unit, pKey, fx);
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
-      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey });
+      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, fx: fx });
     });
 
     // each goods line on its release(s)
@@ -280,7 +303,7 @@ export function buildCells(input) {
         var c = { invoice_id: inv.id, invoice: inv.number, invoice_date: inv.date, customer: inv.customer || null, customer_id: inv.customer_id || null, line_id: gl.ln.id || null,
           description: gl.ln.description, group_id: gl.g ? gl.g.id : null, product: gl.g ? gl.g.name : String(gl.ln.description || '').trim(), product_key: gl.pKey,
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
-          unit_factor: unitFactor(gl.ln.unit, gl.pKey, factors), pounds: p.lb, invoiced: amtParts[ix], flags: [] };
+          unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
         if (p.lb === null) { c.flags.push('unit_unknown'); }
         cells.push(c); mine.push(c);
       });
@@ -366,7 +389,8 @@ export function buildCells(input) {
     c.commission = costKnown && c.pounds !== null ? r2(c.pounds * cost.commission_per_lb) : null;
     c.missing_cost_lines = cost && cost.missing_cost_lines ? cost.missing_cost_lines : [];
     if (cost && cost.cost_unknown) { c.flags.push('purchase_line_without_cost'); }
-    c.inbound_allowance = c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null;
+    c.inbound_exempt = releaseHasNoInbound(c.release); // v55.83-UZ — 1001- / 1003- releases: no inbound charge
+    c.inbound_allowance = c.inbound_exempt ? 0 : (c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null);
     if (c.base_cost === null) { c.flags.push('cost_missing'); }
     if (c.cost_method === 'manual') { c.flags.push('cost_manual'); }
     if (c.cost_method === 'assumed_earliest') { c.flags.push('cost_assumed_before_first_purchase'); c.cost_first_purchase = cost.first_purchase || null; }

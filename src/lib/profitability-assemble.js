@@ -10,7 +10,7 @@
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
 import { warehouseOutboundForRelease, inferBasis, statedBasis, isWarehouseTestRow } from './warehouse-shipping'; // v55.83-TG
 import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge, isSurchargeOnlyLine } from './shipping-terms'; // v55.83-TG (+ UE surcharge rule)
-import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2 } from './profitability';
+import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2, isFoamName, foamFactors } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
 export function splitReleases(text) {
@@ -83,6 +83,7 @@ export function assembleProfitability(d) {
       var nm = lineName(it);
       return { id: it.id, description: nm, qty: Number(it.quantity) || 0, unit: unitOfLine[it.id] || unitOfName[nameKey(nm)] || '', unit_price: Number(it.unit_price) || 0,
         amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null,
+        foam: isFoamName(it.wave_product_name) || isFoamName(it.description), // v55.83-UZ — "anything with foam": product name or description
         transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
     });
     var text = lines.map(function (l) { return l.description; }).join(' · ');
@@ -152,7 +153,7 @@ export function assembleProfitability(d) {
   function costOf(inv, cell) {
     var keys = cell.group_id ? (billKeysOfGroup[cell.group_id] || []) : [];
     // nothing linked on purpose = no cost from bills; similar names are never assumed to be the same product
-    var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: factors, freeNameKeys: freeNameKeys }) : null;
+    var fromBills = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: cell.foam === true ? foamFactors(factors) : factors, freeNameKeys: freeNameKeys }) : null; // v55.83-UZ — a foam sale's purchases in yards weigh 3 lb per yard too, so cost per yard is unchanged
     // v55.83-TE — only now a cost typed by hand: this sale's own, else the product's default
     var m = (cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
     // v55.83-TJ — a cost a person typed wins over the "bought before our first bill" assumption

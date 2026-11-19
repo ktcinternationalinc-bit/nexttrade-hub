@@ -18,7 +18,7 @@ import { windowFloorFor, clampFrom } from '../../../../lib/visibility-window-ser
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
-import { nameKey, toPounds, unitKey, isTransportLine, DEFAULT_UNIT_FACTORS } from '../../../../lib/profitability'; // v55.83-TE — merged names + pounds, the same rules as Profitability
+import { nameKey, toPounds, unitKey, isTransportLine, DEFAULT_UNIT_FACTORS, isFoamName, foamFactors } from '../../../../lib/profitability'; // v55.83-TE — merged names + pounds, the same rules as Profitability
 
 var API_BUILD_MARKER = 'v55.83-ON-sales-report';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -147,7 +147,9 @@ export async function POST(req) {
       productRevenue = r2(productRevenue + amount);
       // TE — the MERGED name when the description is in a product group; pounds from the unit set on the description (or the line)
       var gid = groupOfName[nk]; var pkey = gid ? 'g:' + gid : 'n:' + nk; var plabel = gid ? gName[gid] : name;
-      var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var lb = toPounds(qty, unit, null, factors);
+      // v55.83-UZ (Max, Nov 19: anything with foam weighs 3 lb per yard) — the same rule as Profitability
+      var isFoam = isFoamName(it.wave_product_name) || isFoamName(it.description) || (!!gid && isFoamName(gName[gid]));
+      var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var lb = toPounds(qty, unit, null, isFoam ? foamFactors(factors) : factors);
       if (lb === null) { noUnitLines += 1; } else { poundsTotal += lb; }
       if (!products[pkey]) { products[pkey] = { product: plabel, grouped: !!gid, qty: 0, revenue: 0, pounds: 0, poundsMissing: false, invSet: {}, names: {} }; }
       products[pkey].qty = r2(products[pkey].qty + qty);
