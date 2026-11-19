@@ -17,7 +17,9 @@ import { categorizeLine, partyName, wantsBill } from '../../../../lib/nextrade-b
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP private bank accounts — respected here too
 import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v55.83-UB — the same REAL account can have two connections
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
+import { learnPlan, linesForRule } from '../../../../lib/company-rule-learn'; // v55.83-VK — the books learn a rule from what a person categorizes
 var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
+var SQL_MISSING_VK = 'Using a rule on lines of any date needs one small database update first: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Until then, use “📏 Apply rules” for the dates shown.';
 var SQL_MISSING_UB = 'Transfers and category directions need one database update first: run sql/v55-83-UB-company-transfers.sql in Supabase (SQL Editor).';
 
 var API_BUILD_MARKER = 'v55.83-TW-company-books';
@@ -27,6 +29,8 @@ var LINE_COLS = 'id, date, posted_date, amount_abs, direction, account_id, name,
 
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function missingRel(e) { return /does not exist|schema cache|Could not find the table|company_category/i.test(String((e && e.message) || '')); }
+// the is_private column does not exist at all (Postgres 42703 / PostgREST PGRST204) — anything else (permission, network…) is NOT this
+function missingPrivateColumn(e) { var c = String((e && e.code) || ''); var m = String((e && e.message) || ''); return (c === '42703' || c === 'PGRST204') && /is_private/.test(m) && /does not exist|schema cache/i.test(m) && !/permission/i.test(m); }
 function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function fail(msg, st) { return NextResponse.json({ ok: false, error: msg }, { status: st || 400 }); }
 function readFail(what, e) { return NextResponse.json({ ok: false, error: missingRel(e) ? SQL_MISSING : 'Could not read ' + what + ' (' + ((e && e.message) || 'error') + ') — nothing changed.' }, { status: missingRel(e) ? 409 : 503 }); }
@@ -212,10 +216,15 @@ export async function POST(req) {
       // payroll shows as "Warehouse staff" — no names (Max)
       var linesOut = (pl.data || []).map(function (l) { var c = byKey[l.company_category]; return (c && c.is_payroll) ? Object.assign({}, l, { name: 'Warehouse staff', merchant_name: null }) : l; });
       if (action === 'totals') { return NextResponse.json({ ok: true, totals: companyTotals(linesOut, catsL.data || []), from: from, to: to, capped: !!pl.capped }); }
-      var links = {};
+      var links = {}; var ktcMapL = null; var ktcCatsL = null;
       if (comp.key === 'nextrade' && linesOut.length) {
         var lnk = await db.from('company_bill_links').select('source_bank_transaction_id, bill_id, mode, status').eq('company_id', cid).eq('status', 'active').limit(20000);
         if (!lnk.error) { (lnk.data || []).forEach(function (x) { links[x.source_bank_transaction_id] = x; }); }
+      }
+      if (comp.key === 'nextrade') { // v55.83-VK — the KTC category per Nextrade category, shown and set right on the line
+        var mpL = await db.from('company_category_map').select('category_key, ktc_category').eq('company_id', cid);
+        var kcL = await db.from('expense_categories').select('key, label, active, kind').eq('active', true).order('sort');
+        if (!mpL.error && !kcL.error) { ktcMapL = {}; (mpL.data || []).forEach(function (m) { ktcMapL[m.category_key] = m.ktc_category; }); ktcCatsL = (kcL.data || []).map(function (k) { return { key: k.key, label: k.label }; }); }
       }
       var acR = await db.from('plaid_accounts').select('plaid_account_id, name, mask, type').eq('wave_business_id', cid);
       var accts = {}; ((acR && acR.data) || []).forEach(function (a) { accts[a.plaid_account_id] = a; });
@@ -228,7 +237,7 @@ export async function POST(req) {
         (lq.data || []).forEach(function (x) { (legs[x.transfer_group_id] = legs[x.transfer_group_id] || []).push(x); });
       }
       function otherLeg(l) { if (!l.transfer_group_id) { return null; } var o = (legs[l.transfer_group_id] || []).filter(function (x) { return x.id !== l.id; })[0]; if (!o) { return null; } if (isPrivateRow(o, scope)) { return { private: true }; } var oa = accts[o.account_id] || {}; return { id: o.id, date: o.date, account_label: (oa.name || 'account') + (oa.mask ? ' ••' + oa.mask : '') }; } // (Codex 22:50) a private partner leg: nothing about it is returned
-      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped });
+      return NextResponse.json({ ok: true, lines: linesOut.map(function (l) { var a = accts[l.account_id] || {}; return Object.assign({}, l, { account_label: (a.name || 'account') + (a.mask ? ' ••' + a.mask : ''), is_card: a.type === 'credit', ktc_bill: links[l.id] || null, transfer_with: otherLeg(l) }); }), categories: catsL.data || [], capped: !!pl.capped, ktc_map: ktcMapL || undefined, ktc_categories: ktcCatsL || undefined });
     }
 
     // the KTC side needs: the party name and the Nextrade → KTC category mapping
@@ -238,15 +247,16 @@ export async function POST(req) {
       var map = {}; (mp.data || []).forEach(function (m) { map[m.category_key] = m.ktc_category; });
       return { map: map, party: await partyName(db) };
     }
-    async function categorize(line, cat, source, nctx) {
+    async function categorize(line, cat, source, nctx, guarded) {
       var label = null;
       if (comp.key === 'nextrade') {
         var acc = await db.from('plaid_accounts').select('name, mask').eq('plaid_account_id', line.account_id).maybeSingle();
         if (acc.error) { return { id: line.id, ok: false, error: 'Could not read the account (' + acc.error.message + ') — nothing changed.' }; }
         label = acc.data ? (acc.data.name || '') + (acc.data.mask ? ' ••' + acc.data.mask : '') : null;
       }
-      var res = await categorizeLine(db, line, cat, { actorId: userId, source: source, ktcCategory: cat && nctx ? nctx.map[cat.key] || null : null, party: nctx ? nctx.party : null, accountLabel: label });
+      var res = await categorizeLine(db, line, cat, { actorId: userId, source: source, ktcCategory: cat && nctx ? nctx.map[cat.key] || null : null, party: nctx ? nctx.party : null, accountLabel: label, guarded: guarded === true });
       if (!res.ok) { return { id: line.id, ok: false, error: res.error }; }
+      if (res.skipped === true) { return { id: line.id, ok: true, skipped: true, why: res.why }; }
       return { id: line.id, ok: true, ktc: comp.key === 'nextrade' ? res : undefined };
     }
 
@@ -285,6 +295,62 @@ export async function POST(req) {
       return NextResponse.json({ ok: badM.length === 0, made: doM.length - badM.length, left: mb.lines.length - doM.length + badM.length, error: badM.length ? badM.length + ' line(s) not billed: ' + badM.slice(0, 5).map(function (b) { return b.error; }).join(' · ') : undefined });
     }
 
+    // v55.83-VK — learn a rule from each line a person categorized by hand. Best effort: the category is already saved, so a
+    // problem here is reported in the answer (state 'failed') and never undoes or blocks the categorizing.
+    async function learnFrom(linesDone, cat) {
+      var out = [];
+      try {
+        if (!linesDone.length || !cat || cat.is_payroll === true) { return out; }
+        // a private account's description never goes into a rule (rules are shown to everyone who can open the books)
+        var priv = {};
+        var pq = await db.from('plaid_accounts').select('plaid_account_id, is_private').eq('is_private', true);
+        // (Codex 20:27 P2) fail CLOSED: only the exact "column is not there" answer (TP SQL never run: nothing is private) lets learning go on
+        if (pq.error) { if (!missingPrivateColumn(pq.error)) { return [{ state: 'failed', error: 'Could not check private accounts — no rule learned.' }]; } }
+        else { (pq.data || []).forEach(function (a) { priv[a.plaid_account_id] = true; }); }
+        var rq = await db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count').eq('company_id', cid).limit(5000);
+        if (rq.error) { return [{ state: 'failed', error: 'Could not read the rules — no rule learned.' }]; }
+        var rulesL = rq.data || []; var seen = {}; var touched = [];
+        for (var li = 0; li < linesDone.length && touched.length < 20; li++) {
+          var ln = linesDone[li];
+          if (priv[ln.account_id]) { continue; }
+          var plan = learnPlan(rulesL, ln, cat);
+          if (plan.op === 'none') { continue; }
+          var sk = plan.text + '|' + plan.direction; if (seen[sk]) { continue; } seen[sk] = true;
+          var nowL = new Date().toISOString(); var ruleRow = plan.rule || null; var state = plan.op === 'same' || plan.op === 'covered' ? 'kept' : plan.op === 'update' ? 'updated' : 'created';
+          if (plan.op === 'update') {
+            var upL = await db.from('company_rules').update({ category_key: cat.key, active: true, updated_by: userId, updated_at: nowL }).eq('id', plan.rule.id).eq('company_id', cid).select('id, match_text, category_key, direction, active, hit_count').maybeSingle();
+            if (upL.error || !upL.data) { out.push({ state: 'failed', match_text: plan.text, error: 'The rule was not updated (' + ((upL.error && upL.error.message) || 'not found') + ').' }); continue; }
+            rulesL = rulesL.map(function (r) { return r.id === upL.data.id ? upL.data : r; }); ruleRow = upL.data;
+            await audit(db, userId, 'company_rule_learned', 'company_rule', ruleRow.id, { company: comp.label, match_text: plan.text, direction: plan.direction, from: plan.was, to: cat.key, how: 'updated from a hand-categorized line' });
+          } else if (plan.op === 'create') {
+            var inL = await db.from('company_rules').insert({ company_id: cid, match_text: plan.text, category_key: cat.key, direction: plan.direction, active: true, created_by: userId, updated_by: userId, updated_at: nowL }).select('id, match_text, category_key, direction, active, hit_count').maybeSingle();
+            if (inL.error || !inL.data) {
+              if (inL.error && inL.error.code === '23505') { continue; } // someone made the same rule a moment ago — theirs stands
+              out.push({ state: 'failed', match_text: plan.text, error: 'The rule was not saved (' + ((inL.error && inL.error.message) || 'error') + ').' }); continue;
+            }
+            rulesL.push(inL.data); ruleRow = inL.data;
+            await audit(db, userId, 'company_rule_learned', 'company_rule', ruleRow.id, { company: comp.label, match_text: plan.text, direction: plan.direction, to: cat.key, how: 'created from a hand-categorized line' });
+          }
+          touched.push({ rule: ruleRow, state: state, was: plan.was || null });
+        }
+        if (!touched.length) { return out; }
+        // how many OTHER lines (any date, not categorized yet, visible to this person) each of these rules would now categorize
+        var open = [];
+        for (var op = 0; op < 10; op++) {
+          var oq = await db.from('bank_transactions').select(LINE_COLS).eq('wave_business_id', cid).is('company_category', null).is('transfer_group_id', null)
+            .or('review_status.is.null,review_status.neq.duplicate').order('date', { ascending: false }).order('id', { ascending: true }).range(op * 1000, op * 1000 + 999);
+          if (oq.error) { open = null; break; }
+          open = open.concat(oq.data || []); if (!oq.data || oq.data.length < 1000) { break; }
+        }
+        var openVis = open ? dropPrivate(open, scope).filter(function (l) { return !priv[l.account_id] || scope.all; }) : null;
+        touched.forEach(function (t) {
+          out.push({ state: t.state, rule_id: t.rule.id, match_text: t.rule.match_text, direction: t.rule.direction, category_key: t.rule.category_key, was: t.was,
+            matches: openVis ? linesForRule(rulesL, t.rule.id, openVis).length : null });
+        });
+      } catch (e) { out.push({ state: 'failed', error: 'No rule learned (' + ((e && e.message) || 'error') + ').' }); }
+      return out;
+    }
+
     var WRITES_CAT = { set_category: 1, apply_rules: 1 };
     if (WRITES_CAT[action]) { var instC = await db.rpc('hub_company_books_installed'); if (instC.error || instC.data !== true) { return fail(SQL_MISSING, 409); } }
     if (action === 'set_category') {
@@ -306,33 +372,54 @@ export async function POST(req) {
       var results = [];
       for (var i = 0; i < lr.data.length; i++) { results.push(await categorize(lr.data[i], catS, 'manual', nctx)); }
       var bad = results.filter(function (r) { return !r.ok; });
-      return NextResponse.json({ ok: bad.length === 0, results: results, saved: results.length - bad.length, error: bad.length ? bad.length + ' line(s) not changed: ' + bad.map(function (b) { return b.error; }).join(' · ') : undefined });
+      // v55.83-VK (Max 19 Nov: "any categories i enter should be learned … a rule should be created and used and automatically
+      // updated") — what the person just did becomes this company's rule. Never from payroll lines (names) or private accounts.
+      var learned = [];
+      if (catS && body.learn !== false) { learned = await learnFrom(lr.data.filter(function (l) { return results.some(function (r) { return r.ok && r.id === l.id; }); }), catS); }
+      return NextResponse.json({ ok: bad.length === 0, results: results, saved: results.length - bad.length, learned: learned, error: bad.length ? bad.length + ' line(s) not changed: ' + bad.map(function (b) { return b.error; }).join(' · ') : undefined });
     }
 
     if (action === 'apply_rules') {
       var catsA = await loadCats(db, cid); var rulesA = await db.from('company_rules').select('id, match_text, category_key, direction, active, hit_count').eq('company_id', cid).eq('active', true);
       if (catsA.error || rulesA.error) { return readFail('the rules', catsA.error || rulesA.error); }
       var byKeyA = {}; (catsA.data || []).forEach(function (c) { if (c.active) { byKeyA[c.key] = c; } });
-      var plA = await pageLines(db, cid, from, to);
+      if (!(rulesA.data || []).length) { return NextResponse.json({ ok: true, categorized: 0, bills_made: 0, skipped: 0, would: 0, would_bills: 0, problems: [], more: false }); } // no rules: nothing to do
+      // v55.83-VK — all_dates: every line not categorized yet (used right after a rule is learned); rule_ids: only what THOSE rules win
+      var onlyRules = Array.isArray(body.rule_ids) && body.rule_ids.length ? body.rule_ids.map(String) : null;
+      // (Codex 20:27 P1 / P3) rules never write by themselves: every run is a person's press. preview = count only, NOTHING written.
+      var previewA = body.preview === true;
+      if (body.automatic === true) { return fail('Rules are applied only when a person presses Apply.'); }
+      // with the VK database step, a rule categorizes a line only if it is STILL waiting when the line is locked. The new
+      // any-date / chosen-rule runs need it; the dated Apply button keeps working as before until the SQL is run.
+      var guardA = false;
+      if (!previewA) { var gq = await db.rpc('hub_company_rule_guard_installed'); guardA = !gq.error && gq.data === true; if (!guardA && (body.all_dates === true || onlyRules)) { return fail(SQL_MISSING_VK, 409); } }
+      var plA = await pageLines(db, cid, body.all_dates === true ? '2000-01-01' : from, body.all_dates === true ? '2999-12-31' : to);
       if (plA.error) { return readFail('the bank lines', plA.error); }
       var nctxA = null;
       if (comp.key === 'nextrade') { nctxA = await nextradeCtx(); if (nctxA.error) { return readFail('the category mapping', nctxA.error); } }
-      var done = 0; var problems = []; var hits = {};
-      var todo = dropPrivate(plA.data, scope).filter(function (l) { return !l.company_category && l.pending !== true; });
-      for (var j = 0; j < todo.length && j < 500; j++) {
+      var done = 0; var problems = []; var hits = {}; var billsMade = 0; var tried = 0; var moreA = false; var skippedA = 0; var would = 0; var wouldBills = 0;
+      var todo = dropPrivate(plA.data, scope).filter(function (l) { return !l.company_category && l.pending !== true && !l.transfer_group_id; });
+      for (var j = 0; j < todo.length; j++) {
         var ln = todo[j];
         var rules = (rulesA.data || []).filter(function (r) { return r.direction === 'any' || r.direction === ln.direction; });
         var rule = bestCompanyRule(rules, String(ln.merchant_name || '') + ' ' + String(ln.name || ''));
         if (!rule || !byKeyA[rule.category_key]) { continue; }
-        var res = await categorize(ln, byKeyA[rule.category_key], 'rule', nctxA);
-        if (res.ok) { done++; hits[rule.id] = (hits[rule.id] || 0) + 1; } else { problems.push(res.error); }
+        if (onlyRules && onlyRules.indexOf(String(rule.id)) < 0) { continue; }
+        if (previewA) { would++; if (comp.key === 'nextrade' && wantsBill(ln, byKeyA[rule.category_key])) { wouldBills++; } continue; }
+        if (tried >= 300) { moreA = true; break; } // the rest on the next press
+        tried++;
+        var res = await categorize(ln, byKeyA[rule.category_key], 'rule', nctxA, guardA);
+        if (res.ok && res.skipped === true) { skippedA++; } // someone categorized it (or it changed) a moment ago — left exactly as it is
+        else if (res.ok) { done++; hits[rule.id] = (hits[rule.id] || 0) + 1; if (res.ktc && res.ktc.action && res.ktc.action !== 'none') { billsMade++; } } else { problems.push(res.error); }
       }
+      if (previewA) { return NextResponse.json({ ok: true, preview: true, would: would, would_bills: wouldBills }); }
       var hitIds = Object.keys(hits);
       for (var h = 0; h < hitIds.length; h++) {
         var rw = (rulesA.data || []).filter(function (r) { return r.id === hitIds[h]; })[0];
         await db.from('company_rules').update({ hit_count: (Number(rw.hit_count) || 0) + hits[hitIds[h]] }).eq('id', hitIds[h]);
       }
-      return NextResponse.json({ ok: true, categorized: done, problems: problems.slice(0, 20), more: todo.length > 500 });
+      if (done > 0) { await audit(db, userId, 'company_rules_applied', 'company', cid, { company: comp.label, categorized: done, ktc_bills: billsMade, problems: problems.length, all_dates: body.all_dates === true, only_rules: onlyRules, skipped: skippedA, guarded: guardA }); }
+      return NextResponse.json({ ok: true, categorized: done, bills_made: billsMade, skipped: skippedA, problems: problems.slice(0, 20), problem_count: problems.length, more: moreA });
     }
 
     if (action === 'mapping' || action === 'save_mapping') {

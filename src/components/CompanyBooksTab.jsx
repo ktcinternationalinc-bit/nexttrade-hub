@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { hubFetch } from '../lib/hub-fetch';
 import { companyByKey } from '../lib/companies';
+import { lineShown } from '../lib/company-rule-learn'; // v55.83-VK — All / Categorized / Not categorized / one category
 import StatementImport from './StatementImport';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -30,7 +31,9 @@ export default function CompanyBooksTab(props) {
   var t0 = new Date(); var f0 = new Date(t0.getFullYear(), t0.getMonth() - 2, 1);
   var s6 = useState(iso(f0)); var from = s6[0]; var setFrom = s6[1];
   var s7 = useState(iso(t0)); var to = s7[0]; var setTo = s7[1];
-  var s8 = useState('uncat'); var show = s8[0]; var setShow = s8[1];
+  var s8 = useState('all'); var show = s8[0]; var setShow = s8[1]; // v55.83-VK — a line stays on the page after it is categorized (Max 19 Nov: "i don't see them")
+  var s22 = useState(null); var ruleWait = s22[0]; var setRuleWait = s22[1]; // lines shown that a rule covers (count only — nothing is written on open)
+  var s21 = useState({ map: {}, cats: [] }); var ktc = s21[0]; var setKtc = s21[1]; // Nextrade: KTC category per Nextrade category
   var s9 = useState(''); var q = s9[0]; var setQ = s9[1];
   var s10 = useState({}); var sel = s10[0]; var setSel = s10[1];
   var s11 = useState(''); var bulkCat = s11[0]; var setBulkCat = s11[1];
@@ -51,11 +54,40 @@ export default function CompanyBooksTab(props) {
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
   function loadCats() { return api({ action: 'categories' }).then(function (j) { if (j && j.ok) { setCats(j.categories || []); setKinds(j.kinds || {}); if (j.sql_missing) { setSqlMissing(j.sql_missing); } } }); }
+  // v55.83-VK (Codex 19 Nov 20:27 P1 / P3) — opening the page WRITES NOTHING. It only counts the lines shown that a rule
+  // covers and says so in a bar; a rule categorizes lines only when a person presses Apply and answers the question.
   function loadLines() {
-    setBusy(true);
+    setBusy(true); setRuleWait(null);
     return api({ action: 'lines', from: from, to: to }).then(function (j) {
-      if (j && j.ok) { setLines(j.lines || []); setCats(j.categories || cats); setErr(''); setSqlMissing(j.sql_missing || ''); setSel({}); }
+      if (j && j.ok) {
+        setLines(j.lines || []); setCats(j.categories || cats); setErr(''); setSqlMissing(j.sql_missing || ''); setSel({});
+        if (j.ktc_categories) { setKtc({ map: j.ktc_map || {}, cats: j.ktc_categories || [] }); }
+        var waiting = (j.lines || []).some(function (l) { return !l.company_category && !l.pending && !l.transfer_group_id; });
+        if (canManage && waiting && !j.sql_missing) {
+          return api({ action: 'apply_rules', from: from, to: to, preview: true }).then(function (a) { if (a && a.ok && a.would > 0) { setRuleWait({ would: a.would, bills: a.would_bills || 0 }); } });
+        }
+      }
       else { setErr((j && j.error) || 'Could not load the lines.'); }
+    }).finally(function () { setBusy(false); });
+  }
+  // what a rule run did — every outcome is said out loud, including the lines it left alone and the ones it could not do
+  function sayRuleRun(a, lead) {
+    if (!a || !a.ok) { toast.error((a && a.error) || 'The rules were not applied.'); return; }
+    var bits = [a.categorized + ' line(s) categorized' + (lead || '')];
+    if (a.bills_made) { bits.push(a.bills_made + ' KTC bill(s) made'); }
+    if (a.skipped) { bits.push(a.skipped + ' left alone (changed by someone a moment ago)'); }
+    if (a.more) { bits.push('more left — press 📏 Apply rules again'); }
+    toast.success(bits.join(' · '));
+    if (a.problems && a.problems.length) { toast.error((a.problem_count || a.problems.length) + ' line(s) could NOT be categorized by a rule: ' + a.problems[0]); }
+  }
+  // 📏 Apply rules: count first, ask, then write (dates shown)
+  function applyRulesAsk() {
+    setBusy(true);
+    api({ action: 'apply_rules', from: from, to: to, preview: true }).then(function (pv) {
+      if (!pv || !pv.ok) { toast.error((pv && pv.error) || 'Could not count the lines.'); return; }
+      if (!pv.would) { toast.success('No line shown that is not categorized yet matches a rule.'); setRuleWait(null); return; }
+      if (!window.confirm('Your rules cover ' + pv.would + ' line(s) not categorized yet, between ' + from + ' and ' + to + '.' + (pv.would_bills ? '\n\n' + pv.would_bills + ' of them are in a category KTC pays: each makes its KTC bill (owed to Nextrade).' : '') + '\n\nCategorize them now?')) { return; }
+      return api({ action: 'apply_rules', from: from, to: to }).then(function (a) { sayRuleRun(a, ' by the rules'); return loadLines(); });
     }).finally(function () { setBusy(false); });
   }
   function loadView(v) {
@@ -75,9 +107,31 @@ export default function CompanyBooksTab(props) {
     setBusy(true);
     api({ action: 'set_category', ids: ids, category_key: key || null }).then(function (j) {
       var made = ((j && j.results) || []).filter(function (r) { return r.ktc && r.ktc.action && r.ktc.action !== 'none'; });
-      if (j && j.ok) { toast.success('Saved ' + j.saved + ' line(s)' + (made.length ? ' · KTC bills: ' + made.map(function (r) { return r.ktc.action + (r.ktc.bill_number ? ' ' + r.ktc.bill_number : ''); }).join(', ') : '')); }
+      // v55.83-VK — what was just categorized by hand became (or updated) a rule: say so, and offer the other lines it covers
+      var learned = ((j && j.learned) || []); var catLabel = (catByKey[key] || {}).label || key;
+      var fresh = learned.filter(function (x) { return x.state === 'created' || x.state === 'updated'; });
+      var failedL = learned.filter(function (x) { return x.state === 'failed'; });
+      var ruleWords = fresh.length ? ' · 📏 rule ' + (fresh[0].state === 'updated' ? 'updated' : 'learned') + ': “' + fresh[0].match_text + '” → ' + catLabel + (fresh.length > 1 ? ' (+' + (fresh.length - 1) + ' more)' : '') : '';
+      if (j && j.ok) { toast.success('Saved ' + j.saved + ' line(s)' + (made.length ? ' · KTC bills: ' + made.map(function (r) { return r.ktc.action + (r.ktc.bill_number ? ' ' + r.ktc.bill_number : ''); }).join(', ') : '') + ruleWords); }
       else { toast.error((j && j.error) || 'Not saved.'); }
-      loadLines();
+      if (failedL.length) { toast.error('The line is saved, but no rule was learned: ' + (failedL[0].error || 'error')); }
+      var withMore = learned.filter(function (x) { return x.rule_id && x.matches > 0; }); var nMore = 0; withMore.forEach(function (x) { nMore += x.matches; });
+      if (withMore.length && window.confirm(nMore + ' other line(s) not categorized yet have the same description (' + withMore.map(function (x) { return '“' + x.match_text + '”'; }).join(', ') + ').\n\nPut them in “' + catLabel + '” too?' + (comp.key === 'nextrade' ? '\n\n(For a category KTC pays, each line also makes its KTC bill.)' : ''))) {
+        return api({ action: 'apply_rules', all_dates: true, rule_ids: withMore.map(function (x) { return x.rule_id; }) }).then(function (a) {
+          sayRuleRun(a, ' by the new rule');
+          return loadLines();
+        });
+      }
+      return loadLines();
+    }).finally(function () { setBusy(false); });
+  }
+  // v55.83-VK (Max 19 Nov: "should be able to categorize the nextrade selections for ktc") — the KTC category of the KTC bills a
+  // Nextrade category makes, picked right on the line (the same setting as 🔁 Category mapping → KTC)
+  function setKtcCategory(nextradeKey, ktcKey) {
+    setBusy(true);
+    api({ action: 'save_mapping', category_key: nextradeKey, ktc_category: ktcKey || null }).then(function (j) {
+      if (j && j.ok) { toast.success('KTC category saved for “' + ((catByKey[nextradeKey] || {}).label || nextradeKey) + '”' + (j.bills_filled ? ' · ' + j.bills_filled + ' KTC bill(s) filled in' : '')); var m = Object.assign({}, ktc.map); m[nextradeKey] = ktcKey || null; setKtc({ map: m, cats: ktc.cats }); }
+      else { toast.error((j && j.error) || 'Not saved.'); }
     }).finally(function () { setBusy(false); });
   }
   // v55.83-UB (Max: 'add categories on the fly and give it a direction') — make the category, then put this line in it
@@ -117,9 +171,9 @@ export default function CompanyBooksTab(props) {
   }
   var catByKey = {}; cats.forEach(function (c) { catByKey[c.key] = c; });
   var activeCats = cats.filter(function (c) { return c.active; });
+  var nCat = 0; var nUncat = 0; (lines || []).forEach(function (l) { if (l.company_category) { nCat++; } else { nUncat++; } });
   var shown = (lines || []).filter(function (l) {
-    if (show === 'uncat' && l.company_category) { return false; }
-    if (show !== 'uncat' && show !== 'all' && l.company_category !== show) { return false; }
+    if (!lineShown(show, l)) { return false; }
     if (q && (String(l.name || '') + ' ' + String(l.merchant_name || '') + ' ' + l.amount_abs).toLowerCase().indexOf(q.toLowerCase()) < 0) { return false; }
     return true;
   });
@@ -145,13 +199,18 @@ export default function CompanyBooksTab(props) {
     {view === 'lines' && <div>
       <div className="flex gap-2 items-center flex-wrap mb-2">
         <select className={inp} style={inpS} value={show} onChange={function (e) { setShow(e.target.value); }}>
-          <option value="uncat">Not categorized yet</option><option value="all">All lines</option>{cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</select>
+          <option value="all">{'All lines (' + (nCat + nUncat) + ')'}</option><option value="cat">{'Categorized (' + nCat + ')'}</option><option value="uncat">{'Not categorized yet (' + nUncat + ')'}</option>
+          <optgroup label="One category">{cats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}</optgroup></select>
         <input className={inp} style={inpS} placeholder="Find (description or amount)" value={q} onChange={function (e) { setQ(e.target.value); }} />
-        {canManage && <button onClick={function () { setBusy(true); api({ action: 'apply_rules', from: from, to: to }).then(function (j) { if (j && j.ok) { toast.success(j.categorized + ' line(s) categorized by the rules' + (j.problems && j.problems.length ? ' · ' + j.problems.length + ' not: ' + j.problems[0] : '')); } else { toast.error((j && j.error) || 'Not done.'); } loadLines(); }).finally(function () { setBusy(false); }); }} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#ede9fe', '#5b21b6')}>📏 Apply rules to uncategorized</button>}
+        {canManage && <button onClick={applyRulesAsk} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#ede9fe', '#5b21b6')}>📏 Apply rules to uncategorized</button>}
         {canManage && comp.key === 'nextrade' && <button onClick={function () { setBusy(true); api({ action: 'missing_bills' }).then(function (j) { if (!j || !j.ok) { toast.error((j && j.error) || 'Not done.'); setBusy(false); return; } if (!j.count) { toast.success('Every line in a "KTC pays this" category already has its KTC bill.'); setBusy(false); return; } if (!window.confirm(j.count + ' earlier line(s) are in a category KTC pays (e.g. Warehouse staff) but have no KTC bill yet. Make their KTC bills now (one per line, owed to Nextrade)?')) { setBusy(false); return; } api({ action: 'make_missing_bills' }).then(function (k) { if (k && k.ok) { toast.success(k.made + ' KTC bill(s) made' + (k.left ? ' · ' + k.left + ' left — press again' : '')); } else { toast.error((k && k.error) || 'Not done.'); } loadLines(); }).finally(function () { setBusy(false); }); }); }} disabled={busy} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#dbeafe', '#1e3a8a')}>🧾 Make the missing KTC bills</button>}
         <button onClick={function () { exportCsv([['date', 'account', 'description', 'in/out', 'amount', 'category', 'KTC bill']].concat(shown.map(function (l) { return [l.date, l.account_label, l.name, l.direction, l.amount_abs, l.company_category ? (catByKey[l.company_category] || {}).label || l.company_category : '', l.ktc_bill ? l.ktc_bill.mode : '']; })), comp.key + '-transactions-' + from + '-to-' + to + '.csv'); }} className="px-2 py-1 rounded text-[10px] font-bold" style={btn('#f0fdf4', '#166534')}>⬇ Export CSV</button>
         <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length} line(s)</span>
       </div>
+      {canManage && ruleWait && ruleWait.would > 0 && <div className="flex gap-2 items-center flex-wrap mb-2 p-2 rounded" style={{ background: '#f5f3ff', border: '1px solid #c4b5fd', color: '#4c1d95' }}>
+        <span className="text-[12px] font-bold">{'📏 ' + ruleWait.would + ' line(s) shown are not categorized yet and match one of your rules' + (ruleWait.bills ? ' (' + ruleWait.bills + ' would make a KTC bill)' : '') + '. Nothing is changed until you press:'}</span>
+        <button onClick={applyRulesAsk} disabled={busy} className="px-2.5 py-1 rounded text-[11px] font-extrabold" style={{ background: '#5b21b6', color: '#ffffff' }}>📏 Apply rules…</button>
+      </div>}
       {canManage && selIds.length > 0 && <div className="flex gap-2 items-center mb-2 p-2 rounded" style={{ background: '#f8fafc', border: '1px solid #cbd5e1' }}>
         <span className="text-[11px] font-bold">{selIds.length} selected →</span>
         <select className={inp} style={inpS} value={bulkCat} onChange={function (e) { setBulkCat(e.target.value); }}><option value="">pick a category…</option>{activeCats.map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}<option value="__clear">— take the category off —</option></select>
@@ -163,7 +222,7 @@ export default function CompanyBooksTab(props) {
           <th className="p-1 text-left">Date</th><th className="p-1 text-left">Account</th><th className="p-1 text-left">Description</th><th className="p-1 text-right">Amount</th><th className="p-1 text-left">Category</th>{comp.key === 'nextrade' && <th className="p-1 text-left">KTC bill</th>}</tr></thead>
           <tbody>{shown.map(function (l) {
             var panel = rowPanel && rowPanel.id === l.id ? rowPanel : null;
-            return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0' }}>
+            return <React.Fragment key={l.id}><tr style={{ borderTop: '1px solid #e2e8f0', background: l.company_category ? '#f0fdf4' : '#ffffff' }}>
               <td className="p-1">{canManage && <input type="checkbox" checked={!!sel[l.id]} onChange={function (e) { var n = Object.assign({}, sel); n[l.id] = e.target.checked; setSel(n); }} />}</td>
               <td className="p-1 whitespace-nowrap">{l.date}{l.pending ? ' ⏳' : ''}</td>
               <td className="p-1 whitespace-nowrap">{l.is_card ? '💳 ' : '🏦 '}{l.account_label}</td>
@@ -177,7 +236,11 @@ export default function CompanyBooksTab(props) {
                       <button onClick={function () { openTransfer(l, false, ''); }} disabled={busy} title="This is money moving between two of the company's own accounts (or paying its credit card): find the other side and pair them as ONE transfer — never income or spending" className="px-1.5 py-0.5 rounded text-[11px] font-bold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔</button></span>
                     : ((catByKey[l.company_category] || {}).label || '—')}
                 {l.company_category_source === 'rule' ? <span className="ml-1 text-[9px]" style={{ color: '#6d28d9' }}>📏 rule</span> : null}</td>
-              {comp.key === 'nextrade' && <td className="p-1 text-[10px]">{l.ktc_bill ? KTC_BILL_WORDS[l.ktc_bill.mode] || '' : ''}</td>}
+              {comp.key === 'nextrade' && <td className="p-1 text-[10px]">{l.ktc_bill ? KTC_BILL_WORDS[l.ktc_bill.mode] || '' : ''}
+                {l.ktc_bill && l.company_category ? (canManage
+                  ? <select className={inp + ' ml-1'} style={Object.assign({}, inpS, ktc.map[l.company_category] ? {} : { borderColor: '#d97706', background: '#fffbeb' })} disabled={busy} value={ktc.map[l.company_category] || ''} title={'The KTC category of KTC bills made from “' + ((catByKey[l.company_category] || {}).label || l.company_category) + '”. Set once: it is used for every line in that Nextrade category, and fills in KTC bills that have no category yet.'} onChange={function (e) { setKtcCategory(l.company_category, e.target.value); }}>
+                      <option value="">KTC category — not set</option>{ktc.cats.map(function (k) { return <option key={k.key} value={k.key}>{'KTC: ' + k.label}</option>; })}</select>
+                  : <span className="ml-1" style={{ color: '#475569' }}>{ktc.map[l.company_category] ? 'KTC: ' + ((ktc.cats.filter(function (k) { return k.key === ktc.map[l.company_category]; })[0] || {}).label || ktc.map[l.company_category]) : 'KTC category not set'}</span>) : null}</td>}
             </tr>
             {panel && panel.mode === 'newcat' && <tr><td colSpan={comp.key === 'nextrade' ? 7 : 6} className="p-2" style={{ background: '#f8fafc' }}>
               <div className="flex gap-2 items-center flex-wrap">

@@ -117,7 +117,10 @@ export async function prepareCategorize(db, line, cat, ctx) {
 export async function categorizeLine(db, line, cat, ctx) {
   var prep = await prepareCategorize(db, line, cat, ctx);
   if (!prep.ok) { return prep; }
-  var r = await db.rpc('hub_company_categorize', { p: prep.payload });
+  // v55.83-VK (Codex 19 Nov 20:27 P1) — a RULE goes through the guarded step: under the line's lock it categorizes only a line
+  // that is still waiting (not categorized by a person a moment ago, not pending, not a duplicate, not paired) — else "skipped".
+  var r = ctx && ctx.guarded === true ? await db.rpc('hub_company_categorize_if_open', { p: prep.payload }) : await db.rpc('hub_company_categorize', { p: prep.payload });
+  if (!r.error && r.data && r.data.skipped === true) { return { ok: true, skipped: true, why: r.data.why || null, action: 'none', bill_id: null, bill_number: null }; }
   if (r.error) {
     var m = String(r.error.message || '');
     if (/HUB_GUARD:/.test(m)) { return { ok: false, error: m.replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ' Nothing was changed.' }; }

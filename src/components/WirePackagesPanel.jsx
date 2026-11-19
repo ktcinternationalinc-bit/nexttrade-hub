@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fillToAmount, fillVendors } from '../lib/wire-fill'; // v55.83-SC — build a wire for an amount
 import { requestFit } from '../lib/wire-funding';
+import { wireBillsToShow, groupByVendor, groupTotals, tickGroup } from '../lib/wire-bill-tree'; // v55.83-VK — the company's bills as a tree
 import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; // v55.83-SQ — the two printable copies of a request // v55.83-SP — a request drawn from a transfer never goes over it
 import { supabase } from '../lib/supabase';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';
@@ -385,7 +386,7 @@ export default function WirePackagesPanel(props) {
     });
   }
   function pickPayee(kind, name) {
-    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [], fundId: null, fund: null }));
+    setEd(Object.assign({}, ed, { kind: kind, payee: name, picks: {}, bills: null, fee: kind !== 'vendor' ? ed.fee : '', fillMsg: null, fillVendors: [], fundId: null, fund: null, onlyTheirs: undefined, shut: {} }));
     loadBills(kind, name, ed.id);
     if (kind !== 'vendor') { loadFunding(kind, name); }
   }
@@ -599,6 +600,11 @@ export default function WirePackagesPanel(props) {
     var qq = q.trim().toLowerCase();
     var shown = (ed.bills || []).filter(function (b) { return !qq || [b.vendor_name, b.bill_number, b.release_number].join(' ').toLowerCase().indexOf(qq) >= 0; });
     var mineB = shown.filter(function (b) { return !b.needs_mark; }); var otherB = shown.filter(function (b) { return b.needs_mark; });
+    // v55.83-VK (Max 19 Nov: "filter by nextrade if i am wiring to nextrade..using their bills only") — a wire to NextTrade lists
+    // only NextTrade's bills to begin with; one press shows every open bill. A bill already ticked always stays in view.
+    var onlyTheirs = ed.kind !== 'vendor' && (ed.onlyTheirs === undefined ? ed.kind === 'affiliate' : ed.onlyTheirs === true);
+    var otherShown = ed.kind !== 'vendor' ? wireBillsToShow(otherB, ed.picks, onlyTheirs) : otherB;
+    var mineT = groupTotals(mineB, ed.picks); var mineGroups = groupByVendor(mineB, ed.picks);
     var renderRow = function (b) {
       var on = ed.picks[b.id] != null;
       var notValid = b.validation_status !== 'validated'; // v55.83-RO — validate first, then wire
@@ -724,6 +730,11 @@ export default function WirePackagesPanel(props) {
           <div className="text-[13px] font-extrabold" style={{ color: INK }}>2 · Tick the bills this wire pays</div>
           <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="🔎 search vendor, bill # or release #" className={inp} style={Object.assign({ flex: '1 1 260px' }, inpS)} />
         </div>
+        {ed.kind !== 'vendor' && ed.bills && <div className="flex gap-1 items-center flex-wrap mb-2">
+          <span className="text-[11px] font-bold" style={{ color: SUB }}>Show:</span>
+          <button type="button" onClick={function () { setEd(Object.assign({}, ed, { onlyTheirs: true })); }} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={onlyTheirs ? { background: '#0f766e', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{'Only ' + ed.payee + '’s bills (' + mineB.length + ')'}</button>
+          <button type="button" onClick={function () { setEd(Object.assign({}, ed, { onlyTheirs: false })); }} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold" style={!onlyTheirs ? { background: '#0f766e', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{'All open bills (' + (mineB.length + otherB.length) + ')'}</button>
+        </div>}
         {staleIds.length > 0 && <div className="rounded-lg p-2 mb-2" style={{ background: '#fee2e2', border: '1px solid #fca5a5' }}>
           <div className="text-[12px] font-extrabold mb-1" style={{ color: '#7f1d1d' }}>{'⚠ ' + staleIds.length + ' bill(s) on this wire can no longer be paid by it (already paid, void, or paid through another company) — untick them:'}</div>
           {staleIds.map(function (k) {
@@ -734,10 +745,26 @@ export default function WirePackagesPanel(props) {
           })}</div>}
         {!ed.bills ? <div className="text-[12px] py-3" style={{ color: MUTED }}>Loading the open bills…</div> : <div className="rounded-lg overflow-auto mb-3" style={{ maxHeight: 420, border: '1px solid #e2e8f0' }}>
           <table className="w-full">
-            {ed.kind !== 'vendor' && mineB.length > 0 && <tbody><tr><td colSpan={5} className="px-2 py-1.5 text-[11px] font-extrabold" style={{ background: '#ecfeff', color: '#155e75' }}>{'Bills already marked “paid through ' + ed.payee + '” (' + mineB.length + ')'}</td></tr></tbody>}
+            {/* v55.83-VK (Max 19 Nov) — the company's own bills as a tree: tick ALL, tick one vendor, or tick single bills */}
+            {ed.kind !== 'vendor' && mineB.length > 0 && <tbody><tr style={{ background: '#ecfeff' }}>
+              <td className="px-2 py-1.5" style={{ width: 28 }}><input type="checkbox" title={'Tick every validated bill paid through ' + ed.payee} checked={mineT.tickable > 0 && mineT.ticked >= mineT.tickable} disabled={!mineT.tickable} onChange={function () { setEd(Object.assign({}, ed, { picks: tickGroup(ed.picks, mineB, !(mineT.tickable > 0 && mineT.ticked >= mineT.tickable)) })); }} style={{ width: 18, height: 18 }} /></td>
+              <td colSpan={2} className="px-2 py-1.5 text-[12px] font-extrabold" style={{ color: '#155e75' }}>{'Bills paid through ' + ed.payee + ' — ' + mineT.count + ' bill(s)' + (mineT.tickable < mineT.count ? ' · ' + (mineT.count - mineT.tickable) + ' not validated yet' : '')}<span className="font-normal" style={{ color: SUB }}>{' · tick here to pay them all'}</span></td>
+              <td className="px-2 py-1.5 text-right text-[12px] font-extrabold tabular-nums" style={{ color: '#155e75' }}>${fmt(mineT.open)}</td>
+              <td className="px-2 py-1.5 text-right text-[12px] font-extrabold tabular-nums" style={{ color: '#065f46' }}>{mineT.ticked ? mineT.ticked + ' ticked · $' + fmt(mineT.pay) : ''}</td></tr></tbody>}
             {head}
-            <tbody>{(ed.kind === 'vendor' ? shown : mineB).map(renderRow)}</tbody>
-            {ed.kind !== 'vendor' && otherB.length > 0 && <tbody><tr><td colSpan={5} className="px-2 py-1.5 text-[11px] font-extrabold" style={{ background: '#f8fafc', color: SUB }}>{'Other open bills (' + otherB.length + ') — ticking one marks it “paid through ' + ed.payee + '”'}</td></tr>{otherB.map(renderRow)}</tbody>}
+            {ed.kind === 'vendor' && <tbody>{shown.map(renderRow)}</tbody>}
+            {ed.kind !== 'vendor' && mineGroups.map(function (g) {
+              var shut = !!(ed.shut && ed.shut[g.vendor]); var allOn = g.tickable > 0 && g.ticked >= g.tickable;
+              return <tbody key={'g-' + g.vendor}>
+                {mineGroups.length > 1 && <tr style={{ background: '#f0fdfa', borderTop: '2px solid #99f6e4', cursor: 'pointer' }} onClick={function () { var sh = Object.assign({}, ed.shut || {}); sh[g.vendor] = !shut; setEd(Object.assign({}, ed, { shut: sh })); }}>
+                  <td className="px-2 py-1.5" onClick={function (e) { e.stopPropagation(); }}><input type="checkbox" title={'Tick every validated bill of ' + g.vendor} checked={allOn} disabled={!g.tickable} onChange={function () { setEd(Object.assign({}, ed, { picks: tickGroup(ed.picks, g.bills, !allOn) })); }} style={{ width: 16, height: 16 }} /></td>
+                  <td colSpan={2} className="px-2 py-1.5 text-[12px] font-extrabold" style={{ color: INK }}>{(shut ? '▸ ' : '▾ ') + g.vendor + ' — ' + g.count + ' bill(s)'}</td>
+                  <td className="px-2 py-1.5 text-right text-[12px] font-bold tabular-nums" style={{ color: SUB }}>${fmt(g.open)}</td>
+                  <td className="px-2 py-1.5 text-right text-[11px] font-bold tabular-nums" style={{ color: '#065f46' }}>{g.ticked ? g.ticked + ' ticked · $' + fmt(g.pay) : ''}</td></tr>}
+                {!(shut && mineGroups.length > 1) && g.bills.map(renderRow)}
+              </tbody>; })}
+            {ed.kind !== 'vendor' && otherShown.length > 0 && <tbody><tr><td colSpan={5} className="px-2 py-1.5 text-[11px] font-extrabold" style={{ background: '#f8fafc', color: SUB }}>{onlyTheirs ? 'Other bills already ticked on this wire (' + otherShown.length + ')' : 'Other open bills (' + otherShown.length + ') — ticking one marks it “paid through ' + ed.payee + '”'}</td></tr>{otherShown.map(renderRow)}</tbody>}
+            {ed.kind !== 'vendor' && onlyTheirs && mineB.length === 0 && otherShown.length === 0 && otherB.length > 0 && <tbody><tr><td colSpan={5} className="px-3 py-4 text-[12px]" style={{ color: MUTED }}>{(qq ? 'No bill paid through ' + ed.payee + ' matches “' + q + '”. ' : 'No open, validated bill is marked “paid through ' + ed.payee + '” yet. ') + 'Press “All open bills” above to see the other ' + otherB.length + '.'}</td></tr></tbody>}
             {shown.length === 0 && <tbody><tr><td colSpan={5} className="px-3 py-4 text-[12px]" style={{ color: MUTED }}>{qq ? 'Nothing matches “' + q + '”.' : 'No open bills. Add the bill in 💸 Bills first.'}</td></tr></tbody>}
           </table></div>}
         {/* step 3 */}
