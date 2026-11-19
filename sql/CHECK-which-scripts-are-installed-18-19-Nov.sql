@@ -1,5 +1,3 @@
--- READ-ONLY CHECK (changes nothing): which of the scripts from 17–19 Nov 2026 are installed on this database.
--- One row per script. "RUN" = its mark is on the database. "NOT RUN" = you still need to run that file.
 WITH f AS (SELECT p.proname, p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'),
      t AS (SELECT tgname FROM pg_trigger WHERE NOT tgisinternal),
      elite(k) AS (VALUES ('10011541'), ('10011627'), ('10021036'), ('10021059'), ('10021125'), ('10021129'), ('10021130'), ('10021133'), ('10021138'), ('10021144'), ('10021146'), ('10021152'), ('10021154'),
@@ -13,7 +11,6 @@ WITH f AS (SELECT p.proname, p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oi
          EXISTS (SELECT 1 FROM f WHERE proname = 'hub_wire_line_pay') AND EXISTS (SELECT 1 FROM t WHERE tgname = 'hub_wire_line_cap') AND EXISTS (SELECT 1 FROM t WHERE tgname = 'hub_bill_payment_final') AND to_regclass('public.uq_wpkg_line_open_bill') IS NULL,
          'not installed (or only partly)'
   UNION ALL SELECT 3, 'v55-83-UM-invoice-delete.sql', 'Invoices: Delete / Void / Archive buttons work',
-         -- Codex 13:06: COMPLETE = both functions with their exact signatures AND the guard switched on, on the invoices table
          to_regprocedure('public.hub_invoice_lifecycle(jsonb)') IS NOT NULL AND to_regprocedure('public.hub_invoice_lifecycle_check(jsonb)') IS NOT NULL
            AND EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid JOIN pg_namespace ns ON ns.oid = c.relnamespace
                        WHERE g.tgname = 'hub_guard_invoice_status' AND NOT g.tgisinternal AND g.tgenabled <> 'D' AND ns.nspname = 'public' AND c.relname = 'accounting_invoices'),
