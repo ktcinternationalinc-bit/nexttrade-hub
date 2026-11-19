@@ -14,7 +14,7 @@ var KIND_LABELS = { income: 'Income', cogs: 'Cost of goods sold', expense: 'Expe
 // put the covered bills INTO their real categories, and show the
 // unallocated remainder as RTM's service fee. −payments + bills + fee = 0,
 // so every total is IDENTICAL in both views — only the breakdown moves.
-function rtmAdjust(cats0, rtm) {
+export function rtmAdjust(cats0, rtm) {
   var r2a = function (x) { return Math.round((Number(x) || 0) * 100) / 100; };
   var map = {};
   (cats0 || []).forEach(function (c) { map[c.key] = Object.assign({}, c); }); // v55.83-QY — keep earlier companies' markers when several are applied in turn
@@ -37,7 +37,7 @@ function rtmAdjust(cats0, rtm) {
 // v55.83-TS (Max, Nov 17: "uncategorized -235,000 — what is that") — money sent to a paid-through company (NextTrade, RTM
 // Capital) with NO category was taken out under a made-up "uncategorized" category: a -$235,000 row with nothing behind it,
 // counted as an expense on the Income Statement. It is the SAME money as the ⚠ Uncategorized row, so it is folded back there.
-function foldUnc(cats) {
+export function foldUnc(cats) {
   var shift = 0;
   var out = (cats || []).filter(function (c) { if (c.key === 'uncategorized') { shift += Number(c.total) || 0; return false; } return true; });
   out.uncShift = Math.round(shift * 100) / 100;

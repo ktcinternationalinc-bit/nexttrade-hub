@@ -11,7 +11,9 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, periodBreakdown } from '../lib/pnl-period'; // v55.83-VL — P&L by period: periods and the breakdown of one period
+import { bucketOf, periodBreakdown, linesToFix } from '../lib/pnl-period';
+import { bucketRange, expenseColumns, finalPnl, realCostCategories } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
+import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -106,8 +108,38 @@ export default function ProfitabilityTab(props) {
   var fullBtn = useRef(null);
   useEffect(function () { if (fullBtn.current) { try { fullBtn.current.focus(); } catch (eF) {} } if (!full) { return undefined; } var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }, [full]);
   var s16 = useState('month'); var pGran = s16[0]; var setPGran = s16[1]; // v55.83-TN — P&L by period: week / month / quarter / year
-  var s18 = useState(null); var pOpen = s18[0]; var setPOpen = s18[1]; // v55.83-VL — the period whose breakdown is open
+  var s18 = useState(null); var pOpen = s18[0]; var setPOpen = s18[1];
+  // v55.83-VQ (Max, Nov 19: "where are the rest of the columns and the total final pnl per month") — each period's expenses, asked
+  // from the Income Statement (period_stats) for exactly that period's dates and kept by period. Nothing is recalculated here.
+  var s19 = useState({}); var pExp = s19[0]; var setPExp = s19[1];
+  function loadExpenses(keys, gran) {
+    var todo = (keys || []).filter(function (k) { return !pExp[gran + '|' + k] && bucketRange(k, gran); }).slice(0, 24);
+    if (!todo.length) { return; }
+    var mark = {}; todo.forEach(function (k) { mark[gran + '|' + k] = { status: 'loading' }; });
+    setPExp(function (prev) { return Object.assign({}, prev, mark); });
+    function put(k, res) { setPExp(function (prev) { var nx = Object.assign({}, prev); nx[gran + '|' + k] = res; return nx; }); }
+    todo.reduce(function (chain, k) {
+      return chain.then(function () {
+        var rg = bucketRange(k, gran);
+        return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: rg.from, to: rg.to, user_id: userProfile && userProfile.id }) })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (!j || !j.ok) { put(k, { status: 'error', why: (j && j.error) || 'The expenses could not be loaded.' }); return; }
+            if (j.from !== rg.from) { put(k, { status: 'outside', why: 'Expenses before ' + j.from + ' are not open to you.' }); return; }
+            if (!j.spending) { put(k, { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.' }); return; }
+            var rc = realCostCategories(j.spending, rtmAdjust, foldUnc);
+            put(k, { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), from: j.from, to: j.to });
+          }).catch(function () { put(k, { status: 'error', why: 'The expenses could not be loaded.' }); });
+      });
+    }, Promise.resolve());
+  }
   var s17 = useState('all'); var pPre = s17[0]; var setPPre = s17[1]; // v55.83-TN — release prefix: all / 1001 / 1002 / 1003 / other
+  useEffect(function () {
+    if (view !== 'period' || pPre !== 'all' || !data || !data.cells) { return; }
+    var seen = {}; var keys = [];
+    data.cells.forEach(function (c) { var b0 = bucketOf(c.invoice_date, pGran); if (!seen[b0.key]) { seen[b0.key] = true; keys.push(b0.key); } });
+    if (keys.length <= 13) { loadExpenses(keys, pGran); }
+  }, [view, pGran, pPre, data]); // eslint-disable-line react-hooks/exhaustive-deps // v55.83-VL — the period whose breakdown is open
 
   function call(payload) {
     // v55.83-TG — the server checks the sign-in token itself (it no longer trusts the user id in the request)
@@ -318,7 +350,7 @@ export default function ProfitabilityTab(props) {
     function cell(r, f, isProfit) {
       if (isProfit && hidden) { return '🔒'; }
       var v = r[f] / 100; var miss = r.miss[f] || 0;
-      return <span>{(v < 0 ? '−$' : '$') + fmt(Math.abs(v))}{miss > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{miss + ' line(s) not known yet'}</div>}</span>;
+      return <span>{(v < 0 ? '−$' : '$') + fmt(Math.abs(v))}{miss > 0 && (r.key === 'total' ? <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{miss + ' sale line(s) missing this'}</div> : <button onClick={function (e) { e.stopPropagation(); setPOpen(r.key); }} title="Show these sale lines and how to fix them" style={{ display: 'block', marginLeft: 'auto', color: '#b45309', fontSize: 9, fontWeight: 800, textDecoration: 'underline', background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>{miss + ' missing — see & fix'}</button>)}</span>;
     }
     function pct(a, b) { return hidden ? '🔒' : (b ? (Math.round(a / b * 1000) / 10) + '%' : '—'); }
     function csv() {
@@ -337,7 +369,7 @@ export default function ProfitabilityTab(props) {
             var isP = x.kind === 'profit';
             return <tr key={x.key} style={{ borderTop: '1px solid ' + LINE, fontWeight: isP ? 800 : 400, background: isP ? '#ecfdf5' : '#ffffff', color: INK }}>
               <td className="px-2 py-1">{(x.kind === 'out' ? '− ' : x.kind === 'in' ? '+ ' : '= ') + x.label}</td>
-              <td className="px-2 py-1 text-right tabular-nums" style={isP && x.cents !== null ? { color: x.cents >= 0 ? '#065f46' : '#7f1d1d' } : undefined}>{money(x.cents)}{x.missing > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{x.missing + ' line(s) not known yet'}</div>}</td>
+              <td className="px-2 py-1 text-right tabular-nums" style={isP && x.cents !== null ? { color: x.cents >= 0 ? '#065f46' : '#7f1d1d' } : undefined}>{money(x.cents)}{x.missing > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{x.missing + ' line(s) missing — listed under “Lines to fix”'}</div>}</td>
             </tr>; })}</tbody></table>
         </div>;
       }
@@ -355,11 +387,66 @@ export default function ProfitabilityTab(props) {
             </tr>; })}</tbody></table></div>
         </div>;
       }
+      // v55.83-VQ (Max: "what does this mean? how do I go and fix it?") — the lines behind every amber note, why, and where to fix
+      var fx = linesToFix(cs);
+      function goFix(where, row) { setFull(false); setOpen(null); if (where === 'invoice' && row) { setSearchQ(String(row.invoice || '')); setView('invoice'); if (row.invoice_id) { setOpen('invoice:' + row.invoice_id); } } else { setView(where === 'containers' ? 'containers' : (where === 'invoice' ? 'invoice' : 'setup')); } }
+      var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
+        <div className="font-extrabold text-[12px]" style={{ color: '#92400e' }}>{'⚠ Lines to fix — ' + fx.rows.length + ' of ' + fx.total + ' sale lines in ' + r.label + ' are missing a cost, so their profit is not counted yet.'}</div>
+        <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>What is missing, and where to fix it:</div>
+        {fx.reasons.map(function (g) { return <div key={g.key} className="text-[11px] mb-1 flex gap-2 items-start flex-wrap" style={{ color: INK }}><span><b>{g.count + ' × ' + g.title + '.'}</b>{' ' + g.how}</span><button onClick={function (e) { e.stopPropagation(); goFix(g.go, null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>{g.goLabel + ' →'}</button></div>; })}
+        <div className="overflow-auto pl-scroll mt-1" style={{ maxHeight: 260, border: '1px solid ' + LINE, background: '#ffffff' }}><table className="w-full text-[11px]">
+          <thead><tr style={{ background: '#fef3c7', color: '#92400e' }}>{['Invoice', 'Date', 'Customer', 'Product', 'Release', 'Sold for', 'What is missing', ''].map(function (h, i) { return <th key={i} className={'px-2 py-1 font-bold ' + (i === 5 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
+          <tbody>{fx.rows.slice(0, 300).map(function (w, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+            <td className="px-2 py-1 font-bold">{w.invoice}</td><td className="px-2 py-1">{w.invoice_date}</td><td className="px-2 py-1">{w.customer}</td><td className="px-2 py-1">{w.product}</td><td className="px-2 py-1">{w.release || '—'}</td>
+            <td className="px-2 py-1 text-right tabular-nums">{w.sold_for === null ? '—' : '$' + fmt(w.sold_for)}</td><td className="px-2 py-1 font-bold" style={{ color: '#b45309' }}>{w.missing_text}</td>
+            <td className="px-2 py-1 text-right"><button onClick={function (e) { e.stopPropagation(); goFix('invoice', w); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button></td>
+          </tr>; })}</tbody></table></div>
+        {fx.rows.length > 300 && <div className="text-[10px] mt-1" style={{ color: SUB }}>{'Showing the 300 biggest of ' + fx.rows.length + '.'}</div>}
+      </div>;
       return <div>
+        {fixBox}
         <div className="font-extrabold text-[12px] mb-2" style={{ color: INK }}>{r.label + ' — breakdown · ' + bd.lines + ' line(s) · ' + fmt0(bd.pounds) + ' lb · total profit ' + money(bd.total.profit) + ' (goods ' + money(bd.total.goods_profit) + ' + transport ' + money(bd.total.transport_profit) + ')'}</div>
         <div className="flex gap-3 flex-wrap mb-2">{side('goods', 'GOODS', '#1e3a8a')}{side('transport', 'TRANSPORTATION', '#7c2d12')}</div>
         <div className="flex gap-3 flex-wrap">{list('By product', bd.products)}{list('By customer', bd.customers)}</div>
-        <div className="text-[10px] mt-1" style={{ color: SUB }}>Operating expenses (warehouse / office, commission, partner fee, payroll, taxes) are not in this table yet — it shows the profit on what was sold.</div>
+        {expPanel(r)}
+        <div className="text-[10px] mt-1" style={{ color: SUB }}>The commission taken off above is the per-pound commission inside goods profit; there is no separate commission expense column. FINAL P&L = total profit − A − C − D − E. Profit is dated by invoice date; expenses by the date the money left the bank.</div>
+      </div>;
+    }
+    // v55.83-VQ — the expense columns. Only with ALL releases: the Income Statement's expenses are the whole company's and cannot
+    // be split by release prefix. The Total row adds the periods that have loaded and says so when some have not.
+    var expOn = pPre === 'all'; var EXK = ['A', 'C', 'D', 'E', 'unassigned'];
+    var totalExp = (function () { var t = { status: 'ok', cols: expenseColumns([], 0), partial: false }; rows.forEach(function (r0) { var e0 = pExp[pGran + '|' + r0.key]; if (!e0 || e0.status !== 'ok') { t.partial = true; return; } ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (k) { t.cols[k].cents += e0.cols[k].cents; }); t.cols.total += e0.cols.total; }); return t; })();
+    function expOf(r) { return r.key === 'total' ? totalExp : pExp[pGran + '|' + r.key]; }
+    function expCell(r, k) {
+      if (!expOn) { return '—'; }
+      var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
+      if (e.status === 'locked') { return '🔒'; }
+      if (e.status !== 'ok') { return <span title={e.why} style={{ color: '#b45309' }}>n/a</span>; }
+      return <span>{money(e.cols[k].cents)}{e.partial && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>some periods missing</div>}</span>;
+    }
+    function finalCell(r) {
+      if (!expOn) { return '—'; } if (hidden) { return '🔒'; }
+      var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
+      if (e.status === 'locked') { return '🔒'; }
+      if (e.status !== 'ok') { return <span title={e.why} style={{ color: '#b45309' }}>n/a</span>; }
+      var f = finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));
+      return <span style={{ color: f.cents >= 0 ? '#065f46' : '#7f1d1d' }}>{money(f.cents)}
+        {e.cols.unassigned.cents !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'if the uncategorized is all expense: ' + money(f.cents - e.cols.unassigned.cents)}</div>}
+        {(!f.complete || e.partial) && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>known part only</div>}</span>;
+    }
+    function expPanel(r) {
+      if (!expOn) { return <div className="text-[11px] mt-2" style={{ color: SUB }}>Expenses and the final P&L are shown with Releases: All (they are the whole company’s and cannot be split by release).</div>; }
+      var e = expOf(r); if (!e || e.status !== 'ok') { return <div className="text-[11px] mt-2" style={{ color: '#b45309' }}>{e && e.why ? e.why : 'Expenses for this period are loading…'}</div>; }
+      var groups = [['A', 'A · Warehouse / Office'], ['C', 'C · Partner fee'], ['D', 'D · Payroll'], ['E', 'E · Taxes'], ['unassigned', 'Uncategorized expenses — not taken off the profit yet'], ['in_profit', 'Paid to suppliers, truckers, brokers — already inside goods and transport profit, NOT taken off again']];
+      return <div className="mt-2">
+        <div className="font-extrabold text-[11px] mb-1" style={{ color: '#7c2d12' }}>{'EXPENSES paid ' + e.from + ' → ' + e.to + ' (from the Income Statement, real-cost look)'}</div>
+        <div className="flex gap-3 flex-wrap">{groups.map(function (g) { var col = e.cols[g[0]];
+          return <div key={g[0]} style={{ flex: '1 1 260px', minWidth: 240 }}><table className="w-full text-[11px]" style={{ background: '#ffffff', border: '1px solid ' + LINE }}><tbody>
+            <tr style={{ background: g[0] === 'unassigned' ? '#fef3c7' : (g[0] === 'in_profit' ? '#f1f5f9' : '#ffedd5'), color: INK, fontWeight: 800 }}><td className="px-2 py-1">{g[1]}</td><td className="px-2 py-1 text-right tabular-nums">{money(col.cents)}</td></tr>
+            {col.cats.map(function (c0) { return <tr key={c0.key} style={{ borderTop: '1px solid ' + LINE, color: INK }}><td className="px-2 py-1">{c0.label}</td><td className="px-2 py-1 text-right tabular-nums">{money(c0.cents)}</td></tr>; })}
+            {col.cats.length === 0 && <tr><td colSpan={2} className="px-2 py-1" style={{ color: SUB }}>nothing</td></tr>}
+          </tbody></table></div>; })}</div>
+        <div className="text-[10px] mt-1" style={{ color: SUB }}>To move money out of “Uncategorized”, give the bank line a category in Accounting → Transactions (or Stats → Income Statement, which lists the lines). Categories are placed in a column by their name.</div>
       </div>;
     }
     var hd = { background: '#f1f5f9', color: '#334155' };
@@ -384,10 +471,10 @@ export default function ProfitabilityTab(props) {
       </div>
       <div ref={topBar} onScroll={function () { syncFrom(topBar, tableBox); }} className="overflow-x-auto overflow-y-hidden pl-scroll" style={{ height: 16, marginBottom: 2 }}><div ref={topInner} style={{ height: 1 }} /></div>
       <div ref={tableBox} onScroll={function () { syncFrom(tableBox, topBar); }} className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: full ? 'none' : '65vh', flex: full ? '1 1 auto' : undefined }}>
-        <table className="w-full text-[11px]" style={{ minWidth: 1350 }}>
+        <table className="w-full text-[11px]" style={{ minWidth: 2050 }}>
           <thead ref={outerHead}>
-            <tr><th className="px-2 py-1" /><th className="px-2 py-1" /><th colSpan={3} className="px-2 py-1 text-center font-extrabold" style={{ background: '#064e3b', color: '#ffffff' }}>PROFIT</th><th colSpan={4} className="px-2 py-1 text-center font-extrabold nt-th-goods">GOODS — how the goods profit is made</th><th colSpan={3} className="px-2 py-1 text-center font-extrabold nt-th-transport">TRANSPORTATION — how the transport profit is made</th><th className="px-2 py-1" /></tr>
-            <tr>{['Period', 'Pounds', 'Goods profit', 'Transport profit', 'Total profit', 'Goods revenue', 'Goods cost', 'Margin', 'Avg profit / lb', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Lines'].map(function (h, i) { return <th key={h} className={'px-2 py-1.5 font-bold ' + (i === 0 ? 'text-left' : 'text-right')}>{h}</th>; })}</tr>
+            <tr><th className="px-2 py-1" /><th className="px-2 py-1" /><th colSpan={3} className="px-2 py-1 text-center font-extrabold" style={{ background: '#064e3b', color: '#ffffff' }}>PROFIT ON SALES</th><th colSpan={5} className="px-2 py-1 text-center font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>EXPENSES (paid in the period)</th><th className="px-2 py-1 text-center font-extrabold" style={{ background: '#0f172a', color: '#ffffff' }}>BOTTOM LINE</th><th colSpan={4} className="px-2 py-1 text-center font-extrabold nt-th-goods">GOODS — how the goods profit is made</th><th colSpan={3} className="px-2 py-1 text-center font-extrabold nt-th-transport">TRANSPORTATION — how the transport profit is made</th><th className="px-2 py-1" /></tr>
+            <tr>{['Period', 'Pounds', 'Goods profit', 'Transport profit', 'Total profit', 'A · Warehouse / Office', 'C · Partner fee', 'D · Payroll', 'E · Taxes', 'Uncategorized expenses', 'FINAL P&L', 'Goods revenue', 'Goods cost', 'Margin', 'Avg profit / lb', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Lines'].map(function (h, i) { return <th key={h} className={'px-2 py-1.5 font-bold ' + (i === 0 ? 'text-left' : 'text-right')}>{h}</th>; })}</tr>
           </thead>
           <tbody>{rows.concat(rows.length > 1 ? [tot] : []).map(function (r, i) {
             var isT = r.key === 'total'; var isOpen = !isT && pOpen === r.key;
@@ -397,6 +484,8 @@ export default function ProfitabilityTab(props) {
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.goods_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'goods_profit', true)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.transport_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'transport_profit', true)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#d1fae5' }}>{hidden ? '🔒' : <span>{(r.profit < 0 ? '−$' : '$') + fmt(Math.abs(r.profit / 100))}{r.uncounted > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.uncounted + ' line(s) / $' + fmt(r.uncounted_revenue / 100) + ' revenue not counted until their cost is known'}</div>}</span>}</td>
+              {EXK.map(function (k) { return <td key={'x' + k} className="px-2 py-1.5 text-right tabular-nums" style={{ background: isT ? undefined : (k === 'unassigned' ? '#fef3c7' : '#fff7ed') }}>{expCell(r, k)}</td>; })}
+              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ background: isT ? undefined : '#e2e8f0' }}>{finalCell(r)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{pct(r.goods_profit, r.goods_revenue)}</td>
@@ -404,11 +493,11 @@ export default function ProfitabilityTab(props) {
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'transport_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'trucking_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'freight_cost')}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{r.lines}{r.incomplete > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.incomplete + ' not complete'}</div>}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{r.lines}{r.incomplete > 0 && (isT ? <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.incomplete + ' to fix'}</div> : <button onClick={function (e) { e.stopPropagation(); setPOpen(r.key); }} title="Show the sale lines that are missing a cost and how to fix them" style={{ display: 'block', marginLeft: 'auto', color: '#b45309', fontSize: 9, fontWeight: 800, textDecoration: 'underline', background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>{r.incomplete + ' to fix — show'}</button>)}</td>
             </tr>];
-            if (isOpen) { out.push(<tr key={r.key + ':open'}><td colSpan={13} className="px-3 py-2" style={{ background: '#f0f9ff', borderTop: '1px solid #7dd3fc' }}>{breakdownPanel(r, cells.filter(function (c) { return bucketOf(c.invoice_date, pGran).key === r.key; }))}</td></tr>); }
+            if (isOpen) { out.push(<tr key={r.key + ':open'}><td colSpan={19} className="px-3 py-2" style={{ background: '#f0f9ff', borderTop: '1px solid #7dd3fc' }}>{breakdownPanel(r, cells.filter(function (c) { return bucketOf(c.invoice_date, pGran).key === r.key; }))}</td></tr>); }
             return out; })}
-            {rows.length === 0 && <tr><td colSpan={13} className="px-3 py-4 text-center" style={{ color: SUB }}>No sales in these dates for these releases.</td></tr>}</tbody>
+            {rows.length === 0 && <tr><td colSpan={19} className="px-3 py-4 text-center" style={{ color: SUB }}>No sales in these dates for these releases.</td></tr>}</tbody>
         </table>
       </div>
       <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight. Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
@@ -778,6 +867,7 @@ export default function ProfitabilityTab(props) {
       </div>
     </div>}
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}
-    {peekId && <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); setFull(false); onGo('invoices'); }} />}
+    {/* v55.83-VQ (Max, Nov 19: "clicking on view invoice from here is not working" — in FULL SCREEN the invoice opened BEHIND the table: the full-screen layer is above the viewer's own layer. The viewer is now mounted on the page body, above full screen.) */}
+    {peekId && typeof document !== 'undefined' && createPortal(<div style={{ position: 'fixed', inset: 0, zIndex: 300 }}><InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { setFull(false); try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); setFull(false); onGo('invoices'); }} /></div>, document.body)}
   </div>;
 }

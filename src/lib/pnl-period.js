@@ -63,3 +63,35 @@ export function periodBreakdown(cells) {
     products: group('product', '(no product name)'), customers: group('customer', '(no customer)'),
     total: hidden ? { goods_profit: null, transport_profit: null, profit: null } : { goods_profit: gp, transport_profit: tp, profit: gp + tp } };
 }
+
+// v55.83-VQ (Max, Nov 19 2026: "when it says 26 lines not known yet ... it needs to be user-friendly. What does this mean? How do
+// I go and fix it? ... you click on it and it takes you to those lines that are unknown that you can fix").
+// The sale lines of a period whose profit cannot be counted yet, each with WHAT is missing in plain words, and the reasons
+// grouped with HOW to fix them and which screen to open. Nothing is guessed: a line is listed only for a figure it really lacks.
+var FIX = [
+  { key: 'pounds', title: 'No weight', how: 'The unit on the invoice line has no pounds, so nothing can be worked out per pound. Set the pounds for that unit or product.', go: 'setup', goLabel: 'Open Set-up: names, units and supplier links' },
+  { key: 'base_cost', title: 'No supplier cost', how: 'No supplier bill is linked to this product and no cost was typed for it. Link the supplier bill to the product, or type its cost per pound.', go: 'setup', goLabel: 'Open Set-up: names, units and supplier links' },
+  { key: 'transport_revenue', title: 'Transport charged not known', how: 'The shipping terms of the invoice could not be worked out (for example a CNF price with no shipping amount). Open the invoice line and set its terms.', go: 'invoice', goLabel: 'Open By invoice' },
+  { key: 'trucking_cost', title: 'Trucking cost not known', how: 'There is no trucking bill and no estimate for the release of this sale. Enter the estimate, or attach the bill to the release.', go: 'containers', goLabel: 'Open Containers (shipping cost)' },
+  { key: 'freight_cost', title: 'Freight cost not known', how: 'There is no freight / shipping bill and no estimate for the release of this sale. Enter the estimate, or attach the bill to the release.', go: 'containers', goLabel: 'Open Containers (shipping cost)' },
+  { key: 'other', title: 'Not complete', how: 'Something else on this line is missing. Open the invoice to see what.', go: 'invoice', goLabel: 'Open By invoice' }
+];
+export function linesToFix(cells) {
+  var list = cells || [];
+  if (list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, rows: [], reasons: [], total: list.length }; }
+  var count = {}; var rows = [];
+  list.forEach(function (c) {
+    var miss = [];
+    if (!known(c.pounds)) { miss.push('pounds'); } else if (!known(c.base_cost)) { miss.push('base_cost'); }
+    if (!known(c.transport_revenue)) { miss.push('transport_revenue'); }
+    if (!known(c.trucking_cost)) { miss.push('trucking_cost'); }
+    if (!known(c.freight_cost)) { miss.push('freight_cost'); }
+    if (!miss.length && (!known(c.goods_profit) || !known(c.transport_profit))) { miss.push('other'); }
+    if (!miss.length) { return; }
+    miss.forEach(function (k) { count[k] = (count[k] || 0) + 1; });
+    rows.push({ invoice_id: c.invoice_id || null, invoice: c.invoice || '', invoice_date: c.invoice_date || '', customer: c.customer || '', product: c.product || c.description || '', release: c.release_raw || c.release || '',
+      sold_for: known(c.goods_revenue) ? Number(c.goods_revenue) : null, missing: miss, missing_text: miss.map(function (k) { return FIX.filter(function (f) { return f.key === k; })[0].title; }).join(' · ') });
+  });
+  rows.sort(function (a, b) { return (b.sold_for || 0) - (a.sold_for || 0); });
+  return { hidden: false, total: list.length, rows: rows, reasons: FIX.filter(function (f) { return count[f.key]; }).map(function (f) { return { key: f.key, title: f.title, how: f.how, go: f.go, goLabel: f.goLabel, count: count[f.key] }; }) };
+}

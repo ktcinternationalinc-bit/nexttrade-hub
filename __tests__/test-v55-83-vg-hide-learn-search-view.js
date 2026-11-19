@@ -60,7 +60,7 @@ check('Profitability: search box on By product / By customer / By invoice, with 
 
 // ── 3. view invoice
 check('Profitability: every invoice row has "view invoice"; the click does not also expand the row', pt.indexOf('🧾 view invoice</button>') > 0 && pt.indexOf('onClick={function (e) { e.stopPropagation(); setPeekId(r.invoice.id); }}') > 0);
-check('Profitability: it opens the shared invoice pop-up (runtime import present)', /import InvoicePeek from '\.\/InvoicePeek';/.test(pt) && pt.indexOf('{peekId && <InvoicePeek invoiceId={peekId}') > 0);
+check('Profitability: it opens the shared invoice pop-up (runtime import present)', /import InvoicePeek from '\.\/InvoicePeek';/.test(pt) && pt.indexOf('<InvoicePeek invoiceId={peekId}') > 0 && pt.indexOf('{peekId && ') > 0); // v55.83-VQ: mounted on the page body, above full screen
 check('Profitability: Edit hands the invoice to the Invoices screen exactly like Stats does (same event, then go to invoices), leaving full screen first', pt.indexOf("window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 }))") > 0 && pt.indexOf("setPeekId(null); setFull(false); onGo('invoices');") > 0);
 var at = read('src/components/AccountingTab.jsx'); var inv = read('src/components/AccountingInvoicesTab.jsx'); var peek = read('src/components/InvoicePeek.jsx');
 check('Accounting gives Profitability the navigation it needs; the Invoices screen listens for that event; the pop-up shows Edit when given onEdit', at.indexOf('<ProfitabilityTab {...props} onGo={goFrom} />') > 0 && inv.indexOf("window.addEventListener('nt-open-invoice-edit', onEvt);") > 0 && /props\.onEdit && <button/.test(peek));

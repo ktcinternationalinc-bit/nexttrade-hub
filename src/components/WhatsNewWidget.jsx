@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VQ',
+    date: '2026-11-19',
+    title: 'Profitability → P&L by period: expense columns and the FINAL P&L for each period',
+    items: [
+      { text: '**New columns right after Total profit:** A · Warehouse / Office, C · Partner fee, D · Payroll, E · Taxes, **Uncategorized expenses**, and **FINAL P&L** (total profit minus A, C, D and E). There is no commission column: commission stays inside goods profit.' },
+      { text: 'The expenses are the same figures as Accounting → Stats → Income Statement, for the dates of each period: what left the bank in that period, with money sent to RTM and NextTrade replaced by the bills it paid, so nothing is counted twice.' },
+      { text: '**Uncategorized expenses** stays as its own column until everything has a category. It is shown but not taken off the profit; under the final figure you also see what it would be if all of it were expense. While anything is uncategorized, the final figure says “known part only”.' },
+      { text: 'Payments to suppliers, truckers and brokers are already inside goods profit and transport profit, so they are listed for information and never taken off a second time.' },
+      { text: '**“Lines missing a cost” now tells you what to do.** The small amber notes are buttons. Click one and the period opens with a **Lines to fix** list: each sale line, what is missing in plain words (no supplier cost, no weight, trucking or freight cost not known, transport charged not known), how to fix it, and a button that takes you there — the invoice itself, Set-up, or Containers.' },
+      { text: '**Fixed: “view invoice” in full screen.** On By invoice in full screen the invoice was opening behind the table, so nothing seemed to happen. It now opens on top.' },
+      { text: '**Click a period** to see which categories are behind each column. To move money out of Uncategorized, give the bank line a category in Accounting → Transactions.' },
+      { text: 'Good to know: profit is dated by invoice date and expenses by the date the money left the bank. Expenses show only with Releases: All, because they are the whole company’s. People without the “see totals” switch see a lock instead of expenses. The cash / accrual switch is not in this build.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/pnl-expenses.js (bucketRange, letterOf, expenseColumns, finalPnl, realCostCategories; whole cents). ProfitabilityTab asks /api/accounting/bills period_stats once per period, one after another, at most 24 periods and automatically only for 13 or fewer; a period whose dates come back clamped is marked n/a. rtmAdjust and foldUnc are now exported from PeriodStatsTab and reused, not copied. No route, SQL or data change.' },
+    ]
+  },
+  {
     version: 'v55.83-VO',
     date: '2026-11-19',
     title: 'NT Warehouse link in the sidebar',
