@@ -16,6 +16,7 @@
 var fs = require('fs');
 var path = require('path');
 var src = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'EgyptBankTab.jsx'), 'utf8');
+var dupLib = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'egypt-bank-duplicates.js'), 'utf8'); // v55.83-VG moved the classification here
 
 var failures = [];
 function ok(label, cond, hint) {
@@ -37,11 +38,11 @@ ok('2b: scans across ALL accounts (no account_id filter on existing query)',
 
 // 3. Three categories — clean / exact / possible
 ok('3a: classifies as clean when no match',
-  /status: 'clean'/.test(src));
+  /status: 'clean'/.test(dupLib));
 ok('3b: classifies as exact when same date+amount+desc60',
-  /status: 'exact'/.test(src));
+  /status: 'exact'/.test(dupLib));
 ok('3c: classifies as possible for same-day-amount or adjacent-date match',
-  /status: 'possible'/.test(src));
+  /status: 'possible'/.test(dupLib));
 
 // 4. Review step exists and runs BEFORE insert
 ok('4a: review step state defined',

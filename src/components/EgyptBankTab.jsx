@@ -4,7 +4,9 @@ import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supa
 import * as XLSX from 'xlsx';
 import { pdfRowsForImport, importBlockedByPdf } from '../lib/pdf-statement';
 import { readPdfStatementInBrowser } from '../lib/pdf-statement-browser'; // v55.83-VF — bank statement PDFs
+import EgyptBankImportPreview from './EgyptBankImportPreview'; // v55.83-VI — the import preview (pages, per-file lines)
 import { classifyAgainstExisting } from '../lib/egypt-bank-duplicates'; // v55.83-VG — duplicate classification (testable)
+import { combineFiles, importPlan, writeImportPlan, reviewCounts, toggleRowInclude } from '../lib/egypt-bank-multi-file'; // v55.83-VI — several statement files in one go
 import { hidePhraseFrom, hidePhraseUsable, countHideMatches, hideLearnQuestion, hideRuleFor } from '../lib/egypt-bank-hide-learn'; // v55.83-VG — hide one, learn, hide the rest
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
@@ -36,7 +38,9 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const [accForm, setAccForm] = useState({ bank_name: '', account_number: '', account_name: '', currency: 'EGP' });
   const [importStep, setImportStep] = useState('select'); // select | preview | importing | done
   const [importData, setImportData] = useState([]);
-  const [pdfNotes, setPdfNotes] = useState([]); // v55.83-VF — what the balance check said about each PDF statement read
+  const [previewPageNo, setPreviewPageNo] = useState(0); // v55.83-VI — the import preview, a page of 200 rows at a time
+  const [previewOnlyMarked, setPreviewOnlyMarked] = useState(false); // …or only the rows unticked as copies of a line in another selected file
+  const [fileResults, setFileResults] = useState([]); // v55.83-VI — one result per selected file (accepted with its balance check, or refused with the reason)
   const [importAccount, setImportAccount] = useState('');
   const [importStats, setImportStats] = useState(null);
   // v55.83-A.6.15 (Max May 14 2026) — Bulk delete modal state
@@ -105,20 +109,30 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     
-    setPdfNotes([]);
-    let allParsed = [];
-    for (const file of files) {
-      const parsed = await parseOneFile(file);
-      allParsed = [...allParsed, ...parsed];
+    // v55.83-VI (Max, Nov 19 2026: "make sure i can upload several pdfs at a time") — every file is read and proved ON ITS OWN.
+    // A file that is refused hands over nothing and never stops the others; each file gets its own line in the preview. The same
+    // bank line appearing in two of the selected files is unticked in the later file. Nothing is saved before "Import".
+    setFileResults([]); setPreviewPageNo(0); setPreviewOnlyMarked(false);
+    const results = [];
+    for (const file of files) { results.push(await readOneFile(file)); }
+    const combined = combineFiles(results);
+    setFileResults(combined.results);
+    setImportData(combined.rows);
+    setImportStep('preview'); // also when every file was refused: the preview then lists why, file by file, with nothing to import
+  };
+
+  // one selected file → { name, kind, refused, reason, short, note, rows }. Never throws, never shows a pop-up.
+  const readOneFile = async (file) => {
+    const name = (file && file.name) || 'file';
+    const kind = (/\.pdf$/i.test(name) || (file && file.type === 'application/pdf')) ? 'pdf' : 'sheet';
+    const out = { reason: '', short: '', note: null };
+    let rows = [];
+    try { rows = (await parseOneFile(file, out)) || []; }
+    catch (err) { rows = []; out.reason = name + ': this file could not be read (' + ((err && err.message) || 'unknown reason') + '). Nothing from it was added.'; }
+    if (rows.length === 0) {
+      return { name: name, kind: kind, refused: true, reason: out.reason || (name + ': no transactions were found in this file — check the column format. Nothing from it was added.'), short: out.short || '', note: out.note, rows: [] };
     }
-    if (allParsed.length === 0) {
-      alert('No transactions found in ' + files.length + ' file(s). Check column format.');
-      return;
-    }
-    // Re-number rows
-    allParsed = allParsed.map((t, i) => ({ ...t, _row: i + 1 }));
-    setImportData(allParsed);
-    setImportStep('preview');
+    return { name: name, kind: kind, refused: false, reason: '', short: '', note: out.note, rows: rows };
   };
 
   // v55.83-VF (Max, Nov 19 2026: "I NEED TO BE ABLE TO IMPORT PDFS AS WELL IN EGYPT BANK") — a statement the bank exports as PDF.
@@ -126,15 +140,18 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   // row is checked against the bank's own running balance. The result of that check is shown before anything is imported.
   const readPdfStatement = async (file) => readPdfStatementInBrowser(await file.arrayBuffer());
 
-  const parseOneFile = async (file) => {
+  // v55.83-VI — `out` receives why a file gave no rows (out.reason, and out.short without amounts) and the PDF balance note
+  // (out.note); nothing here shows a pop-up any more, so one bad file cannot interrupt the others.
+  const parseOneFile = async (file, out) => {
+    out = out || {};
     if (/\.pdf$/i.test(file.name || '') || file.type === 'application/pdf') {
       let res;
       try { res = await readPdfStatement(file); }
-      catch (err) { alert('The PDF "' + file.name + '" could not be opened (' + ((err && err.message) || 'unknown reason') + '). If it is password-protected, save an unprotected copy or export Excel from the bank.'); return []; }
+      catch (err) { out.reason = 'The PDF "' + file.name + '" could not be opened (' + ((err && err.message) || 'unknown reason') + '). If it is password-protected, save an unprotected copy or export Excel from the bank. Nothing from it was added.'; return []; }
       // v55.83-VG (Codex 16:03) — THE GATE: rows come out only when every one is proved against the bank's printed balances.
       const gate = pdfRowsForImport(res, file.name);
-      if (gate.note) setPdfNotes(prev => [...prev, gate.note]);
-      if (gate.refused) { alert(seeBankBalances || !gate.note ? gate.reason : gate.note.short); return []; }
+      out.note = gate.note || null;
+      if (gate.refused) { out.reason = gate.reason; out.short = gate.note ? gate.note.short : ''; return []; }
       return gate.rows;
     }
     const data = await file.arrayBuffer();
@@ -278,7 +295,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
 
     // Strategy 2: Regular tabular format with headers
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-    if (rows.length === 0) { alert('No data found'); return; }
+    if (rows.length === 0) { out.reason = (file.name || 'file') + ': no data was found in this file. Nothing from it was added.'; return []; }
 
     const cols = Object.keys(rows[0]);
     const find2 = (keywords) => cols.find(c => keywords.some(k => c.toLowerCase().includes(k.toLowerCase())));
@@ -328,15 +345,14 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     if (parsed.length === 0) {
       // Show diagnostic: what columns were found and sample data
       const sample = rows.slice(0, 3).map(r => JSON.stringify(r).substring(0, 200));
-      alert(
-        'No transactions detected.\n\n' +
-        'Columns found: ' + cols.join(', ') + '\n\n' +
-        'Date column: ' + (tblDateCol || 'none') + '\n' +
-        'Description column: ' + (tblDescCol || 'none') + '\n' +
-        'Amount column: ' + (amountCol || creditColName || debitColName || 'none') + '\n\n' +
-        'Sample row: ' + (sample[0] || 'empty') + '\n\n' +
-        'Tip: Make sure your file has columns named Date, Description, and Amount (or Credit/Debit).'
-      );
+      out.short = (file.name || 'file') + ': no transactions detected — the file needs columns named Date, Description, and Amount (or Credit/Debit). Nothing from it was added.';
+      out.reason = (file.name || 'file') + ': no transactions detected. ' +
+        'Columns found: ' + cols.join(', ') + '. ' +
+        'Date column: ' + (tblDateCol || 'none') + '. ' +
+        'Description column: ' + (tblDescCol || 'none') + '. ' +
+        'Amount column: ' + (amountCol || creditColName || debitColName || 'none') + '. ' +
+        'Sample row: ' + (sample[0] || 'empty') + '. ' +
+        'Tip: Make sure your file has columns named Date, Description, and Amount (or Credit/Debit). Nothing from it was added.';
       return [];
     }
 
@@ -427,59 +443,38 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     const pdfBlock2 = importBlockedByPdf((classified || []).map(function (c) { return c && c.row; })); // v55.83-VG — checked again right before anything is written
     if (pdfBlock2) { alert(pdfBlock2); setImportStep('preview'); return; }
     setImportStep('importing');
-    var imported = 0, skipped = 0, exactSkipped = 0, possibleSkipped = 0, overridden = 0;
-    var toInsert = [];
+    // v55.83-VI — what is written is decided in one tested place (importPlan): only rows whose decision is 'import', kept apart
+    // per file. A flagged row nobody chose to import is skipped and counted as skipped (it used to be left out without being counted).
+    var plan = importPlan(classified, accId, myId);
+    var imported = 0, skipped = plan.skipped, exactSkipped = plan.exactSkipped, possibleSkipped = plan.possibleSkipped, overridden = plan.overridden;
     var auditEntries = [];
+    var batchByFile = {}; var perFile = [];
     classified.forEach(function (c) {
-      if (c.decision === 'import') {
-        toInsert.push({ account_id: accId, date: c.row.date, description: c.row.description, amount: c.row.amount, imported_by: myId });
-        if (c.status !== 'clean') overridden += 1;
-      } else if (c.decision === 'skip') {
-        skipped += 1;
-        if (c.status === 'exact') exactSkipped += 1;
-        else if (c.status === 'possible') possibleSkipped += 1;
-      }
       if (c.status !== 'clean') {
         auditEntries.push({
           row_date: c.row.date,
           amount: c.row.amount,
           description_short: (c.row.description || '').substring(0, 80),
           status: c.status,
-          decision: c.decision,
+          decision: c.decision === 'import' ? 'import' : 'skip',
           matched_ids: c.matches.map(function (m) { return m.id; }),
+          file: c.row._file || null,
+          file_ix: c.row._fileIx === undefined ? null : c.row._fileIx,
           decided_by: myId,
           decided_at: new Date().toISOString(),
         });
       }
     });
 
-    // v55.83-A.6.15 — Create batch record first; best-effort (don't fail import if table missing)
-    var batchId = null;
-    try {
-      var totalAmt = toInsert.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0);
-      var batchResp = await supabase.from('bank_import_batches').insert({
-        imported_by: myId,
-        account_id: accId,
-        row_count: toInsert.length,
-        total_amount: totalAmt,
-        status: 'active',
-      }).select().maybeSingle();
-      if (batchResp.data && batchResp.data.id) {
-        batchId = batchResp.data.id;
-        // Tag every row with this batch_id
-        toInsert = toInsert.map(function (r) { return Object.assign({}, r, { import_batch_id: batchId }); });
-      }
-    } catch (_) { /* table may not exist yet; proceed without batch */ }
-
-    // Batch insert in chunks of 100
-    for (var i = 0; i < toInsert.length; i += 100) {
-      var chunk = toInsert.slice(i, i + 100);
-      try {
-        var resp = await supabase.from('egypt_bank_transactions').insert(chunk);
-        if (resp.error) skipped += chunk.length;
-        else imported += chunk.length;
-      } catch (e) { skipped += chunk.length; }
-    }
+    // v55.83-A.6.15 — a batch record first; best-effort (don't fail the import if the table is missing).
+    // v55.83-VI — ONE BATCH PER FILE, with the file's name, so one statement can be rolled back on its own. The writing is in
+    // writeImportPlan (tested against a fake database): a file whose rows are only partly saved gets its batch record corrected.
+    var written = await writeImportPlan(plan, {
+      createBatch: async function (row) { var r = await supabase.from('bank_import_batches').insert(row).select().maybeSingle(); return (r && r.data && r.data.id) || null; },
+      insertRows: async function (chunk) { var r = await supabase.from('egypt_bank_transactions').insert(chunk); return !(r && r.error); },
+      updateBatch: async function (id, patch) { await supabase.from('bank_import_batches').update(patch).eq('id', id); },
+    }, accId, myId);
+    imported = written.imported; skipped += written.failed; batchByFile = written.batchByFile; perFile = written.perFile;
 
     // Write audit log for every override decision (best-effort, swallows errors)
     if (auditEntries.length > 0) {
@@ -499,14 +494,14 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             user_id: myId,
             entity_type: 'egypt_bank_transactions',
             action: 'import_dedup_' + auditEntries[ai].decision,
-            details: Object.assign({ import_batch_id: batchId }, auditEntries[ai]),
+            details: Object.assign({ import_batch_id: auditEntries[ai].decision === 'import' ? (batchByFile[String(auditEntries[ai].file_ix)] || null) : null }, auditEntries[ai]),
             created_at: auditEntries[ai].decided_at,
           });
         }
       } catch (e) { /* ignore */ }
     }
 
-    setImportStats({ imported: imported, skipped: skipped, duplicates: exactSkipped + possibleSkipped, exactSkipped: exactSkipped, possibleSkipped: possibleSkipped, overridden: overridden, total: classified.length });
+    setImportStats({ imported: imported, skipped: skipped, duplicates: exactSkipped + possibleSkipped, exactSkipped: exactSkipped, possibleSkipped: possibleSkipped, overridden: overridden, total: classified.length, perFile: perFile });
     setImportStep('done');
     setReviewClassified(null);
     await logActivity(myId, 'Imported ' + imported + ' Egypt bank transactions (' + exactSkipped + ' exact duplicates skipped, ' + possibleSkipped + ' possible duplicates skipped, ' + overridden + ' overridden)', 'finance');
@@ -1424,66 +1419,13 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             </div>
           )}
 
-          {importStep === 'preview' && (() => {
-            const included = importData.filter(r => r._include);
-            const totalDeposits = included.filter(r => r.amount > 0).reduce((s, r) => s + r.amount, 0);
-            const totalWithdrawals = included.filter(r => r.amount < 0).reduce((s, r) => s + Math.abs(r.amount), 0);
-            return (
-            <div>
-              <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
-                <h3 className="font-bold text-sm">Preview — {included.length} of {importData.length} rows</h3>
-                <div className="flex gap-2">
-                  <button onClick={() => { setImportStep('select'); setImportData([]); }} className="px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-semibold">← Back</button>
-                  <button onClick={doImport} disabled={!importAccount} className="px-4 py-2 bg-green-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50">✅ Import {included.length} rows</button>
-                </div>
-              </div>
-              {!importAccount && <p className="text-xs text-red-500 font-semibold mb-2">⚠️ Select an account above first</p>}
-              {/* v55.83-VF — the balance check of each PDF statement; amounts only for people who may see bank balances */}
-              {pdfNotes.map((n, i) => <p key={i} className={'text-xs font-semibold mb-2 rounded-lg p-2 border ' + (n.ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-300 text-amber-900')}>{n.ok ? '✅ ' : ''}{seeBankBalances ? n.text : n.short}</p>)}
-              {/* Summary */}
-              {seeBankBalances && <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
-                  <div className="text-[9px] text-green-600 font-bold">Deposits</div>
-                  <div className="text-sm font-black text-green-700">+{totalDeposits.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-                  <div className="text-[9px] text-green-500">{included.filter(r => r.amount > 0).length} transactions</div>
-                </div>
-                <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
-                  <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
-                  <div className="text-sm font-black text-red-700">-{totalWithdrawals.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-                  <div className="text-[9px] text-red-500">{included.filter(r => r.amount < 0).length} transactions</div>
-                </div>
-                <div className="bg-blue-50 rounded-lg p-2 border border-blue-200 text-center">
-                  <div className="text-[9px] text-blue-600 font-bold">Net</div>
-                  <div className={'text-sm font-black ' + ((totalDeposits - totalWithdrawals) >= 0 ? 'text-blue-700' : 'text-red-700')}>{(totalDeposits - totalWithdrawals).toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-                </div>
-              </div>}
-              <div className="overflow-auto max-h-[500px] bg-white rounded-xl border">
-                <table className="w-full border-collapse text-xs">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr>
-                      <th className="px-2 py-2 text-left">✓</th>
-                      <th className="px-2 py-2 text-left">Date</th>
-                      <th className="px-2 py-2 text-left">Description</th>
-                      <th className="px-2 py-2 text-right text-green-600">Deposit</th>
-                      <th className="px-2 py-2 text-right text-red-600">Withdrawal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importData.slice(0, 200).map((r, i) => (
-                      <tr key={i} className={r._include ? '' : 'opacity-30'}>
-                        <td className="px-2 py-1.5"><input type="checkbox" checked={r._include} onChange={() => { const d = [...importData]; d[i]._include = !d[i]._include; setImportData(d); }} /></td>
-                        <td className="px-2 py-1.5">{r.date}</td>
-                        <td className="px-2 py-1.5" style={{ wordBreak: 'break-word' }}>{r.description}</td>
-                        <td className="px-2 py-1.5 text-right font-bold text-green-600">{r.amount > 0 ? '+' + r.amount.toLocaleString(undefined, {minimumFractionDigits:2}) : ''}</td>
-                        <td className="px-2 py-1.5 text-right font-bold text-red-600">{r.amount < 0 ? Math.abs(r.amount).toLocaleString(undefined, {minimumFractionDigits:2}) : ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            );
-          })()}
+          {importStep === 'preview' && (
+            <EgyptBankImportPreview importData={importData} fileResults={fileResults} seeBankBalances={seeBankBalances} importAccount={importAccount}
+              previewPageNo={previewPageNo} previewOnlyMarked={previewOnlyMarked}
+              onPage={setPreviewPageNo} onOnlyMarked={(v) => { setPreviewOnlyMarked(v); setPreviewPageNo(0); }}
+              onToggle={(i) => setImportData(toggleRowInclude(importData, i))}
+              onBack={() => { setImportStep('select'); setImportData([]); }} onImport={doImport} />
+          )}
 
           {importStep === 'analyzing' && (
             <div className="text-center py-12">
@@ -1497,8 +1439,10 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             var cleanCount = reviewClassified.filter(function (c) { return c.status === 'clean'; }).length;
             var exactCount = reviewClassified.filter(function (c) { return c.status === 'exact'; }).length;
             var possibleCount = reviewClassified.filter(function (c) { return c.status === 'possible'; }).length;
-            var importing = reviewClassified.filter(function (c) { return c.decision === 'import'; }).length;
-            var skipping = reviewClassified.filter(function (c) { return c.decision === 'skip'; }).length;
+            // v55.83-VI — one tested count: anything not set to "import" is skipped (a "possible" row nobody decided on included)
+            var counts = reviewCounts(reviewClassified);
+            var importing = counts.importing;
+            var skipping = counts.skipping;
             return (
               <div>
                 <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-3">
@@ -1506,10 +1450,12 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     🔍 Duplicate review needed / مراجعة التكرارات
                   </h3>
                   <p className="text-[12px] text-amber-900">
-                    Some rows in this statement already exist in your data. Review and decide each one below.
-                    Your import on April 12 and May 13 created ~100 duplicates because the system used to only check
-                    within the selected account. That bug is now fixed — we check across ALL accounts. /
+                    Some rows in this statement already exist in your data (checked across ALL accounts). /
                     بعض الصفوف موجودة بالفعل. راجع كل صف وحدد ما إذا كنت تريد استيراده أم تخطيه.
+                  </p>
+                  {/* v55.83-VI (Max, Nov 19: "skip all flagged or individually is not working") — it worked, but nothing on screen showed it */}
+                  <p className="text-[12px] font-bold text-amber-900 mt-1">
+                    Flagged rows are SKIPPED unless you choose “Import anyway”. Press “Confirm and import” to bring in the {importing} row{importing === 1 ? '' : 's'} that will be imported ({cleanCount} clean{counts.flaggedImporting > 0 ? ' + ' + counts.flaggedImporting + ' you chose to import anyway' : ''}); {skipping} will be skipped.
                   </p>
                 </div>
 
@@ -1553,7 +1499,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                           : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">🟡 POSSIBLE</span>;
                         var firstMatch = c.matches[0] || {};
                         return (
-                          <tr key={idx} className="border-b border-slate-100 align-top">
+                          <tr key={idx} className={'border-b border-slate-100 align-top ' + (c.decision === 'import' ? 'bg-emerald-50' : 'bg-slate-50 text-slate-400')} style={c.decision === 'import' ? undefined : { textDecoration: 'line-through', textDecorationColor: '#cbd5e1' }}>
                             <td className="px-2 py-2">{statusBadge}</td>
                             <td className="px-2 py-2 whitespace-nowrap">{c.row.date}</td>
                             <td className="px-2 py-2 text-right font-mono">{Number(c.row.amount).toLocaleString()}</td>
@@ -1566,13 +1512,16 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                             <td className="px-2 py-2 text-center">
                               <div className="inline-flex rounded border border-slate-300 overflow-hidden text-[10px] font-bold">
                                 <button onClick={function () { setReviewDecision(idx, 'skip'); }}
-                                  className={'px-2 py-1 ' + (c.decision === 'skip' ? 'bg-red-600 text-white' : 'bg-white text-slate-700 hover:bg-red-50')}>
+                                  className={'px-2 py-1 ' + (c.decision !== 'import' ? 'bg-red-600 text-white' : 'bg-white text-slate-700 hover:bg-red-50')}>
                                   Skip / تخطى
                                 </button>
                                 <button onClick={function () { setReviewDecision(idx, 'import'); }}
                                   className={'px-2 py-1 ' + (c.decision === 'import' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 hover:bg-emerald-50')}>
                                   Import anyway / استورد رغماً
                                 </button>
+                              </div>
+                              <div className={'mt-1 text-[10px] font-extrabold ' + (c.decision === 'import' ? 'text-emerald-700' : 'text-red-700')} style={{ textDecoration: 'none', display: 'block' }}>
+                                {c.decision === 'import' ? '✓ WILL IMPORT ANYWAY' : '✕ SKIPPED — will not be imported'}
                               </div>
                             </td>
                           </tr>
@@ -1584,15 +1533,17 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
 
                 <div className="mt-3 flex justify-between items-center flex-wrap gap-2">
                   <div className="flex gap-2">
-                    <button onClick={function () {
+                    {/* v55.83-VI — says what it did; when every flagged row is already skipped it says so instead of looking dead */}
+                    <button disabled={counts.allFlaggedSkipped} onClick={function () {
                       // Skip all flagged duplicates (default safe action)
                       setReviewClassified(function (prev) {
                         return prev.map(function (c) {
                           return c.status === 'clean' ? c : Object.assign({}, c, { decision: 'skip' });
                         });
                       });
-                    }} className="px-3 py-1.5 rounded bg-red-100 text-red-800 text-[11px] font-bold hover:bg-red-200">
-                      🛑 Skip all flagged / تخطى الكل
+                      toast?.success?.((exactCount + possibleCount) + ' flagged row' + (exactCount + possibleCount === 1 ? '' : 's') + ' will be skipped. Press “Confirm and import” to bring in the ' + cleanCount + ' clean row' + (cleanCount === 1 ? '' : 's') + '.');
+                    }} className={'px-3 py-1.5 rounded text-[11px] font-bold ' + (counts.allFlaggedSkipped ? 'bg-slate-100 text-slate-500 cursor-default' : 'bg-red-100 text-red-800 hover:bg-red-200')}>
+                      {counts.allFlaggedSkipped ? '✓ All ' + counts.flagged + ' flagged row' + (counts.flagged === 1 ? ' is' : 's are') + ' already skipped' : '🛑 Skip all flagged / تخطى الكل (' + counts.flaggedImporting + ' set to import)'}
                     </button>
                     {isAdmin && (
                       <button onClick={function () {
@@ -1617,7 +1568,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     </button>
                     <button onClick={function () { executeImport(reviewClassified, importAccount); }}
                       className="px-4 py-1.5 rounded bg-blue-600 text-white text-[11px] font-bold hover:bg-blue-700">
-                      Confirm and import / تأكيد واستيراد
+                      Confirm and import {importing} row{importing === 1 ? '' : 's'} / تأكيد واستيراد
                     </button>
                   </div>
                 </div>
@@ -1647,6 +1598,9 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 {importStats.overridden > 0 && (
                   <div className="text-amber-900 font-bold">⚠️ {importStats.overridden} flagged rows imported anyway (override) / تم تجاوز التحذير</div>
                 )}
+                {(importStats.perFile || []).length > 1 && (importStats.perFile || []).map((f, i) => (
+                  <div key={i} className="text-[12px] text-slate-700">📄 {f.file || 'file ' + (i + 1)}: <b>{f.imported}</b> of {f.selected} imported{f.imported < f.selected ? ' — ' + (f.selected - f.imported) + ' could not be saved' : ''}</div>
+                ))}
                 {importStats.skipped > (importStats.duplicates || 0) && (
                   <div className="text-slate-600">{importStats.skipped - (importStats.duplicates || 0)} errors / أخطاء</div>
                 )}

@@ -12,6 +12,7 @@ var path = require('path');
 var cleanup = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'TreasuryCleanupTab.jsx'), 'utf8');
 var reports = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ReportsTab.jsx'), 'utf8');
 var bank = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'EgyptBankTab.jsx'), 'utf8');
+var multiLib = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'lib', 'egypt-bank-multi-file.js'), 'utf8'); // v55.83-VI — the batch writing lives here
 var page = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'page.jsx'), 'utf8');
 
 var failures = [];
@@ -86,9 +87,9 @@ ok('6e: handles missing bank_import_batches table gracefully',
 
 // === 7. Import tags rows with batch_id (so rollback works) ===
 ok('7a: executeImport creates batch record',
-  /from\('bank_import_batches'\)\.insert\(\{[\s\S]{0,300}status: 'active'/.test(bank));
+  /var batchRow = \{[^}]*status: 'active' \};/.test(multiLib) && /from\('bank_import_batches'\)\.insert\(/.test(bank)); // v55.83-VI: one batch per file, written by writeImportPlan
 ok('7b: imported rows tagged with import_batch_id',
-  /import_batch_id: batchId/.test(bank));
+  /import_batch_id: batchId/.test(multiLib));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

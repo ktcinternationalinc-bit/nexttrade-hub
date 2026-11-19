@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VI',
+    date: '2026-11-19',
+    title: 'Egypt Bank: choose several statements at once, and a duplicate screen that shows what it will do',
+    items: [
+      { text: '**Egypt Bank → Import: choose several files in one go** (PDF, Excel or CSV, mixed). Hold Ctrl and click each file, or click the first and Shift-click the last. Every file is checked on its own.' },
+      { text: 'The preview shows **one line per file**: green when it was read (a PDF with its balance check), red with the reason when it was not. A file that is refused adds nothing and **does not stop the other files**.' },
+      { text: 'If the same bank line is in two of the files you chose (statements that overlap, or the same statement as Excel and as PDF), it is **unticked in the later file** and marked, so it comes in once. A line with only the same date and amount is also unticked — tick it back if it really is another payment. One earlier line can only ever cover one later line.' },
+      { text: 'The preview is in **pages of 200 rows** with Previous / Next, and a button to **show only the rows marked as copies**, so every row of every file can be reached and ticked. Ticks are kept when you change page.' },
+      { text: 'Nothing is saved until you press Import. Each file is saved as its own import, with its file name, so one statement can be undone under Import history without touching the others. The finish screen shows how many rows came from each file. If some rows of a file cannot be saved, that file’s import record is corrected to what was really saved.' },
+      { text: '**Duplicate review screen:** flagged rows were always skipped unless you chose “Import anyway”, but nothing on the screen showed it. Now every flagged row says **SKIPPED** (greyed, struck through) or **WILL IMPORT ANYWAY** (green), the top line says how many rows will come in and how many are skipped, the Confirm button carries the number, and “Skip all flagged” confirms what it did.' },
+      { text: 'A “possible duplicate” you did not decide on is skipped and is now counted as skipped on the finish screen.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/egypt-bank-multi-file.js (combineFiles, markCrossFileDuplicates with one identity per earlier row and exact matches reserved before date-and-amount matches, fileResultLines, previewPage, toggleRowInclude, reviewCounts, importPlan, writeImportPlan, groupRowsByFile). The preview is its own component, EgyptBankImportPreview, with no state and no data access. EgyptBankTab: handleFile reads each file through readOneFile (try/catch, no pop-ups; parseOneFile reports through an out object), the preview renders fileResultLines, executeImport writes importPlan groups with one bank_import_batches row per file (filename column, retried without it), the audit entry carries the file. The PDF gate and both PDF locks are unchanged and still per file.' },
+    ]
+  },
+  {
     version: 'v55.83-VG',
     date: '2026-11-19',
     title: 'Egypt Bank: import the bank’s PDF statement, and “hide one → hide all like it”. Profitability: search and view invoice',
