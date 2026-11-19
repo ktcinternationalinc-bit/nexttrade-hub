@@ -5599,7 +5599,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-VH</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-VO</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -6020,6 +6020,47 @@ function HubApp() {
                 </div>
               );
             })}
+            {/* v55.83-VO — NT Warehouse external links. These open the Nextrade
+                warehouse in a NEW TAB (they are NOT Hub tabs and render no Hub
+                content). Production is gated by the "NT Warehouse" switch
+                (Settings → Action Permissions, default OFF) or super admin. The
+                STAGING link is super-admin only and marked TEST so no one does
+                real work there. Neither link logs anyone in — the warehouse has
+                its own sign-in. */}
+            {(isSuperAdmin || modulePerms?.['NT Warehouse'] === true) && (
+              <div className="mb-1">
+                <div className="px-3 pt-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600 font-mono"
+                  style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                  <span className="text-zinc-700">// </span>NT WAREHOUSE
+                </div>
+                <a href="https://nextradeindustries.com/admin" target="_blank" rel="noopener noreferrer"
+                  onClick={() => setSidebarOpen(false)}
+                  className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50">
+                  <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
+                  <span className="truncate flex-1">
+                    <span>NT Warehouse</span>
+                    <span className="text-[9px] text-zinc-600 block leading-tight" style={{ direction: 'rtl' }}>مخزن نكست تريد</span>
+                  </span>
+                  <span className="text-zinc-600 text-[10px]">↗</span>
+                </a>
+                {isSuperAdmin && (
+                  <a href="https://fix.nextrade-staging.com/admin" target="_blank" rel="noopener noreferrer"
+                    onClick={() => setSidebarOpen(false)}
+                    title="Staging / test warehouse — do not perform real work here"
+                    className="w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 text-amber-400/90 border-transparent hover:text-amber-300 hover:bg-amber-900/10">
+                    <span className="w-4 flex items-center justify-center shrink-0 opacity-80"><Warehouse size={15} strokeWidth={2} /></span>
+                    {/* v55.83-VO (Codex 15:18 P2): the TEST badge sits on its own line OUTSIDE the
+                        truncating name span and does not shrink, so the warning is never clipped at
+                        the 220px sidebar width (desktop, mobile or RTL). */}
+                    <span className="flex-1 min-w-0">
+                      <span className="block truncate">NT Warehouse</span>
+                      <span className="text-[8px] font-mono mt-0.5 inline-block px-1 py-px rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 whitespace-nowrap">STAGING · TEST</span>
+                    </span>
+                    <span className="text-amber-500/70 text-[10px] shrink-0">↗</span>
+                  </a>
+                )}
+              </div>
+            )}
           </div>
           {/* Sign Out */}
           <div className="px-3 py-3 border-t border-zinc-800 mt-2">

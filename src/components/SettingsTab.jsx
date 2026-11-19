@@ -370,6 +370,7 @@ const MODULES = [
   'Edit CRM', 'View Costs', 'See Inventory Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
   'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Edit Open Accounts',
   'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
+  'NT Warehouse', // v55.83-VO — opt-in switch for the sidebar link to the live Nextrade warehouse
 ];
 
 // ============================================================
@@ -538,6 +539,8 @@ const ACTION_PERMS = [
   { key: 'invoice.create',                  label: 'ACCT-005 - Invoices: Create/Edit', desc: 'Create and edit Hub invoices and proformas. (Legacy "Edit Invoices" also grants this.)' },
   { key: 'purchase_orders.view',            label: 'ACCT-006 - Purchase Orders: View', desc: 'View internal purchase orders. Does NOT require Bank: View. NOTE: for launch back-compat, "Invoices: View" also currently opens POs until roles are assigned.' },
   { key: 'purchase_orders.edit',            label: 'ACCT-007 - Purchase Orders: Edit', desc: 'Create / edit / delete internal purchase orders. NOTE: for launch back-compat, "Invoices: Create/Edit" also currently grants this until roles are assigned.' },
+  // v55.83-VO — opt-in (default OFF). Shows the production "NT Warehouse" link in the sidebar, which opens nextradeindustries.com/admin in a new tab. It grants NO warehouse login — users still sign in to Nextrade themselves. The STAGING warehouse link is super-admin only and never controlled by this switch.
+  { key: 'NT Warehouse',                    label: 'NT Warehouse link',               desc: 'Shows the "NT Warehouse" link in the sidebar that opens the live Nextrade warehouse (nextradeindustries.com) in a new browser tab. Off by default. Does not log anyone in — the warehouse has its own sign-in.' },
 ];
 
 // v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)

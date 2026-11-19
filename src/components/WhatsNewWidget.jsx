@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VO',
+    date: '2026-11-19',
+    title: 'NT Warehouse link in the sidebar',
+    items: [
+      { text: 'The sidebar can now show an **NT Warehouse** link that opens the Nextrade warehouse in a new browser tab, so the Hub and the warehouse sit side by side. It does not sign you in — the warehouse has its own login.' },
+      { text: 'A super admin also sees a second link, **NT Warehouse · STAGING · TEST**, marked in amber. That one opens the test copy of the warehouse — do not do real work there.' },
+      { superAdminOnly: true, text: 'The production link is off by default. Turn it on per person in Settings → Permissions → Action Permissions → “NT Warehouse link”. Opening in a new tab is the first step; showing the warehouse inside the Hub (embedded) waits on a separate, approved change on the warehouse server.' },
+      { superAdminOnly: true, text: 'Technical: two <a target="_blank" rel="noopener noreferrer"> entries at the foot of the sidebar group list in page.jsx; production gated by isSuperAdmin || modulePerms["NT Warehouse"] === true, staging by isSuperAdmin only, its TEST badge on its own non-truncating line. New permission key "NT Warehouse" added to MODULES + ACTION_PERMS (default OFF) in SettingsTab. No Hub tab, route or data touched. Test vo-nt-warehouse-link.' },
+    ]
+  },
+  {
     version: 'v55.83-VH',
     date: '2026-11-19',
     title: 'Orders → Releases with no KTC invoice: shipped orders apart from the ones not shipped yet',
