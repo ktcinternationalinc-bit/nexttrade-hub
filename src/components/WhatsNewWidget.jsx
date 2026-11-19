@@ -33,11 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VJ',
+    date: '2026-11-19',
+    title: 'USA or Egypt is decided invoice by invoice — by its business and its currency',
+    items: [
+      { text: '**A customer can be both a USA and an Egypt customer.** Each invoice is now placed by its own business and currency, not by the customer: in the KTC USA business and in dollars → USA; in Egyptian pounds, or in the Kandil Egypt business → Egypt. Dollar invoices of customers marked “Egypt” that were left out of the USA reports now count there. Invoices in pounds are still never added to the dollar reports.' },
+      { text: 'The “Egypt / US” mark on a customer no longer moves that customer’s invoices between the two sides; it only matters for an invoice that belongs to no business at all (there are none today).' },
+      { text: 'Egypt Bank → “Correct this import record” counts the saved rows in a fixed order, so the count is right for very large imports too.' },
+      { superAdminOnly: true, text: 'Technical: businessOfInvoice order is now (1) wave_business_id set and not the KTC US business gives EG, (2) KTC US business gives EG when currency is EGP and US otherwise, regardless of the customer business_tag, (3) no business id falls back to the old tag, currency and source rules. Still a two-way US or EG answer: when other books (RTM, NextTrade) get invoices this needs a real business list. correctImportRecord pages with order(id).' },
+    ]
+  },
+  {
     version: 'v55.83-VI',
     date: '2026-11-19',
     title: 'Egypt Bank: choose several statements at once, and a duplicate screen that shows what it will do. USA reports: only KTC USA invoices',
     items: [
-      { text: '**USA reports no longer include invoices that belong to the Kandil Egypt business.** Two such invoices (number 1, Mamoon Al Sayad, 293,150 — the LUX one — and number 2190, 1.00) were being counted on the USA side of Profitability, the Sales report, P&L and the income statement because their customers were not marked as Egypt. They now count on the Egypt side only. Nothing was deleted or changed in the invoices themselves.' },
+      { text: '**USA reports no longer include invoices that belong to the Kandil Egypt business.** A few such invoices were being counted on the USA side of Profitability, the Sales report, P&L and the income statement because their customers were not marked as Egypt. They now count on the Egypt side only. Nothing was deleted or changed in the invoices themselves.' },
       { text: '**Egypt Bank → Import: choose several files in one go** (PDF, Excel or CSV, mixed). Hold Ctrl and click each file, or click the first and Shift-click the last. Every file is checked on its own.' },
       { text: 'The preview shows **one line per file**: green when it was read (a PDF with its balance check), red with the reason when it was not. A file that is refused adds nothing and **does not stop the other files**.' },
       { text: 'If the same bank line is in two of the files you chose (statements that overlap, or the same statement as Excel and as PDF), it is **unticked in the later file** and marked, so it comes in once. A line with only the same date and amount is also unticked — tick it back if it really is another payment. One earlier line can only ever cover one later line.' },

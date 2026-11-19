@@ -2,6 +2,15 @@
 // (Max, Oct 13, verbatim): "they should only come from the ones that are
 // entered or subject to pending move to wave. that is the usa business."
 //
+// v55.83-VJ (Max, Nov 19 2026) — HOW IT IS DECIDED NOW, in this order:
+//   1. the invoice is bound to ANOTHER Wave business (today: KANDIL EGYPT)      → EGYPT
+//   2. the invoice is bound to the KTC US business: in Egyptian pounds → EGYPT, otherwise → US
+//      (the customer's tag does not move it: one customer can be both a USA and an Egypt customer)
+//   3. the invoice has NO business at all → the older rules below (customer tag, currency, Wave linkage)
+// The answer is still only US or EG. When other books (RTM, NextTrade) carry invoices, step 1 must become a real business
+// list — another business must not silently mean Egypt.
+//
+// Older rules, now only for step 3:
 // US  = the invoice lives in Wave or is headed there: it came FROM Wave
 //       (source wave_import), is already IN Wave (wave_invoice_id), or is
 //       bound to a Wave business silo (wave_business_id — hub-created US
@@ -23,6 +32,11 @@ export function businessOfInvoice(inv, custTagById) {
   // currency says. It used to count as US just because it had some business id. An invoice with no business id at all keeps
   // the rules below (there are none on live today).
   if (inv.wave_business_id && inv.wave_business_id !== US_WAVE_BUSINESS_ID) { return 'EG'; }
+  // v55.83-VJ (Max, Nov 19 2026: a customer can be "both a usa and egyptian customer. but depends on the currency"; and "never by
+  // the customer alone") — an invoice IN THE KTC USA business is decided by ITS OWN currency: Egyptian pounds → Egypt, anything
+  // else → USA. The customer's egypt / us tag no longer moves such an invoice; the tag only decides invoices that carry no
+  // business at all (below).
+  if (inv.wave_business_id === US_WAVE_BUSINESS_ID) { return (inv.currency || 'USD') === 'EGP' ? 'EG' : 'US'; }
   var tag = custTagById ? custTagById[inv.accounting_customer_id] : null;
   if (tag === 'egypt') { return 'EG'; }
   if (tag === 'us') { return 'US'; }

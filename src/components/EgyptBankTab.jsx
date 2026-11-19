@@ -446,7 +446,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const correctImportRecord = async function (ix) {
     var f = importStats && importStats.perFile && importStats.perFile[ix]; if (!f || !f.batchId) { return; }
     var res = await reconcileBatchRecord({
-      readBatchRows: async function (id) { var all = []; var from = 0; while (true) { var r = await supabase.from('egypt_bank_transactions').select('amount').eq('import_batch_id', id).range(from, from + 999); if (!r || r.error || !r.data) { return { ok: false }; } all = all.concat(r.data); if (r.data.length < 1000) { break; } from += 1000; } return { ok: true, count: all.length, total: all.reduce(function (a, x) { return a + Number(x.amount || 0); }, 0) }; },
+      readBatchRows: async function (id) { var all = []; var from = 0; while (true) { var r = await supabase.from('egypt_bank_transactions').select('id, amount').eq('import_batch_id', id).order('id', { ascending: true }).range(from, from + 999); if (!r || r.error || !r.data) { return { ok: false }; } all = all.concat(r.data); if (r.data.length < 1000) { break; } from += 1000; } return { ok: true, count: all.length, total: all.reduce(function (a, x) { return a + Number(x.amount || 0); }, 0) }; },
       updateBatch: batchRecordUpdate,
     }, f.batchId);
     if (res.ok) { toast?.success?.(res.message); setImportStats(function (prev) { if (!prev) { return prev; } return Object.assign({}, prev, { perFile: prev.perFile.map(function (p, i) { return i === ix ? Object.assign({}, p, { historyOk: true, warning: '' }) : p; }) }); }); }
