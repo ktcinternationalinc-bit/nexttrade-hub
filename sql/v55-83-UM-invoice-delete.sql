@@ -8,8 +8,8 @@
 --   3. The browser can no longer delete invoices / proformas, nor change their status (void / cancelled / archived / restored):
 --      editing an invoice is not affected.
 --   4. A person can only delete / void records of a business they belong to (the super admin: every business).
--- Run AFTER sql/v55-83-TQ-add-transactions-permission.sql. Changes no invoice or payment. It may ADD business-membership rows for
--- users who have none (single-business case only — see the end). Safe to run more than once.
+-- Run AFTER sql/v55-83-TQ-add-transactions-permission.sql. Changes no data (no invoice, payment or membership). Safe to run more than once.
+-- People who are not a member of a business cannot delete / void its invoices: see sql/v55-83-UM-business-members-OPTIONAL.sql.
 -- Run in: Supabase → your project → SQL Editor → New query → paste all of this → Run
 -- ═══════════════════════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION public.hub_guard_sensitive_grant() RETURNS trigger
@@ -115,6 +115,14 @@ END $$;
 REVOKE ALL ON FUNCTION public.hub_invoice_lifecycle(jsonb) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hub_invoice_lifecycle(jsonb) TO service_role;
 
+-- the change-NOTHING check, under its own name (Codex 05:46 P1): the Hub calls THIS before it touches Wave. A database that does not
+-- have it (this script not run, or an older copy of the step) answers "function not found" and the Hub stops — the deleting step
+-- itself is never used as a check. It always forces check_only, whatever is passed in.
+CREATE OR REPLACE FUNCTION public.hub_invoice_lifecycle_check(p jsonb) RETURNS jsonb
+LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$ SELECT public.hub_invoice_lifecycle(coalesce(p, '{}'::jsonb) || jsonb_build_object('check_only', true)) $$;
+REVOKE ALL ON FUNCTION public.hub_invoice_lifecycle_check(jsonb) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hub_invoice_lifecycle_check(jsonb) TO service_role;
+
 -- ── the browser may edit an invoice, but not change its status (void / cancelled / archived / restored) or delete it
 CREATE OR REPLACE FUNCTION public.hub_guard_invoice_status() RETURNS trigger
 LANGUAGE plpgsql SET search_path = '' AS $$
@@ -139,22 +147,6 @@ BEGIN
     EXECUTE 'REVOKE DELETE ON TABLE public.accounting_proformas FROM public, anon, authenticated';
     EXECUTE 'DROP TRIGGER IF EXISTS hub_guard_invoice_status ON public.accounting_proformas';
     EXECUTE 'CREATE TRIGGER hub_guard_invoice_status BEFORE UPDATE ON public.accounting_proformas FOR EACH ROW EXECUTE FUNCTION public.hub_guard_invoice_status()';
-  END IF;
-END $$;
-
--- ── business membership top-up. The Hub's own rule (sql/v55-83-y-phase1-hardening.sql): "every current user belongs to the single
---    business". Users added since then have no membership row and would be refused by the business check above. While the Hub has
---    exactly ONE business, each user without any membership is added to it (as 'member'). With two or more businesses nothing is
---    added here: the super admin decides who belongs where. Nobody is removed or changed.
-DO $$
-DECLARE v_n int;
-BEGIN
-  -- dynamic SQL: these tables may not exist in every database
-  IF to_regclass('public.user_business_memberships') IS NOT NULL AND to_regclass('public.businesses') IS NOT NULL THEN
-    EXECUTE 'SELECT count(*) FROM public.businesses' INTO v_n;
-    IF v_n = 1 THEN
-      EXECUTE 'INSERT INTO public.user_business_memberships (user_id, business_id, role) SELECT u.id, (SELECT id FROM public.businesses LIMIT 1), ''member'' FROM public.users u WHERE NOT EXISTS (SELECT 1 FROM public.user_business_memberships m WHERE m.user_id = u.id) ON CONFLICT DO NOTHING';
-    END IF;
   END IF;
 END $$;
 

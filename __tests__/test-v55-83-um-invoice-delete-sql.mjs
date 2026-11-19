@@ -193,13 +193,22 @@ try {
   var sc8 = await life({ kind: 'invoice', action: 'void', id: I(1), actor: U1 });
   check('scope: a member acts on their own business', sc8.ok === true, sc8);
   // top-up: ONE business → users without any membership are added; nobody else changes
+  var optF = fs.readFileSync(path.join(root, 'sql/v55-83-UM-business-members-OPTIONAL.sql'), 'utf8').replace(/\r\n/g, '\n');
+  var topup = optF.substring(optF.indexOf('/*\n') + 3, optF.lastIndexOf('*/'));
   await db.query(sql);
+  check('the UM script itself adds NO memberships (an access change needs approval: it is in the OPTIONAL script)', (await one('SELECT count(*)::int AS n FROM public.user_business_memberships'))[0].n === 1);
+  await db.query(topup);
   var mem = await one('SELECT user_id::text AS u, business_id::text AS b FROM public.user_business_memberships ORDER BY 1');
   check('top-up with ONE business: every user without a membership is added to it (3 users, all in business A)', mem.length === 3 && mem.every(function (m) { return m.b === BA; }), mem);
   check('… so that person can now act there', (await life({ kind: 'invoice', action: 'void', id: I(2), actor: U3 })).ok === true);
   await db.query("INSERT INTO public.businesses (id, name) VALUES ('" + BB + "', 'Second'); INSERT INTO public.users VALUES ('aaaaaaaa-0000-0000-0000-000000000004', NULL, 'staff');");
-  await db.query(sql);
+  await db.query(topup);
   check('top-up with TWO businesses: nobody is added anywhere (the super admin decides)', (await one('SELECT count(*)::int AS n FROM public.user_business_memberships'))[0].n === 3);
+  // ── Codex 05:46 P1 — the check has its OWN name and can never delete
+  await seed();
+  var ck = await as('service', 'SELECT public.hub_invoice_lifecycle_check($1::jsonb) AS r', [JSON.stringify({ kind: 'invoice', action: 'delete', id: I(1), actor: ACTOR, is_super: true, check_only: false })]);
+  check('hub_invoice_lifecycle_check: even when told check_only=false it changes NOTHING (invoice still there) and answers check_only', !ck.error && ck.rows[0].r.ok === true && ck.rows[0].r.check_only === true && (await one("SELECT count(*)::int AS n FROM public.accounting_invoices WHERE id = '" + I(1) + "'"))[0].n === 1, ck);
+  check('… and the browser roles cannot call it', /permission denied/.test((await as(STAFF, "SELECT public.hub_invoice_lifecycle_check('{}'::jsonb)")).error || ''));
 } catch (e) { failN++; console.error('  ✗ crashed:', e.message); }
 finally {
   try { if (db2) { await db2.end(); } } catch (e) {}

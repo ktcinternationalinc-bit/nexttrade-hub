@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UV',
+    date: '2026-11-19',
+    title: "Wires and bills: payments respect what open wires hold; a paid bill cannot be voided, even at the same moment",
+    items: [
+      { text: "A payment on a bill can no longer use money that an open wire already holds for that bill (example: $100 bill, $80 on a draft wire — only $20 can be paid another way). The wire’s own payment is not affected." },
+      { text: "A void or deleted bill takes no new payment, and a bill with a payment that is not undone (or on an open wire) cannot be voided or deleted — the database checks it, so two people acting at the same moment cannot get around it." },
+      { text: "“Delete (incl. Wave)” uses a separate check-only step that can never delete anything by itself." },
+      { superAdminOnly: true, text: "Technical: run sql/v55-83-US-partial-wires.sql (again if already run) and sql/v55-83-UM-invoice-delete.sql. The UM script no longer adds business memberships — that is sql/v55-83-UM-business-members-OPTIONAL.sql (preview first). Postgres 16: US 27/27, UM 38/38; Wave preflight 15/15." },
+    ],
+  },
+  {
     version: 'v55.83-US',
     date: '2026-11-19',
     title: 'Wires: a partly wired bill stays available for its remaining amount',

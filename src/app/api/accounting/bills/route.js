@@ -1964,6 +1964,8 @@ export async function POST(req) {
   } catch (e) {
     // v55.83-UQ — the database refused the exact same bill (two people saving it at the same moment): a plain 409, not a server error
     if (/HUB_EXACT_DUPLICATE/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: exactDupMessage(e.message).replace('It was NOT added again.', 'It was NOT saved.'), duplicate: true, duplicate_level: 'exact' }, { status: 409 }); }
+    // v55.83-US — a database guard refused it (payment over what is left / void while paid): a plain 409 with its own words
+    if (/HUB_GUARD/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: String(e.message).replace(/^[sS]*HUB_GUARD:s*/, '') + ' Nothing was changed.' }, { status: 409 }); }
     return NextResponse.json({ error: (e && e.message) || 'Bills request failed.' }, { status: 500 });
   }
 }

@@ -47,6 +47,7 @@ function fresh(invPatch, extra) {
   state.db.t.accounting_invoice_payments = []; state.db.t.payment_matches = []; state.db.t.wave_sync_log = [];
   Object.assign(state.db.t, extra || {});
   state.db.rpcs.hub_invoice_lifecycle = function (args) { return step(args.p); };
+  state.db.rpcs.hub_invoice_lifecycle_check = function (args) { return step(Object.assign({}, args.p, { check_only: true })); };
 }
 function call(body) { return R.POST(new Request('http://x/api', { method: 'POST', body: JSON.stringify(Object.assign({ wave_business_id: WB, hub_record_id: ID, confirm_delete: true }, body || {})), headers: { 'content-type': 'application/json', authorization: 'Bearer t' } })).then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); }); }
 function inv() { return (state.db.t.accounting_invoices || [])[0]; }
@@ -68,8 +69,13 @@ function untouched() { var i = inv(); return !!i && i.wave_invoice_id === 'W9' &
   check('no switch (Accounting Manager role alone) → 403 before anything; the database step is never called', r5.status === 403 && untouched() && state.rpcCalls.length === 0, r5);
   fresh(); state.who = { error: 'Sign in again.', status: 401 }; var r6 = await call({ user_id: 'u-super' });
   check('no verified sign-in → 401, nothing called', r6.status === 401 && untouched() && state.rpcCalls.length === 0, r6);
-  fresh(); state.db.rpcs.hub_invoice_lifecycle = function () { return { data: null, error: { message: 'Could not find the function public.hub_invoice_lifecycle(p) in the schema cache' } }; }; var r7 = await call();
+  fresh(); state.db.rpcs.hub_invoice_lifecycle_check = function () { return { data: null, error: { message: 'Could not find the function public.hub_invoice_lifecycle_check(p) in the schema cache' } }; }; var r7 = await call();
   check('database step not installed → 409 "run the UM SQL", ZERO Wave calls, untouched', r7.status === 409 && /v55-83-UM-invoice-delete\.sql/.test(r7.j.error) && untouched(), r7);
+  // Codex 05:46 P1 — an OLDER database: only the old step exists, and it would DELETE whatever flags it is given
+  fresh(); delete state.db.rpcs.hub_invoice_lifecycle_check; var oldCalls = 0;
+  state.db.rpcs.hub_invoice_lifecycle = function (args) { oldCalls++; state.db.t.accounting_invoices = []; return { data: { ok: true, action: 'delete', released: 0 }, error: null }; };
+  var rOld = await call();
+  check('OLD database step installed (no separate check function): refused, the old step is NEVER called, ZERO Wave calls, the invoice is still there', rOld.status >= 400 && /Nothing was deleted anywhere/.test(rOld.j.error) && oldCalls === 0 && untouched(), [rOld, oldCalls]);
   fresh({ source: 'wave_import' }); var r8 = await call();
   check('imported from Wave → refused, ZERO Wave calls', r8.status === 409 && untouched(), r8);
   // the good path, in order
@@ -78,7 +84,7 @@ function untouched() { var i = inv(); return !!i && i.wave_invoice_id === 'W9' &
   fresh(); state.waveOk = false; var w = await call();
   check('Wave refuses → nothing deleted anywhere, the Hub step never run for real', w.status === 502 && !!inv() && inv().wave_invoice_id === 'W9' && state.rpcCalls.length === 1, w);
   // a payment recorded in the moment between the check and the Hub step
-  fresh(); var n = 0; state.db.rpcs.hub_invoice_lifecycle = function (args) { n++; if (n === 2) { state.db.t.accounting_invoice_payments.push({ id: 'late', accounting_invoice_id: ID, amount: 1 }); } return step(args.p); };
+  fresh(); state.db.rpcs.hub_invoice_lifecycle = function (args) { if (true) { state.db.t.accounting_invoice_payments.push({ id: 'late', accounting_invoice_id: ID, amount: 1 }); } return step(args.p); };
   var race = await call();
   check('a payment recorded between the check and the Hub step: the truth is reported — Wave copy deleted, Hub invoice kept (unlinked), told to void / archive (not "use Delete")', race.status === 500 && race.j.deleted_in_wave === true && /NOT deleted/.test(race.j.error) && /void or archive it there/.test(race.j.error) && !/use the normal Delete/.test(race.j.error) && !!inv() && inv().wave_invoice_id === null && state.db.t.accounting_invoice_payments.length === 1, race);
   console.log('\nUM Wave delete preflight: ' + pass + ' passed, ' + failN + ' failed');

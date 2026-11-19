@@ -100,9 +100,9 @@ export async function POST(req) {
     // v55.83-UM (Codex 21:50 P1) — BEFORE anything is sent to Wave, the database step runs every check on THIS invoice for THIS person and
     // changes nothing (check_only): its state (archived / void / cancelled), payments and payment matches, imported-from-Wave, and the
     // person's business. Any blocker → zero Wave calls, zero changes. (It also proves the step is installed.)
-    var pre = await db.rpc('hub_invoice_lifecycle', { p: { kind: 'invoice', action: 'delete', id: hubId, actor: by, is_super: _ctxD.isSuperAdmin === true, after_wave_delete: true, check_only: true } });
+    var pre = await db.rpc('hub_invoice_lifecycle_check', { p: { kind: 'invoice', action: 'delete', id: hubId, actor: by, is_super: _ctxD.isSuperAdmin === true, after_wave_delete: true, check_only: true } });
     if (pre.error) {
-      var preMissing = /hub_invoice_lifecycle/.test(String(pre.error.message || '')) && /does not exist|Could not find|schema cache/i.test(String(pre.error.message || ''));
+      var preMissing = /hub_invoice_lifecycle_check/.test(String(pre.error.message || '')) && /does not exist|Could not find|schema cache/i.test(String(pre.error.message || ''));
       return NextResponse.json({ ok: false, error: (preMissing ? LIFECYCLE_SQL_MISSING : 'Could not check the invoice (' + pre.error.message + ').') + ' Nothing was deleted anywhere.', blocked: true }, { status: preMissing ? 409 : 500 });
     }
     if (!pre.data || pre.data.ok !== true || pre.data.check_only !== true) {
