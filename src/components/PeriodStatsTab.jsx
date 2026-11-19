@@ -58,7 +58,8 @@ export default function PeriodStatsTab(props) {
   var canView = VS.access;
   var toast = props.toast || { success: function () {}, error: function () {} };
 
-  var s1 = useState('2026-06-01'); var from = s1[0]; var setFrom = s1[1];
+  // v55.83-VD (Max, Nov 19: "i need the full year in the financial reports") — the Financial Reports screen opens this from 1 January
+  var s1 = useState(/^\d{4}-\d{2}-\d{2}$/.test(String(props.initialFrom || '')) ? props.initialFrom : '2026-06-01'); var from = s1[0]; var setFrom = s1[1];
   var s2 = useState(TODAY); var to = s2[0]; var setTo = s2[1];
   var sSp = useState(null); var spCat = sSp[0]; var setSpCat = sSp[1]; // v55.83-PQ — spending-by-category drill (category key or '' = uncategorized, 'transfer')
   // v55.83-QY — one tax/real-cost switch PER paid-through company (RTM

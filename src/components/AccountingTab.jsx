@@ -203,7 +203,7 @@ export default function AccountingTab(props) {
       {alive('period_stats') && <div className="p-3" style={shown('period_stats')}><PeriodStatsTab {...props} onGo={goFrom} /></div>}
       {sub === 'categories' && <div className="p-3"><ExpenseRulesTab {...props} /></div>}
       {alive('all_txns') && <div className="p-3" style={shown('all_txns')}><AllTransactionsTab {...props} onGo={goFrom} /></div>}
-      {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports />}
+      {sub === 'clickbooks_reports' && reportsEnabled && canClickbooks && <ClickBooksUSReports {...props} onGo={goFrom} />}
       {sub === 'clickbooks_admin' && clickbooksEnabled && <ClickBooksAdmin workflowsEnabled={workflowsEnabled} cutoverEnabled={cutoverEnabled} canClickbooks={canClickbooks} />}
       {sub === 'audit' && <div className="p-3"><AuditTrailTab userProfile={userProfile} /></div>}
       {sub === 'company' && <CompanyProfileTab {...props} />}

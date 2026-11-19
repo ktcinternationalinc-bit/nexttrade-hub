@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VD',
+    date: '2026-11-19',
+    title: 'Financial Reports: the full year, from the Hub’s own records',
+    items: [
+      { text: 'Accounting → 📊 Financial Reports now opens with a **full-year section**: the income statement, invoices and bills from **1 January to today**, built from what is in the Hub (invoices, vendor bills and the categorised bank record). You can change the dates inside it.' },
+      { text: 'The ledger reports underneath (Profit & Loss, Balance Sheet, Tax Summary…) only hold entries from the ledger’s opening date, 31 October 2026, onward — the screen now says so instead of showing empty figures with no explanation.' },
+      { text: 'The full-year section is cash basis and is not a balance sheet. It is as complete as the bills and categories entered in the Hub.' },
+      { superAdminOnly: true, text: 'Technical: ClickBooksUSReports renders PeriodStatsTab with the caller props and initialFrom = 1 January of the current year, above the ledger section; AccountingTab passes props and onGo; PeriodStatsTab takes initialFrom only when it is a yyyy-mm-dd date, else 2026-06-01 as before. Same period_stats route, no number changes. Separately (SQL, run by Max 19 Nov): the four scheduled ClickBooks job functions got default_transaction_isolation repeatable read, because the ledger sync raised CB_REPEATABLE_READ_REQUIRED on every scheduled run. Test vd-full-year-financial-reports.' },
+    ]
+  },
+  {
     version: 'v55.83-UF',
     date: '2026-11-19',
     title: 'Phone: safer voicemail text and a correct phone check',
