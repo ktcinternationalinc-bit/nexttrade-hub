@@ -2,7 +2,7 @@
 -- v55.83-UZ — KTC EGYPT and MOUSTAFA customers: CNF is their USUAL basis (Max, Nov 19 2026)
 -- "please make all ktc egypt and moustafa orders to be cnf and thus shipping to be removed from prices (unless there is a
 --  shipping line item in the invoice)"
--- Written by scripts/uz-make-cnf-sql.js for exactly 2 customer(s) Max confirmed.
+-- Written by scripts/uz-make-cnf-sql.js for exactly 6 customer(s) Max confirmed.
 --
 -- What it does: sets pl_customer_terms.basis = 'CNF' for EXACTLY the customers listed (id + the name Max saw). Nothing else.
 -- The Profitability report then reads every invoice of those customers that has no setting of its own as CNF with the shipping
@@ -18,7 +18,11 @@
 -- ── STEP 1 · PREVIEW (read-only — changes nothing). One cell of JSON: copy it to Claude. ─────────────────────────────
 WITH approved(id, name) AS (VALUES
   ('2f2b2700-916b-4280-8751-dfe3f82322a8'::uuid, 'KTC EGYPT FOR IMPORT AND EXPORT'::text),
-  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text)
+  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text),
+  ('7b0b27b5-a69d-4027-8bd9-5d31e93fa7f9'::uuid, 'Moustafa Tosha'::text),
+  ('27132608-be06-4ca3-9e27-9fb0d7549a1a'::uuid, 'SAAD EGYPT'::text),
+  ('52ca5339-a6a8-493e-b5d7-1d7ce88630cf'::uuid, 'Saad Moustafa'::text),
+  ('f6d0a5f6-0a7f-4907-b3fc-5e9b5857e91f'::uuid, 'Saeed Moustafa'::text)
 ), lines AS (
   SELECT it.invoice_id, coalesce(nullif(btrim(it.wave_product_name), ''), it.description, '') AS nm, coalesce(it.quantity, 0) * coalesce(it.unit_price, 0) AS amt
   FROM public.accounting_invoice_items it
@@ -62,7 +66,11 @@ DECLARE
 BEGIN
   CREATE TEMP TABLE uz_approved ON COMMIT DROP AS SELECT * FROM (VALUES
   ('2f2b2700-916b-4280-8751-dfe3f82322a8'::uuid, 'KTC EGYPT FOR IMPORT AND EXPORT'::text),
-  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text)
+  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text),
+  ('7b0b27b5-a69d-4027-8bd9-5d31e93fa7f9'::uuid, 'Moustafa Tosha'::text),
+  ('27132608-be06-4ca3-9e27-9fb0d7549a1a'::uuid, 'SAAD EGYPT'::text),
+  ('52ca5339-a6a8-493e-b5d7-1d7ce88630cf'::uuid, 'Saad Moustafa'::text),
+  ('f6d0a5f6-0a7f-4907-b3fc-5e9b5857e91f'::uuid, 'Saeed Moustafa'::text)
   ) AS a(id, name);
   SELECT count(*), count(*) - count(DISTINCT id) INTO n_listed, n_dup FROM uz_approved;
   SELECT count(*) INTO n_ok FROM uz_approved a JOIN public.accounting_customers c ON c.id = a.id AND coalesce(c.company_name, c.contact_name, '') = a.name;
@@ -90,7 +98,11 @@ END $$;
 -- ── STEP 3 · CHECK (read-only): every listed customer must show CNF ────────────────────────────────────────────────
 WITH approved(id, name) AS (VALUES
   ('2f2b2700-916b-4280-8751-dfe3f82322a8'::uuid, 'KTC EGYPT FOR IMPORT AND EXPORT'::text),
-  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text)
+  ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text),
+  ('7b0b27b5-a69d-4027-8bd9-5d31e93fa7f9'::uuid, 'Moustafa Tosha'::text),
+  ('27132608-be06-4ca3-9e27-9fb0d7549a1a'::uuid, 'SAAD EGYPT'::text),
+  ('52ca5339-a6a8-493e-b5d7-1d7ce88630cf'::uuid, 'Saad Moustafa'::text),
+  ('f6d0a5f6-0a7f-4907-b3fc-5e9b5857e91f'::uuid, 'Saeed Moustafa'::text)
 )
 SELECT a.name AS customer, ct.basis AS usual_basis, CASE WHEN ct.basis = 'CNF' THEN 'OK' ELSE 'NOT SET — tell Claude' END AS result,
        (SELECT count(*) FROM public.hub_backup_uz_customer_terms b WHERE b.customer_id = a.id) AS copies_saved
