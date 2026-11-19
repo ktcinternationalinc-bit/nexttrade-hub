@@ -86,6 +86,24 @@ export function foamFactors(factors) {
   u.yd = FOAM_LB_PER_YARD; u.lm = FOAM_LB_PER_YARD;
   return { units: u, byProduct: f.byProduct };
 }
+// v55.83-VQ (Max, Nov 19 2026: "headliner is 1.25 lbs per yard... please fix that in profit sections") — a LINE that says HEADLINER
+// (also written "head liner" / "head-liner") weighs 1.25 lb per YARD. Like foam, the answer comes only from the line's own
+// product name and description, never from the merged group's label. Only yards change: pounds, kilos, tons and linear metres
+// stay as they are (Max said per yard). A line that says headliner AND foam is counted as HEADLINER (the product, 1.25) and
+// flagged so a person can look — the two rules give different weights and only one can apply.
+export var HEADLINER_LB_PER_YARD = 1.25;
+export function isHeadlinerLine(productName, description) { var rx = /head[\s-]*liner/i; return rx.test(String(productName || '')) || rx.test(String(description || '')); }
+export function headlinerFactors(factors) {
+  var f = factors || {}; var u = Object.assign({}, f.units || DEFAULT_UNIT_FACTORS);
+  u.yd = HEADLINER_LB_PER_YARD;
+  return { units: u, byProduct: f.byProduct };
+}
+// THE one place that picks the pounds-per-unit table of a line: headliner first, then foam, else the standard table.
+export function weightFactorsFor(productName, description, factors) {
+  if (isHeadlinerLine(productName, description)) { return headlinerFactors(factors); }
+  if (isFoamLine(productName, description)) { return foamFactors(factors); }
+  return factors;
+}
 // v55.83-TE (Max, Nov 16: "why is there no cost when there should be" — Stock Paper linked to "Texas Paper (LBS)" …) — a supplier
 // bill line whose unit field is empty but whose DESCRIPTION states the unit. This reads what is printed; it does not guess.
 // Exactly one unit word must be present; two different ones ("lbs … per ton") = still unknown.
@@ -294,7 +312,10 @@ export function buildCells(input) {
       // line's own name. NEVER the merged group's name: renaming or merging a group must not change a weight.
       var foam = ln.foam === true || (ln.foam !== false && isFoamLine(ln.description, ''));
       if (ln.foam_conflict === true || foamEvidenceConflict(ln.description, '')) { flag('foam_evidence_conflict', inv, { line: ln.description }); }
-      var fx = foam ? foamFactors(factors) : factors;
+      // v55.83-VQ — headliner: what the caller worked out from the line's product name + description (ln.headliner), else the line's own name
+      var headliner = ln.headliner === true || (ln.headliner !== false && isHeadlinerLine(ln.description, ''));
+      if (headliner && foam) { flag('headliner_and_foam', inv, { line: ln.description }); }
+      var fx = headliner ? headlinerFactors(factors) : (foam ? foamFactors(factors) : factors);
       var lb = toPounds(ln.qty, ln.unit, pKey, fx);
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
       goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, fx: fx });

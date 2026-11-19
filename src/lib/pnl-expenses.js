@@ -46,7 +46,9 @@ export function letterOf(cat) {
   if (/commission/.test(text)) { return 'in_profit'; }
   if (/\btax/.test(text)) { return 'E'; }
   if (/payroll|salar|wage|labou?r|staff/.test(text)) { return 'D'; }
-  if (/partner|management fee|professional|service fee/.test(text) || /^__pt_.*_fee$/.test(key)) { return 'C'; }
+  // Max, Nov 19: "professional fee is not a partner fee" — C is ONLY a category named partner fee / management fee. Professional
+  // fees, and what is left of the money sent to RTM / NextTrade after the bills it paid (their service fee), are office costs → A.
+  if (/partner|management fee/.test(text)) { return 'C'; }
   if (/vendor payment|supplier|purchase|freight|truck|shipping|logistic|brokerage|bonded|customs|inspection/.test(text)) { return 'in_profit'; }
   return 'A';
 }
@@ -85,4 +87,70 @@ export function realCostCategories(spending, adjust, fold) {
   var folded = fold(cats);
   var unc = (spending.uncategorized && Number(spending.uncategorized.total)) || 0;
   return { cats: folded, uncategorized: Math.round((unc + (Number(folded.uncShift) || 0)) * 100) / 100 };
+}
+
+// ── v55.83-VQ (Codex 19 Nov 22:20 / 22:35) — WHICH dates are asked, and what an answer means. All pure, so the flow is tested.
+// The scope of a set of answers: grouping, the report's own dates and the person. Answers from another scope are never shown.
+export function expenseScope(gran, reportFrom, reportTo, userId) { return [gran || '', reportFrom || '', reportTo || '', userId || ''].join('|'); }
+
+// One request per period, with the period's dates CUT to the report's own dates — a report for 10–19 Nov asks for 10–19 Nov,
+// not the whole of November — so the profit and the expenses of a row always cover the same days. `partial` says it was cut.
+export function expenseRequests(keys, gran, reportFrom, reportTo) {
+  var out = [];
+  (keys || []).forEach(function (k) {
+    var r = bucketRange(k, gran); if (!r) { return; }
+    var f = reportFrom && reportFrom > r.from ? reportFrom : r.from; var t = reportTo && reportTo < r.to ? reportTo : r.to;
+    if (f > t) { return; }
+    out.push({ key: k, from: f, to: t, partial: f !== r.from || t !== r.to });
+  });
+  return out;
+}
+
+// which of those still have to be asked: the ones with no answer yet, and — when asked to retry — the ones that failed.
+// `ignoreCache` = a new report was loaded: every period is asked again, whatever was known before.
+export function pendingRequests(requests, cache, scope, opts) {
+  var o = opts || {};
+  return (requests || []).filter(function (q) { if (o.ignoreCache) { return true; } var e = cache ? cache[scope + '|' + q.key] : null; return !e || (o.retryErrors && e.status === 'error'); });
+}
+
+// What the Income Statement's answer means for one request. The answer must be for EXACTLY the dates asked (both ends): when
+// the server answered for other dates (dates locked for this person), the figures are not used at all.
+export function readExpenseAnswer(j, req, adjust, fold) {
+  if (!j || j.ok !== true) { return { status: 'error', why: (j && j.error) || 'The expenses could not be loaded.', from: req.from, to: req.to, partial: !!req.partial }; }
+  if (j.from !== req.from || j.to !== req.to) { return { status: 'outside', why: 'Expenses for ' + req.from + ' → ' + req.to + ' are not open to you (the Income Statement only answers for ' + j.from + ' → ' + j.to + ').', from: req.from, to: req.to, partial: !!req.partial }; }
+  if (!j.spending) { return { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.', from: req.from, to: req.to, partial: !!req.partial }; }
+  var rc = realCostCategories(j.spending, adjust, fold);
+  return { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), from: j.from, to: j.to, partial: !!req.partial };
+}
+
+// Asks for the periods one after another. o = { requests, fetchOne(req) → Promise of the answer, put(key, result),
+// isCurrent() → false once a newer report / grouping / person has replaced this run, adjust, fold }.
+// A failed request is recorded as an error for THAT period and the run goes on. An answer that arrives after the run was
+// replaced is thrown away. Returns how it ended: { asked, done, superseded }.
+export async function loadExpensePeriods(o) {
+  var reqs = o.requests || []; var done = 0;
+  reqs.forEach(function (q) { o.put(q.key, { status: 'loading', from: q.from, to: q.to, partial: !!q.partial }); });
+  for (var i = 0; i < reqs.length; i++) {
+    var q = reqs[i]; var res;
+    if (!o.isCurrent()) { return { asked: reqs.length, done: done, superseded: true }; }
+    try { res = readExpenseAnswer(await o.fetchOne(q), q, o.adjust, o.fold); } catch (e) { res = { status: 'error', why: 'The expenses could not be loaded.', from: q.from, to: q.to, partial: !!q.partial }; }
+    if (!o.isCurrent()) { return { asked: reqs.length, done: done, superseded: true }; }
+    o.put(q.key, res); done += 1;
+  }
+  return { asked: reqs.length, done: done, superseded: false };
+}
+
+// The Total row: the sum of the periods — and whether it is the whole story. `complete` only when EVERY period of the report
+// has an answer; otherwise the final figure of the total is not shown at all (a total with periods missing is not a total).
+export function totalExpenses(keys, cache, scope) {
+  var t = { status: 'ok', cols: expenseColumns([], 0), complete: true, loaded: 0, loading: 0, failed: 0, unavailable: 0, missing: 0, periods: (keys || []).length };
+  (keys || []).forEach(function (k) {
+    var e = cache ? cache[scope + '|' + k] : null;
+    if (!e) { t.missing += 1; t.complete = false; return; }
+    if (e.status === 'loading') { t.loading += 1; t.complete = false; return; }
+    if (e.status === 'error') { t.failed += 1; t.complete = false; return; }
+    if (e.status !== 'ok') { t.unavailable += 1; t.complete = false; return; }
+    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total;
+  });
+  return t;
 }

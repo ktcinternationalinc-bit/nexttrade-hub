@@ -11,8 +11,8 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, periodBreakdown, linesToFix } from '../lib/pnl-period';
-import { bucketRange, expenseColumns, finalPnl, realCostCategories } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix } from '../lib/pnl-period';
+import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
@@ -48,6 +48,7 @@ var FLAG_WORDS = {
   two_trucking_bills_on_one_release: 'TWO trucking bills on one release (only one is allowed)',
   warehouse_cost_not_usable: 'The warehouse has this release but its shipping cost cannot be used yet (a part is missing, or two orders share the release)', // v55.83-TG
   basis_not_stated_on_invoice: 'The invoice does not say CNF or EXW — basis guessed by the rule, please check', // v55.83-TG
+  headliner_and_foam: 'A line says both headliner and foam. It is counted as HEADLINER (1.25 lb per yard), not foam (3 lb) — fix the name if that is wrong', // v55.83-VQ
   foam_evidence_conflict: 'A line says both “no foam” and foam (product name vs description). It is counted as NOT foam (2.5 lb per yard) — fix the name if it is foam', // v55.83-UZ
   basis_assumed_from_shipping_line:'The invoice has a shipping line, so shipping is taken as charged on that line — NOT inside the goods price (Max’s rule). Set CNF/EXW on the invoice to confirm', // v55.83-TJ
   basis_exw_without_shipping_line: 'EXW, but the invoice has no shipping charge line and the warehouse shows shipping costs', // v55.83-TG
@@ -114,37 +115,44 @@ export default function ProfitabilityTab(props) {
   useEffect(function () { if (fullBtn.current) { try { fullBtn.current.focus(); } catch (eF) {} } if (!full) { return undefined; } var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }, [full]);
   var s16 = useState('month'); var pGran = s16[0]; var setPGran = s16[1]; // v55.83-TN — P&L by period: week / month / quarter / year
   var s18 = useState(null); var pOpen = s18[0]; var setPOpen = s18[1];
-  // v55.83-VQ (Max, Nov 19: "where are the rest of the columns and the total final pnl per month") — each period's expenses, asked
-  // from the Income Statement (period_stats) for exactly that period's dates and kept by period. Nothing is recalculated here.
-  var s19 = useState({}); var pExp = s19[0]; var setPExp = s19[1];
-  function loadExpenses(keys, gran) {
-    var todo = (keys || []).filter(function (k) { return !pExp[gran + '|' + k] && bucketRange(k, gran); }).slice(0, 24);
-    if (!todo.length) { return; }
-    var mark = {}; todo.forEach(function (k) { mark[gran + '|' + k] = { status: 'loading' }; });
-    setPExp(function (prev) { return Object.assign({}, prev, mark); });
-    function put(k, res) { setPExp(function (prev) { var nx = Object.assign({}, prev); nx[gran + '|' + k] = res; return nx; }); }
-    todo.reduce(function (chain, k) {
-      return chain.then(function () {
-        var rg = bucketRange(k, gran);
-        return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: rg.from, to: rg.to, user_id: userProfile && userProfile.id }) })
-          .then(function (r) { return r.json(); })
-          .then(function (j) {
-            if (!j || !j.ok) { put(k, { status: 'error', why: (j && j.error) || 'The expenses could not be loaded.' }); return; }
-            if (j.from !== rg.from) { put(k, { status: 'outside', why: 'Expenses before ' + j.from + ' are not open to you.' }); return; }
-            if (!j.spending) { put(k, { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.' }); return; }
-            var rc = realCostCategories(j.spending, rtmAdjust, foldUnc);
-            put(k, { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), from: j.from, to: j.to });
-          }).catch(function () { put(k, { status: 'error', why: 'The expenses could not be loaded.' }); });
-      });
-    }, Promise.resolve());
-  }
   var s17 = useState('all'); var pPre = s17[0]; var setPPre = s17[1]; // v55.83-TN — release prefix: all / 1001 / 1002 / 1003 / other
+  // v55.83-VQ (Max, Nov 19: "where are the rest of the columns and the total final pnl per month") — each period's expenses come from
+  // the Income Statement (period_stats), asked for exactly the days of that period that are INSIDE this report. The rules of what is
+  // asked, what an answer means and what the total is are in src/lib/pnl-expenses.js (tested); this only keeps the answers.
+  // (Codex 22:20 / 22:35): the dates are the report's own; every period of the report is asked, also one with no sales; a new
+  // report, grouping or person throws the old answers away and ignores late ones; a failed period can be asked again.
+  var s19 = useState({}); var pExp = s19[0]; var setPExp = s19[1];
+  var s20 = useState({ from: '', to: '' }); var applied = s20[0]; var setApplied = s20[1]; // the dates the report on screen was loaded with
+  var expGen = useRef(0); var expAuto = useRef(-1);
+  var todayIso = new Date().toISOString().substring(0, 10);
+  var floorIso = (data && data.window_floor) || '';
+  var effFrom = applied.from && floorIso && floorIso > applied.from ? floorIso : (applied.from || floorIso || '');
+  var effTo = applied.to && applied.to < todayIso ? applied.to : todayIso;
+  var expScope = expenseScope(pGran, effFrom, effTo, userProfile && userProfile.id);
+  function periodKeys() { // every period of the report: the ones with sales AND every period between its two dates
+    var seen = {}; var keys = [];
+    bucketsBetween(effFrom, effTo, pGran).forEach(function (b0) { if (!seen[b0.key]) { seen[b0.key] = true; keys.push(b0.key); } });
+    ((data && data.cells) || []).forEach(function (c) { var b1 = bucketOf(c.invoice_date, pGran); if (b1.key !== 'zz' && !seen[b1.key]) { seen[b1.key] = true; keys.push(b1.key); } });
+    return keys.sort();
+  }
+  function startExpenses(opts) {
+    var reqs = pendingRequests(expenseRequests(periodKeys(), pGran, effFrom, effTo), pExp, expScope, opts);
+    if (!reqs.length) { return; }
+    var gen = expGen.current; var scope = expScope;
+    loadExpensePeriods({ requests: reqs, adjust: rtmAdjust, fold: foldUnc,
+      isCurrent: function () { return expGen.current === gen; },
+      put: function (k, res) { if (expGen.current !== gen) { return; } setPExp(function (prev) { var nx = Object.assign({}, prev); nx[scope + '|' + k] = res; return nx; }); },
+      fetchOne: function (q) { return fetch('/api/accounting/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'period_stats', from: q.from, to: q.to, user_id: userProfile && userProfile.id }) }).then(function (r) { return r.json(); }); } });
+  }
+  // a new report, another grouping or another person: the answers kept so far no longer apply
+  useEffect(function () { expGen.current += 1; setPExp({}); }, [data, pGran, userProfile && userProfile.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 13 periods or fewer load by themselves, once per report; more than that wait for the “Load expenses” button (same loader)
   useEffect(function () {
     if (view !== 'period' || pPre !== 'all' || !data || !data.cells) { return; }
-    var seen = {}; var keys = [];
-    data.cells.forEach(function (c) { var b0 = bucketOf(c.invoice_date, pGran); if (!seen[b0.key]) { seen[b0.key] = true; keys.push(b0.key); } });
-    if (keys.length <= 13) { loadExpenses(keys, pGran); }
-  }, [view, pGran, pPre, data]); // eslint-disable-line react-hooks/exhaustive-deps // v55.83-VL — the period whose breakdown is open
+    if (expAuto.current === expGen.current) { return; }
+    if (periodKeys().length > 13) { return; }
+    expAuto.current = expGen.current; startExpenses({ ignoreCache: true });
+  }, [view, pGran, pPre, data, applied]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function call(payload) {
     // v55.83-TG — the server checks the sign-in token itself (it no longer trusts the user id in the request)
@@ -159,7 +167,7 @@ export default function ProfitabilityTab(props) {
     setBusy(true);
     call({ action: 'report', date_from: (f === undefined ? from : f) || null, date_to: (t === undefined ? to : t) || null }).then(function (j) {
       if (!j || j.ok !== true) { toast.error((j && j.error) || 'The report did not load.'); return; }
-      setData(j);
+      setData(j); setApplied({ from: (f === undefined ? from : f) || '', to: (t === undefined ? to : t) || '' });
     }).finally(function () { setBusy(false); });
   }
   useEffect(function () { load('2026-06-01', ''); }, []);
@@ -351,6 +359,8 @@ export default function ProfitabilityTab(props) {
     function blank(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, miss: {} }; F.forEach(function (f) { r[f] = 0; }); return r; }
     var by = {}; var tot = blank('total', 'Total');
     cells.forEach(function (c) { var b = bucketOf(c.invoice_date, pGran); var r = by[b.key] || (by[b.key] = blank(b.key, b.label)); add(r, c); add(tot, c); });
+    // v55.83-VQ (Codex 22:20) — every period between the report's two dates has a row, also one with no sales (its expenses still count)
+    bucketsBetween(effFrom, effTo, pGran).forEach(function (b0) { if (!by[b0.key]) { by[b0.key] = blank(b0.key, b0.label); } });
     var rows = Object.keys(by).sort().map(function (k) { return settle(by[k]); }); settle(tot);
     function cell(r, f, isProfit) {
       if (isProfit && hidden) { return '🔒'; }
@@ -359,8 +369,14 @@ export default function ProfitabilityTab(props) {
     }
     function pct(a, b) { return hidden ? '🔒' : (b ? (Math.round(a / b * 1000) / 10) + '%' : '—'); }
     function csv() {
-      var head = ['Period', 'Lines', 'Pounds', 'Goods revenue', 'Goods cost (goods + commission + inbound + bonded)', 'Goods profit', 'Goods margin %', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit (goods + transport)', 'Revenue not counted (cost unknown)', 'Lines not complete'];
-      var lines = [head].concat(rows.concat([tot]).map(function (r) { return [r.label, r.lines, Math.round(r.pounds), r.goods_revenue / 100, r.goods_cost / 100, hidden ? '' : r.goods_profit / 100, hidden ? '' : (r.goods_revenue ? Math.round(r.goods_profit / r.goods_revenue * 1000) / 10 : ''), r.transport_revenue / 100, r.trucking_cost / 100, r.freight_cost / 100, hidden ? '' : r.transport_profit / 100, hidden ? '' : r.profit / 100, r.uncounted_revenue / 100, r.incomplete]; }));
+      var head = ['Period', 'Lines', 'Pounds', 'Goods revenue', 'Goods cost (goods + commission + inbound + bonded)', 'Goods profit', 'Goods margin %', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit (goods + transport)', 'Revenue not counted (cost unknown)', 'Lines not complete', 'Expense dates', 'A Warehouse / Office', 'C Partner fee', 'D Payroll', 'E Taxes', 'Uncategorized expenses (not taken off)', 'FINAL P&L (total profit − A − C − D − E)', 'Final P&L complete?'];
+      var lines = [head].concat(rows.concat([tot]).map(function (r) { return [r.label, r.lines, Math.round(r.pounds), r.goods_revenue / 100, r.goods_cost / 100, hidden ? '' : r.goods_profit / 100, hidden ? '' : (r.goods_revenue ? Math.round(r.goods_profit / r.goods_revenue * 1000) / 10 : ''), r.transport_revenue / 100, r.trucking_cost / 100, r.freight_cost / 100, hidden ? '' : r.transport_profit / 100, hidden ? '' : r.profit / 100, r.uncounted_revenue / 100, r.incomplete].concat((function () {
+        // the expense columns of the CSV follow the screen exactly: empty when not shown there (other release filter, locked, not loaded, total incomplete)
+        var e = expOn ? expOf(r) : null; var isTot = r.key === 'total';
+        if (!e || e.status !== 'ok') { return [e && e.from ? e.from + ' to ' + e.to : '', '', '', '', '', '', '', expOn ? (e ? (e.why || e.status) : 'not loaded') : 'expenses are shown with Releases: All']; }
+        var f = (hidden || (isTot && !e.complete)) ? { cents: null, complete: false } : finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));
+        return [isTot ? (e.loaded + ' of ' + e.periods + ' periods') : e.from + ' to ' + e.to, e.cols.A.cents / 100, e.cols.C.cents / 100, e.cols.D.cents / 100, e.cols.E.cents / 100, e.cols.unassigned.cents / 100, f.cents === null ? '' : f.cents / 100, f.cents === null ? 'not shown' : (f.complete ? 'yes' : 'known part only')];
+      })()); }));
       var text = lines.map(function (l) { return l.map(function (x) { var t0 = String(x === null || x === undefined ? '' : x); return /[",\n]/.test(t0) ? '"' + t0.replace(/"/g, '""') + '"' : t0; }).join(','); }).join('\n');
       var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'pnl-by-' + pGran + '-' + (pPre === 'all' ? 'all' : pPre) + '-' + (from || 'start') + '-to-' + (to || 'today') + '.csv'; a.click();
     }
@@ -420,24 +436,26 @@ export default function ProfitabilityTab(props) {
     // v55.83-VQ — the expense columns. Only with ALL releases: the Income Statement's expenses are the whole company's and cannot
     // be split by release prefix. The Total row adds the periods that have loaded and says so when some have not.
     var expOn = pPre === 'all'; var EXK = ['A', 'C', 'D', 'E', 'unassigned'];
-    var totalExp = (function () { var t = { status: 'ok', cols: expenseColumns([], 0), partial: false }; rows.forEach(function (r0) { var e0 = pExp[pGran + '|' + r0.key]; if (!e0 || e0.status !== 'ok') { t.partial = true; return; } ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (k) { t.cols[k].cents += e0.cols[k].cents; }); t.cols.total += e0.cols.total; }); return t; })();
-    function expOf(r) { return r.key === 'total' ? totalExp : pExp[pGran + '|' + r.key]; }
+    var expKeys = rows.filter(function (r0) { return r0.key !== 'zz'; }).map(function (r0) { return r0.key; });
+    var totalExp = totalExpenses(expKeys, pExp, expScope);
+    function expOf(r) { return r.key === 'total' ? totalExp : pExp[expScope + '|' + r.key]; }
     function expCell(r, k) {
       if (!expOn) { return '—'; }
       var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
       if (e.status === 'locked') { return '🔒'; }
       if (e.status !== 'ok') { return <span title={e.why} style={{ color: '#b45309' }}>n/a</span>; }
-      return <span>{money(e.cols[k].cents)}{e.partial && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>some periods missing</div>}</span>;
+      return <span>{money(e.cols[k].cents)}{r.key === 'total' && !e.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{e.loaded + ' of ' + e.periods + ' periods only'}</div>}</span>;
     }
     function finalCell(r) {
       if (!expOn) { return '—'; } if (hidden) { return '🔒'; }
       var e = expOf(r); if (!e || e.status === 'loading') { return '…'; }
       if (e.status === 'locked') { return '🔒'; }
       if (e.status !== 'ok') { return <span title={e.why} style={{ color: '#b45309' }}>n/a</span>; }
+      if (r.key === 'total' && !e.complete) { return <span style={{ color: '#b45309', fontSize: 10, fontWeight: 700 }} title="A total with periods missing is not a total">not shown until every period has its expenses</span>; }
       var f = finalPnl(r.profit, e.cols, (r.incomplete || 0) + (r.uncounted || 0));
       return <span style={{ color: f.cents >= 0 ? '#065f46' : '#7f1d1d' }}>{money(f.cents)}
         {e.cols.unassigned.cents !== 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{'if the uncategorized is all expense: ' + money(f.cents - e.cols.unassigned.cents)}</div>}
-        {(!f.complete || e.partial) && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>known part only</div>}</span>;
+        {!f.complete && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>known part only</div>}</span>;
     }
     function expPanel(r) {
       if (!expOn) { return <div className="text-[11px] mt-2" style={{ color: SUB }}>Expenses and the final P&L are shown with Releases: All (they are the whole company’s and cannot be split by release).</div>; }
@@ -473,6 +491,10 @@ export default function ProfitabilityTab(props) {
       <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: SUB }}>
         <button ref={fullBtn} onClick={function () { setFull(!full); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={full ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }} title={full ? 'Back to the normal page (Esc)' : 'Show the table on the whole screen'}>{full ? '✕ Exit full screen' : '⤢ Full screen'}</button>
         <span>Click a period to open its breakdown · drag the bar below to move left / right</span>
+        {expOn && <span style={{ color: totalExp.complete ? '#065f46' : '#b45309', fontWeight: 700 }}>{'Expenses: ' + totalExp.loaded + ' of ' + totalExp.periods + ' periods loaded' + (totalExp.loading ? ' · ' + totalExp.loading + ' loading…' : '') + (totalExp.failed ? ' · ' + totalExp.failed + ' failed' : '') + (totalExp.unavailable ? ' · ' + totalExp.unavailable + ' not open to you' : '')}</span>}
+        {expOn && totalExp.missing > 0 && totalExp.loading === 0 && <button onClick={function () { startExpenses({}); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>{'Load expenses for ' + totalExp.missing + ' period(s)'}</button>}
+        {expOn && totalExp.failed > 0 && totalExp.loading === 0 && <button onClick={function () { startExpenses({ retryErrors: true }); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>{'Try again (' + totalExp.failed + ' failed)'}</button>}
+        {expOn && <span style={{ color: SUB }}>{'· ' + (effFrom || 'the start') + ' → ' + effTo}</span>}
       </div>
       <div ref={topBar} onScroll={function () { syncFrom(topBar, tableBox); }} className="overflow-x-auto overflow-y-hidden pl-scroll" style={{ height: 16, marginBottom: 2 }}><div ref={topInner} style={{ height: 1 }} /></div>
       <div ref={tableBox} onScroll={function () { syncFrom(tableBox, topBar); }} className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: full ? 'none' : '65vh', flex: full ? '1 1 auto' : undefined }}>
@@ -484,7 +506,7 @@ export default function ProfitabilityTab(props) {
           <tbody>{rows.concat(rows.length > 1 ? [tot] : []).map(function (r, i) {
             var isT = r.key === 'total'; var isOpen = !isT && pOpen === r.key;
             var out = [<tr key={r.key} onClick={isT ? undefined : function () { setPOpen(isOpen ? null : r.key); }} title={isT ? undefined : (isOpen ? 'Close the breakdown' : 'Open the breakdown of ' + r.label)} style={{ background: isT ? '#e2e8f0' : (isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff')), color: INK, borderTop: '1px solid ' + LINE, fontWeight: isT ? 800 : 400, cursor: isT ? 'default' : 'pointer' }}>
-              <td className="px-2 py-1.5 font-bold">{isT ? '' : (isOpen ? '▾ ' : '▸ ')}{r.label}</td>
+              <td className="px-2 py-1.5 font-bold">{isT ? '' : (isOpen ? '▾ ' : '▸ ')}{r.label}{!isT && expOf(r) && expOf(r).partial && <div style={{ color: SUB, fontSize: 9, fontWeight: 400 }}>{expOf(r).from + ' → ' + expOf(r).to + ' only'}</div>}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{fmt0(r.pounds)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.goods_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'goods_profit', true)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.transport_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'transport_profit', true)}</td>

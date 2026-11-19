@@ -95,3 +95,13 @@ export function linesToFix(cells) {
   rows.sort(function (a, b) { return (b.sold_for || 0) - (a.sold_for || 0); });
   return { hidden: false, total: list.length, rows: rows, reasons: FIX.filter(function (f) { return count[f.key]; }).map(function (f) { return { key: f.key, title: f.title, how: f.how, go: f.go, goLabel: f.goLabel, count: count[f.key] }; }) };
 }
+
+// v55.83-VQ (Codex 22:20) — EVERY period between two dates, also the ones with no sales (a month with rent and payroll but no
+// invoice is still a month of the P&L). [{ key, label }] in date order; empty when either date is missing or they are reversed.
+export function bucketsBetween(from, to, g) {
+  var a = String(from || '').substring(0, 10); var b = String(to || '').substring(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b) || a > b) { return []; }
+  var out = []; var seen = {}; var t = Date.parse(a + 'T00:00:00Z'); var end = Date.parse(b + 'T00:00:00Z'); var guard = 0;
+  while (t <= end && guard < 40000) { var bk = bucketOf(new Date(t).toISOString().substring(0, 10), g); if (!seen[bk.key]) { seen[bk.key] = true; out.push(bk); } t += 86400000; guard += 1; }
+  return out;
+}

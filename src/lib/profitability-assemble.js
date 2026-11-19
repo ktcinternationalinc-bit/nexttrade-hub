@@ -10,7 +10,7 @@
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
 import { warehouseOutboundForRelease, inferBasis, statedBasis, isWarehouseTestRow } from './warehouse-shipping'; // v55.83-TG
 import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge, isSurchargeOnlyLine } from './shipping-terms'; // v55.83-TG (+ UE surcharge rule)
-import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2, isFoamLine, foamEvidenceConflict, foamFactors } from './profitability';
+import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2, isFoamLine, foamEvidenceConflict, foamFactors, isHeadlinerLine } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
 export function splitReleases(text) {
@@ -83,6 +83,7 @@ export function assembleProfitability(d) {
       var nm = lineName(it);
       return { id: it.id, description: nm, qty: Number(it.quantity) || 0, unit: unitOfLine[it.id] || unitOfName[nameKey(nm)] || '', unit_price: Number(it.unit_price) || 0,
         amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null,
+        headliner: isHeadlinerLine(it.wave_product_name, it.description), // v55.83-VQ — headliner = 1.25 lb per yard
         foam: isFoamLine(it.wave_product_name, it.description), foam_conflict: foamEvidenceConflict(it.wave_product_name, it.description), // v55.83-UZ — "anything with foam": product name or description
         transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
     });
