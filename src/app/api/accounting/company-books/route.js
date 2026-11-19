@@ -19,7 +19,7 @@ import { realAccounts, realKeyOf } from '../../../../lib/duplicate-detect'; // v
 import { loadBankAccounts } from '../../../../lib/duplicates-server';
 import { learnPlan, linesForRule } from '../../../../lib/company-rule-learn'; // v55.83-VK — the books learn a rule from what a person categorizes
 var SQL_MISSING_UD = '"KTC pays this" on a category needs one database update first: run sql/v55-83-UD-pay-nextrade.sql in Supabase (SQL Editor).';
-var SQL_MISSING_VK = 'Using a rule on lines of any date needs one small database update first: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Until then, use “📏 Apply rules” for the dates shown.';
+var SQL_MISSING_VK = 'Rules need one small database update before they can categorize lines: run sql/v55-83-VK-rule-apply-guard.sql in Supabase (SQL Editor). Nothing was changed. You can still categorize lines by hand.';
 var SQL_MISSING_UB = 'Transfers and category directions need one database update first: run sql/v55-83-UB-company-transfers.sql in Supabase (SQL Editor).';
 
 var API_BUILD_MARKER = 'v55.83-TW-company-books';
@@ -389,10 +389,10 @@ export async function POST(req) {
       // (Codex 20:27 P1 / P3) rules never write by themselves: every run is a person's press. preview = count only, NOTHING written.
       var previewA = body.preview === true;
       if (body.automatic === true) { return fail('Rules are applied only when a person presses Apply.'); }
-      // with the VK database step, a rule categorizes a line only if it is STILL waiting when the line is locked. The new
-      // any-date / chosen-rule runs need it; the dated Apply button keeps working as before until the SQL is run.
-      var guardA = false;
-      if (!previewA) { var gq = await db.rpc('hub_company_rule_guard_installed'); guardA = !gq.error && gq.data === true; if (!guardA && (body.all_dates === true || onlyRules)) { return fail(SQL_MISSING_VK, 409); } }
+      // (Codex 20:58 / 21:03) EVERY rule write goes through the VK database step, which categorizes a line only if it is STILL
+      // waiting when the line is locked. Not installed, or the check cannot be read → refused, for the dated button too:
+      // there is no unguarded way for a rule to write. Counting (preview) and a person's own categorizing are not affected.
+      if (!previewA) { var gq = await db.rpc('hub_company_rule_guard_installed'); if (gq.error || gq.data !== true) { return fail(SQL_MISSING_VK, 409); } }
       var plA = await pageLines(db, cid, body.all_dates === true ? '2000-01-01' : from, body.all_dates === true ? '2999-12-31' : to);
       if (plA.error) { return readFail('the bank lines', plA.error); }
       var nctxA = null;
@@ -408,7 +408,7 @@ export async function POST(req) {
         if (previewA) { would++; if (comp.key === 'nextrade' && wantsBill(ln, byKeyA[rule.category_key])) { wouldBills++; } continue; }
         if (tried >= 300) { moreA = true; break; } // the rest on the next press
         tried++;
-        var res = await categorize(ln, byKeyA[rule.category_key], 'rule', nctxA, guardA);
+        var res = await categorize(ln, byKeyA[rule.category_key], 'rule', nctxA, true);
         if (res.ok && res.skipped === true) { skippedA++; } // someone categorized it (or it changed) a moment ago — left exactly as it is
         else if (res.ok) { done++; hits[rule.id] = (hits[rule.id] || 0) + 1; if (res.ktc && res.ktc.action && res.ktc.action !== 'none') { billsMade++; } } else { problems.push(res.error); }
       }
@@ -418,7 +418,7 @@ export async function POST(req) {
         var rw = (rulesA.data || []).filter(function (r) { return r.id === hitIds[h]; })[0];
         await db.from('company_rules').update({ hit_count: (Number(rw.hit_count) || 0) + hits[hitIds[h]] }).eq('id', hitIds[h]);
       }
-      if (done > 0) { await audit(db, userId, 'company_rules_applied', 'company', cid, { company: comp.label, categorized: done, ktc_bills: billsMade, problems: problems.length, all_dates: body.all_dates === true, only_rules: onlyRules, skipped: skippedA, guarded: guardA }); }
+      if (done > 0) { await audit(db, userId, 'company_rules_applied', 'company', cid, { company: comp.label, categorized: done, ktc_bills: billsMade, problems: problems.length, all_dates: body.all_dates === true, only_rules: onlyRules, skipped: skippedA, guarded: true }); }
       return NextResponse.json({ ok: true, categorized: done, bills_made: billsMade, skipped: skippedA, problems: problems.slice(0, 20), problem_count: problems.length, more: moreA });
     }
 

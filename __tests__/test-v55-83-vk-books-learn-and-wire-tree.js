@@ -230,16 +230,30 @@ function rulesOf(db, company) { return db.t.company_rules.filter(function (r) { 
   check('Nextrade: the same — the person\'s category stays, the rule is counted as left alone', i2.row.company_category_source === 'manual' && i2.out.ok && i2.out.skipped === 1 && i2.out.categorized === 0, [i2.out, i2.row]);
   check('Nextrade: … and NO KTC bill is made, counted or changed by the rule', i2.bills === 0 && i2.out.bills_made === 0);
 
-  // the database step not installed yet
-  db = seed(); db.guard = false; state.perms = { 'company.rtm.manage': true };
-  db.t.company_rules.push({ id: 'R1', company_id: 'RTM_BOOKS', match_text: 'centerpoint energy', category_key: 'elec', direction: 'out', active: true, hit_count: 0 });
-  var g1 = await call({ company: 'rtm', action: 'apply_rules', all_dates: true, rule_ids: ['R1'] });
-  var g2 = await call({ company: 'rtm', action: 'apply_rules', all_dates: true });
-  check('without the VK database step, the NEW any-date / chosen-rule runs are refused with a plain message; nothing changes', g1._status === 409 && g2._status === 409 && /v55-83-VK-rule-apply-guard\.sql/.test(g1.error) && cat(db, 'L1') === null && cat(db, 'L3') === null, [g1, g2]);
-  var g3 = await call({ company: 'rtm', action: 'apply_rules', from: '2026-10-01', to: '2026-11-30' });
-  check('… the dated Apply button keeps working exactly as it does today', g3.ok && g3.categorized === 2 && !db.guardedCalls);
-  var g4 = await call({ company: 'rtm', action: 'apply_rules', from: '2025-01-01', to: '2026-11-30', preview: true });
-  check('… and counting works with or without it', g4.ok && g4.would === 1);
+  // the database step not installed, or its check unreadable: EVERY rule write is refused (Codex 20:58 / 21:03) — no unguarded path
+  async function noGuard(mode) {
+    var d = seed(); state.perms = { 'company.rtm.manage': true };
+    if (mode === 'absent') { d.guard = false; } else { d.rpcs.hub_company_rule_guard_installed = function () { return { data: null, error: { message: 'function public.hub_company_rule_guard_installed() does not exist' } }; }; }
+    d.t.company_rules.push({ id: 'R1', company_id: 'RTM_BOOKS', match_text: 'centerpoint energy', category_key: 'elec', direction: 'out', active: true, hit_count: 0 });
+    var calls = 0; var plain = d.rpcs.hub_company_categorize; var open = d.rpcs.hub_company_categorize_if_open;
+    d.rpcs.hub_company_categorize = function (x, y) { calls++; return plain(x, y); }; d.rpcs.hub_company_categorize_if_open = function (x, y) { calls++; return open(x, y); };
+    var snap = JSON.stringify(d.t.bank_transactions) + JSON.stringify(d.t.company_rules);
+    var dated = await call({ company: 'rtm', action: 'apply_rules', from: '2026-10-01', to: '2026-11-30' });
+    var allD = await call({ company: 'rtm', action: 'apply_rules', all_dates: true });
+    var byRule = await call({ company: 'rtm', action: 'apply_rules', all_dates: true, rule_ids: ['R1'] });
+    var same = JSON.stringify(d.t.bank_transactions) + JSON.stringify(d.t.company_rules) === snap; var ruleCalls = calls;
+    var pvw = await call({ company: 'rtm', action: 'apply_rules', from: '2025-01-01', to: '2026-11-30', preview: true });
+    var hand = await call({ company: 'rtm', action: 'set_category', ids: ['L7'], category_key: 'repairs' });
+    return { dated: dated, allD: allD, byRule: byRule, same: same, ruleCalls: ruleCalls, pvw: pvw, hand: hand, handCat: d.t.bank_transactions.filter(function (x) { return x.id === 'L7'; })[0].company_category };
+  }
+  for (var gm of ['absent', 'error']) {
+    var ng = await noGuard(gm);
+    check('guard ' + gm + ': the dated Apply, the any-date run and the chosen-rule run are ALL refused (409) with the script named', ng.dated._status === 409 && ng.allD._status === 409 && ng.byRule._status === 409 && /v55-83-VK-rule-apply-guard\.sql/.test(ng.dated.error) && ng.dated.error.indexOf('Until then') < 0, [ng.dated, ng.allD, ng.byRule]);
+    check('guard ' + gm + ': not one categorize / bill call was made and nothing changed', ng.ruleCalls === 0 && ng.same);
+    check('guard ' + gm + ': counting still works (read-only) and a person can still categorize by hand', ng.pvw.ok && ng.pvw.would === 3 && ng.hand.ok && ng.handCat === 'repairs', [ng.pvw, ng.hand]);
+  }
+  var routeSrc0 = fs.readFileSync(path.join(root, 'src/app/api/accounting/company-books/route.js'), 'utf8');
+  check('the route has no unguarded rule write: the rule loop always passes guarded = true', routeSrc0.indexOf("categorize(ln, byKeyA[rule.category_key], 'rule', nctxA, true)") > 0 && routeSrc0.indexOf('guardA') < 0 && routeSrc0.indexOf("if (gq.error || gq.data !== true) { return fail(SQL_MISSING_VK, 409); }") > 0);
 
   // (Codex 20:27 P2) the private check fails CLOSED
   async function privLookup(err) {
