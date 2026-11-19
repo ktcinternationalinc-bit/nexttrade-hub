@@ -52,7 +52,7 @@ export default function SourcingDeskTab(props) {
   function load() {
     setBusy(true); setErr('');
     api({ action: 'list' }).then(function (j) { setBusy(false); if (j.ok) { setList(j.requests || []); setCanResearch(!!j.can_research); } else { setList([]); setErr(j.error || 'Could not load the requests.'); } });
-    api({ action: 'health' }).then(function (j) { if (j.ok) { setHealth(j); setCanApprove(!!j.can_approve); } });
+    api({ action: 'health' }).then(function (j) { if (j.ok) { setHealth(j); setCanApprove(!!j.can_approve); if ((j.health || []).some(function (x) { return (x.key === "email_send" || x.key === "email_read") && !x.ok; })) { setShowHealth(true); } /* v55.83-UY (Max: "there is no mailbox test button") - the box opens by itself while the mailbox is not connected */ } });
     api({ action: 'approvals' }).then(function (j) { if (j.ok) { setApprovals(j.items || []); setCanApprove(!!j.can_approve); } });
   }
   function open(id) { setBusy(true); setAsk(null); setOpenDraft(null); setEdit(null); api({ action: 'get', id: id }).then(function (j) { setBusy(false); if (j.ok) { setDet(j); setCanResearch(!!j.can_research); setCanApprove(!!j.can_approve); } else { toast.error(j.error || 'Could not open the request.'); } }); }
@@ -81,6 +81,13 @@ export default function SourcingDeskTab(props) {
   }
   function saveForm() {
     var f = form;
+    // v55.83-UY (Max, Nov 19: "edit the request") — the same form saves changes to an existing request
+    if (f.editId) {
+      act({ action: 'edit_request', id: f.editId, request: { company: f.company, direction: f.direction, product: f.product, specs: f.specs, quantity: f.quantity, destination: f.destination, needed_by: f.needed_by, internal_note: f.internal_note } },
+        function (j) { return !(j.changed || []).length ? 'Nothing was changed.' : '✓ Saved.' + (j.unsent_drafts ? ' ' + j.unsent_drafts + ' message(s) not sent yet still have the old wording — use “Write again” on each.' : ''); },
+        function () { setForm(null); open(f.editId); });
+      return;
+    }
     var go = function (atts) { act({ action: 'create_request', request: Object.assign({}, f, { attachments: atts, files: undefined }) }, function (j) { return '✓ ' + j.label + ' created.'; }, function (j) { setForm(null); load(); open(j.id); }); };
     if (f.files && f.files.length) {
       setBusy(true);
@@ -157,7 +164,7 @@ export default function SourcingDeskTab(props) {
   var healthBox = health && <div className="rounded-xl p-3 mb-3" style={panel}>
     <div className="flex gap-2 items-center flex-wrap">
       <div className="text-[13px] font-extrabold" style={{ color: INK }}>🔌 What is connected</div>
-      {health.usage && <span className="text-[12px] font-bold" style={{ color: SUB }}>{'Paid web search this month: ' + money(health.usage.spent) + ' of ' + money(health.usage.cap) + ' (' + health.usage.searches_used + ' searches)'}</span>}
+      {health.usage && <span className="text-[12px] font-bold" style={{ color: SUB }}>{'Research this month: ' + money(health.usage.spent) + ' of ' + money(health.usage.cap) + ' (' + health.usage.searches_used + ' searches)'}</span>}
       <div className="flex-1" />
       <Btn light onClick={function () { setShowHealth(!showHealth); }}>{showHealth ? 'Hide' : 'Show details'}</Btn>
     </div>
@@ -175,7 +182,7 @@ export default function SourcingDeskTab(props) {
       {mailTest && !mailTest.running && <div className="mt-1 rounded-lg p-2" style={{ background: mailTest.ok ? '#ecfdf5' : '#fef2f2', border: '1px solid ' + (mailTest.ok ? '#6ee7b7' : '#fca5a5') }}>
         {(mailTest.steps || []).map(function (st, i) { return <div key={i} className="text-[12px] font-bold" style={{ color: st.ok ? '#065f46' : '#7f1d1d' }}>{(st.ok ? '✓ ' : '✗ ') + st.text}</div>; })}
         {mailTest.sender && <div className="text-[12px] mt-1" style={{ color: SUB }}>{'Signature: ' + mailTest.sender}</div>}</div>}
-      {health.usage && <div className="text-[11px] mt-1" style={{ color: MUTED }}>{'The $' + health.usage.cap.toFixed(0) + ' cap covers the search fee ($0.01 a search; a run uses up to 6). The AI’s reading and writing is billed separately by the AI account: ' + (health.usage.input_tokens + health.usage.output_tokens).toLocaleString('en-US') + ' tokens used by research this month.'}</div>}
+      {health.usage && <div className="text-[11px] mt-1" style={{ color: MUTED }}>{'The $' + health.usage.cap.toFixed(0) + ' limit covers the search fee ($0.01 a search; a run uses up to 6) and the AI’s work together: ' + money(health.usage.search_spent || 0) + ' searches + ' + money(health.usage.ai_spent || 0) + ' AI (' + (health.usage.input_tokens + health.usage.output_tokens).toLocaleString('en-US') + ' tokens, estimated at today’s rate) this month.'}</div>}
     </div>}
   </div>;
 
@@ -183,8 +190,8 @@ export default function SourcingDeskTab(props) {
   if (form) {
     var F = function (k, v) { var n = Object.assign({}, form); n[k] = v; setForm(n); };
     return <div className="nt-paper rounded-xl p-3" style={panel}>
-      <div className="flex gap-2 items-center mb-2"><div className="text-[16px] font-extrabold" style={{ color: INK }}>New sourcing request</div><div className="flex-1" /><Btn light onClick={function () { setForm(null); }}>✕ Close</Btn></div>
-      <div className="text-[12px] mb-3" style={{ color: SUB }}>It becomes a numbered assignment (SR-…) with you as the owner. Nothing is searched or sent until you say so.</div>
+      <div className="flex gap-2 items-center mb-2"><div className="text-[16px] font-extrabold" style={{ color: INK }}>{form.editId ? 'Edit ' + (form.editLabel || 'the request') : 'New sourcing request'}</div><div className="flex-1" /><Btn light onClick={function () { setForm(null); }}>✕ Close</Btn></div>
+      <div className="text-[12px] mb-3" style={{ color: SUB }}>{form.editId ? 'Change what is being asked for. Suppliers already on the shortlist stay. Run the research again afterwards if the product changed.' : 'It becomes a numbered assignment (SR-…) with you as the owner. Nothing is searched or sent until you say so.'}</div>
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
         <label className="text-[12px] font-bold" style={{ color: SUB }}>For which company
           <select value={form.company} onChange={function (e) { F('company', e.target.value); }} className={inp + ' w-full mt-1'} style={inpS}><option value="">— pick —</option>{COMPANIES.map(function (c) { return <option key={c} value={c}>{c}</option>; })}</select></label>
@@ -200,14 +207,14 @@ export default function SourcingDeskTab(props) {
           <input value={form.destination} onChange={function (e) { F('destination', e.target.value); }} placeholder="for example: Alexandria, Egypt" className={inp + ' w-full mt-1'} style={inpS} /></label>
         <label className="text-[12px] font-bold" style={{ color: SUB }}>Needed by (optional)
           <input type="date" value={form.needed_by} onChange={function (e) { F('needed_by', e.target.value); }} className={inp + ' w-full mt-1'} style={inpS} /></label>
-        <label className="text-[12px] font-bold" style={{ color: SUB }}>Answer due (optional)
-          <input type="date" value={form.due_date} onChange={function (e) { F('due_date', e.target.value); }} className={inp + ' w-full mt-1'} style={inpS} /></label>
+        {!form.editId && <label className="text-[12px] font-bold" style={{ color: SUB }}>Answer due (optional)
+          <input type="date" value={form.due_date} onChange={function (e) { F('due_date', e.target.value); }} className={inp + ' w-full mt-1'} style={inpS} /></label>}
         <label className="text-[12px] font-bold" style={{ color: '#7f1d1d', gridColumn: '1 / -1' }}>🔒 Internal note — stays inside KTC (target price, limits, who asked)
           <textarea value={form.internal_note} onChange={function (e) { F('internal_note', e.target.value); }} rows={2} placeholder="never sent to a supplier and never given to the web research" className={inp + ' w-full mt-1'} style={Object.assign({}, inpS, { border: '1px solid #fca5a5' })} /></label>
-        <label className="text-[12px] font-bold rounded-lg px-3 py-2" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer', gridColumn: '1 / -1' }}>📎 {form.files && form.files.length ? form.files.length + ' file(s) chosen' : 'Attach a photo or a specification sheet (optional, up to 5)'}
-          <input type="file" multiple accept="application/pdf,image/*" onChange={function (e) { F('files', e.target.files); }} style={{ display: 'none' }} /></label>
+        {!form.editId && <label className="text-[12px] font-bold rounded-lg px-3 py-2" style={{ color: INK, background: '#f1f5f9', border: '1px dashed #94a3b8', cursor: 'pointer', gridColumn: '1 / -1' }}>📎 {form.files && form.files.length ? form.files.length + ' file(s) chosen' : 'Attach a photo or a specification sheet (optional, up to 5)'}
+          <input type="file" multiple accept="application/pdf,image/*" onChange={function (e) { F('files', e.target.files); }} style={{ display: 'none' }} /></label>}
       </div>
-      <div className="mt-3 flex gap-2"><Btn big onClick={saveForm} disabled={busy}>{busy ? 'Saving…' : 'Create the request'}</Btn><Btn big light onClick={function () { setForm(null); }}>Cancel</Btn></div>
+      <div className="mt-3 flex gap-2"><Btn big onClick={saveForm} disabled={busy}>{busy ? 'Saving…' : form.editId ? 'Save changes' : 'Create the request'}</Btn><Btn big light onClick={function () { setForm(null); }}>Cancel</Btn></div>
     </div>;
   }
 
@@ -243,6 +250,7 @@ export default function SourcingDeskTab(props) {
           {!live && <Btn big color="#0f766e" onClick={function () { if (!canResearch) { toast.error('Starting paid web research needs the “Commercial: Start web research” permission — ask an admin in Settings.'); return; } setAsk({ kind: 'research' }); }} disabled={busy}>{'🔎 ' + (det.shortlist.length ? 'Research again' : 'Research suppliers on the web')}</Btn>}
           {live && <span className="text-[13px] font-extrabold" style={{ color: '#1e3a8a' }}>{live.status === 'running' ? '⏳ Researching now…' : '⏳ Waiting for the worker (it runs every 5 minutes)'}</span>}
           {live && <Btn color="#1d4ed8" onClick={function () { act({ action: 'run_now', id: R.id }, function (j) { var r = j.result || {}; return !j.ran ? 'Nothing was waiting.' : r.ok ? '✓ Research finished — ' + ((r.result && r.result.found) || 0) + ' supplier(s) proposed.' : 'Research did not finish: ' + (r.error || (r.cap ? 'the monthly cap is reached' : 'see the request')) + (r.will_retry ? ' It will try again.' : ''); }, function () { open(R.id); load(); }); }} disabled={busy}>{busy ? 'Working… (can take a few minutes)' : '▶ Run now'}</Btn>}
+          {!live && <Btn light onClick={function () { setForm({ editId: R.id, editLabel: R.label, company: R.company || '', direction: R.direction || '', product: R.product || '', specs: R.specs || '', quantity: R.quantity || '', destination: R.destination || '', needed_by: R.needed_by || '', due_date: R.due_date || '', internal_note: R.internal_note || '', files: null }); }}>✏ Edit request</Btn>}
           <Btn light onClick={function () { setAsk({ kind: 'supplier', legal_name: '', website: '', country: '', role: 'unknown', products: '' }); }}>＋ Add a supplier I know</Btn>
           <Btn light onClick={function () { setAsk({ kind: 'next', next_action: R.next_action || '', due_date: R.due_date || '' }); }}>✏ Next step / due date</Btn>
           <Btn light onClick={function () { setAsk({ kind: 'close', reason: '' }); }}>Close this request</Btn>
@@ -250,7 +258,7 @@ export default function SourcingDeskTab(props) {
         {closed && <div className="mt-2"><Btn light onClick={function () { act({ action: 'reopen', id: R.id }, 'Reopened.', function () { open(R.id); }); }}>Reopen</Btn></div>}
 
         {ask && ask.kind === 'research' && <div className="mt-2 rounded-lg p-2" style={{ background: '#ffffff', border: '1px solid #0f766e' }}>
-          <div className="text-[13px] font-bold" style={{ color: INK }}>{'This uses paid web search: up to 6 searches (at most $0.06) plus the AI’s reading. This month so far: ' + (det.usage ? money(det.usage.spent) + ' of ' + money(det.usage.cap) : 'unknown') + '.'}</div>
+          <div className="text-[13px] font-bold" style={{ color: INK }}>{'This is paid: up to 6 web searches plus the AI’s work, usually well under $1 a run, and a run is stopped if the AI’s work reaches $2. Estimated this month (searches and AI together, AI priced at today’s rate): ' + (det.usage ? money(det.usage.spent) + ' of ' + money(det.usage.cap) : 'unknown') + '.'}</div>
           <div className="text-[12px]" style={{ color: SUB }}>The agent only reads public pages. It contacts nobody, and your internal note is not given to it.</div>
           <div className="mt-2 flex gap-2"><Btn color="#0f766e" onClick={function () { act({ action: 'start_research', id: R.id }, 'Research queued.', function () { setAsk(null); open(R.id); }); }} disabled={busy}>Yes, start the research</Btn><Btn light onClick={function () { setAsk(null); }}>Cancel</Btn></div></div>}
         {ask && ask.kind === 'next' && <div className="mt-2 rounded-lg p-2 flex gap-2 flex-wrap items-center" style={{ background: '#ffffff', border: '1px solid #93c5fd' }}>

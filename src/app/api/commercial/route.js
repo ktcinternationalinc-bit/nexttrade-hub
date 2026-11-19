@@ -63,8 +63,10 @@ export async function POST(req) {
       h = h.filter(function (x) { return x.key !== 'email'; });
       h.push({ key: 'email_send', label: 'Sending from ' + (mc.user || 'info@ktcus.com') + ' as ' + signatureLines(mc.sender).slice(0, 2).join(', '), ok: mc.configured, unknown: false,
         detail: mc.configured ? 'Set up on the server (' + mc.smtp_host + ':' + mc.smtp_port + '). Every message is approved by a person before it goes. Use “Test the mailbox” to check the sign-in.' : 'Not connected — add COMMERCIAL_MAIL_USER and COMMERCIAL_MAIL_PASSWORD in Vercel → Settings → Environment Variables, then redeploy.' });
-      h.push({ key: 'email_read', label: 'Reading replies', ok: !!(mc.configured && lr0 && lr0.ok), unknown: !!(mc.configured && !lr0),
-        detail: !mc.configured ? 'Not connected (same mailbox settings).' : !lr0 ? 'Not checked yet — it runs every 5 minutes once a message has been sent.' : lr0.ok ? 'Last checked ' + String(lr0.at || '').substring(0, 16).replace('T', ' ') + ' UTC — ' + (lr0.stored || 0) + ' new reply(ies).' : 'Last check failed: ' + (lr0.error || 'unknown') });
+      // v55.83-UY (Max's screen, Nov 19: "CONNECTED" beside a failed reading test) — a check that never opened the mailbox (nothing sent yet) proves nothing
+      var readProven = !!(mc.configured && lr0 && lr0.ok && !lr0.nothing_sent && (Number(lr0.scanned) > 0 || lr0.nothing_sent === false));
+      h.push({ key: 'email_read', label: 'Reading replies', ok: readProven, unknown: !!(mc.configured && (!lr0 || (lr0.ok && !readProven))),
+        detail: !mc.configured ? 'Not connected (same mailbox settings).' : !lr0 ? 'Not checked yet — it runs every 5 minutes once a message has been sent.' : (lr0.ok && !readProven) ? 'Not proven yet: nothing has been sent, so the mailbox has not been opened for reading. Use “Test the mailbox” — it must show a green “Reading” line.' : lr0.ok ? 'Last checked ' + String(lr0.at || '').substring(0, 16).replace('T', ' ') + ' UTC — ' + (lr0.stored || 0) + ' new reply(ies).' : 'Last check failed: ' + (lr0.error || 'unknown') });
       return NextResponse.json({ ok: true, health: h, usage: mu.error ? null : mu, can_research: canResearch, can_approve: canApprove });
     }
 
@@ -198,6 +200,36 @@ export async function POST(req) {
 
     if (R.stage === 'closed' && action !== 'reopen') { return fail('This request is closed. Reopen it to change it.', 409); }
 
+    // v55.83-UY (Max, Nov 19: "edit the request") — change what was asked for after the request was created.
+    // Same checks as creating one. Not while research is waiting or running (a paid run must not read a half-changed request).
+    if (action === 'edit_request') {
+      if (R.stage === 'researching') { return fail('Research is running for this request. Wait until it finishes, then edit it.', 409); }
+      var liveJ = await db.from('agent_jobs').select('id').eq('ref_id', R.id).in('status', ['queued', 'running']).limit(1);
+      if (liveJ.error) { return dbErr(liveJ.error); }
+      if (liveJ.data && liveJ.data[0]) { return fail('Research is waiting or running for this request. Wait until it finishes, then edit it.', 409); }
+      var ve = validateRequest(Object.assign({}, body.request || {}, { due_date: R.due_date || null }));
+      if (!ve.ok) { return fail(ve.errors.join(' ')); }
+      var EDITABLE = ['company', 'direction', 'product', 'specs', 'quantity', 'destination', 'needed_by', 'internal_note'];
+      var ePatch = {}; var before = {}; var after = {}; var changed = [];
+      EDITABLE.forEach(function (k) {
+        var was = R[k] == null || R[k] === '' ? null : R[k]; var now = ve.row[k] == null || ve.row[k] === '' ? null : ve.row[k];
+        if (String(was == null ? '' : was) === String(now == null ? '' : now)) { return; }
+        ePatch[k] = now; changed.push(k);
+        if (k !== 'internal_note') { before[k] = was; after[k] = now; }   // the internal note's text never goes into the audit log (it is read more widely)
+      });
+      if (!changed.length) { return NextResponse.json({ ok: true, changed: [], unsent_drafts: 0 }); }
+      // the title follows the product only when it was never given its own wording
+      if (ePatch.product && String(R.title || '') === String(R.product || '').substring(0, 140)) { ePatch.title = String(ePatch.product).substring(0, 140); }
+      ePatch.updated_at = nowIso();
+      var eu = await db.from('sourcing_requests').update(ePatch).eq('id', R.id).neq('stage', 'researching').neq('stage', 'closed').select('id');
+      if (eu.error) { return dbErr(eu.error); }
+      if (!eu.data || !eu.data.length) { return fail('The request changed while you were editing (research started or it was closed). Open it again.', 409); }
+      var unsent = 0;
+      try { var dq = await db.from('commercial_messages').select('id, status').eq('request_id', R.id).in('status', ['draft', 'pending_approval', 'approved', 'failed']); unsent = (dq && !dq.error && dq.data) ? dq.data.length : 0; } catch (eD) { unsent = 0; }
+      await audit(db, userId, 'sourcing_request_edited', 'sourcing_request', R.id, { request: requestLabel(R.seq), changed: changed, before: before, after: after, internal_note_changed: changed.indexOf('internal_note') >= 0, unsent_drafts: unsent });
+      return NextResponse.json({ ok: true, changed: changed, unsent_drafts: unsent });
+    }
+
     // ── stage, next action, due date
     if (action === 'update') {
       var patch = { updated_at: nowIso() };
@@ -225,10 +257,18 @@ export async function POST(req) {
       if (!canResearch) { return fail('Starting paid web research needs the “Commercial: Start web research” permission.', 403); }
       var mu3 = await monthUsage(db);
       if (mu3.error) { return fail(mu3.error + SQL_HINT, 400); }
-      if (!mu3.fits) { return fail('The monthly web-search cap is reached: $' + mu3.spent.toFixed(2) + ' used of $' + mu3.cap.toFixed(2) + '. A run can use up to ' + SEARCHES_PER_RUN + ' searches ($' + mu3.run_cost_max.toFixed(2) + ').', 409); }
+      if (!mu3.fits) { return fail('The monthly research limit is reached: $' + mu3.spent.toFixed(2) + ' used of $' + mu3.cap.toFixed(2) + ' (searches and AI work together). One run needs up to $' + mu3.run_cost_max.toFixed(2) + ' free.', 409); }
+      // v55.83-UY rev 2 (Codex 19 Nov, P2 "edit_request is not atomic against start_research"): the request is marked "researching" FIRST, in one
+      // conditional statement, and only then is the job created. An edit changes the request only with stage <> researching in its own statement, so
+      // the two can never both win: no job can exist for a request that an edit is still allowed to change, and a worker only ever reads the brief
+      // after the stage is set. If the job cannot be created the stage is put back.
+      var prevStage = R.stage; var prevNext = R.next_action || null;
+      var lk = await db.from('sourcing_requests').update({ stage: 'researching', next_action: 'The agent is researching suppliers on the web.', updated_at: nowIso() }).eq('id', R.id).neq('stage', 'researching').neq('stage', 'closed').select('id');
+      if (lk.error) { return dbErr(lk.error); }
+      var took = !!(lk.data && lk.data.length);
+      var putBack = async function () { if (took) { await db.from('sourcing_requests').update({ stage: prevStage, next_action: prevNext, updated_at: nowIso() }).eq('id', R.id).eq('stage', 'researching'); } };
       var ji = await db.from('agent_jobs').insert({ kind: 'sourcing_research', ref_id: R.id, created_by: userId }).select('id').single();
-      if (ji.error) { if (/duplicate key|uq_agent_job_live/i.test(ji.error.message || '')) { return fail('Research for this request is already running or waiting — it will not be started (or paid for) twice.', 409); } return dbErr(ji.error); }
-      await db.from('sourcing_requests').update({ stage: 'researching', next_action: 'The agent is researching suppliers on the web.', updated_at: nowIso() }).eq('id', R.id);
+      if (ji.error) { await putBack(); if (/duplicate key|uq_agent_job_live/i.test(ji.error.message || '')) { return fail('Research for this request is already running or waiting — it will not be started (or paid for) twice.', 409); } return dbErr(ji.error); }
       await audit(db, userId, 'sourcing_research_started', 'sourcing_request', R.id, { request: requestLabel(R.seq), job: ji.data.id, max_searches: SEARCHES_PER_RUN, month_spent_before: mu3.spent });
       return NextResponse.json({ ok: true, job_id: ji.data.id });
     }

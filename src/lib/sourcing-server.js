@@ -2,10 +2,12 @@
 // The AI searches the public web (a paid tool, counted against the monthly cap) and records candidates through a tool call;
 // only what vetShortlist() can tie to a page the search really returned is saved. Nothing here sends a message.
 import { audit } from './audit-server';
-import { researchBrief, RESEARCH_SYSTEM, RECORD_TOOL, sourcesFromResponse, vetShortlist, SEARCHES_PER_RUN, searchBudget, DEFAULT_MONTHLY_CAP_USD, requestLabel } from './sourcing';
+import { researchBrief, RESEARCH_SYSTEM, RECORD_TOOL, sourcesFromResponse, vetShortlist, SEARCHES_PER_RUN, searchBudget, DEFAULT_MONTHLY_CAP_USD, requestLabel, tokenCostUsd, AI_RUN_ALLOWANCE_USD, AI_MAX_OUTPUT_TOKENS, nextCallFits } from './sourcing';
 
 export function monthlyCap() { var c = Number(process.env.COMMERCIAL_SEARCH_MONTHLY_CAP_USD); return c >= 0 && process.env.COMMERCIAL_SEARCH_MONTHLY_CAP_USD ? c : DEFAULT_MONTHLY_CAP_USD; }
-export function agentModel() { return process.env.COMMERCIAL_AGENT_MODEL || 'claude-sonnet-4-6'; }
+// v55.83-UY (Max, Nov 19: "i need a smart AI") — the research runs on the stronger model; COMMERCIAL_AGENT_MODEL in Vercel still overrides it
+export function agentModel() { return process.env.COMMERCIAL_AGENT_MODEL || 'claude-opus-5-5'; }
+export function webSearchToolType() { return process.env.COMMERCIAL_WEB_SEARCH_TOOL || 'web_search_20250305'; }
 
 // paid searches used since the first of this month (UTC), as reported by the provider on each job
 export async function monthUsage(db) {
@@ -14,7 +16,7 @@ export async function monthUsage(db) {
   if (r.error) { return { error: r.error.message }; }
   var s = 0, it = 0, ot = 0, jobs = 0;
   (r.data || []).forEach(function (j) { s += Number(j.searches) || 0; it += Number(j.input_tokens) || 0; ot += Number(j.output_tokens) || 0; jobs++; });
-  var b = searchBudget(s, monthlyCap(), SEARCHES_PER_RUN);
+  var b = searchBudget(s, monthlyCap(), SEARCHES_PER_RUN, tokenCostUsd(agentModel(), it, ot), AI_RUN_ALLOWANCE_USD);   // v55.83-UY — searches + AI work
   b.jobs = jobs; b.input_tokens = it; b.output_tokens = ot;
   return b;
 }
@@ -27,18 +29,22 @@ export async function researchCall(request, opts) {
   var messages = [{ role: 'user', content: researchBrief(request) }];
   var sources = {}; var usage = { searches: 0, input_tokens: 0, output_tokens: 0 }; var recorded = null; var nudged = false;
   var deadline = Date.now() + (o.budgetMs || 240000);
+  var ceiling = o.aiCeilingUsd == null ? AI_RUN_ALLOWANCE_USD : Number(o.aiCeilingUsd); var lastInput = 0;
   for (var turn = 0; turn < 5; turn++) {
+    // v55.83-UY rev 2 — money is checked before every call: a run stops rather than pass its ceiling (and is not retried, a retry would pay again)
+    var nf = nextCallFits(agentModel(), usage.input_tokens, usage.output_tokens, lastInput, ceiling);
+    if (!nf.fits) { return { error: 'The research was stopped: it reached the spending ceiling for one run ($' + ceiling.toFixed(2) + ') before it finished.', fatal: true, ceiling: true, usage: usage, sources: sources }; }
     if (Date.now() > deadline) { return { error: 'The research ran out of time before it finished.', usage: usage, sources: sources }; }
     var left = SEARCHES_PER_RUN - usage.searches;
     var tools = [RECORD_TOOL];
-    if (left > 0) { tools.unshift({ type: 'web_search_20250305', name: 'web_search', max_uses: left }); }
+    if (left > 0) { tools.unshift({ type: webSearchToolType(), name: 'web_search', max_uses: left }); }
     var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = ctl ? setTimeout(function () { try { ctl.abort(); } catch (eA) { /* ignore */ } }, Math.max(5000, deadline - Date.now())) : null;
     var res, j;
     try {
       res = await doFetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctl ? ctl.signal : undefined,
         headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: agentModel(), max_tokens: 4000, system: RESEARCH_SYSTEM, tools: tools, messages: messages }) });
+        body: JSON.stringify({ model: agentModel(), max_tokens: AI_MAX_OUTPUT_TOKENS, system: RESEARCH_SYSTEM, tools: tools, messages: messages }) });
       j = await res.json();
     } catch (eF) { if (timer) { clearTimeout(timer); } return { error: 'Could not reach the AI service (' + ((eF && eF.message) || 'network') + ').', usage: usage, sources: sources }; }
     if (timer) { clearTimeout(timer); }
@@ -48,9 +54,11 @@ export async function researchCall(request, opts) {
         web_search_off: /web search/i.test(msg) && /not enabled|disabled/i.test(msg) };
     }
     var u = j.usage || {};
-    usage.input_tokens += Number(u.input_tokens) || 0; usage.output_tokens += Number(u.output_tokens) || 0;
+    usage.input_tokens += Number(u.input_tokens) || 0; usage.output_tokens += Number(u.output_tokens) || 0; lastInput = Number(u.input_tokens) || 0;
     usage.searches += Number(u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
     var content = j.content || [];
+    // v55.83-UY — the AI service can decline a request (it answers normally but with stop_reason "refusal"): a plain failed run, never a result
+    if (j.stop_reason === 'refusal') { return { error: 'The AI service declined this research request.', fatal: true, usage: usage, sources: sources }; }
     sourcesFromResponse(content, sources);
     var call = content.filter(function (b) { return b && b.type === 'tool_use' && b.name === 'record_shortlist'; })[0];
     if (call) { recorded = call.input || {}; break; }
@@ -116,9 +124,16 @@ export async function runNextJob(db, opts) {
   if (!request || request.stage === 'closed') { await finish({ status: 'cancelled', finished_at: new Date().toISOString(), last_error: 'the request no longer exists or is closed' }); return { ran: true, job_id: job.id, ok: false, cancelled: true }; }
   // the cap is checked again at run time (several jobs could have been queued)
   var mu = await monthUsage(db);
-  if (!mu.error && !mu.fits) {
-    await finish({ status: 'failed', finished_at: new Date().toISOString(), last_error: 'Monthly web-search cap reached ($' + mu.spent.toFixed(2) + ' of $' + mu.cap.toFixed(2) + ').' });
-    await db.from('sourcing_requests').update({ stage: 'new', next_action: 'Research did not run: the monthly web-search cap is reached.', updated_at: new Date().toISOString() }).eq('id', request.id).eq('stage', 'researching');
+  // v55.83-UY (Codex 18 Nov 23:06) — when this month's spending cannot be read, NOTHING paid runs (it used to go ahead)
+  if (mu.error) {
+    var stopU = job.attempts >= job.max_attempts; var whyU = 'Research did not run: this month\'s spending could not be read (' + String(mu.error).substring(0, 160) + ').';
+    await finish(stopU ? { status: 'failed', finished_at: new Date().toISOString(), last_error: whyU } : { status: 'queued', run_after: new Date(Date.now() + 5 * 60000 * Math.max(1, Number(job.attempts) || 1)).toISOString(), last_error: whyU });
+    if (stopU) { await db.from('sourcing_requests').update({ stage: 'new', next_action: whyU.substring(0, 300), updated_at: new Date().toISOString() }).eq('id', request.id).eq('stage', 'researching'); }
+    return { ran: true, job_id: job.id, ok: false, error: whyU, will_retry: !stopU, usage_unreadable: true };
+  }
+  if (!mu.fits) {
+    await finish({ status: 'failed', finished_at: new Date().toISOString(), last_error: 'Monthly research limit reached ($' + mu.spent.toFixed(2) + ' of $' + mu.cap.toFixed(2) + ').' });
+    await db.from('sourcing_requests').update({ stage: 'new', next_action: 'Research did not run: the monthly research limit is reached.', updated_at: new Date().toISOString() }).eq('id', request.id).eq('stage', 'researching');
     return { ran: true, job_id: job.id, ok: false, cap: true };
   }
   var r = await researchCall(request, { fetch: o.fetch, budgetMs: o.budgetMs });

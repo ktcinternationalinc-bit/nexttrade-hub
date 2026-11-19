@@ -176,14 +176,14 @@ export async function checkInbox(db, opts) {
     } finally { try { lock.release(); } catch (eR) { /* ignore */ } }
     out.ok = true;
   } catch (e) {
-    out.error = String((e && e.message) || e).substring(0, 300);
+    out.error = imapWhy(e).substring(0, 300);
     out.auth_failed = /auth|login|credentials|AUTHENTICATIONFAILED/i.test(out.error);
   } finally { try { await client.logout(); } catch (eL) { /* ignore */ } }
   await saveState(db, out);
   return out;
 }
 async function saveState(db, out) {
-  var rec = { id: 1, last_result: { ok: out.ok, stored: out.stored, bounces: out.bounces, scanned: out.scanned, error: out.error || null, at: now() }, updated_at: now() };
+  var rec = { id: 1, last_result: { ok: out.ok, stored: out.stored, bounces: out.bounces, scanned: out.scanned, error: out.error || null, nothing_sent: !!out.nothing_sent, at: now() }, updated_at: now() };   // v55.83-UY — nothing_sent = the mailbox was NOT opened
   if (out.ok) { rec.last_check_at = now(); }
   try { await db.from('commercial_mail_state').upsert(rec, { onConflict: 'id' }); } catch (e) { /* the table may not exist yet */ }
 }
@@ -212,6 +212,14 @@ export async function prepareFollowUps(db, opts) {
 }
 
 // ── "Test the mailbox": sign in to sending and reading, send nothing
+// v55.83-UY (Max, Nov 19: the test said only "Command failed") — the mail server's own answer, in plain words. Never the password.
+export function imapWhy(e) {
+  var base = String((e && e.message) || e || 'unknown error');
+  var said = String((e && (e.responseText || e.response)) || '').replace(/\s+/g, ' ').trim();
+  var out = base + (said && said !== base ? ' — the mail server said: “' + said.substring(0, 200) + '”' : '');
+  if (e && e.authenticationFailed) { out += ' (the mail server refused the sign-in for reading: check that IMAP is switched on for this mailbox, and that the password is the mailbox password)'; }
+  return out.substring(0, 420);
+}
 export async function testMailbox(opts) {
   var o = opts || {}; var cfg = o.config || mailConfig(); var steps = [];
   steps.push({ ok: isEmail(cfg.user), text: 'Mailbox name (COMMERCIAL_MAIL_USER): ' + (cfg.user || 'not set') });
@@ -221,7 +229,7 @@ export async function testMailbox(opts) {
   catch (e) { steps.push({ ok: false, text: 'Sending: could not sign in to ' + cfg.smtp_host + ':' + cfg.smtp_port + ' — ' + String((e && e.message) || e).substring(0, 160) + (cfg.smtp_port === 465 ? ' (if this is an encryption error, set COMMERCIAL_SMTP_PORT=587)' : '') }); }
   var c = makeImap(cfg, o);
   try { await c.connect(); steps.push({ ok: true, text: 'Reading: signed in to ' + cfg.imap_host + ':993' }); }
-  catch (e2) { steps.push({ ok: false, text: 'Reading: could not sign in to ' + cfg.imap_host + ':993 — ' + String((e2 && e2.message) || e2).substring(0, 160) }); }
+  catch (e2) { steps.push({ ok: false, text: 'Reading: could not sign in to ' + cfg.imap_host + ':993 — ' + imapWhy(e2) }); }
   finally { try { await c.logout(); } catch (eL) { /* ignore */ } }
   return { ok: steps.every(function (s) { return s.ok; }), steps: steps, sender: signatureLines(cfg.sender).join(' · ') };
 }

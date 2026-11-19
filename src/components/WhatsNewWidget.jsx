@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UY',
+    date: '2026-11-19',
+    title: 'Sourcing desk: edit a request, a smarter AI, and a monthly limit that covers everything',
+    items: [
+      { text: 'New “✏ Edit request” button on every sourcing request: change the company, what it is, the product, specifications, quantity, destination, needed-by date and the internal note after the request was created. Suppliers already on the shortlist stay. Not available while research is running.' },
+      { text: 'The web research now runs on a stronger AI, and it knows that used, second-hand and surplus goods are sold by dealers, marketplaces and auction houses — the first request (a used Caterpillar loader) came back empty because it was looking for makers and authorised distributors only.' },
+      { text: 'The $50 monthly limit now counts the searches AND the AI’s work together, and research stops (instead of going ahead) if this month’s spending cannot be read.' },
+      { text: 'Still true: nothing is saved unless it points to a page the search really returned, and nothing is sent to anyone without approval.' },
+      { text: 'Mailbox: “Test the mailbox” now repeats what the mail server actually said when reading fails; “Reading replies” shows CONNECTED only after the mailbox was really opened; and the “What is connected” box opens by itself while sending or reading is not connected. One research run is stopped if the AI’s work reaches $2.' },
+      { text: 'Technical: commercial route edit_request (verified caller, audit sourcing_request_edited with before/after, internal note text never in the audit); sourcing-server.js default model claude-opus-5-5, max_tokens 16000, refusal handled, budget fail-closed (Codex 18 Nov 23:06); searchBudget adds token cost.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-UX',
     date: '2026-11-19',
     title: 'Wires: a payment can never use money another open wire holds — also from the same transfer',
