@@ -9,6 +9,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom'; // v55.83-UM — full screen above the Hub header
 import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
+import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
+import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -69,6 +71,10 @@ export default function ProfitabilityTab(props) {
   var s4 = useState(false); var busy = s4[0]; var setBusy = s4[1];
   var sEF = useState(true); var onlyDiff = sEF[0]; var setOnlyDiff = sEF[1]; // v55.83-TG — Estimate vs Final: show only differences
   var s5 = useState('product'); var view = s5[0]; var setView = s5[1];
+  // v55.83-VG (Max, Nov 19: "need a search on this page" · "click on the view invoice and see a copy of the invoice and edit it from there")
+  var sQ = useState(''); var searchQ = sQ[0]; var setSearchQ = sQ[1];
+  var sPk = useState(null); var peekId = sPk[0]; var setPeekId = sPk[1];
+  var onGo = props.onGo || function () {};
   var s6 = useState(null); var open = s6[0]; var setOpen = s6[1];
   var s7 = useState({}); var pick = s7[0]; var setPick = s7[1];
   var s8 = useState(''); var groupName = s8[0]; var setGroupName = s8[1];
@@ -477,7 +483,8 @@ export default function ProfitabilityTab(props) {
     return [
       <td key="c0" className={sub ? 'px-2 py-1' : 'px-2 py-1.5 font-bold'} style={Object.assign({ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', minWidth: 220, maxWidth: 300 }, sub ? { paddingLeft: 26 } : {})}>{(isOpen ? '▾ ' : '▸ ') + r.label}
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
-        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'shipping_line_rule' ? ' (assumed — shipping line on the invoice, not in the price)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
+        {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'shipping_line_rule' ? ' (assumed — shipping line on the invoice, not in the price)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}
+        {isInvoice && !sub && r.invoice && r.invoice.id && <button type="button" onClick={function (e) { e.stopPropagation(); setPeekId(r.invoice.id); }} className="mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }} title="Open a copy of this invoice. From there, Edit opens it in the Invoices screen.">🧾 view invoice</button>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && dot('Some weights are missing — only lines with a weight are counted')}</td>,
       <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{(Number(r.invoiced) || 0) - (Number(r.goods_revenue) || 0) > 0.009 && !(r.unknown_fields || []).some(function (f) { return f === 'goods_revenue'; }) ? <span>{'$' + fmt(r.goods_revenue)}<button type="button" title={'On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'} aria-label={'On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'} onClick={function (e) { e.stopPropagation(); explain('On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'); }} className="ml-1 px-1 rounded font-bold" style={{ fontSize: 8, background: '#e2e8f0', color: '#475569', verticalAlign: 'middle', border: 0, cursor: 'help' }}>CNF</button></span> : money(r, 'goods_revenue')}</td>,
       <td key="c3" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#065f46' }}>{r.avg_goods_price_per_lb === null ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_goods_price_per_lb)}</td>,
@@ -504,7 +511,8 @@ export default function ProfitabilityTab(props) {
       <div className="text-[10px] mb-1" style={{ color: SUB }}>{'Releases: ' + (r.release_list.length ? r.release_list.join(', ') : 'none') + ' · ' + r.invoice_count + ' invoice(s) · ' + cs.length + ' line(s). Hover over “Cost from” to see the supplier bills behind a cost.'}</div>
       {cellsTable(cs, isInvoice, true)}</td></tr>;
   }
-  function viewTable(rows, firstCol, isInvoice) {
+  function viewTable(rowsAll, firstCol, isInvoice) {
+    var rows = filterRowsBySearch(rowsAll, searchQ); // v55.83-VG — search only chooses which rows are shown
     // v55.83-TA — under each MERGED product, its original descriptions, each with its own totals and averages
     var subsOf = {};
     if (view === 'product') { ((data && data.by_product_names) || []).forEach(function (s0) { (subsOf[s0.parent] = subsOf[s0.parent] || []).push(s0); }); }
@@ -704,6 +712,11 @@ export default function ProfitabilityTab(props) {
         {[['period', '📅 P&L by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice'], ['containers', '🚢 Containers (shipping cost)'], ['estfinal', '⚖ Estimate vs Final (shipping)'], ['setup', '⚙ Names, units and supplier links']].map(function (v) {
           return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
         <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>
+        {(view === 'product' || view === 'customer' || view === 'invoice') && <span className="flex items-center gap-1 ml-auto">
+          <input type="search" value={searchQ} onChange={function (e) { setSearchQ(e.target.value); setOpen(null); }} placeholder="🔎 Search invoice, customer, release, product…" aria-label="Search the rows of this table" className="nt-light px-2.5 py-1.5 rounded-lg text-[12px]" style={{ width: 290, border: '1px solid ' + LINE, background: '#ffffff', color: INK }} />
+          {searchQ.trim() !== '' && <span className="text-[11px] font-bold" style={{ color: '#b45309' }}>{filterRowsBySearch(view === 'product' ? (data.by_product || []) : view === 'customer' ? (data.by_customer || []) : (data.by_invoice || []), searchQ).length + ' of ' + (view === 'product' ? (data.by_product || []) : view === 'customer' ? (data.by_customer || []) : (data.by_invoice || [])).length + ' shown — the totals above are for ALL rows'}</span>}
+          {searchQ.trim() !== '' && <button type="button" onClick={function () { setSearchQ(''); }} className="px-2 py-1 rounded text-[11px] font-bold" style={{ background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }}>clear</button>}
+        </span>}
       </div>
       {view === 'period' && periodView()}
       {view === 'product' && viewTable(data.by_product || [], 'Product', false)}
@@ -717,5 +730,6 @@ export default function ProfitabilityTab(props) {
       </div>
     </div>}
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}
+    {peekId && <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); setFull(false); onGo('invoices'); }} />}
   </div>;
 }

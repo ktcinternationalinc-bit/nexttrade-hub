@@ -33,15 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
-    version: 'v55.83-VF',
+    version: 'v55.83-VG',
     date: '2026-11-19',
-    title: 'Egypt Bank: import the bank’s PDF statement',
+    title: 'Egypt Bank: import the bank’s PDF statement, and “hide one → hide all like it”. Profitability: search and view invoice',
     items: [
-      { text: 'Egypt Bank → Import now takes the bank’s **PDF statement** as well as Excel / CSV. Pick the PDF with the same “Select File(s)” button.' },
-      { text: 'Every row read from the PDF is **checked against the bank’s own running balance**. The preview says “all balances agree” in green, or shows an amber warning naming the first line that does not agree — before anything is imported.' },
-      { text: 'Which column is money in and which is money out is worked out from the balances, not guessed. A scanned picture of a statement, or a PDF with no running balance, is refused with the reason instead of being imported on a guess.' },
-      { text: 'The file is read on your own computer; it is not sent anywhere. The usual preview, duplicate check and import follow, exactly as for Excel.' },
-      { superAdminOnly: true, text: 'Technical: new src/lib/pdf-statement.js (statementFromTextItems, statementCheckText, parseStatementDate, parseStatementAmount): lines by baseline, date column and description column by clustering, money columns by right-edge clustering on dated lines, debit vs credit proved by replaying both readings against printed balances, single-amount-column statements signed by subset sum between printed balances, opening / closing lines (English and Arabic) used for the check. EgyptBankTab reads text with pdfjs-dist 3.11.174 (legacy build, worker entry on the main thread, dynamic import), accept now includes pdf, check note in the preview (amounts only with bank-balance permission). next.config aliases canvas to false. Test vf-egypt-bank-pdf-statement, 28 checks incl. the real 8-page CIB sample when present.' },
+      { text: '**Egypt Bank → Import now takes the bank’s PDF statement** as well as Excel / CSV, with the same “Select File(s)” button. The file is read on your own computer; it is not sent anywhere.' },
+      { text: 'A PDF is imported **only when every row is proved against the bank’s own running balance** (and the closing balance, when it is printed). Then the preview says so in green. If anything does not agree, or it cannot be proved which amounts are money in and which are money out, **nothing from that PDF is imported** and the screen says why. A scanned picture of a statement cannot be read.' },
+      { text: 'If the same statement was already imported from Excel, the usual duplicate check applies: identical lines are skipped, and lines with the same date and amount are held for you to decide.' },
+      { text: '**Egypt Bank: hide one, hide all like it.** When you hide a transaction you are asked once whether to hide every other one with the same words (for example “Outward Swift Charges”), now and on future imports. You can change the words first. It is saved as a normal private rule under ⚙ Rules, where you can switch it off or delete it.' },
+      { text: '**Profitability: search box** on By product / By customer / By invoice — type an invoice number, customer, release number or product. The totals at the top always stay for all rows.' },
+      { text: '**Profitability → By invoice: “🧾 view invoice”** on every row opens a copy of the invoice; Edit there takes you to it in the Invoices screen.' },
+      { text: 'Stats & Income Statement: the “pick a category” box and the date boxes are readable again (dark text on white).' },
+      { superAdminOnly: true, text: 'Technical: src/lib/pdf-statement.js (reader; direction proved only when exactly one reading fits the printed balances; one-column statements need a unique sign solution per run; rows after the last balance need a matching closing line; pdfRowsForImport is the gate, importBlockedByPdf is re-checked in doImport and executeImport), pdf-statement-browser.js (pdfjs-dist 3.11.174 legacy build, lazy chunk, main-thread worker, isEvalSupported false), egypt-bank-duplicates.js (classification moved word for word out of EgyptBankTab), egypt-bank-hide-learn.js, profitability-search.js; next.config aliases canvas and path2d-polyfill to false. Codex 15:48 and 16:03 P1 fixed. Tests vf-egypt-bank-pdf-statement, vg-pdf-import-gate, vg-hide-learn-search-view.' },
     ]
   },
   {

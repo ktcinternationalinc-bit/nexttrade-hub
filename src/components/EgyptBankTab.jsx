@@ -2,7 +2,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import * as XLSX from 'xlsx';
-import { statementFromTextItems, statementCheckText } from '../lib/pdf-statement'; // v55.83-VF — bank statement PDFs
+import { pdfRowsForImport, importBlockedByPdf } from '../lib/pdf-statement';
+import { readPdfStatementInBrowser } from '../lib/pdf-statement-browser'; // v55.83-VF — bank statement PDFs
+import { classifyAgainstExisting } from '../lib/egypt-bank-duplicates'; // v55.83-VG — duplicate classification (testable)
+import { hidePhraseFrom, hidePhraseUsable, countHideMatches, hideLearnQuestion, hideRuleFor } from '../lib/egypt-bank-hide-learn'; // v55.83-VG — hide one, learn, hide the rest
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
 import { useBankVisibility } from '../lib/use-bank-visibility';
@@ -121,28 +124,18 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   // v55.83-VF (Max, Nov 19 2026: "I NEED TO BE ABLE TO IMPORT PDFS AS WELL IN EGYPT BANK") — a statement the bank exports as PDF.
   // The words are read in the browser (the file is not sent anywhere), turned into the same rows as an Excel statement, and every
   // row is checked against the bank's own running balance. The result of that check is shown before anything is imported.
-  const readPdfStatement = async (file) => {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf');
-    const worker = await import('pdfjs-dist/legacy/build/pdf.worker.entry');
-    pdfjs.GlobalWorkerOptions.workerSrc = worker.default || worker;
-    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
-    const pages = [];
-    for (let n = 1; n <= doc.numPages; n++) {
-      const tc = await (await doc.getPage(n)).getTextContent();
-      pages.push(tc.items.map(i => ({ str: i.str, x: i.transform[4], y: i.transform[5], w: i.width })));
-    }
-    return statementFromTextItems(pages);
-  };
+  const readPdfStatement = async (file) => readPdfStatementInBrowser(await file.arrayBuffer());
 
   const parseOneFile = async (file) => {
     if (/\.pdf$/i.test(file.name || '') || file.type === 'application/pdf') {
       let res;
       try { res = await readPdfStatement(file); }
       catch (err) { alert('The PDF "' + file.name + '" could not be opened (' + ((err && err.message) || 'unknown reason') + '). If it is password-protected, save an unprotected copy or export Excel from the bank.'); return []; }
-      if (!res.ok) { alert(file.name + ': ' + res.error); return []; }
-      setPdfNotes(prev => [...prev, { name: file.name, ok: res.check.ok === true, text: statementCheckText(res.check, file.name),
-        short: file.name + ': ' + res.check.rows + ' rows read from ' + res.check.pages + ' pages. ' + (res.check.ok === true ? 'Checked against the bank’s own running balance: everything agrees.' : '⚠ The rows could NOT all be checked against the bank’s running balance — look at them carefully before importing.') }]);
-      return res.transactions.map((t, i) => ({ date: t.date, description: t.description, amount: t.amount, _include: true, _row: i + 1 }));
+      // v55.83-VG (Codex 16:03) — THE GATE: rows come out only when every one is proved against the bank's printed balances.
+      const gate = pdfRowsForImport(res, file.name);
+      if (gate.note) setPdfNotes(prev => [...prev, gate.note]);
+      if (gate.refused) { alert(seeBankBalances || !gate.note ? gate.reason : gate.note.short); return []; }
+      return gate.rows;
     }
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data);
@@ -386,54 +379,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
       if (resp.data.length < pageSize) break;
       from += pageSize;
     }
-    // Build lookup index: key = date|amount|desc60, value = list of existing rows
-    var exactIndex = {};
-    var amountDateIndex = {}; // key = date|amount (for cross-description match)
-    allExisting.forEach(function (e) {
-      var dsc60 = (e.description || '').substring(0, 60).trim().toLowerCase();
-      var key = e.date + '|' + e.amount + '|' + dsc60;
-      if (!exactIndex[key]) exactIndex[key] = [];
-      exactIndex[key].push(e);
-      var ak = e.date + '|' + e.amount;
-      if (!amountDateIndex[ak]) amountDateIndex[ak] = [];
-      amountDateIndex[ak].push(e);
-    });
-
-    var classified = toImport.map(function (row) {
-      var dsc60 = (row.description || '').substring(0, 60).trim().toLowerCase();
-      var key = row.date + '|' + row.amount + '|' + dsc60;
-      var exactMatches = exactIndex[key] || [];
-      if (exactMatches.length > 0) {
-        return { row: row, status: 'exact', matches: exactMatches, decision: 'skip' };
-      }
-      // Same date + amount but different description?
-      var ak = row.date + '|' + row.amount;
-      var sameDayAmount = (amountDateIndex[ak] || []).filter(function (e) {
-        var edsc = (e.description || '').substring(0, 60).trim().toLowerCase();
-        return edsc !== dsc60;
-      });
-      if (sameDayAmount.length > 0) {
-        return { row: row, status: 'possible', matches: sameDayAmount, decision: 'review' };
-      }
-      // Adjacent date (±2 days), same amount, similar description?
-      var rowDate = new Date(row.date);
-      var nearMatches = allExisting.filter(function (e) {
-        if (e.amount !== row.amount) return false;
-        var ed = new Date(e.date);
-        var diffDays = Math.abs((ed - rowDate) / 86400000);
-        if (diffDays > 2 || diffDays === 0) return false;
-        var edsc = (e.description || '').substring(0, 40).trim().toLowerCase();
-        var rdsc = (row.description || '').substring(0, 40).trim().toLowerCase();
-        // Both strings contain a common token longer than 6 chars
-        if (edsc.length === 0 || rdsc.length === 0) return false;
-        return edsc === rdsc || (edsc.length > 10 && rdsc.includes(edsc.substring(0, 10))) || (rdsc.length > 10 && edsc.includes(rdsc.substring(0, 10)));
-      });
-      if (nearMatches.length > 0) {
-        return { row: row, status: 'possible', matches: nearMatches, decision: 'review' };
-      }
-      return { row: row, status: 'clean', matches: [], decision: 'import' };
-    });
-    return classified;
+    // v55.83-VG — the classification itself lives in src/lib/egypt-bank-duplicates.js (moved word for word, so it can be tested)
+    return classifyAgainstExisting(toImport, allExisting);
   };
 
   // State for the review step (v55.83-A.6.14)
@@ -452,6 +399,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     if (!accId) { alert('Select an account first / اختر حسابًا أولاً'); return; }
     const toImport = importData.filter(r => r._include);
     if (toImport.length === 0) { alert('No rows selected / لم يتم اختيار صفوف'); return; }
+    const pdfBlock = importBlockedByPdf(toImport); // v55.83-VG — a PDF row without its proof mark stops the import
+    if (pdfBlock) { alert(pdfBlock); return; }
 
     setImportStep('analyzing');
     // v55.83-A.6.14 — classify before importing
@@ -475,6 +424,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   // roll back this specific import later if needed. Best-effort; if the
   // bank_import_batches table doesn't exist yet, imports still succeed.
   const executeImport = async (classified, accId) => {
+    const pdfBlock2 = importBlockedByPdf((classified || []).map(function (c) { return c && c.row; })); // v55.83-VG — checked again right before anything is written
+    if (pdfBlock2) { alert(pdfBlock2); setImportStep('preview'); return; }
     setImportStep('importing');
     var imported = 0, skipped = 0, exactSkipped = 0, possibleSkipped = 0, overridden = 0;
     var toInsert = [];
@@ -1053,6 +1004,32 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
       toast?.error?.('Failed to apply rules / فشل: ' + ((e && e.message) || String(e)));
     } finally {
       setApplyingRules(false);
+    }
+  };
+
+  // v55.83-VG (Max, Nov 19 2026: "IF I HIDE SOMETHING IT SHOULD BE ABLE TO LEARN AND HIDE ALL OTHER ITEMS WITH THE SAME WORD
+  // DESCRIPTIONS") — after a Hide click the super admin is asked ONCE whether to hide everything with the same words. Yes = an
+  // ordinary PRIVATE hide rule is saved (visible, editable and removable under ⚙ Rules) and applied to every existing
+  // transaction; the rules engine then hides new ones at import. Cancel = only the clicked one stays hidden, nothing is learned.
+  const learnHideFrom = async (description, justHiddenIds) => {
+    if (!canManagePrivateRules) return;
+    const suggestion = hidePhraseFrom(description);
+    if (!hidePhraseUsable(suggestion)) return;
+    const already = (rules || []).some(r => r.active !== false && r.set_hidden && String(r.match_description || '').trim().toLowerCase() === suggestion.toLowerCase());
+    if (already) return; // these words are already a hide rule — nothing to ask
+    const others = countHideMatches(transactions, suggestion, justHiddenIds);
+    const typed = window.prompt(hideLearnQuestion(suggestion, others), suggestion);
+    if (typed === null) return;
+    const phrase = String(typed).replace(/\s+/g, ' ').trim();
+    if (!hidePhraseUsable(phrase)) { alert('At least 3 letters are needed, otherwise far too much would be hidden. Nothing was learned.'); return; }
+    try {
+      const { data, error } = await supabase.from('egypt_bank_rules').insert(hideRuleFor(phrase, myId)).select().single();
+      if (error) throw error;
+      setRules(prev => [data, ...prev]);
+      await applyRules({ ruleId: data.id });
+    } catch (e) {
+      console.error('[learnHideFrom]', e);
+      toast?.error?.('The rule could not be saved, so only the one you clicked is hidden: ' + ((e && e.message) || String(e)));
     }
   };
 
@@ -1931,6 +1908,10 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     const ids = [...selectedTxns];
                     await supabase.from('egypt_bank_transactions').update({ hidden: true }).in('id', ids);
                     setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, hidden: true} : t));
+                    // v55.83-VG — when every selected line has the same words, offer to hide the rest with those words (asked once)
+                    const picked = transactions.filter(t => selectedTxns.has(t.id));
+                    const phrases = [...new Set(picked.map(t => hidePhraseFrom(t.description).toLowerCase()))];
+                    if (picked.length && phrases.length === 1) { await learnHideFrom(picked[0].description, ids); }
                     setSelectedTxns(new Set());
                   }} className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold">🔒 Hide</button>
                 </div>
@@ -2040,6 +2021,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                           <button onClick={async () => {
                             await dbUpdate('egypt_bank_transactions', t.id, { hidden: !isHidden }, myId);
                             setTransactions(prev => prev.map(x => x.id === t.id ? {...x, hidden: !isHidden} : x));
+                            if (!isHidden) { await learnHideFrom(t.description, [t.id]); } // v55.83-VG — hide the rest with the same words?
                           }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-500')}>
                             {isHidden ? '🔓 Unhide' : '🔒 Hide'}
                           </button>

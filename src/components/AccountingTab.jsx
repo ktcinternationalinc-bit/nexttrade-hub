@@ -216,7 +216,7 @@ export default function AccountingTab(props) {
       {sub === 'sales_report' && <SalesReportTab {...props} />}
       {sub === 'pnl' && <PnLTab {...props} />}
       {alive('orders') && <div className="p-3" style={shown('orders')}><OrderMonitorTab {...props} onGo={goFrom} /></div>}
-      {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} /></div>}
+      {sub === 'profitability' && <div className="p-3"><ProfitabilityTab {...props} onGo={goFrom} /></div>}
       {alive('all_invoices') && <div style={shown('all_invoices')}><BusinessBooksTab {...props} onGo={goFrom} /></div>}
       {sub === 'proformas' && <AccountingInvoicesTab key={'acct-pf|' + waveKey} {...props} defaultMode="proformas" />}
       {sub === 'purchaseorders' && <PurchaseOrdersTab {...props} />}

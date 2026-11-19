@@ -123,7 +123,7 @@ export default function PeriodStatsTab(props) {
   function catPicker(r) {
     if (!canPick || !r.id) { return null; }
     if (saving[r.id]) { return <span className="text-[9px] font-bold" style={{ color: '#475569' }}>saving…</span>; }
-    return <select value="" onChange={function (e) { pickCat(r, e.target.value); }} className="text-[10px] rounded px-1 py-0.5"
+    return <select value="" onChange={function (e) { pickCat(r, e.target.value); }} className="nt-light text-[11px] font-semibold rounded px-1 py-1"
       style={{ border: '1px solid #fdba74', background: '#ffffff', color: '#0f172a', maxWidth: 190 }}>
       <option value="">{catList ? '— pick a category —' : 'loading…'}</option>
       {(catList || []).filter(function (c) { return c.key !== 'needs_clarification'; }).map(function (c) { return <option key={c.key} value={c.key}>{c.label}</option>; })}
@@ -273,9 +273,9 @@ export default function PeriodStatsTab(props) {
     <InvoicePeek invoiceId={peekId} onClose={function () { setPeekId(null); }} onEdit={function (id2) { try { window.__ntOpenInvoiceEdit = id2; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id2 })); } catch (e4) {} setPeekId(null); onGo('invoices'); }} />
     <div className="flex gap-2 items-center flex-wrap mb-2">
       <div className="text-sm font-extrabold text-slate-900">📉 Stats — invoices & bills</div>
-      <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={from} onChange={function (e) { setFrom(e.target.value); }} />
+      <input type="date" className="nt-light px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={from} onChange={function (e) { setFrom(e.target.value); }} />
       <span className="text-[10px] text-slate-500">→</span>
-      <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { setTo(e.target.value); }} />
+      <input type="date" className="nt-light px-2 py-1 rounded-lg border border-slate-300 text-xs text-slate-900 bg-white" value={to} onChange={function (e) { setTo(e.target.value); }} />
       <button onClick={function () { load(from, to); }} disabled={busy} className="px-3 py-1 rounded-lg text-[11px] font-extrabold" style={{ background: '#1e293b', color: '#ffffff' }}>{busy ? '…' : 'Go'}</button>
       {/* v55.83-PK (Max): "the dates has something from june 1st as selection next to month year etc" */}
       {(function () {

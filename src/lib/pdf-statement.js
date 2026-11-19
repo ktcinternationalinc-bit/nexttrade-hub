@@ -119,33 +119,83 @@ export function statementFromTextItems(pages) {
     });
     return { hits: hits, misses: misses, signed: signed, end: bal };
   }
-  var best; var proved = true;
-  if (cols.length === 3) { var A = run(true); var B = run(false); best = A.misses.length <= B.misses.length ? A : B; best.outFirst = best === A; proved = (A.hits + B.hits) > 0 && A.misses.length !== B.misses.length; }
-  else {
-    // one amount column: the sign of each row is what moves the running balance to the next printed balance
+  // v55.83-VG (Codex 19 Nov 15:48 / 16:03, P1) — PROVED means: exactly ONE reading agrees with the bank's printed balances.
+  // If two readings both agree, nothing is proved, and nothing may be imported on a guess.
+  var best; var proved = false; var ambiguous = false;
+  if (cols.length === 3) {
+    var A = run(true); var B = run(false);
+    var aFits = A.misses.length === 0 && A.hits > 0; var bFits = B.misses.length === 0 && B.hits > 0;
+    if (aFits && bFits) { ambiguous = JSON.stringify(A.signed) !== JSON.stringify(B.signed); best = A; proved = !ambiguous; }
+    else if (aFits || bFits) { best = aFits ? A : B; proved = true; }
+    else { best = A.misses.length <= B.misses.length ? A : B; proved = false; }
+    if (ambiguous) { best = { hits: A.hits, misses: [], signed: rows.map(function () { return null; }), end: null }; }
+  } else {
+    // one amount column: each run of rows between two printed balances is signed by the ONLY choice of + / − that moves the
+    // balance from one printed figure to the next. No choice fits = the bank's figure disagrees. More than one fits = not proved.
     var bal2 = opening; var signed2 = []; var hits2 = 0; var misses2 = []; var pending = [];
     rows.forEach(function (r) {
       pending.push(r);
       if (r.balance !== null && bal2 !== null) {
-        var target = r.balance - bal2; var n = pending.length; var found = null;
-        for (var mask = 0; mask < (1 << Math.min(n, 12)) && found === null; mask++) { var sum = 0; for (var i = 0; i < n; i++) { sum += ((mask >> i) & 1 ? 1 : -1) * (pending[i].a0 || 0); } if (sum === target) { found = mask; } }
-        if (found === null || n > 12) { misses2.push({ date: r.date, description: r.description.substring(0, 60), expected: r.balance / 100, got: null }); pending.forEach(function (p) { signed2.push(null); }); }
-        else { hits2++; pending.forEach(function (p, i) { signed2.push(((found >> i) & 1 ? 1 : -1) * (p.a0 || 0)); }); }
+        var target = r.balance - bal2; var n = pending.length; var found = null; var count = 0;
+        if (n <= 12) { for (var mask = 0; mask < (1 << n) && count < 2; mask++) { var sum = 0; for (var i = 0; i < n; i++) { sum += ((mask >> i) & 1 ? 1 : -1) * (pending[i].a0 || 0); } if (sum === target) { count++; if (found === null) { found = mask; } } } }
+        if (n > 12 || count > 1) { ambiguous = true; pending.forEach(function () { signed2.push(null); }); }
+        else if (count === 0) { misses2.push({ date: r.date, description: r.description.substring(0, 60), expected: r.balance / 100, got: null }); pending.forEach(function () { signed2.push(null); }); }
+        else { hits2++; pending.forEach(function (pr, i2) { signed2.push(((found >> i2) & 1 ? 1 : -1) * (pr.a0 || 0)); }); }
         bal2 = r.balance; pending = [];
       } else if (r.balance !== null) { bal2 = r.balance; pending.forEach(function () { signed2.push(null); }); pending = []; }
     });
     pending.forEach(function () { signed2.push(null); });
-    best = { hits: hits2, misses: misses2, signed: signed2, end: bal2 }; proved = hits2 > 0 && misses2.length === 0;
+    best = { hits: hits2, misses: misses2, signed: signed2, end: ambiguous || misses2.length ? null : bal2 }; proved = hits2 > 0 && misses2.length === 0 && !ambiguous;
   }
-  var unsigned = best.signed.filter(function (a) { return a === null; }).length;
-  var tx = []; var totalIn = 0; var totalOut = 0;
-  rows.forEach(function (r, i) { var a = best.signed[i]; if (a === null || a === 0) { return; } if (a > 0) { totalIn += a; } else { totalOut -= a; } tx.push({ date: r.date, description: r.description, amount: a / 100 }); });
-  var closingOk = closing === null ? null : (best.end === closing);
-  var check = { rows: tx.length, pages: (pages || []).length, opening: opening === null ? null : opening / 100, closing: closing === null ? null : closing / 100, total_in: totalIn / 100, total_out: totalOut / 100,
-    balances_checked: best.hits + best.misses.length, balances_agree: best.hits, mismatches: best.misses.slice(0, 20), closing_agrees: closingOk, rows_without_a_proved_sign: unsigned,
-    direction_proved: proved, first_date: rows[0].date, last_date: rows[rows.length - 1].date };
-  check.ok = proved && best.misses.length === 0 && unsigned === 0 && closingOk !== false && best.hits > 0;
-  return { ok: tx.length > 0, error: tx.length ? null : 'No rows could be read with certainty.', transactions: tx, check: check };
+  // rows after the LAST printed balance are covered only when a closing balance line follows them
+  var lastBalIx = -1; rows.forEach(function (r, i) { if (r.balance !== null) { lastBalIx = i; } });
+  var tailRows = rows.length - 1 - lastBalIx;
+  var closingOk = closing === null ? null : (best.end !== null && best.end === closing);
+  var tailUnchecked = tailRows > 0 && closingOk !== true ? tailRows : 0;
+  var tx = []; var unresolved = []; var totalIn = 0; var totalOut = 0;
+  rows.forEach(function (r, i) {
+    var a = best.signed[i];
+    if (a === null) { unresolved.push({ date: r.date, description: r.description, figure: ((r.a0 !== null ? r.a0 : r.a1) || 0) / 100 }); return; } // kept and reported — never silently dropped
+    if (a === 0) { return; }
+    if (a > 0) { totalIn += a; } else { totalOut -= a; }
+    tx.push({ date: r.date, description: r.description, amount: a / 100 });
+  });
+  var check = { rows: tx.length, lines_found: rows.length, pages: (pages || []).length, opening: opening === null ? null : opening / 100, closing: closing === null ? null : closing / 100, total_in: totalIn / 100, total_out: totalOut / 100,
+    balances_checked: best.hits + best.misses.length, balances_agree: best.hits, mismatches: best.misses.slice(0, 20), closing_agrees: closingOk, rows_without_a_proved_sign: unresolved.length,
+    direction_proved: proved, two_readings_fit: ambiguous, rows_after_the_last_balance: tailUnchecked, first_date: rows[0].date, last_date: rows[rows.length - 1].date };
+  check.ok = proved && !ambiguous && best.misses.length === 0 && unresolved.length === 0 && closingOk !== false && best.hits > 0 && tailUnchecked === 0;
+  // ok = the PDF could be read · importable = every row is proved against the bank's own balances. ONLY importable rows may be saved.
+  return { ok: true, error: null, importable: check.ok === true, transactions: check.ok === true ? tx : [], read_rows: tx, unresolved: unresolved, check: check };
+}
+
+// why a statement that was read is NOT allowed in (plain words; '' when it is allowed)
+export function statementRefusalText(check) {
+  if (!check || check.ok === true) { return ''; }
+  var m = function (n) { return n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var why = [];
+  if (!check.balances_checked && !check.two_readings_fit) { why.push('the statement prints no running balance to check the rows against'); }
+  if (check.two_readings_fit) { why.push('the balances fit BOTH ways round, so it cannot be proved which amounts are money in and which are money out'); }
+  if (check.mismatches && check.mismatches.length) { why.push(check.mismatches.length + ' printed balance' + (check.mismatches.length === 1 ? ' does' : 's do') + ' not agree with the rows (first: ' + check.mismatches[0].date + ' — the bank prints ' + m(check.mismatches[0].expected) + ')'); }
+  if (check.rows_without_a_proved_sign && !check.two_readings_fit) { why.push(check.rows_without_a_proved_sign + ' row' + (check.rows_without_a_proved_sign === 1 ? '' : 's') + ' could not be proved as money in or money out'); }
+  if (check.closing_agrees === false) { why.push('the closing balance ' + m(check.closing) + ' does not match'); }
+  if (check.rows_after_the_last_balance) { why.push('the last ' + check.rows_after_the_last_balance + ' row' + (check.rows_after_the_last_balance === 1 ? ' is' : 's are') + ' not covered by any printed balance (the file may be cut short)'); }
+  if (!why.length) { why.push('the rows could not be proved against the bank’s balances'); }
+  return 'NOT imported — ' + why.join('; ') + '. Nothing from this PDF was added. Use the bank’s Excel export for this statement, or send the PDF to Claude.';
+}
+
+// THE GATE (Codex 16:03): what a read PDF may hand to the import. Rows only when every one is proved; otherwise none, with the reason.
+export function pdfRowsForImport(res, fileName) {
+  var name = String(fileName || 'PDF');
+  if (!res || res.ok !== true) { return { rows: [], refused: true, reason: name + ': ' + ((res && res.error) || 'the PDF could not be read.'), note: null }; }
+  if (res.importable !== true || !res.check || res.check.ok !== true) { return { rows: [], refused: true, reason: name + ': ' + statementRefusalText(res.check), note: { name: name, ok: false, text: name + ': ' + statementRefusalText(res.check), short: name + ': ' + statementRefusalText(res.check).replace(/\d[\d,]*\.\d{2}/g, '•••') } }; }
+  return { refused: false, reason: null,
+    rows: res.transactions.map(function (t, i) { return { date: t.date, description: t.description, amount: t.amount, _include: true, _row: i + 1, _src: 'pdf', _pdfOk: true, _pdfFile: name }; }),
+    note: { name: name, ok: true, text: statementCheckText(res.check, name), short: name + ': ' + res.check.rows + ' rows read from ' + res.check.pages + ' page' + (res.check.pages === 1 ? '' : 's') + '. Checked against the bank’s own running balance: everything agrees.' } };
+}
+// second lock, used again at the moment of saving: a PDF row that does not carry the proof mark blocks the whole import
+export function importBlockedByPdf(rows) {
+  var bad = (rows || []).filter(function (r) { return r && r._src === 'pdf' && r._pdfOk !== true; });
+  return bad.length ? 'Import stopped: ' + bad.length + ' row' + (bad.length === 1 ? '' : 's') + ' from a PDF statement ' + (bad.length === 1 ? 'is' : 'are') + ' not proved against the bank’s balances. Nothing was saved.' : '';
 }
 
 // what the screen says after reading a PDF (one short text; plain words)
@@ -154,11 +204,5 @@ export function statementCheckText(check, fileName) {
   var m = function (n) { return n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var head = (fileName ? fileName + ': ' : '') + check.rows + ' rows read from ' + check.pages + ' page' + (check.pages === 1 ? '' : 's') + ' (' + check.first_date + ' to ' + check.last_date + '). Money in ' + m(check.total_in) + ', money out ' + m(check.total_out) + '.';
   if (check.ok) { return head + ' CHECKED against the bank’s own running balance: all ' + check.balances_agree + ' printed balances agree' + (check.closing_agrees === true ? ', and the closing balance ' + m(check.closing) + ' matches.' : '.'); }
-  var why = [];
-  if (!check.balances_checked) { why.push('the statement prints no running balance to check against'); }
-  if (check.mismatches && check.mismatches.length) { why.push(check.mismatches.length + ' printed balance' + (check.mismatches.length === 1 ? ' does' : 's do') + ' not agree (first: ' + check.mismatches[0].date + ' — bank says ' + m(check.mismatches[0].expected) + ')'); }
-  if (check.rows_without_a_proved_sign) { why.push(check.rows_without_a_proved_sign + ' row' + (check.rows_without_a_proved_sign === 1 ? '' : 's') + ' left out because in / out could not be proved'); }
-  if (check.closing_agrees === false) { why.push('the closing balance does not match'); }
-  if (!check.direction_proved && !why.length) { why.push('money in / money out could not be proved from the balances'); }
-  return head + ' ⚠ NOT fully checked: ' + why.join('; ') + '. Look at the rows carefully before importing.';
+  return head.replace(check.rows + ' rows read', check.lines_found + ' lines found') + ' ' + statementRefusalText(check);
 }
