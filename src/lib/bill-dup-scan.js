@@ -28,6 +28,24 @@ export function normVendor(s) {
 // "INV-14481 " / "inv 14481" → INV14481
 export function normNum(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 
+// v55.83-UQ (Max, Nov 18: "the duplicates should be avoided from the begining by not accepting them if they are the exact same bill")
+// THE EXACT SAME BILL = same vendor (ignoring Inc / Corp / punctuation), same bill number (ignoring spaces / dashes), same bill date and
+// the same total to the cent, among bills still on file (a voided / deleted one does not count). Such a bill is never accepted twice —
+// not by import, e-mail or typing, and no "save anyway". Anything less than exact keeps the existing duplicate warning.
+export function exactSameBill(cand, bills) {
+  var c = cand || {}; var v = normVendor(c.vendor_name); var n = normNum(c.bill_number); var d = String(c.bill_date || '').substring(0, 10);
+  if (!v || !n || !d) { return null; }
+  var a = Math.round((Number(c.total_amount) || 0) * 100);
+  var list = bills || [];
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i];
+    if (!b || !(b.record_status === 'active' || b.record_status == null) || (c.id && b.id === c.id)) { continue; }
+    if (normVendor(b.vendor_name) === v && normNum(b.bill_number) === n && String(b.bill_date || '').substring(0, 10) === d && Math.round((Number(b.total_amount) || 0) * 100) === a) { return b; }
+  }
+  return null;
+}
+export function exactSameWords(b) { return 'This exact bill is already in the Hub — ' + (b.vendor_name || '?') + ' #' + (b.bill_number || '?') + ' dated ' + String(b.bill_date || '').substring(0, 10) + ' for $' + (Math.round((Number(b.total_amount) || 0) * 100) / 100).toFixed(2) + '. It was NOT added again.'; }
+
 // just the digits, leading zeros dropped: "INV-0014481" → 14481
 export function digitsOf(s) { return String(s || '').replace(/[^0-9]/g, '').replace(/^0+/, ''); }
 

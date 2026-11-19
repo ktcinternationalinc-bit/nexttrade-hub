@@ -33,6 +33,49 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-US',
+    date: '2026-11-19',
+    title: 'Wires: a partly wired bill stays available for its remaining amount',
+    items: [
+      { text: 'A bill that is partly on one wire can now go on another wire for what is left (bill total − paid − amounts on other open wires). The bill list shows “$X on WP-n already — left for this wire: $Y”.' },
+      { text: 'A bill can never be put on wires, or paid, for more than its total — the database checks it, also when two people prepare wires at the same moment.' },
+      { text: 'A bill that still has a payment on it can no longer be voided — undo the payment first.' },
+      { superAdminOnly: true, text: 'Technical: needs sql/v55-83-US-partial-wires.sql (drops uq_wpkg_line_open_bill; triggers hub_wire_line_cap and hub_bill_payment_cap under the hub-bill lock). Postgres 16 proof 14/14.' },
+    ],
+  },
+  {
+    version: 'v55.83-UQ',
+    date: '2026-11-18',
+    title: 'Bills: the exact same bill is never accepted twice',
+    items: [
+      { text: 'A bill with the same vendor, bill number, bill date and total as a bill already in the Hub is refused — when imported from a file, received by e-mail, found by the e-mail scanner, or typed in. There is no “save anyway” for it. (Example: NexPac #14481 dated 2026-06-02 for $2,831 was in the Hub three times.)' },
+      { text: 'The import or e-mail result lists it as skipped: “This exact bill is already in the Hub — … It was NOT added again.” “NexPac Corp.” = “NexPac Corporation” and “inv 14481” = “INV-14481” count as the same (spelling, spaces, dashes, capitals); “INV-14481” and “14481” are different numbers. A bill that is only similar still gets the duplicate warning, as before. Voided copies do not count.' },
+      { text: 'Copies already in the Hub are not touched — void the extra ones in 💸 Bills.' },
+      { superAdminOnly: true, text: 'Technical: needs sql/v55-83-UQ-exact-duplicate-bills.sql — the database refuses the exact same bill under a lock (two imports at the same moment cannot both get in); existing copies stay editable. Postgres 16 proof 14/14.' },
+    ],
+  },
+  {
+    version: 'v55.83-UP',
+    date: '2026-11-18',
+    title: 'Wire check: one clear line per duplicate bill instead of several look-alike lines',
+    items: [
+      { text: 'When a bill on a wire has extra copies in the Hub (same vendor, number / reference and date), the wire now shows ONE red line per extra copy — before, each copy was reported twice (once by bill number, once by reference) and the lines looked identical.' },
+      { text: 'Each line says WHICH copy it means: the date it was entered in the Hub, its amount, and whether it was already paid — and to void the extra copy in 💸 Bills, where it is flagged as a duplicate.' },
+    ],
+  },
+  {
+    version: 'v55.83-UM',
+    date: '2026-11-18',
+    title: 'A switch of its own for deleting / voiding invoices; safer “Are you sure?” box; Profitability full screen, scroll bar and amber dots fixed',
+    items: [
+      { text: 'Settings → 🏦 Banking & Accounting Access → group 3b has a new switch “Delete / void invoices 🔒”. It allows Delete, Void, Mark cancelled, Archive and Restore on invoices and proformas, and “Delete (incl. Wave)”. Only the super admin can switch it on. Nobody but the super admin has it automatically — not the Accounting Manager, Owner or Admin roles: switch it on for each person who needs it.' },
+      { text: 'Those actions now run on the Hub server, which checks the signed-in person, then does the whole change in one step — all of it or none of it. An invoice linked to Wave, imported from Wave or with ANY payment record is never hard-deleted — void or archive it. Payment records are never deleted (also not by “Delete incl. Wave”, which used to remove them after a second question). A bank line still pointing at a deleted invoice goes back to the review list.' },
+      { text: '“Are you sure?” box: Esc means Cancel, the Cancel button is selected first, Tab stays inside the box. If a second question comes while one is open, the first one is answered No. If the box can never open, nothing is done (it used to go ahead).' },
+      { text: 'Profitability: ⤢ Full screen now covers the Hub top bar (the ✕ Exit button is always visible); the top scroll bar no longer stops following after scrolling up or down; the amber dots, dashes, “⚠ why?” and CNF tags can be tapped or reached with Tab + Enter to read their explanation.' },
+      { superAdminOnly: true, text: 'Technical: needs sql/v55-83-UM-invoice-delete.sql (database guard: invoice.delete + advances.manage are super-admin-only switches; DELETE on accounting_invoices / accounting_proformas revoked from browser roles; trigger hub_guard_invoice_status blocks browser status changes; hub_invoice_lifecycle = one locked step, service role only). New /api/accounting/invoice-lifecycle (verifiedCaller, canDeleteInvoices → rpc); /api/wave/delete-invoice verifies the caller, checks the step is installed before calling Wave, never deletes payments. A person can only act on records of a business they belong to (user_business_memberships; super admin: all); “Delete incl. Wave” checks everything before touching Wave. Tests: handler 48, Wave preflight 14, Postgres 16 35/35. Rule: super admin or the switch ON; no role gives it.' },
+    ],
+  },
+  {
     version: 'v55.83-UC',
     date: '2026-11-18',
     title: 'Orders: mark a row Non issue or Corrected — it leaves the report and is kept in an archive',

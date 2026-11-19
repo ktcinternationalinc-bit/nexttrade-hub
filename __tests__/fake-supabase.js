@@ -4,7 +4,7 @@
 function FakeDb(uniques) {
   var self = this; self.t = {}; var seq = 0; self.uniques = uniques || {}; self.fail = {};
   self.maxRows = 1000; // like Supabase/PostgREST: at most 1,000 rows per request unless paged with range()
-  function Q(table) { this.table = table; this.filters = []; this.op = 'select'; this.single = false; }
+  function Q(table) { this.table = table; this.filters = []; this.op = 'select'; this.one = false; }
   Q.prototype.select = function () { return this; };
   Q.prototype.eq = function (k, v) { this.filters.push(function (r) { return String(r[k]) === String(v); }); return this; };
   Q.prototype.neq = function (k, v) { this.filters.push(function (r) { return String(r[k]) !== String(v); }); return this; };
@@ -17,9 +17,11 @@ function FakeDb(uniques) {
   Q.prototype.limit = function (n) { this.lim = n; return this; };
   Q.prototype.order = function (col, o) { (this.sorts = this.sorts || []).push({ col: col, asc: !(o && o.ascending === false) }); return this; };
   Q.prototype.range = function (a, b) { this.rng = [a, b]; return this; };
-  Q.prototype.maybeSingle = function () { this.single = true; return this; };
+  Q.prototype.maybeSingle = function () { this.one = true; return this; };
+  Q.prototype.single = function () { this.one = true; return this; }; // v55.83-UM — same as maybeSingle here (a missing row is data: null)
   Q.prototype.insert = function (row) { this.op = 'insert'; this.row = row; return this; };
   Q.prototype.update = function (p) { this.op = 'update'; this.patch = p; return this; };
+  Q.prototype.delete = function () { this.op = 'delete'; return this; }; // v55.83-UM — removes the matching rows, returns them
   Q.prototype.upsert = function (row, o) { this.op = 'upsert'; this.row = row; this.conflict = String((o && o.onConflict) || '').split(','); return this; };
   function violates(table, row, skipId) {
     var us = self.uniques[table] || []; var rows = self.t[table] || [];
@@ -41,7 +43,7 @@ function FakeDb(uniques) {
         if (violates(this.table, list[i], null)) { return { error: { code: '23505', message: 'duplicate key value violates unique constraint' }, data: null }; }
         var n = Object.assign({ id: 'id' + (++seq), updated_at: stamp(), created_at: stamp() }, list[i]); rows.push(n); made.push(n);
       }
-      return { error: null, data: this.single ? made[0] : made };
+      return { error: null, data: this.one ? made[0] : made };
     }
     if (this.op === 'upsert') {
       var row = this.row; var cc = this.conflict;
@@ -55,13 +57,17 @@ function FakeDb(uniques) {
       hit.forEach(function (r) { Object.assign(r, p); if (!p.updated_at) { r.updated_at = stamp(); } });
       return { error: null, data: hit };
     }
+    if (this.op === 'delete') {
+      var gone = rows.filter(match); self.t[this.table] = rows.filter(function (r) { return !match(r); });
+      return { error: null, data: gone };
+    }
     var out = rows.filter(match);
     var sorts = this.sorts || [];
     if (sorts.length) { out = out.slice().sort(function (x, y) { for (var si = 0; si < sorts.length; si++) { var c = sorts[si].col; var a = x[c], b = y[c]; if (a === b) { continue; } if (a == null) { return 1; } if (b == null) { return -1; } var r = a < b ? -1 : 1; return sorts[si].asc ? r : -r; } return 0; }); }
     if (this.rng) { out = out.slice(this.rng[0], this.rng[1] + 1); }
     if (this.lim != null) { out = out.slice(0, this.lim); }
-    if (!this.single && self.maxRows && out.length > self.maxRows) { out = out.slice(0, self.maxRows); }
-    return { error: null, data: this.single ? (out[0] || null) : out };
+    if (!this.one && self.maxRows && out.length > self.maxRows) { out = out.slice(0, self.maxRows); }
+    return { error: null, data: this.one ? (out[0] || null) : out };
   };
   Q.prototype.then = function (res, rej) { try { return Promise.resolve(this.exec()).then(res, rej); } catch (e) { return Promise.reject(e).then(res, rej); } };
   self.from = function (t) { return new Q(t); };

@@ -32,7 +32,8 @@ export function customerLifecycle(customer, usage, role) {
 }
 
 // usage: { paymentMatchCount }
-export function invoiceLifecycle(invoice, usage, role) {
+// v55.83-UM — `allowed` (canDeleteInvoices: super admin / Accounting Manager role / invoice.delete switch) replaces the role list when given
+export function invoiceLifecycle(invoice, usage, role, allowed) {
   var inv = invoice || {};
   var u = usage || {};
   var syncedToWave = inv.wave_sync_status === 'synced' || !!inv.wave_invoice_id;
@@ -40,7 +41,7 @@ export function invoiceLifecycle(invoice, usage, role) {
   var hasPayments = (u.paymentMatchCount > 0);
   var archived = inv.record_status === 'archived';
   var voided = inv.record_status === 'void' || inv.record_status === 'cancelled';
-  var roleOk = canManageLifecycle(role);
+  var roleOk = allowed === undefined ? canManageLifecycle(role) : allowed === true;
   var blockReason = '';
   if (!roleOk) blockReason = 'You do not have permission.';
   else if (syncedToWave) blockReason = 'This invoice is linked/synced to Wave — void or archive instead (keeps the Wave link).';
@@ -56,12 +57,12 @@ export function invoiceLifecycle(invoice, usage, role) {
   };
 }
 
-export function proformaLifecycle(proforma, role) {
+export function proformaLifecycle(proforma, role, allowed) {
   var pf = proforma || {};
   var converted = pf.status === 'converted' || !!pf.converted_invoice_id;
   var archived = pf.record_status === 'archived';
   var voided = pf.record_status === 'void' || pf.record_status === 'cancelled';
-  var roleOk = canManageLifecycle(role);
+  var roleOk = allowed === undefined ? canManageLifecycle(role) : allowed === true;
   var blockReason = '';
   if (!roleOk) blockReason = 'You do not have permission.';
   else if (converted) blockReason = 'This proforma was converted to an invoice — void or archive instead.';

@@ -10,6 +10,8 @@ import { scopeIfRegistered, getActiveWaveBusiness } from '../lib/wave-business';
 import { businessOfInvoice } from '../lib/business-of';
 import { canViewInvoices, canCreateInvoice, canReopen } from '../lib/bank-permissions';
 import { roundMoney, isPaymentVoid } from '../lib/payment-matching';
+import { canDeleteInvoices, INVOICE_DELETE_DENIED } from '../lib/invoice-delete-access'; // v55.83-UM
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-UM — signed-in token on lifecycle calls
 import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
 import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge } from '../lib/shipping-terms'; // v55.83-TG
@@ -67,6 +69,8 @@ export default function AccountingInvoicesTab(props) {
   var mayView = canViewInvoices(isSuperAdmin, modulePerms, _role);
   var mayEdit = canCreateInvoice(isSuperAdmin, modulePerms, _role);
   var mayApprove = canReopen(isSuperAdmin, modulePerms, userProfile && userProfile.role); // Owner/Admin/Accounting Mgr
+  // v55.83-UM — delete / void / cancel / archive / restore: the super admin, or the “Delete / void invoices 🔒” switch ON (no role gives it)
+  var mayLifecycle = canDeleteInvoices(isSuperAdmin, modulePerms);
 
   var [mode, setMode] = useState(props.defaultMode || 'invoices');     // invoices | proformas
   var [businessId, setBusinessId] = useState(null);
@@ -184,14 +188,18 @@ export default function AccountingInvoicesTab(props) {
           .then(function () { return txIds.length; });
       }).catch(function () { return 0; });
   }
+  // v55.83-UM — every lifecycle change goes through the server, which checks the person and the record again
+  function lcServer(action, row, reason) {
+    return hubFetch('/api/accounting/invoice-lifecycle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userProfile && userProfile.id, action: action, kind: lcKind(), id: row.id, reason: reason || null }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
+      .then(function (j) { if (!j || !j.ok) { throw new Error((j && j.error) || 'Not saved.'); } return j; });
+  }
   function doLcDelete(row) {
     if (!window.confirm('Permanently delete this ' + lcKind() + '? This CANNOT be undone.\n\nAny bank deposits matched to it are RELEASED back to unmatched (their payments voided, never deleted).')) return;
-    releaseBankMatches(row.id)
-      .then(function (nRel) { if (nRel > 0) { toast.success(nRel + ' bank match(es) released back to unmatched.'); } })
-      .then(function () { return dbDelete(lcTbl(), row.id, userProfile && userProfile.id); })
-      .then(function () { return logActivity(userProfile && userProfile.id, 'Deleted ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
-      .then(function () { toast.success('Deleted'); lcRefresh(); })
-      .catch(function (e) { console.error('[lifecycle] delete', e); toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
+    lcServer('delete', row).then(function (j) {
+      if (j.released > 0) { toast.success(j.released + ' bank match(es) released back to unmatched.'); }
+      return logActivity(userProfile && userProfile.id, 'Deleted ' + lcKind() + ' ' + lcName(row), 'accounting_invoices').then(function () { toast.success('Deleted'); lcRefresh(); });
+    }).catch(function (e) { toast.error('Delete failed: ' + ((e && e.message) || 'error')); });
   }
   // v55.83-NC (Max Aug 11) — "Can we actually delete an invoice from the
   // accounting side that will then delete from wave". A Wave-linked invoice is
@@ -200,30 +208,26 @@ export default function AccountingInvoicesTab(props) {
   // refusal stops everything with nothing changed. Wave-pushed payments block
   // server-side; Hub-only payments need a second acknowledgement.
   function deleteWithWave(row, ackHubPayments) {
-    if (!(mayApprove || isSuperAdmin)) { toast.error('Only an Owner/Admin or Accounting Manager can delete a Wave-linked invoice.'); return; }
+    if (!mayLifecycle) { toast.error(INVOICE_DELETE_DENIED); return; }
     var sure = window.confirm(
       'PERMANENTLY delete invoice ' + (row.invoice_number || row.id) + '?\n\n' +
       (row.wave_invoice_id ? 'Its Wave copy will be deleted FIRST — if Wave refuses, nothing is deleted anywhere.\n' : '') +
       'This CANNOT be undone.');
     if (!sure) { return; }
     setBusy(true);
-    releaseBankMatches(row.id).then(function (nRel) { if (nRel > 0) { toast.success(nRel + ' bank match(es) released back to unmatched.'); } }); // v55.83-QM — Wave-path deletes release matches too
-    fetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_delete: true, acknowledge_hub_payments: ackHubPayments === true, user_id: (userProfile && userProfile.id) || null }) })
+    // v55.83-UM (Codex 21:35 P1) — nothing is changed here before the server answers: the server releases the bank lines itself,
+    // in the same locked step as the Hub delete, and only after Wave confirmed its copy is gone
+    hubFetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: row.id, confirm_delete: true, user_id: (userProfile && userProfile.id) || null }) })
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
       .then(function (res) {
         var j = res.j || {};
         if (j.ok === true) {
-          toast.success('Invoice ' + (j.invoice_number || '') + ' deleted' + (j.deleted_in_wave ? ' from Wave and the Hub' : ' from the Hub') + (j.hub_payments_deleted ? ' (' + j.hub_payments_deleted + ' Hub payment record(s) removed with it)' : ''));
+          toast.success('Invoice ' + (j.invoice_number || '') + ' deleted' + (j.deleted_in_wave ? ' from Wave and the Hub' : ' from the Hub') + (j.released_bank_lines ? ' · ' + j.released_bank_lines + ' bank line(s) back to review' : ''));
           logActivity(userProfile && userProfile.id, 'Deleted invoice ' + (row.invoice_number || row.id) + (j.deleted_in_wave ? ' (Wave copy deleted too)' : ''), 'accounting_invoices');
           setEditing(null); setViewing(null); load();
           return;
         }
-        if (j.reason === 'hub_payments_need_ack') {
-          var ack = window.confirm((j.error || 'This invoice has Hub payment records.') + '\n\nDelete them together with the invoice?');
-          if (ack) { setBusy(false); deleteWithWave(row, true); return; }
-          toast.error('Delete cancelled — payments kept.');
-          return;
-        }
+        // v55.83-UM — payments are never deleted: an invoice with payment records is refused (void or archive it); no second confirm
         toast.error('Delete stopped: ' + (j.error || ('HTTP ' + res.status)));
       })
       .catch(function (e) { toast.error('Delete failed: ' + ((e && e.message) || 'network error')); })
@@ -231,7 +235,7 @@ export default function AccountingInvoicesTab(props) {
   }
   function doLcArchive(row) {
     if (!window.confirm('Archive this ' + lcKind() + '? It stays in the records (Wave link preserved) but is hidden from the active list.')) return;
-    dbUpdate(lcTbl(), row.id, archivePatch(userProfile && userProfile.id), userProfile && userProfile.id)
+    lcServer('archive', row)
       .then(function () { return logActivity(userProfile && userProfile.id, 'Archived ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
       .then(function () { toast.success('Archived'); lcRefresh(); })
       .catch(function (e) { console.error('[lifecycle] archive', e); toast.error('Archive failed: ' + ((e && e.message) || 'error')); });
@@ -239,13 +243,13 @@ export default function AccountingInvoicesTab(props) {
   function doLcVoid(row, kind) {
     var reason = window.prompt((kind === 'cancelled' ? 'Cancel' : 'Void') + ' reason (optional):', '');
     if (reason === null) return;
-    dbUpdate(lcTbl(), row.id, voidPatch(userProfile && userProfile.id, kind, reason), userProfile && userProfile.id)
+    lcServer(kind === 'cancelled' ? 'cancel' : 'void', row, reason)
       .then(function () { return logActivity(userProfile && userProfile.id, (kind === 'cancelled' ? 'Cancelled ' : 'Voided ') + lcKind() + ' ' + lcName(row) + (reason ? (' — ' + reason) : ''), 'accounting_invoices'); })
       .then(function () { toast.success(kind === 'cancelled' ? 'Cancelled' : 'Voided'); lcRefresh(); })
       .catch(function (e) { console.error('[lifecycle] void', e); toast.error('Failed: ' + ((e && e.message) || 'error')); });
   }
   function doLcRestore(row) {
-    dbUpdate(lcTbl(), row.id, restorePatch(), userProfile && userProfile.id)
+    lcServer('restore', row)
       .then(function () { return logActivity(userProfile && userProfile.id, 'Restored ' + lcKind() + ' ' + lcName(row), 'accounting_invoices'); })
       .then(function () { toast.success('Restored'); lcRefresh(); })
       .catch(function (e) { console.error('[lifecycle] restore', e); toast.error('Restore failed: ' + ((e && e.message) || 'error')); });
@@ -1018,7 +1022,7 @@ export default function AccountingInvoicesTab(props) {
             </div>
           )}
           {mayEdit && editing !== 'new' && (function () {
-            var lc = isInvoice() ? invoiceLifecycle(editing, { paymentMatchCount: pmCount[editing.id] ? 1 : 0 }, userProfile && userProfile.role) : proformaLifecycle(editing, userProfile && userProfile.role);
+            var lc = isInvoice() ? invoiceLifecycle(editing, { paymentMatchCount: pmCount[editing.id] ? 1 : 0 }, userProfile && userProfile.role, mayLifecycle) : proformaLifecycle(editing, userProfile && userProfile.role, mayLifecycle);
             return (
               <div className="flex gap-2 mt-2 flex-wrap items-center border-t border-slate-700 pt-2">
                 {editing.record_status && editing.record_status !== 'active' && <span className="text-[11px] bg-slate-600 text-white rounded px-1.5 py-0.5 font-bold">{String(editing.record_status).toUpperCase()}</span>}
@@ -1031,7 +1035,7 @@ export default function AccountingInvoicesTab(props) {
                     Wave. The plain lifecycle Delete stays blocked (its blocker is
                     correct: a Hub-only delete would orphan the Wave copy); this
                     button takes the safe route instead. */}
-                {!lc.canHardDelete && isInvoice() && !!editing.wave_invoice_id && editing.source !== 'wave_import' && (mayApprove || isSuperAdmin) &&
+                {!lc.canHardDelete && isInvoice() && !!editing.wave_invoice_id && editing.source !== 'wave_import' && mayLifecycle &&
                   <button onClick={function () { deleteWithWave(editing); }} disabled={busy} className="px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded text-xs font-bold" title="Deletes the Wave copy first, then the Hub invoice">🗑 Delete (incl. Wave)</button>}
                 {!lc.canHardDelete && lc.blockReason && <span className="text-[11px] text-amber-300 font-semibold">{lc.blockReason}</span>}
               </div>

@@ -100,6 +100,14 @@ async function loadPackage(db, id) {
   return { pkg: pkg, rawLines: lr.data || [], ctx: ctx, input: input, live: live, hash: hash, overrides: ovr, status: packageStatus(pkg, hash, rtmPending), rtmPending: rtmPending, paidThrough: paidThrough };
 }
 
+// v55.83-US — a wire line refused by the database (hub_wire_line_cap: more than is left on the bill), or the old one-wire rule
+function lineErr(e) {
+  var m = String((e && e.message) || '');
+  if (/HUB_GUARD/.test(m)) { return m.replace(/^.*HUB_GUARD:\s*/, '') + ' Someone may have just put this bill on another wire — refresh and lower the amount.'; }
+  if (/uq_wpkg_line_open_bill/.test(m)) { return 'One of these bills is on another open wire and the partial-wire database update is not run yet — run sql/v55-83-US-partial-wires.sql, or untick it.'; }
+  return m || 'The wire line was not saved.';
+}
+
 export async function POST(req) {
   try {
     var body = await req.json();
@@ -145,15 +153,17 @@ export async function POST(req) {
       var pays = ids.length ? await inChunks(db, 'vendor_bill_payments', 'bill_id, amount, voided', 'bill_id', ids) : [];
       var paidBy = {}; pays.forEach(function (p) { if (p.voided !== true) { paidBy[p.bill_id] = r2((paidBy[p.bill_id] || 0) + (Number(p.amount) || 0)); } });
       var openLines = ids.length ? await inChunks(db, 'wire_package_lines', 'package_id, bill_id, amount, is_open', 'bill_id', ids) : [];
-      var onPkg = {}; var pkIds = [];
-      openLines.forEach(function (l) { if (l.is_open && l.package_id !== body.package_id) { onPkg[l.bill_id] = l.package_id; if (pkIds.indexOf(l.package_id) < 0) { pkIds.push(l.package_id); } } });
+      // v55.83-US (Max: "i partially wired a bill. the bill should remain in queue with the remaining amount to be used on another wire")
+      // a bill on another open wire is still offered for what is LEFT: total − paid − every other open wire's amount for it
+      var onPkg = {}; var pkIds = []; var resv = {};
+      openLines.forEach(function (l) { if (l.is_open && l.package_id !== body.package_id) { (onPkg[l.bill_id] = onPkg[l.bill_id] || []).push({ pkg: l.package_id, amount: r2(l.amount) }); resv[l.bill_id] = r2((resv[l.bill_id] || 0) + (Number(l.amount) || 0)); if (pkIds.indexOf(l.package_id) < 0) { pkIds.push(l.package_id); } } });
       var pks = pkIds.length ? await inChunks(db, 'wire_packages', 'id, seq, status', 'id', pkIds) : [];
       var pkLab = {}; pks.forEach(function (p) { pkLab[p.id] = packageLabel(p); });
       var rowsO = mine.map(function (b) {
-        var open = r2((Number(b.total_amount) || 0) - (paidBy[b.id] || 0));
+        var open = r2((Number(b.total_amount) || 0) - (paidBy[b.id] || 0) - (resv[b.id] || 0));
         return { id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, release_number: b.release_number || null, bill_date: b.bill_date, due_date: b.due_date,
           category: b.category, total_amount: r2(b.total_amount), paid: paidBy[b.id] || 0, open: open, disputed: b.disputed === true,
-          validation_status: b.validation_status || null, on_package: onPkg[b.id] ? (pkLab[onPkg[b.id]] || 'another wire') : null,
+          validation_status: b.validation_status || null, on_package: onPkg[b.id] ? onPkg[b.id].map(function (x) { return '$' + x.amount.toFixed(2) + ' on ' + (pkLab[x.pkg] || 'another wire'); }).join(', ') : null, reserved_elsewhere: resv[b.id] || 0,
           paid_via: b.paid_via || null, needs_mark: kindO !== 'vendor' && !b.paid_via, release_optional: kindO === 'affiliate',
           other_reference: b.other_reference || null, shipment_direction: b.shipment_direction || null, bill_type: b.bill_type || null };
       }).filter(function (b) { return b.open > 0.005; }).sort(function (a, b) { return (a.needs_mark - b.needs_mark) || String(a.due_date || a.bill_date || '').localeCompare(String(b.due_date || b.bill_date || '')); });
@@ -285,13 +295,19 @@ export async function POST(req) {
         if (!fitS.fits) { return fail('This request is $' + fitS.total.toFixed(2) + ' (bills $' + fitS.bills.toFixed(2) + ' + service fee $' + fitS.fee.toFixed(2) + ') but only $' + r2(fundInfo.remaining).toFixed(2) + ' is left on the $' + r2(fundInfo.amount).toFixed(2) + ' transfer of ' + fundInfo.date + ' — $' + fitS.over_by.toFixed(2) + ' too much. Lower or split a bill, or lower the fee.', 409); }
       }
       var pkgId = body.id || null; var editDiff = null;
-      // one bill, one open wire — checked BEFORE anything is written (the database enforces it too)
-      var onOther = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, is_open', 'bill_id', clean.map(function (c) { return c.bill_id; }));
-      var clash = onOther.filter(function (l) { return l.is_open && l.package_id !== pkgId; });
-      if (clash.length) {
-        var cb = bSBy[clash[0].bill_id] || {};
-        var cp = await db.from('wire_packages').select('seq').eq('id', clash[0].package_id).maybeSingle();
-        return fail((cb.vendor_name || 'A bill') + ' ' + (cb.bill_number || '') + ' is already on wire ' + packageLabel((cp && cp.data) || {}) + ' — one bill, one wire. Untick it here, or cancel that wire.', 409);
+      // v55.83-US — a bill may be on several open wires as long as paid + every open wire amount ≤ the bill total. Checked BEFORE
+      // anything is written; the database checks it again under the bill's lock (hub_wire_line_cap), so two drafts cannot over-allocate
+      var onOther = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, amount, is_open', 'bill_id', clean.map(function (c) { return c.bill_id; }));
+      var resvS = {}; var resvPk = {}; onOther.forEach(function (l) { if (l.is_open && l.package_id !== pkgId) { resvS[l.bill_id] = r2((resvS[l.bill_id] || 0) + (Number(l.amount) || 0)); (resvPk[l.bill_id] = resvPk[l.bill_id] || []).push(l.package_id); } });
+      for (var cj = 0; cj < clean.length; cj++) {
+        var bj = bSBy[clean[cj].bill_id] || {}; if (!resvS[bj.id]) { continue; }
+        var paidJ = 0; pS.forEach(function (p) { if (p.bill_id === bj.id && p.voided !== true) { paidJ += Number(p.amount) || 0; } });
+        var leftJ = r2((Number(bj.total_amount) || 0) - paidJ - resvS[bj.id]);
+        if (clean[cj].amount > leftJ + 0.005) {
+          var cps = await db.from('wire_packages').select('id, seq').in('id', resvPk[bj.id]);
+          var labs = ((cps && cps.data) || []).map(function (x) { return packageLabel(x); }).join(', ');
+          return fail((bj.vendor_name || 'A bill') + ' ' + (bj.bill_number || '') + ': only $' + Math.max(0, leftJ).toFixed(2) + ' is left for this wire — $' + resvS[bj.id].toFixed(2) + ' of it is already on wire ' + (labs || 'another wire') + '. Lower the amount here (or change that wire).', 409);
+        }
       }
       var headS = { payee_kind: kindS, payee_name: payeeS, fee_amount: feeS, fee_note: String(body.fee_note || '').trim().substring(0, 300) || null, memo: String(body.memo || '').trim().substring(0, 500) || null };
       if (fundS !== undefined) { headS.funding_txn_id = fundS; }      // only touched when the screen sent it (works before the SP SQL is run)
@@ -317,13 +333,13 @@ export async function POST(req) {
         var adds = clean.filter(function (c) { return !oldBy[c.bill_id]; });
         if (adds.length) {
           var insA = await db.from('wire_package_lines').insert(adds.map(function (c) { return { package_id: pkgId, bill_id: c.bill_id, amount: c.amount, marked_paid_via: willMark[c.bill_id] === true }; }));
-          if (insA.error) { return fail(/uq_wpkg_line_open_bill/.test(insA.error.message || '') ? 'One of these bills was just put on another wire — untick it.' : insA.error.message, 409); }
+          if (insA.error) { return fail(lineErr(insA.error), 409); }
         }
         for (var ki = 0; ki < clean.length; ki++) {
           var o0 = oldBy[clean[ki].bill_id];
           if (o0 && (r2(o0.amount) !== clean[ki].amount || (o0.marked_paid_via === true) !== (willMark[clean[ki].bill_id] === true))) {
             var uk = await db.from('wire_package_lines').update({ amount: clean[ki].amount, marked_paid_via: willMark[clean[ki].bill_id] === true }).eq('id', o0.id);
-            if (uk.error) { return dbErr(uk.error); }
+            if (uk.error) { return /HUB_GUARD/.test(uk.error.message || '') ? fail(lineErr(uk.error), 409) : dbErr(uk.error); }
           }
         }
         var gone = (oldL.data || []).filter(function (l) { return !seenB[l.bill_id]; }).map(function (l) { return l.id; });
@@ -338,7 +354,7 @@ export async function POST(req) {
         if (insL.error) {
           // never leave an empty draft behind (review gap 7)
           await db.from('wire_packages').delete().eq('id', pkgId).eq('status', 'draft');
-          return fail(/uq_wpkg_line_open_bill/.test(insL.error.message || '') ? 'One of these bills was just put on another wire — untick it and save again.' : insL.error.message, 409);
+          return fail(lineErr(insL.error), 409);
         }
       }
       var totS = packageTotals({ fee_amount: feeS }, clean);
@@ -405,7 +421,7 @@ export async function POST(req) {
       if (insPW.error) { return dbErr(insPW.error); }
       var idPW = insPW.data.id;
       var lnPW = await db.from('wire_package_lines').insert(cleanPW.map(function (c) { return { package_id: idPW, bill_id: c.bill_id, amount: c.amount, marked_paid_via: markPW[c.bill_id] === true }; }));
-      if (lnPW.error) { await db.from('wire_packages').delete().eq('id', idPW); return fail(/uq_wpkg_line_open_bill/.test(lnPW.error.message || '') ? 'One of these bills is already on another wire.' : lnPW.error.message, 409); }
+      if (lnPW.error) { await db.from('wire_packages').delete().eq('id', idPW); return fail(lineErr(lnPW.error), 409); }
       var stPW = await db.from('wire_packages').update({ status: 'sent', approved_total: totPW, sent_by: userId, sent_at: nowIso(), sent_date: body.sent_date, bank_reference: String(body.bank_reference || '').trim().substring(0, 80) || 'recorded after the fact',
         after_the_fact: true, after_the_fact_note: whyPW.substring(0, 500), updated_at: nowIso() }).eq('id', idPW).eq('status', 'draft').select('id');
       if (stPW.error || !stPW.data || !stPW.data.length) {

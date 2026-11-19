@@ -541,7 +541,7 @@ const ACTION_PERMS = [
 ];
 
 // v55.83-TP (Max, Nov 17) — SENSITIVE switches: only the super admin can switch them ON (the database refuses anyone else too)
-const SENSITIVE_PERMS_UI = { 'advances.manage': true, 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true };
+const SENSITIVE_PERMS_UI = { 'advances.manage': true, 'pnl.view_margin': true, 'accounting.view_totals': true, 'bank.view_private': true, 'permissions.grant_sensitive': true, 'bank.add_transactions': true, 'invoice.delete': true }; // v55.83-UM
 // v55.83-TP — one click sets a person up as ACCOUNTING STAFF: enter + validate invoices and bills, see what is owed, see bank lines
 // (amounts included) to match and prepare wires. Never: profit / margin, money totals, bank balances, private accounts, undo matches.
 const ACCOUNTING_STAFF_PRESET = ['accounting.clickbooks.access', 'accounting.wavehub.access', 'accounting.view_invoicing', 'invoice.view', 'invoice.create',

@@ -19,7 +19,8 @@ import { isArEligible } from '../../../../lib/ar-eligibility';
 import { isPaymentVoid } from '../../../../lib/payment-matching';
 import { billOpenBalance, billStatus, cashflowSummary } from '../../../../lib/cashflow';
 import { forecastBuckets, tagRows, BUCKETS } from '../../../../lib/aging';
-import { readBillFromBase64, insertImportedBill, vendorBillType } from '../../../../lib/bill-extract-server';
+import { readBillFromBase64, insertImportedBill, vendorBillType, findExactSameBill, exactDupMessage } from '../../../../lib/bill-extract-server';
+import { exactSameWords } from '../../../../lib/bill-dup-scan'; // v55.83-UQ
 import { importSort, BILL_TYPE_LABEL } from '../../../../lib/bill-extract';
 import { saveBillLines, runPriceCheck, loadLines, loadPriceRules, loadCommissionRules, recheckOpenBills } from '../../../../lib/bill-lines-server'; // v55.83-RQ
 import { commissionRuleFor, productInventory, spendReport, periodRange, normText, shapeLine, priceCheck as priceCheckPure, defaultDirectionFor } from '../../../../lib/bill-lines';
@@ -454,6 +455,12 @@ export async function POST(req) {
           other_reference: Object.prototype.hasOwnProperty.call(fields, 'other_reference') ? fields.other_reference : bl.other_reference,
           bill_type: Object.prototype.hasOwnProperty.call(fields, 'bill_type') ? fields.bill_type : bl.bill_type }, dupAll.bills, await loadDupDismissed(db));
       } catch (eDC) { /* a check problem never blocks a save */ }
+      // v55.83-UQ (Max: "not accepting them if they are the exact same bill") — the exact same bill is refused outright, "save anyway" or not;
+      // an edit that would turn a bill into an exact copy of another one is refused too
+      try {
+        var exactS = await findExactSameBill(db, { id: bl.id || null, vendor_name: vendor, bill_number: fields.bill_number, bill_date: fields.bill_date, total_amount: amt });
+        if (exactS && exactS.id !== bl.id) { return NextResponse.json({ error: exactSameWords(exactS).replace('It was NOT added again.', 'It was NOT saved.'), duplicate: true, duplicate_level: 'exact', duplicate_of: exactS.id }, { status: 409 }); }
+      } catch (eEx) { return NextResponse.json({ error: (eEx && eEx.message) || 'Could not check for the same bill — nothing was saved.' }, { status: 500 }); }
       if (!bl.id && dupSave.level === 'strong' && body.confirm_duplicate !== true) {
         return NextResponse.json({ error: 'This looks like a duplicate — it was NOT saved. ' + dupSave.reasons.join(' · '), duplicate: true, duplicate_level: dupSave.level, duplicate_reasons: dupSave.reasons }, { status: 409 });
       }
@@ -562,6 +569,15 @@ export async function POST(req) {
       if (!body.id) { return NextResponse.json({ error: 'id required.' }, { status: 400 }); }
       var wOnV = await openWireOf(db, body.id);
       if (wOnV) { return NextResponse.json({ error: 'This bill is on wire ' + wOnV.label + ' (' + wOnV.status + ') — ' + (wOnV.status === 'sent' ? 'it was already sent, so it cannot be voided.' : 'untick it on that wire (or cancel the wire) first.') }, { status: 409 }); }
+      // v55.83-US (NexPac #14277: a VOIDED copy still held a live $27,885.79 payment) — a bill with a payment that is not undone cannot be
+      // voided: the money would hang on a bill nobody sees. Undo the payment first (↩ Undo payment — it stays on record as UNDONE).
+      var livePV = await db.from('vendor_bill_payments').select('id, amount, voided').eq('bill_id', body.id);
+      if (livePV.error) { return readFail('its payments', livePV.error); }
+      var liveP = (livePV.data || []).filter(function (p) { return p.voided !== true; }); // a blank voided flag is a live payment
+      if (liveP.length) {
+        var lpSum = 0; liveP.forEach(function (p) { lpSum += Number(p.amount) || 0; });
+        return NextResponse.json({ error: 'This bill has ' + liveP.length + ' payment(s) totalling $' + r2(lpSum).toFixed(2) + ' that are not undone — undo them first (↩ Undo payment), then void the bill. Nothing was changed.' }, { status: 409 });
+      }
       var vb = await db.from('vendor_bills').update({ record_status: 'void', updated_at: new Date().toISOString() }).eq('id', body.id).select('id').maybeSingle();
       if (vb.error) { throw new Error(vb.error.message); }
       if (!vb.data) { return NextResponse.json({ error: 'Bill not found.' }, { status: 404 }); }
@@ -1946,6 +1962,8 @@ export async function POST(req) {
 
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });
   } catch (e) {
+    // v55.83-UQ — the database refused the exact same bill (two people saving it at the same moment): a plain 409, not a server error
+    if (/HUB_EXACT_DUPLICATE/.test(String((e && e.message) || ''))) { return NextResponse.json({ error: exactDupMessage(e.message).replace('It was NOT added again.', 'It was NOT saved.'), duplicate: true, duplicate_level: 'exact' }, { status: 409 }); }
     return NextResponse.json({ error: (e && e.message) || 'Bills request failed.' }, { status: 500 });
   }
 }

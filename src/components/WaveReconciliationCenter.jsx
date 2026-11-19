@@ -23,6 +23,7 @@
 // invoice must not strand the rest of the month's reconciliation.
 import React, { useState } from 'react';
 import { supabase, dbUpdate, logActivity } from '../lib/supabase';
+import { hubFetch } from '../lib/hub-fetch'; // v55.83-UM — /api/wave/delete-invoice verifies the signed-in person
 
 export default function WaveReconciliationCenter(props) {
   var userProfile = props.userProfile;
@@ -109,12 +110,12 @@ export default function WaveReconciliationCenter(props) {
           if (pj2 && (pj2.success === true || pj2.ok === true) && pj2.currency_mismatch !== true) { setRowResult(k, 'done', 'Wave now matches the Hub version'); }
           else { throw new Error('old copy removed but re-push failed: ' + ((pj2 && pj2.error) || '?') + ' — invoice is in Pending Sync, push it from the Sync Center'); }
         } else if (act.kind === 'delete_hub') {
-          var dj = await fetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_delete: true, user_id: uid }) }).then(function (r) { return r.json(); });
+          var dj = await hubFetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_delete: true, user_id: uid }) }).then(function (r) { return r.json(); });
           if (dj && dj.ok === true) { setRowResult(k, 'done', 'Hub invoice deleted' + (dj.hub_payments_deleted ? ' (' + dj.hub_payments_deleted + ' payment record(s) removed)' : '')); }
           else if (dj && dj.reason === 'hub_payments_need_ack') {
             var ack = window.confirm('Invoice ' + (d.invoice_number || '') + ': ' + (dj.error || 'has Hub payment records.') + '\n\nDelete them together with the invoice?');
             if (!ack) { throw new Error('cancelled — payments kept'); }
-            var dj2 = await fetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_delete: true, acknowledge_hub_payments: true, user_id: uid }) }).then(function (r) { return r.json(); });
+            var dj2 = await hubFetch('/api/wave/delete-invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wave_business_id: waveBiz, hub_record_id: d.hub_id, confirm_delete: true, acknowledge_hub_payments: true, user_id: uid }) }).then(function (r) { return r.json(); });
             if (dj2 && dj2.ok === true) { setRowResult(k, 'done', 'Hub invoice + ' + (dj2.hub_payments_deleted || 0) + ' payment record(s) deleted'); }
             else { throw new Error((dj2 && dj2.error) || 'delete refused'); }
           }

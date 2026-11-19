@@ -116,7 +116,7 @@ ok('5g: "i like the rtm proof" — RTM\'s proof file covers ticked bills, with t
   S.indexOf("action === 'rtm_proof'") > 0 && S.indexOf("kind: 'rtm_proof'") > 0 && /* v55.83-SQ realign — requests to NextTrade now expect its wire copies too, so the message names both */ S.indexOf('Copies of the vendor payments are for requests and wires paid through RTM or NextTrade.') > 0);
 ok('5h: a NextTrade or vendor wire with a fee is refused at save; amounts never above a bill\'s open balance; one bill one open wire checked before writing',
   // superseded pin (v55.83-RJ): plainer words ("what is still owed", "untick it")
-  /* superseded (SC): vendor wires only */ S.indexOf("A wire straight to a vendor is bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('one bill, one wire. Untick it here') > 0);
+  /* superseded (SC): vendor wires only */ S.indexOf("A wire straight to a vendor is bills only — no fee.") > 0 && S.indexOf('is more than what is still owed') > 0 && S.indexOf('is left for this wire') > 0 /* v55.83-US realign: partial wires — the sum is checked, not one-bill-one-wire */);
 ok('5i: only a wire not yet sent can be cancelled (the money is gone otherwise)', S.indexOf("Only a wire that was not sent yet can be cancelled.") > 0);
 ok('5j: every step in the append-only audit trail', ['wire_package_prepared', 'wire_package_audit_run', 'wire_package_signoff_1', 'wire_package_signoff_2', 'wire_package_sent', 'wire_package_attached', 'wire_package_rtm_proof', 'wire_package_cancelled'].every(function (k) { return S.indexOf("'" + k + "'") > 0; }));
 var BR = R('src/app/api/accounting/bills/route.js');

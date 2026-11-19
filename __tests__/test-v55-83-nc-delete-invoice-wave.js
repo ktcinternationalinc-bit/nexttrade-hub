@@ -31,24 +31,24 @@ function ok(label, cond) {
 // PART A — Ordering: Wave first, Hub second, refusal stops everything
 // ══════════════════════════════════════════════════════════════════
 
+// v55.83-UM realign (Codex 21:35): the Hub part now runs in the locked database step AFTER the Wave delete
 ok('A1: the Wave invoiceDelete happens BEFORE any Hub deletion',
-  route.indexOf('invoiceDelete(input:$input)') <
-  route.indexOf(".from('accounting_invoice_payments').delete()"));
+  route.indexOf('invoiceDelete(input:$input)') > -1 &&
+  route.indexOf('invoiceDelete(input:$input)') < route.lastIndexOf("after_wave_delete: true } })") && // the real Hub step (last call)
+  route.indexOf('check_only: true } })') < route.indexOf('invoiceDelete(input:$input)')); // the change-nothing check comes BEFORE Wave
 ok('A2: a Wave refusal returns with nothing deleted anywhere',
   /nothing was deleted anywhere/.test(route));
 ok('A3: after a confirmed Wave delete the Hub row is unlinked IMMEDIATELY',
   /update\(\{ wave_invoice_id: null, wave_status: null, wave_sync_status: null \}\)[\s\S]{0,120}\.eq\('wave_invoice_id', oldWaveId\)/.test(route));
 ok('A4: the ordering rationale is written into the route',
   /If it ran the other way/.test(route) && /orphan/.test(route));
-ok('A5: Hub cascade order is payments, then items, then the invoice row',
-  (function () {
-    var p = route.indexOf(".from('accounting_invoice_payments').delete()");
-    var i = route.indexOf(".from('accounting_invoice_items').delete()");
-    var v = route.indexOf(".from('accounting_invoices').delete()");
-    return p > -1 && i > p && v > i;
-  })());
+// v55.83-UM realign: payments are NEVER deleted; items + invoice go in ONE locked database step (all or nothing)
+ok('A5: the Hub part is one locked step (items + invoice), payments never deleted',
+  route.indexOf(".from('accounting_invoice_payments').delete()") < 0 &&
+  route.indexOf(".from('accounting_invoices').delete()") < 0 &&
+  /db\.rpc\('hub_invoice_lifecycle', \{ p: \{ kind: 'invoice', action: 'delete', id: hubId, actor: by, is_super: _ctxD\.isSuperAdmin === true, after_wave_delete: true \} \}\)/.test(route));
 ok('A6: a Hub-delete failure after a Wave delete names the exact partial state',
-  /The Wave copy WAS deleted and unlinked/.test(route));
+  /Its Wave copy WAS already deleted/.test(route) && /void or archive it there/.test(route) /* v55.83-UM realign (Codex 21:50): truthful recovery words */);
 ok('A7: an invoice with NO Wave copy skips Wave and just cascades in the Hub',
   /if \(oldWaveId\) \{/.test(route));
 
@@ -63,9 +63,11 @@ ok('B2: the block happens before ANY delete call (Wave or Hub)',
   route.indexOf("wave_payments_exist") < route.indexOf('invoiceDelete(input:$input)'));
 ok('B3: the Hub never deletes payments in Wave — stated in the message',
   /the Hub will never delete payments for you/.test(route));
-ok('B4: Hub-only payments need an explicit second acknowledgement',
-  /acknowledge_hub_payments !== true/.test(route) &&
-  /reason: 'hub_payments_need_ack'/.test(route));
+// v55.83-UM realign (Max: never delete data): Hub payment records block the delete — no acknowledgement path any more
+ok('B4: Hub payment records block the delete before anything is sent to Wave (void or archive instead)',
+  route.indexOf('acknowledge_hub_payments') < 0 &&
+  /reason: 'hub_payments_block'/.test(route) &&
+  route.indexOf("reason: 'hub_payments_block'") < route.indexOf('invoiceDelete(input:$input)'));
 ok('B5: Wave-imported / historical invoices are refused',
   /source === 'wave_import' \|\| inv\.is_historical === true/.test(route) &&
   /Delete it inside Wave itself/.test(route));
@@ -87,22 +89,24 @@ ok('C1: a deleteWithWave handler exists',
   /function deleteWithWave\(row, ackHubPayments\)/.test(tab));
 ok('C2: it warns the delete is permanent and Wave-first before running',
   /PERMANENTLY delete invoice/.test(tab) && /Wave copy will be deleted FIRST/.test(tab));
-ok('C3: the hub-payments acknowledgement round-trips as a second confirm',
-  /hub_payments_need_ack/.test(tab) && /deleteWithWave\(row, true\)/.test(tab));
-ok('C4: declining the payment acknowledgement keeps the payments',
-  /Delete cancelled — payments kept\./.test(tab));
+// v55.83-UM realign: no "delete the payments too?" question — payments are never deleted
+ok('C3: no payment-deletion acknowledgement on screen',
+  tab.indexOf('hub_payments_need_ack') < 0 && tab.indexOf('deleteWithWave(row, true)') < 0);
+ok('C4: nothing is changed on screen before the server answers (no early bank-match release)',
+  tab.substring(tab.indexOf('function deleteWithWave'), tab.indexOf('function deleteWithWave') + 2500).indexOf('releaseBankMatches(') < 0);
 ok('C5: the button appears exactly where the old blocker message sat',
   /!lc\.canHardDelete && isInvoice\(\) && !!editing\.wave_invoice_id/.test(tab));
 ok('C6: Wave-imported rows never get the button',
   /editing\.source !== 'wave_import'/.test(tab));
-ok('C7: approver-level roles only',
-  /\(mayApprove \|\| isSuperAdmin\) &&\n {18}<button onClick=\{function \(\) \{ deleteWithWave\(editing\); \}\}/.test(tab) ||
-  /Only an Owner\/Admin or Accounting Manager can delete a Wave-linked invoice/.test(tab));
+// v55.83-UM realign: the Wave delete uses the invoice-delete rule (super admin / Accounting Manager role / the 🔒 switch), not approver roles
+ok('C7: only people allowed to delete invoices (UM rule)',
+  /editing\.source !== 'wave_import' && mayLifecycle &&/.test(tab) && /if \(!mayLifecycle\) \{ toast\.error\(INVOICE_DELETE_DENIED\)/.test(tab));
 ok('C8: the deletion is written to the activity log',
   /'Deleted invoice ' \+ \(row\.invoice_number \|\| row\.id\)/.test(tab));
-ok('C9: success toast reports what was actually removed (Wave? payments?)',
+// v55.83-UM realign: the success message says where it was deleted and how many bank lines went back to review (payments never deleted)
+ok('C9: success toast reports what was actually removed (Wave? bank lines back to review?)',
   /deleted_in_wave \? ' from Wave and the Hub' : ' from the Hub'/.test(tab) &&
-  /hub_payments_deleted/.test(tab));
+  /released_bank_lines/.test(tab));
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — The old safety blocker still stands

@@ -43,8 +43,8 @@ export async function packageContext(db, pkgId, pkgLines) {
     rb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.release_number); (sameRelease[k] = sameRelease[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, total_amount: b.total_amount, bill_date: b.bill_date || null }); });
   }
   if (nums.length) {
-    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, total_amount, release_number', 'bill_number', nums);
-    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_date: b.bill_date || null, total_amount: b.total_amount, release_number: b.release_number || null }); });
+    var nb = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, total_amount, release_number, created_at', 'bill_number', nums); // UP: + created_at
+    nb.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.bill_number); (sameNumber[k] = sameNumber[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null, total_amount: b.total_amount, release_number: b.release_number || null, created_at: b.created_at || null }); });
   }
   // v55.83-RK (Max 11:38 "...no duplicates...previously paid") — how much of each OTHER bill sharing a release / reference was already paid
   // v55.83-RL — other bills sharing the OTHER reference (BOL / PO / container…), when that column exists
@@ -52,8 +52,8 @@ export async function packageContext(db, pkgId, pkgLines) {
   var orefs = []; bills.forEach(function (b) { var o0 = normRef(b.other_reference); if (o0 && orefs.indexOf(o0) < 0) { orefs.push(o0); } });
   if (orefs.length) {
     try {
-      var ob = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, total_amount, other_reference', 'other_reference', orefs);
-      ob.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.other_reference); (sameOther[k] = sameOther[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null, total_amount: b.total_amount }); });
+      var ob = await inChunks(db, 'vendor_bills', 'id, vendor_name, bill_number, record_status, bill_date, total_amount, other_reference, created_at', 'other_reference', orefs); // UP: + created_at
+      ob.forEach(function (b) { if (b.record_status !== 'active') { return; } var k = normRef(b.other_reference); (sameOther[k] = sameOther[k] || []).push({ bill_id: b.id, vendor_name: b.vendor_name, bill_number: b.bill_number, bill_date: b.bill_date || null, total_amount: b.total_amount, created_at: b.created_at || null }); });
     } catch (eOr) { sameOther = {}; }
   }
   var otherIds = [];
@@ -75,11 +75,12 @@ export async function packageContext(db, pkgId, pkgLines) {
   // the same bill on ANOTHER open package
   var otherOpen = {};
   if (billIds.length) {
-    var ol = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, is_open', 'bill_id', billIds);
+    var ol = await inChunks(db, 'wire_package_lines', 'package_id, bill_id, amount, is_open', 'bill_id', billIds); // US: + amount
     var otherPk = []; ol.forEach(function (l) { if (l.is_open && l.package_id !== pkgId && otherPk.indexOf(l.package_id) < 0) { otherPk.push(l.package_id); } });
     var pk = otherPk.length ? await inChunks(db, 'wire_packages', 'id, seq, status', 'id', otherPk) : [];
     var lab = {}; pk.forEach(function (p) { if (p.status !== 'cancelled') { lab[p.id] = packageLabel(p); } });
-    ol.forEach(function (l) { if (l.is_open && l.package_id !== pkgId && lab[l.package_id]) { otherOpen[l.bill_id] = lab[l.package_id]; } });
+    // v55.83-US — partial wires: how much of the bill other open wires hold, and which ones
+    ol.forEach(function (l) { if (l.is_open && l.package_id !== pkgId && lab[l.package_id]) { var oo = otherOpen[l.bill_id] || (otherOpen[l.bill_id] = { label: '', amount: 0 }); oo.amount = r2(oo.amount + (Number(l.amount) || 0)); oo.label = oo.label ? oo.label + ', ' + lab[l.package_id] : lab[l.package_id]; } });
   }
   var lines = (pkgLines || []).map(function (l) {
     var others = pays.filter(function (p) { return p.bill_id === l.bill_id && p.id !== l.payment_id; }).map(function (p) {

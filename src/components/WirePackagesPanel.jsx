@@ -286,10 +286,10 @@ function PastWireForm(p) {
       {!past.bills ? <div className="text-[12px]" style={{ color: MUTED }}>Loading the open bills…</div> : past.bills.length === 0 ? <div className="text-[12px]" style={{ color: SUB }}>No open bills for this choice.</div>
         : <div className="overflow-x-auto rounded-lg mb-2" style={{ border: '1px solid #e2e8f0', maxHeight: 320, overflowY: 'auto' }}><table className="w-full text-[12px]"><tbody style={{ color: INK }}>
           {past.bills.map(function (b) {
-            var on = past.picks[b.id] != null; var off = !!b.on_package || (past.kind === 'vendor' && vendorPicked && b.vendor_name !== vendorPicked && !on);
+            var on = past.picks[b.id] != null; var off = (past.kind === 'vendor' && vendorPicked && b.vendor_name !== vendorPicked && !on);
             return <tr key={b.id} style={{ borderTop: '1px solid #f1f5f9', background: on ? '#ecfdf5' : '#ffffff', opacity: off ? 0.45 : 1 }}>
               <td className="px-2 py-1.5"><input type="checkbox" checked={on} disabled={off} onChange={function () { var pk = Object.assign({}, past.picks); if (on) { delete pk[b.id]; } else { pk[b.id] = String(b.open); } set('picks', pk); }} style={{ width: 16, height: 16 }} /></td>
-              <td className="px-2 py-1.5 font-bold">{b.vendor_name}<div className="text-[10px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + ' · ' + (b.bill_date || '') + (b.release_number ? ' · rel ' + b.release_number : '') + (b.on_package ? ' · already on ' + b.on_package : '')}</div></td>
+              <td className="px-2 py-1.5 font-bold">{b.vendor_name}<div className="text-[10px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + ' · ' + (b.bill_date || '') + (b.release_number ? ' · rel ' + b.release_number : '') + (b.on_package ? ' · ' + b.on_package + ' already — left for this wire: $' + fmt(b.open) : '')}</div></td>
               <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: SUB }}>{'open $' + fmt(b.open)}</td>
               <td className="px-2 py-1.5 text-right">{on ? <input value={past.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, past.picks); pk[b.id] = e.target.value; set('picks', pk); }} className={inp} style={Object.assign({ width: 110, textAlign: 'right' }, inpS)} /> : null}</td></tr>;
           })}</tbody></table></div>}
@@ -602,7 +602,7 @@ export default function WirePackagesPanel(props) {
     var renderRow = function (b) {
       var on = ed.picks[b.id] != null;
       var notValid = b.validation_status !== 'validated'; // v55.83-RO — validate first, then wire
-      var off = !!b.on_package || (ed.kind === 'vendor' && pickedVendor && b.vendor_name !== pickedVendor && !on) || (notValid && !on);
+      var off = (ed.kind === 'vendor' && pickedVendor && b.vendor_name !== pickedVendor && !on) || (notValid && !on);
       return <tr key={b.id} onClick={function () { if (!off) { togglePick(b); } }} style={{ borderTop: '1px solid #e2e8f0', background: on ? '#ecfdf5' : '#ffffff', cursor: off ? 'not-allowed' : 'pointer', opacity: off ? 0.45 : 1 }}>
         <td className="px-2 py-2" style={{ width: 28 }}><input type="checkbox" readOnly checked={on} disabled={off} style={{ width: 18, height: 18 }} /></td>
         <td className="px-2 py-2"><div className="text-[13px] font-extrabold" style={{ color: INK }}>{b.vendor_name}</div>
@@ -610,7 +610,7 @@ export default function WirePackagesPanel(props) {
             toast.success('✓ ' + b.vendor_name + ' ' + (b.bill_number || '') + ' validated — you can tick it now.');
             setEd(function (e) { return (e && e.bills) ? Object.assign({}, e, { bills: e.bills.map(function (x) { return x.id === b.id ? Object.assign({}, x, { validation_status: 'validated', shipment_direction: d || x.shipment_direction, bill_type: t || x.bill_type }) : x; }) }) : e; });
           }} /> : <div className="text-[10px] font-extrabold" style={{ color: '#065f46' }}>✓ validated</div>}
-          <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · already on ' + b.on_package : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
+          <div className="text-[11px]" style={{ color: MUTED }}>{'Bill ' + (b.bill_number || '—') + (b.due_date ? ' · due ' + b.due_date : b.bill_date ? ' · ' + b.bill_date : '')}{b.on_package ? ' · ' + b.on_package + ' already — left for this wire: $' + fmt(b.open) : ''}{b.disputed ? ' · DISPUTED' : ''}</div></td>
         <td className="px-2 py-2"><BillFields bill={b} editable={!!perms.prepare} busy={busy} releaseOptional={b.release_optional} onSave={function (field, value, done) { saveField(b.id, field, value, done); }} /></td>
         <td className="px-2 py-2 text-right text-[12px] tabular-nums" style={{ color: SUB }}>${fmt(b.open)}</td>
         <td className="px-2 py-2 text-right" onClick={function (e) { e.stopPropagation(); }}>{on ? <input value={ed.picks[b.id]} onChange={function (e) { var pk = Object.assign({}, ed.picks); pk[b.id] = e.target.value; setEd(Object.assign({}, ed, { picks: pk })); }}

@@ -61,7 +61,7 @@ Q.prototype.run = function () {
       if (this.name === 'sourcing_requests') { r.seq = db.seq++; } // v55.83-SV — the request number comes from the database
       if (this.name === 'wire_package_lines') {
         if (r.is_open === undefined) { r.is_open = true; }
-        if (tbl.some(function (x) { return x.is_open && x.bill_id === r.bill_id; })) { return { data: null, error: { message: 'duplicate key value violates unique constraint "uq_wpkg_line_open_bill"' } }; }
+        if (!db.partialWires && tbl.some(function (x) { return x.is_open && x.bill_id === r.bill_id; })) { return { data: null, error: { message: 'duplicate key value violates unique constraint "uq_wpkg_line_open_bill"' } }; }
       }
       if (hooks && hooks.insert) { var he = hooks.insert(r); if (he) { return { data: null, error: { message: he } }; } }
       if (hooks && hooks.after) { hooks.after(r, null); } // v55.83-SW — computed columns (e.g. content_hash) after the write

@@ -55,7 +55,11 @@ export function auditWire(input) {
   var known = {}; ((input && input.knownReleases) || []).forEach(function (k) { known[normRef(k)] = true; });
   var checks = [];
   var curBill = null; // v55.83-RL — every check knows its bill (so an override is for THAT check on THAT bill)
-  function add(level, code, text) { checks.push({ level: level, code: code, text: text, bill_id: curBill }); }
+  function add(level, code, text, extra) { checks.push(Object.assign({ level: level, code: code, text: text, bill_id: curBill }, extra || {})); }
+  // v55.83-UP (Max, Nov 18: "why is this error message repeating several times") — each extra copy is reported ONCE per bill (not once by
+  // bill number and again by reference), and the line says WHICH copy: when it was entered, its amount, whether it was paid
+  var dupSeen = {};
+  function copyWords(o) { return (o.bill_number ? '#' + o.bill_number + ' ' : '') + 'dated ' + day(o.bill_date) + (o.created_at ? ', entered in the Hub ' + day(o.created_at) : '') + (o.total_amount != null ? ', ' + money(o.total_amount) : '') + (o.paid_total > 0.005 ? ', ALREADY PAID ' + money(o.paid_total) : ', not paid'); }
 
   if (wire.direction && wire.direction !== 'out') { add('block', 'NOT_OUT', 'This bank line is money IN — a wire to a vendor is money out.'); }
   if (!lines.length) { add('block', 'NO_BILLS', 'No bills are linked to this wire yet — link the bills it paid first.'); }
@@ -128,6 +132,10 @@ export function auditWire(input) {
           var oWho = (o.vendor_name || '?') + (o.bill_number ? ' #' + o.bill_number : '');
           var paidTxt = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
           var sd1 = sameDay(o.bill_date, b.bill_date);
+          // v55.83-UP (Codex 22:51) — the same copy matching by release AND by number + date is ONE line (the DUP_REF one below, which names the release)
+          var numB = normRef(b.bill_number);
+          var alsoNum = sd1 === true && !!numB && (sameNum[numB] || []).some(function (x) { return x.bill_id === o.bill_id && normRef(x.vendor_name) === normRef(b.vendor_name) && sameDay(x.bill_date, b.bill_date) === true; });
+          if (alsoNum) { return; }
           if (sd1 === true || (sd1 === null && o.bill_date === undefined)) { add('block', 'DUP_RELEASE', who + ': ' + oWho + ' is the same vendor, same release ' + rel + ' and same date ' + day(b.bill_date) + paidTxt + ' — a duplicate charge.'); }
           else if (sd1 === null) { add('warn', 'DUP_RELEASE', who + ': ' + oWho + ' is the same vendor on release ' + rel + ' but one bill has no date' + paidTxt + ' — check it is not the same charge.'); }
           else { add('info', 'SAME_RELEASE_OTHER_DATE', who + ': ' + oWho + ' is the same vendor on release ' + rel + ' dated ' + day(o.bill_date) + paidTxt + ' — a different date, treated as a separate charge.'); }
@@ -151,7 +159,9 @@ export function auditWire(input) {
         var sd3 = sameDay(o.bill_date, b.bill_date);
         var paidTxt2 = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
         if (sd3 === true || (sd3 === null && o.bill_date === undefined)) {
-          add(sameV ? 'block' : 'warn', 'DUP_REF', who + ': reference ' + num + ' and date ' + day(b.bill_date) + ' are ALSO on ' + (o.vendor_name || '?') + "'s bill" + paidTxt2 + (sameV ? ' — the same vendor: a duplicate bill.' : ' (a different vendor — check it is not the same document).'));
+          if (sameV) { dupSeen[String(l.bill_id) + '|' + String(o.bill_id)] = true; }
+          var relB = normRef(b.release_number); var relToo = sameV && !!relB && (sameRel[relB] || []).some(function (x) { return x.bill_id === o.bill_id; });
+          add(sameV ? 'block' : 'warn', 'DUP_REF', sameV ? (who + ': another copy of this bill is in the Hub — ' + (o.vendor_name || '?') + ' ' + copyWords(o) + '. Same vendor, number ' + num + (relToo ? ', release ' + relB : '') + ' and date: a duplicate bill. Void the extra copy in 💸 Bills (it is flagged there).') : (who + ': reference ' + num + ' and date ' + day(b.bill_date) + ' are ALSO on ' + (o.vendor_name || '?') + "'s bill" + paidTxt2 + ' (a different vendor — check it is not the same document).'), { other_bill_id: o.bill_id });
         } else if (sd3 === null) {
           add('warn', 'DUP_REF', who + ': reference ' + num + ' is also on ' + (o.vendor_name || '?') + "'s bill and one of them has no date" + paidTxt2 + ' — check.');
         } else if (sameV) {
@@ -176,7 +186,11 @@ export function auditWire(input) {
         if (normRef(o.vendor_name) !== normRef(b.vendor_name)) { return; }
         var sdP = sameDay(o.bill_date, b.bill_date);
         var pt = o.paid_total > 0.005 ? ' — it was ALREADY PAID ($' + r2(o.paid_total).toFixed(2) + ')' : '';
-        if (sdP === true) { add('block', 'DUP_OTHER_REF', who + ': ' + (o.vendor_name || '?') + (o.bill_number ? ' #' + o.bill_number : '') + ' has the same reference ' + oref + ' and the same date' + pt + ' — a duplicate charge.'); }
+        if (sdP === true) {
+          if (dupSeen[String(l.bill_id) + '|' + String(o.bill_id)]) { return; } // UP — this copy is already reported above (same number and date)
+          dupSeen[String(l.bill_id) + '|' + String(o.bill_id)] = true;
+          add('block', 'DUP_OTHER_REF', who + ': another bill has the same reference ' + oref + ' and date — ' + (o.vendor_name || '?') + ' ' + copyWords(o) + '. A duplicate charge: void the extra copy in 💸 Bills (it is flagged there).', { other_bill_id: o.bill_id });
+        }
         else if (sdP === null) { add('warn', 'DUP_OTHER_REF', who + ': another bill of ' + (o.vendor_name || '?') + ' has reference ' + oref + ' and one has no date' + pt + ' — check.'); }
       });
     }
@@ -257,7 +271,15 @@ export function auditPackage(input) {
       // a bill ticked for this wire with no "paid through" yet is marked when the wire is SENT (review gap 8)
       if (!samePayee(b.paid_via, pkg.payee_name) && !(l.will_mark === true && !b.paid_via)) { add('block', 'PAYEE_MISMATCH', who + (b.paid_via ? ' is paid through ' + b.paid_via : ' is not marked "paid through ' + pkg.payee_name + '"') + ' — set that on the bill, or pay it on the right wire.'); }
     }
-    if (other[l.bill_id]) { add('block', 'IN_OTHER_PACKAGE', who + ' is already on wire ' + other[l.bill_id] + ' — one bill, one wire.'); }
+    // v55.83-US — partial wires: the same bill on another open wire is fine while paid + every open wire ≤ the bill total
+    var ob = other[l.bill_id];
+    if (typeof ob === 'string') { add('block', 'IN_OTHER_PACKAGE', who + ' is already on wire ' + ob + ' — one bill, one wire.'); }
+    else if (ob && ob.amount > 0) {
+      var paidB = 0; (l.other_payments || []).forEach(function (o) { paidB = r2(paidB + (Number(o.amount) || 0)); });
+      var totB = r2(b.total_amount); var sumB = r2(paidB + ob.amount + (Number(l.amount) || 0));
+      if (sumB > totB + 0.005) { add('block', 'IN_OTHER_PACKAGE', who + ': ' + money(ob.amount) + ' of it is already on wire ' + ob.label + (paidB > 0.005 ? ' and ' + money(paidB) + ' was paid' : '') + ' — with this wire (' + money(l.amount) + ') that is ' + money(sumB) + ', more than the ' + money(totB) + ' bill. Lower this amount to ' + money(Math.max(0, totB - paidB - ob.amount)) + ' or less.'); }
+      else { add('info', 'ALSO_ON_OTHER_PACKAGE', who + ': ' + money(ob.amount) + ' of it is on wire ' + ob.label + '; this wire pays ' + money(l.amount) + ' — together ' + money(sumB) + ' of the ' + money(totB) + ' bill.'); }
+    }
   });
   curBill = null;
   if (tot.fee > 0.005) {

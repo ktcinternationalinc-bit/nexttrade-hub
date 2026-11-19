@@ -46,7 +46,7 @@ var ROLE_DEFAULTS = {
 
 // v55.83-TP (Max, Nov 17: "an admin should also have restrictions unless he is the super admin") — these are NEVER granted by a
 // role (owner / admin / any default): only the super admin, or a person Max switched on explicitly.
-export var SENSITIVE_PERMS = { 'advances.manage': 1, 'pnl.view_margin': 1, 'accounting.view_totals': 1, 'bank_balances.view': 1, 'bank.view_private': 1, 'permissions.grant_sensitive': 1, 'bank.add_transactions': 1 }; // TQ: adding transactions by hand
+export var SENSITIVE_PERMS = { 'advances.manage': 1, 'pnl.view_margin': 1, 'accounting.view_totals': 1, 'bank_balances.view': 1, 'bank.view_private': 1, 'permissions.grant_sensitive': 1, 'bank.add_transactions': 1, 'invoice.delete': 1 }; // UM: deleting / voiding invoices // TQ: adding transactions by hand
 export function isSensitivePerm(perm) { return SENSITIVE_PERMS[perm] === 1; }
 function aliasesFor(perm) { return PERMISSION_ALIASES[perm] || [perm]; }
 

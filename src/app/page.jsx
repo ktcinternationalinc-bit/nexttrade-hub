@@ -81,6 +81,8 @@ import { consumeFifo, reverseFifoConsumption } from '../lib/inventory-cost-engin
 // components (CalendarTab, AdminTab, etc) can consume it without a
 // circular import via page.jsx.
 import { ToastContext } from '../lib/toast-context';
+import { nextConfirmState, answerConfirm, HUB_TOAST_FALLBACK } from '../lib/confirm-queue'; // v55.83-UM
+// v55.83-UM — the "Are you sure?" rules and the no-provider fallback (never an automatic yes) live in lib/confirm-queue.js
 const ToastProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
@@ -95,13 +97,14 @@ const ToastProvider = ({ children }) => {
     info: (msg) => addToast(msg, 'info'),
     warning: (msg) => addToast(msg, 'warning', 4500),
   }), [addToast]);
+  // v55.83-UM (Codex UK follow-up) — a second question while one is open answers the first one NO, so no click waits forever
   const confirmFn = useCallback((opts) => {
     return new Promise((resolve) => {
-      setConfirmState({ ...opts, resolve });
+      setConfirmState(prev => nextConfirmState(prev, opts, resolve));
     });
   }, []);
-  const handleConfirm = () => { if (confirmState?.resolve) confirmState.resolve(true); setConfirmState(null); };
-  const handleCancel = () => { if (confirmState?.resolve) confirmState.resolve(false); setConfirmState(null); };
+  const handleConfirm = () => { setConfirmState(answerConfirm(confirmState, true)); };
+  const handleCancel = () => { setConfirmState(answerConfirm(confirmState, false)); };
   const ctx = useMemo(() => ({ ...toast, confirm: confirmFn }), [toast, confirmFn]);
   return (
     <ToastContext.Provider value={ctx}>
@@ -128,15 +131,34 @@ const ToastProvider = ({ children }) => {
 };
 
 // Confirmation modal — replaces confirm()
+// v55.83-UM (Codex UK follow-up) — a real dialog: Esc answers Cancel, Cancel has the focus first (the safe answer),
+// Tab stays inside the box, and the focus goes back to where it was when the box closes
 const ConfirmModal = ({ open, title, message, confirmText, cancelText, danger, onConfirm, onCancel }) => {
+  const cancelRef = useRef(null); const boxRef = useRef(null); const cancelFn = useRef(onCancel); cancelFn.current = onCancel;
+  useEffect(() => {
+    if (!open) return undefined;
+    const before = typeof document !== 'undefined' ? document.activeElement : null;
+    if (cancelRef.current) cancelRef.current.focus();
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancelFn.current(); return; }
+      if (e.key === 'Tab' && boxRef.current) {
+        const f = boxRef.current.querySelectorAll('button'); if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); if (before && before.focus) { try { before.focus(); } catch (eF) {} } };
+  }, [open]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black/50 z-[250] flex items-center justify-center p-4" onClick={onCancel}>
-      <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-bold mb-2">{title || 'Confirm'}</h3>
-        <p className="text-sm text-slate-600 mb-5">{message}</p>
+      <div ref={boxRef} role="alertdialog" aria-modal="true" aria-labelledby="hub-confirm-title" aria-describedby="hub-confirm-msg" className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+        <h3 id="hub-confirm-title" className="text-lg font-bold mb-2">{title || 'Confirm'}</h3>
+        <p id="hub-confirm-msg" className="text-sm text-slate-600 mb-5">{message}</p>
         <div className="flex gap-3 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50">{cancelText || 'Cancel'}</button>
+          <button ref={cancelRef} onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50">{cancelText || 'Cancel'}</button>
           <button onClick={onConfirm} className={'px-4 py-2 rounded-lg text-sm font-bold text-white ' + (danger ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600')}>{confirmText || 'Confirm'}</button>
         </div>
       </div>
@@ -1971,21 +1993,11 @@ function HubApp() {
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const activeTeamUsers = useMemo(() => filterActiveUsers(teamUsers), [teamUsers]);
-  // Apr 25 2026 — Defensive toast fallback. This is the App component, but
-  // the ToastProvider is mounted INSIDE App's own return tree, which means
-  // useContext(ToastContext) here always returns undefined (App is the
-  // PARENT of the provider, not a child). Without the fallback, any
-  // toast.success / .error / .warning call inside App's event handlers
-  // throws "Cannot read properties of undefined (reading 'success')".
-  // The fallback gives every call site a guaranteed-valid object — calls
-  // become no-ops if there's no provider, and otherwise behave normally.
-  // Real toast UI still works for child components (CalendarTab, AdminTab,
-  // etc.) because they ARE inside the provider.
+  // v55.83-UK/UM — App now wraps HubApp in the ToastProvider, so HubApp always gets the real toast here.
+  // The fallback below exists only if the provider were ever missing: messages go to the console and an
+  // "Are you sure?" question is answered NO with a visible notice (it used to answer YES silently).
   const _toastRaw = useContext(ToastContext);
-  const toast = _toastRaw || {
-    success: () => {}, error: () => {}, warning: () => {}, info: () => {},
-    confirm: async () => true,
-  };
+  const toast = _toastRaw || HUB_TOAST_FALLBACK;
 
   // Breadcrumb — shows current location
   const TAB_GROUPS = { dashboard:'Overview', sales:'Egypt Finance', treasury:'Egypt Finance', checks:'Egypt Finance', debts:'Egypt Finance', egyptbank:'Egypt Finance', bank:'USA Finance', accounting:'USA Finance', quotes:'Egypt Finance', openaccounts:'Open Accounts', reports:'Reports', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
@@ -5587,7 +5599,7 @@ function HubApp() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-UC</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-US</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"

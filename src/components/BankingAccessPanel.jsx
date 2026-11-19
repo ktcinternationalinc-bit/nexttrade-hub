@@ -42,6 +42,7 @@ export var BANKING_GROUPS = [
   { title: '3b · Invoices, customers & payments', note: 'Needs Wave Hub (or ClickBooks) in group 1.', items: [
     { key: 'invoice.view', label: 'See invoices', desc: 'Invoices and proformas, read only.', needsBooks: true },
     { key: 'invoice.create', label: 'Create / edit invoices', desc: 'Make and change invoices and proformas.', needsBooks: true },
+    { key: 'invoice.delete', label: 'Delete / void invoices 🔒', desc: 'Delete, void, cancel, archive and restore invoices and proformas (also “Delete incl. Wave”). Only the super admin can switch it on; no role (Accounting Manager, Owner, Admin) has it by itself.', needsBooks: true },
     { key: 'accounting.customers.view', label: 'See customers', desc: 'Accounting customers (not the CRM).', needsBooks: true },
     { key: 'accounting.customers.edit', label: 'Add / change customers', desc: 'Create, edit and archive accounting customers.', needsBooks: true },
     { key: 'payments.match', label: 'Match payments to invoices', desc: 'Match a bank deposit to a customer invoice.', needsBooks: true },

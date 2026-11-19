@@ -6,6 +6,7 @@
 import { BILL_EXTRACT_PROMPT, parseBillExtraction, BILL_MEDIA_TYPES, importSort, BILL_TYPE_LABEL } from './bill-extract';
 import { saveBillLines, runPriceCheck } from './bill-lines-server';
 import { defaultDirectionFor } from './bill-lines';
+import { exactSameBill, exactSameWords } from './bill-dup-scan'; // v55.83-UQ
 
 // v55.83-RP — the bill TYPE every VALIDATED bill of this vendor carries, when they all agree (else null: never guessed)
 export async function vendorBillType(db, vendorName) {
@@ -20,10 +21,33 @@ export async function vendorBillType(db, vendorName) {
   } catch (e) { return null; }
 }
 
+// v55.83-UQ — the database guard's refusal, without the code prefix
+export function exactDupMessage(m) { return String(m || '').replace(/^[\s\S]*HUB_EXACT_DUPLICATE:\s*/, '') || 'This exact bill is already in the Hub. It was NOT added again.'; }
+// v55.83-UQ — looks up the bills of the same date, then compares vendor and number the forgiving way (Inc / Corp, dashes)
+export async function findExactSameBill(db, row) {
+  var r = row || {}; var d = String(r.bill_date || '').substring(0, 10);
+  if (!d || !String(r.bill_number || '').trim() || !String(r.vendor_name || '').trim()) { return null; }
+  // v55.83-UQ (Codex 23:01) — EVERY bill of that date is read, in pages (no cutoff), and compared in code: vendor, number and the
+  // total to the cent (the database repeats the check under a lock — sql/v55-83-UQ-exact-duplicate-bills.sql)
+  for (var from = 0; from < 200000; from += 1000) {
+    var q = await db.from('vendor_bills').select('id, vendor_name, bill_number, bill_date, total_amount, record_status').eq('bill_date', d).order('id', { ascending: true }).range(from, from + 999);
+    if (q.error) { throw new Error('Could not check for the same bill (' + q.error.message + ') — nothing was added.'); }
+    var page = (q && q.data) || [];
+    var hit = exactSameBill(r, page);
+    if (hit) { return hit; }
+    if (page.length < 1000) { break; }
+  }
+  return null;
+}
+
 // v55.83-RP — every import door (📷 Import, bulk file import, email inbound, email scanner) inserts through here:
 // type + release + reference + direction ride on the new bill; if the RP SQL is not run yet the bill is still created
 // without the new columns (and the RL ones), never lost.
 export async function insertImportedBill(db, row, draft) {
+  // v55.83-UQ — the exact same bill already on file → not inserted; every caller reports it as skipped with this reason
+  var same = null;
+  try { same = await findExactSameBill(db, row); } catch (eS) { return { data: null, error: { code: 'HUB_DUP_CHECK_FAILED', message: (eS && eS.message) || 'Could not check for the same bill — nothing was added.' } }; }
+  if (same) { return { data: null, duplicate_of: same.id, error: { code: 'HUB_EXACT_DUPLICATE', message: exactSameWords(same) } }; }
   var hist = (draft && !draft.bill_type) ? await vendorBillType(db, draft.vendor_name) : null;
   var defDir = null;
   try { var crR = await db.from('bill_commission_rules').select('*'); defDir = defaultDirectionFor(((crR && crR.data) || []).filter(function (x) { return x.active !== false; }), draft && draft.vendor_name); } catch (eDD) { defDir = null; }
@@ -35,6 +59,7 @@ export async function insertImportedBill(db, row, draft) {
   var last = null;
   for (var i = 0; i < tries.length; i++) {
     last = await db.from('vendor_bills').insert(tries[i]).select('id').maybeSingle();
+    if (last.error && /HUB_EXACT_DUPLICATE/.test(String(last.error.message || ''))) { return { data: null, error: { code: 'HUB_EXACT_DUPLICATE', message: exactDupMessage(last.error.message) } }; }
     if (!last.error) {
       last.sorted = i === 0 ? srt : null; last.sql_missing = i > 0;
       // v55.83-RQ — the bill's lines (NexPac: cost + its share of the 12.5% commission) and the first price check; fail-soft

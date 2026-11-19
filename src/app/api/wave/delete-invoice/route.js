@@ -24,7 +24,9 @@
 // SWC-safe: var + string concatenation only.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { assertPermission } from '../../../../lib/server-permissions';
+import { assertPermission, loadUserPermissions } from '../../../../lib/server-permissions';
+import { verifiedCaller } from '../../../../lib/verified-caller'; // v55.83-UM
+import { canDeleteInvoices, INVOICE_DELETE_DENIED, lifecycleRefusal, LIFECYCLE_SQL_MISSING } from '../../../../lib/invoice-delete-access'; // v55.83-UM
 import { isPlaceholderWaveBusiness } from '../../../../lib/wave-business-shared';
 
 var API_BUILD_MARKER = 'v55.83-NC-delete-invoice';
@@ -43,7 +45,12 @@ export async function POST(req) {
     var body = await req.json();
     var waveBusinessId = body.wave_business_id;
     var hubId = body.hub_record_id;
-    var by = body.user_id || null;
+    // v55.83-UM — the verified signed-in person (never a user id sent by the browser) and the invoice-delete rule
+    var who = await verifiedCaller(req, body, createClient);
+    if (who.error) { return NextResponse.json({ ok: false, error: who.error }, { status: who.status || 401 }); }
+    var by = who.userId;
+    var _ctxD = await loadUserPermissions(db, by);
+    if (!canDeleteInvoices(_ctxD.isSuperAdmin, _ctxD.mp, _ctxD.deny)) { return NextResponse.json({ ok: false, error: INVOICE_DELETE_DENIED }, { status: 403 }); }
 
     var _gate = await assertPermission(db, by, 'wave.invoices.push', req);
     if (!_gate.ok) { return NextResponse.json({ ok: false, error: _gate.error }, { status: _gate.status }); }
@@ -80,14 +87,27 @@ export async function POST(req) {
       await logInv({ wave_business_id: waveBusinessId || inv.wave_business_id, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: inv.wave_invoice_id, action: 'delete', dry_run: false, success: false, error_message: payMsg, response_payload: { reason: 'wave_payments_exist', wave_payment_count: wavePays.length }, attempted_by: by });
       return NextResponse.json({ error: payMsg, blocked: true, reason: 'wave_payments_exist' }, { status: 409 });
     }
-    // Hub-only payments: allowed, but only when the caller acknowledged them —
-    // deleting money records must never be a surprise side effect.
+    // v55.83-UM (Codex 21:35 P1; Max's rule: never delete data) — Hub payment records are NEVER deleted any more, not even with a
+    // confirmation: an invoice with any payment record is voided or archived instead. Checked BEFORE anything is sent to Wave.
     var hubPayRes = await db.from('accounting_invoice_payments')
       .select('id')
       .eq('accounting_invoice_id', hubId);
+    if (hubPayRes && hubPayRes.error) { return NextResponse.json({ ok: false, error: 'Could not check its payments (' + hubPayRes.error.message + ') — nothing was deleted anywhere.' }, { status: 500 }); }
     var hubPays = (hubPayRes && hubPayRes.data) || [];
-    if (hubPays.length > 0 && body.acknowledge_hub_payments !== true) {
-      return NextResponse.json({ error: 'This invoice has ' + hubPays.length + ' Hub payment record(s) that will be deleted with it. Confirm again to proceed.', blocked: true, reason: 'hub_payments_need_ack', hub_payment_count: hubPays.length }, { status: 409 });
+    if (hubPays.length > 0) {
+      return NextResponse.json({ ok: false, error: 'This invoice has ' + hubPays.length + ' Hub payment record(s). Payments are never deleted — void or archive the invoice instead. Nothing was deleted anywhere.', blocked: true, reason: 'hub_payments_block', hub_payment_count: hubPays.length }, { status: 409 });
+    }
+    // v55.83-UM (Codex 21:50 P1) — BEFORE anything is sent to Wave, the database step runs every check on THIS invoice for THIS person and
+    // changes nothing (check_only): its state (archived / void / cancelled), payments and payment matches, imported-from-Wave, and the
+    // person's business. Any blocker → zero Wave calls, zero changes. (It also proves the step is installed.)
+    var pre = await db.rpc('hub_invoice_lifecycle', { p: { kind: 'invoice', action: 'delete', id: hubId, actor: by, is_super: _ctxD.isSuperAdmin === true, after_wave_delete: true, check_only: true } });
+    if (pre.error) {
+      var preMissing = /hub_invoice_lifecycle/.test(String(pre.error.message || '')) && /does not exist|Could not find|schema cache/i.test(String(pre.error.message || ''));
+      return NextResponse.json({ ok: false, error: (preMissing ? LIFECYCLE_SQL_MISSING : 'Could not check the invoice (' + pre.error.message + ').') + ' Nothing was deleted anywhere.', blocked: true }, { status: preMissing ? 409 : 500 });
+    }
+    if (!pre.data || pre.data.ok !== true || pre.data.check_only !== true) {
+      var preWhy = lifecycleRefusal(pre.data || {}, 'invoice', 'delete');
+      return NextResponse.json({ ok: false, error: preWhy.msg + ' Nothing was deleted anywhere.', blocked: true, reason: (pre.data && pre.data.code) || 'refused' }, { status: preWhy.status });
     }
 
     // ── STEP 1: Wave delete (only when a Wave copy exists) ──
@@ -135,19 +155,21 @@ export async function POST(req) {
       }
       deletedInWave = true;
       // Truthful immediately: the Wave copy is gone even if the Hub steps below fail.
-      await db.from('accounting_invoices').update({ wave_invoice_id: null, wave_status: null, wave_sync_status: null }).eq('id', hubId).eq('wave_invoice_id', oldWaveId);
+      var unl = await db.from('accounting_invoices').update({ wave_invoice_id: null, wave_status: null, wave_sync_status: null }).eq('id', hubId).eq('wave_invoice_id', oldWaveId).select('id');
+      var unlinked = !(unl && unl.error) && ((unl && unl.data) || []).length > 0; // UM (Codex 21:50) — only claimed when it really happened
       await logInv({ wave_business_id: waveBusinessId, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: oldWaveId, action: 'delete', dry_run: false, response_payload: data, success: true, attempted_by: by });
     }
 
-    // ── STEP 2: Hub cascade — payments, then items, then the invoice ──
-    var delPay = await db.from('accounting_invoice_payments').delete().eq('accounting_invoice_id', hubId).select('id');
-    var delItems = await db.from('accounting_invoice_items').delete().eq('invoice_id', hubId).select('id');
-    var delInv = await db.from('accounting_invoices').delete().eq('id', hubId).select('id');
-    var invErr = delInv && delInv.error ? (delInv.error.message || String(delInv.error)) : null;
+    // ── STEP 2 (v55.83-UM): the Hub part in ONE locked database step — items + invoice, its bank lines back to review; payments
+    // are never deleted (any payment record → refused, re-checked under the lock). All of it or none of it.
+    var hubDel = await db.rpc('hub_invoice_lifecycle', { p: { kind: 'invoice', action: 'delete', id: hubId, actor: by, is_super: _ctxD.isSuperAdmin === true, after_wave_delete: true } });
+    var hubRes = (hubDel && hubDel.data) || {};
+    var invErr = hubDel && hubDel.error ? (hubDel.error.message || String(hubDel.error)) : (!hubRes.ok ? lifecycleRefusal(hubRes, 'invoice', 'delete').msg : null);
 
     if (invErr) {
       // Wave copy (if any) is already gone and unlinked — say exactly where we are.
-      var partial = 'The Hub invoice row could not be deleted (' + invErr + ').' + (deletedInWave ? ' The Wave copy WAS deleted and unlinked — the invoice remains in the Hub without a Wave copy; use the normal Delete to remove it.' : '');
+      // only reachable when something changed in the moment between the check above and here (e.g. a payment was recorded meanwhile)
+      var partial = 'The Hub invoice was NOT deleted: ' + invErr + (deletedInWave ? ' Its Wave copy WAS already deleted' + (unlinked ? ' and the Hub invoice no longer points to it' : ' but the Hub invoice STILL shows the old Wave link — tell the super admin') + '. The invoice is still in the Hub: void or archive it there (Delete will refuse it for the same reason).' : '');
       await logInv({ wave_business_id: waveBusinessId || inv.wave_business_id, entity_type: 'invoice', hub_record_id: hubId, wave_record_id: oldWaveId, action: 'delete', dry_run: false, success: false, error_message: partial, attempted_by: by });
       return NextResponse.json({ ok: false, deleted_in_wave: deletedInWave, error: partial, api_build_marker: API_BUILD_MARKER }, { status: 500 });
     }
@@ -156,8 +178,8 @@ export async function POST(req) {
       ok: true,
       deleted_in_wave: deletedInWave,
       old_wave_invoice_id: oldWaveId,
-      hub_payments_deleted: ((delPay && delPay.data) || []).length,
-      hub_items_deleted: ((delItems && delItems.data) || []).length,
+      hub_payments_deleted: 0, // v55.83-UM — payments are never deleted
+      released_bank_lines: hubRes.released || 0,
       invoice_number: inv.invoice_number,
       api_build_marker: API_BUILD_MARKER, route: API_ROUTE
     };

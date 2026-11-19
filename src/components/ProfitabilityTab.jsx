@@ -6,6 +6,7 @@
 // Nothing on this screen changes an invoice, a bill, inventory or the ledger.
 // All colours are inline: the dark theme repaints the bg-white class, which is how the Stats table became unreadable.
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom'; // v55.83-UM — full screen above the Hub header
 import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 
@@ -80,17 +81,22 @@ export default function ProfitabilityTab(props) {
   // v55.83-UI (Max, Nov 18: "more professional ... extra text on hover ... a scroll bar to move left to right ... show more of the screen")
   var sAb = useState(false); var showAbout = sAb[0]; var setShowAbout = sAb[1];
   var sFull = useState(false); var full = sFull[0]; var setFull = sFull[1];
-  var topBar = useRef(null); var topInner = useRef(null); var tableBox = useRef(null); var syncing = useRef(false);
+  var topBar = useRef(null); var topInner = useRef(null); var tableBox = useRef(null); 
   // v55.83-UI (Max: "2 layers ... when we scroll the second layer that starts with invoice disappears") — the shipments header sticks
   // right UNDER the main header while its shipments are on screen; outerHead measures how tall the main header is
   var outerHead = useRef(null); var sHH = useState(44); var headH = sHH[0]; var setHeadH = sHH[1];
   useEffect(function () { // the top scroll bar is as wide as the table, so it moves it left / right from the top
-    function size() { if (topInner.current && tableBox.current) { topInner.current.style.width = tableBox.current.scrollWidth + 'px'; } if (outerHead.current) { var hh = outerHead.current.offsetHeight || 44; if (hh !== headH) { setHeadH(hh); } } }
+    function size() { if (topInner.current && tableBox.current && topBar.current) { var tb = tableBox.current; topInner.current.style.width = Math.max(0, tb.scrollWidth - tb.clientWidth + topBar.current.clientWidth) + 'px'; } if (outerHead.current) { var hh = outerHead.current.offsetHeight || 44; if (hh !== headH) { setHeadH(hh); } } }
     size(); var t = setTimeout(size, 300); window.addEventListener('resize', size);
     return function () { clearTimeout(t); window.removeEventListener('resize', size); };
   });
   useEffect(function () { if (!full) { return undefined; } function esc(e) { if (e.key === 'Escape') { setFull(false); } } window.addEventListener('keydown', esc); return function () { window.removeEventListener('keydown', esc); }; }, [full]);
-  function syncFrom(src, dst) { if (syncing.current) { syncing.current = false; return; } if (src.current && dst.current) { syncing.current = true; dst.current.scrollLeft = src.current.scrollLeft; } }
+  // v55.83-UM (Codex UI P2) — no guard flag: copy the left position only when it differs, so a vertical-only scroll can never
+  // swallow the next horizontal move; the copied scroll fires back once, finds the positions equal and stops
+  function syncFrom(src, dst) { if (!src.current || !dst.current) { return; } var x = src.current.scrollLeft; if (Math.abs(dst.current.scrollLeft - x) < 1) { return; } dst.current.scrollLeft = x; }
+  // full screen: the page behind does not scroll, the focus moves to the exit button and comes back after
+  var fullBtn = useRef(null);
+  useEffect(function () { if (fullBtn.current) { try { fullBtn.current.focus(); } catch (eF) {} } if (!full) { return undefined; } var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }, [full]);
   var s16 = useState('month'); var pGran = s16[0]; var setPGran = s16[1]; // v55.83-TN — P&L by period: week / month / quarter / year
   var s17 = useState('all'); var pPre = s17[0]; var setPPre = s17[1]; // v55.83-TN — release prefix: all / 1001 / 1002 / 1003 / other
 
@@ -124,12 +130,15 @@ export default function ProfitabilityTab(props) {
   var box = { background: '#ffffff', color: INK, border: '1px solid ' + LINE };
   var th = { background: '#0f172a', color: '#ffffff' };
   var inp = { background: '#ffffff', color: INK, border: '1px solid #94a3b8' };
-  function dot(tip) { return <span title={tip} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 4, background: '#f59e0b', marginLeft: 4, verticalAlign: 'middle', cursor: 'help' }} />; }
+  // v55.83-UM (Codex UI P2) — every amber dot / dash is a small button: hover shows the words, and Tab + Enter or a tap shows them too
+  function explain(tip) { var t = String(tip || 'Part of this amount is still missing.'); if (toast.info) { toast.info(t); } else { toast.success(t); } }
+  function dot(tip) { var t = tip || 'Only part of this amount is known — part missing'; return <button type="button" aria-label={t} title={t} onClick={function (e) { e.stopPropagation(); explain(t); }} style={{ display: 'inline-block', width: 13, height: 13, borderRadius: 7, background: '#f59e0b', backgroundClip: 'content-box', padding: 3, marginLeft: 2, verticalAlign: 'middle', cursor: 'help', border: 0 }} />; }
+  function dash(tip) { return <button type="button" aria-label={tip} title={tip} onClick={function (e) { e.stopPropagation(); explain(tip); }} style={{ color: '#b45309', fontWeight: 700, cursor: 'help', background: 'transparent', border: 0, padding: '0 2px' }}>—</button>; }
   function money(row, f) {
     if (row.unknown_fields && row.unknown_fields.indexOf(f) >= 0) { // v55.83-TB (Max: "looks so awful") — the known amount plainly, a small note that part is missing
       // v55.83-UI — no text in the cell: the known number with an amber dot; the words are on hover
-      if ((Number(row[f]) || 0) === 0) { return <span title="Missing — nothing is known yet for this amount" style={{ color: '#b45309', fontWeight: 700, cursor: 'help' }}>—</span>; }
-      return <span title="Only part of this amount is known — part missing" style={{ cursor: 'help' }}>{'$' + fmt(row[f])}{dot()}</span>;
+      if ((Number(row[f]) || 0) === 0) { return dash('Missing — nothing is known yet for this amount'); }
+      return <span>{'$' + fmt(row[f])}{dot()}</span>;
     }
     return '$' + fmt(row[f]);
   }
@@ -159,7 +168,7 @@ export default function ProfitabilityTab(props) {
     if (!list || !list.length) { return null; }
     var tip = list.map(function (w) { return (w.sales > 1 ? w.sales + ' sales: ' : '') + costHelp(w).text; }).join('\n');
     var w0 = list[0]; var h0 = costHelp(w0); var gid0 = w0.group_id || fallbackGid || null;
-    return <div className="mt-0.5"><button title={tip + (canEdit ? '\n\nClick: ' + h0.fix : '')} onClick={function (e) { e.stopPropagation(); if (canEdit) { goFix(h0.go, gid0, (w0.names || [])[0]); } }} className="px-1.5 py-0.5 rounded font-bold" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d', fontSize: 10, cursor: canEdit ? 'pointer' : 'help' }}>{canEdit ? '⚠ ' + h0.fix : '⚠ why?'}</button></div>;
+    return <div className="mt-0.5"><button title={tip + (canEdit ? '\n\nClick: ' + h0.fix : '')} aria-label={canEdit ? h0.fix + ': ' + tip : 'Why the cost is missing: ' + tip} onClick={function (e) { e.stopPropagation(); if (canEdit) { goFix(h0.go, gid0, (w0.names || [])[0]); } else { explain(tip); } }} className="px-1.5 py-0.5 rounded font-bold" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d', fontSize: 10, cursor: canEdit ? 'pointer' : 'help' }}>{canEdit ? '⚠ ' + h0.fix : '⚠ why?'}</button></div>;
   }
   function costHelpBlock(list, fallbackGid) {
     if (!list || !list.length) { return null; }
@@ -189,7 +198,7 @@ export default function ProfitabilityTab(props) {
             <td className="px-1.5 py-1">{c.description}</td>
             <td className="px-1.5 py-1 text-right">{fmt(c.orig_qty) + ' ' + (c.orig_unit ? (UNIT_WORDS[c.orig_unit] || c.orig_unit) : '')}<div style={{ color: SUB }}>{'@ $' + Number(c.orig_unit_price || 0).toFixed(4) + (c.unit_factor && c.unit_factor !== 1 ? ' · ×' + c.unit_factor : '')}</div></td>
             <td className="px-1.5 py-1 text-right font-bold">{c.pounds === null ? <span style={{ color: '#b45309' }}>unit not set</span> : fmt0(c.pounds)}</td>
-            <td className="px-1.5 py-1 text-right">{c.embedded_transport > 0 && c.goods_revenue !== null ? <span style={{ cursor: 'help' }} title={'On invoice $' + fmt(c.invoiced) + '\n− shipping inside the price $' + fmt(c.embedded_transport) + '\n= goods revenue $' + fmt(c.goods_revenue)}>{'$' + fmt(c.goods_revenue)}<span className="ml-1 px-1 rounded font-bold" style={{ fontSize: 8, background: '#e2e8f0', color: '#475569', verticalAlign: 'middle' }}>CNF</span></span> : cellMoney(c.goods_revenue)}{!c.goods_price_confirmed && <div style={{ color: '#b45309' }}>not confirmed</div>}</td>
+            <td className="px-1.5 py-1 text-right">{c.embedded_transport > 0 && c.goods_revenue !== null ? <span>{'$' + fmt(c.goods_revenue)}<button type="button" title={'On invoice $' + fmt(c.invoiced) + '\n− shipping inside the price $' + fmt(c.embedded_transport) + '\n= goods revenue $' + fmt(c.goods_revenue)} aria-label={'On invoice $' + fmt(c.invoiced) + '\n− shipping inside the price $' + fmt(c.embedded_transport) + '\n= goods revenue $' + fmt(c.goods_revenue)} onClick={function (e) { e.stopPropagation(); explain('On invoice $' + fmt(c.invoiced) + '\n− shipping inside the price $' + fmt(c.embedded_transport) + '\n= goods revenue $' + fmt(c.goods_revenue)); }} className="ml-1 px-1 rounded font-bold" style={{ fontSize: 8, background: '#e2e8f0', color: '#475569', verticalAlign: 'middle', border: 0, cursor: 'help' }}>CNF</button></span> : cellMoney(c.goods_revenue)}{!c.goods_price_confirmed && <div style={{ color: '#b45309' }}>not confirmed</div>}</td>
             <td className="px-1.5 py-1 text-right">{c.pounds > 0 && c.goods_revenue !== null && c.goods_price_confirmed ? fmt4(c.goods_revenue / c.pounds) : '—'}</td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.transport_revenue)}<div style={{ color: SUB }}>{c.transport_source || ''}</div></td>
             <td className="px-1.5 py-1 text-right">{cellMoney(c.base_cost)}<div style={{ color: SUB }}>{c.base_cost_per_lb !== null ? fmt4(c.base_cost_per_lb) + ' / lb' : ''}</div>{c.cost_missing_reason ? costHelpBlock([{ why: c.cost_missing_reason, sales: 1, group_id: c.group_id, first_sale: c.invoice_date, names: [c.description] }]) : null}</td>
@@ -249,7 +258,7 @@ export default function ProfitabilityTab(props) {
     var unk = r.unknown_fields && r.unknown_fields.indexOf(f) >= 0; var v = Number(r[f]) || 0;
     var go = <div><button onClick={function (e) { e.stopPropagation(); setView('containers'); setOpen(null); }} className="mt-0.5 px-1.5 py-0.5 rounded font-bold" title="Open Containers to type it" style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d', fontSize: 10 }}>⚠ type it</button></div>;
     if (!unk) { return '$' + fmt(v); }
-    if (v === 0) { return <span><span title={'No ' + word + ' bill, Nextrade figure or typed amount yet.'} style={{ color: '#b45309', fontWeight: 700, cursor: 'help' }}>—</span>{canEdit && go}</span>; }
+    if (v === 0) { return <span>{dash('No ' + word + ' bill, Nextrade figure or typed amount yet.')}{canEdit && go}</span>; }
     return <span>{'$' + fmt(v)}{dot('Some containers have no ' + word + ' yet — only the known part is shown')}</span>;
   }
   function partInput(rel, partName, pp) {
@@ -469,7 +478,7 @@ export default function ProfitabilityTab(props) {
         {!sub && r.grouped && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + r.name_list.length + ' names)'}</span>}
         {isInvoice && r.invoice && <div className="font-normal" style={{ color: SUB }}>{r.invoice.date + ' · ' + r.invoice.customer + ' · ' + (r.invoice.basis ? BASIS_WORDS[r.invoice.basis] + (r.invoice.basis_source === 'customer' ? ' (customer’s usual)' : r.invoice.basis_source === 'inferred' ? ' (inferred by rule)' : r.invoice.basis_source === 'shipping_line_rule' ? ' (assumed — shipping line on the invoice, not in the price)' : r.invoice.basis_source === 'invoice_text' ? ' (stated on invoice)' : r.invoice.basis_source === 'invoice_form' ? (r.invoice.shipping_terms === 'CNF_SEPARATE' ? ' (separate shipping line — set on invoice)' : ' (set on invoice)') : '') : 'basis not set') + ' · ' + (r.invoice.releases.map(function (x) { return x.raw; }).join(', ') || 'no release')}</div>}</td>,
       <td key="c1" className={pc}>{fmt0(r.pounds)}{r.pounds_incomplete && dot('Some weights are missing — only lines with a weight are counted')}</td>,
-      <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{(Number(r.invoiced) || 0) - (Number(r.goods_revenue) || 0) > 0.009 && !(r.unknown_fields || []).some(function (f) { return f === 'goods_revenue'; }) ? <span style={{ cursor: 'help' }} title={'On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'}>{'$' + fmt(r.goods_revenue)}<span className="ml-1 px-1 rounded font-bold" style={{ fontSize: 8, background: '#e2e8f0', color: '#475569', verticalAlign: 'middle' }}>CNF</span></span> : money(r, 'goods_revenue')}</td>,
+      <td key="c2" className={pc + (sub ? '' : ' font-bold')}>{(Number(r.invoiced) || 0) - (Number(r.goods_revenue) || 0) > 0.009 && !(r.unknown_fields || []).some(function (f) { return f === 'goods_revenue'; }) ? <span>{'$' + fmt(r.goods_revenue)}<button type="button" title={'On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'} aria-label={'On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'} onClick={function (e) { e.stopPropagation(); explain('On invoices $' + fmt(r.invoiced) + '\n− shipping inside CNF prices $' + fmt(r.invoiced - r.goods_revenue) + '\n= goods revenue $' + fmt(r.goods_revenue) + ' (used for $/lb and the goods profit)'); }} className="ml-1 px-1 rounded font-bold" style={{ fontSize: 8, background: '#e2e8f0', color: '#475569', verticalAlign: 'middle', border: 0, cursor: 'help' }}>CNF</button></span> : money(r, 'goods_revenue')}</td>,
       <td key="c3" className={pc + (sub ? '' : ' font-extrabold')} style={sub ? {} : { color: '#065f46' }}>{r.avg_goods_price_per_lb === null ? <span style={{ color: '#b45309' }}>—</span> : fmt4(r.avg_goods_price_per_lb)}</td>,
       <td key="c4" className={pc}>{money(r, 'transport_revenue')}</td>,
       <td key="c5" className={pc} title={(r.cost_missing_why || []).map(function (w) { return w.sales + ' sale(s): ' + w.why; }).join('\n')}>{money(r, 'base_cost')}{fixChip(r.cost_missing_why, r.key.indexOf('g:') === 0 ? r.key.substring(2) : (r.parent && r.parent.indexOf('g:') === 0 ? r.parent.substring(2) : null))}</td>,
@@ -498,10 +507,10 @@ export default function ProfitabilityTab(props) {
     // v55.83-TA — under each MERGED product, its original descriptions, each with its own totals and averages
     var subsOf = {};
     if (view === 'product') { ((data && data.by_product_names) || []).forEach(function (s0) { (subsOf[s0.parent] = subsOf[s0.parent] || []).push(s0); }); }
-    return <div style={full ? { position: 'fixed', inset: 0, zIndex: 60, background: '#ffffff', padding: 10, display: 'flex', flexDirection: 'column' } : {}}>
+    var tableView = <div role={full ? 'dialog' : undefined} aria-modal={full ? 'true' : undefined} aria-label={full ? 'Profitability table, full screen' : undefined} style={full ? { position: 'fixed', inset: 0, zIndex: 200, background: '#ffffff', color: INK, padding: 10, display: 'flex', flexDirection: 'column' } : {}}>
       <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: SUB }}>
-        <button onClick={function () { setFull(!full); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={full ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }} title={full ? 'Back to the normal page (Esc)' : 'Show the table on the whole screen'}>{full ? '✕ Exit full screen' : '⤢ Full screen'}</button>
-        <span>Drag the bar below to move left / right · hover a heading or an amber dot for details</span>
+        <button ref={fullBtn} onClick={function () { setFull(!full); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={full ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }} title={full ? 'Back to the normal page (Esc)' : 'Show the table on the whole screen'}>{full ? '✕ Exit full screen' : '⤢ Full screen'}</button>
+        <span>Drag the bar below to move left / right · hover, tap or Tab to an amber dot for details</span>
       </div>
       <div ref={topBar} onScroll={function () { syncFrom(topBar, tableBox); }} className="overflow-x-auto overflow-y-hidden pl-scroll" style={{ height: 16, marginBottom: 2 }}><div ref={topInner} style={{ height: 1 }} /></div>
       <div ref={tableBox} onScroll={function () { syncFrom(tableBox, topBar); }} className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: full ? 'none' : '75vh', flex: full ? '1 1 auto' : undefined }}>
@@ -528,6 +537,7 @@ export default function ProfitabilityTab(props) {
         })}
         {rows.length === 0 && <tr><td colSpan={18} className="px-2 py-4 text-center" style={{ color: SUB, background: '#ffffff' }}>No invoices in this period.</td></tr>}</tbody>
       </table></div></div>;
+    return full && typeof document !== 'undefined' ? createPortal(tableView, document.body) : tableView;
   }
 
   // ── set-up: descriptions, units, groups, supplier bill links ──
