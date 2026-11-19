@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VL',
+    date: '2026-11-19',
+    title: 'Profitability → P&L by period: full screen, profits side by side, click a period to open it',
+    items: [
+      { text: '**Goods profit, Transport profit and Total profit now sit next to each other**, right after the period, in green. The figures that make them up (revenue, cost, margin, trucking, freight) follow to the right.' },
+      { text: '**Click a period (a month, week, quarter or year) to open its breakdown**: every category of that period — goods sold, supplier cost, commission, inbound allowance, bonded, transport charged, trucking, freight — and the profit by product and by customer. Click it again to close.' },
+      { text: '**⤢ Full screen** and a **scroll bar on top** of the table, the same as on By product. Esc leaves full screen.' },
+      { text: 'The buttons at the top are now in three groups: **Reports** (P&L by period, By product, By customer, By invoice), **Shipping** (Containers, Estimate vs Final), and **Set-up** (names, units and supplier links) on its own with a different look.' },
+      { text: 'Not in this build yet: the expense columns (warehouse / office, commission, partner fee, payroll, taxes) and the cash / accrual switch. The breakdown says so on screen.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/pnl-period.js (bucketOf moved from the screen unchanged; periodBreakdown sums the same cells in whole cents, leaves unknown figures out and counts them, and returns no profit at all when the profit fields were not sent). ProfitabilityTab periodView reuses the full / topBar / tableBox refs and the body portal of viewTable; no route or number change.' },
+    ]
+  },
+  {
     version: 'v55.83-VJ',
     date: '2026-11-19',
     title: 'USA or Egypt is decided invoice by invoice — by its business and its currency',

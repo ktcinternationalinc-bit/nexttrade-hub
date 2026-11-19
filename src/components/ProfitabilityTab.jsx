@@ -11,6 +11,7 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
+import { bucketOf, periodBreakdown } from '../lib/pnl-period'; // v55.83-VL — P&L by period: periods and the breakdown of one period
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 // v55.83-TC (Max, Nov 16: "you need a bottom and side scroll bar to move within the square") — the Hub's dark theme draws 6 px white
@@ -105,6 +106,7 @@ export default function ProfitabilityTab(props) {
   var fullBtn = useRef(null);
   useEffect(function () { if (fullBtn.current) { try { fullBtn.current.focus(); } catch (eF) {} } if (!full) { return undefined; } var prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return function () { document.body.style.overflow = prev; }; }, [full]);
   var s16 = useState('month'); var pGran = s16[0]; var setPGran = s16[1]; // v55.83-TN — P&L by period: week / month / quarter / year
+  var s18 = useState(null); var pOpen = s18[0]; var setPOpen = s18[1]; // v55.83-VL — the period whose breakdown is open
   var s17 = useState('all'); var pPre = s17[0]; var setPPre = s17[1]; // v55.83-TN — release prefix: all / 1001 / 1002 / 1003 / other
 
   function call(payload) {
@@ -293,15 +295,6 @@ export default function ProfitabilityTab(props) {
     if (!f) { return; }
     var fs0 = iso(f); var ts0 = iso(now); setFrom(fs0); setTo(ts0); load(fs0, ts0);
   }
-  function bucketOf(d, g) {
-    var s0 = String(d || '').substring(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(s0)) { return { key: 'zz', label: 'no date' }; }
-    var yy = +s0.substring(0, 4); var mm = +s0.substring(5, 7); var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    if (g === 'year') { return { key: String(yy), label: String(yy) }; }
-    if (g === 'quarter') { var qn = Math.floor((mm - 1) / 3) + 1; return { key: yy + '-Q' + qn, label: 'Q' + qn + ' ' + yy }; }
-    if (g === 'month') { return { key: s0.substring(0, 7), label: MON[mm - 1] + ' ' + yy }; }
-    var dt = new Date(Date.UTC(yy, mm - 1, +s0.substring(8, 10))); var back = (dt.getUTCDay() + 6) % 7; dt = new Date(dt.getTime() - back * 86400000);
-    var k = dt.toISOString().substring(0, 10); return { key: k, label: 'Week of ' + MON[dt.getUTCMonth()] + ' ' + dt.getUTCDate() + ', ' + dt.getUTCFullYear() };
-  }
   function prefixOf(c) { var m0 = String(c.release_raw || '').match(/^\s*(\d{4})\s*-/); return m0 ? m0[1] : ''; }
   function periodView() {
     var cells = (data.cells || []).filter(function (c) { var p0 = prefixOf(c); return pPre === 'all' || (pPre === 'other' ? ['1001', '1002', '1003'].indexOf(p0) < 0 : p0 === pPre); });
@@ -334,8 +327,45 @@ export default function ProfitabilityTab(props) {
       var text = lines.map(function (l) { return l.map(function (x) { var t0 = String(x === null || x === undefined ? '' : x); return /[",\n]/.test(t0) ? '"' + t0.replace(/"/g, '""') + '"' : t0; }).join(','); }).join('\n');
       var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'pnl-by-' + pGran + '-' + (pPre === 'all' ? 'all' : pPre) + '-' + (from || 'start') + '-to-' + (to || 'today') + '.csv'; a.click();
     }
+    function money(c) { return c === null || c === undefined ? '🔒' : (c < 0 ? '−$' : '$') + fmt(Math.abs(c / 100)); }
+    function breakdownPanel(r, cs) {
+      var bd = periodBreakdown(cs);
+      function side(group, title, color) {
+        return <div style={{ flex: '1 1 320px', minWidth: 300 }}>
+          <div className="font-extrabold text-[11px] mb-1" style={{ color: color }}>{title}</div>
+          <table className="w-full text-[11px]" style={{ background: '#ffffff', border: '1px solid ' + LINE }}><tbody>{bd.categories.filter(function (x) { return x.group === group; }).map(function (x) {
+            var isP = x.kind === 'profit';
+            return <tr key={x.key} style={{ borderTop: '1px solid ' + LINE, fontWeight: isP ? 800 : 400, background: isP ? '#ecfdf5' : '#ffffff', color: INK }}>
+              <td className="px-2 py-1">{(x.kind === 'out' ? '− ' : x.kind === 'in' ? '+ ' : '= ') + x.label}</td>
+              <td className="px-2 py-1 text-right tabular-nums" style={isP && x.cents !== null ? { color: x.cents >= 0 ? '#065f46' : '#7f1d1d' } : undefined}>{money(x.cents)}{x.missing > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{x.missing + ' line(s) not known yet'}</div>}</td>
+            </tr>; })}</tbody></table>
+        </div>;
+      }
+      function list(title, items) {
+        return <div style={{ flex: '1 1 320px', minWidth: 300 }}>
+          <div className="font-extrabold text-[11px] mb-1" style={{ color: INK }}>{title + ' (' + items.length + ')'}</div>
+          <div className="overflow-auto pl-scroll" style={{ maxHeight: 240, border: '1px solid ' + LINE, background: '#ffffff' }}><table className="w-full text-[11px]">
+            <thead><tr style={{ background: '#f1f5f9', color: '#334155' }}>{['', 'Pounds', 'Goods profit', 'Transport profit', 'Total'].map(function (h, i) { return <th key={i} className={'px-2 py-1 font-bold ' + (i === 0 ? 'text-left' : 'text-right')}>{h}</th>; })}</tr></thead>
+            <tbody>{items.map(function (it) { return <tr key={it.name} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+              <td className="px-2 py-1">{it.name}{it.missing > 0 && <span style={{ color: '#b45309', fontWeight: 700 }}>{' · some costs not known yet'}</span>}</td>
+              <td className="px-2 py-1 text-right tabular-nums">{fmt0(it.pounds)}</td>
+              <td className="px-2 py-1 text-right tabular-nums">{money(it.goods_profit)}</td>
+              <td className="px-2 py-1 text-right tabular-nums">{money(it.transport_profit)}</td>
+              <td className="px-2 py-1 text-right tabular-nums font-extrabold" style={it.profit === null ? undefined : { color: it.profit >= 0 ? '#065f46' : '#7f1d1d' }}>{money(it.profit)}</td>
+            </tr>; })}</tbody></table></div>
+        </div>;
+      }
+      return <div>
+        <div className="font-extrabold text-[12px] mb-2" style={{ color: INK }}>{r.label + ' — breakdown · ' + bd.lines + ' line(s) · ' + fmt0(bd.pounds) + ' lb · total profit ' + money(bd.total.profit) + ' (goods ' + money(bd.total.goods_profit) + ' + transport ' + money(bd.total.transport_profit) + ')'}</div>
+        <div className="flex gap-3 flex-wrap mb-2">{side('goods', 'GOODS', '#1e3a8a')}{side('transport', 'TRANSPORTATION', '#7c2d12')}</div>
+        <div className="flex gap-3 flex-wrap">{list('By product', bd.products)}{list('By customer', bd.customers)}</div>
+        <div className="text-[10px] mt-1" style={{ color: SUB }}>Operating expenses (warehouse / office, commission, partner fee, payroll, taxes) are not in this table yet — it shows the profit on what was sold.</div>
+      </div>;
+    }
     var hd = { background: '#f1f5f9', color: '#334155' };
-    return <div>
+    // v55.83-VL (Max, Nov 19: "i need full screen look like you did on the other tab. as well as scroll bar on top") — the same full
+    // screen and the same top bar as By product; ("click in to see the breakdown of each month for each category") a period opens.
+    var body = <div role={full ? 'dialog' : undefined} aria-modal={full ? 'true' : undefined} aria-label={full ? 'P&L by period, full screen' : undefined} style={full ? { position: 'fixed', inset: 0, zIndex: 200, background: '#ffffff', color: INK, padding: 10, display: 'flex', flexDirection: 'column' } : {}}>
       <div className="flex gap-2 items-center flex-wrap mb-2 text-[11px]">
         <b>Dates:</b>
         {[['week', 'This week'], ['month', 'This month'], ['quarter', 'This quarter'], ['year', 'This year']].map(function (x) { return <Btn key={x[0]} onClick={function () { setRange(x[0]); }}>{x[1]}</Btn>; })}
@@ -348,34 +378,42 @@ export default function ProfitabilityTab(props) {
         {[['all', 'All'], ['1001', '1001- (Canada)'], ['1002', '1002- (Houston)'], ['1003', '1003-'], ['other', 'Other / none']].map(function (x) { return <button key={x[0]} onClick={function () { setPPre(x[0]); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={pPre === x[0] ? { background: '#0f172a', color: '#ffffff' } : hd}>{x[1]}</button>; })}
         <div className="flex-1" /><Btn onClick={csv}>⬇ CSV</Btn>
       </div>
-      <div className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: '65vh' }}>
-        <table className="w-full text-[11px]" style={{ minWidth: 1250 }}>
-          <thead>
-            <tr><th className="px-2 py-1" /><th colSpan={6} className="px-2 py-1 text-center font-extrabold nt-th-goods">GOODS</th><th colSpan={4} className="px-2 py-1 text-center font-extrabold nt-th-transport">TRANSPORTATION</th><th className="px-2 py-1" /><th className="px-2 py-1" /></tr>
-            <tr>{['Period', 'Pounds', 'Goods revenue', 'Goods cost', 'Goods profit', 'Margin', 'Avg profit / lb', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Transport profit', 'Total profit', 'Lines'].map(function (h, i) { return <th key={h} className={'px-2 py-1.5 font-bold ' + (i === 0 ? 'text-left' : 'text-right')}>{h}</th>; })}</tr>
+      <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: SUB }}>
+        <button ref={fullBtn} onClick={function () { setFull(!full); }} className="px-2.5 py-1 rounded-lg font-extrabold" style={full ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155', border: '1px solid ' + LINE }} title={full ? 'Back to the normal page (Esc)' : 'Show the table on the whole screen'}>{full ? '✕ Exit full screen' : '⤢ Full screen'}</button>
+        <span>Click a period to open its breakdown · drag the bar below to move left / right</span>
+      </div>
+      <div ref={topBar} onScroll={function () { syncFrom(topBar, tableBox); }} className="overflow-x-auto overflow-y-hidden pl-scroll" style={{ height: 16, marginBottom: 2 }}><div ref={topInner} style={{ height: 1 }} /></div>
+      <div ref={tableBox} onScroll={function () { syncFrom(tableBox, topBar); }} className="overflow-auto rounded pl-scroll nt-solid-head" style={{ border: '1px solid ' + LINE, maxHeight: full ? 'none' : '65vh', flex: full ? '1 1 auto' : undefined }}>
+        <table className="w-full text-[11px]" style={{ minWidth: 1350 }}>
+          <thead ref={outerHead}>
+            <tr><th className="px-2 py-1" /><th className="px-2 py-1" /><th colSpan={3} className="px-2 py-1 text-center font-extrabold" style={{ background: '#064e3b', color: '#ffffff' }}>PROFIT</th><th colSpan={4} className="px-2 py-1 text-center font-extrabold nt-th-goods">GOODS — how the goods profit is made</th><th colSpan={3} className="px-2 py-1 text-center font-extrabold nt-th-transport">TRANSPORTATION — how the transport profit is made</th><th className="px-2 py-1" /></tr>
+            <tr>{['Period', 'Pounds', 'Goods profit', 'Transport profit', 'Total profit', 'Goods revenue', 'Goods cost', 'Margin', 'Avg profit / lb', 'Transport charged', 'Trucking (our cost)', 'Freight (our cost)', 'Lines'].map(function (h, i) { return <th key={h} className={'px-2 py-1.5 font-bold ' + (i === 0 ? 'text-left' : 'text-right')}>{h}</th>; })}</tr>
           </thead>
           <tbody>{rows.concat(rows.length > 1 ? [tot] : []).map(function (r, i) {
-            var isT = r.key === 'total';
-            return <tr key={r.key} style={{ background: isT ? '#e2e8f0' : (i % 2 ? '#f8fafc' : '#ffffff'), color: INK, borderTop: '1px solid ' + LINE, fontWeight: isT ? 800 : 400 }}>
-              <td className="px-2 py-1.5 font-bold">{r.label}</td>
+            var isT = r.key === 'total'; var isOpen = !isT && pOpen === r.key;
+            var out = [<tr key={r.key} onClick={isT ? undefined : function () { setPOpen(isOpen ? null : r.key); }} title={isT ? undefined : (isOpen ? 'Close the breakdown' : 'Open the breakdown of ' + r.label)} style={{ background: isT ? '#e2e8f0' : (isOpen ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#ffffff')), color: INK, borderTop: '1px solid ' + LINE, fontWeight: isT ? 800 : 400, cursor: isT ? 'default' : 'pointer' }}>
+              <td className="px-2 py-1.5 font-bold">{isT ? '' : (isOpen ? '▾ ' : '▸ ')}{r.label}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{fmt0(r.pounds)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.goods_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'goods_profit', true)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.transport_profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#ecfdf5' }}>{cell(r, 'transport_profit', true)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.profit >= 0 ? '#065f46' : '#7f1d1d', background: isT ? undefined : '#d1fae5' }}>{hidden ? '🔒' : <span>{(r.profit < 0 ? '−$' : '$') + fmt(Math.abs(r.profit / 100))}{r.uncounted > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.uncounted + ' line(s) / $' + fmt(r.uncounted_revenue / 100) + ' revenue not counted until their cost is known'}</div>}</span>}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_cost')}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.goods_profit >= 0 ? '#065f46' : '#7f1d1d' }}>{cell(r, 'goods_profit', true)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{pct(r.goods_profit, r.goods_revenue)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{hidden ? '🔒' : (r.pounds > 0 ? fmt4(r.goods_profit / 100 / r.pounds) : '—')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'transport_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'trucking_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'freight_cost')}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.transport_profit >= 0 ? '#065f46' : '#7f1d1d' }}>{cell(r, 'transport_profit', true)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-extrabold" style={{ color: r.profit >= 0 ? '#065f46' : '#7f1d1d' }}>{hidden ? '🔒' : <span>{(r.profit < 0 ? '−$' : '$') + fmt(Math.abs(r.profit / 100))}{r.uncounted > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.uncounted + ' line(s) / $' + fmt(r.uncounted_revenue / 100) + ' revenue not counted until their cost is known'}</div>}</span>}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{r.lines}{r.incomplete > 0 && <div style={{ color: '#b45309', fontSize: 9, fontWeight: 700 }}>{r.incomplete + ' not complete'}</div>}</td>
-            </tr>; })}
+            </tr>];
+            if (isOpen) { out.push(<tr key={r.key + ':open'}><td colSpan={13} className="px-3 py-2" style={{ background: '#f0f9ff', borderTop: '1px solid #7dd3fc' }}>{breakdownPanel(r, cells.filter(function (c) { return bucketOf(c.invoice_date, pGran).key === r.key; }))}</td></tr>); }
+            return out; })}
             {rows.length === 0 && <tr><td colSpan={13} className="px-3 py-4 text-center" style={{ color: SUB }}>No sales in these dates for these releases.</td></tr>}</tbody>
         </table>
       </div>
       <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight. Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
     </div>;
+    return full && typeof document !== 'undefined' ? createPortal(body, document.body) : body;
   }
   function estFinalView() {
     var all = (data.containers || []).filter(function (x) { return x.parts && (x.parts.freight.bill !== null || x.parts.trucking.bill !== null || x.parts.freight.estimate !== null || x.parts.trucking.estimate !== null); });
@@ -709,8 +747,18 @@ export default function ProfitabilityTab(props) {
         </div>}
       </div>}
       <div className="flex gap-1.5 flex-wrap mb-2">
-        {[['period', '📅 P&L by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice'], ['containers', '🚢 Containers (shipping cost)'], ['estfinal', '⚖ Estimate vs Final (shipping)'], ['setup', '⚙ Names, units and supplier links']].map(function (v) {
-          return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
+        {/* v55.83-VL (Max, Nov 19: "Names, units and supplier links should be in a separate place ... different button and look" · "just make them look separated somehow") — three groups: reports, shipping, set-up */}
+        <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid ' + LINE }}>
+          <span className="text-[10px] font-extrabold uppercase" style={{ color: SUB }}>Reports</span>
+          {[['period', '📅 P&L by period (goods · transport)'], ['product', 'By product'], ['customer', 'By customer'], ['invoice', 'By invoice']].map(function (v) {
+            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{v[1]}</button>; })}
+        </span>
+        <span className="flex gap-1.5 flex-wrap items-center px-1.5 py-1 rounded-lg" style={{ border: '1px solid #7dd3fc', background: '#f0f9ff' }}>
+          <span className="text-[10px] font-extrabold uppercase" style={{ color: '#075985' }}>Shipping</span>
+          {[['containers', '🚢 Containers (shipping cost)'], ['estfinal', '⚖ Estimate vs Final (shipping)']].map(function (v) {
+            return <button key={v[0]} onClick={function () { setView(v[0]); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" style={view === v[0] ? { background: '#075985', color: '#ffffff' } : { background: '#e0f2fe', color: '#075985' }}>{v[1]}</button>; })}
+        </span>
+        <button onClick={function () { setView('setup'); setOpen(null); }} className="px-3 py-1.5 rounded-lg text-[12px] font-extrabold" title="Set-up, not a report: product names, units and which supplier bills belong to which product" style={view === 'setup' ? { background: '#7c2d12', color: '#ffffff', border: '2px solid #7c2d12' } : { background: '#ffffff', color: '#7c2d12', border: '2px dashed #c2410c' }}>⚙ Set-up: names, units and supplier links</button>
         <span className="text-[11px] self-center" style={{ color: SUB }}>Click a product to see the names that make it up. Click a name to see its shipments.</span>
         {(view === 'product' || view === 'customer' || view === 'invoice') && <span className="flex items-center gap-1 ml-auto">
           <input type="search" value={searchQ} onChange={function (e) { setSearchQ(e.target.value); setOpen(null); }} placeholder="🔎 Search invoice, customer, release, product…" aria-label="Search the rows of this table" className="nt-light px-2.5 py-1.5 rounded-lg text-[12px]" style={{ width: 290, border: '1px solid ' + LINE, background: '#ffffff', color: INK }} />
