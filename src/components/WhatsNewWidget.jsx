@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VN',
+    date: '2026-11-19',
+    title: 'New screen: Customers overview — invoiced, paid, received and owed per customer, for any period',
+    items: [
+      { text: '**Accounting → 👥 Customers overview** (under Selling, next to Open Balances). One line per customer for the period you pick: Last 30 days, Last 3 months, This year, All, or your own dates.' },
+      { text: 'For each customer: **invoiced** in the period, **paid** on those invoices, **received** in the period (money dated in it, on any invoice), **still owed** on those invoices, and how much of that is **overdue**. Paid and owed are as of today.' },
+      { text: 'For people limited to a history window: an invoice that has a payment from before their window shows “not shown” for paid and left to pay, and is left out of the customer’s paid and owed — it is never shown as unpaid.' },
+      { text: '**Click a customer** to see its invoices, each marked Paid, Partially paid (with the amount left) or Unpaid. Click an invoice to open a copy of it; Edit there takes you to it in Invoices.' },
+      { text: 'Each invoice shows the **arrival date from the Nextrade warehouse**, found by its release number. It turns **red when the goods have arrived and the invoice is still not fully paid**; once paid it goes back to normal. A red tag on the customer line counts those.' },
+      { text: 'For now the arrival dates come from the test copy of the warehouse, and the screen says so until the live feed is switched on.' },
+      { text: 'Money recorded in Wave before the Hub has no date: it counts as paid, and is shown as such, but cannot be placed in a period. Invoices in another currency are listed apart and never added in. You can search a customer and show only those who still owe.' },
+      { superAdminOnly: true, text: 'Technical: read-only route /api/accounting/customers-overview (verified caller, ar.view_invoice_balances, history window on invoices and payments, grand totals only with accounting.view_totals); src/lib/customers-overview.js (isArEligible, isPaymentVoid, businessOfInvoice, splitReleases; whole cents); CustomersOverviewTab with a stateless CustomersOverviewView; registered as customers_overview in the Wave-side screens.' },
+    ]
+  },
+  {
     version: 'v55.83-VK',
     date: '2026-11-19',
     title: 'Nextrade and RTM books: categorized lines stay on the page, the books learn your categories, and wires to NextTrade list NextTrade’s bills as a tree',
