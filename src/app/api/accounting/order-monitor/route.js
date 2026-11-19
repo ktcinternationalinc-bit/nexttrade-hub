@@ -6,6 +6,7 @@
 //   POST action=ping    — Nextrade calls this right after a stage is saved (X-Hub-Feed-Token); runs the 30-hour check
 //   POST report · order · deposit_candidates · set_deposit_status · link_deposit · unlink_deposit · override · end_override ·
 //        close_order · settings · run_now  — signed-in users (verified sign-in token)
+//   POST archive_row · unarchive_row — v55.83-UC: "Non issue" / "Corrected" takes a row off the report into the archive (never deleted)
 // SWC-safe: var + string concatenation only.
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
@@ -18,13 +19,14 @@ import { relKey, isTransportLine } from '../../../../lib/profitability';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 
 export const maxDuration = 60;
-var API_BUILD_MARKER = 'v55.83-TI-order-monitor';
+var API_BUILD_MARKER = 'v55.83-UC-order-monitor';
 var SQL_HINT = 'Run sql/v55-83-TI-order-monitor.sql in Supabase first.';
+var ARCHIVE_SQL_HINT = 'Run sql/v55-83-UC-order-report-archive.sql in Supabase first (the Non issue / Corrected archive).';
 var HUB_URL = 'https://nexttrade-hub.vercel.app'; // the Hub's real address (hub.ktcus.com was never connected)
 function admin() { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }); }
 function bad(msg, st) { return NextResponse.json({ ok: false, error: msg, api_build_marker: API_BUILD_MARKER }, { status: st || 400 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
-function missingTable(m) { return /order_(monitor|deposit|alerts|review|closures)/.test(String(m || '')) && /does not exist|schema cache|not find/i.test(String(m || '')); }
+function missingTable(m) { return /order_(monitor|deposit|alerts|review|closures|report_archive)/.test(String(m || '')) && /does not exist|schema cache|not find/i.test(String(m || '')); }
 async function fetchAll(q) { var out = []; for (var from = 0; from < 50000; from += 1000) { var r = await q().range(from, from + 999); if (r.error) { throw new Error(r.error.message); } out = out.concat(r.data || []); if (!r.data || r.data.length < 1000) { break; } } return out; }
 async function inChunks(db, table, cols, col, ids) { var out = []; for (var i = 0; i < ids.length; i += 200) { var r = await db.from(table).select(cols).in(col, ids.slice(i, i + 200)); if (r.error) { throw new Error(r.error.message); } out = out.concat(r.data || []); } return out; }
 
@@ -53,6 +55,7 @@ function latestRow(rows) { return rows.slice().sort(function (a, b) { return Str
 async function loadAll(db, opts) {
   var cfg = feedConfig(); if (cfg.error) { return { error: cfg.error }; }
   var feed = await fetchFeed(cfg);
+  rememberFeed(cfg, feed); // UC — the identity check for archiving reuses this read
   var nowMs = Date.now();
   var stagesBy = {}; (Array.isArray(feed.requirements) ? feed.requirements : (feed.stages || [])).forEach(function (s) { var k = s.order_id; (stagesBy[k] = stagesBy[k] || {}); (stagesBy[k][s.order_status] = stagesBy[k][s.order_status] || []).push(s); });
   var histBy = {}; (feed.status_history || []).forEach(function (h) { (histBy[h.order_id] = histBy[h.order_id] || []).push(h); });
@@ -115,6 +118,37 @@ async function loadAll(db, opts) {
   });
   return { cfg: cfg, feed: feed, orders: out, tablesReady: tablesReady, generated_at: new Date(nowMs).toISOString() };
 }
+// v55.83-UC (Max, Nov 18) — rows marked "Non issue" or "Corrected": the ACTIVE archive entry per order (put back ones are history)
+var ARCHIVE_CHOICES = { non_issue: 'Non issue', corrected: 'Corrected' };
+async function loadArchive(db, source) {
+  var map = {};
+  try { (await fetchAll(function () { return db.from('order_report_archive').select('*').eq('source', source).is('restored_at', null); })).forEach(function (a) { map[String(a.order_id)] = a; }); }
+  catch (eA) { if (/order_report_archive/.test(String(eA.message || '')) && /does not exist|schema cache|not find/i.test(String(eA.message || ''))) { return { ready: false, map: {} }; } throw eA; }
+  return { ready: true, map: map };
+}
+// what the row showed when it was archived — kept with the entry (as shown on screen; it is a record, it decides nothing)
+function cleanSnapshot(x) {
+  x = x && typeof x === 'object' ? x : {}; function t(v, n) { return v === null || v === undefined ? null : String(v).substring(0, n || 200); }
+  return { customer: t(x.customer), country: t(x.country, 80), stage: t(x.stage_label, 80), readiness: t(x.readiness, 120), invoice: t(x.invoice, 120), deposit: t(x.deposit, 120),
+    shipped_date: t(x.shipped_date, 40), scheduled: t(x.scheduled, 40), next_action: t(x.next_action, 400), outstanding: (Array.isArray(x.outstanding) ? x.outstanding : []).slice(0, 40).map(function (o) { return t(o, 160); }), as_shown_on_screen: true };
+}
+// v55.83-UC (Codex QA 18 Nov, P2) — before an order is archived its identity is checked against the WAREHOUSE FEED (never the screen):
+// the order must exist on this warehouse copy, be open, and carry the release the person saw. A copy of the last feed read (≤ 10 min,
+// same copy) is used when it already has the order; otherwise the feed is read again. If the feed cannot be read, nothing is archived.
+var FEED_IDS = { at: 0, source: null, byId: null };
+function rememberFeed(cfg, feed) {
+  var by = {}; (feed.orders || []).forEach(function (o) { by[String(o.id)] = { id: Number(o.id), release_number: o.release_number || null, status: o.status || null, customer_name: o.customer_name || null, country: o.country || null }; });
+  FEED_IDS = { at: Date.now(), source: cfg.source, byId: by };
+}
+async function orderIdentity(cfg, oid) {
+  var fresh = FEED_IDS.byId && FEED_IDS.source === cfg.source && Date.now() - FEED_IDS.at < 600000;
+  if (fresh && FEED_IDS.byId[String(oid)]) { return { order: FEED_IDS.byId[String(oid)], from: 'feed (cached ' + Math.round((Date.now() - FEED_IDS.at) / 1000) + ' s)' }; }
+  var feed; try { feed = await fetchFeed(cfg); } catch (eF) { return { error: 'Could not read the warehouse to check this order (' + ((eF && eF.message) || 'feed') + ') — nothing was archived.' }; }
+  rememberFeed(cfg, feed);
+  return { order: FEED_IDS.byId[String(oid)] || null, from: 'feed' };
+}
+function sameArchiveRequest(row, src, oid, choice, note) { return !!row && row.source === src && Number(row.order_id) === Number(oid) && row.choice === choice && String(row.note || '') === String(note || ''); }
+function archiveOut(row, extra) { return Object.assign({ ok: true, id: row.id, order_id: row.order_id, release_number: row.release_number, choice: row.choice, note: row.note, archived_at: row.archived_at, by_name: row.archived_by_name || null, restored_at: row.restored_at || null, api_build_marker: API_BUILD_MARKER }, extra || {}); }
 function rowOf(ev) {
   var o = ev.order;
   return { id: o.id, release_number: o.release_number, customer: o.customer_name, country: o.country, warehouse: o.warehouse_name, stage: ev.stage, stage_label: ev.stage_label,
@@ -299,7 +333,16 @@ export async function POST(req) {
     }
     if (action === 'report') {
       var all = await loadAll(db); if (all.error) { return bad(all.error, 503); }
-      var rows = all.orders.filter(function (ev) { return body.include_closed === true || (ev.order.status !== 'closed' && ev.order.status !== 'cancelled'); }).map(rowOf);
+      var rowsAll = all.orders.filter(function (ev) { return body.include_closed === true || (ev.order.status !== 'closed' && ev.order.status !== 'cancelled'); }).map(rowOf);
+      // v55.83-UC — archived rows leave the report (and so its counts); they are listed apart, with the order as it is NOW
+      var arch = await loadArchive(db, all.cfg.source); var evBy = {}; all.orders.forEach(function (ev) { evBy[String(ev.order.id)] = ev; });
+      var rows = rowsAll.filter(function (r) { return !arch.map[String(r.id)]; });
+      var aIds = {}; Object.keys(arch.map).forEach(function (k) { if (arch.map[k].archived_by) { aIds[arch.map[k].archived_by] = true; } });
+      var aNames = {}; if (Object.keys(aIds).length) { try { (await inChunks(db, 'users', 'id, name, email', 'id', Object.keys(aIds))).forEach(function (u) { aNames[u.id] = u.name || u.email; }); } catch (eN) { /* fail-soft */ } }
+      var archived = Object.keys(arch.map).map(function (k) { var a = arch.map[k]; var evA = evBy[k];
+        return { archive: { id: a.id, order_id: a.order_id, release_number: a.release_number, choice: a.choice, choice_words: ARCHIVE_CHOICES[a.choice] || a.choice, note: a.note, archived_at: a.archived_at, by_name: aNames[a.archived_by] || a.archived_by_name || 'someone', snapshot: a.snapshot || {} },
+          row: evA ? rowOf(evA) : null, warehouse_status: evA ? evA.order.status : null }; })
+        .sort(function (a, b) { return String(b.archive.archived_at).localeCompare(String(a.archive.archived_at)); });
       var runs = { deadline: null, nightly: null, last_ok_nightly: null, last_ok_deadline: null }; var settings = {};
       if (all.tablesReady) {
         var rD = await db.from('order_review_runs').select('*').eq('kind', 'deadline').order('started_at', { ascending: false }).limit(1); runs.deadline = rD.data && rD.data[0] || null;
@@ -308,21 +351,79 @@ export async function POST(req) {
         var rDo = await db.from('order_review_runs').select('finished_at').eq('kind', 'deadline').eq('ok', true).order('finished_at', { ascending: false }).limit(1); runs.last_ok_deadline = rDo.data && rDo.data[0] ? rDo.data[0].finished_at : null;
         var sR = await db.from('order_monitor_settings').select('key, value'); ((sR && sR.data) || []).forEach(function (r) { settings[r.key] = r.value; });
       }
-      return NextResponse.json({ ok: true, rows: rows, source: all.cfg.source, site: all.feed.site || null, generated_at: all.generated_at, tables_ready: all.tablesReady, sql_hint: all.tablesReady ? null : SQL_HINT, runs: runs, settings: settings, can_manage: canManage, is_super_admin: isSuper, history_in_feed: Array.isArray(all.feed.status_history), api_build_marker: API_BUILD_MARKER });
+      return NextResponse.json({ ok: true, rows: rows, archived: archived, archive_ready: arch.ready, archive_sql_hint: arch.ready ? null : ARCHIVE_SQL_HINT, source: all.cfg.source, site: all.feed.site || null, generated_at: all.generated_at, tables_ready: all.tablesReady, sql_hint: all.tablesReady ? null : SQL_HINT, runs: runs, settings: settings, can_manage: canManage, is_super_admin: isSuper, history_in_feed: Array.isArray(all.feed.status_history), api_build_marker: API_BUILD_MARKER });
     }
     if (action === 'order') {
       var one = await loadAll(db, { orderId: body.order_id }); if (one.error) { return bad(one.error, 503); }
       var ev = one.orders[0]; if (!ev) { return bad('That order is not in the warehouse list.', 404); }
-      var extra = { alerts: [], closures: [] };
+      var extra = { alerts: [], closures: [], archive: [] };
       if (one.tablesReady) {
         var al = await db.from('order_alerts').select('kind, alert_key, first_seen_at, sent_at, recipients, send_error, resolved_at, resolved_why').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('first_seen_at', { ascending: false }).limit(20); extra.alerts = al.data || [];
+        try { var ah = await db.from('order_report_archive').select('choice, note, archived_at, archived_by_name, restored_at, restored_by_name, restore_note').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('archived_at', { ascending: false }).limit(20); extra.archive = ah.error ? [] : (ah.data || []); } catch (eAh) { extra.archive = []; } // UC
         var cl = await db.from('order_closures').select('mode, reason, closed_at, written_to_nextrade, open_exceptions').eq('source', one.cfg.source).eq('order_id', ev.order.id).order('closed_at', { ascending: false }).limit(10); extra.closures = cl.data || [];
       }
       return NextResponse.json({ ok: true, report: Object.assign(rowOf(ev), { items: ev.items, invoices: ev.invoice.all, invoice_flags: ev.invoice.flags, deposit: ev.deposit, deadline: ev.deadline, closure: ev.closure, groups: ev.groups, bills: ev.bills, overrides: ev.overrides, deposit_links: ev.deposit_links }), extra: extra, source: one.cfg.source, can_manage: canManage, api_build_marker: API_BUILD_MARKER });
     }
-    if (!canManage && ['set_deposit_status', 'link_deposit', 'unlink_deposit', 'override', 'end_override', 'close_order', 'run_now', 'deposit_candidates'].indexOf(action) >= 0) { return bad('This needs the "Orders: Manage" permission — Settings → Module Access.', 403); }
+    if (!canManage && ['set_deposit_status', 'link_deposit', 'unlink_deposit', 'override', 'end_override', 'close_order', 'run_now', 'deposit_candidates', 'archive_row', 'unarchive_row'].indexOf(action) >= 0) { return bad('This needs the "Orders: Manage" permission — Settings → Module Access.', 403); }
     var cfgM = feedConfig(); if (cfgM.error) { return bad(cfgM.error, 503); }
     var src = cfgM.source; var oid = Number(body.order_id);
+    // v55.83-UC (Max, Nov 18) — "Non issue" / "Corrected": the row leaves the report and goes to the archive. Nothing is deleted;
+    // the entry keeps who, when, which choice, the note and what the row showed. One click = one entry (request id).
+    if (action === 'archive_row') {
+      var choice = body.choice; if (!Object.prototype.hasOwnProperty.call(ARCHIVE_CHOICES, choice)) { return bad('Pick Non issue or Corrected.'); }
+      if (!(oid > 0) || Math.floor(oid) !== oid || oid > 2147483647) { return bad('Pick the order.'); }
+      var noteA = String(body.note || '').trim().substring(0, 1000);
+      var reqA = typeof body.request_id === 'string' && body.request_id.length >= 8 ? body.request_id.substring(0, 80) : null;
+      if (!reqA) { return bad('Missing the click id — refresh the page and try again.'); }
+      // UC (Codex QA 18 Nov, P2) — a repeated click id is accepted ONLY for the very same archive (copy, order, choice, note);
+      // anything else with that id is refused. The saved entry is what is answered.
+      var dupA = await db.from('order_report_archive').select('*').eq('request_id', reqA).maybeSingle();
+      if (dupA.error) { return bad(missingTable(dupA.error.message) ? ARCHIVE_SQL_HINT : 'Could not check earlier archive entries (' + dupA.error.message + ') — nothing was archived.', missingTable(dupA.error.message) ? 500 : 503); }
+      if (dupA.data) {
+        if (!sameArchiveRequest(dupA.data, src, oid, choice, noteA)) { return bad('This click id was already used for a different archive entry — nothing was archived. Refresh and try again.', 409); }
+        return NextResponse.json(archiveOut(dupA.data, { already_recorded: true }));
+      }
+      // UC (Codex QA 18 Nov, P2) — the order must be on THIS warehouse copy, open, with the release the person saw
+      var idn = await orderIdentity(cfgM, oid);
+      if (idn.error) { return bad(idn.error, 503); }
+      if (!idn.order) { return bad('Order ' + oid + ' is not on the warehouse list (' + src + ') — nothing was archived.', 404); }
+      if (idn.order.status === 'closed' || idn.order.status === 'cancelled') { return bad('Order ' + oid + ' is ' + idn.order.status + ' in the warehouse, so it is not on the report — nothing was archived. Refresh.', 409); }
+      if (String(body.release_number || '').trim() !== String(idn.order.release_number || '').trim()) { return bad('The warehouse now shows release ' + (idn.order.release_number || '(none)') + ' for order ' + oid + ', not ' + (String(body.release_number || '').trim() || '(none)') + ' — nothing was archived. Refresh.', 409); }
+      var snapA = cleanSnapshot(body.snapshot);
+      snapA.verified = { release_number: idn.order.release_number, customer: idn.order.customer_name, country: idn.order.country, warehouse_status: idn.order.status, checked_against: idn.from, checked_at: new Date().toISOString() };
+      var uA = await db.from('users').select('name, email').eq('id', userId).maybeSingle();
+      var byA = (uA.data && (uA.data.name || uA.data.email)) || null;
+      var insA = await db.from('order_report_archive').insert({ source: src, order_id: oid, release_number: idn.order.release_number || null, choice: choice, note: noteA || null, snapshot: snapA, archived_by: userId, archived_by_name: byA, request_id: reqA }).select('*').single();
+      if (insA.error) {
+        var mA = String(insA.error.message || '');
+        if (missingTable(mA)) { return bad(ARCHIVE_SQL_HINT, 500); }
+        if (insA.error.code === '23505' || /one_active|duplicate key|request_id/i.test(mA)) {
+          // the same click arriving twice at once, or someone else archived this order meanwhile: read what is saved and compare
+          var rr = await db.from('order_report_archive').select('*').eq('request_id', reqA).maybeSingle();
+          if (!rr.error && rr.data) { return sameArchiveRequest(rr.data, src, oid, choice, noteA) ? NextResponse.json(archiveOut(rr.data, { already_recorded: true })) : bad('This click id was already used for a different archive entry — nothing was archived. Refresh and try again.', 409); }
+          var act0 = await db.from('order_report_archive').select('archived_by_name, archived_at, choice').eq('source', src).eq('order_id', oid).is('restored_at', null).maybeSingle();
+          var who0 = act0 && act0.data ? ' (' + (ARCHIVE_CHOICES[act0.data.choice] || act0.data.choice) + ' by ' + (act0.data.archived_by_name || 'someone') + ')' : '';
+          return bad('This order is already in the archive' + who0 + ' — nothing new was archived. Refresh.', 409);
+        }
+        return bad('Not archived: ' + mA, 500);
+      }
+      var auditWarn = null;
+      try { await audit(db, userId, 'order_report_archived', 'warehouse_order', String(oid), { choice: choice, note: noteA || null, release: idn.order.release_number || null, source: src, archive_id: insA.data.id, request_id: reqA }); }
+      catch (eAu) { auditWarn = 'Archived, but the audit trail line was not written (' + ((eAu && eAu.message) || 'error') + '). The archive entry itself keeps who and when.'; }
+      return NextResponse.json(archiveOut(insA.data, { audit_warning: auditWarn }));
+    }
+    if (action === 'unarchive_row') {
+      if (typeof body.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.id)) { return bad('Pick the archived row.'); }
+      var noteU = String(body.note || '').trim().substring(0, 1000);
+      var uU = await db.from('users').select('name, email').eq('id', userId).maybeSingle();
+      var upU = await db.from('order_report_archive').update({ restored_at: new Date().toISOString(), restored_by: userId, restored_by_name: (uU.data && (uU.data.name || uU.data.email)) || null, restore_note: noteU || null }).eq('id', body.id).eq('source', src).is('restored_at', null).select('id, order_id, choice, release_number').maybeSingle();
+      if (upU.error) { return bad(missingTable(upU.error.message) ? ARCHIVE_SQL_HINT : 'Not put back: ' + upU.error.message, 500); }
+      if (!upU.data) { return bad('That row is not in the archive any more (already put back?). Refresh.', 404); }
+      var auditWarnU = null;
+      try { await audit(db, userId, 'order_report_unarchived', 'warehouse_order', String(upU.data.order_id), { was: upU.data.choice, note: noteU || null, release: upU.data.release_number || null, source: src, archive_id: upU.data.id }); }
+      catch (eAu2) { auditWarnU = 'Put back, but the audit trail line was not written (' + ((eAu2 && eAu2.message) || 'error') + '). The archive entry itself keeps who and when.'; }
+      return NextResponse.json({ ok: true, order_id: upU.data.order_id, audit_warning: auditWarnU });
+    }
     if (action === 'set_deposit_status') {
       var stv = body.status === 'not_required' ? 'not_required' : (body.status === 'required' ? 'required' : null);
       if (!stv || !(oid > 0)) { return bad('Pick the order and the deposit status.'); }

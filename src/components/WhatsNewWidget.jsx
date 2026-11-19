@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UC',
+    date: '2026-11-18',
+    title: 'Orders: mark a row Non issue or Corrected — it leaves the report and is kept in an archive',
+    items: [
+      { text: 'Accounting → 🚚 Orders: every row now has two buttons under Open report — Non issue and ✓ Corrected. Press one, add a note if you like, press Archive: the row leaves the list and the counts at the top (for example Shipped — missing invoice) go down straight away.' },
+      { text: 'Nothing is deleted. The new 🗄 Archived filter lists every archived row with who did it, when, which button, the note, what the row showed then and how the order looks now. ↩ Put back returns a row to the report; the archive keeps the history (also shown in the order report).' },
+      { text: 'The buttons need the Orders: Manage switch, like the other order decisions (an admin or owner needs that switch turned on in Settings; the role alone is not enough any more). Before archiving, the Hub checks the order is really on the warehouse list, still open and has the same release number; if the warehouse cannot be read, nothing is archived. They need one SQL first: sql/v55-83-UC-order-report-archive.sql.' },
+      { text: 'Technical: new append-only table order_report_archive (trigger refuses DELETE and any edit other than a single put back; one active entry per source+order; request id per click). Route order-monitor: archive_row / unarchive_row (verifiedCaller + orders.monitor + orders.manage, audit trail); report returns rows minus archived + archived[]. Alerts and the overnight review are unchanged (they still see every order).', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-UO',
     date: '2026-11-18',
     title: 'Banking & Accounting Access shows each book exactly as it works',

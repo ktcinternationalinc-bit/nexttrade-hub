@@ -34,17 +34,20 @@ export default function OrderMonitorTab(props) {
   var s8 = useState({}); var form = s8[0]; var setForm = s8[1];
   var s9 = useState(false); var showSet = s9[0]; var setShowSet = s9[1];
   var s10 = useState('orders'); var view = s10[0]; var setView = s10[1]; // v55.83-TM — 'orders' | 'recon'
+  var s11 = useState(null); var archF = s11[0]; var setArchF = s11[1]; // v55.83-UC — { id, choice, note }: the row being marked Non issue / Corrected
+  var s12 = useState(null); var backF = s12[0]; var setBackF = s12[1]; // v55.83-UC — { id, note }: the archived row being put back
 
   function call(payload) {
     return supabase.auth.getSession().then(function (sres) {
       var token = sres && sres.data && sres.data.session ? sres.data.session.access_token : '';
       // v55.83-TO — one request id per click for the actions that write money / close an order (a retry never does it twice)
-      var rid = (payload && (payload.action === 'link_deposit' || payload.action === 'close_order') && !payload.request_id) ? { request_id: 'om-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10) } : {};
+      var rid = (payload && (payload.action === 'link_deposit' || payload.action === 'close_order' || payload.action === 'archive_row') && !payload.request_id) ? { request_id: 'om-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10) } : {};
       return fetch('/api/accounting/order-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(Object.assign({ user_id: userProfile && userProfile.id }, rid, payload)) });
     }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'The server did not answer properly (HTTP ' + r.status + ').' }; }); })
       .catch(function (e) { return { ok: false, error: 'Could not reach the server (' + ((e && e.message) || 'network') + ').' }; });
   }
-  function load() { setBusy(true); setErr(''); call({ action: 'report' }).then(function (j) { if (j && j.ok) { setData(j); } else { setErr((j && j.error) || 'Could not load the orders.'); } }).finally(function () { setBusy(false); }); }
+  // UC (Codex QA 12:05) — load() returns the fresh report (or null when it could not be read), so callers can wait for it
+  function load() { setBusy(true); setErr(''); return call({ action: 'report' }).then(function (j) { if (j && j.ok) { setData(j); return j; } setErr((j && j.error) || 'Could not load the orders.'); return null; }).finally(function () { setBusy(false); }); }
   function openOrder(id) { setOpenId(id); setRep(null); setForm({}); call({ action: 'order', order_id: id }).then(function (j) { if (j && j.ok) { setRep(j); } else { setErr((j && j.error) || 'Could not load the order.'); setOpenId(null); } }); }
   useEffect(function () {
     load();
@@ -54,12 +57,67 @@ export default function OrderMonitorTab(props) {
   function openInvoice(id) { try { window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e) {} if (props.onGo) { props.onGo('invoices'); } }
   function newInvoice() { if (props.onGo) { props.onGo('invoices'); } else { toast.error('Open Accounting → Invoices → + New invoice.'); } }
   function copyRelease(ids) { setBusy(true); return call({ action: 'copy_release_from_po', invoice_ids: ids }).then(function (j) { if (j && j.ok) { toast.success((j.copied.length ? 'Release Number filled on ' + j.copied.join(', ') + '.' : 'Nothing copied.') + (j.skipped.length ? ' Skipped: ' + j.skipped.map(function (x) { return x.number + ' (' + x.why + ')'; }).join('; ') : '')); load(); return true; } toast.error((j && j.error) || 'Not saved.'); return false; }).finally(function () { setBusy(false); }); }
+  // v55.83-UC (Max, Nov 18) — "Non issue" / "Corrected": the row leaves the report (and the counts at the top) at once and goes to
+  // the archive; nothing is deleted. "Put back" returns it. The screen updates straight away; ↻ Refresh re-reads everything.
+  var ARCH_WORDS = { non_issue: 'Non issue', corrected: 'Corrected' };
+  // UC (Codex QA) — one click id per Archive form: a retry after a lost answer sends the SAME id (the server answers the saved entry);
+  // changing the note or the choice makes a new id
+  function newRid() { return 'om-arch-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10); }
+  function archiveRow(r, choice, note, rid) {
+    var snap = { customer: r.customer, country: r.country, stage_label: r.stage_label, readiness: r.readiness && r.readiness.words, invoice: INV_WORDS[r.invoice.state] || r.invoice.state, deposit: DEP_WORDS[r.deposit.status] || r.deposit.status, shipped_date: r.shipped_date, scheduled: r.scheduled, next_action: r.next_action, outstanding: r.outstanding };
+    setBusy(true);
+    return call({ action: 'archive_row', order_id: r.id, release_number: r.release_number, choice: choice, note: note || '', snapshot: snap, request_id: rid }).then(function (j) {
+      if (!(j && j.ok)) { toast.error((j && j.error) || 'Not archived.'); return false; }
+      setArchF(null);
+      if (j.audit_warning) { toast.error(j.audit_warning); }
+      if (j.already_recorded) {
+        // UC (Codex QA 16:25, P2) — a retried click: say what the SAVED earlier click did (and whether it was put back since), then
+        // say where the order is NOW only from the re-read report; never claim it is archived when someone has put it back
+        var lblR = j.release_number || r.release_number || ('Order ' + r.id);
+        var saidR = j.restored_at ? lblR + ': your earlier click had been saved, but the row was put back since — this retry did NOT archive it again.' : lblR + ': your earlier click had already been saved — nothing new was archived.';
+        return load().then(function (fresh) {
+          if (!fresh) { toast.error(saidR + ' The report could not be read again — press ↻ Refresh; the list and the counts may be out of date.'); return true; }
+          var inArch = (fresh.archived || []).some(function (x) { return Number(x.archive.order_id) === Number(r.id); });
+          var onRep = (fresh.rows || []).some(function (x) { return Number(x.id) === Number(r.id); });
+          toast.success(saidR + (inArch ? ' It is in the archive now.' : (onRep ? ' It is on the report now.' : ' It is not on the open list now.')));
+          return true;
+        });
+      }
+      setData(function (d) { if (!d) { return d; } var entry = { archive: { id: j.id, order_id: r.id, release_number: j.release_number || r.release_number, choice: choice, choice_words: ARCH_WORDS[choice], note: note || null, archived_at: j.archived_at || new Date().toISOString(), by_name: j.by_name || (userProfile && (userProfile.name || userProfile.email)) || 'you', snapshot: snap }, row: r, warehouse_status: null };
+        return Object.assign({}, d, { rows: (d.rows || []).filter(function (x) { return x.id !== r.id; }), archived: [entry].concat((d.archived || []).filter(function (a) { return a.archive.order_id !== r.id; })) }); });
+      if (openId === r.id) { setOpenId(null); setRep(null); }
+      toast.success((r.release_number || 'Order ' + r.id) + ' — ' + ARCH_WORDS[choice] + ': moved to the archive.');
+      return true;
+    }).finally(function () { setBusy(false); });
+  }
+  function putBack(a, note) {
+    setBusy(true);
+    return call({ action: 'unarchive_row', id: a.archive.id, note: note || '' }).then(function (j) {
+      if (!(j && j.ok)) { toast.error((j && j.error) || 'Not put back.'); return false; }
+      setBackF(null);
+      // UC (Codex QA 12:05) — the entry left the archive (the server said so); whether the order is back on the OPEN report, and the
+      // counts, are only stated after the report is read again — never from the copy cached when the archive list was loaded
+      setData(function (d) { if (!d) { return d; } return Object.assign({}, d, { archived: (d.archived || []).filter(function (x) { return x.archive.id !== a.archive.id; }) }); });
+      if (j.audit_warning) { toast.error(j.audit_warning); }
+      var label = a.archive.release_number || ('Order ' + a.archive.order_id);
+      return load().then(function (fresh) {
+        if (!fresh) { toast.error(label + ' was put back, but the report could not be read again — press ↻ Refresh; the list and the counts may be out of date.'); return true; }
+        var onReport = (fresh.rows || []).some(function (x) { return Number(x.id) === Number(a.archive.order_id); });
+        toast.success(label + (onReport ? ' is back on the report.' : ' left the archive. It is not on the open list: the warehouse shows it closed, cancelled or no longer listed.'));
+        return true;
+      });
+    }).finally(function () { setBusy(false); });
+  }
   function act(payload, okMsg) { setBusy(true); return call(payload).then(function (j) { if (j && j.ok) { toast.success(okMsg); setForm({}); if (openId) { openOrder(openId); } load(); return true; } toast.error((j && j.error) || 'It did not go through.'); return false; }).finally(function () { setBusy(false); }); }
 
   if (!data) { return <div className="rounded-xl p-4" style={{ background: '#ffffff', border: '1px solid ' + LINE, color: INK }}>{err ? <div className="text-[12px] font-bold" style={{ color: '#b42318' }}>{'⛔ ' + err}</div> : <div className="text-[12px]" style={{ color: SUB }}>Reading the warehouse and the Hub…</div>}</div>; }
 
   var rows = data.rows || [];
-  var FILTERS = [['all', 'All open'], ['deadline', 'Deadline'], ['invoice', 'Invoice problems'], ['deposit', 'Deposit'], ['shipped', 'Shipped — outstanding'], ['close', 'Ready to close']];
+  var archivedAll = data.archived || []; // v55.83-UC — rows marked Non issue / Corrected (not in `rows`, so not in any count above)
+  var canArchive = !!(data.can_manage && data.archive_ready);
+  var FILTERS = [['all', 'All open'], ['deadline', 'Deadline'], ['invoice', 'Invoice problems'], ['deposit', 'Deposit'], ['shipped', 'Shipped — outstanding'], ['close', 'Ready to close'], ['archived', '🗄 Archived · ' + archivedAll.length]];
+  var tq = q.trim().toLowerCase();
+  var archShown = archivedAll.filter(function (a) { var x = a.archive; var sn = x.snapshot || {}; return !tq || (String(x.release_number || '') + ' ' + x.order_id + ' ' + (sn.customer || '') + ' ' + (sn.country || '') + ' ' + (x.note || '') + ' ' + x.by_name + ' ' + x.choice_words).toLowerCase().indexOf(tq) >= 0; });
   function inF(r) {
     if (filter === 'deadline' && ['missed', 'overdue_unshipped', 'due_soon', 'short_notice', 'no_schedule'].indexOf(r.deadline.state) < 0) { return false; }
     if (filter === 'invoice' && !(r.invoice.severe || ['po_so_only', 'cancelled_only', 'missing_overdue', 'draft_only'].indexOf(r.invoice.state) >= 0)) { return false; }
@@ -94,6 +152,7 @@ export default function OrderMonitorTab(props) {
         <Btn onClick={load} disabled={busy}>{busy ? 'Reading…' : '↻ Refresh'}</Btn>
         {data.is_super_admin && <Btn onClick={function () { setShowSet(!showSet); }}>⚙ Alerts & closing</Btn>}
       </div>
+      {err && <div className="px-3 py-2 text-[12px] font-bold" style={{ background: '#fde8e6', color: '#b42318' }}>{'⚠ The last refresh failed (' + err + ') — the list and the counts below may be out of date. Press ↻ Refresh.'}</div>}
       {!data.tables_ready && <div className="px-3 py-2 text-[12px] font-bold" style={{ background: '#fdf1df', color: '#a35a00' }}>{'Deposit decisions, overrides, alerts and the overnight review need one SQL first: ' + data.sql_hint}</div>}
       {data.history_in_feed === false && <div className="px-3 py-1.5 text-[11px]" style={{ background: '#fdf1df', color: '#a35a00' }}>The warehouse is not sending its stage history yet (the Nextrade update is not on this copy), so “reached in time / late” cannot be told yet.</div>}
       {showSet && <SettingsBox set={set} busy={busy} act={act} />}
@@ -106,8 +165,11 @@ export default function OrderMonitorTab(props) {
       <div className="flex flex-wrap gap-1.5 px-3 pb-2 items-center">
         {FILTERS.map(function (f) { return <button key={f[0]} type="button" onClick={function () { setFilter(f[0]); }} className="px-3 py-1 rounded-full text-[11px] font-bold" style={filter === f[0] ? { background: INK, color: '#ffffff' } : { background: '#ffffff', color: INK, border: '1px solid ' + LINE }}>{f[1]}</button>; })}
         <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="release, order, customer, country…" className="px-2 py-1 rounded-lg text-[11px] nt-light" style={{ border: '1px solid ' + LINE, width: 220, color: INK, background: '#ffffff' }} />
-        <span className="text-[11px]" style={{ color: SUB }}>{shown.length + ' of ' + rows.length + ' open orders'}</span>
+        <span className="text-[11px]" style={{ color: SUB }}>{filter === 'archived' ? archShown.length + ' of ' + archivedAll.length + ' archived (not counted above)' : shown.length + ' of ' + rows.length + ' open orders' + (archivedAll.length ? ' · ' + archivedAll.length + ' archived, not counted' : '')}</span>
       </div>
+      {data.can_manage && data.archive_ready === false && <div className="px-3 pb-2 text-[11px] font-bold" style={{ color: '#a35a00' }}>{'Non issue / Corrected needs one SQL first: ' + (data.archive_sql_hint || 'sql/v55-83-UC-order-report-archive.sql')}</div>}
+      {filter === 'archived' && <ArchiveView list={archShown} canManage={!!data.can_manage} busy={busy} backF={backF} setBackF={setBackF} putBack={putBack} openOrder={openOrder} />}
+      {filter !== 'archived' && <div>
       <div className="overflow-auto nt-solid-head" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
         <table className="w-full text-[11px]" style={{ minWidth: 1080 }}>
           <thead><tr>{['Release · order', 'Customer · destination', 'Scheduled / shipped', 'Stage', 'Readiness', 'Invoice', 'Deposit', 'Outstanding · next action', ''].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-semibold sticky top-0" style={{ background: BG, color: SUB, borderBottom: '1px solid ' + LINE }}>{h}</th>; })}</tr></thead>
@@ -122,10 +184,21 @@ export default function OrderMonitorTab(props) {
               <td className="px-2 py-1.5"><Pill k={INV_KEY[r.invoice.state] || 'na'}>{INV_WORDS[r.invoice.state] || r.invoice.state}</Pill>{invFix(r.invoice, r.release_number)}</td>
               <td className="px-2 py-1.5"><Pill k={DEP_KEY[r.deposit.status] || 'na'}>{DEP_WORDS[r.deposit.status] || r.deposit.status}</Pill></td>
               <td className="px-2 py-1.5" style={{ maxWidth: 320 }}>{r.outstanding.length > 0 && <div style={{ color: S.blocked[0] }}>{r.outstanding.slice(0, 4).join(' · ') + (r.outstanding.length > 4 ? ' · +' + (r.outstanding.length - 4) + ' more' : '')}</div>}<div style={{ color: SUB }}>{r.next_action ? 'Next: ' + r.next_action : ''}</div></td>
-              <td className="px-2 py-1.5"><Btn onClick={function () { openOrder(r.id); setTimeout(function () { try { document.getElementById('nt-order-report').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 80); }}>Open report</Btn></td></tr>; })}
+              <td className="px-2 py-1.5" style={{ minWidth: 120 }}><div className="grid gap-1 justify-items-stretch">
+                <Btn onClick={function () { openOrder(r.id); setTimeout(function () { try { document.getElementById('nt-order-report').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 80); }}>Open report</Btn>
+                {canArchive && (!archF || archF.id !== r.id) && <>
+                  <Btn disabled={busy} onClick={function () { setArchF({ id: r.id, choice: 'non_issue', note: '', rid: newRid() }); }} style={{ color: '#6b7380' }}>Non issue</Btn>
+                  <Btn disabled={busy} onClick={function () { setArchF({ id: r.id, choice: 'corrected', note: '', rid: newRid() }); }} style={{ color: S.done[0], border: '1px solid ' + S.done[0] }}>✓ Corrected</Btn></>}
+                {canArchive && archF && archF.id === r.id && <div className="grid gap-1 p-1.5 rounded-lg" style={{ border: '1px solid ' + LINE, background: '#fbfcfd', width: 190 }}>
+                  <b className="text-[11px]">{(archF.choice === 'corrected' ? '✓ Corrected' : 'Non issue') + ' — move to the archive'}</b>
+                  <input id={'nt-om-arch-note-' + r.id} autoFocus value={archF.note} onChange={function (e) { var v = e.target.value; setArchF(function (c) { return Object.assign({}, c, { note: v, rid: newRid() }); }); }} onKeyDown={function (e) { if (e.key === 'Enter' && !busy) { archiveRow(r, archF.choice, archF.note, archF.rid); } if (e.key === 'Escape') { setArchF(null); } }} placeholder="note (optional)" className="px-1.5 py-1 rounded text-[11px] nt-light" style={{ border: '1px solid ' + LINE, color: INK, background: '#ffffff' }} />
+                  <div className="flex gap-1"><Btn dark disabled={busy} onClick={function () { archiveRow(r, archF.choice, archF.note, archF.rid); }}>Archive</Btn><Btn onClick={function () { setArchF(null); }}>Cancel</Btn></div>
+                  <span className="text-[10px]" style={{ color: SUB }}>Kept with your name and the time; 🗄 Archived → Put back returns it.</span></div>}
+              </div></td></tr>; })}
             {shown.length === 0 && <tr><td colSpan={9} className="px-3 py-4 text-center" style={{ color: SUB }}>No order matches this filter.</td></tr>}</tbody>
         </table>
       </div>
+      </div>}
       </div>}
     </div>
     <div id="nt-order-report">{openId && <OrderReport rep={rep} openInvoice={openInvoice} canManage={data.can_manage} busy={busy} act={act} call={call} form={form} setForm={setForm} onClose={function () { setOpenId(null); setRep(null); }} />}</div>
@@ -145,6 +218,38 @@ function SettingsBox(p) {
       <Btn onClick={function () { p.act({ action: 'run_now', job: 'nightly' }, 'Review done.'); }} disabled={p.busy}>Run the overnight review now</Btn>
     </div>
     <div className="text-[11px]" style={{ color: SUB }}>While the Hub reads the warehouse STAGING copy, alerts and automatic closing stay OFF unless you switch them on; switching on sends real emails about staging orders.</div>
+  </div>;
+}
+
+// v55.83-UC — 🗄 Archived: rows someone marked Non issue / Corrected. Who, when, the choice, the note, what the row showed then, and
+// how the order looks NOW (so a row that went bad again is visible). "Put back" returns it to the report; the entry stays as history.
+function ArchiveView(p) {
+  var list = p.list || []; var f = p.backF;
+  return <div className="overflow-auto nt-solid-head" style={{ borderTop: '1px solid ' + LINE, maxHeight: '62vh' }}>
+    <table className="w-full text-[11px]" style={{ minWidth: 1080 }}>
+      <thead><tr>{['Release · order', 'Customer · destination', 'Marked', 'By · when', 'Note', 'What it showed then', 'Now', ''].map(function (h) { return <th key={h} className="px-2 py-1.5 text-left font-semibold sticky top-0" style={{ background: BG, color: SUB, borderBottom: '1px solid ' + LINE }}>{h}</th>; })}</tr></thead>
+      <tbody>{list.map(function (a) {
+        var x = a.archive; var sn = x.snapshot || {}; var vf = sn.verified || {}; var now = a.row;
+        var nowWords = !now ? 'not in the warehouse list any more' : (a.warehouse_status === 'closed' || a.warehouse_status === 'cancelled' ? a.warehouse_status + ' in the warehouse' : now.stage_label + ' · ' + (INV_WORDS[now.invoice.state] || now.invoice.state) + ' · ' + (DEP_WORDS[now.deposit.status] || now.deposit.status));
+        var stillOpen = now && now.outstanding && now.outstanding.length;
+        return <tr key={x.id} style={{ borderBottom: '1px solid ' + LINE, background: '#ffffff' }}>
+          <td className="px-2 py-1.5"><b style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>{x.release_number || '—'}</b><div style={{ color: SUB }}>{'order ' + x.order_id}</div></td>
+          <td className="px-2 py-1.5">{vf.customer || sn.customer || (now && now.customer) || '—'}<div style={{ color: SUB }}>{vf.country || sn.country || (now && now.country) || ''}</div></td>
+          <td className="px-2 py-1.5"><Pill k={x.choice === 'corrected' ? 'done' : 'na'}>{x.choice_words}</Pill></td>
+          <td className="px-2 py-1.5 whitespace-nowrap">{x.by_name}<div style={{ color: SUB }}>{when(x.archived_at)}</div></td>
+          <td className="px-2 py-1.5" style={{ maxWidth: 220 }}>{x.note || <span style={{ color: SUB }}>—</span>}</td>
+          <td className="px-2 py-1.5" style={{ maxWidth: 280, color: SUB }}>{[sn.stage, sn.invoice, sn.deposit].filter(Boolean).join(' · ')}{(sn.outstanding || []).length > 0 && <div style={{ color: S.blocked[0] }}>{sn.outstanding.slice(0, 3).join(' · ') + (sn.outstanding.length > 3 ? ' · +' + (sn.outstanding.length - 3) + ' more' : '')}</div>}</td>
+          <td className="px-2 py-1.5" style={{ maxWidth: 240 }}>{nowWords}{stillOpen ? <div style={{ color: S.wait[0] }}>{now.outstanding.length + ' requirement' + (now.outstanding.length === 1 ? '' : 's') + ' still open'}</div> : null}</td>
+          <td className="px-2 py-1.5" style={{ minWidth: 130 }}><div className="grid gap-1">
+            {now && <Btn onClick={function () { p.openOrder(x.order_id); setTimeout(function () { try { document.getElementById('nt-order-report').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 80); }}>Open report</Btn>}
+            {p.canManage && (!f || f.id !== x.id) && <Btn disabled={p.busy} onClick={function () { p.setBackF({ id: x.id, note: '' }); }}>↩ Put back</Btn>}
+            {p.canManage && f && f.id === x.id && <div className="grid gap-1 p-1.5 rounded-lg" style={{ border: '1px solid ' + LINE, background: '#fbfcfd', width: 190 }}>
+              <b className="text-[11px]">Put back on the report</b>
+              <input id={'nt-om-back-note-' + x.id} autoFocus value={f.note} onChange={function (e) { var v = e.target.value; p.setBackF(function (c) { return Object.assign({}, c, { note: v }); }); }} onKeyDown={function (e) { if (e.key === 'Enter' && !p.busy) { p.putBack(a, f.note); } if (e.key === 'Escape') { p.setBackF(null); } }} placeholder="why (optional)" className="px-1.5 py-1 rounded text-[11px] nt-light" style={{ border: '1px solid ' + LINE, color: INK, background: '#ffffff' }} />
+              <div className="flex gap-1"><Btn dark disabled={p.busy} onClick={function () { p.putBack(a, f.note); }}>Put back</Btn><Btn onClick={function () { p.setBackF(null); }}>Cancel</Btn></div></div>}
+          </div></td></tr>; })}
+        {list.length === 0 && <tr><td colSpan={8} className="px-3 py-4 text-center" style={{ color: SUB }}>Nothing archived{' '}— rows marked Non issue or Corrected show here.</td></tr>}</tbody>
+    </table>
   </div>;
 }
 
@@ -201,6 +306,7 @@ function OrderReport(p) {
           </div>
           <div className="rounded-lg p-3 grid gap-1 text-[12px]" style={{ border: '1px solid ' + LINE }}><b>Bills on this release</b>
             {(r.bills || []).length === 0 ? <span style={{ color: SUB }}>No forwarder or trucker bill in the Hub yet.</span> : r.bills.map(function (b) { return <div key={b.id}>{(b.bill_type === 'shipping' ? 'Forwarder' : 'Trucker') + ' · ' + (b.vendor || '') + ' ' + (b.number || '') + ' · $' + fmt(b.total) + ' · ' + (b.paid + 0.005 >= b.total ? 'paid' : 'paid $' + fmt(b.paid))}</div>; })}</div>
+          {(j.extra.archive || []).length > 0 && <div className="rounded-lg p-3 grid gap-1 text-[12px]" style={{ border: '1px solid ' + LINE }}><b>Archive history (Non issue / Corrected)</b>{j.extra.archive.map(function (a, i) { return <div key={i} style={{ color: SUB }}>{({ non_issue: 'Non issue', corrected: 'Corrected' })[a.choice] + ' — ' + (a.archived_by_name || 'someone') + ', ' + when(a.archived_at) + (a.note ? ': ' + a.note : '') + (a.restored_at ? ' · put back by ' + (a.restored_by_name || 'someone') + ', ' + when(a.restored_at) + (a.restore_note ? ': ' + a.restore_note : '') : ' · in the archive now')}</div>; })}</div>}
           {(j.extra.alerts || []).length > 0 && <div className="rounded-lg p-3 grid gap-1 text-[12px]" style={{ border: '1px solid ' + LINE }}><b>30-hour alerts</b>{j.extra.alerts.map(function (a, i) { return <div key={i} style={{ color: SUB }}>{(DL_WORDS[a.kind] || a.kind) + ' · ' + (a.sent_at ? 'emailed ' + when(a.sent_at) : (a.send_error ? 'NOT sent: ' + a.send_error : 'recorded (alerts off)')) + (a.resolved_at ? ' · resolved ' + when(a.resolved_at) + (a.resolved_why ? ' (' + a.resolved_why + ')' : '') : ' · open')}</div>; })}</div>}
         </div>
       </div>
