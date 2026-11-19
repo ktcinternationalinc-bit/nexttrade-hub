@@ -65,6 +65,25 @@ function isInternalCall(req) {
   return false;
 }
 
+// v55.83-UF (Codex QA 18 Nov, P2) — Supabase update() does not throw on a
+// database error; it returns { error }. Read it, so a transcript that was not
+// stored is never reported as saved. Returns null when saved, else a message.
+// rev 3 (Codex 12:50): also require that exactly the intended row was
+// updated — an update that matched nothing is NOT a save.
+async function saveRow(tableName, id, fields) {
+  try {
+    var res = await supabase.from(tableName).update(fields).eq('id', id).select('id');
+    if (res && res.error) return res.error.message || 'database error';
+    var rows = res && Array.isArray(res.data) ? res.data : [];
+    if (rows.length !== 1 || String(rows[0].id) !== String(id)) {
+      return rows.length === 0 ? 'row not found (nothing updated)' : 'unexpected rows updated: ' + rows.length;
+    }
+    return null;
+  } catch (e) {
+    return e.message || 'database error';
+  }
+}
+
 export async function POST(req) {
   try {
     if (!isInternalCall(req)) {
@@ -94,10 +113,19 @@ export async function POST(req) {
     else if (kind === 'recording') tableName = 'phone_recordings';
     else return NextResponse.json({ ok: false, error: 'invalid kind' }, { status: 400 });
 
+    // rev 3 (Codex 12:50) — the row must exist BEFORE any paid work
+    // (Twilio download, Whisper). Unknown id → 404, nothing fetched.
+    var existRes = await supabase.from(tableName).select('id').eq('id', id).maybeSingle();
+    if (existRes && existRes.error) {
+      return NextResponse.json({ ok: false, error: 'could not read ' + tableName + ': ' + existRes.error.message }, { status: 500 });
+    }
+    if (!existRes || !existRes.data) {
+      return NextResponse.json({ ok: false, error: kind + ' ' + id + ' not found' }, { status: 404 });
+    }
+
     // Mark as transcribing so the UI can show a spinner
-    try {
-      await supabase.from(tableName).update({ transcript_status: 'transcribing' }).eq('id', id);
-    } catch (e) { /* non-fatal */ }
+    var markErr = await saveRow(tableName, id, { transcript_status: 'transcribing' });
+    if (markErr) console.warn('[transcribe] could not mark transcribing (continuing): ' + markErr);
 
     var openaiKey = process.env.OPENAI_API_KEY;
     if (!openaiKey) {
@@ -163,17 +191,17 @@ export async function POST(req) {
     transcriptText = String(transcriptText || '').trim();
 
     // 3. Save the transcript
-    try {
-      await supabase.from(tableName).update({
-        transcript: transcriptText,
-        transcript_status: 'completed',
-      }).eq('id', id);
-    } catch (e) {
-      console.warn('[transcribe] DB update failed:', e.message);
+    var saveErr = await saveRow(tableName, id, {
+      transcript: transcriptText,
+      transcript_status: 'completed',
+    });
+    if (saveErr) {
+      console.error('[transcribe] transcript NOT saved — ' + kind + ' #' + id + ': ' + saveErr);
+      return NextResponse.json({ ok: false, saved: false, error: 'transcript could not be saved: ' + saveErr }, { status: 500 });
     }
 
     console.log('[transcribe] done — ' + kind + ' #' + id + ' (' + transcriptText.length + ' chars)');
-    return NextResponse.json({ ok: true, transcript: transcriptText });
+    return NextResponse.json({ ok: true, saved: true, transcript: transcriptText });
   } catch (e) {
     console.error('[transcribe] error:', e.message);
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });

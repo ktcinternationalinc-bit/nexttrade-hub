@@ -55,8 +55,13 @@ export async function GET(req) {
       env: {
         TWILIO_ACCOUNT_SID: !!process.env.TWILIO_ACCOUNT_SID ? 'set' : 'NOT SET',
         TWILIO_AUTH_TOKEN: !!process.env.TWILIO_AUTH_TOKEN ? 'set' : 'NOT SET',
-        TWILIO_API_KEY: !!process.env.TWILIO_API_KEY ? 'set' : 'NOT SET',
-        TWILIO_API_SECRET: !!process.env.TWILIO_API_SECRET ? 'set' : 'NOT SET',
+        // v55.83-UF — the token route reads TWILIO_API_KEY_SID / TWILIO_API_KEY_SECRET;
+        // the old labels checked names nobody sets and always showed NOT SET.
+        TWILIO_API_KEY_SID: !!process.env.TWILIO_API_KEY_SID ? 'set' : 'NOT SET',
+        TWILIO_API_KEY_SECRET: !!process.env.TWILIO_API_KEY_SECRET ? 'set' : 'NOT SET',
+        TWILIO_MAIN_NUMBER: !!process.env.TWILIO_MAIN_NUMBER ? 'set' : 'NOT SET',
+        OPENAI_API_KEY: !!process.env.OPENAI_API_KEY ? 'set' : 'NOT SET (voicemail text will not work)',
+        CRON_SECRET: !!process.env.CRON_SECRET ? 'set' : 'NOT SET',
         TWILIO_TWIML_APP_SID: !!process.env.TWILIO_TWIML_APP_SID ? 'set' : 'NOT SET',
         NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || '(not set — falling back to nexttrade-hub.vercel.app)',
         NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL ? 'set' : 'NOT SET',

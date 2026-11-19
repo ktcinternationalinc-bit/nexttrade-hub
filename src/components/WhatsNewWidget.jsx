@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-UF',
+    date: '2026-11-19',
+    title: 'Phone: safer voicemail text and a correct phone check',
+    items: [
+      { text: 'Voicemails now only show as written out when the text was really saved. If saving fails, the Hub says so instead of pretending it worked.' },
+      { text: 'The phone check page no longer shows two Twilio keys as missing when they are there.' },
+      { text: 'Technical: /api/phone/transcribe-cron now requires a non-empty CRON_SECRET bearer (removed the x-manual-trigger header bypass and the non-production allow); queue read errors return 500 with read_errors instead of ok:true. transcribe-async reads the {error} of every update (saveRow) and returns 500 saved:false when the transcript was not stored. The cron is still NOT scheduled (not in vercel.json): retry of failed rows needs attempt/lease columns — separate build. /api/phone/health reports TWILIO_API_KEY_SID / _SECRET (names the token route reads) plus TWILIO_MAIN_NUMBER, OPENAI_API_KEY, CRON_SECRET. Test: test-v55-83-uf-transcribe-handlers.js.', superAdminOnly: true }
+    ]
+  },
+  {
     version: 'v55.83-VB',
     date: '2026-11-19',
     title: 'Profitability: foam weighs 3 lb per linear metre too',
