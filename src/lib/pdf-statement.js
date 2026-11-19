@@ -90,14 +90,23 @@ export function statementFromTextItems(pages) {
   var balCol = cols.length - 1;
   function colOf(it) { var best = -1; for (var c = 0; c < cols.length; c++) { if (Math.abs(it.r - cols[c]) <= 7) { best = c; } } return best; }
 
+  // v55.83-VG (Codex 19 Nov 16:38, P1) — FAIL CLOSED on sign markers. A DR / CR, a lone minus or a lone bracket printed in the money
+  // area of a line that was NOT joined to a figure (it sits too far from one, or in a column of its own) is a sign this reader
+  // cannot attach with certainty. It never becomes harmless description text: the whole statement is refused. The same for a
+  // figure that carries two signs at once ("-100.00 CR").
+  var unsupported = false;
+  var moneyFrom = cols[0] - 40; // where the money area of a line starts (the same boundary continuation lines use)
+  function strayMark(it) { return it.x >= moneyFrom && /^(CR|DR)\.?$|^[-\u2212\u2013\u2014]$|^[()]$|^\(\)$/i.test(it.s); }
+  function fig(str) { var f = parseStatementFigure(str); if (f && f.mixed) { unsupported = true; } return f; }
   var rows = []; var cur = null; var opening = null; var closing = null;
   lines.forEach(function (l) {
     var first = l.items[0]; var dt = Math.abs(first.x - dateX) <= 6 ? parseStatementDate(first.s) : '';
+    if (l.items.some(strayMark)) { unsupported = true; } // on ANY line of the document, not only the ones recognised as rows
     if (dt) {
       var desc = []; var amt = {};
       l.items.slice(1).forEach(function (it) {
         var a = parseStatementAmount(it.s); var c = a !== null && it.x > descX + 20 ? colOf(it) : -1;
-        if (c >= 0) { amt[c] = parseStatementFigure(it.s); } else if (it.x >= descX - 6) { desc.push(it.s); }
+        if (c >= 0) { amt[c] = fig(it.s); } else if (it.x >= descX - 6 && !strayMark(it)) { desc.push(it.s); }
       });
       var text = desc.join(' ').replace(/\s+/g, ' ').trim();
       var bal = amt[balCol] === undefined ? null : signedBalance(amt[balCol]);
@@ -108,15 +117,15 @@ export function statementFromTextItems(pages) {
       rows.push(cur);
     } else if (Math.abs(first.x - descX) <= 6) {
       // an undated line that STARTS in the description column (a totals line starting at the page edge is not one)
-      var lineText = l.items.filter(function (it) { return parseStatementAmount(it.s) === null || colOf(it) < 0; }).map(function (it) { return it.s; }).join(' ');
+      var lineText = l.items.filter(function (it) { return (parseStatementAmount(it.s) === null || colOf(it) < 0) && !strayMark(it); }).map(function (it) { return it.s; }).join(' ');
       var hasFig = l.items.some(function (it) { return parseStatementAmount(it.s) !== null && colOf(it) >= 0 && it.x > descX + 20; });
       if (/CLOSING BALANCE|BALANCE CARRIED FORWARD|رصيد الاقفال|الرصيد الختامي/i.test(lineText)) {
         // the closing balance printed on its own line, without a date
-        l.items.forEach(function (it) { var a2 = parseStatementFigure(it.s); if (a2 !== null && colOf(it) === balCol) { closing = signedBalance(a2); } });
+        l.items.forEach(function (it) { var a2 = fig(it.s); if (a2 !== null && colOf(it) === balCol) { closing = signedBalance(a2); } });
         cur = null; return;
       }
       if (/OPENING BALANCE|BALANCE BROUGHT FORWARD|رصيد افتتاحي|الرصيد الافتتاحي/i.test(lineText)) {
-        l.items.forEach(function (it) { var a3 = parseStatementFigure(it.s); if (a3 !== null && colOf(it) === balCol && opening === null) { opening = signedBalance(a3); } });
+        l.items.forEach(function (it) { var a3 = fig(it.s); if (a3 !== null && colOf(it) === balCol && opening === null) { opening = signedBalance(a3); } });
         cur = null; return;
       }
       // a continuation line (it may be the first line of the next page): words only, no figure in a money column
@@ -142,7 +151,7 @@ export function statementFromTextItems(pages) {
   }
   // v55.83-VG (Codex 19 Nov 15:48 / 16:03, P1) — PROVED means: exactly ONE reading agrees with the bank's printed balances.
   // If two readings both agree, nothing is proved, and nothing may be imported on a guess.
-  var best; var proved = false; var ambiguous = false; var unsupported = false;
+  var best; var proved = false; var ambiguous = false;
   if (cols.length === 3) {
     var A = run(true); var B = run(false);
     var aFits = A.misses.length === 0 && A.hits > 0; var bFits = B.misses.length === 0 && B.hits > 0;
@@ -202,7 +211,7 @@ export function statementRefusalText(check) {
   var m = function (n) { return n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var why = [];
   if (!check.balances_checked && !check.two_readings_fit) { why.push('the statement prints no running balance to check the rows against'); }
-  if (check.unsupported_marks) { why.push('the statement marks amounts with DR / CR, a minus or brackets in a way that does not agree with the balances, so the direction of those amounts cannot be trusted'); }
+  if (check.unsupported_marks) { why.push('the statement prints DR / CR, a minus or brackets in a way this reader cannot attach to a figure with certainty (or that does not agree with the balances), so the direction of the amounts cannot be trusted'); }
   if (check.two_readings_fit) { why.push('the balances fit BOTH ways round, so it cannot be proved which amounts are money in and which are money out'); }
   if (check.mismatches && check.mismatches.length) { why.push(check.mismatches.length + ' printed balance' + (check.mismatches.length === 1 ? ' does' : 's do') + ' not agree with the rows (first: ' + check.mismatches[0].date + ' — the bank prints ' + m(check.mismatches[0].expected) + ')'); }
   if (check.rows_without_a_proved_sign && !check.two_readings_fit) { why.push(check.rows_without_a_proved_sign + ' row' + (check.rows_without_a_proved_sign === 1 ? '' : 's') + ' could not be proved as money in or money out'); }
