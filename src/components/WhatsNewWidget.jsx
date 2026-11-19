@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VF',
+    date: '2026-11-19',
+    title: 'Egypt Bank: import the bank’s PDF statement',
+    items: [
+      { text: 'Egypt Bank → Import now takes the bank’s **PDF statement** as well as Excel / CSV. Pick the PDF with the same “Select File(s)” button.' },
+      { text: 'Every row read from the PDF is **checked against the bank’s own running balance**. The preview says “all balances agree” in green, or shows an amber warning naming the first line that does not agree — before anything is imported.' },
+      { text: 'Which column is money in and which is money out is worked out from the balances, not guessed. A scanned picture of a statement, or a PDF with no running balance, is refused with the reason instead of being imported on a guess.' },
+      { text: 'The file is read on your own computer; it is not sent anywhere. The usual preview, duplicate check and import follow, exactly as for Excel.' },
+      { superAdminOnly: true, text: 'Technical: new src/lib/pdf-statement.js (statementFromTextItems, statementCheckText, parseStatementDate, parseStatementAmount): lines by baseline, date column and description column by clustering, money columns by right-edge clustering on dated lines, debit vs credit proved by replaying both readings against printed balances, single-amount-column statements signed by subset sum between printed balances, opening / closing lines (English and Arabic) used for the check. EgyptBankTab reads text with pdfjs-dist 3.11.174 (legacy build, worker entry on the main thread, dynamic import), accept now includes pdf, check note in the preview (amounts only with bank-balance permission). next.config aliases canvas to false. Test vf-egypt-bank-pdf-statement, 28 checks incl. the real 8-page CIB sample when present.' },
+    ]
+  },
+  {
     version: 'v55.83-VD',
     date: '2026-11-19',
     title: 'Financial Reports: the full year, from the Hub’s own records',

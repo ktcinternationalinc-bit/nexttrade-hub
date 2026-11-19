@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import * as XLSX from 'xlsx';
+import { statementFromTextItems, statementCheckText } from '../lib/pdf-statement'; // v55.83-VF — bank statement PDFs
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
 import { useBankVisibility } from '../lib/use-bank-visibility';
@@ -32,6 +33,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const [accForm, setAccForm] = useState({ bank_name: '', account_number: '', account_name: '', currency: 'EGP' });
   const [importStep, setImportStep] = useState('select'); // select | preview | importing | done
   const [importData, setImportData] = useState([]);
+  const [pdfNotes, setPdfNotes] = useState([]); // v55.83-VF — what the balance check said about each PDF statement read
   const [importAccount, setImportAccount] = useState('');
   const [importStats, setImportStats] = useState(null);
   // v55.83-A.6.15 (Max May 14 2026) — Bulk delete modal state
@@ -100,6 +102,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     
+    setPdfNotes([]);
     let allParsed = [];
     for (const file of files) {
       const parsed = await parseOneFile(file);
@@ -115,7 +118,32 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     setImportStep('preview');
   };
 
+  // v55.83-VF (Max, Nov 19 2026: "I NEED TO BE ABLE TO IMPORT PDFS AS WELL IN EGYPT BANK") — a statement the bank exports as PDF.
+  // The words are read in the browser (the file is not sent anywhere), turned into the same rows as an Excel statement, and every
+  // row is checked against the bank's own running balance. The result of that check is shown before anything is imported.
+  const readPdfStatement = async (file) => {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf');
+    const worker = await import('pdfjs-dist/legacy/build/pdf.worker.entry');
+    pdfjs.GlobalWorkerOptions.workerSrc = worker.default || worker;
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+    const pages = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const tc = await (await doc.getPage(n)).getTextContent();
+      pages.push(tc.items.map(i => ({ str: i.str, x: i.transform[4], y: i.transform[5], w: i.width })));
+    }
+    return statementFromTextItems(pages);
+  };
+
   const parseOneFile = async (file) => {
+    if (/\.pdf$/i.test(file.name || '') || file.type === 'application/pdf') {
+      let res;
+      try { res = await readPdfStatement(file); }
+      catch (err) { alert('The PDF "' + file.name + '" could not be opened (' + ((err && err.message) || 'unknown reason') + '). If it is password-protected, save an unprotected copy or export Excel from the bank.'); return []; }
+      if (!res.ok) { alert(file.name + ': ' + res.error); return []; }
+      setPdfNotes(prev => [...prev, { name: file.name, ok: res.check.ok === true, text: statementCheckText(res.check, file.name),
+        short: file.name + ': ' + res.check.rows + ' rows read from ' + res.check.pages + ' pages. ' + (res.check.ok === true ? 'Checked against the bank’s own running balance: everything agrees.' : '⚠ The rows could NOT all be checked against the bank’s running balance — look at them carefully before importing.') }]);
+      return res.transactions.map((t, i) => ({ date: t.date, description: t.description, amount: t.amount, _include: true, _row: i + 1 }));
+    }
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data);
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -1388,7 +1416,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             <div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
               <div className="text-4xl mb-2">📁</div>
               <h3 className="font-bold text-sm mb-1">Upload Bank Statement / رفع كشف حساب</h3>
-              <p className="text-[10px] text-slate-500 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
+              <p className="text-[10px] text-slate-500 mb-3">Supports CIB bank statements (Excel or PDF), any bank statement PDF with a running balance, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
               {accounts.length > 0 && (
                 <div className="mb-3">
                   <label className="text-[10px] text-slate-500 font-bold block mb-1">Select Account / اختر الحساب</label>
@@ -1403,7 +1431,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               )}
               <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
                 Select File(s) / اختر ملفات
-                <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={async (e) => {
+                <input type="file" accept=".xlsx,.xls,.csv,.pdf,application/pdf" multiple className="hidden" onChange={async (e) => {
                   if (!e.target.files[0]) return;
                   let accId = importAccount;
                   if (!accId && accounts.length === 0) {
@@ -1433,6 +1461,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 </div>
               </div>
               {!importAccount && <p className="text-xs text-red-500 font-semibold mb-2">⚠️ Select an account above first</p>}
+              {/* v55.83-VF — the balance check of each PDF statement; amounts only for people who may see bank balances */}
+              {pdfNotes.map((n, i) => <p key={i} className={'text-xs font-semibold mb-2 rounded-lg p-2 border ' + (n.ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-300 text-amber-900')}>{n.ok ? '✅ ' : ''}{seeBankBalances ? n.text : n.short}</p>)}
               {/* Summary */}
               {seeBankBalances && <div className="grid grid-cols-3 gap-2 mb-3">
                 <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
@@ -1669,7 +1699,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             <div className="flex gap-2">
               <label className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer hover:bg-blue-600">
                 📁 Select File(s)
-                <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={async (e) => {
+                <input type="file" accept=".xlsx,.xls,.csv,.pdf,application/pdf" multiple className="hidden" onChange={async (e) => {
                   if (e.target.files[0]) {
                     // Auto-create default account if none exist
                     let accId = importAccount;
