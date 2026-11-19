@@ -127,7 +127,10 @@ export function importPlan(classified, accountId, userId) {
 // Writes an importPlan. db = { createBatch(row) → id or null, insertRows(rows) → true when saved, updateBatch(id, patch) }.
 // One batch record per file, made first; the file's rows carry its id. Rows go in groups of 100. A file whose batch record
 // cannot be made is still imported (without a batch), as before. If some of a file's rows cannot be saved, that file's batch
-// record is corrected to what WAS saved (row count, total and a note) so Import history never claims rows that are not there;
+// record is corrected to what WAS saved (row count, total and a note). That correction is itself CHECKED (Codex 19 Nov 19:08):
+// db.updateBatch must return true only when exactly that record was changed. When it is not confirmed, the file's result says
+// so (historyOk false + a warning) — the saved rows stay, nothing is retried or removed, and reconcileBatchRecord can put the
+// record right later from what is really saved. A file saved without a batch record is flagged too (it cannot be undone on its own);
 // the other files are not affected. Never throws.
 export async function writeImportPlan(plan, db, accountId, userId) {
   var imported = 0, failed = 0; var perFile = []; var batchByFile = {};
@@ -144,13 +147,38 @@ export async function writeImportPlan(plan, db, accountId, userId) {
       try { ok = (await db.insertRows(chunk)) === true; } catch (e3) { ok = false; }
       if (ok) { saved += chunk.length; savedTotal += chunk.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0); } else { failed += chunk.length; }
     }
+    var historyOk = !!batchId; var warning = '';
+    var label = g.file || 'this import';
+    if (!batchId && saved > 0) { warning = label + ': the ' + saved + ' row' + (saved === 1 ? ' was' : 's were') + ' saved, but no import record could be made for this file. It will not appear in Import history and cannot be undone there as one file.'; }
     if (batchId && saved !== rows.length) {
-      try { await db.updateBatch(batchId, { row_count: saved, total_amount: savedTotal, notes: saved + ' of ' + rows.length + ' rows were saved; ' + (rows.length - saved) + ' could not be saved' + (g.file ? ' (' + g.file + ')' : '') }); } catch (e4) { /* the count on the finish screen is still right */ }
+      var fixed = false;
+      try { fixed = (await db.updateBatch(batchId, { row_count: saved, total_amount: savedTotal, notes: saved + ' of ' + rows.length + ' rows were saved; ' + (rows.length - saved) + ' could not be saved' + (g.file ? ' (' + g.file + ')' : '') })) === true; } catch (e4) { fixed = false; }
+      historyOk = fixed;
+      if (!fixed) { warning = label + ': ' + saved + ' of ' + rows.length + ' rows were saved, but the import record for this file could NOT be corrected — Import history still shows ' + rows.length + ' rows for it. The saved rows are fine. Do not import the file again; press “Correct this import record”.'; }
     }
     imported += saved; batchByFile[String(g.fileIx)] = batchId;
-    perFile.push({ file: g.file, fileIx: g.fileIx, selected: g.rows.length, imported: saved, batchId: batchId });
+    perFile.push({ file: g.file, fileIx: g.fileIx, selected: g.rows.length, imported: saved, batchId: batchId, historyOk: historyOk, warning: warning });
   }
-  return { imported: imported, failed: failed, perFile: perFile, batchByFile: batchByFile };
+  return { imported: imported, failed: failed, perFile: perFile, batchByFile: batchByFile, warnings: perFile.map(function (f) { return f.warning; }).filter(Boolean) };
+}
+
+// Was a change to ONE record really made? r = what the database call returned when asked to hand back the changed record
+// (.update(...).eq('id', id).select('id')). True only with no error and exactly one record changed — a refused change, an error
+// that comes back as a value, or a change that matched no record are all false.
+export function updateConfirmed(r) { return !!r && !r.error && Array.isArray(r.data) && r.data.length === 1; }
+
+// Puts ONE import record right from what is really saved, without touching any bank row and without re-importing anything.
+// db.readBatchRows(id) → { ok, count, total } counted from the saved rows of that batch; db.updateBatch(id, patch) → true only
+// when exactly that record was changed. Returns { ok, count, total, message }. Never throws.
+export async function reconcileBatchRecord(db, batchId) {
+  if (!batchId) { return { ok: false, message: 'There is no import record to correct.' }; }
+  var seen = null;
+  try { seen = await db.readBatchRows(batchId); } catch (e1) { seen = null; }
+  if (!seen || seen.ok !== true || !(Number(seen.count) >= 0)) { return { ok: false, message: 'The saved rows of this import could not be counted, so the record was left as it is. Nothing was changed.' }; }
+  var done = false;
+  try { done = (await db.updateBatch(batchId, { row_count: Number(seen.count), total_amount: Number(seen.total) || 0, notes: 'Corrected to the ' + Number(seen.count) + ' rows actually saved' })) === true; } catch (e2) { done = false; }
+  if (!done) { return { ok: false, count: Number(seen.count), total: Number(seen.total) || 0, message: 'The import record could not be changed (' + Number(seen.count) + ' rows are really saved). Nothing was changed; ask an administrator.' }; }
+  return { ok: true, count: Number(seen.count), total: Number(seen.total) || 0, message: 'Import record corrected: ' + Number(seen.count) + ' rows.' };
 }
 
 // what is written, kept apart per file: [{ file, fileIx, rows: [...] }] in selection order. Rows with no file tag go in one group.

@@ -101,7 +101,8 @@ else { console.log('ALL CHECKS PASSED — v55.83-OQ business split'); }
   okS('OS1 functional: Wave-imported, Wave-pushed, and silo-bound (pending push) invoices are US',
     bo({ source: 'wave_import', currency: 'USD' }, {}) === 'US' &&
     bo({ wave_invoice_id: 'w1', currency: 'USD' }, {}) === 'US' &&
-    bo({ wave_business_id: 'biz1', currency: 'USD', approval_status: 'draft' }, {}) === 'US');
+    bo({ wave_business_id: 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMjYzNmI3YzM4YTdk', currency: 'USD', approval_status: 'draft' }, {}) === 'US' &&
+    bo({ wave_business_id: 'biz1', currency: 'USD', approval_status: 'draft' }, {}) === 'EG'); // v55.83-VI: bound to ANOTHER business is not US
   okS('OS2 functional: a USD invoice with NO Wave linkage is EGYPT — exactly the leak Max reported',
     bo({ currency: 'USD', source: 'hub' }, {}) === 'EG' &&
     bo({ currency: 'EGP', wave_business_id: 'biz1' }, {}) === 'EG');

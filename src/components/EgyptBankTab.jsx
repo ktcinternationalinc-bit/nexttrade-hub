@@ -6,7 +6,7 @@ import { pdfRowsForImport, importBlockedByPdf } from '../lib/pdf-statement';
 import { readPdfStatementInBrowser } from '../lib/pdf-statement-browser'; // v55.83-VF — bank statement PDFs
 import EgyptBankImportPreview from './EgyptBankImportPreview'; // v55.83-VI — the import preview (pages, per-file lines)
 import { classifyAgainstExisting } from '../lib/egypt-bank-duplicates'; // v55.83-VG — duplicate classification (testable)
-import { combineFiles, importPlan, writeImportPlan, reviewCounts, toggleRowInclude } from '../lib/egypt-bank-multi-file'; // v55.83-VI — several statement files in one go
+import { combineFiles, importPlan, writeImportPlan, reconcileBatchRecord, updateConfirmed, reviewCounts, toggleRowInclude } from '../lib/egypt-bank-multi-file'; // v55.83-VI — several statement files in one go
 import { hidePhraseFrom, hidePhraseUsable, countHideMatches, hideLearnQuestion, hideRuleFor } from '../lib/egypt-bank-hide-learn'; // v55.83-VG — hide one, learn, hide the rest
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
@@ -439,6 +439,20 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   // v55.83-A.6.15 — also tag each row with an import_batch_id so we can
   // roll back this specific import later if needed. Best-effort; if the
   // bank_import_batches table doesn't exist yet, imports still succeed.
+  // v55.83-VI (Codex 19:08) — changing an import record is CONFIRMED: true only when the database reports no error and exactly
+  // one record changed. A refused or silent no-op change is false, and the screen then says so.
+  const batchRecordUpdate = async function (id, patch) { var r = await supabase.from('bank_import_batches').update(patch).eq('id', id).select('id'); return updateConfirmed(r); };
+  // counts what is REALLY saved for one import (read only), then corrects its record. No bank row is touched, nothing is imported again.
+  const correctImportRecord = async function (ix) {
+    var f = importStats && importStats.perFile && importStats.perFile[ix]; if (!f || !f.batchId) { return; }
+    var res = await reconcileBatchRecord({
+      readBatchRows: async function (id) { var all = []; var from = 0; while (true) { var r = await supabase.from('egypt_bank_transactions').select('amount').eq('import_batch_id', id).range(from, from + 999); if (!r || r.error || !r.data) { return { ok: false }; } all = all.concat(r.data); if (r.data.length < 1000) { break; } from += 1000; } return { ok: true, count: all.length, total: all.reduce(function (a, x) { return a + Number(x.amount || 0); }, 0) }; },
+      updateBatch: batchRecordUpdate,
+    }, f.batchId);
+    if (res.ok) { toast?.success?.(res.message); setImportStats(function (prev) { if (!prev) { return prev; } return Object.assign({}, prev, { perFile: prev.perFile.map(function (p, i) { return i === ix ? Object.assign({}, p, { historyOk: true, warning: '' }) : p; }) }); }); }
+    else { toast?.error?.(res.message); }
+  };
+
   const executeImport = async (classified, accId) => {
     const pdfBlock2 = importBlockedByPdf((classified || []).map(function (c) { return c && c.row; })); // v55.83-VG — checked again right before anything is written
     if (pdfBlock2) { alert(pdfBlock2); setImportStep('preview'); return; }
@@ -472,7 +486,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     var written = await writeImportPlan(plan, {
       createBatch: async function (row) { var r = await supabase.from('bank_import_batches').insert(row).select().maybeSingle(); return (r && r.data && r.data.id) || null; },
       insertRows: async function (chunk) { var r = await supabase.from('egypt_bank_transactions').insert(chunk); return !(r && r.error); },
-      updateBatch: async function (id, patch) { await supabase.from('bank_import_batches').update(patch).eq('id', id); },
+      updateBatch: batchRecordUpdate,
     }, accId, myId);
     imported = written.imported; skipped += written.failed; batchByFile = written.batchByFile; perFile = written.perFile;
 
@@ -1601,6 +1615,11 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 {(importStats.perFile || []).length > 1 && (importStats.perFile || []).map((f, i) => (
                   <div key={i} className="text-[12px] text-slate-700">📄 {f.file || 'file ' + (i + 1)}: <b>{f.imported}</b> of {f.selected} imported{f.imported < f.selected ? ' — ' + (f.selected - f.imported) + ' could not be saved' : ''}</div>
                 ))}
+                {(importStats.perFile || []).map((f, i) => f.warning ? (
+                  <div key={'w' + i} className="text-[12px] font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg p-2 my-1 text-left">⚠️ {f.warning}
+                    {f.batchId && f.historyOk === false && <button onClick={() => correctImportRecord(i)} className="ml-2 px-2 py-1 rounded bg-amber-600 text-white text-[11px] font-bold">Correct this import record</button>}
+                  </div>
+                ) : null)}
                 {importStats.skipped > (importStats.duplicates || 0) && (
                   <div className="text-slate-600">{importStats.skipped - (importStats.duplicates || 0)} errors / أخطاء</div>
                 )}

@@ -18,6 +18,11 @@ export var US_WAVE_BUSINESS_ID = 'QnVzaW5lc3M6NWRkNzI3MDctOTExNC00NjQwLTg4MGQtMj
 
 export function businessOfInvoice(inv, custTagById) {
   if (!inv) { return 'US'; }
+  // v55.83-VI (Max, Nov 19 2026, on the LUX invoice: "keep it on ktc egypt.. remove it from the usa side"; Codex 18 Nov 20:04) —
+  // an invoice BOUND TO ANOTHER Wave business (today: KANDIL EGYPT) is never a USA invoice, whatever the customer's tag or the
+  // currency says. It used to count as US just because it had some business id. An invoice with no business id at all keeps
+  // the rules below (there are none on live today).
+  if (inv.wave_business_id && inv.wave_business_id !== US_WAVE_BUSINESS_ID) { return 'EG'; }
   var tag = custTagById ? custTagById[inv.accounting_customer_id] : null;
   if (tag === 'egypt') { return 'EG'; }
   if (tag === 'us') { return 'US'; }
