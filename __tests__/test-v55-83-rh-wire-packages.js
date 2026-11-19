@@ -104,7 +104,7 @@ ok('5b: two DIFFERENT people sign the exact audited wire; simultaneous clicks ca
 ok('5c: "attach a wire proof ... as part of the approval" — marking sent REQUIRES the bank confirmation file + reference, and only an approved wire can be sent; the approved total is frozen',
   S.indexOf("P.status !== 'ready_to_send'") > 0 && S.indexOf("kind: 'bank_confirmation'") > 0 && S.indexOf("pathT.indexOf('pv/wire-') !== 0") > 0 && S.indexOf('approved_total: P.live.total') > 0);
 ok('5d: "then later when the wire is sent ... attach that whole audit to that wire" — the bank line is attached and the bills are recorded paid THEN (not before), with the overpay guard; failures roll back',
-  S.indexOf("action === 'attach'") > 0 && S.indexOf("db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id") > 0 && S.indexOf('would overpay it. Nothing was recorded.') > 0 && S.indexOf('were voided again; nothing changed') > 0);
+  S.indexOf("action === 'attach'") > 0 && S.indexOf("db.from('vendor_bill_payments').insert({ bill_id: lb.bill_id") > 0 && S.indexOf('would overpay it. Nothing was recorded.') > 0 && S.indexOf('were undone and their wire lines reopened; nothing changed') > 0 && S.indexOf('The clean-up did NOT fully work') > 0); // v55.83-UZ realign (Codex 06:07): the roll-back is checked and reported truthfully
 ok('5e: a bank amount different from the approved wire is refused — only a super admin, with the reason, may accept it',
   // superseded pin (v55.83-RJ, independent review gap 14): the owner may accept it too
   // superseded pin (v55.83-RZ, Max 00:22 "2 yes"): up to $50 more = an extra charge, accepted (Max 16:37: it goes with the bill, not a bank fee); MORE than that still only a super admin / the owner, with the reason

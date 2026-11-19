@@ -117,6 +117,8 @@ BEGIN
   IF p_actor IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'Who is sending it?'); END IF;
   IF p_sent_date IS NULL OR p_sent_date > current_date THEN RETURN jsonb_build_object('ok', false, 'why', 'The date the request was sent is required and cannot be in the future.'); END IF;
 
+  -- v55.83-VA (Codex 06:18) — the same order as every other writer on a bank line: its advisory lock FIRST, then its row
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || w.funding_txn_id::text, 0));
   SELECT to_jsonb(t) INTO tj FROM public.bank_transactions t WHERE t.id = w.funding_txn_id FOR UPDATE;
   IF tj IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'The transfer this request draws from is no longer in the books.'); END IF;
   IF coalesce(tj->>'direction', '') <> 'out' THEN RETURN jsonb_build_object('ok', false, 'why', 'That bank line is money in — a transfer to ' || w.payee_name || ' is money out.'); END IF;
@@ -189,6 +191,8 @@ BEGIN
   IF w.status <> 'attached' THEN RETURN jsonb_build_object('ok', false, 'why', 'Before a request is sent, change the fee by editing the request.'); END IF;
   new_fee := round(coalesce(p_fee, -1), 2);
   IF new_fee < 0 THEN RETURN jsonb_build_object('ok', false, 'why', 'The service fee cannot be negative.'); END IF;
+  -- v55.83-VA (Codex 06:18) — the same order as every other writer on a bank line: its advisory lock FIRST, then its row
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || w.funding_txn_id::text, 0));
   SELECT to_jsonb(t) INTO tj FROM public.bank_transactions t WHERE t.id = w.funding_txn_id FOR UPDATE;
   IF tj IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'The transfer is no longer in the books.'); END IF;
   t_date := coalesce(nullif(tj->>'posted_date', '')::date, nullif(tj->>'date', '')::date);

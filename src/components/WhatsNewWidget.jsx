@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VA',
+    date: '2026-11-19',
+    title: 'Wires: honest messages when matching a wire fails; no lock-up between a funded request and a payment from the same transfer',
+    items: [
+      { text: 'When matching a wire to its bank line fails part-way, the Hub undoes what it wrote and checks every undo step. If anything could not be undone — a payment, a wire line, or the wire still holding its bank line — the message says exactly what, instead of “nothing changed”.' },
+      { text: 'Sending a request drawn from a transfer and recording another payment from that same transfer at the same moment no longer block each other: one simply waits for the other.' },
+      { superAdminOnly: true, text: 'Technical: run sql/v55-83-SP-funded-requests.sql again (wire_request_send / wire_request_fee_change take the bank advisory lock before the bank row — same order as UD / TO), then sql/v55-83-US-partial-wires.sql. Postgres 16 with the real RH+RI+RL+RZ+SP+TO+TV+TW+TX+UB+UD+US stack: 10/10; attach clean-up 13/13.' },
+    ],
+  },
+  {
     version: 'v55.83-UZ',
     date: '2026-11-19',
     title: 'Profitability: foam weighs 3 lb per yard, and no inbound charge on 1001- / 1003- shipments',

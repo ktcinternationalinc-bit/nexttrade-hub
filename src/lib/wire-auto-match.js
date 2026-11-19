@@ -88,10 +88,29 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
   if (claim.error || !claim.data || !claim.data.length) {
     return { ok: false, status: 409, error: (claim.error && /duplicate|unique/i.test(claim.error.message || '')) ? 'That bank line already belongs to another wire.' : 'This wire is being matched by someone else right now — nothing was written. Look again in a moment.' };
   }
-  var release = async function () { await db.from('wire_packages').update({ bank_transaction_id: null }).eq('id', pkg.id).eq('status', 'sent').eq('bank_transaction_id', t0.id); };
+  // v55.83-VA (Codex 07:16) — giving the bank line back is CHECKED: it worked, or it was already free, or it is reported
+  var release = async function () {
+    var rr = await db.from('wire_packages').update({ bank_transaction_id: null }).eq('id', pkg.id).eq('status', 'sent').eq('bank_transaction_id', t0.id).select('id');
+    if (!rr.error && (rr.data || []).length) { return null; }
+    var chk = await db.from('wire_packages').select('id, status, bank_transaction_id').eq('id', pkg.id).maybeSingle();
+    if (!chk.error && chk.data && !chk.data.bank_transaction_id) { return null; } // already free
+    return 'the wire still holds bank line ' + t0.id + (rr.error ? ' (' + rr.error.message + ')' : chk.error ? ' (' + chk.error.message + ')' : '') + ' — it cannot be matched again until that is cleared';
+  };
   var payDate = t0.posted_date || t0.date;
   var method = pkg.payee_kind === 'vendor' ? 'wire' : 'rtm';
   var made = [];
+  // v55.83-UY (Codex 06:07) — undoing a half-done attach: every step is checked; whatever could NOT be undone is said out loud
+  var undoMade = async function () {
+    var bad = [];
+    for (var u = 0; u < made.length; u++) {
+      var uv = await db.from('vendor_bill_payments').update({ voided: true }).eq('id', made[u].payment_id).select('id');
+      if (uv.error || !(uv.data || []).length) { bad.push('payment ' + made[u].payment_id + ' was NOT undone' + (uv.error ? ' (' + uv.error.message + ')' : '')); continue; }
+      var ul = await db.from('wire_package_lines').update({ is_open: true, payment_id: null }).eq('id', made[u].line_id).select('id');
+      if (ul.error || !(ul.data || []).length) { bad.push('wire line ' + made[u].line_id + ' was NOT reopened' + (ul.error ? ' (' + ul.error.message + ')' : '')); }
+    }
+    return bad;
+  };
+  var undoWords = function (bad) { return bad.length ? ' ⚠ The clean-up did NOT fully work: ' + bad.join('; ') + '. Tell the super admin before trying again.' : ' The bill payments already written were undone and their wire lines reopened; nothing changed.'; };
   for (var j = 0; j < lines.length; j++) {
     var lb = lines[j];
     // v55.83-UW (Codex 05:51) — the payment and the closing of THIS wire line happen in ONE database step (hub_wire_line_pay), so the
@@ -105,9 +124,9 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
     } else if (!rp || !rp.data || rp.data.ok !== true) { ip = { error: { message: 'the wire line could not be paid (' + ((rp && rp.data && rp.data.code) || 'refused') + ')' } };
     } else { ip = { data: { id: rp.data.payment_id }, error: null }; atomic = true; }
     if (ip.error) {
-      for (var k = 0; k < made.length; k++) { await db.from('vendor_bill_payments').update({ voided: true }).eq('id', made[k].payment_id); if (made[k].atomic) { await db.from('wire_package_lines').update({ is_open: true, payment_id: null }).eq('id', made[k].line_id); } }
-      await release();
-      return { ok: false, status: 500, error: 'Recording the bill payments failed (' + ip.error.message + ') — the ones already written were voided again; nothing changed.' };
+      var bad1 = await undoMade();
+      var rel1 = await release(); if (rel1) { bad1.push(rel1); }
+      return { ok: false, status: bad1.length ? 500 : (/HUB_GUARD/.test(String(ip.error.message || '')) ? 409 : 500), error: 'Recording the bill payments failed (' + String(ip.error.message || '').replace(/^[\s\S]*HUB_GUARD:\s*/, '') + ').' + undoWords(bad1), cleanup_failed: bad1.length ? bad1 : undefined };
     }
     made.push({ line_id: lb.id, payment_id: ip.data.id, atomic: atomic });
   }
@@ -117,10 +136,9 @@ export async function attachWire(db, pkg, bankRow, actorId, opts) {
   var upA = await db.from('wire_packages').update(Object.assign({}, patch, { bank_fee: fee, matched_auto: !!o.auto })).eq('id', pkg.id).eq('status', 'sent').select('id');
   if (upA.error && /bank_fee|matched_auto/.test(upA.error.message || '')) { upA = await db.from('wire_packages').update(patch).eq('id', pkg.id).eq('status', 'sent').select('id'); } // RZ SQL not run yet
   if (upA.error || !upA.data || !upA.data.length) {
-    for (var n = 0; n < made.length; n++) { await db.from('vendor_bill_payments').update({ voided: true }).eq('id', made[n].payment_id); }
-    await db.from('wire_package_lines').update({ is_open: true, payment_id: null }).eq('package_id', pkg.id);
-    await release();
-    return { ok: false, status: 409, error: ((upA && upA.error && upA.error.message) || 'Someone attached this wire at the same moment') + ' — the bill payments were voided again; nothing changed.' };
+    var bad2 = await undoMade();
+    var rel2 = await release(); if (rel2) { bad2.push(rel2); }
+    return { ok: false, status: bad2.length ? 500 : 409, error: ((upA && upA.error && upA.error.message) || 'Someone attached this wire at the same moment') + '.' + undoWords(bad2), cleanup_failed: bad2.length ? bad2 : undefined };
   }
   var reviewed = false; var pf = null;
   if (pkg.payee_kind !== 'vendor') {
