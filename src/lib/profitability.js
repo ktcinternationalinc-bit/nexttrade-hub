@@ -15,7 +15,7 @@
 // This report never changes an invoice, a bill, inventory or an accounting entry.
 
 export var INBOUND_ALLOWANCE_PER_LB = 0.02;
-// v55.83-UZ (Max, Nov 19 2026: "inbound charges for anything that starts with 1001 or 1003 as an order do NOT have an inbound charge
+// v55.83-VA (Max, Nov 19 2026: "inbound charges for anything that starts with 1001 or 1003 as an order do NOT have an inbound charge
 // in PNL") — goods on a release numbered 1001-… or 1003-… carry no inbound allowance. Every other release, and a sale with no
 // release number, keeps the standard $0.02 per pound.
 export var NO_INBOUND_PREFIXES = ['1001', '1003'];
@@ -63,15 +63,25 @@ export function unitFactor(unit, productKey, factors) {
   var base = f.units || DEFAULT_UNIT_FACTORS;
   return base[u] > 0 ? Number(base[u]) : null;
 }
-// v55.83-UZ (Max, Nov 19 2026: "for foam laminated or anything with foam the weight is 3 LBS per yard") — a line whose name says
-// FOAM weighs 3 lb per yard (and per linear metre, which this report weighs the same as a yard). Pounds, kilos and tons are real
-// weights and are not touched. The factor is this rule, not the general yard figure a person sets under "Names, units".
+// v55.83-VA (Max, Nov 19 2026: "for foam laminated or anything with foam the weight is 3 LBS per yard") — a LINE that says FOAM
+// weighs 3 lb per yard. Only yards: linear metres, pounds, kilos and tons are not touched (Max said "per yard"; Codex 07:36).
+// Codex 07:36 (P2): the answer comes ONLY from the line itself — its product name and its description. The name of the merged
+// product group is a label a person can edit, so it never changes a weight: renaming, merging or un-merging leaves pounds alone.
+// "No Foam" / "non-foam" / "without foam" / "w/o foam" in either text means NOT foam, whatever else is written.
 export var FOAM_LB_PER_YARD = 3;
-// "Face Goods- No Foam" (Max's own product names) says there is NO foam: no foam / non-foam / without foam / w/o foam are not foam.
-export function isFoamName(text) { var t = String(text || ''); return /foam/i.test(t.replace(/\b(no|non|without|w\/o)[\s-]*foam/ig, ' ')); }
+var NO_FOAM_RX = /\b(no|non|without|w\/o)[\s-]*foam/ig;
+export function saysNoFoam(text) { NO_FOAM_RX.lastIndex = 0; return NO_FOAM_RX.test(String(text || '')); }
+export function isFoamName(text) { return /foam/i.test(String(text || '').replace(NO_FOAM_RX, ' ')); }
+// THE one rule (Profitability, Sales Report, supplier-cost conversion): product name + description of the line.
+export function isFoamLine(productName, description) {
+  if (saysNoFoam(productName) || saysNoFoam(description)) { return false; }
+  return isFoamName(productName) || isFoamName(description);
+}
+// one text says "no foam" while a text also says foam: resolved as NOT foam, and flagged so a person looks at the name
+export function foamEvidenceConflict(productName, description) { return (saysNoFoam(productName) || saysNoFoam(description)) && (isFoamName(productName) || isFoamName(description)); }
 export function foamFactors(factors) {
   var f = factors || {}; var u = Object.assign({}, f.units || DEFAULT_UNIT_FACTORS);
-  u.yd = FOAM_LB_PER_YARD; u.lm = FOAM_LB_PER_YARD;
+  u.yd = FOAM_LB_PER_YARD;
   return { units: u, byProduct: f.byProduct };
 }
 // v55.83-TE (Max, Nov 16: "why is there no cost when there should be" — Stock Paper linked to "Texas Paper (LBS)" …) — a supplier
@@ -277,8 +287,11 @@ export function buildCells(input) {
       if (isT) { tLines += cents(amt); return; }
       var g = input.groupOf ? input.groupOf(ln.description) : null;
       var pKey = g ? 'g:' + g.id : 'n:' + nameKey(ln.description);
-      // v55.83-UZ — foam: the line's own name, the text passed by the caller (ln.foam) or the merged product's name says foam
-      var foam = ln.foam === true || isFoamName(ln.description) || (!!g && isFoamName(g.name));
+      // v55.83-VA — foam: the line's own name, the text passed by the caller (ln.foam) or the merged product's name says foam
+      // v55.83-VA (Codex 07:36) — what the caller worked out from the line's product name + description (ln.foam true / false), else the
+      // line's own name. NEVER the merged group's name: renaming or merging a group must not change a weight.
+      var foam = ln.foam === true || (ln.foam !== false && isFoamLine(ln.description, ''));
+      if (ln.foam_conflict === true || foamEvidenceConflict(ln.description, '')) { flag('foam_evidence_conflict', inv, { line: ln.description }); }
       var fx = foam ? foamFactors(factors) : factors;
       var lb = toPounds(ln.qty, ln.unit, pKey, fx);
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
@@ -389,7 +402,7 @@ export function buildCells(input) {
     c.commission = costKnown && c.pounds !== null ? r2(c.pounds * cost.commission_per_lb) : null;
     c.missing_cost_lines = cost && cost.missing_cost_lines ? cost.missing_cost_lines : [];
     if (cost && cost.cost_unknown) { c.flags.push('purchase_line_without_cost'); }
-    c.inbound_exempt = releaseHasNoInbound(c.release); // v55.83-UZ — 1001- / 1003- releases: no inbound charge
+    c.inbound_exempt = releaseHasNoInbound(c.release); // v55.83-VA — 1001- / 1003- releases: no inbound charge
     c.inbound_allowance = c.inbound_exempt ? 0 : (c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null);
     if (c.base_cost === null) { c.flags.push('cost_missing'); }
     if (c.cost_method === 'manual') { c.flags.push('cost_manual'); }

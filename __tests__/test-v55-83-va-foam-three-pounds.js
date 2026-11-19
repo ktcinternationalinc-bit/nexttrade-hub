@@ -1,4 +1,4 @@
-// v55.83-UZ (Max, Nov 19 2026): "for foam laminated or anything with foam the weight is 3 LBS per yard".
+// v55.83-VA (Max, Nov 19 2026): "for foam laminated or anything with foam the weight is 3 LBS per yard".
 // Runs the REAL engine (profitability.js + profitability-assemble.js) — pure functions, no database.
 var path = require('path');
 var fs = require('fs');
@@ -8,13 +8,13 @@ var P = require(path.join(root, 'src/lib/profitability.js'));
 var A = require(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
-console.log('UZ — anything with foam weighs 3 lb per yard');
+console.log('VA — anything with foam weighs 3 lb per yard');
 
 check('the rule: 3 lb per yard', P.FOAM_LB_PER_YARD === 3);
 check('"Foam Laminated", "FOAM-LAMINATED 3MM", "Velvet with foam backing", "foamed PVC" are foam; "Velvet", "Form paper", "" are not',
   ['Foam Laminated', 'FOAM-LAMINATED 3MM', 'Velvet with foam backing', 'foamed PVC'].every(P.isFoamName) && !P.isFoamName('Velvet') && !P.isFoamName('Form paper') && !P.isFoamName('') && !P.isFoamName(null));
 var ff = P.foamFactors({ units: { lb: 1, kg: 2.20462, t: 2204.62, yd: 2.4, lm: 2.6 } });
-check('foam factors: yards and linear metres 3; pounds, kilos and tons unchanged', ff.units.yd === 3 && ff.units.lm === 3 && ff.units.lb === 1 && ff.units.kg === 2.20462 && ff.units.t === 2204.62, ff);
+check('foam factors: only YARDS become 3; linear metres, pounds, kilos and tons unchanged', ff.units.yd === 3 && ff.units.lm === 2.6 && ff.units.lb === 1 && ff.units.kg === 2.20462 && ff.units.t === 2204.62, ff);
 var orig = { units: { yd: 2.5, lm: 2.5, lb: 1 } }; P.foamFactors(orig);
 check('the general factors are not changed by it (a copy is made)', orig.units.yd === 2.5 && orig.units.lm === 2.5);
 check('no factors given → defaults with yards 3', P.foamFactors().units.yd === 3 && P.foamFactors().units.kg === 2.20462);
@@ -27,13 +27,13 @@ var c1 = cellsOf([{ id: 'a', description: 'Foam Laminated Velvet', qty: 1000, un
 check('1,000 yards of "Foam Laminated Velvet" = 3,000 lb (factor 3)', c1[0].pounds === 3000 && c1[0].unit_factor === 3 && c1[0].foam === true, c1[0]);
 check('1,000 yards of "Plain Velvet" = 2,500 lb (unchanged, factor 2.5)', c1[1].pounds === 2500 && c1[1].unit_factor === 2.5 && c1[1].foam === false, c1[1]);
 var c2 = cellsOf([{ id: 'a', description: 'FOAM 5MM', qty: 100, unit: 'LM', unit_price: 1 }, { id: 'b', description: 'Foam scrap', qty: 100, unit: 'lbs', unit_price: 1 }, { id: 'c', description: 'Foam blocks', qty: 100, unit: 'kg', unit_price: 1 }, { id: 'd', description: 'Foam bales', qty: 1, unit: 'ton', unit_price: 1 }]);
-check('foam in linear metres = 3 lb each; foam sold by pounds / kilos / tons keeps its real weight', c2[0].pounds === 300 && c2[1].pounds === 100 && Math.abs(c2[2].pounds - 220.462) < 1e-9 && c2[3].pounds === 2204.62, c2.map(function (c) { return c.pounds; }));
+check('foam in linear metres keeps the general 2.5 (Max said per YARD); foam sold by pounds / kilos / tons keeps its real weight', c2[0].pounds === 250 && c2[1].pounds === 100 && Math.abs(c2[2].pounds - 220.462) < 1e-9 && c2[3].pounds === 2204.62, c2.map(function (c) { return c.pounds; }));
 var c3 = cellsOf([{ id: 'a', description: 'Foam Laminated', qty: 10, unit: '', unit_price: 1 }]);
 check('foam with NO unit set stays unknown (never guessed as yards)', c3[0].pounds === null && c3[0].flags.indexOf('unit_unknown') >= 0, c3[0]);
 var c4 = cellsOf([{ id: 'a', description: 'Foam Laminated', qty: 1000, unit: 'yd', unit_price: 2 }, { id: 'b', description: 'Plain Velvet', qty: 1000, unit: 'yd', unit_price: 2 }], { factors: { units: { yd: 2.4, lm: 2.4, lb: 1 } } });
 check('a person changed the general yard weight to 2.4 → foam is still 3, everything else follows 2.4', c4[0].pounds === 3000 && c4[1].pounds === 2400, c4.map(function (c) { return c.pounds; }));
 var c5 = cellsOf([{ id: 'a', description: 'FL-220 Grey', qty: 1000, unit: 'yd', unit_price: 2 }], { groupOf: function () { return { id: 'g1', name: 'Foam Laminated' }; } });
-check('a description merged into a product called "Foam Laminated" is foam too', c5[0].pounds === 3000 && c5[0].foam === true, c5[0]);
+check('a line that does not say foam, merged into a product called "Foam Laminated", is NOT foam (Codex 07:36: a label a person can rename never changes a weight)', c5[0].pounds === 2500 && c5[0].foam === false, c5[0]);
 var c6 = cellsOf([{ id: 'a', description: 'Laminated Fabric', foam: true, qty: 1000, unit: 'yd', unit_price: 2 }]);
 check('the caller can say a line is foam (foam only in the line description)', c6[0].pounds === 3000);
 var c7 = cellsOf([{ id: 'a', description: 'Foam delivery charge', qty: 1, unit: '', unit_price: 100 }, { id: 'b', description: 'Plain Velvet', qty: 1000, unit: 'yd', unit_price: 2 }]);
@@ -69,8 +69,8 @@ check('totals still reconcile in every view', r.reconciled.product && r.reconcil
 
 // ── the Sales Report uses the same rule (wiring)
 var sr = fs.readFileSync(path.join(root, 'src/app/api/accounting/sales-report/route.js'), 'utf8');
-check('Sales Report: pounds use foamFactors for a foam line (imported from the engine)', /import \{[^}]*isFoamName[^}]*foamFactors[^}]*\} from '..\/..\/..\/..\/lib\/profitability'/.test(sr) && sr.indexOf('toPounds(qty, unit, null, isFoam ? foamFactors(factors) : factors)') > 0);
+check('Sales Report: pounds use foamFactors for a foam line (imported from the engine)', /import \{[^}]*isFoamLine[^}]*foamFactors[^}]*\} from '..\/..\/..\/..\/lib\/profitability'/.test(sr) && sr.indexOf('toPounds(qty, unit, null, isFoam ? foamFactors(factors) : factors)') > 0);
 var asm = fs.readFileSync(path.join(root, 'src/lib/profitability-assemble.js'), 'utf8');
-check('assemble imports isFoamName + foamFactors from the engine (runtime import present)', /import \{[^}]*isFoamName, foamFactors[^}]*\} from '.\/profitability'/.test(asm));
+check('assemble imports isFoamLine + foamFactors from the engine (runtime import present)', /import \{[^}]*isFoamLine, foamEvidenceConflict, foamFactors[^}]*\} from '.\/profitability'/.test(asm));
 console.log('\n' + pass + ' passed, ' + failN + ' failed');
 process.exit(failN ? 1 : 0);

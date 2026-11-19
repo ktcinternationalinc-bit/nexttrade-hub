@@ -1,4 +1,4 @@
-// v55.83-UZ (Max, Nov 19 2026): "inbound charges for anything that starts with 1001 or 1003 as an order do NOT have an inbound
+// v55.83-VA (Max, Nov 19 2026): "inbound charges for anything that starts with 1001 or 1003 as an order do NOT have an inbound
 // charge in PNL". Runs the REAL engine. Also: "Face Goods- No Foam" (his own product name) is NOT foam.
 var path = require('path');
 var root = path.join(__dirname, '..');
@@ -7,7 +7,7 @@ var P = require(path.join(root, 'src/lib/profitability.js'));
 var A = require(path.join(root, 'src/lib/profitability-assemble.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 900))); }
-console.log('UZ — no inbound charge on 1001- / 1003- releases');
+console.log('VA — no inbound charge on 1001- / 1003- releases');
 check('1001-1627, 1003-55, "1001 - 9", key 10011627 and key 10030055 → no inbound', ['1001-1627', '1003-55', '1001 - 9', '10011627', '10030055'].every(P.releaseHasNoInbound));
 check('1002-1160, key 10021160, 1004-1, HOU-1001, empty → inbound stays', ['1002-1160', '10021160', '1004-1', 'HOU-1001', '', null].every(function (r) { return !P.releaseHasNoInbound(r); }));
 function inv(id, rel) { return { id: id, number: id, date: '2026-11-01', customer: 'C', basis: 'EXW', releases: rel ? [rel] : [], lines: [{ id: id + 'l', description: 'Paper', qty: 10000, unit: 'lb', unit_price: 0.5 }] }; }

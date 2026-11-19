@@ -1,7 +1,7 @@
-// v55.83-UZ — WHERE DOES A SHIPPING NUMBER COME FROM? (Max, Nov 19 2026)
-// Reads the ONE JSON that sql/v55-83-UZ-readonly-shipping-questions.sql returns (pasted back by Max), runs the REAL
+// v55.83-VA — WHERE DOES A SHIPPING NUMBER COME FROM? (Max, Nov 19 2026)
+// Reads the ONE JSON that sql/v55-83-VA-readonly-shipping-questions.sql returns (pasted back by Max), runs the REAL
 // Profitability engine on it and prints, per invoice, which source produced each shipping figure. Reads only; writes nothing.
-//   node scripts/uz-explain-shipping.js <file.json> [text to filter invoices / customers / releases by]
+//   node scripts/va-explain-shipping.js <file.json> [text to filter invoices / customers / releases by]
 var path = require('path'); var fs = require('fs');
 var root = path.join(__dirname, '..');
 require(path.join(root, 'node_modules/sucrase/register'));

@@ -1,8 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- v55.83-UZ — KTC EGYPT and MOUSTAFA customers: CNF is their USUAL basis (Max, Nov 19 2026)
+-- v55.83-VA — KTC EGYPT and MOUSTAFA customers: CNF is their USUAL basis (Max, Nov 19 2026)
 -- "please make all ktc egypt and moustafa orders to be cnf and thus shipping to be removed from prices (unless there is a
 --  shipping line item in the invoice)"
--- Written by scripts/uz-make-cnf-sql.js for exactly 6 customer(s) Max confirmed.
+-- Written by scripts/va-make-cnf-sql.js for exactly 6 customer(s) Max confirmed.
 --
 -- What it does: sets pl_customer_terms.basis = 'CNF' for EXACTLY the customers listed (id + the name Max saw). Nothing else.
 -- The Profitability report then reads every invoice of those customers that has no setting of its own as CNF with the shipping
@@ -11,7 +11,7 @@
 -- "surcharge" is extra shipping income and the invoice stays CNF (the rule live since v55.83-UE, Maa Kirpa).
 -- NOT changed: any invoice, any invoice's own setting (pl_invoice_terms), any other customer. Nothing is deleted.
 -- It refuses to run unless every listed customer is found with exactly the confirmed name. A protected copy of what was there
--- before is saved first (hub_backup_uz_customer_terms). Safe to run more than once.
+-- before is saved first (hub_backup_va_customer_terms). Safe to run more than once.
 -- Customer-wide (same as Maa Kirpa, Codex 18 Nov 20:04): it also applies to invoices with no company set — step 1 lists them.
 -- ═══════════════════════════════════════════════════════════════════════════
 
@@ -56,15 +56,15 @@ SELECT jsonb_build_object(
 ) AS copy_this_cell_to_claude;
 
 -- ── STEP 2 · THE CHANGE (run only after Max has seen step 1) ───────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS public.hub_backup_uz_customer_terms (run_at timestamptz NOT NULL, customer_id uuid NOT NULL, had_row boolean NOT NULL, row_data jsonb);
-ALTER TABLE public.hub_backup_uz_customer_terms ENABLE ROW LEVEL SECURITY;   -- no policies: the Supabase SQL editor / server only
-REVOKE ALL ON public.hub_backup_uz_customer_terms FROM public, anon, authenticated;
+CREATE TABLE IF NOT EXISTS public.hub_backup_va_customer_terms (run_at timestamptz NOT NULL, customer_id uuid NOT NULL, had_row boolean NOT NULL, row_data jsonb);
+ALTER TABLE public.hub_backup_va_customer_terms ENABLE ROW LEVEL SECURITY;   -- no policies: the Supabase SQL editor / server only
+REVOKE ALL ON public.hub_backup_va_customer_terms FROM public, anon, authenticated;
 
 DO $$
 DECLARE
   n_listed int; n_ok int; n_dup int; n_already int; n_set int; run timestamptz := clock_timestamp();
 BEGIN
-  CREATE TEMP TABLE uz_approved ON COMMIT DROP AS SELECT * FROM (VALUES
+  CREATE TEMP TABLE va_approved ON COMMIT DROP AS SELECT * FROM (VALUES
   ('2f2b2700-916b-4280-8751-dfe3f82322a8'::uuid, 'KTC EGYPT FOR IMPORT AND EXPORT'::text),
   ('da70bd80-41cc-4c44-accd-6bd6e0db4496'::uuid, 'AL MOUSTAFA CO. FOR IMPORT & EXPORT'::text),
   ('7b0b27b5-a69d-4027-8bd9-5d31e93fa7f9'::uuid, 'Moustafa Tosha'::text),
@@ -72,22 +72,22 @@ BEGIN
   ('52ca5339-a6a8-493e-b5d7-1d7ce88630cf'::uuid, 'Saad Moustafa'::text),
   ('f6d0a5f6-0a7f-4907-b3fc-5e9b5857e91f'::uuid, 'Saeed Moustafa'::text)
   ) AS a(id, name);
-  SELECT count(*), count(*) - count(DISTINCT id) INTO n_listed, n_dup FROM uz_approved;
-  SELECT count(*) INTO n_ok FROM uz_approved a JOIN public.accounting_customers c ON c.id = a.id AND coalesce(c.company_name, c.contact_name, '') = a.name;
+  SELECT count(*), count(*) - count(DISTINCT id) INTO n_listed, n_dup FROM va_approved;
+  SELECT count(*) INTO n_ok FROM va_approved a JOIN public.accounting_customers c ON c.id = a.id AND coalesce(c.company_name, c.contact_name, '') = a.name;
   IF n_listed = 0 OR n_dup <> 0 OR n_ok <> n_listed THEN
     RAISE EXCEPTION 'STOPPED: % customer(s) listed, % found with exactly the confirmed name (% listed twice). Nothing was changed.', n_listed, n_ok, n_dup;
   END IF;
-  SELECT count(*) INTO n_already FROM uz_approved a JOIN public.pl_customer_terms ct ON ct.customer_id = a.id AND ct.basis = 'CNF';
+  SELECT count(*) INTO n_already FROM va_approved a JOIN public.pl_customer_terms ct ON ct.customer_id = a.id AND ct.basis = 'CNF';
 
   -- copy first — only the customers this run really changes (a rerun that changes nothing saves nothing)
-  INSERT INTO public.hub_backup_uz_customer_terms (run_at, customer_id, had_row, row_data)
+  INSERT INTO public.hub_backup_va_customer_terms (run_at, customer_id, had_row, row_data)
     SELECT run, a.id, (ct.customer_id IS NOT NULL), to_jsonb(ct)
-    FROM uz_approved a LEFT JOIN public.pl_customer_terms ct ON ct.customer_id = a.id
+    FROM va_approved a LEFT JOIN public.pl_customer_terms ct ON ct.customer_id = a.id
     WHERE ct.customer_id IS NULL OR ct.basis IS DISTINCT FROM 'CNF';
 
   INSERT INTO public.pl_customer_terms (customer_id, customer_name, basis, updated_by)
-    SELECT a.id, a.name, 'CNF', 'v55.83-UZ (Max 19 Nov: KTC Egypt / Moustafa are CNF, shipping in the price unless a shipping line)'
-    FROM uz_approved a
+    SELECT a.id, a.name, 'CNF', 'v55.83-VA (Max 19 Nov: KTC Egypt / Moustafa are CNF, shipping in the price unless a shipping line)'
+    FROM va_approved a
     WHERE NOT EXISTS (SELECT 1 FROM public.pl_customer_terms ct WHERE ct.customer_id = a.id AND ct.basis = 'CNF')
   ON CONFLICT (customer_id) DO UPDATE SET basis = 'CNF', updated_by = EXCLUDED.updated_by, updated_at = now();
   GET DIAGNOSTICS n_set = ROW_COUNT;
@@ -105,6 +105,6 @@ WITH approved(id, name) AS (VALUES
   ('f6d0a5f6-0a7f-4907-b3fc-5e9b5857e91f'::uuid, 'Saeed Moustafa'::text)
 )
 SELECT a.name AS customer, ct.basis AS usual_basis, CASE WHEN ct.basis = 'CNF' THEN 'OK' ELSE 'NOT SET — tell Claude' END AS result,
-       (SELECT count(*) FROM public.hub_backup_uz_customer_terms b WHERE b.customer_id = a.id) AS copies_saved
+       (SELECT count(*) FROM public.hub_backup_va_customer_terms b WHERE b.customer_id = a.id) AS copies_saved
 FROM approved a LEFT JOIN public.pl_customer_terms ct ON ct.customer_id = a.id
 ORDER BY a.name;

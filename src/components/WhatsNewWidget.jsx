@@ -33,14 +33,14 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
-    version: 'v55.83-UZ',
+    version: 'v55.83-VA',
     date: '2026-11-19',
     title: 'Profitability: foam weighs 3 lb per yard, and no inbound charge on 1001- / 1003- shipments',
     items: [
-      { text: 'Anything with **foam** in its name (foam laminated, foam back, auto foam…) now weighs **3 lb per yard** in Profitability, the P&L and the Sales Report. Everything else sold by the yard stays at 2.5 lb. Foam sold by the kilo, pound or ton keeps its real weight. A name that says “No Foam” is not foam.' },
+      { text: 'Anything with **foam** in its name (foam laminated, foam back, auto foam…) now weighs **3 lb per yard** in Profitability, the P&L and the Sales Report. Everything else sold by the yard stays at 2.5 lb. Foam sold by the kilo, pound, ton or linear metre is not changed. A name that says “No Foam” is not foam. It goes by the name and description on the invoice line itself — renaming or merging a product group never changes a weight.' },
       { text: 'Shipments whose release number starts with **1001-** or **1003-** no longer carry the inbound charge ($0.02 per pound). Houston (1002-) shipments keep it.' },
       { text: 'A foam product only gets a weight once its unit is set: Profitability → Names, units and supplier links → pick Yards next to the name.' },
-      { superAdminOnly: true, text: 'Technical: profitability.js FOAM_LB_PER_YARD 3, isFoamName (no / non / without foam excluded), foamFactors (yd and lm 3, copy), buildCells uses them per line (line name, caller flag from wave product name or description, merged group name) and for unit_factor; assemble passes foam flag and uses foamFactors for a foam sale cost lookup so cost per yard is unchanged; releaseHasNoInbound + NO_INBOUND_PREFIXES 1001 1003, cell inbound_exempt; sales-report route uses the same foam rule. No SQL for the build. Separate data SQL sql/v55-83-UZ-egypt-moustafa-cnf.sql (exact two customer ids, protected backup) for Max. Tests: uz-foam-three-pounds, uz-no-inbound-1001-1003, uz-readonly-query (PGlite), uz-egypt-moustafa-cnf-sql (PGlite).' },
+      { superAdminOnly: true, text: 'Technical: profitability.js FOAM_LB_PER_YARD 3, isFoamName (no / non / without foam excluded), isFoamLine(product name, description) is the one rule, foamEvidenceConflict flags a line that says both, foamFactors (yd 3 only, copy), buildCells uses them per line (never the merged group name, Codex 07:36) and for unit_factor; assemble passes foam flag and uses foamFactors for a foam sale cost lookup so cost per yard is unchanged; releaseHasNoInbound + NO_INBOUND_PREFIXES 1001 1003, cell inbound_exempt; sales-report route uses the same foam rule. No SQL for the build. Separate data SQL sql/v55-83-VA-egypt-moustafa-cnf.sql (exact two customer ids, protected backup) for Max. Tests: va-foam-three-pounds, va-no-inbound-1001-1003, va-readonly-query (PGlite), va-egypt-moustafa-cnf-sql (PGlite).' },
     ]
   },
   {
