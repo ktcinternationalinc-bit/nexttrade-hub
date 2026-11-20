@@ -266,6 +266,13 @@ export function assembleProfitability(d) {
   // A part with nothing stays empty; the other part is still shown and used. Older typed totals are used only when no part is known.
   function numOrNull(v) { return v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : r2(v); }
   var typedPart = {}; (d.partEstimates || []).forEach(function (e) { var o = typedPart[e.release_key] || (typedPart[e.release_key] = {}); var v = numOrNull(e.amount); if (v !== null && (e.part === 'trucking' || e.part === 'freight')) { o[e.part] = { amount: v, note: e.note || null }; } });
+  // v55.83-WH (Max, Nov 20: "a way to signify what the charges are for in terms of shipping to break it down internally ... the 2100
+  // also includes bond fees. It might include something else") — the internal breakdown of a shipping charge, typed on the invoice:
+  //   trucking / freight  → the same typed parts as before (a bill replaces ONLY its own part)
+  //   other               → a shipping cost of its own (labelled), added to the release's shipping cost exactly once
+  //   bond                → INFORMATION only: the bond cost is already in goods cost ($ per Houston container), never deducted twice
+  var otherPart = {}; var bondInfo = {};
+  (d.partEstimates || []).forEach(function (e) { var v2 = numOrNull(e.amount); if (v2 === null) { return; } if (e.part === 'other' && v2 > 0) { otherPart[e.release_key] = { amount: v2, note: e.note || null }; } if (e.part === 'bond') { bondInfo[e.release_key] = { amount: v2, note: e.note || null }; } });
   // v55.83-VS (Codex 07:30) — worked out here, before the parts, because the shipping cost typed on the invoice is a COMBINED
   // amount too (freight + trucking we expect to pay) and gets the same protection as a combined total typed for the release.
   // Order between the two combined sources is unchanged: the total typed for the release first, the invoice form second.
@@ -323,8 +330,11 @@ export function assembleProfitability(d) {
       combinedKept = true; pu.combined_total = comb; pu.combined_remainder = r2(amt - one.amount); pu.combined_from = combFromInvoice ? 'invoice form' : 'typed for the release';
       if (combFromInvoice) { oo.from_invoice_form = true; if (invEst[rel].differ) { flags.push({ kind: 'invoice_shipping_estimates_differ', release: relRaw[rel] || rel, invoices: invEst[rel].invoices, used: invEst[rel].amount }); } }
     }
+    // WH — "other" is added once, only where the cost is built from its parts (a combined amount already includes everything)
+    var oth = (!combinedKept && otherPart[rel]) ? otherPart[rel] : null;
+    if (oth) { amt = r2(amt + oth.amount); pu.other = { amount: oth.amount, label: oth.note || 'other shipping cost' }; }
     var known = [t, f].filter(function (x) { return !!x; });
-    var allBill = known.every(function (x) { return x.kind === 'bill'; });
+    var allBill = !oth && known.every(function (x) { return x.kind === 'bill'; });
     // Codex 16 Nov (P1) kept: when Nextrade has the order and says a part is still missing, a bill for the other part is not "complete"
     var partial = !!wRow && (!t || !f) && !combinedKept; // with a combined total the whole cost is known, so nothing is "partly missing"
     if (allBill && !partial && !combinedKept) { oo.actual = amt; oo.estimate = null; } else { oo.actual = null; oo.estimate = amt; }
@@ -398,6 +408,7 @@ export function assembleProfitability(d) {
     // … and (Max to Codex) the part of a combined total that stays undivided after ONE part was typed: also known money.
     c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : (pu && pu.combined_remainder !== undefined ? pu.combined_remainder : null);
     c.weight_blockers = (c.release && relBadNames[c.release]) ? relBadNames[c.release] : [];
+    c.shipping_other = null; c.shipping_other_label = null; c.bond_inside_shipping = (c.release && bondInfo[c.release]) ? bondInfo[c.release].amount : null;
     c.shipping_combined = c.shipping_total_unsplit !== null; c.shipping_combined_from = c.shipping_combined ? ((pu && pu.combined_from) || 'typed for the release') : null;
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;
@@ -408,7 +419,10 @@ export function assembleProfitability(d) {
       if (pu.combined_remainder !== undefined) {
         if (pu.freight) { c.freight_cost = r2(c.outbound_cost * pu.freight.amount / relTot); }
         c.shipping_combined_share = r2(c.outbound_cost - (c.trucking_cost || 0) - (c.freight_cost || 0)); // this sale's share of the undivided remainder: parts + this = outbound, to the cent
-      } else if (pu.freight) { c.freight_cost = r2(c.outbound_cost - (c.trucking_cost || 0)); }
+      } else {
+        if (pu.other) { c.shipping_other = r2(c.outbound_cost * pu.other.amount / relTot); c.shipping_other_label = pu.other.label; }
+        if (pu.freight) { c.freight_cost = r2(c.outbound_cost - (c.trucking_cost || 0) - (c.shipping_other || 0)); }
+      }
     } else if (pu && relTot === 0 && c.outbound_cost === 0) { if (pu.trucking) { c.trucking_cost = 0; } if (pu.freight) { c.freight_cost = 0; } if (pu.combined_remainder !== undefined) { c.shipping_combined_share = 0; } }
     if (pu && pu.legacy_total !== null && pu.legacy_total !== undefined && c.outbound_cost !== null && c.outbound_cost !== undefined) { c.shipping_combined_share = c.outbound_cost; } // nothing divided: the whole share is combined
     if (c.group_id && !(billKeysOfGroup[c.group_id] || []).length) { c.flags.push('no_bill_description_linked'); }

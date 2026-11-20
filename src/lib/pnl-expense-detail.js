@@ -101,6 +101,7 @@ export function pnlFormula(r, e, hidden) {
     { sign: '', label: 'Transport charged on the ' + of(u.transport_lines) + ' whose shipping cost is known', cents: n(u.transport_revenue) },
     { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: n(u.trucking) },
     { sign: '−', label: 'Freight / shipping (our cost: bill, else typed figure, else estimate)', cents: n(u.freight) },
+    { sign: '−', label: 'Other shipping costs (typed on the invoice)', cents: n(u.other || 0), combined: true },
     // Codex 12:06 — a shipping amount kept as ONE combined figure is neither trucking nor freight: taken off exactly once, under its own name
     { sign: '−', label: 'Shipping kept as one combined amount (not divided into trucking / freight)', cents: n(u.combined || 0), combined: true },
     { sign: '=', label: 'TRANSPORT PROFIT', cents: n(row.transport_profit), strong: true },

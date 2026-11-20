@@ -80,6 +80,17 @@ export async function POST(req) {
     // v55.83-VR (Max, Nov 19: "keep track of the real inbound trucking bills") — READ ONLY. Kronos freight against the pounds
     // received on the same load number. Nothing is written and goods profit is not touched (it keeps the standard allowance).
     // Employees get only bills dated inside their permitted window (date_from was clamped above).
+    // v55.83-WH — READ ONLY: what is typed for the shipping parts of these releases (the invoice form shows it under the shipping terms)
+    if (action === 'release_parts') {
+      var keysRP = (Array.isArray(body.releases) ? body.releases : [body.release]).map(function (r0) { return relKey(r0); }).filter(function (k0) { return !!k0; }).slice(0, 20);
+      if (!keysRP.length) { return NextResponse.json({ ok: true, parts: {}, api_build_marker: API_BUILD_MARKER }); }
+      var rpQ = await db.from('pl_release_part_estimates').select('release_key, part, amount, note, updated_at').in('release_key', keysRP);
+      if (rpQ.error) { return bad('The shipping parts could not be read (' + rpQ.error.message + ').', 503); }
+      var outRP = {}; keysRP.forEach(function (k1) { outRP[k1] = {}; });
+      (rpQ.data || []).forEach(function (r1) { if (outRP[r1.release_key]) { outRP[r1.release_key][r1.part] = { amount: r1.amount === null || r1.amount === undefined ? null : Number(r1.amount), note: r1.note || null, updated_at: r1.updated_at || null }; } });
+      var canRP = await assertPermission(db, userId, 'pnl.edit_costs', req);
+      return NextResponse.json({ ok: true, parts: outRP, can_edit: !!(canRP && canRP.ok === true), api_build_marker: API_BUILD_MARKER });
+    }
     if (action === 'inbound_trucking') {
       if (body.date_from && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date_from))) { return bad('The start date is not a date.', 400); }
       if (body.date_to && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date_to))) { return bad('The end date is not a date.', 400); }
@@ -364,11 +375,11 @@ export async function POST(req) {
     // Clearing keeps the row (amount empty) — nothing is deleted; every change is in the audit trail.
     if (action === 'set_part_estimate') {
       var pk = relKey(body.release); if (!pk) { return bad('The release number is required.'); }
-      var part = body.part === 'trucking' || body.part === 'freight' ? body.part : null; if (!part) { return bad('Choose trucking or freight.'); }
+      var part = (body.part === 'trucking' || body.part === 'freight' || body.part === 'bond' || body.part === 'other') ? body.part : null; if (!part) { return bad('Choose trucking, freight, bond or other.'); }
       var pv = null;
       if (body.amount !== '' && body.amount !== null && body.amount !== undefined) { pv = Number(String(body.amount).replace(/[$,\s]/g, '')); if (isNaN(pv) || pv < 0) { return bad('The amount must be a number, zero or more.'); } }
       var upP = await db.from('pl_release_part_estimates').upsert({ release_key: pk, part: part, amount: pv, note: String(body.note || '').substring(0, 300) || null, updated_by: userId, updated_at: now }, { onConflict: 'release_key,part' });
-      if (upP.error) { return /pl_release_part_estimates/.test(String(upP.error.message)) ? bad('Run sql/v55-83-TL-trucking-freight.sql in Supabase first.') : fail(upP.error); }
+      if (upP.error) { if (/part_check|violates check constraint/i.test(String(upP.error.message)) && (part === 'bond' || part === 'other')) { return bad('NOT SAVED — the database does not accept “' + part + '” yet. Run sql/v55-83-WH-shipping-parts.sql in Supabase once, then save again.'); } return /pl_release_part_estimates/.test(String(upP.error.message)) ? bad('Run sql/v55-83-TL-trucking-freight.sql in Supabase first.') : fail(upP.error); }
       await audit(db, userId, 'pl_part_estimate_set', 'release', pk, { part: part, amount: pv, note: body.note || null });
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
     }

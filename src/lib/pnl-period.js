@@ -24,7 +24,7 @@ export var PERIOD_FIELDS = ['goods_revenue', 'goods_cost', 'goods_profit', 'tran
 export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, yards: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
     // Codex 12:11 — what the two profit figures were ACTUALLY made of: only the lines whose profit is known (`used`), and the
     // revenue of the lines left out because a cost is not known yet (`excl`), per side — never one combined figure for both
-    used: { goods_lines: 0, goods_revenue: 0, goods_cost: 0, transport_lines: 0, transport_revenue: 0, trucking: 0, freight: 0, combined: 0 }, excl: { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 } };
+    used: { goods_lines: 0, goods_revenue: 0, goods_cost: 0, transport_lines: 0, transport_revenue: 0, trucking: 0, freight: 0, other: 0, combined: 0 }, excl: { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 } };
   PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
 export function addPeriodCell(row, c) {
   row.lines++; if (c.keep_unit === true) { row.yards += Number(c.sold_yards) || 0; } else { row.pounds += Number(c.pounds) || 0; } // v55.83-VX — kept-in-yards goods are counted in yards, never as pounds
@@ -37,7 +37,7 @@ export function addPeriodCell(row, c) {
   if (row.used) {
     if (known(c.goods_profit)) { row.used.goods_lines++; row.used.goods_revenue += cz(c.goods_revenue); row.used.goods_cost += cz(c.goods_revenue) - cz(c.goods_profit); }
     else { row.excl.goods_lines++; row.excl.goods_revenue += cz(c.goods_revenue); }
-    if (known(c.transport_profit)) { var tk = cz(c.trucking_cost); var fr = cz(c.freight_cost); row.used.transport_lines++; row.used.transport_revenue += cz(c.transport_revenue); row.used.trucking += tk; row.used.freight += fr; row.used.combined += cz(c.transport_revenue) - cz(c.transport_profit) - tk - fr; }
+    if (known(c.transport_profit)) { var tk = cz(c.trucking_cost); var fr = cz(c.freight_cost); row.used.transport_lines++; row.used.transport_revenue += cz(c.transport_revenue); var ot = cz(c.shipping_other); row.used.trucking += tk; row.used.freight += fr; row.used.other += ot; row.used.combined += cz(c.transport_revenue) - cz(c.transport_profit) - tk - fr - ot; }
     else { row.excl.transport_lines++; row.excl.transport_revenue += cz(c.transport_revenue); }
   }
   if (!c.complete) { row.incomplete++; }
@@ -59,6 +59,7 @@ var CATEGORIES = [
   { key: 'transport_revenue', label: 'Transport charged to customers', group: 'transport', kind: 'in' },
   { key: 'trucking_cost', label: 'Trucking (our cost)', group: 'transport', kind: 'out' },
   { key: 'freight_cost', label: 'Freight / shipping (our cost)', group: 'transport', kind: 'out' },
+  { key: 'shipping_other', label: 'Other shipping costs (typed on the invoice)', group: 'transport', kind: 'out', optional: true },
   { key: 'shipping_combined_share', label: 'Shipping kept as one combined amount (not divided)', group: 'transport', kind: 'out', optional: true },
   { key: 'transport_profit', label: 'TRANSPORT PROFIT', group: 'transport', kind: 'profit' }
 ];

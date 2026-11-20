@@ -33,6 +33,21 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WH',
+    date: '2026-11-20',
+    title: 'Invoices: break the shipping down internally (trucking, freight, bond, other) — never printed',
+    items: [
+      { text: '**A new internal box on the invoice.** Open an invoice for editing. Under the shipping terms there is “Inside the shipping — our cost, part by part”. Type what we expect to pay for Trucking, Freight / shipping and Other (with a note saying what it is), and the Bond / brokerage amount that is inside the charge.' },
+      { text: '**It is never printed.** These figures are for us only. They are not on the invoice, not in its PDF and not sent to Wave or the customer.' },
+      { text: '**Bills go to the right part.** A trucking bill replaces only the trucking figure, a freight bill only the freight figure. The other parts keep what you typed, so a bill for one thing no longer swallows money that was meant for another.' },
+      { text: '**It shows the estimated shipping margin:** what the invoice charges for shipping minus the parts you typed. It is called estimated until the bills are in.' },
+      { text: '**Bond is counted once.** The bond cost is already counted with the goods for a Houston container, so the bond amount you type here is a note: it is not taken off a second time. “Other” is a real shipping cost and is counted once.' },
+      { text: 'A combined shipping amount still works as before: while only one of trucking or freight is typed, the combined amount stays the cost.' },
+      { text: 'Bond and Other need one small database script before they can be saved. Trucking and Freight work right away.' },
+      { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-WH-shipping-parts.sql (pl_release_part_estimates part check now allows bond and other). ShippingPartsBox.jsx reads release_parts and saves through set_part_estimate on the profitability route (pnl.view to read, pnl.edit_costs to save). Engine: other is added to the release shipping cost where it is built from parts (cell.shipping_other); bond is cell.bond_inside_shipping, information only.' }
+    ]
+  },
+  {
     version: 'v55.83-WG',
     date: '2026-11-20',
     title: 'Profitability: headliner is always kept in yards',

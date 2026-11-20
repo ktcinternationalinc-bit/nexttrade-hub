@@ -19,6 +19,7 @@ import { isTransportLine } from '../lib/profitability'; // v55.83-TG
 import ProformaLinkBox, { proformaLinksApi } from './ProformaLinkBox'; // v55.83-VZ — proforma ↔ invoice links + signed proforma
 import ProformaPeek from './ProformaPeek';
 import InvoicePeek from './InvoicePeek';
+import ShippingPartsBox from './ShippingPartsBox'; // v55.83-WH — internal breakdown of the shipping (never printed)
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -993,6 +994,8 @@ export default function AccountingInvoicesTab(props) {
                   <input value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
                   <span>estimate — the bills replace it when they arrive</span>
                 </label>
+                {/* v55.83-WH — the internal breakdown; saved for the release through the Profitability route, never into the invoice */}
+                <ShippingPartsBox releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} />
                 {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Shipping line(s) must total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2)}</div>}
               </div>);
           })()}
