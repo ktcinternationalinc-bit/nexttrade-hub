@@ -42,7 +42,7 @@ try {
   async function transfer(amount, party, date) { seq++; var r = await db.query("INSERT INTO public.bank_transactions (wave_business_id, account_id, direction, amount_abs, date, posted_date, pending, third_party_payer, name) VALUES ('KTC', 'A1', 'out', $1, $2, $2, false, $3, $4) RETURNING id", [amount, date || '2026-09-02', party, 'TRANSFER ' + seq]); return r.rows[0].id; }
   async function bill(total, via, date) { seq++; var r = await db.query("INSERT INTO public.vendor_bills (vendor_name, bill_number, bill_date, total_amount, record_status, paid_via) VALUES ($1, $2, $3, $4, 'active', $5) RETURNING id", ['Vendor ' + seq, 'B-' + seq, date || '2026-09-05', total, via || null]); return r.rows[0].id; }
   async function request(txn, party, fee, lines, signed) { var r = await q(db, "INSERT INTO public.wire_packages (payee_kind, payee_name, fee_amount, status, funding_txn_id, created_by" + (signed === false ? '' : ', signoff1_by, signoff1_at, signoff2_by, signoff2_at') + ") VALUES ($1, $2, $3, 'draft', $4, $5" + (signed === false ? '' : ", '" + S1 + "', now(), '" + S2 + "', now()") + ") RETURNING id", [party === RTM ? 'service_provider' : 'affiliate', party, fee || 0, txn, ACTOR]); if (r.error) { return { error: r.error }; } var id = r.rows[0].id; for (var l of (lines || [])) { var e = await q(db, 'INSERT INTO public.wire_package_lines (package_id, bill_id, amount) VALUES ($1, $2, $3)', [id, l[0], l[1]]); if (e.error) { return { id: id, error: e.error }; } } return { id: id }; }
-  function send(c, id, date) { return q(c, 'SELECT public.wire_request_send($1, $2, $3) AS r', [id, ACTOR, date || '2026-09-03']); }
+  function send(c, id, date) { return q(c, 'SELECT public.wire_request_send($1, $2, $3) AS r', [id, ACTOR, date || '2026-09-15']); }
   async function st(txn, except) { return (await db.query('SELECT public.hub_party_transfer_state($1, $2) AS s', [txn, except || null])).rows[0].s; }
   var click = 0;
   function feeCall(c, p) { click++; return q(c, 'SELECT public.hub_party_fee($1::jsonb) AS r', [JSON.stringify(Object.assign({ actor: ACTOR, request_id: 'click-' + click, reason: 'services rendered' }, p))]); }
@@ -54,14 +54,14 @@ try {
   await db.query("INSERT INTO public.party_money_entries (party, bucket, amount, kind, action_id, reason, created_by) VALUES ($1, 'advance', 75, 'opening_balance', gen_random_uuid(), 'before the Hub', $2)", [NT, ACTOR]);
   var oldSummary = (await db.query('SELECT public.wire_funding_summary($1, NULL) AS s', [LT])).rows[0].s;
   check('BEFORE WF: a request with a $200 fee is sent from a $1,000 transfer (old SP path) — the old summary says 500 left', lsend.rows && lsend.rows[0].r.ok === true && Number(oldSummary.remaining) === 500, [lreq, lsend, oldSummary]);
-  var defsBefore = (await db.query("SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('hub_party_allocate', 'hub_party_money', 'wire_request_fee_change', 'hub_wire_line_pay', 'hub_bill_payment_cap', 'hub_bill_payment_final', 'wpkg_lock') ORDER BY 1")).rows;
+  var defsBefore = (await db.query("SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('hub_party_allocate', 'hub_party_money', 'hub_party_opening', 'hub_wire_line_pay', 'hub_bill_payment_cap', 'hub_bill_payment_final', 'wpkg_lock') ORDER BY 1")).rows;
   var entriesBefore = (await db.query('SELECT md5(string_agg(e::text, \'|\' ORDER BY e.id)) AS h, count(*)::int AS n FROM (SELECT id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date, reason FROM public.party_money_entries) e')).rows[0];
 
   var wf = fs.readFileSync(path.join(root, 'sql/v55-83-WF-party-funds.sql'), 'utf8');
   var run1 = await q(db, wf); var run2 = await q(db, wf);
   check('the WF script runs, and runs again; its check says OK on every line (5)', !run1.error && !run2.error && run2.rows.length === 5 && run2.rows.every(function (r) { return r.result === 'OK'; }), [run1.error, run2.error, run2.rows]);
-  var defsAfter = (await db.query("SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('hub_party_allocate', 'hub_party_money', 'wire_request_fee_change', 'hub_wire_line_pay', 'hub_bill_payment_cap', 'hub_bill_payment_final', 'wpkg_lock') ORDER BY 1")).rows;
-  check('existing money functions are NOT redefined (allocate, money, fee change, line pay, the bill caps, the wire lock: same definitions)', JSON.stringify(defsBefore) === JSON.stringify(defsAfter) && defsBefore.length === 7, [defsBefore, defsAfter]);
+  var defsAfter = (await db.query("SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS d FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('hub_party_allocate', 'hub_party_money', 'hub_party_opening', 'hub_wire_line_pay', 'hub_bill_payment_cap', 'hub_bill_payment_final', 'wpkg_lock') ORDER BY 1")).rows;
+  check('existing money functions are NOT redefined (allocate, money, opening, line pay, the bill caps, the wire lock: same definitions)', JSON.stringify(defsBefore) === JSON.stringify(defsAfter) && defsBefore.length === 7, [defsBefore, defsAfter]);
   var entriesAfter = (await db.query('SELECT md5(string_agg(e::text, \'|\' ORDER BY e.id)) AS h, count(*)::int AS n FROM (SELECT id, party, bucket, amount, kind, bank_transaction_id, bill_id, entry_date, reason FROM public.party_money_entries) e')).rows[0];
   check('no existing ledger entry was changed or removed by the script', entriesBefore.h === entriesAfter.h && entriesAfter.n === 1);
   var privs = (await db.query("SELECT has_function_privilege('authenticated', 'public.hub_party_fee(jsonb)', 'EXECUTE') AS a, has_function_privilege('anon', 'public.hub_party_transfer_set_state(jsonb)', 'EXECUTE') AS b, has_function_privilege('authenticated', 'public.hub_party_transfer_state(uuid,uuid)', 'EXECUTE') AS c, has_function_privilege('service_role', 'public.hub_party_fee(jsonb)', 'EXECUTE') AS s")).rows[0];
@@ -149,8 +149,27 @@ try {
   check('… and a request for 900 on it is refused by the database', /HUB_GUARD/.test(o1.error || ''), o1);
   var o2 = await request(O, RTM, 0, [[OB, 800]]); var o2s = await send(db, o2.id);
   check('… a request for 800 fits and is sent', !o2.error && o2s.rows && o2s.rows[0].r.ok === true && Number((await st(O)).available) === 0, [o2, o2s]);
-  var oa = await q(db, 'SELECT public.hub_party_allocate($1::jsonb) AS r', [JSON.stringify({ party: RTM, actor: ACTOR, request_id: 'alloc-1', ktc_business: 'KTC', bank_transaction_id: O, bills: [], fee: 50, advance: 0, reason: 'x' })]);
-  check('the older "one step" allocate cannot add a fee the transfer no longer holds (refused, nothing saved)', !!oa.error && Number((await st(O)).fees) === 200, oa);
+  // the older "one step" allocate, with a REAL KTC bank account behind the line so it reaches the availability check
+  await db.query("INSERT INTO public.plaid_accounts (plaid_account_id, name, mask, type, wave_business_id, is_private) VALUES ('A1', 'KTC checking', '0001', 'depository', 'KTC', false) ON CONFLICT DO NOTHING");
+  var O2 = await transfer(1000, RTM, '2026-09-07'); await confirm(db, O2, RTM); await feeCall(db, { action: 'mark', party: RTM, bank_transaction_id: O2, amount: 900, entry_date: '2026-09-08' });
+  var oaOk = await q(db, 'SELECT public.hub_party_allocate($1::jsonb) AS r', [JSON.stringify({ party: RTM, actor: ACTOR, request_id: 'alloc-ok', ktc_business: 'KTC', bank_transaction_id: O2, bills: [], fee: 100, advance: 0, reason: 'fits' })]);
+  check('old allocate, valid KTC account: a 100 fee that FITS (1,000 − 900) is saved by the old function, unchanged', !oaOk.error && Number((await st(O2)).fees) === 1000 && Number((await st(O2)).held) === 0, [oaOk, await st(O2)]);
+  var O3 = await transfer(1000, RTM, '2026-09-07'); await confirm(db, O3, RTM); await feeCall(db, { action: 'mark', party: RTM, bank_transaction_id: O3, amount: 900, entry_date: '2026-09-08' });
+  var oa = await q(db, 'SELECT public.hub_party_allocate($1::jsonb) AS r', [JSON.stringify({ party: RTM, actor: ACTOR, request_id: 'alloc-1', ktc_business: 'KTC', bank_transaction_id: O3, bills: [], fee: 150, advance: 0, reason: 'too much' })]);
+  check('old allocate, valid KTC account: a 150 fee the transfer no longer holds is refused BY THE AVAILABILITY GUARD (old function does not know the new fee entries), nothing saved', /would use more than/.test(oa.error || '') && Number((await st(O3)).fees) === 900, oa);
+  var oaAdv = await q(db, 'SELECT public.hub_party_allocate($1::jsonb) AS r', [JSON.stringify({ party: RTM, actor: ACTOR, request_id: 'alloc-adv', ktc_business: 'KTC', bank_transaction_id: O3, bills: [], fee: 0, advance: 50, reason: 'old advance' })]);
+  check('old allocate asking for an "advance" split is refused (retired), nothing saved', /no longer used/.test(oaAdv.error || '') && Number((await st(O3)).held) === 100, oaAdv);
+
+  // an ORDINARY wire to the company (its own bank line, no earlier transfer), with WF loaded
+  var OW = await transfer(1000, RTM, '2026-09-09'); var OWB = await bill(900, RTM);
+  var owp = (await db.query("INSERT INTO public.wire_packages (payee_kind, payee_name, fee_amount, status, created_by) VALUES ('service_provider', $1, 100, 'draft', $2) RETURNING id", [RTM, ACTOR])).rows[0].id;
+  var owl = (await db.query('INSERT INTO public.wire_package_lines (package_id, bill_id, amount) VALUES ($1, $2, 900) RETURNING id', [owp, OWB])).rows[0].id;
+  check('an ordinary wire NOT sent yet reserves nothing on any transfer', Number((await st(OW)).reserved) === 0 && Number((await st(OW)).held) === 1000);
+  var ow1 = await q(db, "UPDATE public.wire_packages SET status = 'sent', signoff1_by = $2, signoff1_at = now(), signoff2_by = $3, signoff2_at = now(), sent_by = $4, sent_at = now(), sent_date = '2026-09-09', approved_total = 1000, bank_reference = 'W1' WHERE id = $1", [owp, S1, S2, ACTOR]);
+  var ow2 = await q(db, 'SELECT public.hub_wire_line_pay($1::jsonb) AS r', [JSON.stringify({ line_id: owl, bank_transaction_id: OW, paid_date: '2026-09-09', method: 'wire', actor: ACTOR })]);
+  var ow3 = await q(db, "UPDATE public.wire_packages SET status = 'attached', bank_transaction_id = $2, attached_by = $3, attached_at = now() WHERE id = $1", [owp, OW, ACTOR]);
+  var ows = await st(OW);
+  check('ordinary wire within its own bank line (900 bills + 100 fee = 1,000): pays its line and attaches with WF loaded; held 0', !ow1.error && !ow2.error && !ow3.error && Number(ows.bills) === 900 && Number(ows.wire_fees) === 100 && Number(ows.held) === 0, [ow1, ow2, ow3, ows]);
 
   // ── retired pool moves are refused IN THE DATABASE; old rows stay ──
   for (var k of [['advance', 'advance_to_fee', -10], ['fee', 'advance_to_fee', 10], ['advance', 'fee_to_advance', 10], ['advance', 'apply_to_bill', -10], ['advance', 'payment_split', 10]]) {
@@ -175,6 +194,42 @@ try {
   check('a line not marked for the company cannot be confirmed as its funds', /not marked as sent to/.test(cBad.error || ''), cBad);
   var cBack = await confirm(db, H, RTM, 'needs_reconciliation');
   check('a transfer can be put back to "needs reconciliation"; every change is in the audit log', cBack.rows && cBack.rows[0].r.to === 'needs_reconciliation' && Number((await db.query("SELECT count(*)::int AS n FROM public.hub_audit_log WHERE action = 'party_transfer_state'")).rows[0].n) >= 6, cBack);
+
+  // ── (Codex 17:24 P1) OLD FUNDS PAY A NEW BILL AFTER MONTH-END — the real write path fed through the real report helper ──
+  var P = await transfer(10000, NT, '2026-09-02'); await confirm(db, P, NT);
+  var PB6 = await bill(6000, NT, '2026-09-10'); var PB12 = await bill(1200, NT, '2026-10-12'); var PB1 = await bill(100, NT, '2026-09-22'); var PB2 = await bill(100, NT, '2026-08-20');
+  var pr1 = await request(P, NT, 0, [[PB6, 6000]]); var ps1 = await send(db, pr1.id, '2026-09-11');
+  var pf1 = await feeCall(db, { action: 'mark', party: NT, bank_transaction_id: P, amount: 500, entry_date: '2026-09-20' });
+  await db.query("CREATE SCHEMA IF NOT EXISTS clickbooks_us; CREATE TABLE IF NOT EXISTS clickbooks_us.books (code text PRIMARY KEY, locked_through date); INSERT INTO clickbooks_us.books VALUES ('KTC_US', '2026-09-30') ON CONFLICT (code) DO UPDATE SET locked_through = EXCLUDED.locked_through;");
+  var linesBefore = Number((await db.query('SELECT count(*)::int AS n FROM public.bank_transactions')).rows[0].n);
+  var pr2 = await request(P, NT, 0, [[PB12, 1200]]); var ps2 = await send(db, pr2.id, '2026-10-15');
+  check('September is CLOSED; the September transfer still holds 3,500; an October bill of 1,200 is paid from it with two approvals — it succeeds, no month reopened', ps1.rows && ps1.rows[0].r.ok === true && pf1.rows && ps2.rows && ps2.rows[0].r.ok === true && ps2.rows[0].r.paid_date === '2026-10-15' && ps2.rows[0].r.transfer_date === '2026-09-02', [ps1, pf1, ps2]);
+  var stored = (await db.query('SELECT p.paid_date::text AS paid_date, p.bank_transaction_id, p.amount::float AS amount FROM public.vendor_bill_payments p WHERE p.bill_id = ANY($1) ORDER BY p.paid_date', [[PB6, PB12]])).rows;
+  check('stored dates: the September use is dated 11 Sep, the October use 15 Oct — both on the ORIGINAL transfer line; the transfer row is unchanged and no bank line was added', stored.length === 2 && stored[0].paid_date === '2026-09-11' && stored[1].paid_date === '2026-10-15' && stored.every(function (r) { return r.bank_transaction_id === P; }) && Number((await db.query('SELECT count(*)::int AS n FROM public.bank_transactions')).rows[0].n) === linesBefore && (await db.query("SELECT date::text AS d, amount_abs::float AS a FROM public.bank_transactions WHERE id = $1", [P])).rows[0].d === '2026-09-02', stored);
+  var pr3 = await request(P, NT, 0, [[PB1, 100]]); var ps3 = await send(db, pr3.id, '2026-09-25');
+  check('a use genuinely dated inside the CLOSED month is refused (nothing recorded)', ps3.rows && ps3.rows[0].r.ok === false && ps3.rows[0].r.blocked_by === 'closed month' && Number((await db.query('SELECT count(*)::int AS n FROM public.vendor_bill_payments WHERE bill_id = $1', [PB1])).rows[0].n) === 0, ps3);
+  var ps3b = await send(db, pr3.id, '2026-10-20');
+  check('… the same request sent with a date in the open month goes through', ps3b.rows && ps3b.rows[0].r.ok === true, ps3b);
+  var pr4 = await request(P, NT, 0, [[PB2, 100]]); var ps4 = await send(db, pr4.id, '2026-08-25');
+  check('funds cannot be used on a date BEFORE the transfer was made', ps4.rows && ps4.rows[0].r.ok === false && ps4.rows[0].r.blocked_by === 'before the transfer', ps4);
+  await db.query("UPDATE public.wire_packages SET status = 'cancelled', cancelled_by = $2, cancelled_at = now() WHERE id = $1", [pr4.id, ACTOR]); await db.query('UPDATE public.wire_package_lines SET is_open = false WHERE package_id = $1', [pr4.id]);
+  // the ACTUAL rows the database now holds, through the ACTUAL report helper
+  req(path.join(root, 'node_modules/sucrase/register'));
+  var PF = req(path.join(root, 'src/lib/party-funds.js'));
+  async function funds(from, to) {
+    var bl = (await db.query("SELECT id, date::text AS date, amount_abs::float AS amount_abs, third_party_payer, direction, name FROM public.bank_transactions WHERE id = $1", [P])).rows;
+    var pys = (await db.query("SELECT id, bill_id, amount::float AS amount, paid_date::text AS paid_date, bank_transaction_id, voided, method FROM public.vendor_bill_payments WHERE bank_transaction_id = $1", [P])).rows;
+    var bls = (await db.query("SELECT id, vendor_name, bill_number, bill_date::text AS bill_date, category, total_amount::float AS total_amount, paid_via FROM public.vendor_bills WHERE id = ANY($1)", [[PB6, PB12, PB1, PB2]])).rows;
+    var wps = (await db.query("SELECT id, status, funding_txn_id, bank_transaction_id, fee_amount::float AS fee_amount, sent_date::text AS sent_date FROM public.wire_packages WHERE funding_txn_id = $1", [P])).rows;
+    for (var w of wps) { w.lines = (await db.query('SELECT bill_id, amount::float AS amount, is_open FROM public.wire_package_lines WHERE package_id = $1', [w.id])).rows; }
+    var ens = (await db.query("SELECT id, party, bucket, kind, amount::float AS amount, bank_transaction_id, source_bank_transaction_id, wire_package_id, entry_date::text AS entry_date, reason FROM public.party_money_entries WHERE source_bank_transaction_id = $1", [P])).rows;
+    return PF.partyFundsBreakdown({ parties: [{ name: NT }], bankLines: bl, pays: pys, bills: bls, requests: wps, entries: ens, from: from, to: to })[0];
+  }
+  var rSep = await funds('2026-09-01', '2026-09-30'); var rOct = await funds('2026-10-01', '2026-10-31');
+  check('REPORT from the real rows — September: sent 10,000, to bills 6,000, explicit fee 500, closing held 3,500; tax line 10,000', rSep.period.funds_sent === 10000 && rSep.period.applied_to_bills === 6000 && rSep.period.fee_deduction === 500 && rSep.period.closing_held === 3500 && rSep.period.tax_professional_fees === 10000 && rSep.arithmetic_ok && !rSep.needs_reconciliation, rSep.period);
+  check('REPORT from the real rows — October: opening 3,500 − bills 1,300 (the 1,200 bill and the 100 one) = closing 2,200; no new funding, NO second tax deduction, no fee', rOct.period.opening_held === 3500 && rOct.period.funds_sent === 0 && rOct.period.applied_to_bills === 1300 && rOct.period.closing_held === 2200 && rOct.period.tax_professional_fees === 0 && rOct.period.fee_deduction === 0 && rOct.arithmetic_ok, rOct.period);
+  check('REPORT: the October rows name the ORIGINAL September transfer, and September\'s figures did not change when October was paid', rOct.period.applied_rows.every(function (r) { return r.transfer_id === P && r.transfer_date === '2026-09-02'; }) && rOct.period.applied_rows.length === 2 && rSep.period.applied_rows.length === 1);
+  check('REPORT and DATABASE agree on what the transfer holds today (2,200)', rOct.current.unused === 2200 && Number((await st(P)).available) === 2200);
 
   // ── closed month ──
   await db.query("CREATE SCHEMA IF NOT EXISTS clickbooks_us; CREATE TABLE IF NOT EXISTS clickbooks_us.books (code text PRIMARY KEY, locked_through date); INSERT INTO clickbooks_us.books VALUES ('KTC_US', '2026-10-31') ON CONFLICT (code) DO UPDATE SET locked_through = EXCLUDED.locked_through;");

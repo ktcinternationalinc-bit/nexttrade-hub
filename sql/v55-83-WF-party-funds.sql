@@ -117,11 +117,15 @@ BEGIN
   t_date := coalesce(nullif(tj->>'posted_date', '')::date, nullif(tj->>'date', '')::date);
   t_amt := round(abs(coalesce((tj->>'amount_abs')::numeric, 0)), 2);
 
-  -- a closed month stays closed: the bill payments would be dated inside it
-  IF to_regclass('clickbooks_us.books') IS NOT NULL AND t_date IS NOT NULL THEN
+  -- v55.83-WF (Codex 17:24): the bills are paid on the day these funds are USED (p_sent_date) — never back-dated to the old
+  -- transfer. So the month that must be open is THAT day's month; the transfer's own month can stay closed.
+  IF t_date IS NOT NULL AND p_sent_date < t_date THEN
+    RETURN jsonb_build_object('ok', false, 'why', 'These funds were sent on ' || t_date || ' — they cannot be used on an earlier date (' || p_sent_date || ').', 'blocked_by', 'before the transfer');
+  END IF;
+  IF to_regclass('clickbooks_us.books') IS NOT NULL THEN
     EXECUTE 'select locked_through from clickbooks_us.books where code = ''KTC_US''' INTO lock_through;
-    IF lock_through IS NOT NULL AND t_date <= lock_through THEN
-      RETURN jsonb_build_object('ok', false, 'why', 'The transfer is dated ' || t_date || ', inside a closed month (books are closed through ' || lock_through || '). Reopen the month first (Accounting → Month-end).', 'blocked_by', 'closed month');
+    IF lock_through IS NOT NULL AND p_sent_date <= lock_through THEN
+      RETURN jsonb_build_object('ok', false, 'why', 'The date these funds are used (' || p_sent_date || ') is inside a closed month (books are closed through ' || lock_through || '). Use a date in an open month, or reopen that month first (Accounting → Month-end).', 'blocked_by', 'closed month');
     END IF;
   END IF;
 
@@ -151,7 +155,7 @@ BEGIN
 
   FOR ln IN SELECT * FROM public.wire_package_lines l WHERE l.package_id = w.id ORDER BY l.created_at, l.id LOOP
     INSERT INTO public.vendor_bill_payments (bill_id, amount, paid_date, bank_transaction_id, method, created_by)
-    VALUES (ln.bill_id, round(ln.amount, 2), t_date, w.funding_txn_id, 'rtm', p_actor) RETURNING id INTO pid;
+    VALUES (ln.bill_id, round(ln.amount, 2), p_sent_date, w.funding_txn_id, 'rtm', p_actor) RETURNING id INTO pid; -- v55.83-WF: the day the funds are used
     UPDATE public.wire_package_lines SET is_open = false, payment_id = pid WHERE id = ln.id;
     IF ln.marked_paid_via IS TRUE THEN
       UPDATE public.vendor_bills SET paid_via = w.payee_name WHERE id = ln.bill_id AND paid_via IS NULL;
@@ -166,7 +170,42 @@ BEGIN
    WHERE id = w.id;
 
   RETURN jsonb_build_object('ok', true, 'bills_paid', n, 'bills_total', bills_total, 'fee', round(coalesce(w.fee_amount, 0), 2), 'total', total,
-                            'paid_date', t_date, 'transfer_amount', t_amt, 'remaining_after', (s->>'remaining')::numeric - total);
+                            'paid_date', p_sent_date, 'transfer_date', t_date, 'transfer_amount', t_amt, 'remaining_after', (s->>'remaining')::numeric - total);
+END $fn$;
+
+-- changing the fee of a sent request: the month that must be open is the request's own (SP function, two lines changed)
+CREATE OR REPLACE FUNCTION public.wire_request_fee_change(p_pkg uuid, p_fee numeric, p_actor uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+DECLARE w public.wire_packages%ROWTYPE; tj jsonb; t_date date; s jsonb; bills numeric; new_fee numeric; lock_through date;
+BEGIN
+  SELECT * INTO w FROM public.wire_packages WHERE id = p_pkg FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'why', 'Request not found.'); END IF;
+  IF w.funding_txn_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'Only a request drawn from a transfer has a service fee that can change after it is sent.'); END IF;
+  IF w.status <> 'attached' THEN RETURN jsonb_build_object('ok', false, 'why', 'Before a request is sent, change the fee by editing the request.'); END IF;
+  new_fee := round(coalesce(p_fee, -1), 2);
+  IF new_fee < 0 THEN RETURN jsonb_build_object('ok', false, 'why', 'The service fee cannot be negative.'); END IF;
+  -- v55.83-VA (Codex 06:18) — the same order as every other writer on a bank line: its advisory lock FIRST, then its row
+  PERFORM pg_advisory_xact_lock(hashtextextended('hub-bank-line:' || w.funding_txn_id::text, 0));
+  SELECT to_jsonb(t) INTO tj FROM public.bank_transactions t WHERE t.id = w.funding_txn_id FOR UPDATE;
+  IF tj IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'The transfer is no longer in the books.'); END IF;
+  t_date := coalesce(w.sent_date, nullif(tj->>'posted_date', '')::date, nullif(tj->>'date', '')::date); -- v55.83-WF: the request's own date (when its fee was charged), not the old transfer's
+  IF to_regclass('clickbooks_us.books') IS NOT NULL AND t_date IS NOT NULL THEN
+    EXECUTE 'select locked_through from clickbooks_us.books where code = ''KTC_US''' INTO lock_through;
+    IF lock_through IS NOT NULL AND t_date <= lock_through THEN
+      RETURN jsonb_build_object('ok', false, 'why', 'This request is dated inside a closed month (closed through ' || lock_through || '). Reopen the month first.', 'blocked_by', 'closed month');
+    END IF;
+  END IF;
+  SELECT coalesce(sum(round(l.amount, 2)), 0) INTO bills FROM public.wire_package_lines l WHERE l.package_id = w.id;
+  s := public.wire_funding_summary(w.funding_txn_id, w.id);
+  IF bills + new_fee > (s->>'remaining')::numeric + 0.005 THEN
+    RETURN jsonb_build_object('ok', false, 'why', 'A fee of $' || to_char(new_fee, 'FM999,999,990.00') || ' does not fit: only $' || to_char(greatest((s->>'remaining')::numeric - bills, 0), 'FM999,999,990.00') || ' of the transfer is free for it.', 'blocked_by', 'over the transfer',
+                              'max_fee', greatest((s->>'remaining')::numeric - bills, 0));
+  END IF;
+  PERFORM set_config('ktc.wire_fee_change', '1', true);
+  UPDATE public.wire_packages SET fee_amount = new_fee, approved_total = bills + new_fee, updated_at = now() WHERE id = w.id;
+  PERFORM set_config('ktc.wire_fee_change', '', true);
+  RETURN jsonb_build_object('ok', true, 'from', round(coalesce(w.fee_amount, 0), 2), 'to', new_fee, 'total', bills + new_fee,
+                            'remaining_after', (s->>'remaining')::numeric - bills - new_fee);
 END $fn$;
 
 -- 5. NO WRITER CAN TAKE A TRANSFER BELOW ZERO. One deferred check, whatever wrote the row (a bill payment, a fee entry, a
