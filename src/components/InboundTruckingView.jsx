@@ -8,8 +8,8 @@ var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#cbd5e1';
 function usd(c) { var n = Math.abs((Number(c) || 0) / 100); return (c < 0 ? '−$' : '$') + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function lbs(p) { return p === null || p === undefined ? '—' : Math.round(p).toLocaleString('en-US'); }
 function rate(r) { return r === null || r === undefined ? '—' : '$' + Number(r).toFixed(4); }
-export function statusWords(L) { return L.status === 'matched' ? 'matched' : (L.status === 'no_goods_bill' ? 'no goods bill found' : (L.status === 'shared_goods_bill' ? 'goods bill shared by two loads' : 'pounds not known')); }
-export function fixWords(L) { return L.status === 'no_goods_bill' ? 'put ' + L.load + ' in its “Other reference” box.' : (L.status === 'shared_goods_bill' ? 'split it so each load has its own bill (one load number in “Other reference”).' : 'give every goods line a quantity and a unit (LBS or YDS).'); }
+export function statusWords(L) { return L.status === 'matched' ? 'matched' : (L.status === 'no_goods_bill' ? 'no goods bill found' : (L.status === 'shared_goods_bill' ? 'goods bill covers several loads' : 'pounds not known')); }
+export function fixWords(L) { return L.status === 'no_goods_bill' ? 'put ' + L.load + ' in its “Other reference” box.' : (L.status === 'shared_goods_bill' ? '' : 'give every goods line a quantity and a unit (LBS or YDS).'); }
 
 export default function InboundTruckingView(props) {
   var r = props.report; var [open, setOpen] = useState(null);
@@ -62,7 +62,7 @@ export default function InboundTruckingView(props) {
                 <td className="px-2 py-1.5 font-bold" style={{ color: bad ? '#b45309' : '#065f46' }}>{statusWords(L)}</td>
               </tr>
               {isOpen && <tr><td colSpan={8} className="px-3 py-2" style={{ background: '#f8fafc', borderTop: '1px solid ' + LINE }}>
-                {bad && <div className="font-bold mb-1" style={{ color: '#b45309' }}>{'Why it is not in the average: ' + L.why + '. To fix: open Accounting → Bills, find the supplier bill for this load and ' + fixWords(L)}</div>}
+                {bad && <div className="font-bold mb-1" style={{ color: '#b45309' }}>{'Why it is not in the average: ' + L.why + '. ' + (L.status === 'shared_goods_bill' ? 'The bill is correct as it is — leave it unchanged. This load stays out of the average until the weight of each load can be recorded.' : 'To fix: open Accounting → Bills, find the supplier bill for this load and ' + fixWords(L))}</div>}
                 <div className="font-extrabold">Kronos freight</div>
                 {L.lines.map(function (f) { return <div key={f.line_id}>{f.vendor + ' · bill ' + f.bill_number + ' · ' + f.bill_date + ' · ' + usd(f.cents) + ' · ' + f.description}</div>; })}
                 <div className="font-extrabold mt-1">Goods received on this load</div>
@@ -81,8 +81,9 @@ export default function InboundTruckingView(props) {
       {r.unmatched_lines.map(function (f) { return <div key={f.line_id} className="text-[11px]">{f.vendor + ' · bill ' + f.bill_number + ' · ' + f.bill_date + ' · ' + usd(f.cents) + ' · ' + f.description + ' — ' + f.why}</div>; })}
     </div>}
     {(r.not_counted || []).length > 0 && <div className="mt-2 text-[11px]" style={{ color: SUB }}>
-      <b>Kronos invoices also charged on a supplier bill:</b> {r.not_counted.map(function (f) { return 'bill ' + f.bill_number + ' ' + usd(f.cents) + ' (' + f.why + (f.amount_differs ? '; the supplier charged ' + usd(f.replacement_cents) : '') + ')'; }).join(' · ')}
-      {t.not_counted_outside_cents > 0 && <div className="font-bold" style={{ color: '#b45309' }}>{usd(t.not_counted_outside_cents) + ' of this is not in this report’s figures at all — widen the dates to see it counted.'}</div>}
+      <b>Kronos invoices also charged on a supplier bill:</b> {r.not_counted.map(function (f) { return 'bill ' + f.bill_number + ' ' + usd(f.cents) + ' (' + f.why + (f.amount_differs === true ? '; the supplier charged ' + usd(f.replacement_in_cents + f.replacement_outside_cents) : '') + ')'; }).join(' · ')}
+      {t.not_counted_outside_cents > 0 && <div className="font-bold" style={{ color: '#b45309' }}>{usd(t.not_counted_outside_cents) + ' of this is not in this report’s figures — it is counted on bills dated outside these dates.'}</div>}
+      {t.not_counted_hidden > 0 && <div style={{ color: SUB }}>{t.not_counted_hidden + ' of these are re-billed on a bill that is not shown; that amount is not given.'}</div>}
     </div>}
   </div>;
 }
