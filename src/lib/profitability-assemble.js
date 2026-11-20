@@ -10,7 +10,7 @@
 //   4. the engine splits each release's share across its goods; 5. only THEN are the period's rows summed and grouped.
 import { warehouseOutboundForRelease, inferBasis, statedBasis, isWarehouseTestRow } from './warehouse-shipping'; // v55.83-TG
 import { basisOfTerms, invoiceEstimatesByRelease, minShippingCharge, isSurchargeOnlyLine } from './shipping-terms'; // v55.83-TG (+ UE surcharge rule)
-import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2, isFoamLine, foamEvidenceConflict, foamFactors, isHeadlinerLine, headlinerFactors, soldUnitOnlyFactors } from './profitability';
+import { billLineUnit, BONDED_PER_HOUSTON_RELEASE, nameKey, relKey, unitKey, buildCells, summarize, reconcile, resolveCost, splitBillAcrossReleases, releaseOrigin, isTransportLine, suggestBasis, DEFAULT_UNIT_FACTORS, r2, isFoamLine, foamEvidenceConflict, foamFactors, isHeadlinerLine, headlinerFactors, soldUnitOnlyFactors, yardsPerSoldUnit } from './profitability';
 
 // "1001-1567 / 1001-1570", "1002-88 & 1002-89", "1001-1, 1001-2" → the separate release numbers on one invoice or bill
 export function splitReleases(text) {
@@ -52,7 +52,7 @@ export function assembleProfitability(d) {
     else { (billKeysOfGroup[gid] = billKeysOfGroup[gid] || []).push(n.name_key); groupById[gid].bill_names.push({ key: n.name_key, name: n.raw_name }); }
   });
   var unitOfName = {}; (d.nameUnits || []).forEach(function (u) { unitOfName[u.name_key] = u.unit; });
-  // v55.83-VV — descriptions a person chose to KEEP IN YARDS (not converted to pounds). previewKeep = { name_key: true / false }
+  // v55.83-VX — descriptions a person chose to KEEP IN YARDS (not converted to pounds). previewKeep = { name_key: true / false }
   // overrides the saved choice for a before / after preview only; nothing is stored by it.
   var keepOfName = {}; (d.nameUnits || []).forEach(function (u) { if (u.keep_unit === true) { keepOfName[u.name_key] = true; } });
   Object.keys(d.previewKeep || {}).forEach(function (k) { if (d.previewKeep[k] === true) { keepOfName[k] = true; } else { delete keepOfName[k]; } });
@@ -87,7 +87,7 @@ export function assembleProfitability(d) {
       var nm = lineName(it);
       return { id: it.id, description: nm, qty: Number(it.quantity) || 0, unit: unitOfLine[it.id] || unitOfName[nameKey(nm)] || '', unit_price: Number(it.unit_price) || 0,
         amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null,
-        keep_unit: keepOfName[nameKey(nm)] === true, // v55.83-VV — kept in yards (the engine applies it only to a line sold in yards / linear metres)
+        keep_unit: keepOfName[nameKey(nm)] === true, // v55.83-VX — kept in yards (the engine applies it only to a line sold in yards / linear metres)
         headliner: isHeadlinerLine(it.wave_product_name, it.description), // v55.83-VQ — headliner = 1.25 lb per yard
         foam: isFoamLine(it.wave_product_name, it.description), foam_conflict: foamEvidenceConflict(it.wave_product_name, it.description), // v55.83-UZ — "anything with foam": product name or description
         transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
@@ -158,13 +158,14 @@ export function assembleProfitability(d) {
   var freeNameKeys = {}; (d.freeBillNames || []).forEach(function (f) { if (f && f.name_key && f.active !== false) { freeNameKeys[f.name_key] = true; } });
   function costOf(inv, cell) {
     var keys = cell.group_id ? (billKeysOfGroup[cell.group_id] || []) : [];
-    // v55.83-VV — a line kept in yards: only supplier lines in yards / linear metres can cost it (no weight conversion); a cost typed
+    // v55.83-VX — a line kept in yards: only supplier lines in yards / linear metres can cost it (no weight conversion); a cost typed
     // by hand counts only when it was typed per yard, and a per-pound one is never reinterpreted. No typed commission (Max: NO).
     if (cell.keep_unit === true) {
-      var fxK = soldUnitOnlyFactors(cell.headliner === true ? headlinerFactors(factors) : (cell.foam === true ? foamFactors(factors) : factors));
+      var fxK = soldUnitOnlyFactors(); var ydPer = yardsPerSoldUnit(cell.sold_unit) || 1; // $ per YARD from the bills → $ per shipping pound of this line, so pounds × rate = its yards × $ per yard
       var fbK = keys.length ? resolveCost({ billNameKeys: keys, invoiceDate: inv.date, releases: inv.releases, productKey: cell.product_key }, costLines, { windowDays: d.windowDays > 0 ? d.windowDays : 90, factors: fxK, freeNameKeys: freeNameKeys }) : null;
       var wantK = {}; keys.forEach(function (k) { wantK[k] = true; });
       if (costLines.some(function (l) { var bu = billLineUnit(l); return wantK[nameKey(l.description)] && (bu === 'lb' || bu === 'kg' || bu === 't'); })) { cell.flags.push('supplier_line_by_weight_not_used'); }
+      if (fbK && fbK.base_per_lb !== null && fbK.base_per_lb !== undefined && cell.unit_factor > 0) { fbK = Object.assign({}, fbK, { per_yard: fbK.base_per_lb, base_per_lb: fbK.base_per_lb * ydPer / cell.unit_factor, commission_per_lb: (fbK.commission_per_lb === null || fbK.commission_per_lb === undefined) ? fbK.commission_per_lb : fbK.commission_per_lb * ydPer / cell.unit_factor }); }
       if (fbK && !fbK.cost_unknown && fbK.base_per_lb !== null) { return fbK; }
       var mK = (cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
       if (mK && Number(mK.x.cost_per_lb) > 0) {
@@ -180,7 +181,7 @@ export function assembleProfitability(d) {
     // v55.83-TJ — a cost a person typed wins over the "bought before our first bill" assumption
     if (fromBills && !fromBills.cost_unknown && fromBills.base_per_lb !== null && !(fromBills.method === 'assumed_earliest' && m && Number(m.x.cost_per_lb) > 0)) { return fromBills; }
     m =(cell.line_id && lineCost[cell.line_id]) ? { x: lineCost[cell.line_id], level: 'sale' } : ((cell.group_id && groupCost[cell.group_id]) ? { x: groupCost[cell.group_id], level: 'product default' } : null);
-    if (m && Number(m.x.cost_per_lb) > 0 && m.x.cost_unit === 'sold_unit') { cell.flags.push('typed_cost_is_per_yard'); return fromBills; } // v55.83-VV — a per-yard figure is never used as per pound
+    if (m && Number(m.x.cost_per_lb) > 0 && m.x.cost_unit === 'sold_unit') { cell.flags.push('typed_cost_is_per_yard'); return fromBills; } // v55.83-VX — a per-yard figure is never used as per pound
     if (m && Number(m.x.cost_per_lb) > 0) { return { base_per_lb: Number(m.x.cost_per_lb), commission_per_lb: Number(m.x.commission_per_lb) || 0, method: 'manual', level: m.level, note: m.x.note || null, sources: [] }; }
     return fromBills;
   }

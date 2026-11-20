@@ -1,4 +1,4 @@
-// v55.83-VV — "Keep in yards" BEFORE / AFTER (Max, Nov 20 2026: "how can we implement something like that without causing
+// v55.83-VX — "Keep in yards" BEFORE / AFTER (Max, Nov 20 2026: "how can we implement something like that without causing
 // mayhem"). Before a description is switched, the report is worked out twice from the SAME data — as it is now, and with the
 // switch — and the difference on the lines of those descriptions is shown. Nothing is stored. Pure; var + concat.
 import { nameKey, unitKey } from './profitability';
@@ -11,7 +11,7 @@ function sums(cells) {
   var o = { lines: 0, pounds: 0, yards: 0, goods_revenue: 0, base_cost: 0, commission: 0, inbound_allowance: 0, goods_profit: 0, cost_known: 0, cost_unknown: 0, profit_known: 0 };
   (cells || []).forEach(function (c) {
     o.lines += 1;
-    if (c.keep_unit === true) { o.yards += Number(c.sold_qty) || 0; } else { o.pounds += Number(c.pounds) || 0; }
+    if (c.keep_unit === true) { o.yards += Number(c.sold_yards) || 0; } else { o.pounds += Number(c.pounds) || 0; }
     o.goods_revenue += known(c.goods_revenue) ? cents(c.goods_revenue) : 0;
     if (known(c.base_cost)) { o.base_cost += cents(c.base_cost); o.cost_known += 1; } else { o.cost_unknown += 1; }
     o.commission += known(c.commission) ? cents(c.commission) : 0;

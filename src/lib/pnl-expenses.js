@@ -42,7 +42,7 @@ export var EXPENSE_COLUMNS = [
 export function letterOf(cat) {
   var c = cat || {}; var kind = String(c.kind || 'expense'); var key = String(c.key || '').toLowerCase();
   var text = (key + ' ' + String(c.label || '')).toLowerCase().replace(/_/g, ' ');
-  // v55.83-VW (Max, Nov 20: "unallocated funds default internally to unused / awaiting allocation, NOT a fee ... Only explicit
+  // v55.83-VY (Max, Nov 20: "unallocated funds default internally to unused / awaiting allocation, NOT a fee ... Only explicit
   // Services rendered designation creates that fee expense") — money sent to RTM / NextTrade that is neither used for a bill nor
   // explicitly booked as their fee is HELD with them: shown, never taken off the profit. Only the explicit fee row is an office cost.
   if (/^__pt_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; }
@@ -75,6 +75,7 @@ export function expenseColumns(cats, uncategorized) {
   if (u) { out.unassigned.cents += u; out.unassigned.cats.push({ key: 'uncategorized', label: 'No category at all', cents: u }); }
   ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (k) { out[k].cats.sort(function (a, b) { return b.cents - a.cents; }); });
   out.total = out.A.cents + out.C.cents + out.D.cents + out.E.cents;
+  out.unconfirmed = out.held.cats.reduce(function (a, c) { return a + (/_unconfirmed$/.test(String(c.key)) ? c.cents : 0); }, 0); // v55.83-VY
   return out;
 }
 
@@ -85,13 +86,14 @@ export function finalPnl(profitCents, cols, incompleteLines) {
   // v55.83-VQ (Codex 22:50 P2) — `assumed` = money left out ONLY because its category name says supplier / trucker / broker /
   // commission ("already inside goods and transport profit"). That is an assumption from a name, not a line-by-line check, so a
   // final figure that rests on it is never called complete.
-  return { cents: profitCents - cols.total, assumed: cols.in_profit.cents, complete: cols.unassigned.cents === 0 && cols.in_profit.cents === 0 && !(incompleteLines > 0) };
+  // unconfirmed = transfers to a company's account that nobody has confirmed: left out of the expenses, but the figure rests on that
+  return { cents: profitCents - cols.total, assumed: cols.in_profit.cents, unconfirmed: cols.unconfirmed || 0, complete: cols.unassigned.cents === 0 && cols.in_profit.cents === 0 && !(cols.unconfirmed > 0) && !(incompleteLines > 0) };
 }
 
 // The Income Statement's categories in its real-cost look, exactly as that screen builds them: every paid-through company's
 // payments taken out of the category they were paid under and its bills put into their own. adjust / fold are that screen's own
 // functions (rtmAdjust, foldUnc), passed in so there is one copy of the rule.
-// v55.83-VW — P&L by period only: an explicitly booked fee is that company's fee whichever date its transfer has. Where the
+// v55.83-VY — P&L by period only: an explicitly booked fee is that company's fee whichever date its transfer has. Where the
 // Income Statement keeps such a fee inside the single "remainder" row of an older transfer, it is moved here into the company's
 // fee row (same money, the total does not move), so that ONLY the explicit fee is deducted and the rest is held.
 export function explicitFeeRows(cats, blocks) {
@@ -104,6 +106,15 @@ export function explicitFeeRows(cats, blocks) {
     rest.total = Math.round((Number(rest.total) - move) * 100) / 100;
     var fee = out.filter(function (c) { return c.key === base + '_fee'; })[0];
     if (fee) { fee.total = Math.round((Number(fee.total) + move) * 100) / 100; } else { out.push({ key: base + '_fee', label: (b.payer || 'RTM') + ' — explicitly booked as their fee', kind: 'expense', count: 0, total: move }); }
+  });
+  // (Codex 12:57) transfers recognised ONLY from the bank's own text, not yet marked by a person: their own row, so the screen can
+  // say "not confirmed yet" — they are not an expense, and the final figure is not called complete while they exist
+  (blocks || []).forEach(function (b) {
+    var um = Math.round((Number(b.unmarked_total) || 0) * 100) / 100; if (!(um > 0.004)) { return; }
+    var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    var rest = out.filter(function (c) { return c.key === base; })[0]; var mv = rest ? Math.min(um, Math.max(0, Number(rest.total) || 0)) : 0; if (!(mv > 0.004)) { return; }
+    rest.total = Math.round((Number(rest.total) - mv) * 100) / 100;
+    out.push({ key: base + '_unconfirmed', label: (b.payer || 'RTM') + ' — transfers to its account that nobody has confirmed yet', kind: 'not_pnl', count: 0, total: mv });
   });
   return out.filter(function (c) { return Math.abs(Number(c.total) || 0) > 0.004 || c.via_rtm || c.rtm_out; });
 }
@@ -185,7 +196,7 @@ export function totalExpenses(keys, cache, scope) {
     if (e.status === 'loading') { t.loading += 1; t.complete = false; return; }
     if (e.status === 'error') { t.failed += 1; t.complete = false; return; }
     if (e.status !== 'ok') { t.unavailable += 1; t.complete = false; return; }
-    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total;
+    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total; t.cols.unconfirmed = (t.cols.unconfirmed || 0) + (e.cols.unconfirmed || 0);
   });
   return t;
 }

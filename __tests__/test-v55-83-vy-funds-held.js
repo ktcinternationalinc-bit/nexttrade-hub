@@ -1,4 +1,4 @@
-// v55.83-VW — Max, 20 Nov 2026 (through Codex, "PRIORITY FROM MAX — existing monthly P&L expense pop-up and RTM / NextTrade fee
+// v55.83-VY — Max, 20 Nov 2026 (through Codex, "PRIORITY FROM MAX — existing monthly P&L expense pop-up and RTM / NextTrade fee
 // calculation"): money sent to RTM / NextTrade is NOT a fee by itself. In the internal P&L by period only an amount EXPLICITLY
 // marked as their services reduces profit; bills they paid are counted once in their own categories; what is left is held with
 // them and is not an expense. "Click an RTM / NextTrade professional-fee component to see original transfers, underlying bill
@@ -15,7 +15,7 @@ var B = require(path.join(root, 'src/lib/paid-through-blocks.js')); var PS = req
 var FundsSent = require(path.join(root, 'src/components/FundsSent.jsx')).default; var PnlFormula = require(path.join(root, 'src/components/PnlFormula.jsx')).default; var ExpenseDetail = require(path.join(root, 'src/components/ExpenseDetail.jsx')).default;
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1100))); }
-console.log('VW — funds sent to RTM / NextTrade: only an explicit fee is an expense');
+console.log('VY — funds sent to RTM / NextTrade: only an explicit fee is an expense');
 
 var labels = { professional_fees: 'Professional Fees', utilities: 'Utilities', goods: 'Goods purchased', trucking: 'Trucking', rent: 'Rent' }; var kinds = { goods: 'cogs' };
 var BILLS = { b1: { vendor_name: 'Mill Co', bill_number: 'M-1', category: 'goods', paid_via: 'RTM Capital', bill_date: '2026-06-02', release_number: '1002-1', total_amount: 30000 },
@@ -81,9 +81,21 @@ var heldKey = e.cols.held.cats[0].key; var mk = e.detail.byKey[heldKey];
 var hd = RS.renderToStaticMarkup(React.createElement(ExpenseDetail, { makeup: mk, rowsListed: true, funding: e.detail.funding.filter(function (x) { return x.key === mk.funding_key; })[0] }));
 check('clicking the held line in the opened period says it is NOT an expense and shows the same company panel; clicking the fee line says it IS deducted', hd.indexOf('This line is NOT an expense') > 0 && hd.indexOf('$66,000.00 funds sent') > 0 && (function () { var fk = e.cols.A.cats.filter(function (c) { return /_fee$/.test(c.key); })[0].key; var m2 = e.detail.byKey[fk]; return RS.renderToStaticMarkup(React.createElement(ExpenseDetail, { makeup: m2, rowsListed: true, funding: e.detail.funding[0] })).indexOf('it IS deducted') > 0; })());
 check('the total row of several periods adds the held money too, and the final figure is still total − A − C − D − E', (function () { var cache = {}; cache['s|2026-06'] = e; cache['s|2026-07'] = eJ; var t = X.totalExpenses(['2026-06', '2026-07'], cache, 's'); return t.cols.held.cents === 1080000 && t.cols.total === e.cols.total && X.finalPnl(5000000, t.cols, 0).cents === 5000000 - e.cols.total; })());
-// source: server + screen
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/bills/route.js'), 'utf8'); var tab = fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8');
+// ── Codex 12:57 — an unmarked transfer is a CANDIDATE a person confirms: not an expense, not silently confirmed, and the figure says so
+var uKey = e.cols.held.cats.filter(function (c) { return /_unconfirmed$/.test(c.key); })[0];
+check('the 26,000 transfer nobody marked is NOT an expense and NOT quietly counted as confirmed funding: with 2,000 fee and 52,000 of bills, all 12,000 left is shown as “not confirmed yet”', !!uKey && uKey.cents === 1200000 && e.cols.unconfirmed === 1200000 && /nobody has confirmed yet/.test(uKey.label) && e.cols.held.cents === 1200000);
+check('while a transfer is unconfirmed the final figure is NOT called complete and carries the amount, so the month is visibly provisional', X.finalPnl(5000000, e.cols, 0).unconfirmed === 1200000 && X.finalPnl(5000000, Object.assign({}, e.cols, { in_profit: { cents: 0, cats: [] } }), 0).complete === false);
+function juneAllMarked() { var a = june({ fee: 2000 }); a.spending.paid_through.forEach(function (b) { b.unmarked_total = 0; b.lines.forEach(function (t) { t.marked = true; }); }); return X.readExpenseAnswer(a, q, PS.rtmAdjust, PS.foldUnc); }
+var eC = juneAllMarked();
+check('after a person confirms it (the line is marked with the company) the same money is plain held funds: nothing unconfirmed, same expenses, same held total', eC.cols.unconfirmed === 0 && eC.cols.held.cents === 1200000 && eC.cols.total === e.cols.total && eC.cols.held.cats.every(function (c) { return !/_unconfirmed$/.test(c.key); }));
+var seen = []; var hC = RS.renderToStaticMarkup(React.createElement(FundsSent, { funding: fu, onConfirm: function (t, p) { seen.push(t.id + ':' + p); } }));
+check('the panel says NOT CONFIRMED YET and gives a Confirm button on the unmarked transfer only (the two marked ones have none)', hC.indexOf('NOT CONFIRMED YET: $26,000.00') > 0 && hC.split('Confirm: sent to RTM Capital').length - 1 === 1 && hC.split('confirmed — RTM Capital').length - 1 === 2 && RS.renderToStaticMarkup(React.createElement(FundsSent, { funding: fu })).indexOf('<button') < 0);
+check('confirming uses the EXISTING action that marks a bank line with the company (its own permission, account and audit checks), then reloads the expenses; nothing is marked automatically', tab.indexOf("action: 'rtm_flag', bank_transaction_id: line.id, payer: payer") > 0 && tab.indexOf('onConfirm={confirmFunds}') > 0 && route.indexOf("marked: false, who: t8.merchant_name || t8.name || ''") > 0 && route.indexOf("update({ third_party_payer: py8") < 0);
+
+// source: server + screen
+
 check('server (Income Statement answer): unmarked money-out lines are added to a company ONLY through the destination rule, never own-account transfers, same business / not pending / not duplicate, fail-soft', route.indexOf("var py8 = fundingPayerOfText(t8.name) || fundingPayerOfText(t8.merchant_name); if (!py8) { return; }") > 0 && route.indexOf("if (t8.transfer_group_id || t8.classification === 'transfer') { return; }") > 0 && route.indexOf(".is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate')") > 0 && route.indexOf('} catch (eId) {}') > 0);
 check('screen: a "Funds with RTM / NextTrade … NOT an expense" box in the opened period, the company panel in the detail and the pop-up, and the export has the held column', tab.indexOf("['held', 'Funds with RTM / NextTrade — sent, but not used for a bill and not marked as their fee: NOT an expense']") > 0 && tab.indexOf('funding={(function () { var mk = e.detail && e.detail.byKey[c0.key];') > 0 && tab.indexOf("'Funds held with RTM / NextTrade (not an expense)'") > 0);
-console.log('\nVW: ' + pass + ' passed, ' + failN + ' failed');
+console.log('\nVY: ' + pass + ' passed, ' + failN + ' failed');
 if (failN) { process.exit(1); }

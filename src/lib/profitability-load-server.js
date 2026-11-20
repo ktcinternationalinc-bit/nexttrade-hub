@@ -35,7 +35,7 @@ export async function loadProfitabilityInput(db) {
       lineReleasePounds: await fetchAll(function () { return db.from('pl_line_release_pounds').select('invoice_item_id, release_key, pounds'); }),
       estimates: await fetchAll(function () { return db.from('pl_release_estimates').select('release_key, outbound_estimate, note'); })
     };
-    // v55.83-VV — "keep in yards" per description, and typed costs per yard (the report still runs before the columns exist)
+    // v55.83-VX — "keep in yards" per description, and typed costs per yard (the report still runs before the columns exist)
     try { setup.nameUnits = await fetchAll(function () { return db.from('pl_name_units').select('name_key, raw_name, unit, keep_unit'); }); setup.keep_unit_ready = true; }
     catch (eKU) { setup.keep_unit_ready = false; }
     // v55.83-TG — the shipping terms chosen on the invoice (same row; works before the new columns exist)

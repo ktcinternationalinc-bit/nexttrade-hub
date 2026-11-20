@@ -1927,7 +1927,7 @@ export async function POST(req) {
             // v55.83-SR — the blocks are built by src/lib/paid-through-blocks.js (same sums as before; a company with a
             // provider_from date is split at that date, and lines from it on are broken into bills / service fee / waiting)
             var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: t9.classification, payer: t9.third_party_payer, marked: true }; });
-            // v55.83-VW — a transfer whose bank text names the company's own account (ending 9909 / 2061) is money sent to that
+            // v55.83-VY — a transfer whose bank text names the company's own account (ending 9909 / 2061) is money sent to that
             // company even when nobody stamped it. Transfers between KTC's own accounts are never taken. Fail-soft.
             try {
               var destOr = FUNDING_DESTINATIONS.map(function (d0) { return 'name.ilike.%' + d0.suffix + '%,merchant_name.ilike.%' + d0.suffix + '%'; }).join(',');

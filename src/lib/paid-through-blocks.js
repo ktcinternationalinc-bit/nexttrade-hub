@@ -8,7 +8,7 @@
 // underneath: bills paid · service fee (on requests) · uncategorized, waiting for bills.
 // Pure. Every block conserves its total: payments = covered bills + (service fee + waiting + other).
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
-// v55.83-VW (Max, Nov 20 2026, through Codex: "For Max's identified RTM destination ending 9909 and NextTrade destination ending
+// v55.83-VY (Max, Nov 20 2026, through Codex: "For Max's identified RTM destination ending 9909 and NextTrade destination ending
 // 2061, unallocated funds default internally to unused / awaiting allocation, NOT a fee") — a money-out bank line that says it
 // is a transfer TO one of these accounts is money sent to that company, also when nobody stamped the company on the line.
 // Only the destination written in the bank's own text counts ("Online Transfer to CHK ...9909"); a category never does.
@@ -79,7 +79,7 @@ export function buildPaidThroughBlocks(o) {
       });
       if (!(payCount > 0 || allocTotal > 0 || advApplied > 0)) { return; }
       // bills / service fee / waiting — line by line, only for lines from provider_from on
-      // v55.83-VW (Max, Nov 20: "Only explicit Services rendered designation creates that fee expense") — every fee a person booked
+      // v55.83-VY (Max, Nov 20: "Only explicit Services rendered designation creates that fee expense") — every fee a person booked
       // on these transfers (on a request, or split off the payment), whichever date the line has. The rows of the Income
       // Statement are NOT changed by it (older entries stay as booked); P&L by period uses this figure for its own deduction.
       var explicitFees = 0;
@@ -106,7 +106,7 @@ export function buildPaidThroughBlocks(o) {
         allocations_total: allocTotal, service_fee: remainder,
         fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows,
         advance_held: advanceHeld, advance_applied: advApplied, explicit_fees: explicitFees, // v55.83-TX · VW
-        // v55.83-VW — the transfers themselves, and how much of them nobody has marked with the company yet
+        // v55.83-VY — the transfers themselves, and how much of them nobody has marked with the company yet
         lines: mine.map(function (t) { return { id: t.id, date: t.date, amount: r2(t.amount), who: t.who || '', marked: t.marked !== false }; }),
         unmarked_total: r2(mine.reduce(function (a, t) { return a + (t.marked === false ? Number(t.amount) || 0 : 0); }, 0)) };
       if (advApplied > 0) {

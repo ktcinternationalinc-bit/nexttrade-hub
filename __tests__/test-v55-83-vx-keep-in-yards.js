@@ -1,4 +1,4 @@
-// v55.83-VV — Max, 20 Nov 2026: "certain groups to be in yards ... certain things are not converted to lbs ... we can give cost in
+// v55.83-VX — Max, 20 Nov 2026: "certain groups to be in yards ... certain things are not converted to lbs ... we can give cost in
 // yards ... without causing mayhem" · commission on them: "NO" · the $0.02 inbound allowance: "NO" · "Headliner and everything
 // else that is not PVC related leather. we should have a radio button to those items in yards excluded from the lb conversion."
 // Real engine (assembleProfitability), real preview function; made-up names and amounts.
@@ -10,7 +10,7 @@ var A = require(path.join(root, 'src/lib/profitability-assemble.js')); var PR = 
 var P = require(path.join(root, 'src/lib/pnl-period.js')); var K = require(path.join(root, 'src/lib/keep-yards-preview.js'));
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1100))); }
-console.log('VV — goods kept in yards (not converted to pounds)');
+console.log('VX — goods kept in yards (not converted to pounds)');
 
 // One Houston release (1002-…: the inbound allowance applies) carrying two sales on one invoice:
 //   • 'Fabric by yd'  — 1,000 yd at $2.00, bought from the supplier IN YARDS: 4,000 yd for $3,200 (+ $80 real commission on the bill)
@@ -84,12 +84,25 @@ check('a headliner line kept in yards: 1,000 yd, shipping weight 1,250 lb (1.25 
 
 // ── route + loader + SQL
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/profitability/route.js'), 'utf8');
-check('server: keep_preview and set_name_keep sit AFTER the edit-costs gate, refuse until the SQL was run, and the save is recorded in the audit trail', route.indexOf("if (action === 'keep_preview' || action === 'set_name_keep') {") > route.indexOf("var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);") && route.indexOf('sql/v55-83-VV-keep-in-yards.sql') > 0 && route.indexOf("'pl_name_keep_unit_set'") > 0 && route.indexOf(".in('unit', ['yd', 'lm'])") > 0);
+check('server: keep_preview and set_name_keep sit AFTER the edit-costs gate, refuse until the SQL was run, and the save is recorded in the audit trail', route.indexOf("if (action === 'keep_preview' || action === 'set_name_keep') {") > route.indexOf("var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);") && route.indexOf('sql/v55-83-VX-keep-in-yards.sql') > 0 && route.indexOf("'pl_name_keep_unit_set'") > 0 && route.indexOf(".in('unit', ['yd', 'lm'])") > 0);
 check('server: profit figures in the preview are removed for a person who may not see profit', route.indexOf("(seeK && seeK.ok === true) ? pvK : stripProfit(pvK)") > 0 && require(path.join(root, 'src/lib/margin-visibility.js')).stripProfit(pv).before.goods_profit === undefined);
 var loader = fs.readFileSync(path.join(root, 'src/lib/profitability-load-server.js'), 'utf8');
 check('the report still runs before the SQL: the new columns are read fail-soft and the feature is simply off', loader.indexOf("select('name_key, raw_name, unit, keep_unit')") > 0 && loader.indexOf('catch (eKU) { setup.keep_unit_ready = false; }') > 0 && on.keep_unit_ready === true && A.assembleProfitability(Object.assign({ date_from: '2026-01-01' }, input({}), { keep_unit_ready: undefined })).keep_unit_ready === false);
-var sql = fs.readFileSync(path.join(root, 'sql/v55-83-VV-keep-in-yards.sql'), 'utf8');
+var sql = fs.readFileSync(path.join(root, 'sql/v55-83-VX-keep-in-yards.sql'), 'utf8');
 check('ONE small SQL: adds columns only (default = converted, as today), deletes nothing, no comment lines', /add column if not exists keep_unit boolean not null default false/.test(sql) && /cost_unit text not null default 'lb'/.test(sql) && !/delete from|drop table|truncate|^--/im.test(sql));
+// ── Codex 12:57 — a linear metre is not a yard; a pounds factor is never used to convert a length
+function runLm(o) { var opt = o || {}; var inp = input({ keep: true, fabricBillUnit: opt.billUnit || 'yd', fabricBillQty: opt.billQty || 4000 });
+  inp.nameUnits = [{ name_key: PR.nameKey('Fabric by yd'), raw_name: 'Fabric by yd', unit: opt.saleUnit || 'lm', keep_unit: true }, { name_key: PR.nameKey('PVC roll'), raw_name: 'PVC roll', unit: 'lb' }];
+  inp.items = [{ id: 'l1', invoice_id: 'i1', description: 'Fabric by yd', quantity: 100, unit_price: 2 }, { id: 'l2', invoice_id: 'i1', description: 'PVC roll', quantity: 5000, unit_price: 1 }];
+  return A.assembleProfitability(Object.assign({ date_from: '2026-01-01', date_to: '' }, inp)); }
+var lmR = runLm({}); var lmC = cellOf(lmR, 'Fabric by yd'); var lmRow = (lmR.by_product || []).filter(function (r) { return /Fabric/.test(r.label); })[0];
+check('a line of 100 LINEAR METRES kept as it is: the line says 100 (metres), and the Yards total counts it as 109.361 yd — never as 100 yd', lmC.keep_unit === true && lmC.sold_unit === 'lm' && lmC.sold_qty === 100 && lmC.sold_yards === 109.361 && lmRow.yards === 109.361 && P.periodBreakdown(lmR.cells, false).yards === 109.361, [lmC.sold_qty, lmC.sold_yards, lmRow && lmRow.yards]);
+check('…sold in METRES, bought in YARDS at $0.80 / yd: cost = 109.361 yd × 0.80 = $87.49 (length conversion 1.09361, not the pounds table)', lmC.base_cost === 87.49 && lmC.base_cost_per_sold_unit === 0.8749, [lmC.base_cost, lmC.base_cost_per_sold_unit]);
+var ydM = cellOf(runLm({ saleUnit: 'yd', billUnit: 'lm', billQty: 4000 }), 'Fabric by yd');
+check('…sold in YARDS, bought in METRES (4,000 m for $3,200 = 4,374.44 yd): cost = 100 yd × 3,200 ÷ 4,374.44 = $73.15', ydM.sold_yards === 100 && ydM.base_cost === 73.15, [ydM.sold_yards, ydM.base_cost]);
+check('the weight tables play no part in it: with other pounds-per-yard / per-metre figures the cost of a kept line is the same', (function () { var a1 = input({ keep: true }); var a2 = input({ keep: true }); a2.factors = [{ unit: 'yd', pounds_per_unit: 7 }, { unit: 'lm', pounds_per_unit: 11 }]; var c1 = cellOf(A.assembleProfitability(Object.assign({ date_from: '2026-01-01' }, a1)), 'Fabric by yd'); var c2 = cellOf(A.assembleProfitability(Object.assign({ date_from: '2026-01-01' }, a2)), 'Fabric by yd'); return c1.base_cost === 800 && c2.base_cost === 800 && c2.pounds === 7000 && c2.sold_yards === 1000; })());
+check('the screen labels a kept metre line in metres (m, / m) and shows its yards beside it', fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8').indexOf("(c.sold_unit === 'lm' ? ' m' : ' yd')") > 0 && fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8').indexOf("'kept in metres (= ' + fmt0(c.sold_yards) + ' yd)'") > 0);
+
 // ── the before / after panel and the screen
 var React = require('react'); global.React = React; var RS = require('react-dom/server'); var KP = require(path.join(root, 'src/components/KeepYardsPreview.jsx')).default;
 var h1 = RS.renderToStaticMarkup(React.createElement(KP, { ask: { names: ['Fabric by yd'], keep: true, preview: pv } }));
@@ -103,5 +116,5 @@ check('a typed cost on a kept-in-yards sale is sent as per YARD, with no commiss
 check('pounds and yards are shown apart: summary rows, the period table, the opened period and the CSV', tab.indexOf('{qtyText(r.pounds, r.yards)}') > 0 && tab.indexOf("{'+ ' + fmt0(r.yards) + ' yd'}") > 0 && tab.indexOf("'Yards (kept in yards)'") > 0 && tab.indexOf('{qtyText(it.pounds, it.yards)}') > 0);
 check('server: a cost typed per yard is validated and stored as per yard (never as per pound), with no commission', route.indexOf("var perYd = body.cost_unit === 'sold_unit';") > 0 && route.indexOf("if (perYd) { rowM.cost_unit = 'sold_unit'; }") > 0 && route.indexOf('commission_per_lb: perYd ? 0 : mpl') > 0);
 
-console.log('\nVV: ' + pass + ' passed, ' + failN + ' failed');
+console.log('\nVX: ' + pass + ' passed, ' + failN + ' failed');
 if (failN) { process.exit(1); }

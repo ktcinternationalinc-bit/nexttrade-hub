@@ -24,7 +24,7 @@ import { stripProfit, MARGIN_PERMISSION } from '../../../../lib/margin-visibilit
 import { nameKey, relKey, PRICING_BASES, DEFAULT_UNIT_FACTORS, unitKey } from '../../../../lib/profitability';
 import { buildInboundTrucking } from '../../../../lib/inbound-trucking'; // v55.83-VR — tracking only
 import { assembleProfitability } from '../../../../lib/profitability-assemble';
-import { keepYardsPreview } from '../../../../lib/keep-yards-preview'; // v55.83-VV — keep in yards: before / after
+import { keepYardsPreview } from '../../../../lib/keep-yards-preview'; // v55.83-VX — keep in yards: before / after
 import { loadProfitabilityInput } from '../../../../lib/profitability-load-server'; // v55.83-UD — shared with the P&L
 
 var API_BUILD_MARKER = 'v55.83-SY-profitability';
@@ -231,7 +231,7 @@ export async function POST(req) {
       await audit(db, userId, 'pl_group_dissolved', 'pl_product_group', body.id, { names_released: (dn.data || []).length });
       return NextResponse.json({ ok: true, api_build_marker: API_BUILD_MARKER });
     }
-    // v55.83-VV (Max, Nov 20: "a radio button to those items in yards excluded from the lb conversion") — a description sold in yards /
+    // v55.83-VX (Max, Nov 20: "a radio button to those items in yards excluded from the lb conversion") — a description sold in yards /
     // linear metres is either converted to pounds (as always) or KEPT IN YARDS. keep_preview works the report out both ways and
     // stores nothing; set_name_keep stores the choice. Both need pnl.edit_costs (checked above). A report setting only.
     if (action === 'keep_preview' || action === 'set_name_keep') {
@@ -240,7 +240,7 @@ export async function POST(req) {
       var keepOn = body.keep === true;
       var ldK = await loadProfitabilityInput(db);
       if (ldK.setup_needed) { return bad(SQL_HINT); }
-      if (ldK.input.keep_unit_ready !== true) { return bad('“Keep in yards” is not switched on in the database yet. Run sql/v55-83-VV-keep-in-yards.sql in Supabase once, then try again. Nothing was changed.'); }
+      if (ldK.input.keep_unit_ready !== true) { return bad('“Keep in yards” is not switched on in the database yet. Run sql/v55-83-VX-keep-in-yards.sql in Supabase once, then try again. Nothing was changed.'); }
       var pvK = keepYardsPreview(ldK.input, { names: namesK, keep: keepOn, date_from: body.date_from || null, date_to: body.date_to || null });
       if (!pvK.ok) { return bad(pvK.error); }
       if (action === 'keep_preview') {
@@ -275,7 +275,7 @@ export async function POST(req) {
       var tbl = lvl === 'group' ? 'pl_group_costs' : 'pl_line_costs'; var col = lvl === 'group' ? 'group_id' : 'invoice_item_id';
       var cpl = body.cost_per_lb === '' || body.cost_per_lb === null || body.cost_per_lb === undefined ? null : Number(String(body.cost_per_lb).replace(/[$,\s]/g, ''));
       var mpl = body.commission_per_lb === '' || body.commission_per_lb === null || body.commission_per_lb === undefined ? 0 : Number(String(body.commission_per_lb).replace(/[$,\s]/g, ''));
-      var perYd = body.cost_unit === 'sold_unit'; // v55.83-VV — a cost typed per YARD for goods kept in yards (never mixed up with per pound)
+      var perYd = body.cost_unit === 'sold_unit'; // v55.83-VX — a cost typed per YARD for goods kept in yards (never mixed up with per pound)
       if (cpl !== null && (isNaN(cpl) || !(cpl > 0) || cpl > (perYd ? 1000 : 100))) { return bad(perYd ? 'The cost must be dollars per YARD, above zero (for example 1.10).' : 'The cost must be dollars per POUND, above zero (for example 0.12).'); }
       if (isNaN(mpl) || mpl < 0 || mpl > 100) { return bad('The commission must be dollars per pound, zero or more.'); }
       var prevM = await db.from(tbl).select('cost_per_lb, commission_per_lb, note').eq(col, ref).maybeSingle();

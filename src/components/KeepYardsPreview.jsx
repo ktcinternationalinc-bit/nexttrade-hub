@@ -1,4 +1,4 @@
-// v55.83-VV — "Keep in yards": what the switch changes, shown BEFORE it is saved (Max, Nov 20 2026: "how can we implement
+// v55.83-VX — "Keep in yards": what the switch changes, shown BEFORE it is saved (Max, Nov 20 2026: "how can we implement
 // something like that without causing mayhem"). Stateless: it shows what keepYardsPreview() worked out on the server.
 import React from 'react';
 

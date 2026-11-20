@@ -21,8 +21,8 @@ export function expenseDetail(spending, rc) {
   var orig = {}; (sp.categories || []).forEach(function (c) { orig[c.key] = c; });
   var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, date: r.date || '', who: r.who || '', cents: cents(r.amount) }); });
   var remOf = {}; blocks.forEach(function (b) { remainderRows(b).forEach(function (rw) { remOf[rw.key] = { block: b, row: rw }; });
-    // v55.83-VW — the company's three possible rows always belong to it, also a fee row P&L by period made itself (explicitFeeRows)
-    var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_'); [base, base + '_fee', base + '_waiting'].forEach(function (k) { if (!remOf[k]) { remOf[k] = { block: b, row: null }; } }); });
+    // v55.83-VY — the company's three possible rows always belong to it, also a fee row P&L by period made itself (explicitFeeRows)
+    var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_'); [base, base + '_fee', base + '_waiting', base + '_unconfirmed'].forEach(function (k) { if (!remOf[k]) { remOf[k] = { block: b, row: null }; } }); });
 
   function makeup(key, label, figure) {
     var m = { key: key, label: label, cents: figure, bank: null, from_advances_cents: 0, taken_out: [], taken_out_cents: 0, bills: { cents: 0, listed_cents: 0, rows: [] }, remainder: null, other_cents: 0 };
@@ -52,7 +52,7 @@ export function expenseDetail(spending, rc) {
     return m;
   }
 
-  // v55.83-VW — FUNDS SENT to each paid-through company in these dates, and what became of them. Every figure is the block's own:
+  // v55.83-VY — FUNDS SENT to each paid-through company in these dates, and what became of them. Every figure is the block's own:
   //   sent = applied to bills (counted once, under each bill's own category) + explicit fee (the ONLY part that is an expense
   //   here) + advance held + unused (neither used nor booked — stays with the company, not an expense).
   out.funding = blocks.map(function (b) {
@@ -107,7 +107,7 @@ export function pnlFormula(r, e, hidden) {
   if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
   if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
-  if (cols && cols.held && cols.held.cents) { not.push({ label: 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' }); }
+  if (cols && cols.held && cols.held.cents) { not.push({ label: 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });

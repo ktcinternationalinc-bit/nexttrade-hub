@@ -33,20 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
-    version: 'v55.83-VW',
+    version: 'v55.83-VY',
     date: '2026-11-20',
     title: 'P&L by period: money sent to RTM / NextTrade is not a fee unless it is marked as one',
     items: [
       { text: '**The rule changed.** In P&L by period, money sent to RTM or NextTrade is no longer taken off as an office cost just because it was sent. Only an amount explicitly booked as their fee is deducted. Bills they paid are counted once, in their own categories. What is left is shown as held with them and does not reduce profit.' },
       { text: '**Click through from the formula.** Press “ƒ how?” next to a FINAL P&L figure, then click “A · Warehouse / Office”. It opens to show what is in it and, for each company, a small table: funds sent, applied to underlying bills, explicitly marked as their fee, unused, and the one figure that is deducted. Click “Applied to underlying bills” to see each bill and the part of it paid from those funds.' },
       { text: '**A new green box in the opened period:** “Funds with RTM / NextTrade — NOT an expense”. Click its line for the same table.' },
-      { text: '**Transfers nobody marked.** A bank transfer whose own text says it went to the RTM or NextTrade account is treated as money sent to that company even if nobody marked it. The table says in amber how much was recognised that way, so a wrong one can be given its real category.' },
+      { text: '**Transfers nobody marked are shown for you to confirm.** A bank transfer whose own text says it went to the RTM or NextTrade account is listed as “not confirmed yet”. It is not taken off as an expense, and the month is marked provisional until someone confirms it. Open “The transfers” in the table and press Confirm on each one that really is money sent to that company. If one is not, give it its real category in All Transactions.' },
       { text: 'This lowers the expenses of months where such transfers were sitting under Professional Fees, so the final figures of those months change. The tax view in Stats → Income Statement is not changed: there the full transfer stays under Professional Fees, once.' },
       { superAdminOnly: true, text: 'Technical: pnl-expenses.js letterOf puts paid-through remainder / waiting / advance rows in a new non-counted column held; explicitFeeRows moves explicitly booked fees (block.explicit_fees) into the fee row. paid-through-blocks.js adds FUNDING_DESTINATIONS, fundingPayerOfText, block.lines, unmarked_total, explicit_fees and richer bill rows. period_stats adds unmarked lines matched by destination text to the blocks. New FundsSent.jsx. No SQL.' }
     ]
   },
   {
-    version: 'v55.83-VV',
+    version: 'v55.83-VX',
     date: '2026-11-20',
     title: 'Profitability: goods sold in yards can stay in yards (not converted to pounds)',
     items: [
@@ -55,8 +55,9 @@ export const BUILD_HISTORY = [
       { text: '**What “kept in yards” means.** The goods are counted in yards and never added to the Pounds totals. Their cost is per yard, from supplier bills that are also in yards. The 2 cents per pound inbound allowance is not charged on them and no commission rate is added. A supplier line bought by weight is not converted — the line asks for a cost per yard instead.' },
       { text: '**Reports show the two apart.** Where a row has both, it shows pounds and yards side by side and no “per pound” average. A product made only of yard goods shows its price and cost per yard. P&L by period shows the yards under the pounds.' },
       { text: '**Shipping is shared as before.** A release’s trucking and freight are still shared between its lines by shipping weight, so other products on the same release do not change.' },
+      { text: 'A line sold in linear metres stays in metres on its own row and is counted in the Yards totals at 1 metre = 1.09361 yards.' },
       { text: 'This needs one small database script before the buttons appear. Until it is run everything stays exactly as it is.' },
-      { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-VV-keep-in-yards.sql (pl_name_units.keep_unit, cost_unit on pl_line_costs and pl_group_costs; adds columns only). Engine: cell.keep_unit, sold_qty, base_cost_per_sold_unit; inbound_allowance 0; resolveCost with soldUnitOnlyFactors; summarize yards and unit_mix. Route actions keep_preview and set_name_keep behind pnl.edit_costs; src/lib/keep-yards-preview.js runs the engine twice. Loader is fail-soft before the SQL.' }
+      { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-VX-keep-in-yards.sql (pl_name_units.keep_unit, cost_unit on pl_line_costs and pl_group_costs; adds columns only). Engine: cell.keep_unit, sold_qty, base_cost_per_sold_unit; inbound_allowance 0; resolveCost with soldUnitOnlyFactors; summarize yards and unit_mix. Route actions keep_preview and set_name_keep behind pnl.edit_costs; src/lib/keep-yards-preview.js runs the engine twice. Loader is fail-soft before the SQL.' }
     ]
   },
   {

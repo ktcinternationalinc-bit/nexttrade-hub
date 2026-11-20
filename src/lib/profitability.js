@@ -91,16 +91,16 @@ export function foamFactors(factors) {
 // product name and description, never from the merged group's label. Only yards change: pounds, kilos, tons and linear metres
 // stay as they are (Max said per yard). A line that says headliner AND foam is counted as HEADLINER (the product, 1.25) and
 // flagged so a person can look — the two rules give different weights and only one can apply.
-// v55.83-VV (Max, Nov 20 2026: "certain groups to be in yards ... not converted to lbs ... a radio button to those items in yards
+// v55.83-VX (Max, Nov 20 2026: "certain groups to be in yards ... not converted to lbs ... a radio button to those items in yards
 // excluded from the lb conversion" · commission on them: "NO" · the $0.02 inbound allowance: "NO") — a description KEPT IN YARDS.
 // Its goods cost comes only from supplier lines that are ALSO in yards / linear metres (bill $ ÷ bill yards — the weight factor
 // cancels out), never from a line bought by weight: this table simply has no pounds, kilos or tons, so such a line cannot be
 // converted. The line still has a SHIPPING WEIGHT (its usual factor), used only to share a release's shipping cost.
-export function soldUnitOnlyFactors(factors) {
-  var f = factors || {}; var u = f.units || DEFAULT_UNIT_FACTORS; var bp = {};
-  Object.keys(f.byProduct || {}).forEach(function (k) { var per = f.byProduct[k] || {}; bp[k] = { yd: per.yd, lm: per.lm }; });
-  return { units: { yd: u.yd, lm: u.lm }, byProduct: bp };
-}
+// (Codex 12:57) LENGTH only: 1 linear metre = 1.09361 yards. The user's pounds-per-yard / pounds-per-metre figures are weights and
+// are never used to turn metres into yards. Used as a factor table it gives YARDS (not pounds) for a yd / lm quantity.
+export var YARDS_PER_METRE = 1.09361;
+export function yardsPerSoldUnit(unit) { var k = unitKey(unit); return k === 'yd' ? 1 : (k === 'lm' ? YARDS_PER_METRE : null); }
+export function soldUnitOnlyFactors() { return { units: { yd: 1, lm: YARDS_PER_METRE }, byProduct: {} }; }
 export function isSoldByLength(unit) { var k = unitKey(unit); return k === 'yd' || k === 'lm'; }
 export var HEADLINER_LB_PER_YARD = 1.25;
 export function isHeadlinerLine(productName, description) { var rx = /head[\s-]*liner/i; return rx.test(String(productName || '')) || rx.test(String(description || '')); }
@@ -351,9 +351,11 @@ export function buildCells(input) {
           description: gl.ln.description, group_id: gl.g ? gl.g.id : null, product: gl.g ? gl.g.name : String(gl.ln.description || '').trim(), product_key: gl.pKey,
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
           unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, headliner: gl.headliner, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
-        // v55.83-VV — kept in yards: pounds stays the SHIPPING weight (only for sharing a release's shipping); sold_qty is this part's yards
+        // v55.83-VX — kept in yards: pounds stays the SHIPPING weight (only for sharing a release's shipping); sold_qty is this part's yards
         c.keep_unit = gl.keep === true; c.sold_unit = c.keep_unit ? unitKey(gl.ln.unit) : null;
         c.sold_qty = (c.keep_unit && p.lb !== null && c.unit_factor > 0) ? Math.round(p.lb / c.unit_factor * 1000) / 1000 : null;
+        // sold_qty is in the line's OWN unit (yards or linear metres); sold_yards is the same length in yards, for totals and per-yard averages
+        c.sold_yards = c.sold_qty === null ? null : Math.round(c.sold_qty * (yardsPerSoldUnit(c.sold_unit) || 1) * 1000) / 1000;
         if (p.lb === null) { c.flags.push('unit_unknown'); }
         if (p.split_missing) { c.flags.push('release_split_missing'); c.releases_on_invoice = rels.length; }
         cells.push(c); mine.push(c);
@@ -441,7 +443,7 @@ export function buildCells(input) {
     c.missing_cost_lines = cost && cost.missing_cost_lines ? cost.missing_cost_lines : [];
     if (cost && cost.cost_unknown) { c.flags.push('purchase_line_without_cost'); }
     c.inbound_exempt = releaseHasNoInbound(c.release); // v55.83-UZ — 1001- / 1003- releases: no inbound charge
-    // v55.83-VV (Max: the $0.02 inbound allowance on goods kept in yards — "NO")
+    // v55.83-VX (Max: the $0.02 inbound allowance on goods kept in yards — "NO")
     c.inbound_allowance = (c.inbound_exempt || c.keep_unit === true) ? 0 : (c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null);
     c.base_cost_per_sold_unit = (c.keep_unit === true && c.base_cost !== null && c.sold_qty > 0) ? r4(c.base_cost / c.sold_qty) : null;
     if (c.base_cost === null) { c.flags.push('cost_missing'); }
@@ -476,8 +478,8 @@ export function summarize(cells, keyFn, labelFn) {
     var k = keyFn(c);
     var row = map[k];
     if (!row) { row = map[k] = { key: k, label: labelFn ? labelFn(c) : k, pounds: 0, yards: 0, has_kept: false, has_converted: false, cells: 0, complete: true, weight_missing: false, unknown: {}, invoices: {}, releases: {}, names: {}, estimate: false }; SUM_FIELDS.forEach(function (f) { row[f] = 0; }); row._c = {}; SUM_FIELDS.forEach(function (f) { row._c[f] = 0; }); order.push(k); }
-    // v55.83-VV — goods kept in yards are counted in YARDS, never in the Pounds total
-    row.cells++; if (c.keep_unit === true) { row.has_kept = true; if (c.sold_qty > 0) { row.yards += c.sold_qty; } else { row.weight_missing = true; } }
+    // v55.83-VX — goods kept in yards are counted in YARDS, never in the Pounds total
+    row.cells++; if (c.keep_unit === true) { row.has_kept = true; if (c.sold_yards > 0) { row.yards += c.sold_yards; } else { row.weight_missing = true; } }
     else { row.has_converted = true; if (c.pounds !== null && c.pounds > 0) { row.pounds += c.pounds; } else { row.weight_missing = true; } }
     SUM_FIELDS.forEach(function (f) { if (c[f] === null || c[f] === undefined) { row.unknown[f] = true; } else { row._c[f] += cents(c[f]); } });
     if (!c.complete) { row.complete = false; }
@@ -490,7 +492,7 @@ export function summarize(cells, keyFn, labelFn) {
     SUM_FIELDS.forEach(function (f) { row[f] = money(row._c[f]); });
     delete row._c;
     row.pounds = Math.round(row.pounds * 1000) / 1000; row.yards = Math.round(row.yards * 1000) / 1000;
-    // v55.83-VV — a per-pound average is shown only for a row made of converted goods alone; a row of kept-in-yards goods alone gets
+    // v55.83-VX — a per-pound average is shown only for a row made of converted goods alone; a row of kept-in-yards goods alone gets
     // per-yard averages; a row that mixes the two gets NO per-unit average (its dollar totals still add up)
     row.unit_mix = row.has_kept && row.has_converted ? 'mixed' : (row.has_kept ? 'yd' : 'lb'); var lbOnly = row.unit_mix === 'lb'; var ydOnly = row.unit_mix === 'yd' && row.yards > 0 && !row.weight_missing;
     row.avg_goods_price_per_yd = ydOnly && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.yards) : null;
