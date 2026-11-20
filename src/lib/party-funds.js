@@ -17,6 +17,29 @@ function key(x) { return String(x == null ? '' : x).trim().toLowerCase(); }
 function day(x) { return String(x == null ? '' : x).substring(0, 10); }
 function inRange(d, from, to) { return !!d && (!from || d >= from) && (!to || d <= to); }
 function sum(rows, f) { var s = 0; (rows || []).forEach(function (r) { s += Number(r[f]) || 0; }); return r2(s); }
+// WHICH COMPANY A BANK LINE IS MONEY SENT TO — the ONE identity rule, shared by this helper and every screen (Codex 20 Nov 13:07).
+//   'marked'    — a person stamped the company on the line (third_party_payer). Established.
+//   'bank_text' — nobody stamped it, but the bank's own text says it is a transfer TO one of the destination accounts Max named
+//                 (RTM ending 9909, NextTrade ending 2061: "Online Transfer to CHK ...9909"). Treated as money sent to that company —
+//                 so it is never a fee by default — and FLAGGED until a person confirms it. A category never identifies a company.
+export var FUNDING_DESTINATIONS = [{ suffix: '9909', payer: 'RTM Capital' }, { suffix: '2061', payer: 'NextTrade Industries' }];
+export function fundingPayerOfText(text) {
+  var t = String(text || '');
+  for (var i = 0; i < FUNDING_DESTINATIONS.length; i++) {
+    var d = FUNDING_DESTINATIONS[i];
+    if (new RegExp('\\bto\\s+(?:chk|checking|sav|savings)\\b[^0-9]{0,8}' + d.suffix + '(?![0-9])', 'i').test(t)) { return d.payer; }
+  }
+  return null;
+}
+// the bank's own transaction number inside the line's text ("… transaction#: 30116993096 …"), or null
+export function bankRefOf(text) { var m = /transaction\s*#\s*:?\s*([0-9]{6,})/i.exec(String(text || '')); return m ? m[1] : null; }
+export function fundingIdentity(line) {
+  var l = line || {};
+  if (l.direction === 'in') { return null; }
+  if (String(l.third_party_payer || '').trim()) { return { payer: String(l.third_party_payer).trim(), basis: 'marked' }; }
+  var byText = fundingPayerOfText(String(l.name || '') + ' ' + String(l.merchant_name || ''));
+  return byText ? { payer: byText, basis: 'bank_text' } : null;
+}
 var CLOSED = { attached: 1, cancelled: 1, reversed: 1, complete: 1 }; // a funded request in any other state still only RESERVES money
 
 // o: { parties: [{ name }], bankLines: [{ id, date, amount_abs, third_party_payer, name, direction }], pays: [vendor_bill_payments],
@@ -27,10 +50,25 @@ export function partyFundsBreakdown(o) {
   var billById = {}; if (Array.isArray(o.bills)) { o.bills.forEach(function (b) { billById[b.id] = b; }); } else { billById = o.bills || {}; }
   return (o.parties || []).map(function (party) {
     var pk = key(party.name);
-    var lines = (o.bankLines || []).filter(function (t) { return key(t.third_party_payer) === pk && t.direction !== 'in'; })
+    var idOf = {}; var lines = (o.bankLines || []).filter(function (t) { var who = fundingIdentity(t); if (!who || key(who.payer) !== pk) { return false; } idOf[t.id] = who.basis; return true; })
       .sort(function (a, b) { return day(a.date) < day(b.date) ? -1 : day(a.date) > day(b.date) ? 1 : String(a.id) < String(b.id) ? -1 : 1; });
-    var transfers = lines.map(function (t) { return { id: t.id, date: day(t.date), reference: t.name || '', sent: r2(Math.abs(Number(t.amount_abs != null ? t.amount_abs : t.amount) || 0)), lifetime_rows: [], lifetime_fee_rows: [], reserved_now: 0, reserved_rows: [] }; });
+    var transfers = lines.map(function (t) { return { id: t.id, date: day(t.date), reference: t.name || '', sent: r2(Math.abs(Number(t.amount_abs != null ? t.amount_abs : t.amount) || 0)), identity: idOf[t.id], lifetime_rows: [], lifetime_fee_rows: [], reserved_now: 0, reserved_rows: [] }; });
     var tById = {}; transfers.forEach(function (t) { tById[t.id] = t; });
+    // THE SAME TRANSFER SEEN TWICE (one bank account connected twice gives two bank lines with the bank's own transaction number):
+    // it is ONE transfer. The stamped line is kept (else the first); the other is listed, counted nowhere, and anything recorded
+    // against it (a bill payment, a fee, a request) follows to the kept line — nothing is dropped, nothing is counted twice.
+    var duplicates = []; var seenRef = {};
+    transfers = transfers.filter(function (t) {
+      var ref = bankRefOf(t.reference); if (!ref) { return true; }
+      var k = ref + '|' + t.sent; var first = seenRef[k];
+      if (!first) { seenRef[k] = t; return true; }
+      var keep = first; var drop = t;
+      if (first.identity !== 'marked' && t.identity === 'marked') { keep = t; drop = first; seenRef[k] = t; }
+      duplicates.push({ id: drop.id, date: drop.date, sent: drop.sent, bank_reference: ref, same_as: keep.id });
+      Object.keys(tById).forEach(function (id) { if (tById[id] === drop) { tById[id] = keep; } });
+      if (keep === t) { return true; }
+      return false;
+    }).filter(function (t) { return !duplicates.some(function (d) { return d.id === t.id; }); });
     var looseFees = []; // explicit fees that name no transfer (older pool-level entries): reported apart, never spread over transfers
 
     // applied to underlying bills: the allocated PORTIONS (payment rows on the transfer's own bank line), one row each
@@ -60,9 +98,10 @@ export function partyFundsBreakdown(o) {
     var per = { funds_sent: 0, applied_rows: [], fee_rows: [], opening_held: 0 };
     var asOf = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0 };
     var cur = { funds_sent: 0, applied_to_bills: 0, services_rendered: 0, reserved: 0 };
-    var unresolved = false;
+    var unresolved = false; var byText = { count: 0, sent: 0 };
     transfers.forEach(function (t) {
       t.counted_as_of = !to || t.date <= to;
+      if (t.identity === 'bank_text') { byText.count++; byText.sent = r2(byText.sent + t.sent); }
       t.as_of_rows = t.lifetime_rows.filter(function (r) { return !to || r.paid_date <= to; });
       t.as_of_fee_rows = t.lifetime_fee_rows.filter(function (r) { return !to || r.date <= to; });
       t.as_of = { applied_to_bills: sum(t.as_of_rows, 'portion'), services_rendered: sum(t.as_of_fee_rows, 'amount') };
@@ -99,6 +138,10 @@ export function partyFundsBreakdown(o) {
       current: { funds_sent: cur.funds_sent, applied_to_bills: cur.applied_to_bills, services_rendered: cur.services_rendered, reserved: cur.reserved,
         unused: r2(cur.funds_sent - cur.applied_to_bills - cur.services_rendered - cur.reserved) },
       arithmetic_ok: Math.abs(r2(closing - asOfHeld)) < 0.005,   // the sums agree with each other — says NOTHING about whether the records are right
+      // transfers recognized only from the bank's text (not stamped by a person): counted as money sent, and listed here to be confirmed
+      identity_to_confirm: byText,
+      // the same bank transfer present as a second bank line: NOT counted; listed so a person can mark the copy as a duplicate
+      duplicate_bank_lines: duplicates, duplicate_bank_lines_total: sum(duplicates, 'sent'),
       needs_reconciliation: unresolved,                           // more used than sent on some transfer, or a fee that names no transfer
     };
   });

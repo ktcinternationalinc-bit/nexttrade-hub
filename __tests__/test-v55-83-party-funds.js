@@ -114,6 +114,36 @@ check('a fee entry that names no transfer: deducted (it is explicit), reported a
 check('an advance-bucket entry is never a fee', of(F.partyFundsBreakdown(Object.assign({}, C, { requests: [], entries: [{ id: 'u2', party: 'NextTrade Industries', bucket: 'advance', kind: 'payment_split', amount: 400, bank_transaction_id: 'K1', entry_date: '2026-12-02' }] })), 'NextTrade Industries').period.fee_deduction === 0);
 check('nothing given → empty, no crash', F.partyFundsBreakdown({}).length === 0 && F.partyFundsBreakdown({ parties: parties })[0].current.unused === 0);
 
+// ── ONE identity rule, shared with the screen (Codex 13:07) ──
+check('marked line → that company, basis "marked"', JSON.stringify(F.fundingIdentity({ third_party_payer: 'RTM Capital', name: 'anything', direction: 'out' })) === JSON.stringify({ payer: 'RTM Capital', basis: 'marked' }));
+check('unmarked line whose bank text says "transfer to CHK ...9909" → RTM by bank text; "...2061" → NextTrade', F.fundingIdentity({ name: 'Online Transfer to CHK ...9909 transaction#: 123', direction: 'out' }).payer === 'RTM Capital' && F.fundingIdentity({ name: 'Online Transfer to CHK ...9909', direction: 'out' }).basis === 'bank_text' && F.fundingIdentity({ name: 'ONLINE TRANSFER TO SAV ...2061', direction: 'out' }).payer === 'NextTrade Industries');
+check('a number that merely CONTAINS 9909 is not that account; nor is a reference, an amount or a transfer FROM it', F.fundingIdentity({ name: 'Online Transfer to CHK ...99091', direction: 'out' }) === null && F.fundingIdentity({ name: 'WIRE REF 9909 KRONOS', direction: 'out' }) === null && F.fundingIdentity({ name: 'CHECK 9909', direction: 'out' }) === null && F.fundingIdentity({ name: 'Online Transfer from CHK ...9909', direction: 'out' }) === null);
+check('money IN is never funding sent; a category never identifies a company', F.fundingIdentity({ name: 'Online Transfer to CHK ...9909', direction: 'in' }) === null && F.fundingIdentity({ name: 'ACH PAYMENT', classification: 'professional_fees', direction: 'out' }) === null);
+check('the mark wins over the text', F.fundingIdentity({ third_party_payer: 'NextTrade Industries', name: 'Online Transfer to CHK ...9909', direction: 'out' }).payer === 'NextTrade Industries');
+var I = { parties: parties, bills: [], pays: [], entries: [], requests: [], from: '2026-06-01', to: '2026-06-30',
+  bankLines: [{ id: 'm1', date: '2026-06-05', amount_abs: 20000, third_party_payer: 'RTM Capital', direction: 'out', name: 'WIRE' },
+    { id: 'u1', date: '2026-06-09', amount_abs: 41000, third_party_payer: null, direction: 'out', name: 'Online Transfer to CHK ...9909 transaction#: 77' },
+    { id: 'u2', date: '2026-06-12', amount_abs: 15000, third_party_payer: null, direction: 'out', name: 'Online Transfer to CHK ...2061' },
+    { id: 'u3', date: '2026-06-13', amount_abs: 999, third_party_payer: null, direction: 'out', name: 'PAYMENT 9909 SOMETHING' }] };
+var iR = of(F.partyFundsBreakdown(I), 'RTM Capital'); var iN = of(F.partyFundsBreakdown(I), 'NextTrade Industries');
+check('an unmarked transfer to the named account is money SENT (never a fee): RTM 61,000 sent, deduction 0, all held', iR.period.funds_sent === 61000 && iR.period.fee_deduction === 0 && iR.as_of.held === 61000 && iR.transfers.length === 2);
+check('… each transfer says how it was identified, and the ones known only from the bank text are listed to be confirmed', iR.transfers[0].identity === 'marked' && iR.transfers[1].identity === 'bank_text' && iR.identity_to_confirm.count === 1 && iR.identity_to_confirm.sent === 41000 && iN.identity_to_confirm.count === 1 && iN.identity_to_confirm.sent === 15000 && iN.period.funds_sent === 15000);
+check('… and a line that only mentions the digits is in nobody\'s funds', iR.transfers.concat(iN.transfers).every(function (t) { return t.id !== 'u3'; }));
+
+// ── the same transfer present as two bank lines (one account connected twice): ONE transfer ──
+check('the bank\'s transaction number is read from the text', F.bankRefOf('Online Transfer to CHK ...9909 transaction#: 30116993096 07/23') === '30116993096' && F.bankRefOf('WIRE OUT') === null && F.bankRefOf('transaction#: 12') === null);
+var D = { parties: parties, bills: [bill('dd1', 'V', 'trucking', 500, '2026-07-25')], entries: [], requests: [], from: '2026-07-01', to: '2026-07-31',
+  bankLines: [{ id: 'copyA', date: '2026-07-23', amount_abs: 25000, third_party_payer: null, direction: 'out', account_id: 'acc-1', name: 'Online Transfer to CHK ...9909 transaction#: 30116993096 07/23' },
+    { id: 'copyB', date: '2026-07-23', amount_abs: 25000, third_party_payer: 'RTM Capital', direction: 'out', account_id: 'acc-2', name: 'Online Transfer to CHK ...9909 transaction#: 30116993096 07/23' },
+    { id: 'other', date: '2026-07-28', amount_abs: 25000, third_party_payer: 'RTM Capital', direction: 'out', account_id: 'acc-2', name: 'Online Transfer to CHK ...9909 transaction#: 30119999999 07/28' }],
+  pays: [pay('dp', 'dd1', 500, 'copyA', '2026-07-26')] };
+var dR = of(F.partyFundsBreakdown(D), 'RTM Capital');
+check('two bank lines with the SAME bank transaction number and amount count ONCE: 50,000 sent, not 75,000', dR.period.funds_sent === 50000 && dR.period.tax_professional_fees === 50000 && dR.transfers.length === 2, dR.period);
+check('the stamped copy is the one kept; the other is listed (not counted) with what it duplicates', dR.transfers[0].id === 'copyB' && dR.duplicate_bank_lines.length === 1 && dR.duplicate_bank_lines[0].id === 'copyA' && dR.duplicate_bank_lines[0].same_as === 'copyB' && dR.duplicate_bank_lines_total === 25000 && dR.identity_to_confirm.count === 0);
+check('a bill payment recorded against the dropped copy is NOT lost: it follows to the kept transfer', dR.period.applied_to_bills === 500 && dR.transfers[0].as_of.applied_to_bills === 500 && dR.transfers[0].as_of_rows[0].transfer_id === 'copyB' && dR.as_of.held === 49500);
+check('a different transaction number with the same amount is a different transfer', dR.transfers[1].id === 'other' && dR.transfers[1].sent === 25000);
+check('same number but a different amount is NOT merged (never guessed)', (function () { var x = JSON.parse(JSON.stringify(D)); x.bankLines[0].amount_abs = 24000; var r = of(F.partyFundsBreakdown(x), 'RTM Capital'); return r.transfers.length === 3 && r.duplicate_bank_lines.length === 0 && r.period.funds_sent === 74000; })());
+
 var src = fs.readFileSync(path.join(root, 'src/lib/party-funds.js'), 'utf8');
 check('no example amount is hard-coded in the application code', !/66000|52000|12000|10000|66,000|52,000/.test(src));
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));
