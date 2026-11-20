@@ -28,7 +28,8 @@ export var EXPENSE_COLUMNS = [
   { key: 'C', label: 'C · Partner fee', counted: true },
   { key: 'D', label: 'D · Payroll', counted: true },
   { key: 'E', label: 'E · Taxes', counted: true },
-  { key: 'unassigned', label: 'Uncategorized expenses', counted: false }
+  { key: 'unassigned', label: 'Uncategorized expenses', counted: false },
+  { key: 'held', label: 'Funds held with RTM / NextTrade', counted: false }
 ];
 
 // Which column one Income Statement category belongs to. cat = { key, label, kind }.
@@ -41,6 +42,11 @@ export var EXPENSE_COLUMNS = [
 export function letterOf(cat) {
   var c = cat || {}; var kind = String(c.kind || 'expense'); var key = String(c.key || '').toLowerCase();
   var text = (key + ' ' + String(c.label || '')).toLowerCase().replace(/_/g, ' ');
+  // v55.83-VW (Max, Nov 20: "unallocated funds default internally to unused / awaiting allocation, NOT a fee ... Only explicit
+  // Services rendered designation creates that fee expense") — money sent to RTM / NextTrade that is neither used for a bill nor
+  // explicitly booked as their fee is HELD with them: shown, never taken off the profit. Only the explicit fee row is an office cost.
+  if (/^__pt_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; }
+  if (key === '__party_advance') { return 'held'; }
   if (kind === 'transfer' || kind === 'not_pnl') { return 'not_pnl'; }
   if (kind === 'income' || kind === 'other_income') { return 'income'; }
   if (!key || key === 'uncategorized' || key === 'needs_clarification' || key === 'other_expense' || /waiting$/.test(key) || /needs clarification|waiting for bills/.test(text)) { return 'unassigned'; }
@@ -59,7 +65,7 @@ export function letterOf(cat) {
 // real-cost look ([{ key, label, kind, total }]); uncategorized = its "uncategorized" money out (a number).
 // Returns { A, C, D, E, unassigned, in_profit: { cents, cats: [{ key, label, cents }] }, total (cents, A + C + D + E only) }.
 export function expenseColumns(cats, uncategorized) {
-  var out = {}; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (k) { out[k] = { cents: 0, cats: [] }; });
+  var out = {}; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (k) { out[k] = { cents: 0, cats: [] }; });
   (cats || []).forEach(function (c) {
     var l = letterOf(c); if (!out[l]) { return; }
     var v = cents(c.total); if (!v) { return; }
@@ -67,7 +73,7 @@ export function expenseColumns(cats, uncategorized) {
   });
   var u = cents(uncategorized);
   if (u) { out.unassigned.cents += u; out.unassigned.cats.push({ key: 'uncategorized', label: 'No category at all', cents: u }); }
-  ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (k) { out[k].cats.sort(function (a, b) { return b.cents - a.cents; }); });
+  ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (k) { out[k].cats.sort(function (a, b) { return b.cents - a.cents; }); });
   out.total = out.A.cents + out.C.cents + out.D.cents + out.E.cents;
   return out;
 }
@@ -85,10 +91,27 @@ export function finalPnl(profitCents, cols, incompleteLines) {
 // The Income Statement's categories in its real-cost look, exactly as that screen builds them: every paid-through company's
 // payments taken out of the category they were paid under and its bills put into their own. adjust / fold are that screen's own
 // functions (rtmAdjust, foldUnc), passed in so there is one copy of the rule.
+// v55.83-VW — P&L by period only: an explicitly booked fee is that company's fee whichever date its transfer has. Where the
+// Income Statement keeps such a fee inside the single "remainder" row of an older transfer, it is moved here into the company's
+// fee row (same money, the total does not move), so that ONLY the explicit fee is deducted and the rest is held.
+export function explicitFeeRows(cats, blocks) {
+  var out = (cats || []).map(function (c) { return Object.assign({}, c); });
+  (blocks || []).forEach(function (b) {
+    var extra = Math.round(((Number(b.explicit_fees) || 0) - (Number(b.fees_booked) || 0)) * 100) / 100; if (!(extra > 0.004)) { return; }
+    var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    var rest = out.filter(function (c) { return c.key === base; })[0]; if (!rest) { return; }
+    var move = Math.min(extra, Math.max(0, Number(rest.total) || 0)); if (!(move > 0.004)) { return; }
+    rest.total = Math.round((Number(rest.total) - move) * 100) / 100;
+    var fee = out.filter(function (c) { return c.key === base + '_fee'; })[0];
+    if (fee) { fee.total = Math.round((Number(fee.total) + move) * 100) / 100; } else { out.push({ key: base + '_fee', label: (b.payer || 'RTM') + ' — explicitly booked as their fee', kind: 'expense', count: 0, total: move }); }
+  });
+  return out.filter(function (c) { return Math.abs(Number(c.total) || 0) > 0.004 || c.via_rtm || c.rtm_out; });
+}
 export function realCostCategories(spending, adjust, fold) {
   if (!spending) { return null; }
   var cats = spending.categories || [];
   (spending.paid_through || []).forEach(function (b) { cats = adjust(cats, b); });
+  cats = explicitFeeRows(cats, spending.paid_through || []);
   var folded = fold(cats);
   var unc = (spending.uncategorized && Number(spending.uncategorized.total)) || 0;
   return { cats: folded, uncategorized: Math.round((unc + (Number(folded.uncShift) || 0)) * 100) / 100 };
@@ -162,7 +185,7 @@ export function totalExpenses(keys, cache, scope) {
     if (e.status === 'loading') { t.loading += 1; t.complete = false; return; }
     if (e.status === 'error') { t.failed += 1; t.complete = false; return; }
     if (e.status !== 'ok') { t.unavailable += 1; t.complete = false; return; }
-    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total;
+    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total;
   });
   return t;
 }

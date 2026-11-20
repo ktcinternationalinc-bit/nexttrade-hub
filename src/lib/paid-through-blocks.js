@@ -8,6 +8,19 @@
 // underneath: bills paid · service fee (on requests) · uncategorized, waiting for bills.
 // Pure. Every block conserves its total: payments = covered bills + (service fee + waiting + other).
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
+// v55.83-VW (Max, Nov 20 2026, through Codex: "For Max's identified RTM destination ending 9909 and NextTrade destination ending
+// 2061, unallocated funds default internally to unused / awaiting allocation, NOT a fee") — a money-out bank line that says it
+// is a transfer TO one of these accounts is money sent to that company, also when nobody stamped the company on the line.
+// Only the destination written in the bank's own text counts ("Online Transfer to CHK ...9909"); a category never does.
+export var FUNDING_DESTINATIONS = [{ suffix: '9909', payer: 'RTM Capital' }, { suffix: '2061', payer: 'NextTrade Industries' }];
+export function fundingPayerOfText(text) {
+  var t = String(text || '');
+  for (var i = 0; i < FUNDING_DESTINATIONS.length; i++) {
+    var d = FUNDING_DESTINATIONS[i];
+    if (new RegExp('\\bto\\s+(?:chk|checking|sav|savings)\\b[^0-9]{0,8}' + d.suffix + '(?![0-9])', 'i').test(t)) { return d.payer; }
+  }
+  return null;
+}
 export function partyKeyOf(x) { return String(x || '').trim().toLowerCase(); }
 
 // 'advance' = money sent ahead to a related company (not an expense until its bills are linked); 'provider' = one line
@@ -50,7 +63,7 @@ export function buildPaidThroughBlocks(o) {
         var k = b.category || 'uncategorized'; var am = r2(p.amount);
         if (!allocByCat[k]) { allocByCat[k] = { key: k, label: catLabels[k] || k, kind: kindOf(k), count: 0, total: 0 }; }
         allocByCat[k].count++; allocByCat[k].total = r2(allocByCat[k].total + am); allocTotal = r2(allocTotal + am);
-        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am }); }
+        if (rows.length < 300) { rows.push({ date: p.paid_date, who: b.vendor_name || '(bill)', ref: b.bill_number || '—', category: k, amount: am, bill_id: p.bill_id, bill_date: b.bill_date || null, release: b.release_number || null, bill_total: b.total_amount === undefined ? null : r2(b.total_amount), bank_line: p.bank_transaction_id || null }); }
       });
       // v55.83-TX — bills paid FROM THE ADVANCE in the period: in the tax view they are professional fees (the server adds them
       // to that line); the real-cost view moves them into the bills' real categories (payments_by_cat out, allocations in)
@@ -66,6 +79,14 @@ export function buildPaidThroughBlocks(o) {
       });
       if (!(payCount > 0 || allocTotal > 0 || advApplied > 0)) { return; }
       // bills / service fee / waiting — line by line, only for lines from provider_from on
+      // v55.83-VW (Max, Nov 20: "Only explicit Services rendered designation creates that fee expense") — every fee a person booked
+      // on these transfers (on a request, or split off the payment), whichever date the line has. The rows of the Income
+      // Statement are NOT changed by it (older entries stay as booked); P&L by period uses this figure for its own deduction.
+      var explicitFees = 0;
+      mine.forEach(function (t) {
+        var feeE = 0; (o.requests || []).forEach(function (w) { if (w.bank_transaction_id === t.id && w.status === 'attached' && w.funding_txn_id) { feeE += Number(w.fee_amount) || 0; } });
+        explicitFees = r2(explicitFees + feeE + r2((splits[t.id] || {}).fee));
+      });
       mine.forEach(function (t) {
         if (!isSplitLine(party, t.date)) { return; }
         var used = 0; (o.pays || []).forEach(function (p) { if (p.bank_transaction_id === t.id && p.voided !== true) { used += Number(p.amount) || 0; } });
@@ -84,7 +105,10 @@ export function buildPaidThroughBlocks(o) {
         allocations_by_cat: Object.keys(allocByCat).map(function (k) { return allocByCat[k]; }).sort(function (x, y) { return y.total - x.total; }),
         allocations_total: allocTotal, service_fee: remainder,
         fees_booked: feesBooked, waiting: waiting, remainder_other: r2(remainder - feesBooked - waiting), rows: rows,
-        advance_held: advanceHeld, advance_applied: advApplied }; // v55.83-TX
+        advance_held: advanceHeld, advance_applied: advApplied, explicit_fees: explicitFees, // v55.83-TX · VW
+        // v55.83-VW — the transfers themselves, and how much of them nobody has marked with the company yet
+        lines: mine.map(function (t) { return { id: t.id, date: t.date, amount: r2(t.amount), who: t.who || '', marked: t.marked !== false }; }),
+        unmarked_total: r2(mine.reduce(function (a, t) { return a + (t.marked === false ? Number(t.amount) || 0 : 0); }, 0)) };
       if (advApplied > 0) {
         var profKey = o.profKey || 'professional_fees';
         blk.payments_by_cat.push({ key: profKey, label: catLabels[profKey] || 'Professional fees', total: advApplied, from_advance: true });

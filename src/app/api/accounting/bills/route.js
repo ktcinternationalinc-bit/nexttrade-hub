@@ -9,7 +9,7 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
-import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks'; // v55.83-SR
+import { buildPaidThroughBlocks, FUNDING_DESTINATIONS, fundingPayerOfText } from '../../../../lib/paid-through-blocks'; // v55.83-SR
 import { periodAdjustments } from '../../../../lib/party-money'; // v55.83-TX
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -1926,7 +1926,22 @@ export async function POST(req) {
           if (!rtmTx.error) {
             // v55.83-SR — the blocks are built by src/lib/paid-through-blocks.js (same sums as before; a company with a
             // provider_from date is split at that date, and lines from it on are broken into bills / service fee / waiting)
-            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: t9.classification, payer: t9.third_party_payer }; });
+            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: t9.classification, payer: t9.third_party_payer, marked: true }; });
+            // v55.83-VW — a transfer whose bank text names the company's own account (ending 9909 / 2061) is money sent to that
+            // company even when nobody stamped it. Transfers between KTC's own accounts are never taken. Fail-soft.
+            try {
+              var destOr = FUNDING_DESTINATIONS.map(function (d0) { return 'name.ilike.%' + d0.suffix + '%,merchant_name.ilike.%' + d0.suffix + '%'; }).join(',');
+              var idTx = await db.from('bank_transactions').select('id, date, posted_date, amount_abs, classification, name, merchant_name, transfer_group_id')
+                .eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate')
+                .gte('date', pFrom).lte('date', pTo).or(destOr).limit(2000);
+              if (!idTx.error) {
+                (idTx.data || []).forEach(function (t8) {
+                  if (t8.transfer_group_id || t8.classification === 'transfer') { return; }
+                  var py8 = fundingPayerOfText(t8.name) || fundingPayerOfText(t8.merchant_name); if (!py8) { return; }
+                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: t8.classification, payer: py8, marked: false, who: t8.merchant_name || t8.name || '' });
+                });
+              }
+            } catch (eId) {}
             var ptReqs = [];
             try {
               var ptIds = ptLines.map(function (x) { return x.id; });

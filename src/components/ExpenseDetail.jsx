@@ -3,6 +3,7 @@
 // Stateless: it shows the make-up worked out by src/lib/pnl-expense-detail.js. The category picker is passed in (the same save
 // as Stats → Income Statement), so this file writes nothing by itself.
 import React from 'react';
+import FundsSent from './FundsSent'; // v55.83-VW
 
 var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
 function money(c) { if (c === null || c === undefined) { return '—'; } var v = c / 100; return (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -14,6 +15,10 @@ function Row(p) { return <tr style={{ borderTop: '1px solid ' + LINE, color: INK
 export default function ExpenseDetail(props) {
   var m = props.makeup; var picker = props.picker || function () { return null; };
   if (!m) { return <div className="text-[11px] px-2 py-1" style={{ color: SUB }}>Nothing to show for this line.</div>; }
+  if (m.remainder && props.funding) {
+    // v55.83-VW — a company row (its explicit fee, or what is held with it): the whole picture of the funds sent, with the bills
+    return <div><div className="px-2 py-1 text-[11px] font-bold" style={{ color: m.is_explicit_fee ? '#7f1d1d' : '#065f46' }}>{m.is_explicit_fee ? 'This line is the part explicitly marked as their fee — it IS deducted.' : 'This line is NOT an expense: it is money still with the company (not used for a bill, not marked as their fee).'}</div><FundsSent funding={props.funding} catLabel={props.catLabel} /></div>;
+  }
   if (m.remainder) {
     var rm = m.remainder;
     return <div className="text-[11px]" style={{ color: INK }}>

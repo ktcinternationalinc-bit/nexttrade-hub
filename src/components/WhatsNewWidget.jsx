@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VW',
+    date: '2026-11-20',
+    title: 'P&L by period: money sent to RTM / NextTrade is not a fee unless it is marked as one',
+    items: [
+      { text: '**The rule changed.** In P&L by period, money sent to RTM or NextTrade is no longer taken off as an office cost just because it was sent. Only an amount explicitly booked as their fee is deducted. Bills they paid are counted once, in their own categories. What is left is shown as held with them and does not reduce profit.' },
+      { text: '**Click through from the formula.** Press “ƒ how?” next to a FINAL P&L figure, then click “A · Warehouse / Office”. It opens to show what is in it and, for each company, a small table: funds sent, applied to underlying bills, explicitly marked as their fee, unused, and the one figure that is deducted. Click “Applied to underlying bills” to see each bill and the part of it paid from those funds.' },
+      { text: '**A new green box in the opened period:** “Funds with RTM / NextTrade — NOT an expense”. Click its line for the same table.' },
+      { text: '**Transfers nobody marked.** A bank transfer whose own text says it went to the RTM or NextTrade account is treated as money sent to that company even if nobody marked it. The table says in amber how much was recognised that way, so a wrong one can be given its real category.' },
+      { text: 'This lowers the expenses of months where such transfers were sitting under Professional Fees, so the final figures of those months change. The tax view in Stats → Income Statement is not changed: there the full transfer stays under Professional Fees, once.' },
+      { superAdminOnly: true, text: 'Technical: pnl-expenses.js letterOf puts paid-through remainder / waiting / advance rows in a new non-counted column held; explicitFeeRows moves explicitly booked fees (block.explicit_fees) into the fee row. paid-through-blocks.js adds FUNDING_DESTINATIONS, fundingPayerOfText, block.lines, unmarked_total, explicit_fees and richer bill rows. period_stats adds unmarked lines matched by destination text to the blocks. New FundsSent.jsx. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-VV',
     date: '2026-11-20',
     title: 'Profitability: goods sold in yards can stay in yards (not converted to pounds)',

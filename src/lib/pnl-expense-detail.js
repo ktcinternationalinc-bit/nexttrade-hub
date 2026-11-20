@@ -20,7 +20,9 @@ export function expenseDetail(spending, rc) {
   var blocks = sp.paid_through || (sp.rtm ? [sp.rtm] : []);
   var orig = {}; (sp.categories || []).forEach(function (c) { orig[c.key] = c; });
   var rowsBy = {}; (sp.rows || []).forEach(function (r) { var k = r.category || 'uncategorized'; (rowsBy[k] = rowsBy[k] || []).push({ id: r.id || null, date: r.date || '', who: r.who || '', cents: cents(r.amount) }); });
-  var remOf = {}; blocks.forEach(function (b) { remainderRows(b).forEach(function (rw) { remOf[rw.key] = { block: b, row: rw }; }); });
+  var remOf = {}; blocks.forEach(function (b) { remainderRows(b).forEach(function (rw) { remOf[rw.key] = { block: b, row: rw }; });
+    // v55.83-VW — the company's three possible rows always belong to it, also a fee row P&L by period made itself (explicitFeeRows)
+    var base = '__pt_' + String(b.key || b.payer || 'rtm').toLowerCase().replace(/[^a-z0-9]+/g, '_'); [base, base + '_fee', base + '_waiting'].forEach(function (k) { if (!remOf[k]) { remOf[k] = { block: b, row: null }; } }); });
 
   function makeup(key, label, figure) {
     var m = { key: key, label: label, cents: figure, bank: null, from_advances_cents: 0, taken_out: [], taken_out_cents: 0, bills: { cents: 0, listed_cents: 0, rows: [] }, remainder: null, other_cents: 0 };
@@ -29,6 +31,7 @@ export function expenseDetail(spending, rc) {
       var b = remOf[key].block;
       m.remainder = { payer: b.payer || '', era_note: b.era_note || null, payments_cents: cents(b.payments_total), payments_count: Number(b.payments_count) || 0, bills_cents: cents(b.allocations_total),
         left_cents: cents(b.service_fee), fees_booked_cents: cents(b.fees_booked), waiting_cents: cents(b.waiting), other_left_cents: cents(b.remainder_other), advance_held_cents: cents(b.advance_held) };
+      m.funding_key = remOf[key].funding_key; m.is_explicit_fee = /_fee$/.test(key);
       m.adds_up = true; return m;
     }
     var o = key === 'uncategorized' ? { total: sp.uncategorized && sp.uncategorized.total, count: sp.uncategorized && sp.uncategorized.count } : (orig[key] || null);
@@ -49,9 +52,21 @@ export function expenseDetail(spending, rc) {
     return m;
   }
 
+  // v55.83-VW — FUNDS SENT to each paid-through company in these dates, and what became of them. Every figure is the block's own:
+  //   sent = applied to bills (counted once, under each bill's own category) + explicit fee (the ONLY part that is an expense
+  //   here) + advance held + unused (neither used nor booked — stays with the company, not an expense).
+  out.funding = blocks.map(function (b) {
+    var sent = cents(b.payments_total) + cents(b.advance_held); var applied = cents(b.allocations_total); var fee = Math.max(cents(b.fees_booked), cents(b.explicit_fees)); var adv = cents(b.advance_held);
+    var bills = (b.rows || []).map(function (r) { return { date: r.date || '', who: r.who || '', ref: r.ref || '', category: r.category || 'uncategorized', cents: cents(r.amount), bill_id: r.bill_id || null, bill_date: r.bill_date || '', release: r.release || '', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total) }; }).sort(function (x, y) { return y.cents - x.cents; });
+    return { key: String(b.key || b.payer || ''), payer: b.payer || '', era_note: b.era_note || null, sent_cents: sent, sent_count: Number(b.payments_count) || 0, unmarked_cents: cents(b.unmarked_total),
+      applied_cents: applied, fee_cents: fee, advance_held_cents: adv, unused_cents: sent - applied - fee - adv,
+      lines: (b.lines || []).map(function (t) { return { id: t.id || null, date: t.date || '', who: t.who || '', cents: cents(t.amount), marked: t.marked !== false }; }).sort(function (x, y) { return x.date < y.date ? -1 : (x.date > y.date ? 1 : 0); }),
+      bills: bills, bills_listed_cents: bills.reduce(function (t0, r) { return t0 + r.cents; }, 0) };
+  });
+  Object.keys(remOf).forEach(function (k) { var fk = String(remOf[k].block.key || remOf[k].block.payer || ''); remOf[k].funding_key = fk; });
   ((rc && rc.cats) || []).forEach(function (c) {
     var v = cents(c.total);
-    if (String(c.kind || '') === 'not_pnl') { if (v) { out.not_pnl.push({ key: c.key, label: c.label || c.key, cents: v }); } }
+    if (String(c.kind || '') === 'not_pnl' && !/^__pt_/.test(String(c.key)) && c.key !== '__party_advance') { if (v) { out.not_pnl.push({ key: c.key, label: c.label || c.key, cents: v }); } }
     out.byKey[c.key] = makeup(c.key, c.label || c.key, v);
   });
   out.byKey.uncategorized = makeup('uncategorized', 'No category at all', cents(rc && rc.uncategorized));
@@ -80,7 +95,7 @@ export function pnlFormula(r, e, hidden) {
     { sign: '−', label: 'Shipping kept as one combined amount (not divided into trucking / freight)', cents: n(u.combined || 0), combined: true },
     { sign: '=', label: 'TRANSPORT PROFIT', cents: n(row.transport_profit), strong: true },
     { sign: '=', label: 'TOTAL PROFIT = goods profit + transport profit', cents: n(row.profit), strong: true },
-    { sign: '−', label: 'A · Warehouse / Office', cents: cols ? cols.A.cents : null },
+    { sign: '−', label: 'A · Warehouse / Office', cents: cols ? cols.A.cents : null, cats: cols ? cols.A.cats : null },
     { sign: '−', label: 'C · Partner fee', cents: cols ? cols.C.cents : null },
     { sign: '−', label: 'D · Payroll', cents: cols ? cols.D.cents : null },
     { sign: '−', label: 'E · Taxes', cents: cols ? cols.E.cents : null },
@@ -92,6 +107,7 @@ export function pnlFormula(r, e, hidden) {
   if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
   if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
+  if (cols && cols.held && cols.held.cents) { not.push({ label: 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });
@@ -100,7 +116,7 @@ export function pnlFormula(r, e, hidden) {
   var notes = ['Profit is dated by invoice date. Expenses are what was PAID in the period (bank date).'];
   if (!hidden && (x.goods_lines > 0 || x.transport_lines > 0)) { notes.push('The table’s Goods revenue and Transport charged columns show ALL sale lines; the sums above use only the lines whose cost is known, which is why they can be smaller.'); }
   if (!ok) { notes.push('The expense columns are not loaded or not shown for this row, so the final figure is not worked out.'); }
-  return { lines: lines, not_used: not, notes: notes };
+  return { lines: lines, not_used: not, notes: notes, funding: (det && det.funding) || [] };
 }
 
 // The invoices of one opened period, one row each, so every one can be opened on top of the page.

@@ -1,0 +1,89 @@
+// v55.83-VW — Max, 20 Nov 2026 (through Codex, "PRIORITY FROM MAX — existing monthly P&L expense pop-up and RTM / NextTrade fee
+// calculation"): money sent to RTM / NextTrade is NOT a fee by itself. In the internal P&L by period only an amount EXPLICITLY
+// marked as their services reduces profit; bills they paid are counted once in their own categories; what is left is held with
+// them and is not an expense. "Click an RTM / NextTrade professional-fee component to see original transfers, underlying bill
+// allocations, explicit services-rendered fees, and unused funds."
+// The amounts below are Codex's ILLUSTRATIVE example (66,000 = 52,000 + 2,000 + 12,000) — made up, not records.
+// Real functions: the real paid-through blocks, the Income Statement's own real-cost rule, the real P&L-by-period column code.
+var path = require('path'); var fs = require('fs');
+var root = path.join(__dirname, '..');
+process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'; process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key';
+require(path.join(root, 'node_modules/sucrase/register'));
+var React = require('react'); global.React = React; var RS = require('react-dom/server');
+var X = require(path.join(root, 'src/lib/pnl-expenses.js')); var D = require(path.join(root, 'src/lib/pnl-expense-detail.js'));
+var B = require(path.join(root, 'src/lib/paid-through-blocks.js')); var PS = require(path.join(root, 'src/components/PeriodStatsTab.jsx'));
+var FundsSent = require(path.join(root, 'src/components/FundsSent.jsx')).default; var PnlFormula = require(path.join(root, 'src/components/PnlFormula.jsx')).default; var ExpenseDetail = require(path.join(root, 'src/components/ExpenseDetail.jsx')).default;
+var pass = 0, failN = 0;
+function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1100))); }
+console.log('VW — funds sent to RTM / NextTrade: only an explicit fee is an expense');
+
+var labels = { professional_fees: 'Professional Fees', utilities: 'Utilities', goods: 'Goods purchased', trucking: 'Trucking', rent: 'Rent' }; var kinds = { goods: 'cogs' };
+var BILLS = { b1: { vendor_name: 'Mill Co', bill_number: 'M-1', category: 'goods', paid_via: 'RTM Capital', bill_date: '2026-06-02', release_number: '1002-1', total_amount: 30000 },
+  b2: { vendor_name: 'Road Trucker', bill_number: 'R-9', category: 'trucking', paid_via: 'RTM Capital', bill_date: '2026-06-10', release_number: '1002-1', total_amount: 12000 },
+  b3: { vendor_name: 'Landlord', bill_number: 'L-6', category: 'rent', paid_via: 'RTM Capital', bill_date: '2026-06-01', release_number: '', total_amount: 20000 },
+  b4: { vendor_name: 'Mill Co', bill_number: 'M-2', category: 'goods', paid_via: 'RTM Capital', bill_date: '2026-07-03', release_number: '1002-2', total_amount: 1200 } };
+// June: three transfers = 66,000 (two marked RTM Capital, one only recognisable by the bank's own text), all booked Professional Fees;
+// plus a 500 utilities bill paid directly. RTM paid 52,000 of bills: 20,000 of the 30,000 goods bill (a PART), 12,000 trucking, 20,000 rent.
+function june(o) {
+  var opt = o || {};
+  var bank = [{ id: 't1', date: '2026-06-03', who: 'Online Transfer to CHK ...9909 transaction#: 111', amount: 25000, category: 'professional_fees', payer: 'RTM Capital', marked: true },
+    { id: 't2', date: '2026-06-15', who: 'Online Transfer to CHK ...9909 transaction#: 222', amount: 15000, category: 'professional_fees', payer: 'RTM Capital', marked: true },
+    { id: 't3', date: '2026-06-25', who: 'Online Transfer to CHK ...9909 transaction#: 333', amount: 26000, category: 'professional_fees', payer: B.fundingPayerOfText('Online Transfer to CHK ...9909 transaction#: 333'), marked: false },
+    { id: 't4', date: '2026-06-11', who: 'City Power', amount: 500, category: 'utilities' }];
+  var byCat = {}; bank.forEach(function (t) { var c = byCat[t.category] || (byCat[t.category] = { key: t.category, label: labels[t.category], kind: 'expense', count: 0, total: 0 }); c.count++; c.total += t.amount; });
+  var blocks = B.buildPaidThroughBlocks({ parties: [{ name: 'RTM Capital', kind: 'service_provider', remainder_label: 'RTM service fee (payments − covered bills)' }, { name: 'NextTrade Industries', kind: 'affiliate', remainder_label: 'Advance with NextTrade' }],
+    lines: bank.filter(function (t) { return t.payer; }).map(function (t) { return { id: t.id, date: t.date, amount: t.amount, classification: t.category, payer: t.payer, marked: t.marked, who: t.who }; }),
+    pays: [{ bill_id: 'b1', amount: 20000, paid_date: '2026-06-05', method: 'rtm', bank_transaction_id: 't1' }, { bill_id: 'b2', amount: 12000, paid_date: '2026-06-18', method: 'rtm', bank_transaction_id: 't2' }, { bill_id: 'b3', amount: 20000, paid_date: '2026-06-26', method: 'rtm', bank_transaction_id: 't3' }],
+    billById: BILLS, requests: [], catLabels: labels, kindOf: function (k) { return kinds[k] || 'expense'; }, from: '2026-06-01', to: '2026-06-30', splits: opt.fee ? { t1: { fee: opt.fee, advance: 0 } } : {} });
+  return { ok: true, from: '2026-06-01', to: '2026-06-30', spending: { categories: Object.keys(byCat).map(function (k) { return byCat[k]; }), uncategorized: { count: 0, total: 0 }, transfers: { count: 0, total: 0 }, paid_through: blocks,
+    rows: bank.map(function (t) { return { id: t.id, date: t.date, who: t.who, amount: t.amount, category: t.category }; }) } };
+}
+var q = { key: '2026-06', from: '2026-06-01', to: '2026-06-30' };
+function read(o) { return X.readExpenseAnswer(june(o), q, PS.rtmAdjust, PS.foldUnc); }
+var e = read({ fee: 2000 }); var fu = e.detail.funding[0];
+
+check('66,000 sent = 52,000 applied to bills + 2,000 explicitly marked as their fee + 12,000 unused — and it adds up', !!fu && fu.payer === 'RTM Capital' && fu.sent_cents === 6600000 && fu.applied_cents === 5200000 && fu.fee_cents === 200000 && fu.unused_cents === 1200000 && fu.applied_cents + fu.fee_cents + fu.advance_held_cents + fu.unused_cents === fu.sent_cents, fu);
+check('ONLY the 2,000 is deducted in A · Warehouse / Office (plus the 500 utilities and the 20,000 rent bill RTM paid, each in its own category) — never the 66,000', e.cols.A.cents === 200000 + 50000 + 2000000 && e.cols.A.cats.filter(function (c) { return /^__pt_/.test(c.key); }).reduce(function (a, c) { return a + c.cents; }, 0) === 200000 && e.cols.A.cats.every(function (c) { return c.key !== 'professional_fees'; }), e.cols.A);
+check('the 12,000 unused is HELD: shown in its own box, not an expense, not "uncategorized"', e.cols.held.cents === 1200000 && e.cols.unassigned.cents === 0 && e.cols.total === e.cols.A.cents);
+check('the bills RTM paid are counted ONCE, in their own categories: goods 20,000 + trucking 12,000 in the not-taken-off-again box, rent 20,000 in A', e.cols.in_profit.cents === 3200000 && e.detail.byKey.goods.cents === 2000000 && e.detail.byKey.rent.cents === 2000000);
+check('nothing is lost and nothing doubled: 66,500 left the bank = 22,500 expenses + 32,000 already inside profit + 12,000 held', e.cols.total + e.cols.in_profit.cents + e.cols.held.cents === 6650000);
+check('click "Applied to underlying bills": the PORTIONS paid from these funds add up to exactly 52,000 — the part-paid goods bill shows 20,000 of its 30,000', fu.bills.length === 3 && fu.bills_listed_cents === 5200000 && fu.bills.filter(function (b) { return b.ref === 'M-1'; })[0].cents === 2000000 && fu.bills.filter(function (b) { return b.ref === 'M-1'; })[0].bill_total_cents === 3000000 && fu.bills.every(function (b) { return !!b.bill_date && !!b.category && !!b.who; }));
+check('the transfers are listed with the bank’s own text; the one nobody marked is shown as such (26,000 recognised by the account)', fu.lines.length === 3 && fu.unmarked_cents === 2600000 && fu.lines.filter(function (t) { return !t.marked; }).length === 1 && fu.lines[0].date === '2026-06-03');
+// reclassify the unused 12,000 as services rendered → 14,000, never 66,000
+var e2 = read({ fee: 14000 }); var fu2 = e2.detail.funding[0];
+check('marking the remaining 12,000 as services rendered makes the fee 14,000 — NOT 66,000 — and nothing is left unused', fu2.fee_cents === 1400000 && fu2.unused_cents === 0 && e2.cols.held.cents === 0 && e2.cols.A.cents === 1400000 + 50000 + 2000000 && e2.cols.total - e.cols.total === 1200000);
+// zero explicit fees
+var e0 = read({}); var fu0 = e0.detail.funding[0];
+check('NO explicit fee: nothing of the transfers is deducted as a fee; 14,000 is unused (no linked bill does NOT mean a fee)', fu0.fee_cents === 0 && fu0.unused_cents === 1400000 && e0.cols.held.cents === 1400000 && e0.cols.A.cents === 50000 + 2000000 && e0.cols.A.cats.every(function (c) { return !/^__pt_/.test(c.key); }));
+// the tax presentation is untouched: the answer's own categories still carry the full transfers under Professional Fees
+check('the tax presentation is not touched by this: the Income Statement’s own categories still show the full 66,000 under Professional Fees, once', june({ fee: 2000 }).spending.categories.filter(function (c) { return c.key === 'professional_fees'; })[0].total === 66000 && JSON.stringify(june({ fee: 2000 }).spending.categories) === JSON.stringify(june({ fee: 14000 }).spending.categories));
+// an explicit fee on an OLDER transfer (before the company's provider_from date) is still a fee here; the Income Statement rows stay as booked
+var blkOld = B.buildPaidThroughBlocks({ parties: [{ name: 'NextTrade Industries', kind: 'affiliate', remainder_label: 'Advance with NextTrade', provider_from: '2026-09-01' }], lines: [{ id: 'n1', date: '2026-06-03', amount: 10000, classification: 'professional_fees', payer: 'NextTrade Industries', marked: true }], pays: [], billById: {}, requests: [], catLabels: labels, kindOf: function () { return 'expense'; }, from: '2026-06-01', to: '2026-06-30', splits: { n1: { fee: 500, advance: 0 } } });
+var spOld = { categories: [{ key: 'professional_fees', label: 'Professional Fees', kind: 'expense', count: 1, total: 10000 }], uncategorized: { total: 0 }, paid_through: blkOld };
+var rcOld = X.realCostCategories(spOld, PS.rtmAdjust, PS.foldUnc); var colsOld = X.expenseColumns(rcOld.cats, rcOld.uncategorized);
+check('an explicit fee of 500 on an OLDER NextTrade transfer: 500 is deducted in A, 9,500 is held — while the block’s own rows (Income Statement) are unchanged', blkOld[0].explicit_fees === 500 && blkOld[0].fees_booked === 0 && colsOld.A.cents === 50000 && colsOld.held.cents === 950000 && B.remainderRows(blkOld[0]).length === 1, [blkOld[0].explicit_fees, colsOld.A, colsOld.held]);
+// funding carried across months: July has no transfer and pays a 1,200 bill from June's money
+var blkJul = B.buildPaidThroughBlocks({ parties: [{ name: 'RTM Capital', kind: 'service_provider', remainder_label: 'RTM service fee (payments − covered bills)' }], lines: [], pays: [{ bill_id: 'b4', amount: 1200, paid_date: '2026-07-08', method: 'rtm', bank_transaction_id: 't3' }], billById: BILLS, requests: [], catLabels: labels, kindOf: function (k) { return kinds[k] || 'expense'; }, from: '2026-07-01', to: '2026-07-31' });
+var ansJul = { ok: true, from: '2026-07-01', to: '2026-07-31', spending: { categories: [], uncategorized: { total: 0 }, transfers: { total: 0 }, paid_through: blkJul, rows: [] } };
+var eJ = X.readExpenseAnswer(ansJul, { key: '2026-07', from: '2026-07-01', to: '2026-07-31' }, PS.rtmAdjust, PS.foldUnc); var fuJ = eJ.detail.funding[0];
+check('next month, no new transfer, a 1,200 bill paid from the money already there: no new bank money, no fee, the bill is counted once in its own category, and the screen says it came from funds sent before', fuJ.sent_cents === 0 && fuJ.applied_cents === 120000 && fuJ.fee_cents === 0 && fuJ.unused_cents === -120000 && eJ.cols.total === 0 && eJ.cols.in_profit.cents === 120000 && eJ.cols.held.cents === -120000 && RS.renderToStaticMarkup(React.createElement(FundsSent, { funding: fuJ })).indexOf('Paid from funds sent BEFORE these dates') > 0, [fuJ, eJ.cols.held]);
+check('…across the two months the held balance is 12,000 − 1,200 = 10,800, and the expenses never include the transfers themselves', e.cols.held.cents + eJ.cols.held.cents === 1080000);
+// the destination rule: only the bank's own "transfer to <account>" wording
+check('a transfer is recognised only by the bank’s own "Transfer to CHK …9909 / …2061" wording — not by a number that merely appears, not a transfer FROM the account, not a longer number', B.fundingPayerOfText('Online Transfer to CHK ...9909 transaction#: 27718') === 'RTM Capital' && B.fundingPayerOfText('ONLINE TRANSFER TO CHECKING 2061') === 'NextTrade Industries' && B.fundingPayerOfText('Invoice 9909 payment') === null && B.fundingPayerOfText('Online Transfer from CHK ...9909') === null && B.fundingPayerOfText('Online Transfer to CHK ...19909') === null && B.fundingPayerOfText('Online Transfer to CHK ...99091') === null && B.fundingPayerOfText('') === null);
+// the formula pop-up
+var row = { key: '2026-06', label: 'Jun 2026', goods_revenue: 10000000, goods_cost: 7000000, goods_profit: 3000000, transport_revenue: 0, trucking_cost: 0, freight_cost: 0, transport_profit: 0, profit: 3000000, uncounted: 0, incomplete: 0 };
+var f = D.pnlFormula(row, e, false); var aLine = f.lines.filter(function (l) { return /^A · /.test(l.label); })[0];
+check('"How Jun 2026 is worked out": the A line carries its categories, the company panels ride along, the held 12,000 is under NOT USED, and FINAL = total − A − C − D − E', !!aLine.cats && aLine.cats.length === e.cols.A.cats.length && f.funding.length === 1 && f.not_used.some(function (z) { return /Funds sent to RTM \/ NextTrade/.test(z.label) && z.cents === 1200000; }) && f.lines[f.lines.length - 1].cents === 3000000 - e.cols.total);
+var html = RS.renderToStaticMarkup(React.createElement(PnlFormula, { title: 'Jun 2026', formula: f, openA: true, catLabel: function (k) { return labels[k] || k; } }));
+check('rendered pop-up: click A → its categories, then the company: $66,000.00 funds sent, $52,000.00 applied, $2,000.00 fee, $12,000.00 unused, the sentence, and the bills with the part-paid one', html.indexOf('click to see what is in it') > 0 && html.indexOf('$66,000.00 funds sent') > 0 && html.indexOf('Only $2,000.00 is deducted here as a professional fee. The $52,000.00 applied to underlying bills is not deducted again here') > 0 && html.indexOf('The unused $12,000.00 does not reduce profit.') > 0 && html.indexOf('Adds up to the funds sent.') > 0 && html.indexOf('M-1') > 0 && html.indexOf('$30,000.00') > 0 && html.indexOf('$20,000.00') > 0 && html.indexOf('These add up to') > 0 && html.indexOf('Goods purchased') > 0, html.substring(0, 400));
+check('the amber note says how much is recognised only from the bank text and what to do if it is wrong', html.indexOf('$26,000.00 of this is recognised only from the bank’s own text') > 0 && html.indexOf('give it its real category in All Transactions') > 0);
+var heldKey = e.cols.held.cats[0].key; var mk = e.detail.byKey[heldKey];
+var hd = RS.renderToStaticMarkup(React.createElement(ExpenseDetail, { makeup: mk, rowsListed: true, funding: e.detail.funding.filter(function (x) { return x.key === mk.funding_key; })[0] }));
+check('clicking the held line in the opened period says it is NOT an expense and shows the same company panel; clicking the fee line says it IS deducted', hd.indexOf('This line is NOT an expense') > 0 && hd.indexOf('$66,000.00 funds sent') > 0 && (function () { var fk = e.cols.A.cats.filter(function (c) { return /_fee$/.test(c.key); })[0].key; var m2 = e.detail.byKey[fk]; return RS.renderToStaticMarkup(React.createElement(ExpenseDetail, { makeup: m2, rowsListed: true, funding: e.detail.funding[0] })).indexOf('it IS deducted') > 0; })());
+check('the total row of several periods adds the held money too, and the final figure is still total − A − C − D − E', (function () { var cache = {}; cache['s|2026-06'] = e; cache['s|2026-07'] = eJ; var t = X.totalExpenses(['2026-06', '2026-07'], cache, 's'); return t.cols.held.cents === 1080000 && t.cols.total === e.cols.total && X.finalPnl(5000000, t.cols, 0).cents === 5000000 - e.cols.total; })());
+// source: server + screen
+var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/bills/route.js'), 'utf8'); var tab = fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8');
+check('server (Income Statement answer): unmarked money-out lines are added to a company ONLY through the destination rule, never own-account transfers, same business / not pending / not duplicate, fail-soft', route.indexOf("var py8 = fundingPayerOfText(t8.name) || fundingPayerOfText(t8.merchant_name); if (!py8) { return; }") > 0 && route.indexOf("if (t8.transfer_group_id || t8.classification === 'transfer') { return; }") > 0 && route.indexOf(".is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate')") > 0 && route.indexOf('} catch (eId) {}') > 0);
+check('screen: a "Funds with RTM / NextTrade … NOT an expense" box in the opened period, the company panel in the detail and the pop-up, and the export has the held column', tab.indexOf("['held', 'Funds with RTM / NextTrade — sent, but not used for a bill and not marked as their fee: NOT an expense']") > 0 && tab.indexOf('funding={(function () { var mk = e.detail && e.detail.byKey[c0.key];') > 0 && tab.indexOf("'Funds held with RTM / NextTrade (not an expense)'") > 0);
+console.log('\nVW: ' + pass + ' passed, ' + failN + ' failed');
+if (failN) { process.exit(1); }
