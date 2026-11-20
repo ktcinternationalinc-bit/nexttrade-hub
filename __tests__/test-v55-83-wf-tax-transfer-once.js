@@ -132,6 +132,10 @@ async function stats(from, to) { var j = await call({ action: 'period_stats', fr
   var pfInt = (pkL.sp.party_funds || []).filter(function (p) { return p.party === NT; })[0];
   check('… and the internal funds figures still exclude unused money and count only explicit fees + the underlying bill (July: bill 6,000 applied, explicit fees 500 on the transfer)', !!pfInt && pfInt.period.applied_to_bills === 6000 && pfInt.period.services_rendered === 500 && pfInt.as_of.held === 13000 - 6000 - 500, pfInt && [pfInt.period, pfInt.as_of]);
 
+  // (Codex 18:13 P1) What's New is open to every employee and ships in the browser bundle: the release note of this build carries NO real figure
+  var wn = fs.readFileSync(path.join(root, 'src/components/WhatsNewWidget.jsx'), 'utf8').split('\r\n').join('\n');
+  var wiAt = wn.indexOf("version: 'v55.83-WI'"); var wiEnd = wn.indexOf("\n  },\n", wiAt); var wiText = wiAt > 0 && wiEnd > wiAt ? wn.substring(wiAt, wiEnd) : '';
+  check('the WI release note exists and contains NO money amount, NO count of transfers and NO dated total — not even in the super-admin line', wiText.length > 200 && !/\$\s?[0-9]/.test(wiText) && !/[0-9][0-9,]{3,}(\.[0-9]{2})?/.test(wiText.replace(/v55\.83-[A-Z]+/g, '').replace(/2026-11-20/g, '').replace(/test-v55-83[\w-]*/g, '')) && !/\b[0-9]+ transfers?\b/i.test(wiText) && !/March|November|September|October/.test(wiText), wiText.substring(0, 300));
   var src = fs.readFileSync(path.join(root, 'src/app/api/accounting/bills/route.js'), 'utf8');
   check('the route no longer calls the old tax adjustment at all', src.indexOf('periodAdjustments(') < 0 && src.indexOf("import { periodAdjustments }") < 0 && src.indexOf('__professional_fees_adv') < 0);
   check('which line is a company transfer is decided ONLY by the shared rule, and a paired own-account transfer is excluded', src.indexOf('var isFundingLine = function (tF) { if (tF.direction !== \'out\' || tF.transfer_group_id) { return null; } return fundingIdentity(') > 0);
