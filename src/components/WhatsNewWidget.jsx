@@ -60,6 +60,9 @@ export const BUILD_HISTORY = [
       { text: 'A line sold in linear metres stays in metres on its own row and is counted in the Yards totals at 1 metre = 1.09361 yards.' },
       { text: 'This needs one small database script before the buttons appear. Until it is run everything stays exactly as it is.' },
       { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-VX-keep-in-yards.sql (pl_name_units.keep_unit, cost_unit on pl_line_costs and pl_group_costs; adds columns only). Engine: cell.keep_unit, sold_qty, base_cost_per_sold_unit; inbound_allowance 0; resolveCost with soldUnitOnlyFactors; summarize yards and unit_mix. Route actions keep_preview and set_name_keep behind pnl.edit_costs; src/lib/keep-yards-preview.js runs the engine twice. Loader is fail-soft before the SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-VV',
     date: '2026-11-20',
     title: 'Bills: importing a PDF now takes the bill from the invoice page only — attached papers are left out',
