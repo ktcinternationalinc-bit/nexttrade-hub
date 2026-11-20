@@ -34,7 +34,7 @@ global.__db = db;
 var bills = require(path.join(root, 'src/app/api/accounting/bills/route.js'));
 async function call(user, body) { var res = await bills.POST({ json: function () { return Promise.resolve(Object.assign({ user_id: user }, body)); }, headers: new Map() }); return res.json(); }
 var aiReply = ''; var realFetch = global.fetch;
-global.fetch = function (url) { if (/anthropic/.test(String(url))) { return Promise.resolve({ json: function () { return Promise.resolve({ content: [{ type: 'text', text: aiReply }] }); } }); } return realFetch.apply(this, arguments); };
+global.fetch = function (url) { if (/anthropic/.test(String(url))) { return Promise.resolve({ json: function () { return Promise.resolve({ content: [{ type: 'text', text: require('./helpers/with-one-page.js')(aiReply) /* VV: the reader now also answers which page is the bill */ }] }); } }); } return realFetch.apply(this, arguments); };
 var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra || '').substring(0, 600))); }
 function hist(a) { return db.t.hub_audit_log.filter(function (h) { return h.action === a; }); }

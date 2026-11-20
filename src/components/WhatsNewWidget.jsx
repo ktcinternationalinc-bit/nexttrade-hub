@@ -60,6 +60,19 @@ export const BUILD_HISTORY = [
       { text: 'A line sold in linear metres stays in metres on its own row and is counted in the Yards totals at 1 metre = 1.09361 yards.' },
       { text: 'This needs one small database script before the buttons appear. Until it is run everything stays exactly as it is.' },
       { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-VX-keep-in-yards.sql (pl_name_units.keep_unit, cost_unit on pl_line_costs and pl_group_costs; adds columns only). Engine: cell.keep_unit, sold_qty, base_cost_per_sold_unit; inbound_allowance 0; resolveCost with soldUnitOnlyFactors; summarize yards and unit_mix. Route actions keep_preview and set_name_keep behind pnl.edit_costs; src/lib/keep-yards-preview.js runs the engine twice. Loader is fail-soft before the SQL.' }
+    version: 'v55.83-VV',
+    date: '2026-11-20',
+    title: 'Bills: importing a PDF now takes the bill from the invoice page only — attached papers are left out',
+    items: [
+      { text: '**A bill PDF often comes with other papers** — packing list, bill of lading, delivery receipt, e-mails, customs papers. The Hub now works out which page(s) are the actual bill / invoice and fills the vendor, number, date, total and lines **from those pages only**.' },
+      { text: '**You are told what it did.** On the imported bill a green box says, for example: "Bill taken from page 1 of 4. Left out: pages 2-3 packing list · page 4 e-mail."' },
+      { text: '**Wrong pages? Pick them yourself.** Tick the page(s) that are the bill and press **Use these pages instead** — the file is read again from those pages.' },
+      { text: '**It never guesses quietly.** If the Hub cannot tell which pages are the bill, or the file holds a second invoice, the box turns red and says so, and **Save stays blocked until you tick that you compared the fields with the bill itself**. When several files are imported at once, such a file is not imported: it is listed with a 🚩 and you import it on its own.' },
+      { text: '**Release number:** if the invoice prints a release, that one is used. If it does not, and the attached packing list shows one, the Hub takes it from the packing list and says where it came from. If the two disagree, the invoice wins and the difference is shown in red.' },
+      { text: '**The whole file is still kept** as the document of the bill, every page. Nothing is removed. The duplicate checks work as before.' },
+      { text: 'The same applies when several files are imported at once: the note on each bill says which pages were used. **Bills that arrive by e-mail are read exactly as before** (the whole file) — not changed in this build.' },
+      { text: 'Keep in mind: the reader still receives the whole file and is told which pages to leave out. That is why the box names the pages and you still check the fields.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/bill-extract.js (BILL_PAGES_PROMPT, disciplinePages — every page accounted for exactly once or "unclear"; applyAttachedRelease; pagesWords), bill-extract-server.js readBillFromBase64(b64, type, { pages, pageCount }), bills route extract_bill / ingest_bill_file, BillsTab pages box, pdf-page-count-browser.js (browser page count, advisory). Page mode is opt-in (billPagesOnly) and used only by the bills route; inbound / email-scan call the reader without it and are unchanged. Forced and automatic answers go through one validation; a needs-review file is skipped in ingest_bill_file. The whole PDF still goes to the reader; other pages are left out by instruction, not cut out. No SQL.' },
     ]
   },
   {

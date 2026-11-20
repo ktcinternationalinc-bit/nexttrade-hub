@@ -1059,8 +1059,13 @@ export async function POST(req) {
       var gType = String(body.media_type || '');
       var gName = String(body.filename || 'bill').replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 60);
       if (!gB64 || !gType) { return NextResponse.json({ error: 'file_base64 and media_type required.' }, { status: 400 }); }
-      var gRead = await readBillFromBase64(gB64, gType);
+      // v55.83-VV — a PDF's bill is taken from its bill pages only; the WHOLE file is still stored below, unchanged
+      var gRead = await readBillFromBase64(gB64, gType, { billPagesOnly: true, pageCount: typeof body.page_count === 'number' ? body.page_count : null });
       if (gRead.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gRead.error }); }
+      // v55.83-VV (Codex 21:08) — when the pages could not be confirmed (unclear, a second bill in the file, a release that
+      // disagrees) NO bill is made here: several-files import has nobody looking at the pages. The file goes through the
+      // one-file Import instead, where the pages are shown and the person must confirm before saving. Nothing is stored.
+      if (gRead.needs_review === true) { return NextResponse.json({ ok: true, skipped: true, pages_need_review: true, pages: gRead.pages || null, file: gName, reason: 'NOT imported — ' + ((gRead.pages && gRead.pages.words) || 'the pages of this file could not be confirmed') + ' Import this file ON ITS OWN (Import, pick only this file): the pages are shown there and you confirm them before saving.' }); }
       var gD = gRead.draft;
       // v55.83-QH (Max 12:26) — ONE shared duplicate radar (lib): hard
       // vendor+number duplicates SKIP; shared reference/release/container
@@ -1083,17 +1088,18 @@ export async function POST(req) {
         due_date: gD.due_date, total_amount: gD.total_amount || 0.01,
         category: gCat, currency: 'USD', wave_business_id: US_WAVE_BUSINESS_ID,
         notes: ((gWarn ? gWarn + ' · ' : '') + 'Imported from file ' + gName +
+                ((gRead.pages && gRead.pages.words && gRead.problems.indexOf(gRead.pages.words) < 0) ? ' · ' + gRead.pages.words : '') + // v55.83-VV — which pages the bill was taken from
                 (gRead.problems.length ? ' · READER FLAGS: ' + gRead.problems.join(' ') : '')).substring(0, 900),
         validation_status: 'pending',
         attachment_path: gUpErr ? null : gPath,
         created_by: userId,
       }, gD); // v55.83-RP — type / release / direction sorted on import
       if (gIns.error) { return NextResponse.json({ ok: true, skipped: true, file: gName, reason: gIns.error.message }); }
-      try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr, sorted: gIns.sorted || null, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] } }); } catch (eGE) {}
+      try { await db.from('vendor_bill_events').insert({ bill_id: gIns.data.id, kind: 'file_ingested', actor_id: userId, details: { file: gName, reader_flags: gRead.problems, duplicate_warning: gWarn, attachment_stored: !gUpErr, pages: gRead.pages || null, pages_need_review: gRead.needs_review === true, sorted: gIns.sorted || null, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] } }); } catch (eGE) {}
       await audit(db, userId, 'bill_imported_from_file', 'vendor_bill', gIns.data.id, { file: gName, duplicate_warning: gWarn }); // v55.83-QI
       return NextResponse.json({ ok: true, created: true, id: gIns.data.id, file: gName,
         vendor: gD.vendor_name || null, amount: gD.total_amount || null,
-        duplicate_warning: gWarn, reader_flags: gRead.problems, lines_read: gIns.lines_saved || 0, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] });
+        duplicate_warning: gWarn, reader_flags: gRead.problems, pages: gRead.pages || null, pages_need_review: gRead.needs_review === true, lines_read: gIns.lines_saved || 0, price_check: gIns.price_check || null, price_flags: gIns.price_flags || [] });
     }
 
     // ── v55.83-RQ — bill lines, price rules, reports ───────────────────────
@@ -1250,7 +1256,8 @@ export async function POST(req) {
     }
 
     if (action === 'extract_bill') {
-      var rd = await readBillFromBase64(String(body.file_base64 || ''), String(body.media_type || ''));
+      // v55.83-VV — body.pages = the pages a person picked ("use these pages instead"); body.page_count = pages counted in the browser
+      var rd = await readBillFromBase64(String(body.file_base64 || ''), String(body.media_type || ''), { billPagesOnly: true, pages: body.pages != null ? body.pages : null, pageCount: typeof body.page_count === 'number' ? body.page_count : null });
       if (rd.error) { return NextResponse.json({ error: rd.error }, { status: rd.status || 500 }); }
       // v55.83-PJ — the document rarely names a category; the vendor's
       // REMEMBERED one is suggested (clearly marked, human still confirms).
@@ -1265,7 +1272,7 @@ export async function POST(req) {
         var pvC = priceCheckPure({ vendor_name: rd.draft && rd.draft.vendor_name, total_amount: rd.draft && rd.draft.total_amount, bill_type: sortX.bill_type }, pvLines, pvRules, pvCR);
         pv = { status: pvC.status, flags: pvC.flags, notes: pvC.notes, checked: pvC.checked, commission_rule: pvCR ? { vendor: pvCR.vendor_match, rate: Number(pvCR.rate) } : null };
       } catch (ePV) { pv = null; }
-      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, suggested_category: sugg, sorted: sortX, price_preview: pv });
+      return NextResponse.json({ ok: true, marker: API_BUILD_MARKER, draft: rd.draft, problems: rd.problems, pages: rd.pages || null, pages_need_review: rd.needs_review === true, suggested_category: sugg, sorted: sortX, price_preview: pv });
     }
 
     // ── match_reference (PF): the underlying hook for the future warehouse
