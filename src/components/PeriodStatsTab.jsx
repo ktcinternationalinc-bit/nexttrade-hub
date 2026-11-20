@@ -3,6 +3,7 @@
 // on for both invoices and bills to see stats". Default June 1, 2026 → today;
 // invoices and bills side by side; month-by-month table; CSV.
 import { remainderRows } from '../lib/paid-through-blocks'; // v55.83-SR
+import { spendingByCategoryCsv, spendingDetailCsv, incomeStatementCsv } from '../lib/tax-pack'; // v55.83-WF step C — the accountant pack's spending files
 import React, { useState, useEffect } from 'react';
 import InvoicePeek from './InvoicePeek'; // v55.83-PS — click a reference → the invoice pops up
 import { acctAccess } from '../lib/accounting-access'; // v55.83-RE
@@ -71,8 +72,9 @@ export default function PeriodStatsTab(props) {
   // one-line tax view by default (Max's decision). Either can be switched.
   function ptIsOn(b) { var bk = b.key || b.payer; return ptOn[bk] === undefined ? true : ptOn[bk] === true; } // v55.83-TS (Max, Nov 17: "NextTrade as well as RTM Capital will have this real-cost view") — real-cost is the default for every paid-through company; each still has its switch // v55.83-SR — one switch per block (a company can have a before / from block)
   function ptAdjust(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (ptIsOn(b0)) { out = rtmAdjust(out, b0); } }); return foldUnc(out); }
-  // the accountant pack: related companies ALWAYS real-cost (advances are not deductible), RTM always one line
-  function taxCats(cats0) { var out = cats0 || []; ptBlocks().forEach(function (b0) { if (b0.kind === 'affiliate') { out = rtmAdjust(out, b0); } }); return foldUnc(out); }
+  // v55.83-WF step C (Max 20 Nov; Codex 18:00) — the accountant pack is the TAX presentation: every transfer to RTM / NextTrade stays ONE
+  // Professional-fees amount, in full. Nothing is re-bucketed here for any company, whatever the switches above say (src/lib/tax-pack.js).
+  function taxCats(cats0) { return foldUnc(cats0 || []); }
   // the ⚠ Uncategorized spending total AFTER paid-through money is shown as the bills it paid (screen view / accountant view)
   function uncOutView() { var u = data && data.spending && data.spending.uncategorized; if (!u) { return 0; } return Math.max(0, Math.round((Number(u.total) + ptAdjust(data.spending.categories).uncShift) * 100) / 100); }
   function uncOutTax() { var u = data && data.spending && data.spending.uncategorized; if (!u) { return 0; } return Math.max(0, Math.round((Number(u.total) + taxCats(data.spending.categories).uncShift) * 100) / 100); }
@@ -215,21 +217,8 @@ export default function PeriodStatsTab(props) {
     dl('tax-pack-5-bills-paid-' + tag + '.csv', rowsCsv(d.bills_paid));
     dl('tax-pack-6-open-payables-' + tag + '.csv', rowsCsv(d.open_bills));
     if (data.spending) {
-      var sp = ['category,type,transactions,total_usd'];
-      (taxCats(data.spending.categories) || []).forEach(function (c) { sp.push('"' + String(c.label).replace(/"/g, '""') + '",' + (KIND_LABELS[c.kind] || c.kind || 'Expense') + ',' + c.count + ',' + Number(c.total).toFixed(2)); });
-      if (data.spending.not_pnl_out && data.spending.not_pnl_out.count > 0) { sp.push('"NOT P&L - loan principal / owner (NOT deductible)",,' + data.spending.not_pnl_out.count + ',' + Number(data.spending.not_pnl_out.total).toFixed(2)); }
-      if (data.spending.deductible_spending !== undefined) {
-        // v55.83-RB — recomputed after related-company advances are taken out of spending
-        var dedP = 0; (taxCats(data.spending.categories) || []).forEach(function (c) { if (c.kind !== 'not_pnl' && c.key !== 'transfer' && c.key !== 'uncategorized') { dedP += Number(c.total) || 0; } });
-        sp.push('"DEDUCTIBLE SPENDING (P&L categories only; advances to related companies excluded)",,,' + dedP.toFixed(2));
-      }
-      if (data.spending.uncategorized) { sp.push('"UNCATEGORIZED (needs review before filing)",' + data.spending.uncategorized.count + ',' + uncOutTax().toFixed(2)); }
-      if (data.spending.transfers) { sp.push('"TRANSFERS BETWEEN OWN ACCOUNTS (not deductible spending)",' + data.spending.transfers.count + ',' + Number(data.spending.transfers.total).toFixed(2)); }
-      sp.push('"REAL SPENDING (transfers excluded)",,' + Number(data.spending.real_spending).toFixed(2));
-      dl('tax-pack-7-spending-by-category-' + tag + '.csv', sp);
-      var det = ['date,who,amount,category,paired_transfer'];
-      (data.spending.rows || []).forEach(function (r) { det.push(r.date + ',"' + String(r.who).replace(/"/g, '""') + '",' + Number(r.amount).toFixed(2) + ',' + (r.category || 'UNCATEGORIZED') + ',' + (r.paired ? 'yes' : '')); });
-      dl('tax-pack-8-spending-detail-' + tag + '.csv', det);
+      dl('tax-pack-7-spending-by-category-' + tag + '.csv', spendingByCategoryCsv(data.spending, KIND_LABELS)); // v55.83-WF step C — built in src/lib/tax-pack.js (run in a test)
+      dl('tax-pack-8-spending-detail-' + tag + '.csv', spendingDetailCsv(data.spending));
     }
     if (data.spending && data.spending.in_categories) {
       var spi = ['category,type,deposits,total_usd'];
@@ -245,21 +234,7 @@ export default function PeriodStatsTab(props) {
       dl('tax-pack-11-income-detail-' + tag + '.csv', deti);
     }
     if (data.spending && data.spending.in_categories) {
-      var revP = 0, cogsP = 0, expP = 0, oinP = 0, oexP = 0;
-      (data.spending.in_categories || []).forEach(function (c) { if (c.kind === 'income') { revP += c.total; } else if (c.kind === 'other_income') { oinP += c.total; } });
-      (taxCats(data.spending.categories) || []).forEach(function (c) { if (c.kind === 'cogs') { cogsP += c.total; } else if (c.kind === 'other_expense') { oexP += c.total; } else if (c.kind !== 'not_pnl') { expP += c.total; } });
-      var isCsv = ['line,amount_usd'];
-      isCsv.push('"Revenue (cash received)",' + revP.toFixed(2));
-      isCsv.push('"Cost of goods sold",-' + cogsP.toFixed(2));
-      isCsv.push('"GROSS PROFIT",' + (revP - cogsP).toFixed(2));
-      isCsv.push('"Operating expenses",-' + expP.toFixed(2));
-      isCsv.push('"OPERATING PROFIT",' + (revP - cogsP - expP).toFixed(2));
-      isCsv.push('"Other income",' + oinP.toFixed(2));
-      isCsv.push('"Other expenses",-' + oexP.toFixed(2));
-      isCsv.push('"NET PROFIT (cash basis)",' + (revP - cogsP - expP + oinP - oexP).toFixed(2));
-      if (data.spending.in_uncategorized && data.spending.in_uncategorized.total > 0.005) { isCsv.push('"WARNING: uncategorized deposits OUTSIDE this statement",' + data.spending.in_uncategorized.total.toFixed(2)); }
-      if (uncOutTax() > 0.005) { isCsv.push('"WARNING: uncategorized spending OUTSIDE this statement",' + uncOutTax().toFixed(2)); }
-      dl('tax-pack-12-income-statement-cash-basis-' + tag + '.csv', isCsv);
+      dl('tax-pack-12-income-statement-cash-basis-' + tag + '.csv', incomeStatementCsv(data.spending)); // v55.83-WF step C
     }
     var mo = ['month,invoiced,collected,bills_entered,bills_paid,net_cash'];
     (data.months || []).forEach(function (m) { mo.push(m.month + ',' + m.invoiced.toFixed(2) + ',' + m.collected.toFixed(2) + ',' + m.billed.toFixed(2) + ',' + m.bills_paid.toFixed(2) + ',' + m.net.toFixed(2)); });
@@ -395,7 +370,7 @@ export default function PeriodStatsTab(props) {
             <span className="text-[10px] font-extrabold" style={{ color: isAff ? '#115e59' : '#9d174d' }}>🏢 {pb.payer}{pb.era_note ? ' · ' + pb.era_note : ''} ({isAff ? 'booked as an advance — earlier entries stay as booked' : 'pays vendors for us — one professional-fees line'}):</span>
             <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={!onP} onChange={function () { var n0 = Object.assign({}, ptOn); n0[pb.key || pb.payer] = false; setPtOn(n0); }} /> Tax view — payments to {pb.payer} stay ONE line (${fmt(pb.payments_total)})</label>
             <label className="flex items-center gap-1 text-[10px] font-bold" style={{ color: '#0f172a' }}><input type="radio" checked={onP} onChange={function () { var n1 = Object.assign({}, ptOn); n1[pb.key || pb.payer] = true; setPtOn(n1); }} /> Real-cost view — covered costs in their ACTUAL categories (${fmt(pb.allocations_total)} + ${fmt(pb.service_fee)} {isAff ? 'not yet linked to costs' : ((pb.waiting > 0.005 || pb.fees_booked > 0.005) ? 'not in bills' : 'service fee')}){!isAff && (pb.waiting > 0.005 || pb.fees_booked > 0.005) ? ' = bills $' + fmt(pb.allocations_total) + ' · service fee $' + fmt((Number(pb.fees_booked) || 0) + (Number(pb.remainder_other) || 0)) + ' · waiting for bills $' + fmt(pb.waiting) : ''}</label>
-            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'Money sent ahead of its costs is an ADVANCE (balance sheet), not spending, until NextTrade\'s bills are linked — the accountant pack and the ClickBooks books use this view.' : 'Totals identical in both views. The accountant tax pack uses the one-line tax view.'} Row drills show direct bank rows only.</span>}
+            {onP && <span className="text-[9px]" style={{ color: isAff ? '#115e59' : '#9d174d' }}>{isAff ? 'This is the INTERNAL view: money sent ahead of its costs is held, not spending, until NextTrade\'s bills are linked. The accountant tax pack does NOT use it — there every transfer to NextTrade stays one Professional-fees amount, in full.' : 'Totals identical in both views. The accountant tax pack always uses the one-line tax view: each transfer once, in full.'} Row drills show direct bank rows only.</span>}
           </div>;
         })}
         <table className="w-full text-[11px]">

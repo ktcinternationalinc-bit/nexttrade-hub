@@ -81,7 +81,9 @@ check('route: private bank accounts (live TP) hidden from the payments list; the
 check('route: a click id is required', /missing click id/.test(route));
 check('route: SWC-safe', route.indexOf('`') < 0 && !/=>/.test(route));
 var bills2 = fs.readFileSync(path.join(root, 'src/app/api/accounting/bills/route.js'), 'utf8');
-check('P&L: advances move out of the payment category to a not-P&L row; applied / converted change professional fees', /__party_advance/.test(bills2) && /periodAdjustments\(/.test(bills2) && /professional_fee_change/.test(bills2) && /splits: ptSplits/.test(bills2));
+// v55.83-WF step C (Max, 20 Nov 2026) — that TX tax rule is RETIRED: a transfer to RTM / NextTrade counts once, in full, under Professional fees;
+// nothing leaves the payment's category for an 'advance' row and nothing is added when held money is used (run for real in test-v55-83-wf-tax-transfer-once.js)
+check('P&L (WF step C): the old advance adjustments are gone from the report route — no periodAdjustments call, no advance row, no professional-fee change; extra-fee splits still reach the blocks', !/periodAdjustments\(/.test(bills2) && !/byCat\.__party_advance/.test(bills2) && !/professional_fee_change/.test(bills2) && /splits: ptSplits/.test(bills2) && /funds_sent_tax/.test(bills2));
 check('P&L: says so when advances cannot be read (never silently)', /advance_note: advNote/.test(bills2));
 var tab = fs.readFileSync(path.join(root, 'src/components/BillsTab.jsx'), 'utf8');
 check('Bills screen: advance balances always visible', /<AdvancesPanel/.test(tab));

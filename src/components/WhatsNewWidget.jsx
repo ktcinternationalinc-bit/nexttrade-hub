@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WI',
+    date: '2026-11-20',
+    title: 'Tax view: every transfer to RTM or NextTrade counts once, in full, under Professional fees',
+    items: [
+      { text: '**Stats → Income Statement (the tax view) and the Accountant pack: every transfer KTC sent RTM or NextTrade now counts ONCE, IN FULL, under Professional fees, on the day it left the bank.** It no longer matters what category the bank line carries — none, “transfer”, or anything else — or whether anyone marked it for the company: it is also recognised from the bank’s own text naming the RTM / NextTrade account.' },
+      { text: '**Using that money later adds nothing to the tax view.** Paying a bill from money already sent, marking part of it as services rendered, or undoing that, creates no second amount.' },
+      { text: 'The Accountant pack (files 7, 8 and 12) now shows the same thing as the screen’s tax view. Before, it took NextTrade’s transfers back out of Professional fees and showed them as an “advance”; it no longer does. File 7 has a new line saying how much of Professional fees is transfers to RTM / NextTrade.' },
+      { text: 'A transfer between KTC’s own accounts is never counted as money sent to a company. The total money out does not change: a transfer is moved into Professional fees, never added on top.' },
+      { text: 'The internal “real-cost” view on the Stats screen (bills in their real categories, money still held is not spending) is unchanged and stays separate.' },
+      { text: 'On today’s figures nothing moves on screen: all 23 transfers ($821,195, March – November) were already categorized Professional fees. What changes is the Accountant pack for NextTrade, and that the rule now holds whatever category a future transfer gets. This is the report layout you asked for; your accountant confirms the treatment and timing.' },
+      { superAdminOnly: true, text: 'Technical: NO SQL. bills route period_stats: a money-out line that fundingIdentity() says went to RTM / NextTrade and is not paired is bucketed under the professional-fees key (moved, not added); spend.funds_sent_tax; rows carry funds_sent_to / bank_category; the TX periodAdjustments tax adjustments are no longer called (no __party_advance row, no from_advances); paid_through payments_by_cat keyed to the same key. NEW src/lib/tax-pack.js builds pack files 7 / 8 / 12; PeriodStatsTab.taxCats no longer runs rtmAdjust. Test: test-v55-83-wf-tax-transfer-once.js (the real period_stats route + the generated CSV text).' },
+    ],
+  },
+  {
     version: 'v55.83-WH',
     date: '2026-11-20',
     title: 'Invoices: break the shipping down internally (trucking, freight, bond, other) — never printed',

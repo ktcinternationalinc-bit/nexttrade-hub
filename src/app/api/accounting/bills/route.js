@@ -12,7 +12,7 @@
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
 import { FUNDING_DESTINATIONS, fundingIdentity } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule
 import { loadPartyFunds } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
-import { periodAdjustments } from '../../../../lib/party-money'; // v55.83-TX
+// v55.83-WF step C — periodAdjustments (the TX tax adjustments) is no longer used here: a transfer to RTM / NextTrade counts once, in full
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -1826,7 +1826,7 @@ export async function POST(req) {
         // basis). Fetch in AND out; the income side mirrors the spending side.
         var spTx = await fetchAll(function () {
           return db.from('bank_transactions')
-            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction')
+            .select('id, date, posted_date, amount_abs, name, merchant_name, classification, transfer_group_id, matched_invoice_id, direction, third_party_payer')
             .eq('wave_business_id', US_WAVE_BUSINESS_ID).in('direction', ['in', 'out']).neq('pending', true)
             .neq('review_status', 'duplicate') // v55.83-QM — duplicates never count in spending/income
             .gte('date', pFrom).lte('date', pTo).order('date', { ascending: false });
@@ -1840,6 +1840,18 @@ export async function POST(req) {
         // taxable income / deductible spending; not_pnl money (loan principal,
         // owner contributions) NEVER does — that is proper accounting.
         var kindOf = function (k0) { return catKinds[k0] || 'expense'; };
+        // v55.83-WF step C (Max, 20 Nov 2026, twice through Codex; "it still does not guarantee the full RTM next trade transfer") —
+        // THE TAX PRESENTATION: every transfer KTC sent RTM Capital or NextTrade Industries counts ONCE, IN FULL, under
+        // "Professional fees", on its own bank date — whatever category the bank line happens to carry (none, "transfer", anything).
+        // Nothing is taken out when part of it is still held, and nothing is added when held money later pays a bill or is
+        // marked / unmarked as services rendered: those are internal moves, not new payments. Which line is such a transfer is
+        // decided by the ONE shared rule (fundingIdentity: stamped for the company, or the bank text names its account). A line
+        // paired as a transfer between KTC's own accounts is never one. The INTERNAL view re-buckets from this same key.
+        var profKeyP = null;
+        Object.keys(catLabels || {}).forEach(function (kP) { if (!profKeyP && /professional/i.test(String(catLabels[kP] || kP))) { profKeyP = kP; } });
+        var taxKeyP = profKeyP || '__professional_fees_pt';
+        var fundingTax = { count: 0, total: 0, recategorized: 0, recategorized_total: 0, by_party: {} };
+        var isFundingLine = function (tF) { if (tF.direction !== 'out' || tF.transfer_group_id) { return null; } return fundingIdentity({ direction: 'out', third_party_payer: tF.third_party_payer, name: tF.name, merchant_name: tF.merchant_name }); };
         var byCat = {}; var trf = { count: 0, total: 0 }; var unc = { count: 0, total: 0 }; var totOut = 0;
         var spRows = [];
         var byCatIn = {}; var trfIn = { count: 0, total: 0 }; var uncIn = { count: 0, total: 0 }; var totIn = 0;
@@ -1863,17 +1875,25 @@ export async function POST(req) {
           }
           totOut = r2(totOut + amt6);
           var key6 = isTrf ? 'transfer' : (t6.classification || null);
-          if (spRows.length < 500 || (!key6 && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id }); } // v55.83-TS
+          var fund6 = isFundingLine(t6); // v55.83-WF step C — money sent to RTM / NextTrade: professional fees, once, in full
+          if (fund6) {
+            var was6 = key6 || 'uncategorized';
+            fundingTax.count++; fundingTax.total = r2(fundingTax.total + amt6);
+            fundingTax.by_party[fund6.payer] = r2((fundingTax.by_party[fund6.payer] || 0) + amt6);
+            if (was6 !== taxKeyP) { fundingTax.recategorized++; fundingTax.recategorized_total = r2(fundingTax.recategorized_total + amt6); }
+            key6 = taxKeyP; isTrf = false;
+          }
+          if (spRows.length < 500 || (!key6 && spRows.length < 3000)) { spRows.push({ id: t6.id, date: d6, who: t6.merchant_name || t6.name || '', amount: amt6, category: key6 || '', paired: !!t6.transfer_group_id, funds_sent_to: fund6 ? fund6.payer : undefined, bank_category: fund6 ? (t6.classification || '') : undefined }); } // v55.83-TS
           if (isTrf) { trf.count++; trf.total = r2(trf.total + amt6); return; }
           if (!key6) { unc.count++; unc.total = r2(unc.total + amt6); return; }
-          if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || key6, kind: kindOf(key6), count: 0, total: 0 }; }
+          if (!byCat[key6]) { byCat[key6] = { key: key6, label: catLabels[key6] || (key6 === '__professional_fees_pt' ? 'Professional fees' : key6), kind: key6 === '__professional_fees_pt' ? 'expense' : kindOf(key6), count: 0, total: 0 }; }
           byCat[key6].count++; byCat[key6].total = r2(byCat[key6].total + amt6);
+          if (fund6) { byCat[key6].funds_sent = r2((byCat[key6].funds_sent || 0) + amt6); } // how much of this line is transfers to RTM / NextTrade
         });
         // v55.83-TX (Max, Nov 17) — NextTrade / RTM payments split into bills · extra fee · ADVANCE. An advance is NOT spending:
         // it leaves the payment's category for a not-P&L 'advance held' row. Later, part of it used to pay bills or turned into
         // a fee becomes a professional fee in the period it happened; a fee turned back into advance leaves professional fees.
-        var ptSplits = {}; var advNote = null; var profKeyP = null;
-        Object.keys(catLabels || {}).forEach(function (kP) { if (!profKeyP && /professional/i.test(String(catLabels[kP] || kP))) { profKeyP = kP; } });
+        var ptSplits = {}; var advNote = null;
         try {
           // the COMPLETE ledger, page by page in a stable order (Supabase returns at most 1,000 rows a request) — never a capped list
           var pmE = { data: [], error: null };
@@ -1889,21 +1909,10 @@ export async function POST(req) {
             var lcP = {}; var ldP = {};
             spTx.forEach(function (tP) { lcP[tP.id] = tP.transfer_group_id || tP.classification === 'transfer' ? 'transfer' : (tP.classification || null); ldP[tP.id] = tP.posted_date || tP.date; });
             (pmE.data || []).forEach(function (eP) { if (eP.kind === 'payment_split' && eP.bank_transaction_id && Object.prototype.hasOwnProperty.call(ldP, eP.bank_transaction_id)) { var sp0 = ptSplits[eP.bank_transaction_id] || (ptSplits[eP.bank_transaction_id] = { fee: 0, advance: 0 }); sp0[eP.bucket] = r2(sp0[eP.bucket] + Number(eP.amount)); } });
-            // only splits whose bank line is in this report (a line the report leaves out never moves money between its rows)
-            var pmUse = (pmE.data || []).filter(function (eP) { return eP.kind !== 'payment_split' || Object.prototype.hasOwnProperty.call(ldP, eP.bank_transaction_id); });
-            var adjP = periodAdjustments(pmUse, pFrom, pTo, lcP, ldP);
-            Object.keys(adjP.advance_out_of_category).forEach(function (kA) {
-              var vA = adjP.advance_out_of_category[kA];
-              if (kA === 'uncategorized') { unc.total = r2(unc.total - vA); return; }
-              if (kA === 'transfer') { trf.total = r2(trf.total - vA); return; }
-              if (byCat[kA]) { byCat[kA].total = r2(byCat[kA].total - vA); }
-            });
-            if (adjP.advance_held > 0.005) { byCat.__party_advance = { key: '__party_advance', label: 'Advance to NextTrade / RTM (held — an asset, not spending)', kind: 'not_pnl', count: 0, total: adjP.advance_held }; }
-            if (Math.abs(adjP.professional_fee_change) > 0.005) {
-              var pk0 = profKeyP || '__professional_fees_adv';
-              if (!byCat[pk0]) { byCat[pk0] = { key: pk0, label: catLabels[pk0] || 'Professional fees', kind: 'expense', count: 0, total: 0 }; }
-              byCat[pk0].total = r2(byCat[pk0].total + adjP.professional_fee_change); byCat[pk0].from_advances = adjP.professional_fee_change;
-            }
+            // v55.83-WF step C — the TX tax adjustments are RETIRED here: an "advance" no longer leaves the payment's category and
+            // using or reclassifying held money no longer adds a professional fee. The transfer already counts once, in full
+            // (above). An advance split never reduces what the blocks see either (the whole transfer was sent).
+            Object.keys(ptSplits).forEach(function (kS) { ptSplits[kS].advance = 0; });
           }
         } catch (eAdv) { advNote = 'Advances could not be read — this report counts NextTrade / RTM payments in full.'; }
         var catRows = Object.values(byCat).sort(function (a6, b6) { return b6.total - a6.total; });
@@ -1935,7 +1944,9 @@ export async function POST(req) {
           if (!rtmTx.error) {
             // v55.83-SR — the blocks are built by src/lib/paid-through-blocks.js (same sums as before; a company with a
             // provider_from date is split at that date, and lines from it on are broken into bills / service fee / waiting)
-            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: t9.classification, payer: t9.third_party_payer, marked: true }; });
+            // v55.83-WF step C — every company line sits under the ONE tax key in spend.categories (above), so the blocks name the
+            // same key: the internal view takes each payment out of exactly the line it was counted in. bank_category keeps what the bank line itself says.
+            var ptLines = (rtmTx.data || []).map(function (t9) { return { id: t9.id, date: t9.posted_date || t9.date, amount: t9.amount_abs, classification: taxKeyP, bank_category: t9.classification, payer: t9.third_party_payer, marked: true }; });
             // v55.83-VY — a transfer whose bank text names the company's own account (ending 9909 / 2061) is money sent to that
             // company even when nobody stamped it. Transfers between KTC's own accounts are never taken. Fail-soft.
             try {
@@ -1945,9 +1956,9 @@ export async function POST(req) {
                 .gte('date', pFrom).lte('date', pTo).or(destOr).limit(2000);
               if (!idTx.error) {
                 (idTx.data || []).forEach(function (t8) {
-                  if (t8.transfer_group_id || t8.classification === 'transfer') { return; }
+                  if (t8.transfer_group_id) { return; } // paired between KTC's own accounts — never money sent to a company (a bare "transfer" category does not make it one: step C)
                   var id8 = fundingIdentity({ direction: 'out', third_party_payer: null, name: t8.name, merchant_name: t8.merchant_name }); if (!id8) { return; }
-                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: t8.classification, payer: id8.payer, marked: false, who: t8.merchant_name || t8.name || '' });
+                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: taxKeyP, bank_category: t8.classification, payer: id8.payer, marked: false, who: t8.merchant_name || t8.name || '' });
                 });
               }
             } catch (eId) {}
@@ -1959,7 +1970,7 @@ export async function POST(req) {
                 if (!wq.error) { ptReqs = ptReqs.concat(wq.data || []); }
               }
             } catch (eWq) { ptReqs = []; }
-            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: profKeyP || '__professional_fees_adv' }); // TX: + advances / extra fees
+            ptBlocks = buildPaidThroughBlocks({ parties: partiesP, lines: ptLines, pays: LS.pays || [], billById: billNameById, requests: ptReqs, catLabels: catLabels, kindOf: kindOf, from: pFrom, to: pTo, splits: ptSplits, profKey: taxKeyP }); // TX: + extra fees · WF step C: the one tax key
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
@@ -1980,7 +1991,9 @@ export async function POST(req) {
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,
           real_income: r2(totIn - trfIn.total), in_rows: inRows,
-          taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote };
+          taxable_income: taxable, not_pnl_in: notPnlIn, advance_note: advNote,
+          // v55.83-WF step C — the tax presentation of money sent to RTM / NextTrade: one line, each transfer once, in full
+          funds_sent_tax: { key: taxKeyP, label: catLabels[taxKeyP] || 'Professional fees', count: fundingTax.count, total: fundingTax.total, by_party: fundingTax.by_party, recategorized: fundingTax.recategorized, recategorized_total: fundingTax.recategorized_total } };
       } catch (eSp) { spend = null; }
       var psPayload = {
         invoices: { invoiced: invoiced, count: invCount, collected: collected, collected_count: colCount, collected_on_period: collectedCohort, collected_on_period_count: colCohortCount, still_open_from_period: stillOpen },
