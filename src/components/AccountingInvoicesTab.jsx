@@ -16,6 +16,9 @@ import { dbDelete } from '../lib/supabase';
 import { invoiceLifecycle, proformaLifecycle, archivePatch, voidPatch, restorePatch } from '../lib/record-lifecycle';
 import { SHIPPING_TERMS, SHIPPING_TERMS_WORDS, checkShippingTerms, minShippingCharge } from '../lib/shipping-terms'; // v55.83-TG
 import { isTransportLine } from '../lib/profitability'; // v55.83-TG
+import ProformaLinkBox, { proformaLinksApi } from './ProformaLinkBox'; // v55.83-VZ — proforma ↔ invoice links + signed proforma
+import ProformaPeek from './ProformaPeek';
+import InvoicePeek from './InvoicePeek';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -101,6 +104,15 @@ export default function AccountingInvoicesTab(props) {
   var [viewPayments, setViewPayments] = useState([]);
   var [viewLoading, setViewLoading] = useState(false);
   var [visCfg, setVisCfg] = useState({ window: 'all', customDays: null, customFrom: null }); // v55.83-JL admin visibility window
+  // v55.83-VZ — the small marks on the lists (which invoice has a proforma; which proforma has invoices / a signed copy) and the two pop-ups
+  var [linkMap, setLinkMap] = useState({ by_invoice: {}, by_proforma: {} });
+  var [peekInv, setPeekInv] = useState(null);
+  var [peekPf, setPeekPf] = useState(null);
+  function loadLinkMap() {
+    proformaLinksApi({ action: 'map' }).then(function (j) { setLinkMap({ by_invoice: j.by_invoice || {}, by_proforma: j.by_proforma || {} }); }).catch(function () { /* the lists work without the marks */ });
+  }
+  function openPeekInvoice(id) { setPeekPf(null); setPeekInv(id); }
+  function openPeekProforma(id) { setPeekInv(null); setPeekPf(id); }
 
   async function load() {
     setLoading(true);
@@ -156,7 +168,7 @@ export default function AccountingInvoicesTab(props) {
     }).catch(function (e) { console.error('[acctinv] load', e); toast.error('Failed to load'); })
       .finally(function () { setLoading(false); });
   }
-  useEffect(function () { if (mayView) load(); else setLoading(false); }, []);
+  useEffect(function () { if (mayView) { load(); loadLinkMap(); } else setLoading(false); }, []);
 
   function custName(id) { var c = customers.find(function (x) { return x.id === id; }); return c ? (c.company_name || c.contact_name || id) : '—'; }
   function lcTbl() { return isInvoice() ? 'accounting_invoices' : 'accounting_proformas'; }
@@ -689,7 +701,7 @@ export default function AccountingInvoicesTab(props) {
           }).then(function () { return logActivity(userProfile && userProfile.id, 'Converted proforma ' + (row.proforma_number || row.id) + ' to invoice', 'accounting_proformas'); });
         });
       })
-      .then(function () { toast.success('Converted to invoice'); setMode('invoices'); load(); })
+      .then(function () { toast.success('Converted to invoice'); setMode('invoices'); load(); loadLinkMap(); })
       .catch(function (e) { console.error('[save] Convert failed: ', e); toast.error('Convert failed: ' + ((e && e.message) || 'unknown error — check console')); })
       .finally(function () { setBusy(false); });
   }
@@ -802,7 +814,10 @@ export default function AccountingInvoicesTab(props) {
               var rc = rowCalc(row);
               return (
                 <div key={row.id} className="grid items-center border-t border-slate-800 hover:bg-slate-800/40" style={{ gridTemplateColumns: gcols }}>
-                  <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}</div>
+                  <div className="px-2 py-1.5 text-xs font-mono text-slate-200 cursor-pointer" onClick={function () { openView(row); }}>{(isInvoice() ? row.invoice_number : row.proforma_number) || <span className="text-slate-500 italic">(none)</span>}
+                    {/* v55.83-VZ — where it came from / what it made, right on the list */}
+                    {isInvoice() && linkMap.by_invoice[row.id] ? <button type="button" onClick={function (e) { e.stopPropagation(); openPeekProforma(linkMap.by_invoice[row.id].proforma_id); }} title="Made from this proforma — click to open it" className="block mt-0.5 text-[9px] bg-indigo-700 hover:bg-indigo-600 text-white rounded px-1 py-0.5 font-bold font-sans">PF {linkMap.by_invoice[row.id].proforma_number || ''} ↗</button> : null}
+                    {!isInvoice() && linkMap.by_proforma[row.id] ? <span className="block mt-0.5 font-sans">{linkMap.by_proforma[row.id].invoices > 0 ? <span className="text-[9px] bg-indigo-700 text-white rounded px-1 py-0.5 font-bold mr-1" title="Invoices made from this proforma — open it to see them">{linkMap.by_proforma[row.id].invoices} invoice{linkMap.by_proforma[row.id].invoices > 1 ? 's' : ''}</span> : null}{linkMap.by_proforma[row.id].signed > 0 ? <span className="text-[9px] bg-emerald-700 text-white rounded px-1 py-0.5 font-bold" title="A signed copy is on file — open it to see it">✍ signed</span> : null}</span> : null}</div>
                   <div className="px-1 py-1" onClick={function (e) { e.stopPropagation(); }}>{isInvoice() ? (
                     relEditId === row.id ? (
                       <div>
@@ -931,6 +946,10 @@ export default function AccountingInvoicesTab(props) {
                 )}
 
                 {viewing.notes && <div className="mt-3 bg-slate-800 rounded p-2 text-slate-200"><span className="font-bold">Notes:</span> {viewing.notes}</div>}
+                {/* v55.83-VZ — the proforma it came from / the invoices it made, and the signed proforma */}
+                <ProformaLinkBox kind={isInvoice() ? 'invoice' : 'proforma'} docId={viewing.id} doc={viewing} mayEdit={mayEdit} toast={toast}
+                  invoices={scopeIfRegistered(invoices, waveBiz, waveReg, true)} proformas={scopeIfRegistered(proformas, waveBiz, waveReg, true)} customerName={custName} linkMap={linkMap}
+                  onOpenInvoice={openPeekInvoice} onOpenProforma={openPeekProforma} onChanged={loadLinkMap} />
               </div>
             </div>
           </div>
@@ -1011,6 +1030,9 @@ export default function AccountingInvoicesTab(props) {
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Notes</span><textarea rows={2} value={hdr.notes || ''} disabled={locked(editing)} onChange={function (e) { uh('notes', e.target.value); }} className={inp} /></label>
             <label className="block"><span className="block text-[11px] text-slate-400 mb-0.5">Terms</span><textarea rows={2} value={hdr.terms || ''} disabled={locked(editing)} onChange={function (e) { uh('terms', e.target.value); }} className={inp} /></label>
           </div>
+          {editing !== 'new' && editing.id && <div className="mb-2"><ProformaLinkBox kind={isInvoice() ? 'invoice' : 'proforma'} docId={editing.id} doc={editing} mayEdit={mayEdit} toast={toast}
+                  invoices={scopeIfRegistered(invoices, waveBiz, waveReg, true)} proformas={scopeIfRegistered(proformas, waveBiz, waveReg, true)} customerName={custName} linkMap={linkMap}
+                  onOpenInvoice={openPeekInvoice} onOpenProforma={openPeekProforma} onChanged={loadLinkMap} /></div>}
           {mayEdit && !locked(editing) && (
             <div className="flex gap-2 flex-wrap">
               {saveBlock && <span className="text-[11px] font-bold mr-2" style={{ color: '#fca5a5', maxWidth: 520 }}>⛔ Not saved: {saveBlock}</span>}
@@ -1044,6 +1066,9 @@ export default function AccountingInvoicesTab(props) {
         </div>
         </div>
       )}
+      {/* v55.83-VZ — the linked document, opened on top of whatever is on screen */}
+      <InvoicePeek invoiceId={peekInv} onClose={function () { setPeekInv(null); }} onOpenProforma={openPeekProforma} />
+      <ProformaPeek proformaId={peekPf} onClose={function () { setPeekPf(null); }} onOpenInvoice={openPeekInvoice} />
     </div>
   );
 }

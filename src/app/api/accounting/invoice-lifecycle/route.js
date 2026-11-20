@@ -10,6 +10,7 @@ import { verifiedCaller } from '../../../../lib/verified-caller';
 import { loadUserPermissions } from '../../../../lib/server-permissions';
 import { canDeleteInvoices, INVOICE_DELETE_DENIED, lifecycleRefusal, LIFECYCLE_SQL_MISSING } from '../../../../lib/invoice-delete-access';
 import { audit } from '../../../../lib/audit-server';
+import { PROFORMA_KEEP_REFUSAL, proformaHasKeptRecords } from '../../../../lib/proforma-keep-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,12 @@ export async function POST(req) {
     var kind = body.kind === 'proforma' ? 'proforma' : 'invoice';
     var id = String(body.id || '');
     if (!UUID.test(id)) { return fail('Which ' + kind + '?'); }
+    // v55.83-VZ — a proforma that has a signed copy or a link to an invoice is never deleted (Max: nothing is ever erased): archive it
+    if (kind === 'proforma' && action === 'delete') {
+      var kept = await proformaHasKeptRecords(db, id);
+      if (kept.error) { return fail('Could not check this proforma for signed copies (' + kept.error + '). Nothing was changed.', 500); }
+      if (kept.signed > 0 || kept.links > 0) { return fail(PROFORMA_KEEP_REFUSAL, 409, { code: 'kept_records' }); }
+    }
     var r = await db.rpc('hub_invoice_lifecycle', { p: { kind: kind, action: action, id: id, actor: userId, is_super: ctx.isSuperAdmin === true, reason: String(body.reason || '').trim().substring(0, 300) || null } });
     if (r.error) {
       if (/hub_invoice_lifecycle/.test(String(r.error.message || '')) && /does not exist|Could not find|schema cache/i.test(String(r.error.message || ''))) { return fail(LIFECYCLE_SQL_MISSING, 409); }

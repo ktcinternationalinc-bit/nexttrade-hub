@@ -12,6 +12,7 @@ var cp = require('child_process');
 var path = require('path');
 
 var MANIFEST = [
+  { f: 'test-v55-83-vz-proforma-links.js', label: 'new', why: 'VZ (Max 20 Nov "Proforma invoices need to be linked to invoices and ... upload a signed proforma that is saved and archived with them"): REAL proforma-links + invoice-lifecycle routes - who may read / write, link rules, unlink keeps the row, history window, signed versions added never replaced, real file kind from bytes, no path leak, audit, delete refused' },
   // Bank/Plaid ingestion + display
   { f: 'test-v55-83-x-bank-ingest.js', label: 'must-pass', why: 'Plaid transaction mapping/ingest' },
   { f: 'test-v55-83-fg-plaid-sync-defensive.js', label: 'must-pass', why: 'Plaid sync defensive handling' },
