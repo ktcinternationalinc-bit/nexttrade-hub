@@ -114,6 +114,7 @@ export function partyFundsBreakdown(o) {
     });
     (o.entries || []).forEach(function (e) {
       if (key(e.party) !== pk || e.bucket !== 'fee') { return; }
+      if (e.wire_package_id) { return; } // v55.83-WF: an entry that points at a wire is a NOTE about that wire's fee — the wire carries the fee, once (same rule as the database)
       var t = tById[e.source_bank_transaction_id || e.bank_transaction_id] || null;
       feeRow(t, e.amount, e.entry_date || (t && t.date) || e.created_at, e.reason || 'services rendered', 'entry:' + e.id);
     });
