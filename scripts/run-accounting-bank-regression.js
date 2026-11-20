@@ -12,6 +12,9 @@ var cp = require('child_process');
 var path = require('path');
 
 var MANIFEST = [
+  { f: 'test-v55-83-wc-sync-route.js', label: 'new', why: 'WC real Plaid handlers with mocked bank/DB: posted refresh, existing link retained on same ID, repeated sync, partial failures logged and cleared on retry' },
+  { f: 'test-v55-83-wc-pending-repair.js', label: 'new', why: 'WC pending repair preview and confirmation, verified super-admin restriction, authoritative bank identities and historic replacements during sync' },
+  { f: 'test-v55-83-wc-bank-trial.js', label: 'new', why: 'WC trial: partial and whole-word transaction search; posted-bank identity refresh; pending reconciliation errors and private-account-scoped sync health' },
   { f: 'test-v55-83-vz-proforma-links.js', label: 'new', why: 'VZ (Max 20 Nov "Proforma invoices need to be linked to invoices and ... upload a signed proforma that is saved and archived with them"): REAL proforma-links + invoice-lifecycle routes - who may read / write, link rules, unlink keeps the row, history window, signed versions added never replaced, real file kind from bytes, no path leak, audit, delete refused' },
   // Bank/Plaid ingestion + display
   { f: 'test-v55-83-x-bank-ingest.js', label: 'must-pass', why: 'Plaid transaction mapping/ingest' },

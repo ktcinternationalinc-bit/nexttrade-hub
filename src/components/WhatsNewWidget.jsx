@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WC',
+    date: '2026-11-20',
+    title: 'Pending bank repair and clearer transaction search',
+    items: [
+      { text: 'All Transactions keeps partial search and adds Whole words. Searching NSF can now exclude transfer. Matching description text is highlighted and the full description is visible while searching.' },
+      { text: 'A pending or removed copy on an older bank connection no longer prevents a posted transaction from loading. Existing bank records are refreshed rather than skipped as imports.' },
+      { text: 'Bank sync reports when pending reconciliation needs attention instead of reporting a fully successful sync. All Transactions shows a warning for affected accounts in its list.' },
+      { text: 'The super admin can preview pending records with confirmed posted replacements. Repairing selected linked records requires the WC database update. Existing bill and invoice payments stay linked; records without bank confirmation remain for review.' },
+      { superAdminOnly: true, text: 'Requires sql/v55-83-WC-pending-identity.sql after SO/TU for linked-record repair. Until installed, existing guarded TU settlement remains active. Changed amounts, conflicting saved work and closed periods require review. No live bank records were manually repaired as part of this application release.' }
+    ]
+  },
+  {
     version: 'v55.83-WB',
     date: '2026-11-20',
     title: 'P&L by period: money sent to RTM / NextTrade is not a fee unless it is marked as one',

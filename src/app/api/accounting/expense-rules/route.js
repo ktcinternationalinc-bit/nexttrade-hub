@@ -13,6 +13,7 @@
 // • Permission: bank.classify (same permission that categorizes in Bank
 //   Review); super admin always.
 import { NextResponse } from 'next/server';
+import { visibleSyncWarning } from '../../../../lib/bank-sync-health';
 import { privateScope, dropPrivate, isPrivateRow } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
@@ -568,7 +569,8 @@ export async function POST(req) {
           wires: wiresBy[t7.id] || null,
           wire: wireBy[t7.id] || ((t7.direction === 'out' && billLegsBy[t7.id] > 0 && /\bWIRE\b|\bWT\b|FEDWIRE|SWIFT|WIRE TRANSFER/i.test(wfull.join(' '))) ? { kind: 'bank', id: t7.id } : null) };
       });
-      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: txA.capped === true, date_filters_locked: atLocked,
+      var bankSyncWarning = await visibleSyncWarning(db, txA.data || []);
+      return NextResponse.json({ ok: true, from: fA, to: tA, transactions: outA, count: outA.length, capped: txA.capped === true, date_filters_locked: atLocked, bank_sync_warning: bankSyncWarning,
         outside_dates: Object.keys(outsideBy).map(function (k8) { return outsideBy[k8]; }), api_build_marker: API_BUILD_MARKER });
     }
 

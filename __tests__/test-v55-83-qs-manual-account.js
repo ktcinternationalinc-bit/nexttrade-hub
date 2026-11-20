@@ -58,7 +58,8 @@ mod.exports.accountTwins(fakeDb(), ['plaid-pnc']).then(function (res) {
     /exRows = exRows\.filter\(function \(t0\) \{ return t0\.review_status !== 'duplicate'; \}\);/.test(si));
   ok('4: Plaid sync skips what a CSV brought in on a TWIN manual account, keyed as the Plaid account',
     /var twinsMD = await accountTwins\(supabase, Object\.keys\(mdAccts\)\);/.test(tr) &&
-    /\(asPlaid\[m0\.account_id\] \|\| m0\.account_id\)/.test(tr));
+    /dedupeImportedRows\(rows, seenRows, asPlaid, knownIds\)/.test(tr) &&
+    /\(aliases \|\| \{\}\)\[row\.account_id\] \|\| row\.account_id/.test(R('src/lib/bank-import-dedupe.js')));
   ok('5: a manual account is NEVER pulled from Plaid — scheduled sync skips it, the transactions route refuses politely',
     /c\.status === 'manual' \|\| \/\^manual-\/\.test\(String\(c\.plaid_item_id/.test(sy) &&
     /Manual \(CSV\) account — add its transactions with 📄 Import statement CSV\./.test(tr));

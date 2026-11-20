@@ -12,6 +12,7 @@
 // CRON_SECRET protected. Writes nothing to Plaid (read-only). SWC-safe: var + concat.
 import { createClient } from '@supabase/supabase-js';
 import { configuredPlaidCron, isPlaidCron, plaidJson } from '../_auth';
+import { settlementWarning } from '../../../../lib/bank-sync-health';
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -96,7 +97,9 @@ async function runSync(request) {
     if (!inScope[c.wave_business_id]) { skippedOutOfScope = skippedOutOfScope + 1; continue; }
 
     var rep = await callTransactions(base, c.id, forwardBearer);
-    var okPull = !(rep && (rep.error || rep.error_code));
+    var pullFailed = !!(rep && (rep.error || rep.error_code));
+    var warning = !pullFailed && rep && rep.pending !== true ? (rep.settlement_warning || settlementWarning(rep.pending_settled)) : null;
+    var okPull = !pullFailed && !warning && !(rep && rep.pending === true);
     results.push({
       connection_id: c.id,
       institution: c.institution_name || null,
@@ -105,7 +108,8 @@ async function runSync(request) {
       ok: okPull,
       pending: rep && rep.pending === true,
       inserted: rep && (rep.inserted != null ? rep.inserted : (rep.report && rep.report.inserted)),
-      error: okPull ? null : (rep && (rep.error || rep.error_code))
+      settlement_warning: warning,
+      error: okPull ? null : (warning || (rep && (rep.error || rep.error_code)) || 'Bank transactions are still preparing')
     });
 
     try {
@@ -121,14 +125,14 @@ async function runSync(request) {
         dry_run: false,
         success: okPull,
         response_payload: logPayload,
-        error_message: okPull ? null : ((rep && (rep.error || rep.error_code)) || 'sync failed'),
+        error_message: okPull ? null : (warning || (rep && (rep.error || rep.error_code)) || 'Bank transactions are still preparing'),
         attempted_at: new Date().toISOString()
       });
     } catch (eLog) { /* best-effort */ }
   }
 
   return plaidJson({
-    ok: true,
+    ok: results.every(function (r) { return r.ok; }),
     ran_at: new Date().toISOString(),
     scope: includeProduction ? 'all_businesses' : 'test_only',
     connections_synced: results.length,

@@ -8,6 +8,8 @@ import { autoTwinCheck } from '../../../../lib/duplicates-server'; // v55.83-SU 
 import { privateScope, dropPrivate } from '../../../../lib/private-accounts-server'; // v55.83-TP — private bank accounts
 import { settlePendingLines, oldestPendingDate } from '../../../../lib/pending-settle-server'; // v55.83-TU — pending lines settled every sync
 import { runRulesAndRecord } from '../../../../lib/expense-rules-server'; // v55.83-UG — category rules run right after every sync
+import { dedupeImportedRows } from '../../../../lib/bank-import-dedupe';
+import { settlementWarning } from '../../../../lib/bank-sync-health';
 
 // v55.83-X — Phase 1 bank ingestion. var + string-concat only (SWC constraint).
 var PLAID_BASE = {
@@ -181,7 +183,7 @@ export async function POST(req) {
         var asPlaid = {}; var lookIds = [];
         Object.keys(twinsMD).forEach(function (pa) { twinsMD[pa].forEach(function (tw) { asPlaid[tw] = pa; if (lookIds.indexOf(tw) < 0) { lookIds.push(tw); } }); });
         var manQ = await supabase.from('bank_transactions')
-          .select('id, account_id, date, posted_date, amount_abs, direction')
+          .select('id, account_id, date, posted_date, amount_abs, direction, pending, review_status')
           .like('plaid_transaction_id', 'manual-%')
           .in('account_id', lookIds)
           .gte('date', mdMin).lte('date', mdMax).limit(20000);
@@ -191,22 +193,20 @@ export async function POST(req) {
         try {
           var otherIds = otherTwinAccts.filter(function (x) { return !mdAccts[x]; });
           if (otherIds.length) {
-            var oq = await supabase.from('bank_transactions').select('id, account_id, date, posted_date, amount_abs, direction, plaid_transaction_id').in('account_id', otherIds).gte('date', mdMin).lte('date', mdMax).limit(20000);
+            var oq = await supabase.from('bank_transactions').select('id, account_id, date, posted_date, amount_abs, direction, plaid_transaction_id, pending, review_status').in('account_id', otherIds).gte('date', mdMin).lte('date', mdMax).limit(20000);
             if (!oq.error && oq.data) { oldRows = oq.data.filter(function (x) { return !/^manual-/.test(String(x.plaid_transaction_id || '')); }); }
           }
         } catch (eOld) { oldRows = []; }
         var seenRows = ((!manQ.error && manQ.data) || []).concat(oldRows);
         if (seenRows.length) {
-          var manCount = {};
-          seenRows.forEach(function (m0) {
-            var k0 = (asPlaid[m0.account_id] || m0.account_id) + '|' + (m0.posted_date || m0.date) + '|' + (Math.round((Number(m0.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + m0.direction;
-            manCount[k0] = (manCount[k0] || 0) + 1;
-          });
-          rows = rows.filter(function (r1) {
-            var k1 = r1.account_id + '|' + (r1.posted_date || r1.date) + '|' + (Math.round((Number(r1.amount_abs) || 0) * 100) / 100).toFixed(2) + '|' + r1.direction;
-            if ((manCount[k1] || 0) > 0) { manCount[k1]--; manualDeduped++; return false; }
-            return true;
-          });
+          var knownIds = {};
+          for (var ki = 0; ki < rows.length; ki += 200) {
+            var known = await supabase.from('bank_transactions').select('plaid_transaction_id').in('plaid_transaction_id', rows.slice(ki, ki + 200).map(function (r) { return r.plaid_transaction_id; }));
+            if (known.error) { throw new Error('Could not verify existing bank identities'); }
+            (known.data || []).forEach(function (r) { knownIds[r.plaid_transaction_id] = true; });
+          }
+          var deduped = dedupeImportedRows(rows, seenRows, asPlaid, knownIds);
+          rows = deduped.rows; manualDeduped = deduped.skipped;
         }
       }
     } catch (eMD) { manualDeduped = 0; }
@@ -226,7 +226,8 @@ export async function POST(req) {
 
     // v55.83-TU — pending lines that have POSTED (or that the bank dropped) are settled: a person's category / review moves to
     // the posted line and the pending copy is filed away in the duplicates log (restorable) — never deleted outright, never
-    // double-counted. A pending line carrying accounting work is left for a person. (Was: a hard delete of the pending row.)
+    // double-counted. WC preserves an already-linked pending UUID for an exact same-money bank replacement;
+    // conflicting work and changed amounts require review. (Was: a hard delete of the pending row.)
     var superseded = supersededPendingIds(rawTxns);
     var pendingSettled = null;
     try {
@@ -260,7 +261,8 @@ export async function POST(req) {
       var aid = t.account_id;
       if (aid && (!newestByAccount[aid] || d > newestByAccount[aid])) { newestByAccount[aid] = d; }
     });
-    var connPatch = { last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null, last_successful_plaid_sync_at: new Date().toISOString() };
+    var settlementIssue = settlementWarning(pendingSettled);
+    var connPatch = { last_synced: new Date().toISOString(), last_sync_status: settlementIssue ? 'partial' : 'ok', last_sync_error: settlementIssue, last_successful_plaid_sync_at: new Date().toISOString() };
     if (newestOverall) { connPatch.last_successful_posted_date = newestOverall; }
     // schema-safe: if the JR columns aren't present yet, retry with the base fields only — but DO NOT
     // pretend the markers saved. v55.83-JT (Codex) — surface markers_persisted:false so the UI warns the
@@ -271,7 +273,7 @@ export async function POST(req) {
     if (cu && cu.error) {
       markersPersisted = false;
       markerError = cu.error.message || 'marker columns missing';
-      try { await supabase.from('bank_connections').update({ last_synced: new Date().toISOString(), last_sync_status: 'ok', last_sync_error: null }).eq('id', conn.id); } catch (eBase) {}
+      try { await supabase.from('bank_connections').update({ last_synced: new Date().toISOString(), last_sync_status: settlementIssue ? 'partial' : 'ok', last_sync_error: settlementIssue }).eq('id', conn.id); } catch (eBase) {}
     }
 
     return plaidJson({
@@ -279,6 +281,7 @@ export async function POST(req) {
       synced: synced,
       superseded: superseded.length,
       pending_settled: pendingSettled, // v55.83-TU
+      settlement_warning: settlementIssue,
       rules_filled: rulesRun && !rulesRun.error ? (rulesRun.applied || 0) : null, // v55.83-UG
       accounts: projectPlaidAccountMetadata(acctsFromPlaid),
       total: totalAvail,

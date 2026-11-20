@@ -5,26 +5,22 @@
 //      archived and restorable through the duplicates log, never deleted outright;
 //   2. a pending line the bank no longer lists at all (cancelled authorisation, or posted under a new reference) is filed away
 //      the same way;
-//   3. a pending line carrying accounting work (matched invoice, bill payment, transfer, wire…) is NEVER filed away — the
-//      database refuses it and it is counted for a person.
+//   3. WC retains the original UUID when a confirmed same-money replacement has an existing payment link. Conflicts,
+//      changed amounts and closed periods still require review. No new payment is created.
 // Codex QA 17 Nov (P1 x2) — (a) if the database steps are not installed, NOTHING is touched (fail closed; was: a plain
 // 'duplicate' mark that skipped every guard); (b) the carry-over and the filing-away happen in ONE database step
 // (hub_settle_pending, sql/v55-83-TU-pending-settle.sql): refused -> both lines unchanged; approval moves only when it is the
 // same money (amount, direction, currency, company) and the posted line has no different category.
 // Never throws; never blocks the sync. Var + concat only.
 
+import { storedPendingReplacements, sameMoney } from './pending-repair-server';
+export { sameMoney } from './pending-repair-server';
+
 var CARRY = ['classification', 'category_source', 'category_verified', 'category_verified_by', 'category_verified_at', 'third_party_payer'];
 
-function cents(x) { return Math.round(Math.abs(Number(x) || 0) * 100); }
 function isBlank(v) { return v === null || v === undefined || v === '' || v === false; }
 
 // the fields a person set on the pending line that the posted line does not have yet
-export function sameMoney(pend, post) {
-  if (!pend || !post) { return false; }
-  var a = function (r) { return cents(r.amount_abs != null ? r.amount_abs : r.amount); };
-  return a(pend) === a(post) && (pend.direction || '') === (post.direction || '') && (pend.iso_currency || 'USD') === (post.iso_currency || 'USD') &&
-    (pend.wave_business_id || '') === (post.wave_business_id || '');
-}
 // the pure rule the database step follows (kept here for tests and the screen)
 export function carryPatch(pend, post) {
   var patch = {};
@@ -56,6 +52,7 @@ export async function settlePendingLines(db, o) {
     var pq = await db.from('bank_transactions').select('*').eq('pending', true).in('account_id', accts).limit(2000);
     if (pq.error) { res.errors++; return res; }
     var pendRows = pq.data || [];
+    if (pendRows.length >= 2000) { res.incomplete = true; }
     if (!pendRows.length) { return res; }
 
     var postIds = [];
@@ -63,31 +60,48 @@ export async function settlePendingLines(db, o) {
     var postBy = {};
     if (postIds.length) {
       var sq = await db.from('bank_transactions').select('*').in('plaid_transaction_id', postIds);
+      if (sq.error) { res.errors++; return res; }
       ((sq && sq.data) || []).forEach(function (r) { postBy[r.plaid_transaction_id] = r; });
     }
 
-    var MISSING = /hub_settle_pending|bank_duplicate_|bank_transaction_duplicates|schema cache|does not exist|PGRST202/i;
+    var storedPairs = await storedPendingReplacements(db, pendRows);
+    var MISSING = /hub_reconcile_pending|hub_settle_pending|bank_duplicate_|bank_transaction_duplicates|schema cache|does not exist|PGRST202/i;
     // one guarded database step; a missing step means NOTHING is touched (fail closed) and the sync says which SQL to run
     async function callRpc(name, args) {
       var r = await db.rpc(name, args);
-      if (r.error) { if (MISSING.test(String(r.error.message || ''))) { res.needs_sql = true; res.sql_hint = 'Run sql/v55-83-SO-duplicates.sql, then sql/v55-83-TU-pending-settle.sql in Supabase.'; } else { res.errors++; } return null; }
+      // Keep the installed TU settlement working during the additive WC rollout.
+      // Only a missing WC function permits this fallback; accounting refusals never do.
+      if (name === 'hub_reconcile_pending' && r.error &&
+          (r.error.code === 'PGRST202' || r.error.code === '42883') &&
+          /hub_reconcile_pending/.test(String(r.error.message || ''))) {
+        res.needs_sql = true;
+        res.sql_hint = 'Linked pending-record repair requires sql/v55-83-WC-pending-identity.sql. Existing guarded TU settlement remains active.';
+        r = await db.rpc('hub_settle_pending', args);
+      }
+      if (r.error) { if (MISSING.test(String(r.error.message || ''))) { res.needs_sql = true; res.sql_hint = 'After approval, install sql/v55-83-SO-duplicates.sql, sql/v55-83-TU-pending-settle.sql, then sql/v55-83-WC-pending-identity.sql.'; } else { res.errors++; } return null; }
       if (r.data && r.data.ok === false) { res.needs_person++; return null; }
       return r.data || { ok: true };
     }
     async function fileAway(pend, keepId, reason) { return !!(await callRpc('bank_duplicate_remove', { p_dup: pend.id, p_keep: keepId, p_actor: null, p_reason: reason })); }
 
     for (var i = 0; i < pendRows.length; i++) {
-      if (Date.now() - t0 > budget) { break; }
+      if (Date.now() - t0 > budget) { res.incomplete = true; break; }
       var p = pendRows[i];
       if (returned[p.plaid_transaction_id]) { continue; } // the bank still lists it as pending — leave it
-      var postId = pairs[p.plaid_transaction_id];
+      var stored = (storedPairs[p.plaid_transaction_id] || []).filter(function (r) {
+        return r.account_id === p.account_id && r.connection_id === p.connection_id && r.wave_business_id === p.wave_business_id;
+      });
+      if (stored.length > 1) { res.needs_person++; continue; }
+      var postId = pairs[p.plaid_transaction_id] || (stored[0] && stored[0].plaid_transaction_id);
       if (postId) {
-        var post = postBy[postId] || null;
+        var post = postBy[postId] || stored[0] || null;
+        // A replacement reported by the bank must actually exist before we retire its pending record.
+        if (!post || post.pending === true || post.review_status === 'duplicate') { res.needs_person++; continue; }
         var same = sameMoney(p, post);
-        var sr = await callRpc('hub_settle_pending', { p_pending: p.id, p_posted: post ? post.id : null,
+        var sr = await callRpc('hub_reconcile_pending', { p_pending: p.id, p_posted: post ? post.id : null,
           p_reason: 'Pending line has posted' + (post ? '' : ' (its posted line was already on the Hub)') + ' — replaced by posted line ' + postId + (same ? '' : ' (final details differ from the pending hold — nothing carried over)') + '. Kept on file, restorable.' });
         if (sr) { res.posted_replaced++; if (sr.carried && sr.carried.length) { res.carried++; } }
-        if (res.needs_sql) { break; } // fail closed for the whole run: nothing else is touched until the SQL is in
+        if (res.needs_sql && !sr) { break; } // successful guarded TU fallback may continue; missing dependencies stop the run
         continue;
       }
       // not returned and not replaced: only judged inside the window this sync pulled completely, and only for an account the

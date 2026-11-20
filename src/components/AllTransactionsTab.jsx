@@ -14,6 +14,8 @@ import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { bankSessionHeaders } from '../lib/bank-visibility-client';
 import WireQuickView from './WireQuickView'; // v55.83-RM
+import { matchesTransaction, searchFragments } from '../lib/transaction-search';
+import PendingBankRepair from './PendingBankRepair';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -52,6 +54,7 @@ export default function AllTransactionsTab(props) {
   var s6 = useState('all'); var fDir = s6[0]; var setFDir = s6[1];
   var s7 = useState('all'); var fCat = s7[0]; var setFCat = s7[1]; // all/uncategorized/categorized/transfers/matched
   var s8 = useState(''); var q = s8[0]; var setQ = s8[1];
+  var searchMode = useState(false); var wholeWords = searchMode[0]; var setWholeWords = searchMode[1];
   var s9 = useState('date'); var sortBy = s9[0]; var setSortBy = s9[1];
   var s10 = useState(true); var sortDesc = s10[0]; var setSortDesc = s10[1];
   var s11 = useState({}); var sel = s11[0]; var setSel = s11[1];
@@ -114,28 +117,7 @@ export default function AllTransactionsTab(props) {
     if (fCat === 'transfers' && !(t.transfer || t.classification === 'transfer')) { return false; }
     if (fCat === 'matched' && !t.matched) { return false; }
     if (fCat === 'advances' && !t.advance) { return false; } // v55.83-QF
-    if (q.trim()) {
-      // v55.83-QM (Max 15:03): "the search should be able to look at description
-      // or ANY other data on the line... including the customer or date etc"
-      // v55.83-RC (Max, Nov 8 13:59: "the search in all transactions is not
-      // working"): EVERY word must appear, in any order, spacing/punctuation
-      // ignored; amounts match with or without "$" and thousands commas
-      // ("1,250", "$1250.00", "1250"); dates as 2026-03-04, 03/04/2026 or 3/4.
-      var amt2 = Number(t.amount).toFixed(2);
-      var dParts = String(t.date || '').split('-');
-      var usD = dParts.length === 3 ? (dParts[1] + '/' + dParts[2] + '/' + dParts[0] + ' ' + Number(dParts[1]) + '/' + Number(dParts[2])) : '';
-      var hayQ = (String(t.who) + ' ' + String(t.who_full || '') + ' ' + String(t.date || '') + ' ' + usD + ' ' + String(t.account || '') + ' ' +
-        amt2 + ' ' + amt2.replace(/\.00$/, '') + ' ' + Number(t.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' ' + String(labelOf[t.classification] || t.classification || '') + ' ' +
-        (t.direction === 'in' ? 'deposit money in ' : 'payment money out ') +
-        (t.matched ? 'matched ' : '') + (t.transfer ? 'transfer ' : '') + (t.advance ? 'advance ' : '') + (t.third_party ? 'rtm paid through ' + String(t.third_party) + ' ' : '') +
-        (t.verified ? 'verified ' : '') + String(t.review_status || '')).toLowerCase().replace(/\s+/g, ' ');
-      var words = q.trim().toLowerCase().replace(/[$]/g, '').split(/\s+/).filter(Boolean);
-      for (var wi = 0; wi < words.length; wi++) {
-        var w0 = /^[0-9,.]+$/.test(words[wi]) ? words[wi].replace(/,/g, '') : words[wi];
-        var hayN = /^[0-9.]+$/.test(w0) ? hayQ.replace(/,/g, '') : hayQ;
-        if (hayN.indexOf(w0) < 0) { return false; }
-      }
-    }
+    if (!matchesTransaction(t, q, wholeWords, labelOf)) { return false; }
     return true;
   });
   rows = rows.slice().sort(function (a, b) {
@@ -501,10 +483,15 @@ export default function AllTransactionsTab(props) {
             style={on ? { background: '#1e293b', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>
             {f === 'all' ? 'Everything' : f === 'uncategorized' ? '⚠ Uncategorized' : f === 'categorized' ? 'Categorized' : f === 'transfers' ? '↔ Transfers' : f === 'matched' ? '🔗 Matched' : '⏳ Advances'}</button>;
         })}
-        <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="search description…"
+        <input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="Search transactions" aria-label="Search transactions"
           className="px-2 py-1 rounded-lg border border-slate-300 text-[10px] nt-light" style={{ color: '#0f172a', background: '#ffffff', width: 170 }} />
+        <label className="inline-flex items-center gap-1 text-[10px] whitespace-nowrap" style={{ color: '#334155' }}>
+          <input type="checkbox" checked={wholeWords} onChange={function (e) { setWholeWords(e.target.checked); }} /> Whole words
+        </label>
         <span className="text-[10px] font-bold" style={{ color: '#64748b' }}>{rows.length} of {txns.length} shown{rows.length > 1000 ? ' (first 1,000 on screen — search or filter to narrow)' : ''}{data && data.capped ? ' · ⚠ 30,000-line cap — narrow the dates' : ''}</span>
       </div>
+      {data && data.bank_sync_warning && <div role="status" className="mb-2 p-2 border rounded-lg text-xs" style={{ background: '#fffbeb', borderColor: '#fcd34d', color: '#92400e' }}>{data.bank_sync_warning}</div>}
+      {isSuperAdmin && <div className="mb-2"><PendingBankRepair onChanged={quietReload} /></div>}
       {/* v55.83-RC — lines that exist but sit outside the dates shown (e.g. a money-market statement import) */}
       {data && data.outside_dates && data.outside_dates.length > 0 && <div className="rounded-lg p-2 mb-2 text-[10px] font-bold" style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#78350f' }}>
         Not in these dates: {data.outside_dates.map(function (o) { return o.account + ' — ' + o.lines + ' line(s) ' + o.first + ' → ' + o.last; }).join(' · ')}.
@@ -538,12 +525,14 @@ export default function AllTransactionsTab(props) {
               <td className="py-1 pr-2 whitespace-nowrap text-[10px]">{t.account}</td>
               <td className="py-1 pr-2 font-semibold cursor-pointer" title="Click to show the full description"
                 onClick={function () { var e2 = Object.assign({}, expanded); e2[t.id] = !e2[t.id]; setExpanded(e2); }}
-                style={expanded[t.id] ? { whiteSpace: 'normal', wordBreak: 'break-word' } : {}}>
+                style={expanded[t.id] || q.trim() ? { whiteSpace: 'normal', overflowWrap: 'anywhere', maxWidth: 420 } : {}}>
                 {/* v55.83-SU — a transfer can carry several requests: one chip each */}
                 {(t.wires && t.wires.length > 1 ? t.wires : (t.wire ? [t.wire] : [])).map(function (wv) { return <button key={wv.id} onClick={function (e) { e.stopPropagation(); setWireView(wv); }} title={wv.kind === 'package' ? 'Open the wire: the bills it paid, who approved it, its history' : 'Money out that paid bills like a wire, with no wire approved in advance — open the bills'}
                   className="mr-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold" style={wv.kind === 'package' ? (wv.status === 'reversed' ? { background: '#e2e8f0', color: '#7f1d1d' } : { background: '#4338ca', color: '#ffffff' }) : { background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5' }}>
                   {wv.kind === 'package' ? '📤 ' + wv.label + (wv.status === 'reversed' ? ' (undone)' : '') : '🏦 wire · no approval'}</button>; })}
-                {expanded[t.id] ? (t.who_full || t.who) : (String(t.who).substring(0, 46) + (String(t.who_full || t.who).length > 46 ? '…' : ''))}</td>
+                {searchFragments(expanded[t.id] || q.trim() ? (t.who_full || t.who) : (String(t.who).substring(0, 46) + (String(t.who_full || t.who).length > 46 ? '…' : '')), q, wholeWords).map(function (part, pi) {
+                  return part.match ? <mark key={pi} style={{ background: '#fef08a', color: '#0f172a' }}>{part.text}</mark> : <React.Fragment key={pi}>{part.text}</React.Fragment>;
+                })}</td>
               <td className="py-1 pr-2 text-right font-extrabold tabular-nums" style={{ color: t.direction === 'out' ? '#7f1d1d' : '#065f46' }}>{(t.direction === 'out' ? '−$' : '+$') + fmt(t.amount)}</td>
               <td className="py-1 pr-2">
                 {t.transfer ? <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#dbeafe', color: '#1e40af' }}>↔ transfer</span>

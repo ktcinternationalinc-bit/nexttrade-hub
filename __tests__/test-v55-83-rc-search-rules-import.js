@@ -79,14 +79,15 @@ ok('2b: lines outside the dates shown are REPORTED per account (the money-market
   /Not in these dates: /.test(R('src/components/AllTransactionsTab.jsx')) &&
   /load\('2000-01-01', new Date\(\)\.toISOString\(\)\.substring\(0, 10\)\)/.test(R('src/components/AllTransactionsTab.jsx')));
 var at = R('src/components/AllTransactionsTab.jsx');
+require('sucrase/register');
+var search = require('../src/lib/transaction-search').matchesTransaction;
 ok('2c: search — every word in any order; amounts with/without $ and commas; US dates; deposit/payment words',
-  /var words = q\.trim\(\)\.toLowerCase\(\)\.replace\(\/\[\$\]\/g, ''\)\.split/.test(at) &&
-  /if \(hayN\.indexOf\(w0\) < 0\) \{ return false; \}/.test(at) && /toLocaleString\('en-US', \{ minimumFractionDigits: 2 \}\)/.test(at) &&
-  /'deposit money in ' : 'payment money out '/.test(at));
+  /matchesTransaction\(t, q, wholeWords, labelOf\)/.test(at) &&
+  search({ who: 'Wire', amount: 1250, direction: 'in', date: '2026-03-04' }, 'deposit 1,250 03/04/2026', false) &&
+  !search({ who: 'Wire', amount: 1250, direction: 'out' }, 'deposit', false));
 // simulate the search on a row
 (function () {
-  var body = at.split('if (q.trim()) {')[1].split('return true;')[0];
-  var fn = new Function('t', 'q', 'labelOf', 'if (q.trim()) {' + body + ' return true;');
+  var fn = function (t, q, labels) { return search(t, q, false, labels); };
   var t = { who: 'PSEG', who_full: 'PUBLIC SERVICE ELEC', date: '2026-03-04', account: 'Money Market •4411', amount: 1250, direction: 'out', classification: 'utilities', review_status: 'reviewed' };
   var L = { utilities: 'Utilities' };
   ok('2d: real search — "public elec", "1,250", "$1250.00", "03/04/2026", "money market utilities" all find the line; "rent" does not',

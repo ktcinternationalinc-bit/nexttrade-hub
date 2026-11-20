@@ -16,11 +16,14 @@ function ok(name, cond) {
 console.log('QD — dual-source dedupe (CSV ↔ Plaid)');
 
 var tr = R('src/app/api/plaid/transactions/route.js');
+require('sucrase/register');
+var dedupe = require('../src/lib/bank-import-dedupe').dedupeImportedRows;
+var row = { account_id: 'a', date: '2026-11-20', amount_abs: 100, direction: 'out', plaid_transaction_id: 'bank-1' };
 ok('1a: direction 1 — a Plaid SYNC skips transactions a CSV import already holds: counted match on account+posted date+amount+direction (name deliberately excluded — CSV and Plaid wordings differ)',
   /\.like\('plaid_transaction_id', 'manual-%'\)/.test(tr) &&
-  /if \(\(manCount\[k1\] \|\| 0\) > 0\) \{ manCount\[k1\]--; manualDeduped\+\+; return false; \}/.test(tr));
+  dedupe([row], [Object.assign({}, row, { plaid_transaction_id: 'manual-1' })]).skipped === 1);
 ok('1b: counting keeps legitimate same-day twins (two slots, two survivors) and is stateless — every sync re-derives the same skips; a lookup error just means no dedupe this pass, never a crash',
-  /manCount\[k0\] = \(manCount\[k0\] \|\| 0\) \+ 1;/.test(tr) &&
+  dedupe([row, Object.assign({}, row, { plaid_transaction_id: 'bank-2' })], [row]).rows.length === 1 &&
   /catch \(eMD\) \{ manualDeduped = 0; \}/.test(tr));
 ok('1c: FLAGGED, not silent — manual_deduped rides the sync response and the banner says how many were ignored',
   /manual_deduped: manualDeduped/.test(tr) &&

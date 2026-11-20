@@ -372,6 +372,8 @@ export default function BankTab({ user, supabase, modulePerms, userProfile, onGo
       }
       if (data.rules_filled > 0) { msg += ' Category rules filled ' + data.rules_filled + ' line(s).'; } // v55.83-UG
       if (ps && ps.needs_sql) { msg += ' ⚠ Pending lines were NOT settled (nothing changed): ' + (ps.sql_hint || 'a database step is missing.'); }
+      if (data.settlement_warning && !(ps && ps.needs_sql)) { msg += ' Warning: ' + data.settlement_warning; }
+      if (data.settlement_warning) { msg = msg.replace('✅ Sync done', 'Bank pull complete - reconciliation needs attention'); }
       // v55.83-SU — the duplicate check ran by itself
       if (Number(data.duplicates_removed) > 0) { msg += ' 🧹 ' + data.duplicates_removed + ' line(s) that arrived a second time through another connection of the same account were removed automatically (kept on file — “Check for duplicates” → removed list → Restore).'; }
       if (Number(data.duplicates_to_review) > 0) { msg += ' 🔍 ' + data.duplicates_to_review + ' possible duplicate(s) need a person — press “Check for duplicates”.'; }
