@@ -94,6 +94,13 @@ export function realCostCategories(spending, adjust, fold) {
 
 // ── v55.83-VQ (Codex 19 Nov 22:20 / 22:35) — WHICH dates are asked, and what an answer means. All pure, so the flow is tested.
 // The scope of a set of answers: grouping, the report's own dates and the person. Answers from another scope are never shown.
+// v55.83-VR (Codex 23:00 P3) — ONE place that says why the expense columns are off, used by the line beside the table, the opened
+// period and the CSV, so the three can never disagree. null = expenses are on.
+export function expensesOffReason(releasesAll, hasFrom) {
+  if (!releasesAll) { return { code: 'releases', short: 'expenses are shown with Releases: All', long: 'Expenses and the final P&L are shown with Releases: All (they are the whole company’s and cannot be split by release).' }; }
+  if (!hasFrom) { return { code: 'no_from', short: 'set a From date to see expenses', long: 'Set a From date at the top and press Apply to see expenses and the final P&L — without a start date the months before the first sale cannot be known.' }; }
+  return null;
+}
 export function expenseScope(gran, reportFrom, reportTo, userId) { return [gran || '', reportFrom || '', reportTo || '', userId || ''].join('|'); }
 
 // One request per period, with the period's dates CUT to the report's own dates — a report for 10–19 Nov asks for 10–19 Nov,

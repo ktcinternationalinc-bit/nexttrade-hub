@@ -6,7 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
 
 var INK = '#0f172a'; var SUB = '#334155'; var MUTED = '#64748b';
-var BLANK = { vendor_match: '', bill_type: '', item_match: '', unit: '', price_mode: 'unit', expected_unit_price: '', expected_amount: '', tolerance_pct: '2', applies_to: 'cost', note: '' };
+var BLANK = { vendor_match: '', bill_type: '', item_match: '', unit: '', price_mode: 'unit', expected_unit_price: '', expected_amount: '', tolerance_pct: '0', applies_to: 'cost', note: '' }; // v55.83-VR (Max, Nov 20) — a new rule starts at 0 % allowed difference
 
 export default function PriceRulesPanel(p) {
   var api = p.api; var toast = p.toast;

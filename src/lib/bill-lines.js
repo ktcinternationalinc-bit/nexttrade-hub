@@ -123,7 +123,7 @@ export function matchRule(rules, bill, line) {
 
 // minAllowed: dollar amounts keep half a cent for rounding; a per-unit RATE is compared exactly (NexPac rates are 5–26 cents)
 function off(actual, expected, tolPct, minAllowed) {
-  var tol = Math.max(0, Number(tolPct == null ? 2 : tolPct)) / 100;
+  var tol = Math.max(0, Number(tolPct == null ? 0 : tolPct)) / 100; // v55.83-VR (Max, Nov 20: "allowed diff in price rule is 0%") — no figure on the rule = no difference allowed (half a cent of rounding only)
   var diff = Math.round((actual - expected) * 100000) / 100000;
   var allowed = Math.max(minAllowed == null ? 0.005 : minAllowed, Math.abs(expected) * tol);
   return Math.abs(diff) > allowed + 1e-9 ? diff : 0;
@@ -138,7 +138,7 @@ function ruleWords(rule) {
   if (rule.vendor_match) { w.push(rule.vendor_match); }
   if (rule.item_match) { w.push('“' + rule.item_match + '”'); }
   if (rule.bill_type) { w.push(String(rule.bill_type).replace('_', ' / ')); }
-  return 'rule: ' + w.join(', ') + (rule.applies_to === 'billed' ? ', price incl. commission' : '') + (rule.note ? ' — ' + rule.note : '') + ', ±' + Number(rule.tolerance_pct == null ? 2 : rule.tolerance_pct) + '% allowed';
+  return 'rule: ' + w.join(', ') + (rule.applies_to === 'billed' ? ', price incl. commission' : '') + (rule.note ? ' — ' + rule.note : '') + ', ±' + Number(rule.tolerance_pct == null ? 0 : rule.tolerance_pct) + '% allowed';
 }
 function pctOf(diff, base) { return base ? (diff > 0 ? '+' : '−') + Math.abs(Math.round(diff / base * 1000) / 10) + '%' : ''; }
 function dollars(n) { return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

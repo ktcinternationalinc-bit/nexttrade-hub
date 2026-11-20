@@ -1180,7 +1180,7 @@ export async function POST(req) {
         unit: String(ru.unit || '').trim().toUpperCase().substring(0, 20) || null,
         expected_unit_price: ru.expected_unit_price === '' || ru.expected_unit_price == null ? null : Number(String(ru.expected_unit_price).replace(/[$,]/g, '')),
         expected_amount: ru.expected_amount === '' || ru.expected_amount == null ? null : Number(String(ru.expected_amount).replace(/[$,]/g, '')),
-        tolerance_pct: ru.tolerance_pct === '' || ru.tolerance_pct == null ? 2 : Number(ru.tolerance_pct),
+        tolerance_pct: ru.tolerance_pct === '' || ru.tolerance_pct == null ? 0 : Number(ru.tolerance_pct), // v55.83-VR (Max, Nov 20: "allowed diff in price rule is 0%") — a rule saved without a figure allows no difference
         applies_to: ru.applies_to === 'billed' ? 'billed' : 'cost',
         note: String(ru.note || '').trim().substring(0, 300) || null, updated_by: userId, updated_at: new Date().toISOString(),
       };

@@ -33,6 +33,23 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VR',
+    date: '2026-11-20',
+    title: 'Profitability → new “Inbound trucking (Kronos)” tracker',
+    items: [
+      { text: '**New tab in Profitability, in the Shipping group: 🚚 Inbound trucking (Kronos).** It lists every Kronos freight charge, finds the goods received on the same load number, turns them into pounds, and shows the real trucking cost per pound — for all loads, for regular loads and for bonded loads.' },
+      { text: '**Tracking only.** Goods profit still uses the standard two cents per pound for inbound trucking. The real cost is shown next to it, with the difference, and is not used in any profit figure until the switch is asked for.' },
+      { text: 'Only Kronos counts as inbound trucking here. Charges of other truckers, and other charges on the same supplier bill, are left out.' },
+      { text: 'Pounds stay pounds. Yards are turned into pounds with the same weights as the rest of Profitability (headliner 1.25 lb per yard, foam 3, otherwise the standard weight in Set-up).' },
+      { text: 'Nothing disappears: a load with no goods bill, a load whose goods have no weight, and a Kronos charge with no load number are shown in amber with their money, left out of the average, and each says why and how to fix it. Click a load to see its bills.' },
+      { text: 'A Kronos invoice entered directly and also charged on a supplier bill is counted once.' },
+      { text: 'The dates are the ones of the report on screen (From / To, then Apply), by the date of the trucking bill.' },
+      { text: '**Bills → price rules: the allowed difference is now 0 %.** A new price rule starts at 0 %, and a rule saved without a figure allows no difference, so any price that is not exactly the rule’s price is flagged. A rule that already carries its own percentage keeps it until you change it.' },
+      { text: 'P&L by period: when the expense columns are off because no From date is set, the screen now says so beside the table, and the CSV download says the same.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/inbound-trucking.js (buildInboundTrucking, loadNumbersIn, truckerInvoiceIn, isLiveBill; whole cents, pure). Read-only action inbound_trucking in /api/accounting/profitability (P&L: View, start date clamped to the history window, no writes). InboundTruckingView.jsx is stateless. A load number is the single 8-digit number on the freight line; goods are supplier bills whose other reference carries it. pnl-expenses.js expensesOffReason is the one source of the expenses-off wording.' }
+    ]
+  },
+  {
     version: 'v55.83-VQ',
     date: '2026-11-19',
     title: 'Profitability → P&L by period: expense columns and the FINAL P&L for each period',
