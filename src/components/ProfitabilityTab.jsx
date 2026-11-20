@@ -172,9 +172,13 @@ export default function ProfitabilityTab(props) {
   }
   // v55.83-WE (Max, Nov 20: "take me to the exact invoice and exact area where i would enter that amount") — opens the invoice in
   // its edit window on the Invoices screen (the same hand-over the invoice pop-up's Edit uses): shipping terms and the shipping cost box are at its top
-  function editInvoice(id) { if (!id) { return; } setFull(false); setFShow(null); try { window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e5) {} onGo('invoices'); }
+  // v55.83-WJ (Max: "the exact invoice and exact area where i would enter that amount") — the hand-over also says WHERE: the Invoices
+  // screen opens the invoice for editing, scrolls to its shipping box, opens the internal breakdown and puts the cursor in the cost box
+  function editInvoice(id) { if (!id) { return; } setFull(false); setFShow(null); try { window.__ntInvoiceFocus = 'shipping'; window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e5) {} onGo('invoices'); }
   // …and a product with no supplier cost: Set-up, already filtered to that product, where a supplier bill line is linked to it
-  function openSetupFor(name) { setFull(false); setFShow(null); setOpen(null); setNameQ(String(name || '')); setView('setup'); }
+  // v55.83-WJ — straight to THAT product in Set-up with its “link supplier bill” control already open (the same jump the cost
+  // chips use: goFix scrolls to the product card and outlines it); a description that is not under a product yet goes to the names list, filtered
+  function openSetupFor(name, gid) { setFull(false); setFShow(null); if (gid) { goFix('link', gid); } else { goFix('names', null, String(name || '')); } }
   function catPicker(row) {
     if (!canPick || !row.id) { return null; }
     if (catSaving[row.id]) { return <span style={{ color: SUB, fontSize: 10, fontWeight: 700 }}>saving…</span>; }
@@ -512,7 +516,7 @@ export default function ProfitabilityTab(props) {
           if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
           if (!data.manual_costs_ready) { return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>; }
           var ck = 'oc:' + t.key; var cEmpty = draft[ck] === undefined || String(draft[ck]).trim() === '';
-          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}><button onClick={function (e) { e.stopPropagation(); openSetupFor(t.product); }} title="Opens Set-up filtered to this product, where its supplier bill line is linked" className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Link its supplier bill →</button><span style={{ color: SUB }}>or type the cost here:</span>
+          return <span className="flex gap-1 items-center flex-wrap justify-end" onClick={function (e) { e.stopPropagation(); }}><button onClick={function (e) { e.stopPropagation(); openSetupFor(t.product, t.group_id); }} title="Opens this product in Set-up with its supplier-bill link list already open" className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Link its supplier bill →</button><span style={{ color: SUB }}>or type the cost here:</span>
             <span>$</span><input value={draft[ck] === undefined ? '' : draft[ck]} onChange={function (e) { d(ck, e.target.value); }} placeholder="cost per lb" aria-label={'Cost per pound of ' + t.product} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({ width: 96 }, inp)} /><span>per lb</span>
             <button disabled={cEmpty} onClick={function (e) { e.stopPropagation(); act({ action: 'set_manual_cost', level: 'group', group_id: t.group_id, cost_per_lb: draft[ck], commission_per_lb: '' }, 'Cost saved for ' + t.product + ' (typed by hand). The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[ck]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: cEmpty ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
           </span>;

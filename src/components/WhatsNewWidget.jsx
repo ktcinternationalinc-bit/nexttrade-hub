@@ -33,6 +33,16 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WJ',
+    date: '2026-11-20',
+    title: 'P&L by period: the fix buttons take you to the exact place',
+    items: [
+      { text: '**“Open invoice … to set it”** now opens the invoice for editing, scrolls to its shipping box, outlines it in orange, opens the internal shipping breakdown and puts the cursor in the shipping cost box.' },
+      { text: '**“Link its supplier bill”** now opens that product in Set-up with its list of supplier bill descriptions already open and the product outlined in orange. A description that is not under a product yet opens the descriptions list filtered to it.' },
+      { superAdminOnly: true, text: 'Technical: ProfitabilityTab editInvoice sets window.__ntInvoiceFocus = shipping before the existing nt-open-invoice-edit hand-over; AccountingInvoicesTab reads it once after the edit window opens (ids nt-invoice-shipping, nt-invoice-ship-cost; ShippingPartsBox initialOpen). openSetupFor uses goFix link with the task group id. No server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WI',
     date: '2026-11-20',
     title: 'Tax view: every transfer to RTM or NextTrade counts once, in full, under Professional fees',

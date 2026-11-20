@@ -375,6 +375,16 @@ export default function AccountingInvoicesTab(props) {
       else { toast.error('Could not open that invoice for editing.'); }
     });
   }
+  // v55.83-WJ (Max: "take me to the exact invoice and exact area where i would enter that amount") — when another screen opens an
+  // invoice FOR ITS SHIPPING COST (window.__ntInvoiceFocus = 'shipping'), the edit window scrolls to the shipping box, outlines it,
+  // opens the internal breakdown and puts the cursor in the cost box. The hint is used once.
+  var sSF = useState(false); var shipFocus = sSF[0]; var setShipFocus = sSF[1];
+  useEffect(function () {
+    if (!editing || typeof window === 'undefined' || window.__ntInvoiceFocus !== 'shipping') { return; }
+    window.__ntInvoiceFocus = null; setShipFocus(true);
+    setTimeout(function () { var box = document.getElementById('nt-invoice-shipping'); if (box) { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); box.style.outline = '3px solid #f59e0b'; setTimeout(function () { box.style.outline = ''; }, 4000); } var inp0 = document.getElementById('nt-invoice-ship-cost'); if (inp0 && !inp0.disabled) { inp0.focus(); } }, 250);
+  }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function () { if (!editing && shipFocus) { setShipFocus(false); } }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(function () {
     var pending = typeof window !== 'undefined' ? window.__ntOpenInvoiceEdit : null;
     if (pending) { window.__ntOpenInvoiceEdit = null; openEditById(pending); }
@@ -981,7 +991,7 @@ export default function AccountingInvoicesTab(props) {
             var c = Number(hdr.shipping_cost_estimate) || 0;
             var noLineExw = st === 'EXW' && !(shipAmt > 0);
             return (
-              <div className="mb-2 rounded p-2" style={{ border: '2px solid ' + (st ? '#334155' : '#f59e0b'), background: st ? 'transparent' : 'rgba(245,158,11,0.08)' }}>
+              <div id="nt-invoice-shipping" className="mb-2 rounded p-2" style={{ border: '2px solid ' + (st ? '#334155' : '#f59e0b'), background: st ? 'transparent' : 'rgba(245,158,11,0.08)' }}>
                 <div className="text-[11px] font-bold text-slate-200 mb-1">Shipping terms * <span className="font-normal text-slate-400">(pick one — required)</span></div>
                 <div className="flex flex-wrap gap-3 mb-1">
                   {SHIPPING_TERMS.map(function (k) { return (
@@ -991,11 +1001,11 @@ export default function AccountingInvoicesTab(props) {
                 </div>
                 <label className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
                   <span>{'Our shipping cost (freight + trucking)' + (st === 'EXW' ? ' — only if you add a shipping line' : '')}</span>
-                  <input value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
+                  <input id="nt-invoice-ship-cost" value={hdr.shipping_cost_estimate || ''} disabled={locked(editing) || noLineExw} onChange={function (e) { uh('shipping_cost_estimate', e.target.value); }} placeholder={noLineExw ? 'none on EXW' : 'e.g. 5325'} className={inp} style={{ maxWidth: '140px' }} />
                   <span>estimate — the bills replace it when they arrive</span>
                 </label>
                 {/* v55.83-WH — the internal breakdown; saved for the release through the Profitability route, never into the invoice */}
-                <ShippingPartsBox releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} />
+                <ShippingPartsBox key={'spb-' + (shipFocus ? 'open' : 'closed')} initialOpen={shipFocus} releaseText={hdr.release_number} charged={shipAmt} terms={st} userId={userProfile && userProfile.id} toast={toast} disabled={false} />
                 {(st === 'CNF_SEPARATE' || (st === 'EXW' && shipAmt > 0)) && c > 0 && <div className="text-[11px] mt-1" style={{ color: shipAmt + 0.005 >= minShippingCharge(c) ? '#86efac' : '#fca5a5' }}>{'Shipping line(s) must total at least $' + minShippingCharge(c).toFixed(2) + ' (cost + 7%). Now: $' + shipAmt.toFixed(2)}</div>}
               </div>);
           })()}
