@@ -85,8 +85,9 @@ export function linesToFix(cells, forceHidden) {
     var miss = [];
     if (!known(c.pounds)) { miss.push('pounds'); } else if (!known(c.base_cost)) { miss.push('base_cost'); }
     if (!known(c.transport_revenue)) { miss.push('transport_revenue'); }
-    if (!known(c.trucking_cost)) { miss.push('trucking_cost'); }
-    if (!known(c.freight_cost)) { miss.push('freight_cost'); }
+    var comb = known(c.shipping_total_unsplit); // v55.83-VS — a combined transportation cost is known money: its parts are not "missing"
+    if (!known(c.trucking_cost) && !comb) { miss.push('trucking_cost'); }
+    if (!known(c.freight_cost) && !comb) { miss.push('freight_cost'); }
     if (!miss.length && (!known(c.goods_profit) || !known(c.transport_profit))) { miss.push('other'); }
     if (!miss.length) { return; }
     miss.forEach(function (k) { count[k] = (count[k] || 0) + 1; });
@@ -104,8 +105,8 @@ export function linesToFix(cells, forceHidden) {
 // known and is never listed; only a part with nothing at all is open.
 export function openTasks(cells, forceHidden) {
   var list = cells || [];
-  if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, tasks: [], lines: 0 }; }
-  var map = {}; var order = []; var lineSet = {};
+  if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, tasks: [], lines: 0, combined: [] }; }
+  var map = {}; var order = []; var lineSet = {}; var combined = {}; var combinedList = [];
   function add(key, base, c, i) {
     var t = map[key]; if (!t) { t = map[key] = Object.assign({ key: key, lines: 0, sold_for: 0, invoices: [], _inv: {} }, base); order.push(key); }
     t.lines++; t.sold_for += known(c.goods_revenue) ? Number(c.goods_revenue) : 0; lineSet[i] = true;
@@ -122,7 +123,9 @@ export function openTasks(cells, forceHidden) {
     var splitMissing = (c.flags || []).indexOf('release_split_missing') >= 0;
     if ((noT || noF) && !rel && splitMissing) { add('relsplit:' + inv, { kind: 'release_split', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — on ' + (c.releases_on_invoice || 'several') + ' releases, pounds not divided between them', how: 'The release numbers on the invoice are right — leave them. Open its row in By invoice and type how many pounds went on each release; then each release’s shipping cost can be shared.' }, c, i); }
     else if ((noT || noF) && !rel) { add('norelease:' + inv, { kind: 'no_release', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — no release number', how: 'Without a release number its trucking and freight cannot be found. Open the invoice and put the release number on it. If it is a test invoice, void it.' }, c, i); }
-    else if ((noT || noF) && known(c.shipping_total_unsplit)) { add('unsplit:' + rel, { kind: 'unsplit_total', action: 'containers', release: rel, amount: Number(c.shipping_total_unsplit), title: 'Release ' + rel + ' — one shipping total, not divided into trucking and freight', how: 'A single shipping total is already recorded for this release and IS used in the profit. Nothing is missing. To see trucking and freight separately, open Containers and type both parts for this release — together they replace the single total, so type both.' }, c, i); }
+    // Max to Codex, Nov 20 — a combined transportation cost is KNOWN: it is used as it is, nobody has to divide it, and it is
+    // not a thing to fix. It is only counted for the grey note under the list.
+    else if ((noT || noF) && known(c.shipping_total_unsplit)) { if (!combined[rel]) { combined[rel] = true; combinedList.push({ release: rel, amount: Number(c.shipping_total_unsplit) }); } }
     else {
       [['trucking', noT, c.trucking_kind, c.trucking_from], ['freight', noF, c.freight_kind, c.freight_from]].forEach(function (x) {
         if (!x[1]) { return; }
@@ -134,7 +137,7 @@ export function openTasks(cells, forceHidden) {
   });
   var RANK = { trucking: 1, freight: 1, no_release: 2, release_split: 2, not_shared: 3, base_cost: 3, pounds: 3, transport_revenue: 4, unsplit_total: 5, other: 6 };
   var tasks = order.map(function (k) { var t = map[k]; delete t._inv; return t; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
-  return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length };
+  return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length, combined: combinedList };
 }
 
 // v55.83-VQ (Codex 22:20) — EVERY period between two dates, also the ones with no sales (a month with rent and payroll but no

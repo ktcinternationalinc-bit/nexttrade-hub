@@ -261,11 +261,26 @@ export function assembleProfitability(d) {
     }
     var oo = outbound[rel] || (outbound[rel] = o);
     var amt = r2((t ? t.amount : 0) + (f ? f.amount : 0));
+    // v55.83-VS (Max to Codex, Nov 20: a combined shipping amount "may cover both shipping and trucking"; a manual trucking 0 "must
+    // NOT replace or zero out" it) — THE RULE when a single combined total is recorded for the release:
+    //   - no part known            → the combined total is the cost (as before);
+    //   - BOTH parts known          → trucking + freight is the cost: an explicit split replaces the combined total (as before);
+    //   - exactly ONE part known    → the combined total STAYS the cost. The known part (also 0) is shown as that part; the rest
+    //     stays "combined, breakdown not separated" — it is NOT relabelled as the other part, and nothing is counted twice.
+    //     Only when the one known part alone is larger than the combined total does the larger figure win, and it is flagged.
+    var comb = estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel])) ? r2(estimateOf[rel]) : null;
+    var combinedKept = false;
+    if (comb !== null && (!t || !f)) {
+      var one = t || f;
+      if (one.amount > comb + 0.005) { flags.push({ kind: 'part_exceeds_combined_total', release: relRaw[rel] || rel, part: t ? 'trucking' : 'freight', part_amount: one.amount, combined_total: comb }); }
+      else { amt = comb; }
+      combinedKept = true; pu.combined_total = comb; pu.combined_remainder = r2(amt - one.amount);
+    }
     var known = [t, f].filter(function (x) { return !!x; });
     var allBill = known.every(function (x) { return x.kind === 'bill'; });
     // Codex 16 Nov (P1) kept: when Nextrade has the order and says a part is still missing, a bill for the other part is not "complete"
-    var partial = !!wRow && (!t || !f);
-    if (allBill && !partial) { oo.actual = amt; oo.estimate = null; } else { oo.actual = null; oo.estimate = amt; }
+    var partial = !!wRow && (!t || !f) && !combinedKept; // with a combined total the whole cost is known, so nothing is "partly missing"
+    if (allBill && !partial && !combinedKept) { oo.actual = amt; oo.estimate = null; } else { oo.actual = null; oo.estimate = amt; }
     oo.partial = partial;
     if (wRow && known.some(function (x) { return x.kind !== 'bill' && x.from.indexOf('Nextrade') >= 0; })) { whUsed[rel] = { final: false, amount: amt, row: wRow }; oo.warehouse = { amount: amt, final: false, order_id: wRow.order_id, link: wRow.source_link }; }
     if (partial) { flags.push({ kind: 'warehouse_cost_not_usable', release: relRaw[rel] || rel, why: (!t ? 'trucking' : 'freight') + ' missing in the warehouse — the other part is used' }); }
@@ -334,7 +349,9 @@ export function assembleProfitability(d) {
     c.trucking_from = pu && pu.trucking ? pu.trucking.from : null; c.freight_from = pu && pu.freight ? pu.freight.from : null;
     // v55.83-VS (Codex 07:00 P1) — a single shipping total typed for the release (older way), not divided into trucking and freight:
     // the money IS known. The screen must say "not divided", never "missing".
-    c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : null;
+    // … and (Max to Codex) the part of a combined total that stays undivided after ONE part was typed: also known money.
+    c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : (pu && pu.combined_remainder !== undefined ? pu.combined_remainder : null);
+    c.shipping_combined = c.shipping_total_unsplit !== null;
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;
       if (pu.trucking) { c.trucking_cost = r2(c.outbound_cost * tAmt / relTot); }
