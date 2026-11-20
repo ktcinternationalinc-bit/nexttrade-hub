@@ -4,6 +4,8 @@
 // revenue, AVERAGE PRICE per product, shipping separated. Click a customer to
 // see exactly which products they bought and at what average price.
 import React, { useState, useEffect } from 'react';
+import { SalesQtyCell, SalesAvgCell } from './SalesUnitCells'; // v55.83-WL — yard goods stay in yards
+import { qtyAvgText, totalsText } from '../lib/sales-units';
 import InvoicePeek from './InvoicePeek'; // v55.83-UD — click an invoice (shipment) of a customer to see it
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -74,7 +76,7 @@ export default function SalesReportTab(props) {
           <div className="rounded-lg p-2" style={{ background: '#dcfce7', color: '#052e16' }}><div className="text-[10px] font-bold">Product sales (USD)</div><div className="text-lg font-black">{fmt(tt.product_revenue)}</div></div>
           <div className="rounded-lg p-2" style={{ background: '#e0f2fe', color: '#0c2a5e' }}><div className="text-[10px] font-bold">Shipping (separate)</div><div className="text-lg font-black">{fmt(tt.shipping_revenue)}</div><div className="text-[9px]">{tt.shipping_lines} shipping line(s)</div></div>
           <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Grand total</div><div className="text-lg font-black">{fmt(tt.grand_total)}</div></div>
-          <div className="rounded-lg p-2" style={{ background: '#fef9c3', color: '#422006' }}><div className="text-[10px] font-bold">Pounds sold · avg $ / lb</div><div className="text-lg font-black">{Number(tt.pounds || 0).toLocaleString('en-US') + ' lb'}</div><div className="text-[10px] font-bold">{tt.pounds > 0 && !tt.lines_without_unit ? 'avg $' + (tt.product_revenue / tt.pounds).toFixed(4) + ' / lb' : (tt.lines_without_unit ? tt.lines_without_unit + ' line(s) have no unit set — no average' : '')}</div></div>
+          <div className="rounded-lg p-2" style={{ background: '#fef9c3', color: '#422006' }}><div className="text-[10px] font-bold">Pounds sold · avg $ / lb</div><div className="text-lg font-black">{totalsText(tt).big}</div><div className="text-[10px] font-bold">{totalsText(tt).small}</div>{totalsText(tt).yards && <div className="text-[10px] font-bold" style={{ color: '#1d4ed8' }}>{totalsText(tt).yards}</div>}</div>
           <div className="rounded-lg p-2" style={{ background: '#f1f5f9', color: '#0f172a' }}><div className="text-[10px] font-bold">Invoices · line items</div><div className="text-lg font-black">{tt.invoices} · {tt.line_items}</div></div>
         </div>
       )}
@@ -88,28 +90,28 @@ export default function SalesReportTab(props) {
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
             <div className="text-[12px] font-extrabold text-slate-800">🧵 By product — merged names, POUNDS, revenue, average $ per lb (click a merged product to see its names)</div>
-            <button onClick={function () { csvOf(data.products, ['product', 'pounds', 'revenue', 'avg_price_per_lb', 'invoices'], 'sales-by-product.csv'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
+            <button onClick={function () { csvOf(data.products, ['product', 'pounds', 'yards', 'revenue', 'avg_price_per_lb', 'avg_price_per_yd', 'invoices'], 'sales-by-product.csv'); }} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-white">⬇ CSV</button>
           </div>
           <div className="overflow-auto rounded border border-slate-200" style={{ maxHeight: 340 }}>
             <table className="w-full text-[11px] nt-solid-head">
-              <thead><tr>{['Product', 'Pounds (lb)', 'Revenue', 'Avg $ / lb', 'Invoices'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
+              <thead><tr>{['Product', 'Pounds (lb) · yards', 'Revenue', 'Avg $ / lb · / yd', 'Invoices'].map(function (h) { return <th key={h} className="px-2 py-1 text-left font-bold sticky top-0" style={th}>{h}</th>; })}</tr></thead>
               <tbody>{(data.products || []).map(function (p, i) {
                 var po = openProd === p.product + i; var hasNames = p.grouped && (p.names || []).length > 0;
                 var rows = [(
                   <tr key={p.product + i} onClick={function () { if (hasNames) { setOpenProd(po ? null : p.product + i); } }} className="border-t border-slate-200" style={{ background: po ? '#e0f2fe' : (i % 2 ? '#f8fafc' : '#fff'), color: '#0f172a', cursor: hasNames ? 'pointer' : 'default' }}>
                     <td className="px-2 py-1 font-bold">{(hasNames ? (po ? '▾ ' : '▸ ') : '') + p.product}{hasNames && <span className="ml-1 text-[9px] font-semibold" style={{ color: '#64748b' }}>{'(' + p.names.length + ' names)'}</span>}</td>
-                    <td className="px-2 py-1 text-right font-mono">{Number(p.pounds || 0).toLocaleString('en-US')}{p.pounds_incomplete && <div className="text-[9px]" style={{ color: '#b45309' }}>unit not set on some lines</div>}</td>
+                    <td className="px-2 py-1 text-right font-mono"><SalesQtyCell row={p} /></td>
                     <td className="px-2 py-1 text-right font-mono font-black">{fmt(p.revenue)}</td>
-                    <td className="px-2 py-1 text-right font-mono font-bold" style={{ color: '#065f46' }}>{p.avg_price_per_lb != null ? '$' + Number(p.avg_price_per_lb).toFixed(4) : '—'}</td>
+                    <td className="px-2 py-1 text-right font-mono font-bold" style={{ color: '#065f46' }}><SalesAvgCell row={p} /></td>
                     <td className="px-2 py-1 text-right">{p.invoices}</td>
                   </tr>
                 )];
                 if (po) { (p.names || []).forEach(function (n2, j) { rows.push(
                   <tr key={p.product + i + ':' + j} className="border-t border-slate-100" style={{ background: '#f0f9ff', color: '#0c2a5e' }}>
-                    <td className="px-2 py-1 pl-6">{n2.product}<div className="text-[9px]" style={{ color: '#64748b' }}>{fmt(n2.qty) + ' ' + (n2.unit ? ({ lb: 'lb', kg: 'kg', t: 'tons', yd: 'yards', lm: 'linear metres' })[n2.unit] || n2.unit : '(unit not set)')}</div></td>
-                    <td className="px-2 py-1 text-right font-mono">{Number(n2.pounds || 0).toLocaleString('en-US')}</td>
+                    <td className="px-2 py-1 pl-6">{n2.product}<div className="text-[9px]" style={{ color: '#64748b' }}>{fmt(n2.qty) + ' ' + (n2.unit ? ({ lb: 'lb', kg: 'kg', t: 'tons', yd: 'yards', lm: 'linear metres' })[n2.unit] || n2.unit : '(unit not set)') + (n2.kept_in_yards ? ' · kept in yards' : '')}</div></td>
+                    <td className="px-2 py-1 text-right font-mono"><SalesQtyCell row={n2} /></td>
                     <td className="px-2 py-1 text-right font-mono">{fmt(n2.revenue)}</td>
-                    <td className="px-2 py-1 text-right font-mono">{n2.avg_price_per_lb != null ? '$' + Number(n2.avg_price_per_lb).toFixed(4) : '—'}</td>
+                    <td className="px-2 py-1 text-right font-mono"><SalesAvgCell row={n2} /></td>
                     <td className="px-2 py-1 text-right">{n2.invoices}</td>
                   </tr>); }); }
                 return rows;
@@ -146,7 +148,7 @@ export default function SalesReportTab(props) {
                         <td className="px-2 py-1 pl-6">{cp.product}</td>
                         <td className="px-2 py-1 text-right font-mono">{fmt(cp.revenue)}</td>
                         <td className="px-2 py-1 text-right font-mono">{fmt(cp.qty)}</td>
-                        <td className="px-2 py-1 text-right font-mono text-slate-500">{Number(cp.pounds || 0).toLocaleString('en-US') + ' lb · avg ' + (cp.avg_price_per_lb != null ? '$' + Number(cp.avg_price_per_lb).toFixed(4) + ' / lb' : '—')}</td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-500">{qtyAvgText(cp)}</td>
                         <td className="px-2 py-1"></td>
                       </tr>
                     );
@@ -158,7 +160,7 @@ export default function SalesReportTab(props) {
                       <tr key={c.customer + '::inv::' + iv.id} onClick={function () { setPeekId(iv.id); }} className="border-t border-slate-100 cursor-pointer hover:bg-sky-100" style={{ background: '#ffffff', color: '#0c2a5e' }}>
                         <td className="px-2 py-1 pl-6"><span className="underline font-bold" style={{ color: '#1d4ed8' }}>{iv.invoice_number || 'invoice'}</span> <span className="text-slate-500">{iv.invoice_date || ''}</span></td>
                         <td className="px-2 py-1 text-right font-mono">{fmt(iv.product)}</td>
-                        <td className="px-2 py-1 text-right font-mono text-slate-500">{iv.pounds ? Number(iv.pounds).toLocaleString('en-US') + ' lb' : ''}</td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-500">{[iv.pounds ? Number(iv.pounds).toLocaleString('en-US') + ' lb' : '', iv.yards ? Number(iv.yards).toLocaleString('en-US') + ' yd' : ''].filter(Boolean).join(' · ')}</td>
                         <td className="px-2 py-1 text-right font-mono">{fmt(iv.shipping)}</td>
                         <td className="px-2 py-1 text-right text-[10px] font-bold" style={{ color: '#1d4ed8' }}>open ▸</td>
                       </tr>

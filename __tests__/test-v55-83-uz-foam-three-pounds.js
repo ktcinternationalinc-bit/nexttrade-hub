@@ -69,7 +69,7 @@ check('totals still reconcile in every view', r.reconciled.product && r.reconcil
 
 // ── the Sales Report uses the same rule (wiring)
 var sr = fs.readFileSync(path.join(root, 'src/app/api/accounting/sales-report/route.js'), 'utf8');
-check('Sales Report: pounds use foamFactors for a foam line (imported from the engine)', /import \{[^}]*isFoamLine[^}]*foamFactors[^}]*\} from '..\/..\/..\/..\/lib\/profitability'/.test(sr) && sr.indexOf('toPounds(qty, unit, null, weightFactorsFor(it.wave_product_name, it.description, factors))') > 0); // v55.83-VQ: one picker — headliner, then foam, else standard
+check('Sales Report: pounds use foamFactors for a foam line (imported from the engine)', /import \{[^}]*isFoamLine[^}]*foamFactors[^}]*\} from '..\/..\/..\/..\/lib\/profitability'/.test(sr) && (require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/sales-units.js'), 'utf8').indexOf('toPounds(qty, unit, null, weightFactorsFor(it.wave_product_name, it.description, factors))') > 0 && sr.indexOf('lineQuantity(it, qty, unit,') > 0)); // v55.83-VQ: one picker — headliner, then foam, else standard
 var asm = fs.readFileSync(path.join(root, 'src/lib/profitability-assemble.js'), 'utf8');
 check('assemble imports isFoamLine + foamFactors from the engine (runtime import present)', /import \{[^}]*isFoamLine, foamEvidenceConflict, foamFactors[^}]*\} from '.\/profitability'/.test(asm));
 console.log('\n' + pass + ' passed, ' + failN + ' failed');

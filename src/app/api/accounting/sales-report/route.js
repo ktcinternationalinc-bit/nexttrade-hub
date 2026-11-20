@@ -19,6 +19,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
 import { nameKey, toPounds, unitKey, isTransportLine, DEFAULT_UNIT_FACTORS, isFoamLine, foamFactors, weightFactorsFor } from '../../../../lib/profitability'; // v55.83-TE — merged names + pounds, the same rules as Profitability
+import { lineQuantity, blankQty, addQuantity, finishQuantity } from '../../../../lib/sales-units'; // v55.83-WL — yard goods stay in yards, as in Profitability
 
 var API_BUILD_MARKER = 'v55.83-ON-sales-report';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -101,7 +102,9 @@ export async function POST(req) {
     async function opt(t, cols) { try { return await fetchAll(function () { return db.from(t).select(cols); }); } catch (eO) { return []; } }
     var gRows = await opt('pl_product_groups', 'id, display_name, active, created_at');
     var gnRows = await opt('pl_group_names', 'group_id, source, name_key, active');
-    var nuRows = await opt('pl_name_units', 'name_key, unit');
+    // v55.83-WL — the "keep in yards" switch of each description (the report still runs before that column exists)
+    var nuRows = await opt('pl_name_units', 'name_key, unit, keep_unit'); var keepReady = nuRows.length > 0;
+    if (!nuRows.length) { nuRows = await opt('pl_name_units', 'name_key, unit'); }
     var luRows = await opt('pl_line_units', 'invoice_item_id, unit');
     var ufRows = await opt('pl_unit_factors', 'unit, pounds_per_unit');
     var nkRows = await opt('pl_name_kinds', 'name_key, kind');
@@ -109,16 +112,16 @@ export async function POST(req) {
     gRows.filter(function (g) { return g.active !== false; }).sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)); }).forEach(function (g) {
       var k = nameKey(g.display_name) || ('id:' + g.id); if (!canonByName[k]) { canonByName[k] = g.id; gName[g.id] = g.display_name; } canonOf[g.id] = canonByName[k]; });
     var groupOfName = {}; gnRows.forEach(function (n) { if (n.active !== false && n.source === 'invoice' && canonOf[n.group_id]) { groupOfName[n.name_key] = canonOf[n.group_id]; } });
-    var unitOfName = {}; nuRows.forEach(function (u) { unitOfName[u.name_key] = u.unit; });
+    var unitOfName = {}; var keepOfName = {}; nuRows.forEach(function (u) { unitOfName[u.name_key] = u.unit; if (u.keep_unit === true) { keepOfName[u.name_key] = true; } });
     var unitOfLine = {}; luRows.forEach(function (u) { unitOfLine[u.invoice_item_id] = u.unit; });
     var factors = { units: Object.assign({}, DEFAULT_UNIT_FACTORS) }; ufRows.forEach(function (f) { var u = unitKey(f.unit); if (u && Number(f.pounds_per_unit) > 0) { factors.units[u] = Number(f.pounds_per_unit); } });
     var kindOf = {}; nkRows.forEach(function (k) { kindOf[k.name_key] = k.kind; });
 
     var products = {}; var customers = {}; var custProd = {};
-    var shippingRevenue = 0; var shippingLines = 0; var productRevenue = 0; var itemCount = 0; var poundsTotal = 0; var noUnitLines = 0;
+    var shippingRevenue = 0; var shippingLines = 0; var productRevenue = 0; var itemCount = 0; var poundsTotal = 0; var yardsTotal = 0; var revLbTotal = 0; var revYdTotal = 0; var noUnitLines = 0;
     var usdInvoiceSet = {};
     var invAgg = {}; // v55.83-UD (Max, Nov 18: "click on an invoice by the customer — each shipment — to see it")
-    function ia(id) { return invAgg[id] || (invAgg[id] = { product: 0, shipping: 0, pounds: 0 }); }
+    function ia(id) { return invAgg[id] || (invAgg[id] = { product: 0, shipping: 0, pounds: 0, yards: 0 }); }
     items.forEach(function (it) {
       var parent = invById[it.invoice_id];
       if (!parent || usdIds[it.invoice_id] !== true) { return; } // USD tables only; non-USD reported separately
@@ -149,46 +152,48 @@ export async function POST(req) {
       var gid = groupOfName[nk]; var pkey = gid ? 'g:' + gid : 'n:' + nk; var plabel = gid ? gName[gid] : name;
       // v55.83-UZ (Max, Nov 19: anything with foam weighs 3 lb per yard) — the same rule as Profitability
       // the line's product name + description decide the weight table, never the merged group's name (Codex 07:36): headliner 1.25 lb / yd, foam 3, else standard
-      var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var lb = toPounds(qty, unit, null, weightFactorsFor(it.wave_product_name, it.description, factors)); // v55.83-VQ — headliner 1.25 lb per yard, then foam 3, else standard
-      if (lb === null) { noUnitLines += 1; } else { poundsTotal += lb; }
-      if (!products[pkey]) { products[pkey] = { product: plabel, grouped: !!gid, qty: 0, revenue: 0, pounds: 0, poundsMissing: false, invSet: {}, names: {} }; }
+      // v55.83-WL — one rule for the quantity (src/lib/sales-units.js): kept in yards → yards, never pounds; otherwise pounds as before
+      var unit = unitOfLine[it.id] || unitOfName[nk] || ''; var q = lineQuantity(it, qty, unit, { marked: keepOfName[nk] === true, ready: keepReady }, factors); var lb = q.lb;
+      if (q.kept) { yardsTotal += q.yd; revYdTotal = r2(revYdTotal + amount); } else if (lb === null) { noUnitLines += 1; } else { poundsTotal += lb; revLbTotal = r2(revLbTotal + amount); }
+      if (!products[pkey]) { products[pkey] = { product: plabel, grouped: !!gid, qty: 0, revenue: 0, q: blankQty(), invSet: {}, names: {} }; }
       products[pkey].qty = r2(products[pkey].qty + qty);
       products[pkey].revenue = r2(products[pkey].revenue + amount);
       products[pkey].invSet[it.invoice_id] = true;
-      if (lb === null) { products[pkey].poundsMissing = true; } else { products[pkey].pounds += lb; }
-      var nm0 = products[pkey].names[nk] || (products[pkey].names[nk] = { product: name, unit: unit || null, qty: 0, revenue: 0, pounds: 0, poundsMissing: false, invSet: {} });
-      nm0.qty = r2(nm0.qty + qty); nm0.revenue = r2(nm0.revenue + amount); nm0.invSet[it.invoice_id] = true; if (lb === null) { nm0.poundsMissing = true; } else { nm0.pounds += lb; }
+      addQuantity(products[pkey].q, q, amount);
+      var nm0 = products[pkey].names[nk] || (products[pkey].names[nk] = { product: name, unit: unit || null, kept_in_yards: q.kept, qty: 0, revenue: 0, q: blankQty(), invSet: {} });
+      nm0.qty = r2(nm0.qty + qty); nm0.revenue = r2(nm0.revenue + amount); nm0.invSet[it.invoice_id] = true; addQuantity(nm0.q, q, amount);
 
       if (!customers[cid]) { customers[cid] = { customer: cname, revenue: 0, qty: 0, shipping: 0, invSet: {} }; }
       customers[cid].revenue = r2(customers[cid].revenue + amount);
       customers[cid].qty = r2(customers[cid].qty + qty);
       customers[cid].invSet[it.invoice_id] = true;
-      ia(it.invoice_id).product = r2(ia(it.invoice_id).product + amount); if (lb !== null) { ia(it.invoice_id).pounds += lb; }
+      ia(it.invoice_id).product = r2(ia(it.invoice_id).product + amount); if (q.kept) { ia(it.invoice_id).yards += q.yd; } else if (lb !== null) { ia(it.invoice_id).pounds += lb; }
 
       var ck = cid + '||' + pkey;
-      if (!custProd[ck]) { custProd[ck] = { customer: cname, product: plabel, qty: 0, revenue: 0, pounds: 0, poundsMissing: false }; }
+      if (!custProd[ck]) { custProd[ck] = { customer: cname, product: plabel, qty: 0, revenue: 0, q: blankQty() }; }
       custProd[ck].qty = r2(custProd[ck].qty + qty);
       custProd[ck].revenue = r2(custProd[ck].revenue + amount);
-      if (lb === null) { custProd[ck].poundsMissing = true; } else { custProd[ck].pounds += lb; }
+      addQuantity(custProd[ck].q, q, amount);
     });
 
     function withAvg(rows) {
       return rows.map(function (p) {
         p.avg_price = p.qty > 0 ? r2(p.revenue / p.qty) : null;
         // TE — average $ per POUND: only when every line behind it has a unit (pounds are never guessed)
-        if (p.pounds !== undefined) { p.pounds = Math.round(p.pounds); p.avg_price_per_lb = p.pounds > 0 && !p.poundsMissing ? Math.round(p.revenue / p.pounds * 10000) / 10000 : null; p.pounds_incomplete = !!p.poundsMissing; delete p.poundsMissing; }
+        // WL — pounds and yards apart, each with its own average; never one blended figure
+        if (p.q) { var fq = finishQuantity(p.q); p.pounds = fq.pounds; p.yards = fq.yards; p.avg_price_per_lb = fq.avg_price_per_lb; p.avg_price_per_yd = fq.avg_price_per_yd; p.pounds_incomplete = fq.pounds_incomplete; delete p.q; }
         return p;
       });
     }
     var productRows = withAvg(Object.keys(products).map(function (k) {
       var p = products[k];
-      var subs = withAvg(Object.keys(p.names).map(function (k2) { var n2 = p.names[k2]; return { product: n2.product, unit: n2.unit, qty: n2.qty, revenue: n2.revenue, pounds: n2.pounds, poundsMissing: n2.poundsMissing, invoices: Object.keys(n2.invSet).length }; })).sort(function (a, b) { return b.revenue - a.revenue; });
-      return { product: p.product, grouped: p.grouped, qty: p.qty, revenue: p.revenue, pounds: p.pounds, poundsMissing: p.poundsMissing, invoices: Object.keys(p.invSet).length, names: subs };
+      var subs = withAvg(Object.keys(p.names).map(function (k2) { var n2 = p.names[k2]; return { product: n2.product, unit: n2.unit, kept_in_yards: n2.kept_in_yards === true, qty: n2.qty, revenue: n2.revenue, q: n2.q, invoices: Object.keys(n2.invSet).length }; })).sort(function (a, b) { return b.revenue - a.revenue; });
+      return { product: p.product, grouped: p.grouped, qty: p.qty, revenue: p.revenue, q: p.q, invoices: Object.keys(p.invSet).length, names: subs };
     })).sort(function (a, b) { return b.revenue - a.revenue; });
     var customerRows = Object.keys(customers).map(function (k) {
       var c = customers[k];
       // each invoice (shipment) of this customer, newest first — the screen opens it on a click
-      var list = Object.keys(c.invSet).map(function (iid) { var iv = invById[iid] || {}; var ag = invAgg[iid] || { product: 0, shipping: 0, pounds: 0 }; return { id: iid, invoice_number: iv.invoice_number || null, invoice_date: iv.invoice_date || null, product: ag.product, shipping: ag.shipping, pounds: Math.round(ag.pounds), total: Number(iv.total_amount) || 0 }; })
+      var list = Object.keys(c.invSet).map(function (iid) { var iv = invById[iid] || {}; var ag = invAgg[iid] || { product: 0, shipping: 0, pounds: 0, yards: 0 }; return { id: iid, invoice_number: iv.invoice_number || null, invoice_date: iv.invoice_date || null, product: ag.product, shipping: ag.shipping, pounds: Math.round(ag.pounds), yards: Math.round(ag.yards || 0), total: Number(iv.total_amount) || 0 }; })
         .sort(function (a, b) { return String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')); });
       return { customer: c.customer, revenue: c.revenue, qty: c.qty, shipping: c.shipping, invoices: Object.keys(c.invSet).length, invoice_list: list.slice(0, 200) };
     }).sort(function (a, b) { return b.revenue - a.revenue; });
@@ -199,7 +204,7 @@ export async function POST(req) {
     return NextResponse.json({
       ok: true,
       totals: {
-        product_revenue: r2(productRevenue), pounds: Math.round(poundsTotal), lines_without_unit: noUnitLines,
+        product_revenue: r2(productRevenue), pounds: Math.round(poundsTotal), yards: Math.round(yardsTotal), pounds_revenue: r2(revLbTotal), yards_revenue: r2(revYdTotal), lines_without_unit: noUnitLines,
         shipping_revenue: r2(shippingRevenue),
         grand_total: r2(productRevenue + shippingRevenue),
         invoices: Object.keys(usdInvoiceSet).length,

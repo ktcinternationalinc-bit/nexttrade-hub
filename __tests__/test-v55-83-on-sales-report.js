@@ -34,7 +34,7 @@ ok('ON8: UI default period is June 1, 2026 onward; presets incl. Last month, Las
   /'Last month'/.test(ui) && /'Last 3 months'/.test(ui) && /'This year', '2026-01-01'/.test(ui) &&
   /'2025', '2025-01-01', '2025-12-31'/.test(ui) && /'All history'/.test(ui));
 ok('ON9: clicking a customer expands their product breakdown with average prices',
-  /setOpenCust\(open \? null : c\.customer\)/.test(ui) && /cp\.avg_price_per_lb/.test(ui)); // v55.83-TE realign: the customer’s products show pounds and $ per lb
+  /setOpenCust\(open \? null : c\.customer\)/.test(ui) && /qtyAvgText\(cp\)/.test(ui)); // v55.83-WL realign (the words now come from sales-units.js); TE realign: the customer’s products show pounds and $ per lb
 ok('ON10: both tables export CSV and the tab lives under Accounting',
   /sales-by-product\.csv/.test(ui) && /sales-by-customer\.csv/.test(ui) &&
   /\['sales_report', '📈 Sales Report'\]/.test(at));

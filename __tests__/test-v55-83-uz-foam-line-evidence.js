@@ -69,7 +69,7 @@ check('totals reconcile in every arrangement', [merged, renamed, split, sameName
 
 // ── the Sales Report and the screen use the same rule
 var sr = fs.readFileSync(path.join(root, 'src/app/api/accounting/sales-report/route.js'), 'utf8');
-check('Sales Report: isFoamLine(product name, description) — no group name in the decision', sr.indexOf('weightFactorsFor(it.wave_product_name, it.description, factors)') > 0 && !/isFoamName\(gName/.test(sr) && /import \{[^}]*isFoamLine[^}]*foamFactors[^}]*\} from/.test(sr));
+check('Sales Report: isFoamLine(product name, description) — no group name in the decision', (require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/sales-units.js'), 'utf8').indexOf('weightFactorsFor(it.wave_product_name, it.description, factors)') > 0 && sr.indexOf('lineQuantity(it, qty, unit,') > 0) && !/isFoamName\(gName/.test(sr) && /import \{[^}]*isFoamLine[^}]*foamFactors[^}]*\} from/.test(sr));
 var eng = fs.readFileSync(path.join(root, 'src/lib/profitability.js'), 'utf8');
 check('engine: the group name is not read for foam anywhere', !/isFoam(Name|Line)\(g\.name/.test(eng));
 var asm = fs.readFileSync(path.join(root, 'src/lib/profitability-assemble.js'), 'utf8');

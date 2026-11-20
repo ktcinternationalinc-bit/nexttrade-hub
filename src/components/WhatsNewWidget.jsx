@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WL',
+    date: '2026-11-20',
+    title: 'Sales Report: goods kept in yards are shown in yards',
+    items: [
+      { text: '**Sales Report now follows the same yard rule as Profitability.** Headliner, and any description you marked to keep in yards, is counted in yards and no longer added to the Pounds total. PVC and everything else is converted to pounds as before.' },
+      { text: 'Each product row shows its pounds and, in blue, its yards. The average price is per pound for the pound goods and per yard for the yard goods. The two are never mixed into one number.' },
+      { text: 'The top box shows pounds sold with the average per pound worked out from the pound goods only, and a second line for the yards kept in yards with their own average.' },
+      { text: 'The customer breakdown, each invoice line and the product download carry yards as well. Sales dollars are not changed by this.' },
+      { superAdminOnly: true, text: 'Technical: new src/lib/sales-units.js (lineQuantity, addQuantity, finishQuantity, words for the screen) used by the sales-report route; reads pl_name_units.keep_unit fail-soft, so before that column exists the report is the old all-pounds one. Totals gain yards, pounds_revenue, yards_revenue. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WK',
     date: '2026-11-20',
     title: 'Profitability: averages per pound and per yard side by side; Bills vendor groups follow the sort',
