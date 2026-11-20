@@ -6,12 +6,18 @@
 // Read-only: editing stays in the Invoices tab.
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import ProformaLinkBox from './ProformaLinkBox'; // v55.83-VZ — the proforma this invoice came from + its signed copies
+import ProformaPeek from './ProformaPeek';
 
 function fmt(n) { return (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 
 export default function InvoicePeek(props) {
-  var invoiceId = props.invoiceId;
+  // v55.83-VZ — from the linked proforma's pop-up a person may open ANOTHER of its invoices: that one is shown here instead
+  var sv = useState(null); var swapId = sv[0]; var setSwapId = sv[1];
+  var sp = useState(null); var peekPf = sp[0]; var setPeekPf = sp[1];
+  useEffect(function () { setSwapId(null); setPeekPf(null); }, [props.invoiceId]);
+  var invoiceId = props.invoiceId ? (swapId || props.invoiceId) : null;
   var onClose = props.onClose || function () {};
   var s1 = useState(null); var d = s1[0]; var setD = s1[1];
   var s2 = useState(null); var err = s2[0]; var setErr = s2[1];
@@ -88,7 +94,11 @@ export default function InvoicePeek(props) {
             <span className="font-extrabold tabular-nums" style={{ color: '#064e3b' }}>+${fmt(p.amount)}</span></div>;
         })}
         {d.inv.notes && <div className="text-[10px] mt-2" style={{ color: '#64748b' }}>Notes: {d.inv.notes}</div>}
+        <ProformaLinkBox kind="invoice" docId={invoiceId} light={true} readOnly={true}
+          onOpenProforma={function (pid) { if (props.onOpenProforma) { props.onOpenProforma(pid); } else { setPeekPf(pid); } }} />
       </div>}
     </div>
+    {peekPf && <div onClick={function (e) { e.stopPropagation(); }}><ProformaPeek proformaId={peekPf} onClose={function () { setPeekPf(null); }}
+      onOpenInvoice={function (iid) { setPeekPf(null); if (iid && iid !== invoiceId) { setSwapId(iid); } }} /></div>}
   </div>;
 }

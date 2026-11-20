@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VZ',
+    date: '2026-11-20',
+    title: 'Proformas are linked to their invoices, and the signed proforma is kept with them',
+    items: [
+      { text: '**An invoice shows the proforma it came from, and a proforma shows the invoices made from it.** Go to Accounting → Invoices (or Proformas) and press View on a row. Near the bottom there is a new box. On an invoice it says “Proforma this invoice came from”; on a proforma it says “Invoices made from this proforma”. Each one is a button: press it and the other document opens on top of the page. Close it and you are back where you were.' },
+      { text: '**The lists show it too.** An invoice that came from a proforma has a small “PF” button under its number; press it to open the proforma. A proforma shows how many invoices it has, and a green “signed” mark when a signed copy is on file.' },
+      { text: '**Link and unlink.** People who may edit invoices see “Link to a proforma…” on an invoice and “Link an invoice…” on a proforma. Search, press Link. One proforma can have several invoices; an invoice belongs to one proforma. If the customers are different the Hub asks first. Unlink is next to each link you made by hand. A link made by Convert stays as it is. Every link and unlink is written in the audit trail with who and when.' },
+      { text: '**Upload signed proforma.** Open a proforma (View or Edit) and press “Upload signed proforma”. Pick the PDF or the photo of the signed pages (up to 15 MB). You can add a short note. It is saved and shown with who uploaded it and when, with Open and Download buttons. The same list is shown on every invoice linked to that proforma.' },
+      { text: '**Nothing is ever replaced or deleted.** A newer signed copy is added as the next version and the earlier ones stay in the list. Archiving or voiding the proforma or the invoice keeps the signed copy. A proforma that has a signed copy or a link cannot be deleted any more: archive it instead.' },
+      { text: '**Private.** Signed copies are kept in their own locked place. Only people who may see invoices can open them, and the history limit set for employees applies here as well.' },
+      { text: 'The printed invoice your customer receives and everything sent to Wave are unchanged.' },
+      { text: 'One database update is needed before linking by hand and uploading work. Until it is run, the box only shows links made by Convert.' },
+      { superAdminOnly: true, text: 'Technical: run sql/v55-83-VZ-proforma-links-signed.sql once (two tables closed to browsers, append-only by trigger, plus the private store proforma-signed with no storage rules). New route /api/accounting/proforma-links (get, map, file_url, link, unlink, upload_start, upload_finish; verified caller; invoices.view to read, invoices.create or invoices.edit to write; history window enforced; audit actions proforma_invoice_linked, proforma_invoice_unlinked, proforma_signed_uploaded). Files go to the store by a one-path signed upload ticket; the server then checks the real bytes and a SHA-256 fingerprint and adds version max+1. invoice-lifecycle refuses a hard delete of a proforma with a signed copy or a link. New: src/lib/proforma-links.js, src/lib/proforma-keep-server.js, src/components/ProformaLinkBox.jsx, src/components/ProformaPeek.jsx. Convert still writes converted_invoice_id.' }
+    ]
+  },
+  {
     version: 'v55.83-VV',
     date: '2026-11-20',
     title: 'Bills: importing a PDF now takes the bill from the invoice page only — attached papers are left out',
