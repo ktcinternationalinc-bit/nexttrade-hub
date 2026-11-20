@@ -4,6 +4,7 @@
 // linking the REAL bank transaction (money out, settled). Writes need the
 // bills.manage permission; nothing is ever deleted — bills void, payments void.
 import React, { useState, useEffect, useRef } from 'react';
+import { searchBills, sortBills, groupByVendor, BILL_SORTS } from '../lib/bill-groups'; // v55.83-VU — grouped by vendor, search, sort
 import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
@@ -59,6 +60,12 @@ export default function BillsTab(props) {
   var s18 = useState(''); var typeF = s18[0]; var setTypeF = s18[1];
   var s19 = useState(''); var dirF = s19[0]; var setDirF = s19[1];
   var s20 = useState('due'); var sortBy = s20[0]; var setSortBy = s20[1];
+  // v55.83-VU (Max, Nov 20: "group under every different vendor ... drill down ... filter, search ... sort by the invoice date, by the invoice number")
+  var sVd = useState('asc'); var sortDir = sVd[0]; var setSortDir = sVd[1];
+  var sVq = useState(''); var billQ = sVq[0]; var setBillQ = sVq[1];
+  var sVg = useState('grouped'); var listView = sVg[0]; var setListView = sVg[1]; // 'grouped' = one row per vendor, opened to its bills · 'all' = every bill in one list
+  var sVo = useState({}); var openVendors = sVo[0]; var setOpenVendors = sVo[1];
+  function sortOn(k) { if (sortBy === k) { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); } else { setSortBy(k); setSortDir(k === 'amount' || k === 'open' ? 'desc' : 'asc'); } }
   var s21 = useState(null); var panel = s21[0]; var setPanel = s21[1]; // 'rules' | 'reports'
   var s22 = useState(''); var priceF = s22[0]; var setPriceF = s22[1];
   var s22v = useState(''); var valF = s22v[0]; var setValF = s22v[1]; // v55.83-UB: validated / not validated
@@ -309,17 +316,28 @@ export default function BillsTab(props) {
     if (valF && (valF === 'validated' ? b.validation_status !== 'validated' : b.validation_status === 'validated')) { return false; }
     return true;
   });
-  var TYPE_ORDER = { trucking: 1, shipping: 2, bonded_brokerage: 3, supplier: 4 };
-  if (sortBy !== 'due') {
-    shown = shown.slice().sort(function (a, b) {
-      var k = sortBy === 'type' ? (TYPE_ORDER[a.bill_type] || 9) - (TYPE_ORDER[b.bill_type] || 9)
-        : sortBy === 'direction' ? String(a.shipment_direction || 'z').localeCompare(String(b.shipment_direction || 'z'))
-        : sortBy === 'vendor' ? String(a.vendor_name || '').localeCompare(String(b.vendor_name || ''))
-        : sortBy === 'newest' ? String(b.bill_date || '').localeCompare(String(a.bill_date || ''))
-        : sortBy === 'amount' ? (Number(b.total_amount) || 0) - (Number(a.total_amount) || 0) : 0;
-      return k || String(a.due_date || '').localeCompare(String(b.due_date || ''));
-    });
+  // v55.83-VU — search, then sort (one tested place: src/lib/bill-groups.js), then group by vendor
+  var beforeSearch = shown.length;
+  shown = sortBills(searchBills(shown, billQ, catLabelOf), sortBy, sortDir);
+  var vendorGroups = groupByVendor(shown, TODAY);
+  var searching = String(billQ || '').trim() !== '';
+  function vendorOpen(g) { return searching || vendorGroups.length === 1 || openVendors[g.key] === true; }
+  function toggleVendor(g) { var o = Object.assign({}, openVendors); if (o[g.key]) { delete o[g.key]; } else { o[g.key] = true; } setOpenVendors(o); }
+  function vendorHead(g) {
+    var isO = vendorOpen(g);
+    return <tr key={'vg:' + g.key} onClick={function () { toggleVendor(g); }} title={isO ? 'Close this vendor' : 'Show this vendor’s bills'} style={{ background: isO ? '#dbeafe' : '#f1f5f9', color: '#0f172a', borderTop: '2px solid #94a3b8', borderBottom: '1px solid #cbd5e1', cursor: 'pointer' }}>
+      <td className="py-2 pr-2 font-extrabold" colSpan={4}><span style={{ color: '#1d4ed8' }}>{isO ? '▾ ' : '▸ '}</span>{g.vendor}<span className="ml-2 font-bold" style={{ color: '#475569' }}>{g.count + (g.count === 1 ? ' bill' : ' bills')}</span>
+        {g.late > 0 && <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#c2410c', color: '#ffffff' }}>{g.late + ' late'}</span>}
+        {g.duplicates > 0 && <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-extrabold" style={{ background: '#6b21a8', color: '#ffffff' }}>{g.duplicates + ' possible duplicate' + (g.duplicates === 1 ? '' : 's')}</span>}
+        {g.earliest_due && <span className="ml-2 text-[10px] font-semibold" style={{ color: '#475569' }}>{'next due ' + g.earliest_due}</span>}</td>
+      <td className="py-2 pr-2 text-right font-bold">{'$' + fmt(g.total_cents / 100)}</td><td className="py-2 pr-2 text-right font-bold">{'$' + fmt(g.paid_cents / 100)}</td><td className="py-2 pr-2 text-right font-extrabold">{'$' + fmt(g.open_cents / 100)}</td>
+      <td colSpan={4} className="py-2 text-[10px]" style={{ color: '#475569' }}>{isO ? 'click to close' : 'click to see the bills'}</td></tr>;
   }
+  function renderBillList(billRow) {
+    if (listView === 'all') { return shown.map(billRow); }
+    var out = []; vendorGroups.forEach(function (g) { out.push(vendorHead(g)); if (vendorOpen(g)) { g.bills.forEach(function (b0) { out.push(billRow(b0)); }); } }); return out;
+  }
+  function th(label, key, right) { var on = sortBy === key; return <th className={'py-2 pr-2 font-semibold' + (right ? ' text-right' : '')}><button onClick={function () { sortOn(key); }} title={'Sort by ' + label.toLowerCase() + (on ? ' — click again to reverse' : '')} style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit', fontWeight: on ? 800 : 600, color: on ? '#1d4ed8' : '#475569', textDecoration: 'underline' }}>{label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')}</button></th>; }
   function paysOf(id) { return payments.filter(function (p) { return p.bill_id === id; }); }
   // v55.83-RZ (Max 00:17: "it goes from OPEN to READY ... and then ... the status of the bills become PAID") — a bill on a wire shows
   // where the wire is: OPEN (being signed) → READY (both signatures) → SENT (waiting for the bank line) → PAID (matched)
@@ -477,10 +495,17 @@ export default function BillsTab(props) {
       <select className={inp} value={valF} onChange={function (e) { setValF(e.target.value); }} title="Validated or not">
         <option value="">validated + not validated</option><option value="validated">✓ Validated</option><option value="not_validated">Not validated</option></select>
       <span className="text-[10px] font-bold ml-2" style={{ color: '#475569' }}>Sort:</span>
-      <select className={inp} value={sortBy} onChange={function (e) { setSortBy(e.target.value); }}>
-        <option value="due">due date</option><option value="type">type of bill</option><option value="direction">inbound / outbound</option><option value="vendor">vendor</option><option value="newest">newest bill date</option><option value="amount">largest amount</option></select>
-      {(typeF || dirF || priceF || valF || sortBy !== 'due') && <button onClick={function () { setTypeF(''); setDirF(''); setPriceF(''); setValF(''); setSortBy('due'); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear</button>}
-      <span className="text-[10px]" style={{ color: '#64748b' }}>{shown.length + ' bill(s)'}</span>
+      <select className={inp} value={sortBy} onChange={function (e) { setSortBy(e.target.value); }} title="Sort the bills (inside each vendor when grouped)">{BILL_SORTS.map(function (o) { return <option key={o.key} value={o.key}>{o.label}</option>; })}</select>
+      <button onClick={function () { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); }} className="px-2 py-1 rounded-lg text-[10px] font-extrabold" style={{ background: '#f1f5f9', color: '#334155' }} title="Reverse the order">{sortDir === 'asc' ? '▲ first → last' : '▼ last → first'}</button>
+      {(typeF || dirF || priceF || valF || sortBy !== 'due' || sortDir !== 'asc' || billQ) && <button onClick={function () { setTypeF(''); setDirF(''); setPriceF(''); setValF(''); setSortBy('due'); setSortDir('asc'); setBillQ(''); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear</button>}
+    </div>
+    {/* v55.83-VU — search + grouped by vendor / all bills */}
+    <div className="flex gap-2 items-center flex-wrap mb-2">
+      <input value={billQ} onChange={function (e) { setBillQ(e.target.value); }} placeholder="🔎 Search bills: vendor, bill number, release, amount…" aria-label="Search bills" className={inp} style={{ minWidth: 300 }} />
+      {billQ && <button onClick={function () { setBillQ(''); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>clear search</button>}
+      {[['grouped', '🗂 Grouped by vendor'], ['all', '☰ All bills in one list']].map(function (x) { return <button key={x[0]} onClick={function () { setListView(x[0]); }} className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold" style={listView === x[0] ? { background: '#0f172a', color: '#ffffff' } : { background: '#f1f5f9', color: '#334155' }}>{x[1]}</button>; })}
+      {listView === 'grouped' && !searching && vendorGroups.length > 1 && <span><button onClick={function () { var o = {}; vendorGroups.forEach(function (g) { o[g.key] = true; }); setOpenVendors(o); }} className="text-[10px] underline font-bold mr-2" style={{ color: '#1d4ed8' }}>open all</button><button onClick={function () { setOpenVendors({}); }} className="text-[10px] underline font-bold" style={{ color: '#1d4ed8' }}>close all</button></span>}
+      <span className="text-[10px] font-bold" style={{ color: '#475569' }}>{shown.length + (shown.length === 1 ? ' bill' : ' bills') + ' · ' + vendorGroups.length + (vendorGroups.length === 1 ? ' vendor' : ' vendors') + (searching ? ' match the search (of ' + beforeSearch + ')' : '')}</span>
     </div>
     {canView && <AdvancesPanel userProfile={userProfile} toast={toast} onChanged={load} />}{/* v55.83-TX — advance balances, always visible */}
     {panel === 'nextrade' && <NextradeBillsPanel userProfile={userProfile} onClose={function () { setPanel(null); }} />}
@@ -630,13 +655,13 @@ export default function BillsTab(props) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs text-left">
         <thead><tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569' }}>
-          <th className="py-2 pr-2 font-semibold">Vendor</th><th className="py-2 pr-2 font-semibold">Bill #</th>
-          <th className="py-2 pr-2 font-semibold">Bill date</th><th className="py-2 pr-2 font-semibold">Due</th>
-          <th className="py-2 pr-2 font-semibold text-right">Amount</th><th className="py-2 pr-2 font-semibold text-right">Paid</th>
-          <th className="py-2 pr-2 font-semibold text-right">Open</th><th className="py-2 pr-2 font-semibold">Category</th>
+          {th('Vendor', 'vendor')}{th('Bill #', 'bill_number')}
+          {th('Bill date', 'bill_date')}{th('Due', 'due')}
+          {th('Amount', 'amount', true)}<th className="py-2 pr-2 font-semibold text-right">Paid</th>
+          {th('Open', 'open', true)}<th className="py-2 pr-2 font-semibold">Category</th>
           <th className="py-2 pr-2 font-semibold">Status</th><th className="py-2 pr-2 font-semibold">Validation</th><th className="py-2 font-semibold"></th></tr></thead>
         <tbody>
-          {shown.map(function (b) {
+          {renderBillList(function (b) {
             var late = b.record_status === 'active' && b.open > 0.005 && b.due_date && b.due_date < TODAY;
             var dupOn = b.record_status === 'active' && !!b.dup_flag; var dupStrong = dupOn && b.dup_flag.level === 'strong'; // v55.83-SV
             return <React.Fragment key={b.id}>
@@ -933,7 +958,7 @@ export default function BillsTab(props) {
               </td></tr>}
             </React.Fragment>;
           })}
-          {shown.length === 0 && <tr><td colSpan={11} className="py-4 text-center text-slate-500 text-[11px]">{busy ? 'Loading…' : 'No bills here yet.'}</td></tr>}
+          {shown.length === 0 && <tr><td colSpan={11} className="py-4 text-center text-slate-500 text-[11px]">{busy ? 'Loading…' : (searching ? 'No bill matches “' + billQ + '”. Clear the search, or look under another tab (Open / Paid / All).' : 'No bills here yet.')}</td></tr>}
         </tbody>
       </table>
     </div>

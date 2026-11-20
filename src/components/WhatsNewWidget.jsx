@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VU',
+    date: '2026-11-20',
+    title: 'Bills: grouped by vendor, with search and sorting',
+    items: [
+      { text: '**Bills are grouped by vendor.** Accounting → Bills now shows one row per vendor with how many bills it has, the total, what is paid, what is still open, how many are late and the next due date. Click a vendor to see its bills; click again to close it. “Open all” and “close all” are next to the search box.' },
+      { text: '**Search.** Type in the search box: a vendor name, a bill number, a release number, an amount, a date or a category. Several words narrow it down. While you search, every vendor with a match opens by itself.' },
+      { text: '**Sort by clicking a column.** Click Vendor, Bill #, Bill date, Due, Amount or Open to sort by it; click again to reverse. When grouped, the bills inside each vendor follow that order. Bill numbers sort the way you read them (9 before 10).' },
+      { text: '**All bills in one list** is still there: press “All bills in one list” next to the search box. Search and sorting work the same way.' },
+      { text: 'The Open / Paid / Disputed tabs and the type, direction and validation filters work as before, and every button on a bill row is unchanged.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/bill-groups.js (vendorKey, searchBills, sortBills, groupByVendor, BILL_SORTS; totals in whole cents over active bills). BillsTab.jsx runs filter → search → sort → group and renders the same row function in both views. Display only: no server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-VT',
     date: '2026-11-20',
     title: 'Profitability → P&L by period: click an expense to see what is behind it, a formula button, and invoices that open on top',
