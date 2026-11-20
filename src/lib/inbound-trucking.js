@@ -12,6 +12,15 @@
 //     load's pounds unknown: it is listed, never guessed.
 //   - Average per pound = freight of the matched loads / pounds of the matched loads. Loads that are not matched are left
 //     out of the average and shown with their money, so nothing disappears.
+// Codex 20 Nov 06:15:
+//   - HISTORY WINDOW (P1): `floor` is the first day the person may see. Freight is never taken from before it. Older supplier
+//     bills may still supply POUNDS to a load (the aggregate stays right), but nothing that identifies them leaves this
+//     function: no id, number, vendor, date or quantity — only "N older bill(s) not shown". A bill with no date counts as older.
+//   - A supplier bill that names MORE THAN ONE load number (P1) is never given to each load in full: every load it names is
+//     "shared goods bill", unresolved, and left out of the average.
+//   - DATES AND DUPLICATES (P2): the supplier's re-billed line is the one that counts (it carries the load number), on ITS
+//     bill date. The direct Kronos bill for the same invoice is listed as not counted, saying whether its replacement is in
+//     this report or dated outside it, with both amounts when they differ. It is never called counted here when it is not.
 // Whole cents throughout. Pure functions, no database, no clock.
 import { toPounds, billLineUnit, weightFactorsFor, DEFAULT_UNIT_FACTORS, INBOUND_ALLOWANCE_PER_LB } from './profitability';
 
@@ -35,7 +44,9 @@ function inDates(day, from, to) { var d = txt(day).substring(0, 10); if (from &&
 // o = { bills, lines, factors, from, to }   (from / to = bill date of the freight bill, optional)
 export function buildInboundTrucking(o) {
   var bills = (o && o.bills) || []; var lines = (o && o.lines) || []; var factors = (o && o.factors) || { units: DEFAULT_UNIT_FACTORS };
-  var from = (o && o.from) || ''; var to = (o && o.to) || '';
+  var floor = (o && o.floor) || ''; var from = (o && o.from) || ''; var to = (o && o.to) || '';
+  if (floor && (!from || from < floor)) { from = floor; }
+  function older(day) { return !!floor && (!txt(day).substring(0, 10) || txt(day).substring(0, 10) < floor); }
   var billById = {}; bills.forEach(function (b) { if (isLiveBill(b)) { billById[b.id] = b; } });
   var linesByBill = {}; lines.forEach(function (l) { if (billById[l.bill_id]) { (linesByBill[l.bill_id] = linesByBill[l.bill_id] || []).push(l); } });
 
@@ -49,7 +60,7 @@ export function buildInboundTrucking(o) {
       if (!own && !(named && txt(l.line_kind) === 'charge')) { return; }
       var c = cents(l.amount); if (c === 0) { return; }
       var ti = own ? txt(b.bill_number).toUpperCase() : truckerInvoiceIn(l.description);
-      if (!own && ti) { rebilled[ti] = txt(b.vendor_name) + ' bill ' + txt(b.bill_number); }
+      if (!own && ti) { var rb = rebilled[ti] || (rebilled[ti] = { cents: 0, in_report: false, label: '' }); rb.cents += c; var bd = txt(b.bill_date).substring(0, 10); if (inDates(bd, from, to)) { rb.in_report = true; } if (!rb.label && !older(bd)) { rb.label = txt(b.vendor_name) + ' bill ' + txt(b.bill_number); } }
       freight.push({ line_id: l.id, bill_id: b.id, vendor: txt(b.vendor_name), bill_number: txt(b.bill_number), bill_date: txt(b.bill_date).substring(0, 10), description: txt(l.description), cents: c, own: own, trucker_invoice: ti, bonded: isBondedLine(l), loads: loadNumbersIn(l.description) });
     });
   });
@@ -57,18 +68,24 @@ export function buildInboundTrucking(o) {
   var notCounted = []; var counted = [];
   freight.forEach(function (f) {
     if (!inDates(f.bill_date, from, to)) { return; }
-    if (f.own && f.trucker_invoice && rebilled[f.trucker_invoice]) { f.why = 'already counted through ' + rebilled[f.trucker_invoice]; notCounted.push(f); return; }
+    if (f.own && f.trucker_invoice && rebilled[f.trucker_invoice]) {
+      var rb2 = rebilled[f.trucker_invoice]; var via = rb2.label || 'a supplier bill';
+      f.replacement_in_report = rb2.in_report; f.replacement_cents = rb2.cents; f.amount_differs = rb2.cents !== f.cents;
+      f.why = rb2.in_report ? 'counted once in this report, through ' + via : 'NOT counted in this report: the same invoice is re-billed on ' + via + ', which is dated outside these dates';
+      notCounted.push(f); return;
+    }
     counted.push(f);
   });
 
   // 2) pounds received per load number
-  var goodsByLoad = {};
+  var goodsByLoad = {}; var sharedLoad = {}; // sharedLoad: a supplier bill names this load together with another one
   Object.keys(billById).forEach(function (id) {
     var b = billById[id]; if (txt(b.bill_type) !== 'supplier') { return; }
-    loadNumbersIn(b.other_reference).forEach(function (ld) { (goodsByLoad[ld] = goodsByLoad[ld] || []).push(b); });
+    var lds = loadNumbersIn(b.other_reference);
+    lds.forEach(function (ld) { (goodsByLoad[ld] = goodsByLoad[ld] || []).push(b); if (lds.length > 1) { sharedLoad[ld] = true; } });
   });
   function poundsOf(load) {
-    var gb = goodsByLoad[load] || []; var lb = 0; var unknown = 0; var itemLines = 0; var billsOut = [];
+    var gb = goodsByLoad[load] || []; var lb = 0; var unknown = 0; var itemLines = 0; var billsOut = []; var olderBills = 0;
     gb.forEach(function (b) {
       var bl = 0; var bu = 0;
       (linesByBill[b.id] || []).forEach(function (l) {
@@ -77,9 +94,10 @@ export function buildInboundTrucking(o) {
         var p = toPounds(l.qty, billLineUnit(l), null, weightFactorsFor('', l.description, factors));
         if (p === null || !(Number(l.qty) > 0)) { unknown++; bu++; } else { lb += p; bl += p; }
       });
+      if (older(b.bill_date)) { olderBills++; return; } // used for the pounds, never shown
       billsOut.push({ bill_id: b.id, vendor: txt(b.vendor_name), bill_number: txt(b.bill_number), bill_date: txt(b.bill_date).substring(0, 10), pounds: Math.round(bl), unknown_lines: bu });
     });
-    return { bills: billsOut, pounds: lb, unknown: unknown, item_lines: itemLines };
+    return { bills: billsOut, count: gb.length, older: olderBills, pounds: lb, unknown: unknown, item_lines: itemLines };
   }
 
   // 3) loads and the lines that cannot be matched
@@ -92,8 +110,9 @@ export function buildInboundTrucking(o) {
   });
   var loads = order.map(function (k) {
     var L = loadMap[k]; var g = poundsOf(k);
-    L.goods_bills = g.bills; L.first_date = L.lines.map(function (x) { return x.bill_date; }).sort()[0] || '';
-    if (g.bills.length === 0) { L.status = 'no_goods_bill'; L.pounds = null; L.why = 'no supplier bill carries load number ' + k + ' as its other reference'; }
+    L.goods_bills = g.bills; L.older_goods_bills = g.older; L.first_date = L.lines.map(function (x) { return x.bill_date; }).sort()[0] || '';
+    if (sharedLoad[k]) { L.status = 'shared_goods_bill'; L.pounds = null; L.why = 'a supplier bill names this load together with another load, so its pounds cannot be split between them'; }
+    else if (g.count === 0) { L.status = 'no_goods_bill'; L.pounds = null; L.why = 'no supplier bill carries load number ' + k + ' as its other reference'; }
     else if (g.unknown > 0 || g.item_lines === 0 || !(g.pounds > 0)) { L.status = 'pounds_unknown'; L.pounds = null; L.why = g.item_lines === 0 ? 'the supplier bill has no goods lines' : g.unknown + ' goods line(s) have no unit or quantity that can be turned into pounds'; }
     else { L.status = 'matched'; L.pounds = Math.round(g.pounds); L.per_lb = L.freight_cents / 100 / L.pounds; L.why = ''; }
     return L;
@@ -113,9 +132,10 @@ export function buildInboundTrucking(o) {
     totals: {
       all: all, regular: sum(matched.filter(function (L) { return !L.bonded; })), bonded: sum(matched.filter(function (L) { return L.bonded; })),
       open_loads: open.length, open_cents: total(open), unmatched_cents: total(unmatched), not_counted_cents: total(notCounted),
+      not_counted_outside_cents: total(notCounted.filter(function (f) { return !f.replacement_in_report; })),
       tracked_cents: all.freight_cents + total(open) + total(unmatched)
     },
     standard_per_lb: INBOUND_ALLOWANCE_PER_LB, standard_cents: standardCents, difference_cents: all.freight_cents - standardCents,
-    used_in_profit: 'standard', from: from, to: to
+    used_in_profit: 'standard', from: from, to: to, floor: floor || null
   };
 }

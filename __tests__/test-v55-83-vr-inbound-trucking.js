@@ -68,8 +68,40 @@ check('the yard weight comes from the weight table in use (3 lb here), headliner
 var html = RS.renderToStaticMarkup(React.createElement(View.default, { report: r, yardPounds: 2.5 }));
 check('the screen says in plain words that this is tracking only and profit keeps the standard $0.02', html.indexOf('Tracking only. Goods profit still uses the standard $0.02 per pound') > 0 && html.indexOf('until you ask for the switch') > 0);
 check('the screen shows the real rate, the three groups and what is not in the average', html.indexOf('$0.0430') > 0 && html.indexOf('Regular loads') > 0 && html.indexOf('Bonded loads') > 0 && html.indexOf('2 load(s) without pounds') > 0 && html.indexOf('3 line(s) without a load number') > 0);
-check('every load is a row with its status; unmatched lines carry how to fix them', html.indexOf('80000003') > 0 && html.indexOf('no goods bill found') > 0 && html.indexOf('pounds not known') > 0 && html.indexOf('add the 8-digit load number to the line') > 0 && html.indexOf('Entered twice, counted once') > 0);
+check('every load is a row with its status; unmatched lines carry how to fix them', html.indexOf('80000003') > 0 && html.indexOf('no goods bill found') > 0 && html.indexOf('pounds not known') > 0 && html.indexOf('add the 8-digit load number to the line') > 0 && html.indexOf('Kronos invoices also charged on a supplier bill') > 0 && html.indexOf('counted once in this report, through Supplier One Corp bill T-1') > 0);
 check('loading, error and empty states', RS.renderToStaticMarkup(React.createElement(View.default, { busy: true })).indexOf('Loading the Kronos bills') > 0 && RS.renderToStaticMarkup(React.createElement(View.default, { error: 'boom' })).indexOf('boom') > 0 && RS.renderToStaticMarkup(React.createElement(View.default, { report: T.buildInboundTrucking({ bills: [], lines: [] }) })).indexOf('No Kronos freight with a load number in these dates.') > 0);
+
+// ── Codex 20 Nov 06:15 — the three reproductions, executed
+function B(id, vendor, num, date, type, ref) { return { id: id, vendor_name: vendor, bill_number: num, bill_date: date, bill_type: type, record_status: 'active', deleted_at: null, other_reference: ref || null }; }
+function Ln(id, bill, kind, desc, qty, unit, amount) { return { id: id, bill_id: bill, line_kind: kind, description: desc, qty: qty, unit: unit, amount: amount }; }
+// P1 — one supplier bill naming two loads is never given to both in full
+var m2 = T.buildInboundTrucking({ bills: [B(1, 'Sup', 'T', '2026-11-05', 'trucking'), B(2, 'Sup', 'G', '2026-11-01', 'supplier', '80221111 / 80221112'), B(3, 'Sup', 'G3', '2026-11-01', 'supplier', '80221113 80221113')],
+  lines: [Ln(1, 1, 'charge', 'Freight Kronos - 80221111', 1, null, 100), Ln(2, 1, 'charge', 'Freight Kronos - 80221112', 1, null, 100), Ln(3, 2, 'item', 'Paper', 100, 'LBS', 10), Ln(4, 1, 'charge', 'Freight Kronos - 80221113', 1, null, 50), Ln(5, 3, 'item', 'Paper', 500, 'LBS', 10)] });
+check('Codex P1: a 100-lb supplier bill naming two loads gives NEITHER load its pounds — both are unresolved and out of the average (it was 200 lb at $1)', m2.loads.filter(function (x) { return x.status === 'shared_goods_bill'; }).length === 2 && m2.loads.filter(function (x) { return x.status === 'shared_goods_bill'; }).every(function (x) { return x.pounds === null; }) && m2.totals.open_cents === 20000 && m2.totals.all.pounds === 500 && m2.totals.all.freight_cents === 5000, m2.totals);
+check('…and the same load number written twice on one bill is one load, counted once (500 lb, not 1,000)', m2.loads.filter(function (x) { return x.load === '80221113'; })[0].pounds === 500 && m2.loads.filter(function (x) { return x.load === '80221113'; })[0].status === 'matched');
+check('…and the screen says what to do about a shared bill', RS.renderToStaticMarkup(React.createElement(View.default, { report: m2 })).indexOf('goods bill shared by two loads') > 0 && View.fixWords({ status: 'shared_goods_bill', load: '1' }).indexOf('split it so each load has its own bill') === 0);
+// P2 — direct Kronos bill and its supplier re-bill in different periods
+var xb = [B(1, 'Kronos Logistics', 'KLNX162', '2026-11-10', 'trucking'), B(2, 'Sup', 'T9', '2026-12-01', 'trucking'), B(3, 'Sup', 'G9', '2026-11-02', 'supplier', '80330001')];
+var xl = [Ln(1, 1, 'charge', 'Line haul 80330001', 1, null, 100), Ln(2, 2, 'charge', 'Freight Kronos Invoice # KLNX162 - 80330001', 1, null, 110), Ln(3, 3, 'item', 'Paper', 1000, 'LBS', 10)];
+var nov = T.buildInboundTrucking({ bills: xb, lines: xl, from: '2026-11-01', to: '2026-11-30' });
+var dec = T.buildInboundTrucking({ bills: xb, lines: xl, from: '2026-12-01', to: '2026-12-31' });
+var both = T.buildInboundTrucking({ bills: xb, lines: xl, from: '2026-11-01', to: '2026-12-31' });
+check('Codex P2: November holds only the direct bill — it is NOT called counted: it says the re-bill is dated outside these dates, and its $100 is shown as outside this report', nov.totals.tracked_cents === 0 && nov.not_counted.length === 1 && nov.not_counted[0].replacement_in_report === false && /NOT counted in this report/.test(nov.not_counted[0].why) && /dated outside these dates/.test(nov.not_counted[0].why) && nov.totals.not_counted_outside_cents === 10000, nov.not_counted);
+check('…December (the re-bill’s own date) counts it once, at the supplier’s amount; nothing is double counted across the two months', dec.totals.tracked_cents === 11000 && dec.totals.all.freight_cents === 11000 && dec.not_counted.length === 0 && nov.totals.tracked_cents + dec.totals.tracked_cents === both.totals.tracked_cents);
+check('…both months together: counted once through the re-bill, the direct bill says so, and the different amount ($100 vs $110) is shown', both.totals.tracked_cents === 11000 && both.not_counted.length === 1 && both.not_counted[0].replacement_in_report === true && /counted once in this report/.test(both.not_counted[0].why) && both.not_counted[0].amount_differs === true && both.not_counted[0].replacement_cents === 11000 && both.totals.not_counted_outside_cents === 0);
+var rep = T.buildInboundTrucking({ bills: xb.concat([B(4, 'Sup', 'T10', '2026-12-05', 'trucking')]), lines: xl.concat([Ln(9, 4, 'charge', 'Freight Kronos Invoice # KLNX162 (part 2) - 80330001', 1, null, 40)]), from: '2026-11-01', to: '2026-12-31' });
+check('…a part re-bill on a second supplier bill: both re-billed lines count ($150 on the load), the direct bill still once', rep.totals.tracked_cents === 15000 && rep.not_counted.length === 1 && rep.not_counted[0].replacement_cents === 15000 && rep.loads[0].lines.length === 2);
+check('…the outside-period money is said on the screen', RS.renderToStaticMarkup(React.createElement(View.default, { report: nov })).indexOf('is not in this report’s figures at all') > 0);
+// P1 — the history window
+var wb = [B(1, 'Sup', 'T-NOV', '2026-11-05', 'trucking'), B(2, 'OldVendor Secret', 'OLD-777', '2025-01-01', 'supplier', '80440001'), B(3, 'Sup', 'G-NOV', '2026-11-02', 'supplier', '80440001'), B(4, 'NoDate Vendor', 'ND-1', null, 'supplier', '80440001'), B(5, 'Sup', 'T-OLD', '2025-02-01', 'trucking'), B(6, 'Kronos Logistics', 'KLNX500', '2026-11-06', 'trucking'), B(7, 'OldRebiller Secret', 'RB-OLD', '2025-03-01', 'trucking')];
+var wl = [Ln(1, 1, 'charge', 'Freight Kronos - 80440001', 1, null, 300), Ln(2, 2, 'item', 'Paper', 100, 'LBS', 1), Ln(3, 3, 'item', 'Paper', 900, 'LBS', 1), Ln(4, 4, 'item', 'Paper', 77, 'LBS', 1), Ln(5, 5, 'charge', 'Freight Kronos - 80449999', 1, null, 999), Ln(6, 6, 'charge', 'haul', 1, null, 60), Ln(7, 7, 'charge', 'Freight Kronos Invoice # KLNX500', 1, null, 60)];
+var emp = T.buildInboundTrucking({ bills: wb, lines: wl, floor: '2026-06-01', from: '2025-01-01' }); var empS = JSON.stringify(emp);
+check('Codex P1: with a floor, an older supplier bill and one with no date still supply POUNDS (1,077), but no id, number, vendor, date or quantity of theirs is in the answer', emp.loads.length === 1 && emp.loads[0].pounds === 1077 && emp.loads[0].goods_bills.length === 1 && emp.loads[0].goods_bills[0].bill_number === 'G-NOV' && emp.loads[0].older_goods_bills === 2 && empS.indexOf('OLD-777') < 0 && empS.indexOf('OldVendor') < 0 && empS.indexOf('2025-01-01') < 0 && empS.indexOf('ND-1') < 0 && empS.indexOf('NoDate') < 0, emp.loads[0]);
+check('…freight from before the floor is not there at all, even when an earlier From date is asked', emp.from === '2026-06-01' && empS.indexOf('T-OLD') < 0 && empS.indexOf('80449999') < 0 && empS.indexOf('99900') < 0);
+check('…a duplicate explained by a re-bill from before the floor does not name that bill', emp.not_counted.length === 1 && empS.indexOf('RB-OLD') < 0 && empS.indexOf('OldRebiller') < 0 && /a supplier bill/.test(emp.not_counted[0].why));
+var sup = T.buildInboundTrucking({ bills: wb, lines: wl });
+check('…the super admin (no floor) sees every bill behind the same 1,077 lb', sup.loads.filter(function (x) { return x.load === '80440001'; })[0].goods_bills.length === 3 && sup.loads.filter(function (x) { return x.load === '80440001'; })[0].older_goods_bills === 0 && JSON.stringify(sup).indexOf('OLD-777') > 0 && sup.loads.length === 2);
+check('…the screen says older bills are counted but not shown', (function () { var st = RS.renderToStaticMarkup(React.createElement(View.default, { report: emp })); return st.indexOf('OLD-777') < 0; })() && fs.readFileSync(path.join(root, 'src/components/InboundTruckingView.jsx'), 'utf8').indexOf('older bill(s) not shown (before the dates you may see); their pounds are counted') > 0);
 
 // wiring
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/profitability/route.js'), 'utf8');
@@ -82,5 +114,35 @@ check('the route keeps the API style (no arrow functions, no template literals, 
 check('the screen imports what it uses and has the tab in the Shipping group', /import InboundTruckingView from '\.\/InboundTruckingView';/.test(tab) && tab.indexOf("['inbound', '🚚 Inbound trucking (Kronos)']") > 0 && tab.indexOf("{view === 'inbound' && <InboundTruckingView") > 0 && tab.indexOf("action: 'inbound_trucking'") > 0 && tab.indexOf('if (gen !== inbGen.current) { return; }') > 0);
 check('goods profit is untouched: the tracker is not imported by the profit engine', fs.readFileSync(path.join(root, 'src/lib/profitability.js'), 'utf8').indexOf('inbound-trucking') < 0 && fs.readFileSync(path.join(root, 'src/lib/profitability-assemble.js'), 'utf8').indexOf('inbound-trucking') < 0 && P.INBOUND_ALLOWANCE_PER_LB === 0.02 && lib.indexOf('INBOUND_ALLOWANCE_PER_LB') > 0);
 
-console.log('\n' + pass + ' passed, ' + failN + ' failed');
-if (failN > 0) { process.exit(1); }
+// ── the REAL route, run (Codex: a route-response test, not a source pin)
+var Module = require('module');
+function stub(file, exportsObj) { var id = require.resolve(file); var m = new Module(id); m.filename = id; m.loaded = true; m.exports = exportsObj; require.cache[id] = m; }
+var world = { who: { userId: 'u1' }, perms: { 'pnl.view': true }, floor: '2026-06-01', tables: { vendor_bills: wb, vendor_bill_lines: wl, pl_unit_factors: [{ unit: 'yd', pounds_per_unit: 2.5 }] }, writes: 0 };
+function chain(table) { var q = {};
+  ['select', 'order', 'eq'].forEach(function (k) { q[k] = function () { return q; }; });
+  ['insert', 'update', 'upsert', 'delete'].forEach(function (k) { q[k] = function () { world.writes += 1; return q; }; });
+  q.range = function (a, b2) { return Promise.resolve({ data: (world.tables[table] || []).slice(a, b2 + 1), error: null }); };
+  q.maybeSingle = function () { return Promise.resolve({ data: (world.tables[table] || [])[0] || null, error: null }); };
+  q.then = function (ok, no) { return Promise.resolve({ data: world.tables[table] || [], error: null }).then(ok, no); };
+  return q; }
+stub(path.join(root, 'node_modules/next/server.js'), { NextResponse: { json: function (body, init) { return { status: (init && init.status) || 200, body: body }; } } });
+stub('@supabase/supabase-js', { createClient: function () { return { from: chain, rpc: function () { world.writes += 1; return Promise.resolve({}); } }; } });
+stub(path.join(root, 'src/lib/verified-caller.js'), { verifiedCaller: async function () { return world.who; } });
+stub(path.join(root, 'src/lib/server-permissions.js'), { assertPermission: async function (db, userId, key) { return world.perms[key] ? { ok: true, ctx: {} } : { ok: false }; } });
+stub(path.join(root, 'src/lib/visibility-window-server.js'), { windowFloorFor: async function () { return world.floorError ? { error: world.floorError } : { floor: world.floor }; }, clampFrom: function (d, f) { return !f ? d : (!d || d < f ? f : d); } });
+var ROUTE = require(path.join(root, 'src/app/api/accounting/profitability/route.js'));
+function post(body) { return ROUTE.POST({ json: async function () { return body; }, headers: { get: function () { return 'Bearer x'; } } }); }
+(async function () {
+  var e1 = await post({ user_id: 'u1', action: 'inbound_trucking', date_from: '2025-01-01' }); var e1s = JSON.stringify(e1.body);
+  check('ROUTE, employee with a floor of 1 June 2026 asking from 2025: 200, the load keeps its 1,077 lb, and NOTHING of the 2025 bill, the undated bill, the old freight or the old re-biller is in the response', e1.status === 200 && e1.body.ok === true && e1.body.loads.length === 1 && e1.body.loads[0].pounds === 1077 && e1.body.loads[0].older_goods_bills === 2 && e1.body.from === '2026-06-01' && e1s.indexOf('OLD-777') < 0 && e1s.indexOf('OldVendor') < 0 && e1s.indexOf('ND-1') < 0 && e1s.indexOf('NoDate') < 0 && e1s.indexOf('T-OLD') < 0 && e1s.indexOf('RB-OLD') < 0 && e1s.indexOf('OldRebiller') < 0 && e1s.indexOf('2025-') < 0, e1.body);
+  world.floor = null; var e2 = await post({ user_id: 'u1', action: 'inbound_trucking' });
+  check('ROUTE, super admin (no floor): all history — both loads and all three supplier bills', e2.status === 200 && e2.body.loads.length === 2 && JSON.stringify(e2.body).indexOf('OLD-777') > 0 && e2.body.floor === null);
+  world.floor = '2026-06-01'; world.floorError = 'window not readable'; var e3 = await post({ user_id: 'u1', action: 'inbound_trucking' });
+  check('ROUTE: when the window cannot be read the answer is refused (503), never all history', e3.status === 503 && !e3.body.loads);
+  world.floorError = null; world.perms = {}; var e4 = await post({ user_id: 'u1', action: 'inbound_trucking' });
+  check('ROUTE: without P&L: View → 403 and no data', e4.status === 403 && !e4.body.loads);
+  world.perms = { 'pnl.view': true }; var e5 = await post({ user_id: 'u1', action: 'inbound_trucking', date_to: 'yesterday' });
+  check('ROUTE: a date that is not a date is refused; and nothing was ever written', e5.status === 400 && world.writes === 0);
+  console.log('\n' + pass + ' passed, ' + failN + ' failed');
+  if (failN > 0) { process.exit(1); }
+})().catch(function (e) { console.log('  ✗ FAIL: route run threw ' + (e && e.stack || e)); process.exit(1); });

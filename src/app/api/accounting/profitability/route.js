@@ -88,7 +88,7 @@ export async function POST(req) {
       var itFr = await db.from('pl_unit_factors').select('unit, pounds_per_unit');
       if (itFr.error && !missingTable(itFr.error.message)) { return bad(itFr.error.message, 500); }
       (itFr.data || []).forEach(function (f) { var u = unitKey(f.unit); if (u && Number(f.pounds_per_unit) > 0) { itF.units[u] = Number(f.pounds_per_unit); } });
-      var itOut = buildInboundTrucking({ bills: itBills, lines: itLines, factors: itF, from: body.date_from || '', to: body.date_to || '' });
+      var itOut = buildInboundTrucking({ bills: itBills, lines: itLines, factors: itF, from: body.date_from || '', to: body.date_to || '', floor: vwin.floor || '' }); // Codex 06:15 P1 — the floor is passed on its own: older supplier bills only supply pounds, nothing that identifies them is returned
       return NextResponse.json(Object.assign({ ok: true, window_floor: vwin.floor, yard_pounds: itF.units.yd, api_build_marker: API_BUILD_MARKER }, itOut));
     }
 
