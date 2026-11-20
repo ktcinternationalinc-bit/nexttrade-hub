@@ -44,7 +44,7 @@ var pass = 0, failN = 0;
 function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra || '').substring(0, 500))); }
 var aiReply = '';
 var realFetch = global.fetch;
-global.fetch = function (url) { if (/anthropic/.test(String(url))) { return Promise.resolve({ json: function () { return Promise.resolve({ content: [{ type: 'text', text: aiReply }] }); } }); } return realFetch.apply(this, arguments); };
+global.fetch = function (url) { if (/anthropic/.test(String(url))) { return Promise.resolve({ json: function () { return Promise.resolve({ content: [{ type: 'text', text: require('./helpers/with-one-page.js')(aiReply) /* VV: the reader now also answers which page is the bill */ }] }); } }); } return realFetch.apply(this, arguments); };
 var CK = { matches_records: true, goods_received: true, charges_accurate: true };
 console.log('RP — bill type + direction on import; both required to validate');
 (async function () {

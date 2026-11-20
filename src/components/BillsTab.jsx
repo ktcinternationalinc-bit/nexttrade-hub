@@ -9,6 +9,9 @@ import { supabase } from '../lib/supabase';
 import { hubFetch } from '../lib/hub-fetch'; // v55.83-TO — verified sign-in + one id per click for money actions
 import { US_WAVE_BUSINESS_ID } from '../lib/business-of';
 import { BILL_TYPES, BILL_TYPE_LABEL } from '../lib/bill-extract';
+import { importPagesState, pickedPages, problemsBesidesPages, notesWithReleaseSource, importSaveGate } from '../lib/bill-pages-ui'; // v55.83-VV
+import BillPagesBox from './BillPagesBox'; // v55.83-VV
+import { pdfPageCountFromBase64 } from '../lib/pdf-page-count-browser'; // v55.83-VV — real page count of an imported PDF
 import BillLinesPanel, { PriceCheckBox } from './BillLinesPanel'; // v55.83-RQ
 import PriceRulesPanel from './PriceRulesPanel';
 import RepeatingBillsPanel from './RepeatingBillsPanel'; // v55.83-TV
@@ -49,6 +52,7 @@ export default function BillsTab(props) {
   var s8 = useState(null); var importFile = s8[0]; var setImportFile = s8[1]; // {file, base64, media_type}
   var s9 = useState(false); var reading = s9[0]; var setReading = s9[1];
   var s10 = useState([]); var importNotes = s10[0]; var setImportNotes = s10[1];
+  var sVM = useState(null); var importPages = sVM[0]; var setImportPages = sVM[1]; // v55.83-VV — { pages (server answer), count, pick: { pageNo: true }, review }
   var s11 = useState(null); var validating = s11[0]; var setValidating = s11[1]; // {bill, checks, notes}
   var s12 = useState(null); var disputing = s12[0]; var setDisputing = s12[1];   // {bill, reason, follow_up_date}
   var s13 = useState(null); var dueThru = s13[0]; var setDueThru = s13[1];       // result of due_through
@@ -218,14 +222,16 @@ export default function BillsTab(props) {
           var rq = new FileReader();
           rq.onload = function () {
             var b64q = String(rq.result).split(',')[1] || '';
-            api({ action: 'ingest_bill_file', filename: f1.name, media_type: f1.type, file_base64: b64q }).then(function (jq) {
+            // v55.83-VV — the real page count goes along (best effort) so the reader's page list can be compared with it
+            (f1.type === 'application/pdf' ? pdfPageCountFromBase64(b64q) : Promise.resolve(null)).then(function (nq) { return api({ action: 'ingest_bill_file', filename: f1.name, media_type: f1.type, file_base64: b64q, page_count: nq || undefined }); }).then(function (jq) {
               if (jq && jq.created) {
                 madeQ++;
+                if (jq.pages && jq.pages.words) { notesQ.push('   ' + f1.name + ' — ' + jq.pages.words); }
                 notesQ.push('✅ ' + (jq.vendor || f1.name) + (jq.amount ? ' — $' + Number(jq.amount).toLocaleString('en-US', { minimumFractionDigits: 2 }) : '') + ' → PENDING VALIDATION' + (jq.duplicate_warning ? ' · ' + jq.duplicate_warning : '') + ((jq.reader_flags || []).length ? ' · reader flags: ' + jq.reader_flags.length : '') + (jq.lines_read ? ' · ' + jq.lines_read + ' line(s) read' : ' · no lines read') +
                   (jq.price_check === 'flagged' ? ' · ⚠ PRICE CHECK FLAGGED' : jq.price_check === 'ok' ? ' · ✅ prices match the rules' : jq.price_check === 'no_rules' ? ' · no price rule applies yet' : ''));
                 (jq.price_flags || []).forEach(function (ft) { notesQ.push('      ⚠ ' + ft); });
               } else if (jq && jq.skipped) {
-                notesQ.push('⏭ ' + f1.name + ' — skipped: ' + (jq.reason || '')); 
+                notesQ.push((jq.pages_need_review ? '🚩 ' : '⏭ ') + f1.name + ' — ' + (jq.pages_need_review ? '' : 'skipped: ') + (jq.reason || '')); 
               } else {
                 notesQ.push('✗ ' + f1.name + ' — ' + ((jq && jq.error) || 'failed'));
               }
@@ -251,12 +257,29 @@ export default function BillsTab(props) {
     var rd = new FileReader();
     rd.onload = function () {
       var b64 = String(rd.result).split(',')[1] || '';
-      setReading(true); setImportNotes(['📄 Reading "' + f.name + '" (' + Math.round(f.size / 1024) + ' KB) — the AI is extracting vendor, number, dates and amount…']);
+      setReading(true); setImportPages(null); setImportNotes(['📄 Reading "' + f.name + '" (' + Math.round(f.size / 1024) + ' KB) — the AI is extracting vendor, number, dates and amount…']);
+      // v55.83-VV — count the PDF's pages here first (best effort), then read
+      (f.type === 'application/pdf' ? pdfPageCountFromBase64(b64) : Promise.resolve(null)).then(function (n) { readImported(f, b64, n, null); });
+    };
+    rd.readAsDataURL(f);
+  }
+  // v55.83-VV — "Use these pages instead": the same file is read again, taking the bill from the ticked pages only
+  function rereadPages() {
+    if (!importFile || !importPages) { return; }
+    var want = pickedPages(importPages);
+    if (!want.length) { toast.error('Tick at least one page.'); return; }
+    setReading(true);
+    readImported(importFile.file, importFile.base64, importFile.page_count || importPages.count || null, want);
+  }
+  function readImported(f, b64, pageCount, forcedPages) {
+    {
       var guard = new Promise(function (res, rej) { setTimeout(function () { rej(new Error('no answer after 75 seconds')); }, 75000); });
-      Promise.race([api({ action: 'extract_bill', file_base64: b64, media_type: f.type }), guard]).then(function (j) {
+      Promise.race([api({ action: 'extract_bill', file_base64: b64, media_type: f.type, page_count: pageCount || undefined, pages: forcedPages || undefined }), guard]).then(function (j) {
         if (j && j.ok && j.draft) {
-          setImportFile({ file: f, base64: b64, media_type: f.type });
-          var notes2 = (j.problems || []).slice();
+          setImportFile({ file: f, base64: b64, media_type: f.type, page_count: pageCount || null });
+          var pgSt = importPagesState(j, pageCount); // confirmed always starts false: every new file and every re-read asks for the tick again
+          setImportPages(pgSt);
+          var notes2 = problemsBesidesPages(j, pgSt); // the page sentence has its own box
           if (!j.draft.category && j.suggested_category) { notes2.push('🧠 Category pre-filled from what you picked for this vendor before — change it if wrong.'); }
           var srt = j.sorted || {};
           notes2.push(srt.bill_type ? 'Type: ' + BILL_TYPE_LABEL[srt.bill_type] + ' (' + SRC_WORDS[srt.bill_type_source] + ').' : 'Type: could not tell from the bill — left blank, it is picked at validation.');
@@ -266,7 +289,7 @@ export default function BillsTab(props) {
             vendor_name: j.draft.vendor_name || '', bill_number: j.draft.bill_number || '',
             bill_date: j.draft.bill_date || TODAY, due_date: j.draft.due_date || '',
             total_amount: j.draft.total_amount || '', category: j.draft.category || j.suggested_category || '',
-            notes: j.draft.notes || '', _imported: true,
+            notes: notesWithReleaseSource(j.draft.notes, j.pages), _imported: true, // VV — where the release came from stays on the bill
             // v55.83-RP — type + release + reference + direction from the import (blank when the bill does not make it clear)
             bill_type: (j.sorted && j.sorted.bill_type) || '', bill_type_source: (j.sorted && j.sorted.bill_type_source) || null,
             release_number: (j.sorted && j.sorted.release_number) || '', other_reference: (j.sorted && j.sorted.other_reference) || '',
@@ -282,9 +305,12 @@ export default function BillsTab(props) {
         toast.error('The reader took too long or the connection dropped (' + ((eR9 && eR9.message) || 'network') + ') — try again. If it keeps happening, send just the invoice page (page 1) instead of the merged PDF.');
         setImportNotes(['✗ Read failed — the request timed out or dropped. Try again (the fix in this build raises the server time limit), or import just page 1.']);
       }).finally(function () { setReading(false); });
-    };
-    rd.readAsDataURL(f);
+    }
   }
+  // v55.83-VV — which pages the bill was taken from, which were left out, and a way to pick other pages
+  var pagesBox = (editing && editing._imported && importPages && importPages.pages) ? <BillPagesBox state={importPages} reading={reading} onReread={rereadPages}
+    onPick={function (pn, on) { var np = Object.assign({}, importPages.pick); np[pn] = on; setImportPages(Object.assign({}, importPages, { pick: np })); }}
+    onConfirm={function (on) { setImportPages(Object.assign({}, importPages, { confirmed: on })); }} /> : null;
 
   if (!canView) {
     return <div className="nt-paper rounded-xl border border-slate-200 p-4 text-sm" style={{ background: '#ffffff', color: '#334155' }}>
@@ -381,6 +407,10 @@ export default function BillsTab(props) {
 
   function saveBill() {
     var d = Object.assign({}, editing || {});
+    // v55.83-VV (Codex 21:08) — pages not confirmed: the person must tick that the fields were checked against the bill itself
+    var pgGate = importSaveGate(d, importPages);
+    if (pgGate.blocked) { toast.error(pgGate.message); return; }
+    d.notes = pgGate.notes;
     setBusy(true);
     var pre = Promise.resolve(null);
     var fileLost = false; // v55.83-SV — a file that did not upload is never silent
@@ -591,6 +621,7 @@ export default function BillsTab(props) {
 
     {editing && !editing.id && <div id="nt-bill-editor" className="rounded-xl p-3 mb-3" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
       <div className="text-xs font-extrabold mb-2" style={{ color: '#1e3a8a' }}>{editing.id ? 'Edit bill' : (editing._imported ? '📷 Imported bill — CHECK every field before saving' : 'New bill')}</div>
+      {pagesBox}
       {editing._imported && importNotes.length > 0 && <div className="text-[11px] rounded-lg p-2 mb-2" style={{ background: '#ffedd5', color: '#431407', border: '1px solid #fdba74' }}>{importNotes.join(' ')}</div>}
       {editing._imported && pricePreview && <PriceCheckBox check={pricePreview} status={pricePreview.status} onRules={function () { setPanel('rules'); }} />}
       {editing._imported && Array.isArray(editing.lines) && editing.lines.length > 0 && <div className="rounded-lg p-2 mb-2" style={{ background: '#ffffff', border: '1px solid #bfdbfe' }}>
