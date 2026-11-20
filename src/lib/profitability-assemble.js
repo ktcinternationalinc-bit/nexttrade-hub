@@ -332,6 +332,9 @@ export function assembleProfitability(d) {
     var relTot = ob0 ? (ob0.actual !== null && ob0.actual !== undefined ? ob0.actual : ob0.estimate) : null;
     c.trucking_cost = null; c.freight_cost = null; c.trucking_kind = pu && pu.trucking ? pu.trucking.kind : null; c.freight_kind = pu && pu.freight ? pu.freight.kind : null;
     c.trucking_from = pu && pu.trucking ? pu.trucking.from : null; c.freight_from = pu && pu.freight ? pu.freight.from : null;
+    // v55.83-VS (Codex 07:00 P1) — a single shipping total typed for the release (older way), not divided into trucking and freight:
+    // the money IS known. The screen must say "not divided", never "missing".
+    c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : null;
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;
       if (pu.trucking) { c.trucking_cost = r2(c.outbound_cost * tAmt / relTot); }

@@ -441,12 +441,13 @@ export default function ProfitabilityTab(props) {
           </span>;
         }
         if (t.action === 'open_invoice') { return <span>{t.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(t.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}<button onClick={function (e) { e.stopPropagation(); goFix('invoice', t); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></span>; }
+        if (t.action === 'containers') { return <button onClick={function (e) { e.stopPropagation(); goFix('containers', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#075985', color: '#ffffff' }}>Open Containers →</button>; }
         return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>;
       }
       var openBox = ot.tasks.length === 0 ? null : <div className="mb-2 rounded-lg" style={{ background: '#ffffff', border: '1px solid #f59e0b' }}>
         <div className="px-2 py-1.5 font-extrabold text-[12px]" style={{ background: '#fef3c7', color: '#92400e' }}>{'What remains open in ' + r.label + ': ' + ot.tasks.length + ' thing(s) to fix, covering ' + ot.lines + ' sale line(s). Fix one and it leaves this list.'}</div>
         {ot.tasks.slice(0, 100).map(function (t, i) { return <div key={t.key} className="px-2 py-1.5 text-[11px] flex gap-2 items-start flex-wrap" style={{ borderTop: '1px solid ' + LINE, color: INK }}>
-          <span style={{ flex: '1 1 420px' }}><b>{(i + 1) + '. ' + t.title + '.'}</b>{' ' + t.how}<span style={{ color: SUB }}>{' — ' + t.lines + ' line(s), sold for $' + fmt(t.sold_for) + (t.invoices.length ? ' · invoice ' + t.invoices.slice(0, 6).map(function (x) { return x.invoice; }).join(', ') + (t.invoices.length > 6 ? ' +' + (t.invoices.length - 6) + ' more' : '') : '')}</span></span>
+          <span style={{ flex: '1 1 420px' }}><b>{(i + 1) + '. ' + t.title + (t.kind === 'unsplit_total' ? ' ($' + fmt(t.amount) + ')' : '') + '.'}</b>{' ' + t.how}<span style={{ color: SUB }}>{' — ' + t.lines + ' line(s), sold for $' + fmt(t.sold_for) + (t.invoices.length ? ' · invoice ' + t.invoices.slice(0, 6).map(function (x) { return x.invoice; }).join(', ') + (t.invoices.length > 6 ? ' +' + (t.invoices.length - 6) + ' more' : '') : '')}</span></span>
           <span>{taskAction(t)}</span>
         </div>; })}
         {ot.tasks.length > 100 && <div className="px-2 py-1 text-[10px]" style={{ color: SUB }}>{'Showing the first 100 of ' + ot.tasks.length + '.'}</div>}

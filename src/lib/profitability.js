@@ -331,7 +331,7 @@ export function buildCells(input) {
         if (ok) { rels.forEach(function (k) { var v = Number(rp[k]) || 0; if (v > 0) { parts.push({ rel: k, lb: v }); sum += v; } }); }
         if (!ok || !parts.length || (gl.lb !== null && Math.abs(sum - gl.lb) > 0.5)) {
           flag('release_split_missing', inv, { line: gl.ln.description, pounds: gl.lb, assigned: sum });
-          parts = [{ rel: '', lb: gl.lb }];
+          parts = [{ rel: '', lb: gl.lb, split_missing: true }]; // v55.83-VS — the cell says WHY it has no release: the invoice has several, not none
         }
       }
       var amtParts = allocate(gl.amt, parts.map(function (p) { return p.lb === null ? 1 : p.lb; }));
@@ -341,6 +341,7 @@ export function buildCells(input) {
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
           unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, headliner: gl.headliner, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
         if (p.lb === null) { c.flags.push('unit_unknown'); }
+        if (p.split_missing) { c.flags.push('release_split_missing'); c.releases_on_invoice = rels.length; }
         cells.push(c); mine.push(c);
       });
     });
