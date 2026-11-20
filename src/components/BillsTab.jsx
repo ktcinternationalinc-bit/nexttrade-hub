@@ -345,7 +345,7 @@ export default function BillsTab(props) {
   // v55.83-VU — search, then sort (one tested place: src/lib/bill-groups.js), then group by vendor
   var beforeSearch = shown.length;
   shown = sortBills(searchBills(shown, billQ, catLabelOf), sortBy, sortDir);
-  var vendorGroups = groupByVendor(shown, TODAY);
+  var vendorGroups = groupByVendor(shown, TODAY, sortBy === 'vendor' ? sortDir : 'asc'); // v55.83-WK — Vendor ▼ lists the groups Z → A too
   var searching = String(billQ || '').trim() !== '';
   function vendorOpen(g) { return searching || vendorGroups.length === 1 || openVendors[g.key] === true; }
   function toggleVendor(g) { var o = Object.assign({}, openVendors); if (o[g.key]) { delete o[g.key]; } else { o[g.key] = true; } setOpenVendors(o); }

@@ -477,11 +477,17 @@ export function summarize(cells, keyFn, labelFn) {
   (cells || []).forEach(function (c) {
     var k = keyFn(c);
     var row = map[k];
-    if (!row) { row = map[k] = { key: k, label: labelFn ? labelFn(c) : k, pounds: 0, yards: 0, has_kept: false, has_converted: false, cells: 0, complete: true, weight_missing: false, unknown: {}, invoices: {}, releases: {}, names: {}, estimate: false }; SUM_FIELDS.forEach(function (f) { row[f] = 0; }); row._c = {}; SUM_FIELDS.forEach(function (f) { row._c[f] = 0; }); order.push(k); }
+    if (!row) { row = map[k] = { key: k, label: labelFn ? labelFn(c) : k, pounds: 0, yards: 0, has_kept: false, has_converted: false, cells: 0, complete: true, weight_missing: false, unknown: {}, invoices: {}, releases: {}, names: {}, estimate: false }; SUM_FIELDS.forEach(function (f) { row[f] = 0; }); row._lb = { rev: 0, cost: 0, comm: 0, inb: 0, unk: {}, wm: false }; row._yd = { rev: 0, cost: 0, comm: 0, inb: 0, unk: {}, wm: false }; row._c = {}; SUM_FIELDS.forEach(function (f) { row._c[f] = 0; }); order.push(k); }
     // v55.83-VX — goods kept in yards are counted in YARDS, never in the Pounds total
     row.cells++; if (c.keep_unit === true) { row.has_kept = true; if (c.sold_yards > 0) { row.yards += c.sold_yards; } else { row.weight_missing = true; } }
     else { row.has_converted = true; if (c.pounds !== null && c.pounds > 0) { row.pounds += c.pounds; } else { row.weight_missing = true; } }
     SUM_FIELDS.forEach(function (f) { if (c[f] === null || c[f] === undefined) { row.unknown[f] = true; } else { row._c[f] += cents(c[f]); } });
+    // v55.83-WK (Max, Nov 20: "there's some things with average cost and it's by pound. So what are we going to do when there's
+    // yards?") — the per-unit averages are worked out SEPARATELY for the converted (pound) lines and the kept-in-yards lines of a
+    // row, so a row with both shows a per-pound average for its pound goods and a per-yard average for its yard goods — never one blended figure.
+    var sub = c.keep_unit === true ? row._yd : row._lb;
+    if (c.keep_unit === true ? !(c.sold_yards > 0) : !(c.pounds !== null && c.pounds > 0)) { sub.wm = true; }
+    [['rev', 'goods_revenue'], ['cost', 'base_cost'], ['comm', 'commission'], ['inb', 'inbound_allowance']].forEach(function (x) { if (c[x[1]] === null || c[x[1]] === undefined) { sub.unk[x[1]] = true; } else { sub[x[0]] += cents(c[x[1]]); } });
     if (!c.complete) { row.complete = false; }
     if (c.outbound_kind === 'estimate') { row.estimate = true; }
     row.invoices[c.invoice_id] = true; if (c.release) { row.releases[c.release] = true; }
@@ -494,17 +500,19 @@ export function summarize(cells, keyFn, labelFn) {
     row.pounds = Math.round(row.pounds * 1000) / 1000; row.yards = Math.round(row.yards * 1000) / 1000;
     // v55.83-VX — a per-pound average is shown only for a row made of converted goods alone; a row of kept-in-yards goods alone gets
     // per-yard averages; a row that mixes the two gets NO per-unit average (its dollar totals still add up)
-    row.unit_mix = row.has_kept && row.has_converted ? 'mixed' : (row.has_kept ? 'yd' : 'lb'); var lbOnly = row.unit_mix === 'lb'; var ydOnly = row.unit_mix === 'yd' && row.yards > 0 && !row.weight_missing;
-    row.avg_goods_price_per_yd = ydOnly && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.yards) : null;
-    row.avg_base_cost_per_yd = ydOnly && !row.unknown.base_cost ? r4(row.base_cost / row.yards) : null;
-    row.avg_all_cost_per_yd = ydOnly && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.yards) : null;
+    row.unit_mix = row.has_kept && row.has_converted ? 'mixed' : (row.has_kept ? 'yd' : 'lb');
+    var L = row._lb; var Y = row._yd; delete row._lb; delete row._yd;
+    var lbOk = row.has_converted && row.pounds > 0 && !L.wm; var ydOk = row.has_kept && row.yards > 0 && !Y.wm;
+    row.avg_goods_price_per_yd = ydOk && !Y.unk.goods_revenue ? r4(Y.rev / 100 / row.yards) : null;
+    row.avg_base_cost_per_yd = ydOk && !Y.unk.base_cost ? r4(Y.cost / 100 / row.yards) : null;
+    row.avg_all_cost_per_yd = ydOk && !Y.unk.base_cost && !Y.unk.commission && !Y.unk.inbound_allowance ? r4((Y.cost + Y.comm + Y.inb) / 100 / row.yards) : null;
     // an average needs ALL of the revenue AND all of the pounds behind it; part of either = no average shown
-    row.avg_goods_price_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.pounds) : null;
-    row.avg_base_cost_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost ? r4(row.base_cost / row.pounds) : null;
+    row.avg_goods_price_per_lb = lbOk && !L.unk.goods_revenue ? r4(L.rev / 100 / row.pounds) : null;
+    row.avg_base_cost_per_lb = lbOk && !L.unk.base_cost ? r4(L.cost / 100 / row.pounds) : null;
     row.pounds_incomplete = row.weight_missing;
     // v55.83-TC (Max, Nov 16: "Avg Cost All / LB - adding the commission and inbound allowance") — goods cost + commission + inbound
     // allowance, ÷ pounds. Only when all three are fully known and every weight is there; otherwise no average is shown.
-    row.avg_all_cost_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.pounds) : null;
+    row.avg_all_cost_per_lb = lbOk && !L.unk.base_cost && !L.unk.commission && !L.unk.inbound_allowance ? r4((L.cost + L.comm + L.inb) / 100 / row.pounds) : null;
     // v55.83-TK (Max, Nov 17: "the total cost is everything except for the shipping ... there should be a transportation profit and then
     // the goods profit") — total cost = goods cost + commission + inbound allowance + brokerage + bonded (NOT outbound shipping).
     // Goods profit = goods revenue − total cost. Transport profit = transport charged − outbound shipping. Profit = the two together.

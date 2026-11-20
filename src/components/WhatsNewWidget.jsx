@@ -33,6 +33,18 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WK',
+    date: '2026-11-20',
+    title: 'Profitability: averages per pound and per yard side by side; Bills vendor groups follow the sort',
+    items: [
+      { text: '**Averages when a row has both pound goods and yard goods.** The average price, average cost and average all-in cost are now worked out separately: per pound for the goods counted in pounds, per yard for the goods kept in yards. A row with both shows the two figures one under the other. They are never blended into one number.' },
+      { text: 'P&L by period does the same for average profit: per pound on the pound goods, per yard on the yard goods.' },
+      { text: 'A row with only pound goods, or only yard goods, shows exactly what it showed before.' },
+      { text: '**Bills:** when the list is grouped by vendor and you sort by Vendor in reverse, the vendor groups now run Z to A as well.' },
+      { superAdminOnly: true, text: 'Technical: profitability.js summarize keeps sub-sums for converted and kept-in-yards cells and derives avg_*_per_lb and avg_*_per_yd from each; pnl-period rows carry gp_lb and gp_yd; bill-groups.js groupByVendor takes a direction. No server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WJ',
     date: '2026-11-20',
     title: 'P&L by period: the fix buttons take you to the exact place',

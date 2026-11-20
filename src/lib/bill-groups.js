@@ -56,7 +56,8 @@ export function sortBills(bills, sortBy, dir) {
 
 // Groups in A → Z order of the vendor; each keeps its bills in the order given (so sort first, then group).
 // today = 'YYYY-MM-DD' for the late count. Totals count ACTIVE bills only (a voided bill is listed but adds nothing).
-export function groupByVendor(bills, today) {
+// dir = 'desc' lists the vendors Z → A (used when the list is sorted by vendor, last → first); anything else A → Z.
+export function groupByVendor(bills, today, dir) {
   var by = {}; var order = [];
   (bills || []).forEach(function (b) {
     var k = vendorKey(b.vendor_name);
@@ -69,5 +70,6 @@ export function groupByVendor(bills, today) {
     if (isOpen && b.due_date && (!g.earliest_due || b.due_date < g.earliest_due)) { g.earliest_due = b.due_date; }
     if (b.dup_flag) { g.duplicates += 1; }
   });
-  return order.map(function (k) { return by[k]; }).sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+  var d = dir === 'desc' ? -1 : 1;
+  return order.map(function (k) { return by[k]; }).sort(function (a, b) { return d * (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0)); });
 }

@@ -21,13 +21,14 @@ export function bucketOf(d, g) {
 // new: combined_cost = the shipping amount kept as one combined figure (not divided into trucking / freight), so that
 // transport charged − trucking − freight − combined = transport profit holds on the numbers shown.
 export var PERIOD_FIELDS = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
-export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, yards: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
+export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, yards: 0, gp_lb: 0, gp_yd: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
     // Codex 12:11 — what the two profit figures were ACTUALLY made of: only the lines whose profit is known (`used`), and the
     // revenue of the lines left out because a cost is not known yet (`excl`), per side — never one combined figure for both
     used: { goods_lines: 0, goods_revenue: 0, goods_cost: 0, transport_lines: 0, transport_revenue: 0, trucking: 0, freight: 0, other: 0, combined: 0 }, excl: { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 } };
   PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
 export function addPeriodCell(row, c) {
   row.lines++; if (c.keep_unit === true) { row.yards += Number(c.sold_yards) || 0; } else { row.pounds += Number(c.pounds) || 0; } // v55.83-VX — kept-in-yards goods are counted in yards, never as pounds
+  if (known(c.goods_profit)) { if (c.keep_unit === true) { row.gp_yd += Math.round(Number(c.goods_profit) * 100); } else { row.gp_lb += Math.round(Number(c.goods_profit) * 100); } } // v55.83-WK — goods profit of the pound lines and of the yard lines, apart
   var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
   var v = { goods_revenue: c.goods_revenue, goods_cost: gc.some(function (x) { return x === null || x === undefined; }) ? null : gc.reduce(function (s0, x) { return s0 + Number(x); }, 0), goods_profit: c.goods_profit,
     transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
