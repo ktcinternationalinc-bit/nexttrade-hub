@@ -35,6 +35,9 @@ export async function loadProfitabilityInput(db) {
       lineReleasePounds: await fetchAll(function () { return db.from('pl_line_release_pounds').select('invoice_item_id, release_key, pounds'); }),
       estimates: await fetchAll(function () { return db.from('pl_release_estimates').select('release_key, outbound_estimate, note'); })
     };
+    // v55.83-VV — "keep in yards" per description, and typed costs per yard (the report still runs before the columns exist)
+    try { setup.nameUnits = await fetchAll(function () { return db.from('pl_name_units').select('name_key, raw_name, unit, keep_unit'); }); setup.keep_unit_ready = true; }
+    catch (eKU) { setup.keep_unit_ready = false; }
     // v55.83-TG — the shipping terms chosen on the invoice (same row; works before the new columns exist)
     try { setup.terms = await fetchAll(function () { return db.from('pl_invoice_terms').select('invoice_id, basis, embedded_transport, shipping_terms, shipping_cost_estimate'); }); setup.shipping_terms_ready = true; }
     catch (eST) { setup.shipping_terms_ready = false; }
@@ -45,7 +48,8 @@ export async function loadProfitabilityInput(db) {
     try { setup.customerTerms = await fetchAll(function () { return db.from('pl_customer_terms').select('customer_id, customer_name, basis'); }); setup.customer_terms_ready = true; }
     catch (eCT) { if (!missingTable(eCT && eCT.message)) { throw eCT; } setup.customerTerms = []; setup.customer_terms_ready = false; }
     // v55.83-TE — costs typed by hand (the report still runs before these tables exist)
-    try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note'); }); setup.manual_costs_ready = true; }
+    try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note'); }); setup.manual_costs_ready = true;
+      if (setup.keep_unit_ready) { try { setup.lineCosts = await fetchAll(function () { return db.from('pl_line_costs').select('invoice_item_id, cost_per_lb, commission_per_lb, note, cost_unit'); }); setup.groupCosts = await fetchAll(function () { return db.from('pl_group_costs').select('group_id, cost_per_lb, commission_per_lb, note, cost_unit'); }); } catch (eCU) { setup.keep_unit_ready = false; } } }
     catch (eMC) { if (!missingTable(eMC && eMC.message)) { throw eMC; } setup.lineCosts = []; setup.groupCosts = []; setup.manual_costs_ready = false; }
     // v55.83-TL — trucking / freight typed per release (the report still runs before this table exists)
     try { setup.partEstimates = await fetchAll(function () { return db.from('pl_release_part_estimates').select('release_key, part, amount, note'); }); setup.part_estimates_ready = true; }

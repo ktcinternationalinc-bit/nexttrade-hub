@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VV',
+    date: '2026-11-20',
+    title: 'Profitability: goods sold in yards can stay in yards (not converted to pounds)',
+    items: [
+      { text: '**A choice for every description sold in yards.** Accounting → Profitability → Set-up, in the list of descriptions: next to each one sold in yards or linear metres there are now two buttons — “convert to pounds” (as it always was, for PVC leather goods) and “keep in yards” (for headliner, fabrics and other goods that are not PVC leather).' },
+      { text: '**You see what changes before it is saved.** Choosing “keep in yards” opens a small before / after: the quantity, the goods cost, the commission, the inbound allowance and the profit for that description, and whether any other line would move. Nothing is saved until you press Yes. It can be switched back the same way.' },
+      { text: '**What “kept in yards” means.** The goods are counted in yards and never added to the Pounds totals. Their cost is per yard, from supplier bills that are also in yards. The 2 cents per pound inbound allowance is not charged on them and no commission rate is added. A supplier line bought by weight is not converted — the line asks for a cost per yard instead.' },
+      { text: '**Reports show the two apart.** Where a row has both, it shows pounds and yards side by side and no “per pound” average. A product made only of yard goods shows its price and cost per yard. P&L by period shows the yards under the pounds.' },
+      { text: '**Shipping is shared as before.** A release’s trucking and freight are still shared between its lines by shipping weight, so other products on the same release do not change.' },
+      { text: 'This needs one small database script before the buttons appear. Until it is run everything stays exactly as it is.' },
+      { superAdminOnly: true, text: 'Technical: ONE SQL sql/v55-83-VV-keep-in-yards.sql (pl_name_units.keep_unit, cost_unit on pl_line_costs and pl_group_costs; adds columns only). Engine: cell.keep_unit, sold_qty, base_cost_per_sold_unit; inbound_allowance 0; resolveCost with soldUnitOnlyFactors; summarize yards and unit_mix. Route actions keep_preview and set_name_keep behind pnl.edit_costs; src/lib/keep-yards-preview.js runs the engine twice. Loader is fail-soft before the SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-VU',
     date: '2026-11-20',
     title: 'Bills: grouped by vendor, with search and sorting',

@@ -21,13 +21,13 @@ export function bucketOf(d, g) {
 // new: combined_cost = the shipping amount kept as one combined figure (not divided into trucking / freight), so that
 // transport charged − trucking − freight − combined = transport profit holds on the numbers shown.
 export var PERIOD_FIELDS = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
-export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
+export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, yards: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
     // Codex 12:11 — what the two profit figures were ACTUALLY made of: only the lines whose profit is known (`used`), and the
     // revenue of the lines left out because a cost is not known yet (`excl`), per side — never one combined figure for both
     used: { goods_lines: 0, goods_revenue: 0, goods_cost: 0, transport_lines: 0, transport_revenue: 0, trucking: 0, freight: 0, combined: 0 }, excl: { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 } };
   PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
 export function addPeriodCell(row, c) {
-  row.lines++; row.pounds += Number(c.pounds) || 0;
+  row.lines++; if (c.keep_unit === true) { row.yards += Number(c.sold_qty) || 0; } else { row.pounds += Number(c.pounds) || 0; } // v55.83-VV — kept-in-yards goods are counted in yards, never as pounds
   var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
   var v = { goods_revenue: c.goods_revenue, goods_cost: gc.some(function (x) { return x === null || x === undefined; }) ? null : gc.reduce(function (s0, x) { return s0 + Number(x); }, 0), goods_profit: c.goods_profit,
     transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
@@ -82,8 +82,8 @@ export function periodBreakdown(cells, forceHidden) {
     var by = {}; var order = [];
     list.forEach(function (c) {
       var name = String(c[field] || '').trim() || fallback;
-      var r = by[name]; if (!r) { r = by[name] = { name: name, lines: 0, pounds: 0, goods_profit: 0, transport_profit: 0, profit: 0, missing: 0 }; order.push(name); }
-      r.lines += 1; r.pounds += Number(c.pounds) || 0;
+      var r = by[name]; if (!r) { r = by[name] = { name: name, lines: 0, pounds: 0, yards: 0, goods_profit: 0, transport_profit: 0, profit: 0, missing: 0 }; order.push(name); }
+      r.lines += 1; if (c.keep_unit === true) { r.yards += Number(c.sold_qty) || 0; } else { r.pounds += Number(c.pounds) || 0; }
       if (known(c.goods_profit)) { r.goods_profit += cents(c.goods_profit); } else { r.missing += 1; }
       if (known(c.transport_profit)) { r.transport_profit += cents(c.transport_profit); } else { r.missing += 1; }
     });
@@ -91,7 +91,7 @@ export function periodBreakdown(cells, forceHidden) {
       .sort(function (a, b) { return hidden ? b.pounds - a.pounds : ((b.profit - a.profit) || (a.name < b.name ? -1 : 1)); });
   }
   var gp = cats.filter(function (x) { return x.key === 'goods_profit'; })[0].cents; var tp = cats.filter(function (x) { return x.key === 'transport_profit'; })[0].cents;
-  return { hidden: hidden, lines: list.length, pounds: list.reduce(function (a, c) { return a + (Number(c.pounds) || 0); }, 0), categories: cats,
+  return { hidden: hidden, lines: list.length, pounds: list.reduce(function (a, c) { return a + (c.keep_unit === true ? 0 : (Number(c.pounds) || 0)); }, 0), yards: list.reduce(function (a, c) { return a + (c.keep_unit === true ? (Number(c.sold_qty) || 0) : 0); }, 0), categories: cats,
     products: group('product', '(no product name)'), customers: group('customer', '(no customer)'),
     total: hidden ? { goods_profit: null, transport_profit: null, profit: null } : { goods_profit: gp, transport_profit: tp, profit: gp + tp } };
 }

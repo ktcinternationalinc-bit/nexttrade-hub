@@ -91,6 +91,17 @@ export function foamFactors(factors) {
 // product name and description, never from the merged group's label. Only yards change: pounds, kilos, tons and linear metres
 // stay as they are (Max said per yard). A line that says headliner AND foam is counted as HEADLINER (the product, 1.25) and
 // flagged so a person can look — the two rules give different weights and only one can apply.
+// v55.83-VV (Max, Nov 20 2026: "certain groups to be in yards ... not converted to lbs ... a radio button to those items in yards
+// excluded from the lb conversion" · commission on them: "NO" · the $0.02 inbound allowance: "NO") — a description KEPT IN YARDS.
+// Its goods cost comes only from supplier lines that are ALSO in yards / linear metres (bill $ ÷ bill yards — the weight factor
+// cancels out), never from a line bought by weight: this table simply has no pounds, kilos or tons, so such a line cannot be
+// converted. The line still has a SHIPPING WEIGHT (its usual factor), used only to share a release's shipping cost.
+export function soldUnitOnlyFactors(factors) {
+  var f = factors || {}; var u = f.units || DEFAULT_UNIT_FACTORS; var bp = {};
+  Object.keys(f.byProduct || {}).forEach(function (k) { var per = f.byProduct[k] || {}; bp[k] = { yd: per.yd, lm: per.lm }; });
+  return { units: { yd: u.yd, lm: u.lm }, byProduct: bp };
+}
+export function isSoldByLength(unit) { var k = unitKey(unit); return k === 'yd' || k === 'lm'; }
 export var HEADLINER_LB_PER_YARD = 1.25;
 export function isHeadlinerLine(productName, description) { var rx = /head[\s-]*liner/i; return rx.test(String(productName || '')) || rx.test(String(description || '')); }
 export function headlinerFactors(factors) {
@@ -318,7 +329,7 @@ export function buildCells(input) {
       var fx = headliner ? headlinerFactors(factors) : (foam ? foamFactors(factors) : factors);
       var lb = toPounds(ln.qty, ln.unit, pKey, fx);
       if (lb === null) { flag('unit_unknown', inv, { line: ln.description, unit: ln.unit || null }); }
-      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, headliner: headliner, fx: fx });
+      goods.push({ ln: ln, amt: amt, lb: lb, g: g, pKey: pKey, foam: foam, headliner: headliner, fx: fx, keep: ln.keep_unit === true && isSoldByLength(ln.unit) });
     });
 
     // each goods line on its release(s)
@@ -340,6 +351,9 @@ export function buildCells(input) {
           description: gl.ln.description, group_id: gl.g ? gl.g.id : null, product: gl.g ? gl.g.name : String(gl.ln.description || '').trim(), product_key: gl.pKey,
           release: p.rel, basis: basis, orig_qty: Number(gl.ln.qty) || 0, orig_unit: gl.ln.unit || null, orig_unit_price: Number(gl.ln.unit_price) || 0,
           unit_factor: unitFactor(gl.ln.unit, gl.pKey, gl.fx), foam: gl.foam, headliner: gl.headliner, pounds: p.lb, invoiced: amtParts[ix], flags: [] };
+        // v55.83-VV — kept in yards: pounds stays the SHIPPING weight (only for sharing a release's shipping); sold_qty is this part's yards
+        c.keep_unit = gl.keep === true; c.sold_unit = c.keep_unit ? unitKey(gl.ln.unit) : null;
+        c.sold_qty = (c.keep_unit && p.lb !== null && c.unit_factor > 0) ? Math.round(p.lb / c.unit_factor * 1000) / 1000 : null;
         if (p.lb === null) { c.flags.push('unit_unknown'); }
         if (p.split_missing) { c.flags.push('release_split_missing'); c.releases_on_invoice = rels.length; }
         cells.push(c); mine.push(c);
@@ -427,7 +441,9 @@ export function buildCells(input) {
     c.missing_cost_lines = cost && cost.missing_cost_lines ? cost.missing_cost_lines : [];
     if (cost && cost.cost_unknown) { c.flags.push('purchase_line_without_cost'); }
     c.inbound_exempt = releaseHasNoInbound(c.release); // v55.83-UZ — 1001- / 1003- releases: no inbound charge
-    c.inbound_allowance = c.inbound_exempt ? 0 : (c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null);
+    // v55.83-VV (Max: the $0.02 inbound allowance on goods kept in yards — "NO")
+    c.inbound_allowance = (c.inbound_exempt || c.keep_unit === true) ? 0 : (c.pounds !== null ? r2(c.pounds * INBOUND_ALLOWANCE_PER_LB) : null);
+    c.base_cost_per_sold_unit = (c.keep_unit === true && c.base_cost !== null && c.sold_qty > 0) ? r4(c.base_cost / c.sold_qty) : null;
     if (c.base_cost === null) { c.flags.push('cost_missing'); }
     if (c.cost_method === 'manual') { c.flags.push('cost_manual'); }
     if (c.cost_method === 'assumed_earliest') { c.flags.push('cost_assumed_before_first_purchase'); c.cost_first_purchase = cost.first_purchase || null; }
@@ -459,8 +475,10 @@ export function summarize(cells, keyFn, labelFn) {
   (cells || []).forEach(function (c) {
     var k = keyFn(c);
     var row = map[k];
-    if (!row) { row = map[k] = { key: k, label: labelFn ? labelFn(c) : k, pounds: 0, cells: 0, complete: true, weight_missing: false, unknown: {}, invoices: {}, releases: {}, names: {}, estimate: false }; SUM_FIELDS.forEach(function (f) { row[f] = 0; }); row._c = {}; SUM_FIELDS.forEach(function (f) { row._c[f] = 0; }); order.push(k); }
-    row.cells++; if (c.pounds !== null && c.pounds > 0) { row.pounds += c.pounds; } else { row.weight_missing = true; }
+    if (!row) { row = map[k] = { key: k, label: labelFn ? labelFn(c) : k, pounds: 0, yards: 0, has_kept: false, has_converted: false, cells: 0, complete: true, weight_missing: false, unknown: {}, invoices: {}, releases: {}, names: {}, estimate: false }; SUM_FIELDS.forEach(function (f) { row[f] = 0; }); row._c = {}; SUM_FIELDS.forEach(function (f) { row._c[f] = 0; }); order.push(k); }
+    // v55.83-VV — goods kept in yards are counted in YARDS, never in the Pounds total
+    row.cells++; if (c.keep_unit === true) { row.has_kept = true; if (c.sold_qty > 0) { row.yards += c.sold_qty; } else { row.weight_missing = true; } }
+    else { row.has_converted = true; if (c.pounds !== null && c.pounds > 0) { row.pounds += c.pounds; } else { row.weight_missing = true; } }
     SUM_FIELDS.forEach(function (f) { if (c[f] === null || c[f] === undefined) { row.unknown[f] = true; } else { row._c[f] += cents(c[f]); } });
     if (!c.complete) { row.complete = false; }
     if (c.outbound_kind === 'estimate') { row.estimate = true; }
@@ -471,14 +489,20 @@ export function summarize(cells, keyFn, labelFn) {
     var row = map[k];
     SUM_FIELDS.forEach(function (f) { row[f] = money(row._c[f]); });
     delete row._c;
-    row.pounds = Math.round(row.pounds * 1000) / 1000;
+    row.pounds = Math.round(row.pounds * 1000) / 1000; row.yards = Math.round(row.yards * 1000) / 1000;
+    // v55.83-VV — a per-pound average is shown only for a row made of converted goods alone; a row of kept-in-yards goods alone gets
+    // per-yard averages; a row that mixes the two gets NO per-unit average (its dollar totals still add up)
+    row.unit_mix = row.has_kept && row.has_converted ? 'mixed' : (row.has_kept ? 'yd' : 'lb'); var lbOnly = row.unit_mix === 'lb'; var ydOnly = row.unit_mix === 'yd' && row.yards > 0 && !row.weight_missing;
+    row.avg_goods_price_per_yd = ydOnly && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.yards) : null;
+    row.avg_base_cost_per_yd = ydOnly && !row.unknown.base_cost ? r4(row.base_cost / row.yards) : null;
+    row.avg_all_cost_per_yd = ydOnly && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.yards) : null;
     // an average needs ALL of the revenue AND all of the pounds behind it; part of either = no average shown
-    row.avg_goods_price_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.pounds) : null;
-    row.avg_base_cost_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost ? r4(row.base_cost / row.pounds) : null;
+    row.avg_goods_price_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.goods_revenue ? r4(row.goods_revenue / row.pounds) : null;
+    row.avg_base_cost_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost ? r4(row.base_cost / row.pounds) : null;
     row.pounds_incomplete = row.weight_missing;
     // v55.83-TC (Max, Nov 16: "Avg Cost All / LB - adding the commission and inbound allowance") — goods cost + commission + inbound
     // allowance, ÷ pounds. Only when all three are fully known and every weight is there; otherwise no average is shown.
-    row.avg_all_cost_per_lb = row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.pounds) : null;
+    row.avg_all_cost_per_lb = lbOnly && row.pounds > 0 && !row.weight_missing && !row.unknown.base_cost && !row.unknown.commission && !row.unknown.inbound_allowance ? r4((row.base_cost + row.commission + row.inbound_allowance) / row.pounds) : null;
     // v55.83-TK (Max, Nov 17: "the total cost is everything except for the shipping ... there should be a transportation profit and then
     // the goods profit") — total cost = goods cost + commission + inbound allowance + brokerage + bonded (NOT outbound shipping).
     // Goods profit = goods revenue − total cost. Transport profit = transport charged − outbound shipping. Profit = the two together.
