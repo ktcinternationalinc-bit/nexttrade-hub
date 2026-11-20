@@ -9,7 +9,8 @@
 // • Cash flow = settled bank reality (money that actually moved) alongside
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
-import { buildPaidThroughBlocks, FUNDING_DESTINATIONS, fundingPayerOfText } from '../../../../lib/paid-through-blocks'; // v55.83-SR
+import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
+import { partyFundsBreakdown, FUNDING_DESTINATIONS, fundingIdentity } from '../../../../lib/party-funds'; // v55.83-VY — the ONE funds calculation and identity rule // v55.83-SR
 import { periodAdjustments } from '../../../../lib/party-money'; // v55.83-TX
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -1937,8 +1938,8 @@ export async function POST(req) {
               if (!idTx.error) {
                 (idTx.data || []).forEach(function (t8) {
                   if (t8.transfer_group_id || t8.classification === 'transfer') { return; }
-                  var py8 = fundingPayerOfText(t8.name) || fundingPayerOfText(t8.merchant_name); if (!py8) { return; }
-                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: t8.classification, payer: py8, marked: false, who: t8.merchant_name || t8.name || '' });
+                  var id8 = fundingIdentity({ direction: 'out', third_party_payer: null, name: t8.name, merchant_name: t8.merchant_name }); if (!id8) { return; }
+                  ptLines.push({ id: t8.id, date: t8.posted_date || t8.date, amount: t8.amount_abs, classification: t8.classification, payer: id8.payer, marked: false, who: t8.merchant_name || t8.name || '' });
                 });
               }
             } catch (eId) {}
@@ -1954,7 +1955,40 @@ export async function POST(req) {
             ptBlocks.forEach(function (blk) { if (partyKey(blk.payer) === 'rtm capital') { rtmBlk = blk; } });
           }
         } catch (eR9) { rtmBlk = null; ptBlocks = []; }
-        spend = { rtm: rtmBlk, paid_through: ptBlocks, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
+        // v55.83-VY (Codex 13:07: "integrate helper into the actual route -> report -> FundsSent -> totals/export path") — the shared
+        // funds calculation, fed with the WHOLE history of each company (a fee or a bill payment dated in this period can belong
+        // to a transfer of an earlier one). Read-only. null when it cannot be worked out — the screen then says so.
+        var partyFunds = null;
+        try {
+          var pfParties = await loadParties(db); var pfLines = []; var pfSeen = {};
+          var pfSel = 'id, date, posted_date, amount_abs, classification, third_party_payer, name, merchant_name, direction, transfer_group_id';
+          var pfA = await fetchAll(function () { return db.from('bank_transactions').select(pfSel).eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').not('third_party_payer', 'is', null).neq('pending', true).neq('review_status', 'duplicate').order('id', { ascending: true }); });
+          var pfOr = FUNDING_DESTINATIONS.map(function (d1) { return 'name.ilike.%' + d1.suffix + '%,merchant_name.ilike.%' + d1.suffix + '%'; }).join(',');
+          var pfB = await fetchAll(function () { return db.from('bank_transactions').select(pfSel).eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate').or(pfOr).order('id', { ascending: true }); });
+          pfA.concat(pfB).forEach(function (t7) {
+            if (pfSeen[t7.id]) { return; }
+            if (!t7.third_party_payer && t7.transfer_group_id) { return; } // a paired transfer between KTC's own accounts is never money sent to a company
+            pfSeen[t7.id] = true;
+            pfLines.push({ id: t7.id, date: t7.posted_date || t7.date, amount_abs: t7.amount_abs, third_party_payer: t7.third_party_payer, name: (t7.name || '') + (t7.merchant_name && t7.merchant_name !== t7.name ? ' ' + t7.merchant_name : ''), direction: 'out', classification: t7.classification });
+          });
+          var pfIds = pfLines.map(function (x7) { return x7.id; }); var pfReqs = [];
+          try {
+            for (var q7 = 0; q7 < pfIds.length; q7 += 200) {
+              var w7 = await db.from('wire_packages').select('*').in('funding_txn_id', pfIds.slice(q7, q7 + 200));
+              if (!w7.error) { pfReqs = pfReqs.concat(w7.data || []); }
+            }
+            var pkIds = pfReqs.map(function (w8) { return w8.id; }); var pkLines = [];
+            for (var q8 = 0; q8 < pkIds.length; q8 += 200) {
+              var l8 = await db.from('wire_package_lines').select('package_id, bill_id, amount, is_open').in('package_id', pkIds.slice(q8, q8 + 200));
+              if (!l8.error) { pkLines = pkLines.concat(l8.data || []); }
+            }
+            pfReqs = pfReqs.map(function (w9) { return { id: w9.id, status: w9.status, funding_txn_id: w9.funding_txn_id, fee_amount: w9.fee_amount, sent_date: w9.sent_date || w9.sent_at || null, lines: pkLines.filter(function (l9) { return l9.package_id === w9.id; }) }; });
+          } catch (eW7) { pfReqs = []; }
+          partyFunds = partyFundsBreakdown({ parties: pfParties, bankLines: pfLines, pays: LS.pays || [], bills: billNameById, requests: pfReqs, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
+          // the bill's own file, so the screen can open it (the storage rules decide who may)
+          partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
+        } catch (ePf) { partyFunds = null; }
+        spend = { rtm: rtmBlk, paid_through: ptBlocks, party_funds: partyFunds, categories: catRows, transfers: trf, uncategorized: unc, total_out: totOut,
           real_spending: r2(totOut - trf.total), rows: spRows,
           deductible_spending: deductible, not_pnl_out: notPnlOut,
           in_categories: catRowsIn, in_transfers: trfIn, in_uncategorized: uncIn, total_in: totIn,

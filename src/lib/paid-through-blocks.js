@@ -8,19 +8,8 @@
 // underneath: bills paid · service fee (on requests) · uncategorized, waiting for bills.
 // Pure. Every block conserves its total: payments = covered bills + (service fee + waiting + other).
 function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
-// v55.83-VY (Max, Nov 20 2026, through Codex: "For Max's identified RTM destination ending 9909 and NextTrade destination ending
-// 2061, unallocated funds default internally to unused / awaiting allocation, NOT a fee") — a money-out bank line that says it
-// is a transfer TO one of these accounts is money sent to that company, also when nobody stamped the company on the line.
-// Only the destination written in the bank's own text counts ("Online Transfer to CHK ...9909"); a category never does.
-export var FUNDING_DESTINATIONS = [{ suffix: '9909', payer: 'RTM Capital' }, { suffix: '2061', payer: 'NextTrade Industries' }];
-export function fundingPayerOfText(text) {
-  var t = String(text || '');
-  for (var i = 0; i < FUNDING_DESTINATIONS.length; i++) {
-    var d = FUNDING_DESTINATIONS[i];
-    if (new RegExp('\\bto\\s+(?:chk|checking|sav|savings)\\b[^0-9]{0,8}' + d.suffix + '(?![0-9])', 'i').test(t)) { return d.payer; }
-  }
-  return null;
-}
+// v55.83-VY — WHICH company a bank line is money sent to is decided in ONE place: src/lib/party-funds.js (Codex 13:07).
+export { FUNDING_DESTINATIONS, fundingPayerOfText, fundingIdentity } from './party-funds';
 export function partyKeyOf(x) { return String(x || '').trim().toLowerCase(); }
 
 // 'advance' = money sent ahead to a related company (not an expense until its bills are linked); 'provider' = one line

@@ -17,7 +17,7 @@ export default function ExpenseDetail(props) {
   if (!m) { return <div className="text-[11px] px-2 py-1" style={{ color: SUB }}>Nothing to show for this line.</div>; }
   if (m.remainder && props.funding) {
     // v55.83-VY — a company row (its explicit fee, or what is held with it): the whole picture of the funds sent, with the bills
-    return <div><div className="px-2 py-1 text-[11px] font-bold" style={{ color: m.is_explicit_fee ? '#7f1d1d' : '#065f46' }}>{m.is_explicit_fee ? 'This line is the part explicitly marked as their fee — it IS deducted.' : 'This line is NOT an expense: it is money still with the company (not used for a bill, not marked as their fee).'}</div><FundsSent funding={props.funding} catLabel={props.catLabel} onConfirm={props.onConfirm} /></div>;
+    return <div><div className="px-2 py-1 text-[11px] font-bold" style={{ color: m.is_explicit_fee ? '#7f1d1d' : '#065f46' }}>{m.is_explicit_fee ? 'This line is the part explicitly marked as their fee — it IS deducted.' : 'This line is NOT an expense: it is money still with the company (not used for a bill, not marked as their fee).'}</div><FundsSent funding={props.funding} catLabel={props.catLabel} onConfirm={props.onConfirm} onOpenBill={props.onOpenBill} /></div>;
   }
   if (m.remainder) {
     var rm = m.remainder;

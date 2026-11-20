@@ -10,6 +10,7 @@
 //   and anything the lists cannot explain is ONE visible line ("other adjustments"), never hidden.
 // Pure. Money in whole cents.
 import { remainderRows } from './paid-through-blocks';
+import { feeExplanation, currentFundsWords } from './party-funds'; // v55.83-VY — the shared funds calculation's own sentences
 
 function cents(x) { return Math.round((Number(x) || 0) * 100); }
 
@@ -26,12 +27,13 @@ export function expenseDetail(spending, rc) {
 
   function makeup(key, label, figure) {
     var m = { key: key, label: label, cents: figure, bank: null, from_advances_cents: 0, taken_out: [], taken_out_cents: 0, bills: { cents: 0, listed_cents: 0, rows: [] }, remainder: null, other_cents: 0 };
+    // a row made from the shared funds calculation (the explicit fee, or what is held): it has no lines of its own — the company panel shows it
+    if (/^__pf_/.test(String(key))) { m.remainder = { payer: '' }; m.funding_key = String(key).replace(/_(fee|held)$/, ''); m.is_explicit_fee = /_fee$/.test(String(key)); m.adds_up = true; return m; }
     if (remOf[key]) {
       // what is left of the money sent to a paid-through company after the bills it paid — it has no lines of its own
       var b = remOf[key].block;
       m.remainder = { payer: b.payer || '', era_note: b.era_note || null, payments_cents: cents(b.payments_total), payments_count: Number(b.payments_count) || 0, bills_cents: cents(b.allocations_total),
         left_cents: cents(b.service_fee), fees_booked_cents: cents(b.fees_booked), waiting_cents: cents(b.waiting), other_left_cents: cents(b.remainder_other), advance_held_cents: cents(b.advance_held) };
-      m.funding_key = remOf[key].funding_key; m.is_explicit_fee = /_fee$/.test(key);
       m.adds_up = true; return m;
     }
     var o = key === 'uncategorized' ? { total: sp.uncategorized && sp.uncategorized.total, count: sp.uncategorized && sp.uncategorized.count } : (orig[key] || null);
@@ -52,18 +54,22 @@ export function expenseDetail(spending, rc) {
     return m;
   }
 
-  // v55.83-VY — FUNDS SENT to each paid-through company in these dates, and what became of them. Every figure is the block's own:
-  //   sent = applied to bills (counted once, under each bill's own category) + explicit fee (the ONLY part that is an expense
-  //   here) + advance held + unused (neither used nor booked — stays with the company, not an expense).
-  out.funding = blocks.map(function (b) {
-    var sent = cents(b.payments_total) + cents(b.advance_held); var applied = cents(b.allocations_total); var fee = Math.max(cents(b.fees_booked), cents(b.explicit_fees)); var adv = cents(b.advance_held);
-    var bills = (b.rows || []).map(function (r) { return { date: r.date || '', who: r.who || '', ref: r.ref || '', category: r.category || 'uncategorized', cents: cents(r.amount), bill_id: r.bill_id || null, bill_date: r.bill_date || '', release: r.release || '', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total) }; }).sort(function (x, y) { return y.cents - x.cents; });
-    return { key: String(b.key || b.payer || ''), payer: b.payer || '', era_note: b.era_note || null, sent_cents: sent, sent_count: Number(b.payments_count) || 0, unmarked_cents: cents(b.unmarked_total),
-      applied_cents: applied, fee_cents: fee, advance_held_cents: adv, unused_cents: sent - applied - fee - adv,
-      lines: (b.lines || []).map(function (t) { return { id: t.id || null, date: t.date || '', who: t.who || '', cents: cents(t.amount), marked: t.marked !== false }; }).sort(function (x, y) { return x.date < y.date ? -1 : (x.date > y.date ? 1 : 0); }),
-      bills: bills, bills_listed_cents: bills.reduce(function (t0, r) { return t0 + r.cents; }, 0) };
+  // v55.83-VY — FUNDS with each paid-through company, from the ONE shared calculation in the answer (spending.party_funds =
+  // partyFundsBreakdown for these dates). Nothing is recomputed here: dollars become cents and the lists get the names the panel shows.
+  var transferDate = {};
+  out.funding = (Array.isArray(sp.party_funds) ? sp.party_funds : []).map(function (c) {
+    var p = c.period || {}; (c.transfers || []).forEach(function (t) { transferDate[t.id] = t.date; });
+    var inP = function (d) { return (!p.from || d >= p.from) && (!p.to || d <= p.to); };
+    var transfers = (c.transfers || []).filter(function (t) { return inP(t.date); }).map(function (t) { return { id: t.id, date: t.date, who: t.reference || '', cents: cents(t.sent), marked: t.identity === 'marked' }; });
+    var applied = (p.applied_rows || []).map(function (r) { var sb = r.source_bill || {}; return { paid_date: r.paid_date || '', transfer_id: r.transfer_id || null, transfer_date: r.transfer_date || transferDate[r.transfer_id] || '', vendor: r.vendor || '', bill_number: r.bill_number || '', bill_id: r.bill_id || null, bill_date: sb.bill_date || '', release: r.release_number || '', category: sb.category || 'uncategorized', recognition: sb.recognition || 'unverified', bill_total_cents: (r.bill_total === null || r.bill_total === undefined) ? null : cents(r.bill_total), cents: cents(r.portion), attachment_path: r.attachment_path || null }; });
+    var fees = (p.fee_rows || []).concat(p.loose_fee_rows || []).map(function (r) { return { date: r.date || '', cents: cents(r.amount), why: r.why || 'services rendered', transfer_id: r.transfer_id || null, transfer_date: r.transfer_id ? (transferDate[r.transfer_id] || '') : '' }; });
+    var dups = (c.duplicate_bank_lines || []).filter(function (d) { return inP(d.date); }).map(function (d) { return { id: d.id, date: d.date, cents: cents(d.sent), same_as: d.same_as }; });
+    return { key: '__pf_' + String(c.party || '').toLowerCase().replace(/[^a-z0-9]+/g, '_'), payer: c.party || '',
+      period: { from: p.from || '', to: p.to || '', opening_held_cents: cents(p.opening_held), funds_sent_cents: cents(p.funds_sent), applied_cents: cents(p.applied_to_bills), fee_cents: cents(p.services_rendered), fee_deduction_cents: cents(p.fee_deduction), closing_held_cents: cents(p.closing_held), tax_cents: cents(p.tax_professional_fees) },
+      transfers: transfers, applied_rows: applied, applied_listed_cents: applied.reduce(function (t0, r) { return t0 + r.cents; }, 0), fee_rows: fees,
+      to_confirm_cents: transfers.reduce(function (t0, t) { return t0 + (t.marked ? 0 : t.cents); }, 0), duplicates: dups, duplicates_cents: dups.reduce(function (t0, d) { return t0 + d.cents; }, 0),
+      needs_reconciliation: c.needs_reconciliation === true, explanation: feeExplanation(c), today_words: currentFundsWords(c) };
   });
-  Object.keys(remOf).forEach(function (k) { var fk = String(remOf[k].block.key || remOf[k].block.payer || ''); remOf[k].funding_key = fk; });
   ((rc && rc.cats) || []).forEach(function (c) {
     var v = cents(c.total);
     if (String(c.kind || '') === 'not_pnl' && !/^__pt_/.test(String(c.key)) && c.key !== '__party_advance') { if (v) { out.not_pnl.push({ key: c.key, label: c.label || c.key, cents: v }); } }
@@ -107,7 +113,8 @@ export function pnlFormula(r, e, hidden) {
   if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
   if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
-  if (cols && cols.held && cols.held.cents) { not.push({ label: 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
+  if (cols && cols.duplicates) { not.push({ label: 'A bank transfer that appears twice (the second copy)', cents: cols.duplicates, why: 'the same transfer came in as two bank lines — the copy is counted nowhere' }); }
+  if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });

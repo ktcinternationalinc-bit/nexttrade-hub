@@ -45,6 +45,7 @@ export function letterOf(cat) {
   // v55.83-VY (Max, Nov 20: "unallocated funds default internally to unused / awaiting allocation, NOT a fee ... Only explicit
   // Services rendered designation creates that fee expense") — money sent to RTM / NextTrade that is neither used for a bill nor
   // explicitly booked as their fee is HELD with them: shown, never taken off the profit. Only the explicit fee row is an office cost.
+  if (/^__pf_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; } // rows made from the shared funds calculation (party-funds.js)
   if (/^__pt_/.test(key)) { return /_fee$/.test(key) ? 'A' : 'held'; }
   if (key === '__party_advance') { return 'held'; }
   if (kind === 'transfer' || kind === 'not_pnl') { return 'not_pnl'; }
@@ -96,6 +97,25 @@ export function finalPnl(profitCents, cols, incompleteLines) {
 // v55.83-VY — P&L by period only: an explicitly booked fee is that company's fee whichever date its transfer has. Where the
 // Income Statement keeps such a fee inside the single "remainder" row of an older transfer, it is moved here into the company's
 // fee row (same money, the total does not move), so that ONLY the explicit fee is deducted and the rest is held.
+function slugOf(x) { return String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '_'); }
+// The company rows of P&L by period, from the shared calculation (funds = partyFundsBreakdown(...) for these dates):
+//   fee  = period.fee_deduction — explicit services rendered DATED in the period; the only professional-fee expense
+//   held = period.closing_held — still with the company at the end of the period; a balance, never an expense
+// meta.unconfirmed = transfers of THIS period recognised only from the bank text; meta.duplicates = second copies of a bank
+// transfer dated in this period (counted nowhere).
+export function partyFundsRows(cats, funds) {
+  var out = (cats || []).filter(function (c) { return !/^__pt_/.test(String(c.key)) && c.key !== '__party_advance'; }).map(function (c) { return Object.assign({}, c); });
+  var meta = { unconfirmed: 0, duplicates: 0, needs_reconciliation: false };
+  (funds || []).forEach(function (f) {
+    var p = f.period || {}; var base = '__pf_' + slugOf(f.party);
+    if (Math.abs(Number(p.fee_deduction) || 0) > 0.004) { out.push({ key: base + '_fee', label: f.party + ' — services rendered (explicitly marked as their fee)', kind: 'expense', count: (p.fee_rows || []).length, total: Number(p.fee_deduction) }); }
+    if (Math.abs(Number(p.closing_held) || 0) > 0.004) { out.push({ key: base + '_held', label: f.party + ' — held with them at the end of these dates', kind: 'not_pnl', count: 0, total: Number(p.closing_held) }); }
+    (f.transfers || []).forEach(function (t) { if (t.identity === 'bank_text' && (!p.from || t.date >= p.from) && (!p.to || t.date <= p.to)) { meta.unconfirmed += Math.round((Number(t.sent) || 0) * 100); } });
+    (f.duplicate_bank_lines || []).forEach(function (d) { if ((!p.from || d.date >= p.from) && (!p.to || d.date <= p.to)) { meta.duplicates += Math.round((Number(d.sent) || 0) * 100); } });
+    if (f.needs_reconciliation) { meta.needs_reconciliation = true; }
+  });
+  return { cats: out, meta: meta };
+}
 export function explicitFeeRows(cats, blocks) {
   var out = (cats || []).map(function (c) { return Object.assign({}, c); });
   (blocks || []).forEach(function (b) {
@@ -122,10 +142,14 @@ export function realCostCategories(spending, adjust, fold) {
   if (!spending) { return null; }
   var cats = spending.categories || [];
   (spending.paid_through || []).forEach(function (b) { cats = adjust(cats, b); });
-  cats = explicitFeeRows(cats, spending.paid_through || []);
+  // v55.83-VY (Codex 13:07) — with the shared funds calculation in the answer, IT decides the fee and what is held; the block's
+  // own remainder rows are not used at all. Without it (an older answer) the block rule below is the fall-back.
+  var fundsMeta = null;
+  if (Array.isArray(spending.party_funds)) { var pf = partyFundsRows(cats, spending.party_funds); cats = pf.cats; fundsMeta = pf.meta; }
+  else { cats = explicitFeeRows(cats, spending.paid_through || []); }
   var folded = fold(cats);
   var unc = (spending.uncategorized && Number(spending.uncategorized.total)) || 0;
-  return { cats: folded, uncategorized: Math.round((unc + (Number(folded.uncShift) || 0)) * 100) / 100 };
+  return { cats: folded, uncategorized: Math.round((unc + (Number(folded.uncShift) || 0)) * 100) / 100, funds: fundsMeta };
 }
 
 // ── v55.83-VQ (Codex 19 Nov 22:20 / 22:35) — WHICH dates are asked, and what an answer means. All pure, so the flow is tested.
@@ -166,7 +190,9 @@ export function readExpenseAnswer(j, req, adjust, fold) {
   if (j.from !== req.from || j.to !== req.to) { return { status: 'outside', why: 'Expenses for ' + req.from + ' → ' + req.to + ' are not open to you (the Income Statement only answers for ' + j.from + ' → ' + j.to + ').', from: req.from, to: req.to, partial: !!req.partial }; }
   if (!j.spending) { return { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.', from: req.from, to: req.to, partial: !!req.partial }; }
   var rc = realCostCategories(j.spending, adjust, fold);
-  return { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), detail: expenseDetail(j.spending, rc), from: j.from, to: j.to, partial: !!req.partial };
+  var colsR = expenseColumns(rc.cats, rc.uncategorized);
+  if (rc.funds) { colsR.unconfirmed = rc.funds.unconfirmed; colsR.duplicates = rc.funds.duplicates; colsR.funds_need_reconciliation = rc.funds.needs_reconciliation; colsR.held_is_balance = true; }
+  return { status: 'ok', cols: colsR, detail: expenseDetail(j.spending, rc), from: j.from, to: j.to, partial: !!req.partial };
 }
 
 // Asks for the periods one after another. o = { requests, fetchOne(req) → Promise of the answer, put(key, result),
@@ -196,7 +222,10 @@ export function totalExpenses(keys, cache, scope) {
     if (e.status === 'loading') { t.loading += 1; t.complete = false; return; }
     if (e.status === 'error') { t.failed += 1; t.complete = false; return; }
     if (e.status !== 'ok') { t.unavailable += 1; t.complete = false; return; }
-    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit', 'held'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; }); t.cols.total += e.cols.total; t.cols.unconfirmed = (t.cols.unconfirmed || 0) + (e.cols.unconfirmed || 0);
+    t.loaded += 1; ['A', 'C', 'D', 'E', 'unassigned', 'in_profit'].forEach(function (c) { t.cols[c].cents += e.cols[c].cents; });
+    // held is a BALANCE at the end of each period (not a flow): the total row shows the latest period's, never a sum of balances
+    if (e.cols.held_is_balance) { t.cols.held.cents = e.cols.held.cents; t.cols.held_is_balance = true; } else { t.cols.held.cents += e.cols.held.cents; }
+    t.cols.duplicates = (t.cols.duplicates || 0) + (e.cols.duplicates || 0); t.cols.total += e.cols.total; t.cols.unconfirmed = (t.cols.unconfirmed || 0) + (e.cols.unconfirmed || 0);
   });
   return t;
 }
