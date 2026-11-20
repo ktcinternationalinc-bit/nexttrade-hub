@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VT',
+    date: '2026-11-20',
+    title: 'Profitability → P&L by period: click an expense to see what is behind it, a formula button, and invoices that open on top',
+    items: [
+      { text: '**Click any expense line.** Open a period, then click a line such as Professional Fees, Utilities or Uncategorized. It opens to show what the figure is made of: the bank lines paid under that category, any money sent to RTM or NextTrade that was taken out of it, and the bills they paid that were put in its place. The sum is shown and says when it adds up.' },
+      { text: '**No double counting, in plain sight.** Money sent to RTM or NextTrade is shown being taken out, and each bill they paid is counted once under its own category. Supplier, trucker and broker bills sit in the grey box that is not taken off again, because they are already inside goods and transport profit. What is left with RTM or NextTrade after the bills is its own line, with the sum.' },
+      { text: '**Change a category right there.** Each bank line in the opened list has a small menu to move it to another category. It is the same save as Stats → Income Statement and needs the same permission. The expenses reload by themselves. A bill paid through RTM or NextTrade is changed on the bill.' },
+      { text: '**The “ƒ how?” button** next to every FINAL P&L figure. Hold the mouse on it, or click it to keep it open. It shows the whole formula with that row’s own numbers: goods revenue, goods cost, goods profit, transport charged, trucking, freight, transport profit, total profit, then A, C, D, E and the final figure. Underneath it lists what was NOT used and why: uncategorized money, supplier and trucker payments, loans and advances, transfers, and sale lines whose cost is not known.' },
+      { text: '**Invoices open on top of the page.** In “What remains open” every invoice number is now a button. Each opened period also has a list of its invoices with an Open button. The invoice comes up in front, also in full screen; close it and you are back where you were.' },
+      { text: 'Nothing in the numbers changed. Expenses are still what was paid in the period.' },
+      { superAdminOnly: true, text: 'Technical: src/lib/pnl-expense-detail.js (expenseDetail, pnlFormula, periodInvoices; whole cents) reads the same period_stats answer: spending.rows, paid_through blocks, categories. readExpenseAnswer adds detail to an ok answer. New stateless components ExpenseDetail.jsx and PnlFormula.jsx. Category change calls expense-rules bulk_classify single_pick, gated on bank.classify. No server change, no SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-VS',
     date: '2026-11-20',
     title: 'Profitability → P&L by period: a clear list of what remains open, fixed right there',

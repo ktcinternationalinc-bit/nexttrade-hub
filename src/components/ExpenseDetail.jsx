@@ -1,0 +1,63 @@
+// v55.83-VT — P&L by period: what is behind ONE expense figure (Max, Nov 20 2026: "click on expenses to see the underlying" ·
+// "for me to change if necessary" · "no double counting with professional fees and the underlying fees that it pays").
+// Stateless: it shows the make-up worked out by src/lib/pnl-expense-detail.js. The category picker is passed in (the same save
+// as Stats → Income Statement), so this file writes nothing by itself.
+import React from 'react';
+
+var INK = '#0f172a'; var SUB = '#475569'; var LINE = '#e2e8f0';
+function money(c) { if (c === null || c === undefined) { return '—'; } var v = c / 100; return (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+function Row(p) { return <tr style={{ borderTop: '1px solid ' + LINE, color: INK, fontWeight: p.strong ? 800 : 400, background: p.strong ? '#f1f5f9' : '#ffffff' }}><td className="px-2 py-1">{p.label}{p.note ? <div style={{ color: SUB, fontSize: 10, fontWeight: 400 }}>{p.note}</div> : null}</td><td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{p.value}</td></tr>; }
+
+// props: makeup (one entry of expenseDetail().byKey), rowsListed (false = the lines were not sent to this person),
+//        picker(row) → the category picker for one bank line, or null
+export default function ExpenseDetail(props) {
+  var m = props.makeup; var picker = props.picker || function () { return null; };
+  if (!m) { return <div className="text-[11px] px-2 py-1" style={{ color: SUB }}>Nothing to show for this line.</div>; }
+  if (m.remainder) {
+    var rm = m.remainder;
+    return <div className="text-[11px]" style={{ color: INK }}>
+      <div className="px-2 py-1" style={{ color: SUB }}>{'This is not a bill. It is what is left of the money sent to ' + rm.payer + (rm.era_note ? ' (' + rm.era_note + ')' : '') + ' in these dates after the bills it paid. The bills it paid are NOT in this figure — each one is counted once, under its own category.'}</div>
+      <table className="w-full text-[11px]"><tbody>
+        <Row label={'Money sent to ' + rm.payer + ' (' + rm.payments_count + ' bank line(s))'} value={money(rm.payments_cents)} />
+        <Row label="− Bills it paid (counted under their own categories)" value={'−' + money(rm.bills_cents).replace('−', '')} />
+        <Row label="= Left over" value={money(rm.left_cents)} strong />
+        {rm.fees_booked_cents !== 0 && <Row label="   of which: service fee booked on requests" value={money(rm.fees_booked_cents)} />}
+        {rm.waiting_cents !== 0 && <Row label="   of which: still waiting for bills" value={money(rm.waiting_cents)} />}
+        {rm.other_left_cents !== 0 && <Row label="   of which: the rest" value={money(rm.other_left_cents)} />}
+        <Row label="This line" value={money(m.cents)} strong />
+      </tbody></table>
+    </div>;
+  }
+  var b = m.bank || { cents: 0, count: 0, rows: [], listed_cents: 0, unlisted_cents: 0 };
+  return <div className="text-[11px]" style={{ color: INK }}>
+    <table className="w-full text-[11px]"><tbody>
+      <Row label={'Bank lines paid under this category (' + b.count + ')'} value={money(b.cents)} />
+      {m.from_advances_cents !== 0 && <Row label="+ Bills paid from an advance, booked here" value={money(m.from_advances_cents)} />}
+      {m.taken_out.map(function (t, i) { return <Row key={'t' + i} label={'− Money sent to ' + t.payer + (t.era_note ? ' (' + t.era_note + ')' : '') + ', taken out of here'} note={'It is replaced by the bills ' + t.payer + ' paid, so the same money is not counted twice.'} value={'−' + money(t.cents).replace('−', '')} />; })}
+      {m.bills.cents !== 0 && <Row label="+ Bills paid through RTM / NextTrade that belong to this category" value={money(m.bills.cents)} />}
+      {m.other_cents !== 0 && <Row label="Other adjustments (not explained by the lists below)" note="Shown so nothing is hidden. Tell Claude if you see this." value={money(m.other_cents)} />}
+      <Row label={'= ' + m.label + (m.adds_up ? ' — adds up' : '')} value={money(m.cents)} strong />
+    </tbody></table>
+    {props.rowsListed === false && <div className="px-2 py-1" style={{ color: '#b45309' }}>The bank lines themselves are not shown to you.</div>}
+    {b.rows.length > 0 && <div className="mt-1">
+      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bank lines (' + b.rows.length + ')'}</div>
+      <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>
+        {b.rows.map(function (r, i) { return <tr key={r.id || i} style={{ borderTop: '1px solid ' + LINE }}>
+          <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 70)}</td>
+          <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.cents)}</td><td className="px-2 py-1 text-right">{picker(r)}</td></tr>; })}
+      </tbody></table></div>
+      {b.unlisted_cents !== 0 && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The lines listed add up to ' + money(b.listed_cents) + '; the other ' + money(b.unlisted_cents) + ' is an advance moved in or out of this category, or lines beyond what one list can hold (open a shorter period to see them all).'}</div>}
+    </div>}
+    {b.rows.length === 0 && b.cents !== 0 && props.rowsListed !== false && <div className="px-2 py-1" style={{ color: '#b45309' }}>No bank lines could be listed for this amount (open a shorter period, or it is an advance moved between categories).</div>}
+    {m.bills.rows.length > 0 && <div className="mt-1">
+      <div className="px-2 py-1 font-extrabold" style={{ background: '#f8fafc', color: INK }}>{'Bills paid through RTM / NextTrade (' + m.bills.rows.length + ') — to change one, change the category on the bill'}</div>
+      <div className="overflow-auto pl-scroll" style={{ maxHeight: 260 }}><table className="w-full text-[11px]"><tbody>
+        {m.bills.rows.map(function (r, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE }}>
+          <td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-semibold">{String(r.who).substring(0, 60)}</td><td className="px-2 py-1">{r.ref}</td>
+          <td className="px-2 py-1" style={{ color: SUB }}>{'paid by ' + r.payer}</td><td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{money(r.cents)}</td></tr>; })}
+      </tbody></table></div>
+      {m.bills.listed_cents !== m.bills.cents && <div className="px-2 py-1" style={{ color: '#b45309' }}>{'The bills listed add up to ' + money(m.bills.listed_cents) + ' of ' + money(m.bills.cents) + ' (the list holds 300 per company).'}</div>}
+    </div>}
+  </div>;
+}

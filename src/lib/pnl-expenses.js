@@ -6,6 +6,8 @@
 // "real cost" look), asked for once per period. This file only (1) says which dates a period covers and (2) puts each of the
 // Income Statement's categories into a column. Pure; money in whole cents.
 
+import { expenseDetail } from './pnl-expense-detail'; // v55.83-VT — what is behind each figure, from the same answer
+
 function cents(x) { return Math.round((Number(x) || 0) * 100); }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -130,7 +132,7 @@ export function readExpenseAnswer(j, req, adjust, fold) {
   if (j.from !== req.from || j.to !== req.to) { return { status: 'outside', why: 'Expenses for ' + req.from + ' → ' + req.to + ' are not open to you (the Income Statement only answers for ' + j.from + ' → ' + j.to + ').', from: req.from, to: req.to, partial: !!req.partial }; }
   if (!j.spending) { return { status: 'locked', why: 'Expenses are shown only to people with the “see totals” switch.', from: req.from, to: req.to, partial: !!req.partial }; }
   var rc = realCostCategories(j.spending, adjust, fold);
-  return { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), from: j.from, to: j.to, partial: !!req.partial };
+  return { status: 'ok', cols: expenseColumns(rc.cats, rc.uncategorized), detail: expenseDetail(j.spending, rc), from: j.from, to: j.to, partial: !!req.partial };
 }
 
 // Asks for the periods one after another. o = { requests, fetchOne(req) → Promise of the answer, put(key, result),
