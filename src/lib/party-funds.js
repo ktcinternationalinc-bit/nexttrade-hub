@@ -95,9 +95,19 @@ export function partyFundsBreakdown(o) {
     });
     // explicit services rendered: (a) the fee of a request already sent from the transfer, (b) fee entries of the advances ledger
     function feeRow(t, amount, date, why, id) { var a = r2(amount); if (!a) { return; } var row = { transfer_id: t ? t.id : null, date: day(date), amount: a, why: why, id: id }; if (t) { t.lifetime_fee_rows.push(row); } else { looseFees.push(row); } }
+    // (Codex 20 Nov 13:37) a wire that was SENT and matched to its bank line carries its explicit fee whether it was a request
+    // drawn from an earlier transfer (funding_txn_id) or an ordinary wire that is itself the transfer (bank_transaction_id, no
+    // funding_txn_id) — the same rule wire-funding-server.js uses. Each wire is read ONCE even if it reaches us twice.
+    var seenWire = {};
     (o.requests || []).forEach(function (w) {
+      if (!w || w.id == null || seenWire[w.id]) { return; } seenWire[w.id] = true;
+      if (w.status === 'attached') {
+        var ta = tById[w.funding_txn_id] || tById[w.bank_transaction_id] || null;
+        if (ta) { feeRow(ta, w.fee_amount, w.sent_date || ta.date, w.funding_txn_id ? 'service fee on a request' : 'service fee on a wire', 'request:' + w.id); }
+        return;
+      }
+      // only a request drawn from an EARLIER transfer reserves held money; an ordinary wire not sent yet has sent nothing
       var t = tById[w.funding_txn_id] || null; if (!t) { return; }
-      if (w.status === 'attached') { feeRow(t, w.fee_amount, w.sent_date || t.date, 'service fee on a request', 'request:' + w.id); return; }
       if (CLOSED[w.status]) { return; }
       var held = r2(w.fee_amount); (w.lines || []).forEach(function (l) { if (l.is_open !== false) { held = r2(held + (Number(l.amount) || 0)); } });
       if (held) { t.reserved_now = r2(t.reserved_now + held); t.reserved_rows.push({ request_id: w.id, status: w.status, amount: held, fee: r2(w.fee_amount) }); } // bills AND fee: the whole commitment

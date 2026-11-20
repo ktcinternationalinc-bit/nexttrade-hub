@@ -159,6 +159,22 @@ check('… voided payments and bills not paid through a company are not in the l
 check('each company has its own list, and a September payment is not in August\'s period or as-of lists but is in the lifetime list', uN.paid_without_a_transfer.period_total === 0 && uN.paid_without_a_transfer.as_of_total === 0 && uN.paid_without_a_transfer.lifetime_total === 500 && uN.paid_without_a_transfer.lifetime_rows[0].vendor === 'Rent Co');
 check('nothing unlinked → empty lists, no flag', nt.paid_without_a_transfer.lifetime_total === 0 && nt.paid_without_a_transfer.period_rows.length === 0 && nt.needs_reconciliation === false);
 
+// ── (Codex 13:37 P2) the explicit fee of an ORDINARY attached wire (bank_transaction_id, no funding_txn_id) ──
+var W = { parties: parties, bills: [], pays: [], entries: [], bankLines: [line('t', '2026-06-15', 1000, 'RTM Capital')], from: '2026-06-01', to: '2026-06-30' };
+function wRun(reqs, from, to) { return of(F.partyFundsBreakdown(Object.assign({}, W, { requests: reqs, from: from || W.from, to: to || W.to })), 'RTM Capital'); }
+var ord = { id: 'ow', status: 'attached', bank_transaction_id: 't', funding_txn_id: null, fee_amount: 100, sent_date: '2026-06-15', lines: [] };
+var w1 = wRun([ord]);
+check('your reproduction: transfer 1,000, ordinary attached wire with a 100 fee → fee 100, held 900 (was 0 / 1,000)', w1.period.fee_deduction === 100 && w1.period.closing_held === 900 && w1.as_of.held === 900 && w1.current.unused === 900 && w1.period.fee_rows.length === 1 && w1.period.fee_rows[0].why === 'service fee on a wire', w1.period);
+var fundedBoth = { id: 'fw', status: 'attached', bank_transaction_id: 't', funding_txn_id: 't', fee_amount: 100, sent_date: '2026-06-20', lines: [] };
+check('a funded request reaching the helper TWICE (from both queries) has its fee counted once', wRun([fundedBoth, fundedBoth]).period.fee_deduction === 100 && wRun([fundedBoth, JSON.parse(JSON.stringify(fundedBoth))]).as_of.held === 900);
+check('an ordinary wire and a funded request on the same transfer: two fees, each once', wRun([ord, Object.assign({}, fundedBoth, { fee_amount: 40 })]).period.fee_deduction === 140);
+check('a reversed or cancelled ordinary wire carries no fee', wRun([Object.assign({}, ord, { status: 'reversed' }), Object.assign({}, ord, { id: 'ow2', status: 'cancelled' })]).period.fee_deduction === 0);
+var lateFee = Object.assign({}, ord, { sent_date: '2026-07-10' });
+check('a fee dated in a LATER month: June deduction 0 and held 1,000; July deduction 100, opening 1,000, closing 900', wRun([lateFee]).period.fee_deduction === 0 && wRun([lateFee]).period.closing_held === 1000 && wRun([lateFee], '2026-07-01', '2026-07-31').period.fee_deduction === 100 && wRun([lateFee], '2026-07-01', '2026-07-31').period.opening_held === 1000 && wRun([lateFee], '2026-07-01', '2026-07-31').period.closing_held === 900);
+check('an ordinary wire NOT sent yet (draft, no funding transfer) reserves nothing and carries no fee', (function () { var x = wRun([{ id: 'dw', status: 'draft', bank_transaction_id: null, funding_txn_id: null, fee_amount: 100, lines: [{ bill_id: 'q', amount: 500, is_open: true }] }]); return x.current.reserved === 0 && x.period.fee_deduction === 0 && x.current.unused === 1000; })());
+check('a draft whose bank line is set but which is not a funded request still reserves nothing (only funding_txn_id reserves)', wRun([{ id: 'dw2', status: 'ready', bank_transaction_id: 't', funding_txn_id: null, fee_amount: 100, lines: [{ bill_id: 'q', amount: 500, is_open: true }] }]).current.reserved === 0);
+check('an attached wire on a bank line that is NOT one of this company\'s transfers adds no fee here', wRun([Object.assign({}, ord, { bank_transaction_id: 'someone-else' })]).period.fee_deduction === 0);
+
 var src = fs.readFileSync(path.join(root, 'src/lib/party-funds.js'), 'utf8');
 check('no example amount is hard-coded in the application code', !/66000|52000|12000|10000|66,000|52,000/.test(src));
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));
