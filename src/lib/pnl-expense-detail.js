@@ -71,6 +71,8 @@ export function pnlFormula(r, e, hidden) {
     { sign: '', label: 'Transport charged to customers', cents: row.transport_revenue },
     { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: row.trucking_cost },
     { sign: '−', label: 'Freight / shipping (our cost: bill, else typed figure, else estimate)', cents: row.freight_cost },
+    // Codex 12:06 — a shipping amount kept as ONE combined figure is neither trucking nor freight: taken off exactly once, under its own name
+    { sign: '−', label: 'Shipping kept as one combined amount (not divided into trucking / freight)', cents: row.combined_cost || 0, combined: true },
     { sign: '=', label: 'TRANSPORT PROFIT', cents: n(row.transport_profit), strong: true },
     { sign: '=', label: 'TOTAL PROFIT = goods profit + transport profit', cents: n(row.profit), strong: true },
     { sign: '−', label: 'A · Warehouse / Office', cents: cols ? cols.A.cents : null },
@@ -79,9 +81,10 @@ export function pnlFormula(r, e, hidden) {
     { sign: '−', label: 'E · Taxes', cents: cols ? cols.E.cents : null },
     { sign: '=', label: 'FINAL P&L = total profit − A − C − D − E', cents: (cols && !hidden && row.profit !== undefined && row.profit !== null) ? row.profit - cols.total : null, strong: true }
   ];
+  lines = lines.filter(function (l) { return !(l.combined && !l.cents); });
   var not = [];
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
-  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'already inside goods cost and transport cost above, so not taken off a second time (decided by the category name)' }); }
+  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (x) { not.push({ label: x.label, cents: x.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });

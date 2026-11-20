@@ -167,6 +167,11 @@ export function assembleProfitability(d) {
   // pass 1 — pounds per release (a release is usable for a split only when every goods line on it has its pounds)
   var p1 = buildCells({ invoices: engineInvoices, groupOf: groupOf, factors: factors });
   var relPounds = {}; var relBad = {};
+  // v55.83-VT (Max, Nov 20: "i have NO IDEA what I am supposed to fix") — WHICH descriptions on a release have no weight, so the
+  // screen can name them and fix the unit right there. The invoice is named only when it is inside the report's own dates.
+  var relBadNames = {};
+  p1.cells.forEach(function (c) { if (!c.release || !(c.pounds === null || !(c.pounds > 0))) { return; } var nm = String(c.description || '').trim(); if (!nm) { return; } var lst = relBadNames[c.release] || (relBadNames[c.release] = []);
+    if (lst.some(function (b) { return b.name === nm; })) { return; } lst.push(periodIds[c.invoice_id] ? { name: nm, invoice: c.invoice || null, invoice_id: c.invoice_id || null } : { name: nm, older: true }); });
   p1.cells.forEach(function (c) { if (!c.release) { return; } if (c.pounds === null || !(c.pounds > 0)) { relBad[c.release] = true; } else { relPounds[c.release] = (relPounds[c.release] || 0) + c.pounds; } });
   Object.keys(relBad).forEach(function (k) { delete relPounds[k]; });
   var relKnown = {}; p1.cells.forEach(function (c) { if (c.release) { relKnown[c.release] = true; } });
@@ -359,6 +364,7 @@ export function assembleProfitability(d) {
     // the money IS known. The screen must say "not divided", never "missing".
     // … and (Max to Codex) the part of a combined total that stays undivided after ONE part was typed: also known money.
     c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : (pu && pu.combined_remainder !== undefined ? pu.combined_remainder : null);
+    c.weight_blockers = (c.release && relBadNames[c.release]) ? relBadNames[c.release] : [];
     c.shipping_combined = c.shipping_total_unsplit !== null; c.shipping_combined_from = c.shipping_combined ? ((pu && pu.combined_from) || 'typed for the release') : null;
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;

@@ -11,7 +11,7 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks } from '../lib/pnl-period';
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow } from '../lib/pnl-period';
 import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
@@ -388,22 +388,12 @@ export default function ProfitabilityTab(props) {
   function prefixOf(c) { var m0 = String(c.release_raw || '').match(/^\s*(\d{4})\s*-/); return m0 ? m0[1] : ''; }
   function periodView() {
     var cells = (data.cells || []).filter(function (c) { var p0 = prefixOf(c); return pPre === 'all' || (pPre === 'other' ? ['1001', '1002', '1003'].indexOf(p0) < 0 : p0 === pPre); });
-    var F = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
     // v55.83-VQ (Codex 22:50 P1) — the server's own answer decides (can_see_margin false), also for a period with no sales at all; the
     // missing-field check stays as a second lock
     var hidden = (data && data.can_see_margin === false) || cells.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
-    function add(row, c) {
-      row.lines++; row.pounds += Number(c.pounds) || 0;
-      var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
-      var v = { goods_revenue: c.goods_revenue, goods_cost: gc.some(function (x) { return x === null || x === undefined; }) ? null : gc.reduce(function (s0, x) { return s0 + Number(x); }, 0), goods_profit: c.goods_profit,
-        transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
-      F.forEach(function (f) { if (v[f] === null || v[f] === undefined) { row.miss[f] = (row.miss[f] || 0) + 1; } else { row[f] += Math.round(Number(v[f]) * 100); } });
-      if (!c.complete) { row.incomplete++; }
-      if (c.uncounted_lines) { row.uncounted++; }
-    }
+    var add = addPeriodCell; // v55.83-VT — the sums live in src/lib/pnl-period.js (tested), unchanged, plus the combined shipping amount
     // v55.83-UD — total profit is ALWAYS goods profit + transport profit (each over the lines whose costs are known)
-    function settle(r) { r.profit = r.goods_profit + r.transport_profit; return r; }
-    function blank(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, miss: {} }; F.forEach(function (f) { r[f] = 0; }); return r; }
+    var settle = settlePeriodRow; var blank = blankPeriodRow;
     var by = {}; var tot = blank('total', 'Total');
     cells.forEach(function (c) { var b = bucketOf(c.invoice_date, pGran); var r = by[b.key] || (by[b.key] = blank(b.key, b.label)); add(r, c); add(tot, c); });
     // v55.83-VQ (Codex 22:20) — every period between the report's two dates has a row, also one with no sales (its expenses still count)
@@ -473,6 +463,22 @@ export default function ProfitabilityTab(props) {
             <button disabled={draft[tk] === undefined || String(draft[tk]).trim() === ''} onClick={function (e) { e.stopPropagation(); act({ action: 'set_part_estimate', release: t.release, part: t.part, amount: draft[tk] }, (t.part === 'trucking' ? 'Trucking' : 'Freight') + ' saved for ' + t.release + '. The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[tk]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: (draft[tk] === undefined || String(draft[tk]).trim() === '') ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
           </span>;
         }
+        // v55.83-VT (Max, Nov 20: "it should give you that pop-up there, what to fix, and then it'll update it in its own place")
+        if (t.action === 'unit') {
+          if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
+          return <span className="flex flex-col gap-1" onClick={function (e) { e.stopPropagation(); }}>{(t.names || []).map(function (nm) { return <span key={nm} className="flex gap-1 items-center"><b style={{ maxWidth: 220 }}>{nm}</b><span>is sold in</span>
+            <select value="" disabled={busy} aria-label={'Unit of ' + nm} onChange={function (e) { var u = e.target.value; if (!u) { return; } act({ action: 'set_name_unit', names: [nm], unit: u }, 'Unit saved for “' + nm + '”. The list is refreshed.'); }} className="nt-light px-1.5 py-0.5 rounded text-[11px] font-bold" style={inp}>
+              <option value="">pick the unit…</option>{['lb', 'kg', 't', 'yd', 'lm'].map(function (u) { return <option key={u} value={u}>{UNIT_WORDS[u]}</option>; })}</select></span>; })}</span>;
+        }
+        if (t.action === 'cost') {
+          if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
+          if (!data.manual_costs_ready) { return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>; }
+          var ck = 'oc:' + t.key; var cEmpty = draft[ck] === undefined || String(draft[ck]).trim() === '';
+          return <span className="flex gap-1 items-center" onClick={function (e) { e.stopPropagation(); }}>
+            <span>$</span><input value={draft[ck] === undefined ? '' : draft[ck]} onChange={function (e) { d(ck, e.target.value); }} placeholder="cost per lb" aria-label={'Cost per pound of ' + t.product} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({ width: 96 }, inp)} /><span>per lb</span>
+            <button disabled={cEmpty} onClick={function (e) { e.stopPropagation(); act({ action: 'set_manual_cost', level: 'group', group_id: t.group_id, cost_per_lb: draft[ck], commission_per_lb: '' }, 'Cost saved for ' + t.product + ' (typed by hand). The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[ck]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: cEmpty ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
+          </span>;
+        }
         if (t.action === 'open_invoice') { return <span>{t.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(t.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}<button onClick={function (e) { e.stopPropagation(); goFix('invoice', t); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></span>; }
         return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>;
       }
@@ -488,8 +494,7 @@ export default function ProfitabilityTab(props) {
       var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
         <div className="font-extrabold text-[12px]" style={{ color: '#92400e' }}>{'⚠ Lines to fix — ' + fx.rows.length + ' of ' + fx.total + ' sale lines in ' + r.label + ' are missing a cost, so their profit is not counted yet.'}</div>
         {openBox}
-        <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>The same, line by line:</div>
-        {fx.reasons.map(function (g) { return <div key={g.key} className="text-[11px] mb-1 flex gap-2 items-start flex-wrap" style={{ color: INK }}><span><b>{g.count + ' × ' + g.title + '.'}</b>{' ' + g.how}</span><button onClick={function (e) { e.stopPropagation(); goFix(g.go, null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>{g.goLabel + ' →'}</button></div>; })}
+        <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>The same sale lines, one by one, for reference — fix them in the numbered list above (each fix is made right in its row):</div>
         <div className="overflow-auto pl-scroll mt-1" style={{ maxHeight: 260, border: '1px solid ' + LINE, background: '#ffffff' }}><table className="w-full text-[11px]">
           <thead><tr style={{ background: '#fef3c7', color: '#92400e' }}>{['Invoice', 'Date', 'Customer', 'Product', 'Release', 'Sold for', 'What is missing', ''].map(function (h, i) { return <th key={i} className={'px-2 py-1 font-bold ' + (i === 5 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>
           <tbody>{fx.rows.slice(0, 300).map(function (w, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
@@ -624,7 +629,7 @@ export default function ProfitabilityTab(props) {
         </table>
       </div>
       {fShow && (function () { var fr = rows.concat([tot]).filter(function (x) { return x.key === fShow.key; })[0]; if (!fr) { return null; } return <div style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 250, pointerEvents: fShow.pinned ? 'auto' : 'none' }}><PnlFormula title={fr.label || 'the total'} formula={pnlFormula(fr, expOn ? expOf(fr) : null, hidden)} onClose={fShow.pinned ? function () { setFShow(null); } : null} /></div>; })()}
-      <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight. Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
+      <div className="text-[10px] mt-1" style={{ color: SUB }}>Dated by invoice date. Goods cost = goods + commission + inbound allowance + bonded ($200 per Houston container; brokerage is the same thing and is not added twice). Transport profit = transport charged − trucking − freight − any shipping amount kept as one combined figure (not divided into trucking and freight). Total profit = goods profit + transport profit; a line whose cost is not known yet adds nothing to profit until it is (its revenue is shown under the total). “Not known yet” = some lines have no figure for that column yet (e.g. a bill not in) — the total shows only what is known. The same lines as By product / customer / invoice, so the totals agree.</div>
     </div>;
     return full && typeof document !== 'undefined' ? createPortal(body, document.body) : body;
   }
@@ -988,7 +993,7 @@ export default function ProfitabilityTab(props) {
       {view === 'estfinal' && estFinalView()}
       {view === 'inbound' && <InboundTruckingView report={inb.report} busy={inb.busy} error={inb.error} onReload={loadInbound} yardPounds={inb.report && inb.report.yard_pounds} />}
       <div className="text-[10px] mt-2" style={{ color: SUB }}>
-        Goods profit = goods revenue − goods cost − commission − inbound allowance − bonded/brokerage. Transport profit = transport charged − trucking − freight. Total profit = both. Averages are total ÷ total pounds. Costs that belong to a release are split across all the goods on that release by pounds, before any grouping or filter. Bonded / brokerage (the same thing) is $200 per Houston container (release 1002-), none on paper / foil containers or Canada (1001-). A bonded or brokerage bill that names exactly that one Houston release replaces the $200; any other bonded / brokerage bill is only listed for comparison.
+        Goods profit = goods revenue − goods cost − commission − inbound allowance − bonded/brokerage. Transport profit = transport charged − trucking − freight − any shipping amount kept as one combined figure (not divided into trucking and freight). Total profit = both. Averages are total ÷ total pounds. Costs that belong to a release are split across all the goods on that release by pounds, before any grouping or filter. Bonded / brokerage (the same thing) is $200 per Houston container (release 1002-), none on paper / foil containers or Canada (1001-). A bonded or brokerage bill that names exactly that one Houston release replaces the $200; any other bonded / brokerage bill is only listed for comparison.
       </div>
     </div>}
     {!data && busy && <div className="text-[12px] p-2" style={{ color: SUB }}>Building the report…</div>}

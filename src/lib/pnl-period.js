@@ -17,6 +17,25 @@ export function bucketOf(d, g) {
   var k = dt.toISOString().substring(0, 10); return { key: k, label: 'Week of ' + MON[dt.getUTCMonth()] + ' ' + dt.getUTCDate() + ', ' + dt.getUTCFullYear() };
 }
 
+// v55.83-VT (Codex 12:06) — the row of the period table, added up in ONE tested place (it was inside the screen). Unchanged sums;
+// new: combined_cost = the shipping amount kept as one combined figure (not divided into trucking / freight), so that
+// transport charged − trucking − freight − combined = transport profit holds on the numbers shown.
+export var PERIOD_FIELDS = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
+export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {} }; PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
+export function addPeriodCell(row, c) {
+  row.lines++; row.pounds += Number(c.pounds) || 0;
+  var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
+  var v = { goods_revenue: c.goods_revenue, goods_cost: gc.some(function (x) { return x === null || x === undefined; }) ? null : gc.reduce(function (s0, x) { return s0 + Number(x); }, 0), goods_profit: c.goods_profit,
+    transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
+  PERIOD_FIELDS.forEach(function (f) { if (v[f] === null || v[f] === undefined) { row.miss[f] = (row.miss[f] || 0) + 1; } else { row[f] += Math.round(Number(v[f]) * 100); } });
+  if (known(c.shipping_combined_share)) { row.combined_cost += Math.round(Number(c.shipping_combined_share) * 100); }
+  if (!c.complete) { row.incomplete++; }
+  if (c.uncounted_lines) { row.uncounted++; }
+  return row;
+}
+// total profit is ALWAYS goods profit + transport profit (each over the lines whose costs are known)
+export function settlePeriodRow(r) { r.profit = r.goods_profit + r.transport_profit; return r; }
+
 // the lines of the breakdown, in the order they are shown
 var CATEGORIES = [
   { key: 'goods_revenue', label: 'Goods sold', group: 'goods', kind: 'in' },
@@ -29,6 +48,7 @@ var CATEGORIES = [
   { key: 'transport_revenue', label: 'Transport charged to customers', group: 'transport', kind: 'in' },
   { key: 'trucking_cost', label: 'Trucking (our cost)', group: 'transport', kind: 'out' },
   { key: 'freight_cost', label: 'Freight / shipping (our cost)', group: 'transport', kind: 'out' },
+  { key: 'shipping_combined_share', label: 'Shipping kept as one combined amount (not divided)', group: 'transport', kind: 'out', optional: true },
   { key: 'transport_profit', label: 'TRANSPORT PROFIT', group: 'transport', kind: 'profit' }
 ];
 
@@ -43,10 +63,10 @@ export function periodBreakdown(cells, forceHidden) {
   var hidden = forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; });
   var cats = CATEGORIES.map(function (d) {
     var row = { key: d.key, label: d.label, group: d.group, kind: d.kind, cents: 0, missing: 0, lines: 0 };
-    list.forEach(function (c) { var v = c[d.key]; if (!known(v)) { row.missing += 1; return; } row.cents += cents(v); row.lines += 1; });
+    list.forEach(function (c) { var v = c[d.key]; if (!known(v)) { if (!d.optional) { row.missing += 1; } return; } row.cents += cents(v); row.lines += 1; });
     if (hidden && d.kind === 'profit') { row.cents = null; }
     return row;
-  });
+  }).filter(function (row) { var d0 = CATEGORIES.filter(function (x) { return x.key === row.key; })[0]; return !(d0.optional && row.cents === 0); });
   function group(field, fallback) {
     var by = {}; var order = [];
     list.forEach(function (c) {
@@ -108,14 +128,15 @@ export function openTasks(cells, forceHidden) {
   if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, tasks: [], lines: 0, combined: [] }; }
   var map = {}; var order = []; var lineSet = {}; var combined = {}; var combinedList = [];
   function add(key, base, c, i) {
-    var t = map[key]; if (!t) { t = map[key] = Object.assign({ key: key, lines: 0, sold_for: 0, invoices: [], _inv: {} }, base); order.push(key); }
+    var t = map[key]; if (!t) { t = map[key] = Object.assign({ key: key, lines: 0, sold_for: 0, invoices: [], _inv: {}, _seen: {} }, base); order.push(key); }
+    if (t._seen[i]) { return; } t._seen[i] = true;
     t.lines++; t.sold_for += known(c.goods_revenue) ? Number(c.goods_revenue) : 0; lineSet[i] = true;
     var iv = String(c.invoice || ''); if (iv && !t._inv[iv]) { t._inv[iv] = true; t.invoices.push({ invoice: iv, invoice_id: c.invoice_id || null }); }
   }
   list.forEach(function (c, i) {
     var rel = String(c.release_raw || c.release || ''); var prod = String(c.product || c.description || '(no product name)'); var inv = String(c.invoice || '');
-    if (!known(c.pounds)) { add('pounds:' + prod, { kind: 'pounds', action: 'setup', product: prod, title: prod + ' — no weight', how: 'The unit of this product has no pounds, so nothing can be worked out per pound. In Set-up, give the product its unit (lb, kg, yd …).' }, c, i); }
-    else if (!known(c.base_cost)) { add('base_cost:' + prod, { kind: 'base_cost', action: 'setup', product: prod, title: prod + ' — no supplier cost', how: 'No supplier bill is linked to this product and no cost is typed for it. In Set-up, link the supplier bill line to the product, or type its cost per pound.' }, c, i); }
+    if (!known(c.pounds)) { add('pounds:' + prod, { kind: 'pounds', action: 'unit', product: prod, names: [String(c.description || prod)], title: prod + ' — no weight', how: 'The Hub does not know what “' + String(c.description || prod) + '” is sold in, so nothing can be worked out per pound. Pick its unit here.' }, c, i); if (map['pounds:' + prod].names.indexOf(String(c.description || prod)) < 0) { map['pounds:' + prod].names.push(String(c.description || prod)); } }
+    else if (!known(c.base_cost)) { add('base_cost:' + prod, { kind: 'base_cost', action: c.group_id ? 'cost' : 'setup', product: prod, group_id: c.group_id || null, title: prod + ' — no supplier cost', how: c.group_id ? 'No supplier bill is linked to this product and no cost is typed for it. Type what it costs us per POUND here (used until a supplier bill is linked to it).' : 'This description is not under a product yet, so it has no cost. In Set-up, tick it and put it under a product; then its cost can be typed.' }, c, i); }
     if (!known(c.transport_revenue)) { add('terms:' + inv, { kind: 'transport_revenue', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — the shipping charged cannot be worked out', how: 'Either the shipping terms of the invoice are not set (for example a CNF price with no shipping amount), or a goods line on it has no weight to share the shipping by. Open its row in By invoice: set the terms, and check every line has a unit.' }, c, i); }
     var noT = !known(c.trucking_cost); var noF = !known(c.freight_cost);
     // Codex 07:00 — a null share is NOT proof that the money is missing. The source decides what the row says and whether typing
@@ -129,14 +150,15 @@ export function openTasks(cells, forceHidden) {
     else {
       [['trucking', noT, c.trucking_kind, c.trucking_from], ['freight', noF, c.freight_kind, c.freight_from]].forEach(function (x) {
         if (!x[1]) { return; }
-        if (x[2]) { add('alloc:' + x[0] + ':' + rel, { kind: 'not_shared', action: 'setup', part: x[0], release: rel, source: String(x[3] || x[2]), title: 'Release ' + rel + ' — ' + x[0] + ' is known, but cannot be shared between its sale lines', how: 'The ' + x[0] + ' figure is there (' + String(x[3] || x[2]) + '). It is shared by pounds, and a product on this release has no weight. Do not type the figure again — give that product its unit in Set-up.' }, c, i); return; }
+        if (x[2]) { var wb = (c.weight_blockers || []); var wn = wb.map(function (b) { return '“' + b.name + '”' + (b.invoice ? ' (invoice ' + b.invoice + ')' : (b.older ? ' (on an older invoice of this release)' : '')); }).join(', ');
+          add('alloc:' + rel, { kind: 'not_shared', action: wb.length ? 'unit' : 'setup', release: rel, names: wb.map(function (b) { return b.name; }), blockers: wb, title: 'Release ' + rel + ' — its shipping cost is known, but cannot be shared between its sale lines', how: 'The trucking / freight figure is already there — do not type it again. It is shared by pounds, and ' + (wb.length ? wn + ' on this release has no unit, so its pounds are not known. Pick the unit here.' : 'a product on this release has no weight. Give that product its unit in Set-up.') }, c, i); return; }
         add(x[0] + ':' + rel, { kind: x[0], action: 'type', part: x[0], release: rel, title: 'Release ' + rel + ' — no ' + x[0] + ' cost', how: 'There is no ' + (x[0] === 'trucking' ? 'trucking' : 'freight / shipping') + ' bill, no typed figure and no estimate for this release. Type the ' + x[0] + ' cost here — type 0 if there was none. A ' + x[0] + ' bill for this release replaces it when it arrives.' }, c, i);
       });
     }
     if (!lineSet[i] && (!known(c.goods_profit) || !known(c.transport_profit))) { add('other:' + inv, { kind: 'other', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — not complete', how: 'Something else on this invoice is missing. Open it to see what.' }, c, i); }
   });
   var RANK = { trucking: 1, freight: 1, no_release: 2, release_split: 2, not_shared: 3, base_cost: 3, pounds: 3, transport_revenue: 4, unsplit_total: 5, other: 6 };
-  var tasks = order.map(function (k) { var t = map[k]; delete t._inv; return t; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
+  var tasks = order.map(function (k) { var t = map[k]; delete t._inv; delete t._seen; return t; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
   return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length, combined: combinedList };
 }
 
