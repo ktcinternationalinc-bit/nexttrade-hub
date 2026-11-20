@@ -144,6 +144,21 @@ check('a bill payment recorded against the dropped copy is NOT lost: it follows 
 check('a different transaction number with the same amount is a different transfer', dR.transfers[1].id === 'other' && dR.transfers[1].sent === 25000);
 check('same number but a different amount is NOT merged (never guessed)', (function () { var x = JSON.parse(JSON.stringify(D)); x.bankLines[0].amount_abs = 24000; var r = of(F.partyFundsBreakdown(x), 'RTM Capital'); return r.transfers.length === 3 && r.duplicate_bank_lines.length === 0 && r.period.funds_sent === 74000; })());
 
+// ── bills paid THROUGH the company with no source transfer named (simple-fixes' gap): shown apart, taken from no transfer ──
+var U = { parties: parties, entries: [], requests: [], from: '2026-08-01', to: '2026-08-31',
+  bills: [Object.assign(bill('ub1', 'Kronos', 'trucking', 800, '2026-08-03'), { paid_via: 'RTM Capital' }), Object.assign(bill('ub2', 'AMB', 'trucking', 300, '2026-08-04'), { paid_via: 'RTM Capital' }),
+    Object.assign(bill('ub3', 'Rent Co', 'rent', 500, '2026-08-05'), { paid_via: 'NextTrade Industries' }), bill('ub4', 'Direct Vendor', 'supplies', 90, '2026-08-06')],
+  bankLines: [line('UT1', '2026-08-01', 5000, 'RTM Capital'), { id: 'KTC-OTHER', date: '2026-08-02', amount_abs: 300, third_party_payer: null, direction: 'out', name: 'ACH AMB' }],
+  pays: [pay('up1', 'ub1', 800, null, '2026-08-10'), pay('up2', 'ub2', 300, 'KTC-OTHER', '2026-08-11'), pay('up3', 'ub3', 500, null, '2026-09-02'), pay('up4', 'ub4', 90, null, '2026-08-12'),
+    Object.assign(pay('up5', 'ub1', 50, null, '2026-08-13'), { voided: true }), pay('up6', 'ub1', 100, 'UT1', '2026-08-14')] };
+var uR = of(F.partyFundsBreakdown(U), 'RTM Capital'); var uN = of(F.partyFundsBreakdown(U), 'NextTrade Industries');
+check('a bill paid through RTM with NO bank line named is listed apart: 800, plus 300 that sits on a line which is not an RTM transfer', uR.paid_without_a_transfer.period_total === 1100 && uR.paid_without_a_transfer.period_rows.length === 2 && total(uR.paid_without_a_transfer.period_rows, 'portion') === 1100 && uR.paid_without_a_transfer.period_rows[0].on_bank_line === null && uR.paid_without_a_transfer.period_rows[1].on_bank_line === 'KTC-OTHER', uR.paid_without_a_transfer);
+check('… it is taken from NO transfer (held stays 4,900 after the one linked 100) and it is never a fee', uR.as_of.held === 4900 && uR.period.applied_to_bills === 100 && uR.period.fee_deduction === 0 && uR.transfers[0].as_of.applied_to_bills === 100);
+check('… and the company is flagged needs_reconciliation (held funds are overstated until these are linked)', uR.needs_reconciliation === true && uR.arithmetic_ok === true);
+check('… voided payments and bills not paid through a company are not in the list', uR.paid_without_a_transfer.lifetime_rows.every(function (r) { return r.payment_id !== 'up5' && r.payment_id !== 'up4'; }));
+check('each company has its own list, and a September payment is not in August\'s period or as-of lists but is in the lifetime list', uN.paid_without_a_transfer.period_total === 0 && uN.paid_without_a_transfer.as_of_total === 0 && uN.paid_without_a_transfer.lifetime_total === 500 && uN.paid_without_a_transfer.lifetime_rows[0].vendor === 'Rent Co');
+check('nothing unlinked → empty lists, no flag', nt.paid_without_a_transfer.lifetime_total === 0 && nt.paid_without_a_transfer.period_rows.length === 0 && nt.needs_reconciliation === false);
+
 var src = fs.readFileSync(path.join(root, 'src/lib/party-funds.js'), 'utf8');
 check('no example amount is hard-coded in the application code', !/66000|52000|12000|10000|66,000|52,000/.test(src));
 check('the helper is pure: no database, no fetch, no supabase import', !/supabase|fetch\(|\.from\(|rpc\(/.test(src));

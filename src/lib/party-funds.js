@@ -80,6 +80,19 @@ export function partyFundsBreakdown(o) {
         // facts ABOUT the bill only. Where and when the report recognizes this cost is NOT decided here — the report must resolve it.
         source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });
     });
+    // BILLS PAID THROUGH THIS COMPANY WITH NO SOURCE TRANSFER NAMED: the bill is marked "paid through" the company and has a live
+    // payment, but that payment is on no bank line of ours (recorded as "paid for us" without saying from which transfer), or on a
+    // bank line that is not one of this company's transfers. They are real bill payments (the bill's own cost is counted where the
+    // report counts it), but they take from NO transfer here — so held funds are overstated by them until a person links them.
+    var unlinked = [];
+    (o.pays || []).forEach(function (p) {
+      if (p.voided === true || tById[p.bank_transaction_id]) { return; }
+      var b = billById[p.bill_id]; if (!b || key(b.paid_via) !== pk) { return; }
+      unlinked.push({ payment_id: p.id || null, paid_date: day(p.paid_date), portion: r2(p.amount), bill_id: p.bill_id, vendor: b.vendor_name || '(bill)', bill_number: b.bill_number || null,
+        bill_total: b.total_amount != null ? r2(b.total_amount) : null, release_number: b.release_number || null, method: p.method || null,
+        on_bank_line: p.bank_transaction_id || null, // null = no bank line at all; an id = a line that is not one of this company's transfers
+        source_bill: { category: b.category || 'uncategorized', bill_date: day(b.bill_date) || null, recognition: 'unverified' } });
+    });
     // explicit services rendered: (a) the fee of a request already sent from the transfer, (b) fee entries of the advances ledger
     function feeRow(t, amount, date, why, id) { var a = r2(amount); if (!a) { return; } var row = { transfer_id: t ? t.id : null, date: day(date), amount: a, why: why, id: id }; if (t) { t.lifetime_fee_rows.push(row); } else { looseFees.push(row); } }
     (o.requests || []).forEach(function (w) {
@@ -121,6 +134,9 @@ export function partyFundsBreakdown(o) {
     });
     var looseInPeriod = looseFees.filter(function (r) { return inRange(r.date, from, to); });
     if (looseFees.length) { unresolved = true; }
+    if (unlinked.length) { unresolved = true; }
+    var unlinkedPeriod = unlinked.filter(function (r) { return inRange(r.paid_date, from, to); });
+    var unlinkedAsOf = unlinked.filter(function (r) { return !to || r.paid_date <= to; });
     var applied = sum(per.applied_rows, 'portion'); var fees = sum(per.fee_rows, 'amount');
     var closing = r2(per.opening_held + per.funds_sent - applied - fees);
     var asOfHeld = r2(asOf.funds_sent - asOf.applied_to_bills - asOf.services_rendered);
@@ -142,7 +158,11 @@ export function partyFundsBreakdown(o) {
       identity_to_confirm: byText,
       // the same bank transfer present as a second bank line: NOT counted; listed so a person can mark the copy as a duplicate
       duplicate_bank_lines: duplicates, duplicate_bank_lines_total: sum(duplicates, 'sent'),
-      needs_reconciliation: unresolved,                           // more used than sent on some transfer, or a fee that names no transfer
+      // paid through the company but linked to no transfer: NOT taken from any transfer above, NOT a fee — listed to be linked.
+      // period = paid in the dates asked · as_of = paid up to `to` · lifetime = all. Each total is the sum of its own list.
+      paid_without_a_transfer: { period_total: sum(unlinkedPeriod, 'portion'), period_rows: unlinkedPeriod, as_of_total: sum(unlinkedAsOf, 'portion'), as_of_rows: unlinkedAsOf,
+        lifetime_total: sum(unlinked, 'portion'), lifetime_rows: unlinked },
+      needs_reconciliation: unresolved,                           // more used than sent on some transfer, a fee that names no transfer, or a bill paid through the company with no transfer named
     };
   });
 }
