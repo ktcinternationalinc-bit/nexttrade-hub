@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
 import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks } from '../lib/pnl-period';
+import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
@@ -443,7 +444,6 @@ export default function ProfitabilityTab(props) {
         if (t.action === 'open_invoice') { return <span>{t.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(t.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}<button onClick={function (e) { e.stopPropagation(); goFix('invoice', t); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></span>; }
         return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>;
       }
-      var combNote = (ot.combined || []).length === 0 ? null : <div className="px-2 py-1 text-[10px]" style={{ color: SUB, borderTop: '1px solid ' + LINE }}>{(ot.combined || []).length + ' release(s) use a combined transportation cost; breakdown not separated (' + (ot.combined || []).slice(0, 8).map(function (x) { return x.release + ' $' + fmt(x.amount); }).join(', ') + ((ot.combined || []).length > 8 ? ' …' : '') + '). It is used in the profit as it is — nothing to fix.'}</div>;
       var openBox = ot.tasks.length === 0 ? null : <div className="mb-2 rounded-lg" style={{ background: '#ffffff', border: '1px solid #f59e0b' }}>
         <div className="px-2 py-1.5 font-extrabold text-[12px]" style={{ background: '#fef3c7', color: '#92400e' }}>{'What remains open in ' + r.label + ': ' + ot.tasks.length + ' thing(s) to fix, covering ' + ot.lines + ' sale line(s). Fix one and it leaves this list.'}</div>
         {ot.tasks.slice(0, 100).map(function (t, i) { return <div key={t.key} className="px-2 py-1.5 text-[11px] flex gap-2 items-start flex-wrap" style={{ borderTop: '1px solid ' + LINE, color: INK }}>
@@ -451,7 +451,6 @@ export default function ProfitabilityTab(props) {
           <span>{taskAction(t)}</span>
         </div>; })}
         {ot.tasks.length > 100 && <div className="px-2 py-1 text-[10px]" style={{ color: SUB }}>{'Showing the first 100 of ' + ot.tasks.length + '.'}</div>}
-        {combNote}
         <div className="px-2 py-1 text-[10px]" style={{ color: SUB, borderTop: '1px solid ' + LINE }}>A figure that is already there — a bill, a typed figure or an estimate, also 0 — counts as known and is not listed. A bill for the release always replaces a typed figure or an estimate.</div>
       </div>;
       var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
@@ -472,6 +471,8 @@ export default function ProfitabilityTab(props) {
       </div>;
       return <div>
         {fixBox}
+        {/* Codex 07:20 P2 — shown on its own, also when the period has nothing to fix; openTasks returns no list at all to a person who may not see profit */}
+        <CombinedShippingNote combined={ot.combined} />
         <div className="font-extrabold text-[12px] mb-2" style={{ color: INK }}>{r.label + ' — breakdown · ' + bd.lines + ' line(s) · ' + fmt0(bd.pounds) + ' lb · total profit ' + money(bd.total.profit) + ' (goods ' + money(bd.total.goods_profit) + ' + transport ' + money(bd.total.transport_profit) + ')'}</div>
         <div className="flex gap-3 flex-wrap mb-2">{side('goods', 'GOODS', '#1e3a8a')}{side('transport', 'TRANSPORTATION', '#7c2d12')}</div>
         <div className="flex gap-3 flex-wrap">{list('By product', bd.products)}{list('By customer', bd.customers)}</div>

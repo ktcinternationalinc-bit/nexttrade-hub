@@ -355,8 +355,15 @@ export function assembleProfitability(d) {
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;
       if (pu.trucking) { c.trucking_cost = r2(c.outbound_cost * tAmt / relTot); }
-      if (pu.freight) { c.freight_cost = r2(c.outbound_cost - (c.trucking_cost || 0)); }
-    } else if (pu && relTot === 0 && c.outbound_cost === 0) { if (pu.trucking) { c.trucking_cost = 0; } if (pu.freight) { c.freight_cost = 0; } }
+      // Codex 07:20 P1 — with a combined total kept, EACH known part is its own share of the cost (its own amount ÷ the release
+      // total); what is left is the combined remainder, never added to freight. Without a combined total freight is the rest, so
+      // trucking + freight = outbound to the cent, as before.
+      if (pu.combined_remainder !== undefined) {
+        if (pu.freight) { c.freight_cost = r2(c.outbound_cost * pu.freight.amount / relTot); }
+        c.shipping_combined_share = r2(c.outbound_cost - (c.trucking_cost || 0) - (c.freight_cost || 0)); // this sale's share of the undivided remainder: parts + this = outbound, to the cent
+      } else if (pu.freight) { c.freight_cost = r2(c.outbound_cost - (c.trucking_cost || 0)); }
+    } else if (pu && relTot === 0 && c.outbound_cost === 0) { if (pu.trucking) { c.trucking_cost = 0; } if (pu.freight) { c.freight_cost = 0; } if (pu.combined_remainder !== undefined) { c.shipping_combined_share = 0; } }
+    if (pu && pu.legacy_total !== null && pu.legacy_total !== undefined && c.outbound_cost !== null && c.outbound_cost !== undefined) { c.shipping_combined_share = c.outbound_cost; } // nothing divided: the whole share is combined
     if (c.group_id && !(billKeysOfGroup[c.group_id] || []).length) { c.flags.push('no_bill_description_linked'); }
     if (!c.group_id && c.base_cost === null) { c.flags.push('not_grouped_no_cost_source'); }
     // v55.83-TE (Max, Nov 16: "why does the second not have an avg cost") — say WHY a cost is missing, one reason per sale
