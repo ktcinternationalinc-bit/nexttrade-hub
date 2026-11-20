@@ -50,7 +50,7 @@ function run(o) {
   var items = o.items || [{ id: 'l1', invoice_id: 'i1', wave_product_name: 'Paper', description: 'Paper', quantity: 100, unit_price: 10 }];
   return A.assembleProfitability({ date_from: '2026-01-01', date_to: '', windowDays: 90, warehouseOn: false,
     invoices: [{ id: 'i1', invoice_number: 'INV 1', accounting_customer_id: 'c1', invoice_date: '2026-06-10', record_status: 'active', currency: 'USD', release_number: o.release || '1001-9001' }],
-    items: items, customerNames: { c1: 'Alpha' }, terms: [{ invoice_id: 'i1', shipping_terms: 'EXW' }],
+    items: items, customerNames: { c1: 'Alpha' }, terms: o.terms || [{ invoice_id: 'i1', shipping_terms: 'EXW' }],
     nameUnits: [{ name_key: PR.nameKey('Paper'), unit: 'lb' }], groups: [], groupNames: [], bills: o.bills || [], billLines: [], warehouseRows: [],
     estimates: o.estimates || [], partEstimates: o.partEstimates || [], lineReleasePounds: o.lineReleasePounds || [] });
 }
@@ -125,6 +125,35 @@ check('…the same with an explicit trucking $0: no task, no line to fix, note r
 check('…no combined release → the note renders nothing; a person who may not see profit gets no list to render', RS.renderToStaticMarkup(React.createElement(Note, { combined: [] })) === '' && P.openTasks(okCells, true).combined.length === 0);
 var tabSrc = fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8');
 check('…on the screen the note sits OUTSIDE the amber Lines-to-fix box, right after it, so it shows when that box is absent', tabSrc.indexOf('<CombinedShippingNote combined={ot.combined} />') > tabSrc.indexOf('        {fixBox}') && tabSrc.indexOf('{combNote}') < 0 && /import CombinedShippingNote from '\.\/CombinedShippingNote';/.test(tabSrc));
+
+// ── Codex 07:30 — the shipping cost typed ON THE INVOICE is a combined amount too: the same rule, the same marks
+var IT = [{ invoice_id: 'i1', shipping_terms: 'CNF_INCLUDED', shipping_cost_estimate: 1000 }]; var I20 = [{ id: 'l1', invoice_id: 'i1', wave_product_name: 'Paper', description: 'Paper', quantity: 100, unit_price: 20 }];
+function irun(o) { return run(Object.assign({ terms: IT, items: I20 }, o || {})); }
+function shipOnly(r) { var o3 = P.openTasks(r.cells || []); o3.tasks = o3.tasks.filter(function (k) { return k.kind === 'trucking' || k.kind === 'freight' || k.kind === 'not_shared' || k.kind === 'no_release' || k.kind === 'release_split'; }); return o3; }
+var i0 = irun(); var ci0 = (i0.cells || [])[0];
+check('Codex 07:30: invoice-form combined $1,000 alone → cost 1,000, marked combined (from the invoice form), NO trucking / freight task', ci0.outbound_cost === 1000 && ci0.shipping_total_unsplit === 1000 && ci0.shipping_combined_from === 'invoice form' && ci0.shipping_combined_share === 1000 && shipOnly(i0).tasks.length === 0 && shipOnly(i0).combined.length === 1, [ci0.outbound_cost, ci0.shipping_total_unsplit, shipOnly(i0).tasks.map(function (k) { return k.key; })]);
+var i1 = irun({ partEstimates: [{ release_key: RK, part: 'trucking', amount: 0 }] }); var ci1 = (i1.cells || [])[0];
+check('…+ manual trucking $0 → the total STAYS 1,000 (it was dropping to 0), trucking is 0 manual, freight stays empty with no kind, 1,000 stays combined, no missing-freight task', ci1.outbound_cost === 1000 && ci1.trucking_cost === 0 && ci1.trucking_kind === 'manual' && ci1.freight_cost === null && !ci1.freight_kind && ci1.shipping_total_unsplit === 1000 && ci1.shipping_combined_from === 'invoice form' && shipOnly(i1).tasks.length === 0 && rec(ci1), [ci1.outbound_cost, ci1.trucking_cost, ci1.freight_cost, shipOnly(i1).tasks.map(function (k) { return k.key; })]);
+var i2 = irun({ partEstimates: [{ release_key: RK, part: 'freight', amount: 0 }] }); var ci2 = (i2.cells || [])[0];
+check('…+ manual freight $0 → total 1,000, freight 0, trucking empty, 1,000 combined, no task', ci2.outbound_cost === 1000 && ci2.freight_cost === 0 && ci2.trucking_cost === null && ci2.shipping_combined_share === 1000 && shipOnly(i2).tasks.length === 0 && rec(ci2));
+var i3 = irun({ partEstimates: [{ release_key: RK, part: 'trucking', amount: 300 }] }); var ci3 = (i3.cells || [])[0];
+check('…+ trucking $300 → total 1,000, trucking 300, 700 combined', ci3.outbound_cost === 1000 && ci3.trucking_cost === 300 && ci3.shipping_total_unsplit === 700 && rec(ci3) && shipOnly(i3).tasks.length === 0);
+var i4 = irun({ partEstimates: [{ release_key: RK, part: 'trucking', amount: null }] });
+check('…clearing the box is not a zero: plain combined 1,000 again', (i4.cells || [])[0].outbound_cost === 1000 && (i4.cells || [])[0].trucking_cost === null && (i4.cells || [])[0].shipping_total_unsplit === 1000);
+var i5 = irun({ partEstimates: [{ release_key: RK, part: 'trucking', amount: 300 }, { release_key: RK, part: 'freight', amount: 500 }] }); var ci5 = (i5.cells || [])[0];
+check('…both parts typed (300 + 500) replace the invoice-form amount: 800, nothing combined', ci5.outbound_cost === 800 && ci5.trucking_cost === 300 && ci5.freight_cost === 500 && ci5.shipping_total_unsplit === null && shipOnly(i5).combined.length === 0);
+var i6 = irun({ bills: [{ id: 'b1', bill_number: 'TR-1', vendor_name: 'Trucker', bill_type: 'trucking', shipment_direction: 'outbound', release_number: '1001-9001', total_amount: 300, record_status: 'active', bill_date: '2026-06-12' }] }); var ci6 = (i6.cells || [])[0];
+check('…a trucking BILL of $300 beside the invoice-form 1,000: total 1,000, trucking 300 from the bill, 700 combined', ci6.outbound_cost === 1000 && ci6.trucking_cost === 300 && ci6.trucking_kind === 'bill' && ci6.shipping_total_unsplit === 700 && rec(ci6));
+var i7 = irun({ estimates: [{ release_key: RK, outbound_estimate: 600 }], partEstimates: [{ release_key: RK, part: 'trucking', amount: 0 }] });
+check('…two combined sources: the total typed for the release (600) still comes before the invoice form (1,000), as before', (i7.cells || [])[0].outbound_cost === 600 && (i7.cells || [])[0].shipping_combined_from === 'typed for the release');
+var RK2 = PR.relKey('1001-9002');
+var i8in = { release: '1001-9001 / 1001-9002', lineReleasePounds: [{ invoice_item_id: 'l1', release_key: RK, pounds: 60 }, { invoice_item_id: 'l1', release_key: RK2, pounds: 40 }] };
+var i8 = irun(i8in); var i8b = irun(Object.assign({ partEstimates: [{ release_key: RK, part: 'trucking', amount: 0 }] }, i8in));
+function relCells(r, raw) { return (r.cells || []).filter(function (c) { return (c.release_raw || '') === raw; }); }
+check('…an invoice on two releases (60 lb / 40 lb): the 1,000 is still divided 600 / 400 by pounds, each marked combined', relCells(i8, '1001-9001')[0].outbound_cost === 600 && relCells(i8, '1001-9002')[0].outbound_cost === 400 && (i8.cells || []).every(function (c) { return c.shipping_combined === true; }) && shipOnly(i8).tasks.length === 0, (i8.cells || []).map(function (c) { return [c.release_raw, c.outbound_cost, c.shipping_total_unsplit]; }));
+check('…and trucking $0 typed on ONE of them leaves both shares as they were (600 and 400)', relCells(i8b, '1001-9001')[0].outbound_cost === 600 && relCells(i8b, '1001-9001')[0].trucking_cost === 0 && relCells(i8b, '1001-9002')[0].outbound_cost === 400 && shipOnly(i8b).tasks.length === 0);
+check('…reload: the same input gives the same cells', JSON.stringify(irun({ partEstimates: [{ release_key: RK, part: 'trucking', amount: 0 }] }).cells) === JSON.stringify(i1.cells));
+check('…the neutral note is rendered for the invoice source as well', (function () { var React2 = require('react'); var RS2 = require('react-dom/server'); var N2 = require(path.join(root, 'src/components/CombinedShippingNote.jsx')).default; return RS2.renderToStaticMarkup(React2.createElement(N2, { combined: shipOnly(i1).combined })).indexOf('1001-9001 $1,000.00') > 0; })());
 
 // P2 — known parts, but a sibling line has no weight
 var two = [{ id: 'l1', invoice_id: 'i1', wave_product_name: 'Paper', description: 'Paper', quantity: 100, unit_price: 10 }, { id: 'l2', invoice_id: 'i1', wave_product_name: 'Mystery', description: 'Mystery', quantity: 5, unit_price: 10 }];

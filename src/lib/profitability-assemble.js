@@ -235,6 +235,12 @@ export function assembleProfitability(d) {
   // A part with nothing stays empty; the other part is still shown and used. Older typed totals are used only when no part is known.
   function numOrNull(v) { return v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : r2(v); }
   var typedPart = {}; (d.partEstimates || []).forEach(function (e) { var o = typedPart[e.release_key] || (typedPart[e.release_key] = {}); var v = numOrNull(e.amount); if (v !== null && (e.part === 'trucking' || e.part === 'freight')) { o[e.part] = { amount: v, note: e.note || null }; } });
+  // v55.83-VS (Codex 07:30) — worked out here, before the parts, because the shipping cost typed on the invoice is a COMBINED
+  // amount too (freight + trucking we expect to pay) and gets the same protection as a combined total typed for the release.
+  // Order between the two combined sources is unchanged: the total typed for the release first, the invoice form second.
+  var invEst = invoiceEstimatesByRelease(engineInvoices.map(function (iv) { return { invoice_id: iv.id, invoice_number: iv.number, shipping_terms: iv.shipping_terms, shipping_cost_estimate: iv.shipping_cost_estimate, releases: iv.releases }; }), relPounds);
+  (invEst.__unresolved || []).forEach(function (u) { flags.push({ kind: 'invoice_shipping_estimate_split_unresolved', invoice: u.invoice, releases: u.releases.map(function (k) { return relRaw[k] || k; }), amount: u.amount }); });
+  delete invEst.__unresolved;
   var whUsed = {}; var partsUsed = {};
   Object.keys(relKnown).forEach(function (rel) {
     var o = outbound[rel] || { actual: null, estimate: null, bills: [] };
@@ -269,12 +275,15 @@ export function assembleProfitability(d) {
     //     stays "combined, breakdown not separated" — it is NOT relabelled as the other part, and nothing is counted twice.
     //     Only when the one known part alone is larger than the combined total does the larger figure win, and it is flagged.
     var comb = estimateOf[rel] !== undefined && !isNaN(Number(estimateOf[rel])) ? r2(estimateOf[rel]) : null;
+    var combFromInvoice = false;
+    if (comb === null && invEst[rel] && invEst[rel].amount !== null && invEst[rel].amount !== undefined && !isNaN(Number(invEst[rel].amount))) { comb = r2(invEst[rel].amount); combFromInvoice = true; }
     var combinedKept = false;
     if (comb !== null && (!t || !f)) {
       var one = t || f;
       if (one.amount > comb + 0.005) { flags.push({ kind: 'part_exceeds_combined_total', release: relRaw[rel] || rel, part: t ? 'trucking' : 'freight', part_amount: one.amount, combined_total: comb }); }
       else { amt = comb; }
-      combinedKept = true; pu.combined_total = comb; pu.combined_remainder = r2(amt - one.amount);
+      combinedKept = true; pu.combined_total = comb; pu.combined_remainder = r2(amt - one.amount); pu.combined_from = combFromInvoice ? 'invoice form' : 'typed for the release';
+      if (combFromInvoice) { oo.from_invoice_form = true; if (invEst[rel].differ) { flags.push({ kind: 'invoice_shipping_estimates_differ', release: relRaw[rel] || rel, invoices: invEst[rel].invoices, used: invEst[rel].amount }); } }
     }
     var known = [t, f].filter(function (x) { return !!x; });
     var allBill = known.every(function (x) { return x.kind === 'bill'; });
@@ -288,15 +297,14 @@ export function assembleProfitability(d) {
 
   // v55.83-TG — the shipping cost typed ON THE INVOICE: an ESTIMATE, used only when the release has no bill, no typed release
   // estimate and no warehouse figure. A bill always replaces it (Max: "Final confirmed value is based on bill").
-  var invEst = invoiceEstimatesByRelease(engineInvoices.map(function (iv) { return { invoice_id: iv.id, invoice_number: iv.number, shipping_terms: iv.shipping_terms, shipping_cost_estimate: iv.shipping_cost_estimate, releases: iv.releases }; }), relPounds);
-  (invEst.__unresolved || []).forEach(function (u) { flags.push({ kind: 'invoice_shipping_estimate_split_unresolved', invoice: u.invoice, releases: u.releases.map(function (k) { return relRaw[k] || k; }), amount: u.amount }); });
-  delete invEst.__unresolved;
   Object.keys(invEst).forEach(function (rel) {
     if (!relKnown[rel]) { return; }
     var o = outbound[rel];
     if (o && ((o.actual !== null && o.actual !== undefined) || (o.estimate !== null && o.estimate !== undefined))) { return; }
     o = outbound[rel] || (outbound[rel] = { actual: null, estimate: null, bills: [] });
     o.estimate = invEst[rel].amount; o.from_invoice_form = true;
+    // Codex 07:30 — the same "combined, not separated" mark as a total typed for the release: known money, not missing parts
+    if (partsUsed[rel] && !partsUsed[rel].trucking && !partsUsed[rel].freight) { partsUsed[rel].legacy_total = r2(invEst[rel].amount); partsUsed[rel].combined_from = 'invoice form'; }
     if (invEst[rel].differ) { flags.push({ kind: 'invoice_shipping_estimates_differ', release: relRaw[rel] || rel, invoices: invEst[rel].invoices, used: invEst[rel].amount }); }
   });
 
@@ -351,7 +359,7 @@ export function assembleProfitability(d) {
     // the money IS known. The screen must say "not divided", never "missing".
     // … and (Max to Codex) the part of a combined total that stays undivided after ONE part was typed: also known money.
     c.shipping_total_unsplit = pu && pu.legacy_total !== null && pu.legacy_total !== undefined ? pu.legacy_total : (pu && pu.combined_remainder !== undefined ? pu.combined_remainder : null);
-    c.shipping_combined = c.shipping_total_unsplit !== null;
+    c.shipping_combined = c.shipping_total_unsplit !== null; c.shipping_combined_from = c.shipping_combined ? ((pu && pu.combined_from) || 'typed for the release') : null;
     if (pu && c.outbound_cost !== null && c.outbound_cost !== undefined && relTot > 0) {
       var tAmt = pu.trucking ? pu.trucking.amount : 0;
       if (pu.trucking) { c.trucking_cost = r2(c.outbound_cost * tAmt / relTot); }
