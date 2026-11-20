@@ -63,16 +63,21 @@ export function expenseDetail(spending, rc) {
 // Returns { lines: [{ sign: '' | '−' | '=', label, cents (null = not known / not shown), strong }], not_used: [{ label, cents, why }], notes: [] }.
 export function pnlFormula(r, e, hidden) {
   var row = r || {}; var ok = !!(e && e.status === 'ok' && e.cols); var cols = ok ? e.cols : null;
+  // Codex 12:11 — the equations use ONLY the lines the profit was made of (a sale whose cost is not known yet adds nothing to
+  // profit, so its revenue is not in the equation either: it is listed under NOT USED, per side). An unknown cost is never shown as 0.
+  var u = row.used || { goods_lines: row.lines || 0, goods_revenue: row.goods_revenue, goods_cost: row.goods_cost, transport_lines: row.lines || 0, transport_revenue: row.transport_revenue, trucking: row.trucking_cost, freight: row.freight_cost, combined: row.combined_cost || 0 };
+  var x = row.excl || { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 };
   function n(v) { return hidden ? null : (v === undefined || v === null ? null : v); }
+  function of(k) { return k + ' sale line' + (k === 1 ? '' : 's'); }
   var lines = [
-    { sign: '', label: 'Goods revenue (what the goods were sold for)', cents: row.goods_revenue },
-    { sign: '−', label: 'Goods cost = supplier cost + commission + inbound allowance + bonded', cents: row.goods_cost },
+    { sign: '', label: 'Goods revenue of the ' + of(u.goods_lines) + ' whose cost is known', cents: n(u.goods_revenue) },
+    { sign: '−', label: 'Goods cost of those lines = supplier cost + commission + inbound allowance + bonded', cents: n(u.goods_cost) },
     { sign: '=', label: 'GOODS PROFIT', cents: n(row.goods_profit), strong: true },
-    { sign: '', label: 'Transport charged to customers', cents: row.transport_revenue },
-    { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: row.trucking_cost },
-    { sign: '−', label: 'Freight / shipping (our cost: bill, else typed figure, else estimate)', cents: row.freight_cost },
+    { sign: '', label: 'Transport charged on the ' + of(u.transport_lines) + ' whose shipping cost is known', cents: n(u.transport_revenue) },
+    { sign: '−', label: 'Trucking (our cost: bill, else typed figure, else estimate)', cents: n(u.trucking) },
+    { sign: '−', label: 'Freight / shipping (our cost: bill, else typed figure, else estimate)', cents: n(u.freight) },
     // Codex 12:06 — a shipping amount kept as ONE combined figure is neither trucking nor freight: taken off exactly once, under its own name
-    { sign: '−', label: 'Shipping kept as one combined amount (not divided into trucking / freight)', cents: row.combined_cost || 0, combined: true },
+    { sign: '−', label: 'Shipping kept as one combined amount (not divided into trucking / freight)', cents: n(u.combined || 0), combined: true },
     { sign: '=', label: 'TRANSPORT PROFIT', cents: n(row.transport_profit), strong: true },
     { sign: '=', label: 'TOTAL PROFIT = goods profit + transport profit', cents: n(row.profit), strong: true },
     { sign: '−', label: 'A · Warehouse / Office', cents: cols ? cols.A.cents : null },
@@ -83,17 +88,18 @@ export function pnlFormula(r, e, hidden) {
   ];
   lines = lines.filter(function (l) { return !(l.combined && !l.cents); });
   var not = [];
+  if (!hidden && x.goods_lines > 0) { not.push({ label: 'Goods revenue of ' + of(x.goods_lines) + ' with no cost yet', cents: x.goods_revenue, why: 'the cost of these goods is not known yet (not zero), so they add nothing to goods profit until it is — see “What remains open”' }); }
+  if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
   if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
   if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
   var det = ok ? e.detail : null;
   if (det) {
-    (det.not_pnl || []).forEach(function (x) { not.push({ label: x.label, cents: x.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });
+    (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });
     if (det.transfers_cents) { not.push({ label: 'Transfers between our own accounts', cents: det.transfers_cents, why: 'money moved, not spent' }); }
   }
-  if (row.uncounted > 0) { not.push({ label: 'Revenue of ' + row.uncounted + ' sale line(s) whose cost is not known', cents: row.uncounted_revenue, why: 'adds nothing to profit until the cost is known' }); }
   var notes = ['Profit is dated by invoice date. Expenses are what was PAID in the period (bank date).'];
+  if (!hidden && (x.goods_lines > 0 || x.transport_lines > 0)) { notes.push('The table’s Goods revenue and Transport charged columns show ALL sale lines; the sums above use only the lines whose cost is known, which is why they can be smaller.'); }
   if (!ok) { notes.push('The expense columns are not loaded or not shown for this row, so the final figure is not worked out.'); }
-  if (row.incomplete > 0) { notes.push(row.incomplete + ' sale line(s) are missing a cost — the profit shown is the known part.'); }
   return { lines: lines, not_used: not, notes: notes };
 }
 

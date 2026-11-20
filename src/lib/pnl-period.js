@@ -21,7 +21,11 @@ export function bucketOf(d, g) {
 // new: combined_cost = the shipping amount kept as one combined figure (not divided into trucking / freight), so that
 // transport charged − trucking − freight − combined = transport profit holds on the numbers shown.
 export var PERIOD_FIELDS = ['goods_revenue', 'goods_cost', 'goods_profit', 'transport_revenue', 'trucking_cost', 'freight_cost', 'transport_profit', 'profit', 'uncounted_revenue'];
-export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {} }; PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
+export function blankPeriodRow(key, label) { var r = { key: key, label: label, lines: 0, pounds: 0, incomplete: 0, uncounted: 0, combined_cost: 0, miss: {},
+    // Codex 12:11 — what the two profit figures were ACTUALLY made of: only the lines whose profit is known (`used`), and the
+    // revenue of the lines left out because a cost is not known yet (`excl`), per side — never one combined figure for both
+    used: { goods_lines: 0, goods_revenue: 0, goods_cost: 0, transport_lines: 0, transport_revenue: 0, trucking: 0, freight: 0, combined: 0 }, excl: { goods_lines: 0, goods_revenue: 0, transport_lines: 0, transport_revenue: 0 } };
+  PERIOD_FIELDS.forEach(function (f) { r[f] = 0; }); return r; }
 export function addPeriodCell(row, c) {
   row.lines++; row.pounds += Number(c.pounds) || 0;
   var gc = [c.base_cost, c.commission, c.inbound_allowance, c.brokerage, c.bonded];
@@ -29,6 +33,13 @@ export function addPeriodCell(row, c) {
     transport_revenue: c.transport_revenue, trucking_cost: c.trucking_cost, freight_cost: c.freight_cost, transport_profit: c.transport_profit, profit: c.profit, uncounted_revenue: c.uncounted_revenue || 0 };
   PERIOD_FIELDS.forEach(function (f) { if (v[f] === null || v[f] === undefined) { row.miss[f] = (row.miss[f] || 0) + 1; } else { row[f] += Math.round(Number(v[f]) * 100); } });
   if (known(c.shipping_combined_share)) { row.combined_cost += Math.round(Number(c.shipping_combined_share) * 100); }
+  function cz(x) { return known(x) ? Math.round(Number(x) * 100) : 0; }
+  if (row.used) {
+    if (known(c.goods_profit)) { row.used.goods_lines++; row.used.goods_revenue += cz(c.goods_revenue); row.used.goods_cost += cz(c.goods_revenue) - cz(c.goods_profit); }
+    else { row.excl.goods_lines++; row.excl.goods_revenue += cz(c.goods_revenue); }
+    if (known(c.transport_profit)) { var tk = cz(c.trucking_cost); var fr = cz(c.freight_cost); row.used.transport_lines++; row.used.transport_revenue += cz(c.transport_revenue); row.used.trucking += tk; row.used.freight += fr; row.used.combined += cz(c.transport_revenue) - cz(c.transport_profit) - tk - fr; }
+    else { row.excl.transport_lines++; row.excl.transport_revenue += cz(c.transport_revenue); }
+  }
   if (!c.complete) { row.incomplete++; }
   if (c.uncounted_lines) { row.uncounted++; }
   return row;
