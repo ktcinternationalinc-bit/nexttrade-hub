@@ -76,7 +76,7 @@ export function expenseDetail(spending, rc) {
   });
   ((rc && rc.cats) || []).forEach(function (c) {
     var v = cents(c.total);
-    if (String(c.kind || '') === 'not_pnl' && !/^__pt_/.test(String(c.key)) && c.key !== '__party_advance') { if (v) { out.not_pnl.push({ key: c.key, label: c.label || c.key, cents: v }); } }
+    if (String(c.kind || '') === 'not_pnl' && !/^__p[tf]_/.test(String(c.key)) && c.key !== '__party_advance') { if (v) { out.not_pnl.push({ key: c.key, label: c.label || c.key, cents: v }); } }
     out.byKey[c.key] = makeup(c.key, c.label || c.key, v);
   });
   out.byKey.uncategorized = makeup('uncategorized', 'No category at all', cents(rc && rc.uncategorized));
@@ -106,19 +106,19 @@ export function pnlFormula(r, e, hidden) {
     { sign: '=', label: 'TRANSPORT PROFIT', cents: n(row.transport_profit), strong: true },
     { sign: '=', label: 'TOTAL PROFIT = goods profit + transport profit', cents: n(row.profit), strong: true },
     { sign: '−', label: 'A · Warehouse / Office', cents: cols ? cols.A.cents : null, cats: cols ? cols.A.cats : null },
-    { sign: '−', label: 'C · Partner fee', cents: cols ? cols.C.cents : null },
-    { sign: '−', label: 'D · Payroll', cents: cols ? cols.D.cents : null },
-    { sign: '−', label: 'E · Taxes', cents: cols ? cols.E.cents : null },
+    { sign: '−', label: 'C · Partner fee', cents: cols ? cols.C.cents : null, cats: cols ? cols.C.cats : null },
+    { sign: '−', label: 'D · Payroll', cents: cols ? cols.D.cents : null, cats: cols ? cols.D.cats : null },
+    { sign: '−', label: 'E · Taxes', cents: cols ? cols.E.cents : null, cats: cols ? cols.E.cats : null },
     { sign: '=', label: 'FINAL P&L = total profit − A − C − D − E', cents: (cols && !hidden && row.profit !== undefined && row.profit !== null) ? row.profit - cols.total : null, strong: true }
   ];
   lines = lines.filter(function (l) { return !(l.combined && !l.cents); });
   var not = [];
-  if (!hidden && x.goods_lines > 0) { not.push({ label: 'Goods revenue of ' + of(x.goods_lines) + ' with no cost yet', cents: x.goods_revenue, why: 'the cost of these goods is not known yet (not zero), so they add nothing to goods profit until it is — see “What remains open”' }); }
-  if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
-  if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, why: 'money out with no category yet — not taken off until it gets one' }); }
-  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
+  if (!hidden && x.goods_lines > 0) { not.push({ label: 'Goods revenue of ' + of(x.goods_lines) + ' with no cost yet', cents: x.goods_revenue, open_list: true, why: 'the cost of these goods is not known yet (not zero), so they add nothing to goods profit until it is' }); }
+  if (!hidden && x.transport_lines > 0) { not.push({ label: 'Transport charged on ' + of(x.transport_lines) + ' with no shipping cost yet', cents: x.transport_revenue, open_list: true, why: 'the shipping cost of these lines is not known yet (not zero), so they add nothing to transport profit until it is' }); }
+  if (cols && cols.unassigned.cents) { not.push({ label: 'Uncategorized expenses', cents: cols.unassigned.cents, cats: cols.unassigned.cats, why: 'money out with no category yet — not taken off until it gets one. Open it and give each line its category right here.' }); }
+  if (cols && cols.in_profit.cents) { not.push({ label: 'Paid to suppliers, truckers, brokers', cents: cols.in_profit.cents, cats: cols.in_profit.cats, why: 'ASSUMED already inside goods cost and transport cost above, so not taken off a second time — decided by the category name, not checked bill by bill' }); }
   if (cols && cols.duplicates) { not.push({ label: 'A bank transfer that appears twice (the second copy)', cents: cols.duplicates, why: 'the same transfer came in as two bank lines — the copy is counted nowhere' }); }
-  if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
+  if (cols && cols.held && cols.held.cents) { not.push({ label: cols.held_is_balance ? 'Held with RTM / NextTrade at the end of these dates' : 'Funds sent to RTM / NextTrade, not used for bills and not marked as services rendered', cents: cols.held.cents, funding: true, why: 'held with them for future bills — it is not an expense unless it is explicitly marked as their fee' + (cols.unconfirmed > 0 ? '. Of this, ' + (cols.unconfirmed / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) + ' is transfers nobody has confirmed yet — confirm them under A' : '') }); }
   var det = ok ? e.detail : null;
   if (det) {
     (det.not_pnl || []).forEach(function (z) { not.push({ label: z.label, cents: z.cents, why: 'not a cost of the period (loan, owner money or an advance still held)' }); });

@@ -1,0 +1,74 @@
+// v55.83-WE — Max, 20 Nov 2026: "i updated [it] to be EXW. trucking cost is no longer unknown if just exw. Means we don't cover
+// any shipping. Why does it still ask about this" · "it already has a freight charge in the invoice" · "take me to the exact
+// invoice and exact area where i would enter that amount" · "no supplier cost. i should click on that and it should take me
+// exactly to where i need to update that" · "all of the underlying ... should have a link to see the underlying including taxes"
+// · "not used in figures..should be able to click it and see underlying and fix it from right there".
+// Real engine, real task list, real formula; rendered pop-up with its handlers invoked.
+var path = require('path'); var fs = require('fs');
+var root = path.join(__dirname, '..');
+process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'; process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key';
+require(path.join(root, 'node_modules/sucrase/register'));
+var React = require('react'); global.React = React; var RS = require('react-dom/server');
+var A = require(path.join(root, 'src/lib/profitability-assemble.js')); var PR = require(path.join(root, 'src/lib/profitability.js')); var P = require(path.join(root, 'src/lib/pnl-period.js'));
+var X = require(path.join(root, 'src/lib/pnl-expenses.js')); var D = require(path.join(root, 'src/lib/pnl-expense-detail.js')); var PS = require(path.join(root, 'src/components/PeriodStatsTab.jsx'));
+var PnlFormula = require(path.join(root, 'src/components/PnlFormula.jsx')).default;
+var pass = 0, failN = 0;
+function check(label, cond, extra) { if (cond) { pass++; } else { failN++; } console.log((cond ? '  ✓ ' : '  ✗ FAIL: ') + label + (cond ? '' : '  ' + JSON.stringify(extra === undefined ? '' : extra).substring(0, 1100))); }
+console.log('WE — EXW means no shipping cost; open items jump to where they are fixed; every pop-up line opens');
+
+var RK = PR.relKey('1001-1627');
+function run(o) { var opt = o || {};
+  return A.assembleProfitability({ date_from: '2026-01-01', date_to: '', windowDays: 90, warehouseOn: false,
+    invoices: [{ id: 'i1', invoice_number: 'INV 1', accounting_customer_id: 'c1', invoice_date: '2026-09-22', record_status: 'active', currency: 'USD', release_number: '1001-1627' }].concat(opt.second ? [{ id: 'i2', invoice_number: 'INV 2', accounting_customer_id: 'c1', invoice_date: '2026-09-23', record_status: 'active', currency: 'USD', release_number: '1001-1627' }] : []),
+    items: [{ id: 'l1', invoice_id: 'i1', description: 'Paper', quantity: 100, unit_price: 10 }].concat(opt.shipLine ? [{ id: 'l1s', invoice_id: 'i1', description: 'FREIGHT COST', quantity: 1, unit_price: 500 }] : []).concat(opt.second ? [{ id: 'l2', invoice_id: 'i2', description: 'Paper', quantity: 50, unit_price: 10 }] : []),
+    customerNames: { c1: 'Alpha' }, terms: [{ invoice_id: 'i1', shipping_terms: opt.terms || 'EXW' }].concat(opt.second ? [{ invoice_id: 'i2', shipping_terms: opt.terms2 || 'EXW' }] : []),
+    nameUnits: [{ name_key: PR.nameKey('Paper'), unit: 'lb' }], groups: [], groupNames: [], bills: opt.bills || [], billLines: [], warehouseRows: [], estimates: opt.estimates || [], partEstimates: opt.partEstimates || [], lineReleasePounds: [],
+    lineCosts: [{ invoice_item_id: 'l1', cost_per_lb: 4, commission_per_lb: 0 }, { invoice_item_id: 'l2', cost_per_lb: 4, commission_per_lb: 0 }] }); }
+function ship(r) { return P.openTasks(r.cells || []).tasks.filter(function (k) { return k.kind === 'trucking' || k.kind === 'freight'; }); }
+var ex = run({}); var cx = ex.cells[0];
+check('an invoice set to EXW on the form, nothing else known: trucking and freight are a KNOWN 0 (the customer arranges the shipping) — the line is complete and nothing is asked', cx.trucking_cost === 0 && cx.freight_cost === 0 && cx.outbound_cost === 0 && cx.transport_profit !== null && /EXW on the invoice/.test(String(cx.trucking_from)) && ship(ex).length === 0 && P.linesToFix(ex.cells).rows.length === 0, [cx.trucking_cost, cx.freight_cost, cx.trucking_from, ship(ex).map(function (k) { return k.key; })]);
+var cn = run({ terms: 'CNF_SEPARATE' });
+check('the same invoice as CNF (we ship): nothing is assumed — trucking and freight are asked, as before', cn.cells[0].trucking_cost === null && ship(cn).length === 2);
+var eb = run({ bills: [{ id: 'b1', bill_number: 'TR-1', vendor_name: 'Trucker', bill_type: 'trucking', shipment_direction: 'outbound', release_number: '1001-1627', total_amount: 300, record_status: 'active', bill_date: '2026-09-23' }] });
+check('EXW but a real trucking BILL exists for the release: the bill is the cost (300), the 0 is only the fall-back for the part with nothing', eb.cells[0].trucking_cost === 300 && eb.cells[0].trucking_kind === 'bill' && eb.cells[0].freight_cost === 0 && ship(eb).length === 0, [eb.cells[0].trucking_cost, eb.cells[0].freight_cost]);
+var et = run({ partEstimates: [{ release_key: RK, part: 'freight', amount: 250 }] });
+check('EXW with a typed freight figure: the typed figure stays (250), trucking is the known 0', et.cells[0].freight_cost === 250 && et.cells[0].trucking_cost === 0 && ship(et).length === 0);
+var ec = run({ estimates: [{ release_key: RK, outbound_estimate: 600 }] });
+check('EXW with a combined shipping amount typed for the release: the combined amount is NOT wiped out by the EXW zero (600 stays)', ec.cells[0].outbound_cost === 600 && ec.cells[0].shipping_total_unsplit === 600);
+var es = run({ shipLine: true });
+check('"EXW" but the invoice itself charges shipping on a line: we evidently ship, so nothing is assumed 0 and the cost is asked', es.cells.filter(function (c) { return c.description === 'Paper'; })[0].trucking_cost === null && ship(es).length >= 1, ship(es).map(function (k) { return k.key; }));
+var em = run({ second: true, terms2: 'CNF_SEPARATE' });
+check('a release on TWO invoices, one EXW and one CNF: not assumed 0 (only when every invoice of the release is EXW)', em.cells.every(function (c) { return c.trucking_cost === null; }) && ship(em).length === 2);
+check('…both EXW: known 0 on both', run({ second: true }).cells.every(function (c) { return c.trucking_cost === 0 && c.freight_cost === 0; }));
+// the wording and what the jump buttons need
+var tk = ship(run({ terms: 'CNF_SEPARATE', shipLine: true }))[0];
+check('a shipping row says it asks what it COST US (not the charge on the invoice), tells about EXW, and carries what the invoice charges the customer and the invoice id to jump to', /COST US \(not what the invoice charges the customer\)/.test(tk.how) && /choose EXW there/.test(tk.how) && tk.charged === 500 && tk.invoices[0].invoice_id === 'i1', tk);
+var src = fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8');
+check('screen: a shipping row has "Open invoice … to set it →" which opens THAT invoice for editing on the Invoices screen (existing hand-over), beside the type-it-here box; it shows what the invoice charges', src.indexOf("{'Open invoice ' + inv0.invoice + ' to set it →'}") > 0 && src.indexOf("function editInvoice(id) { if (!id) { return; } setFull(false); setFShow(null); try { window.__ntOpenInvoiceEdit = id; window.dispatchEvent(new CustomEvent('nt-open-invoice-edit', { detail: id })); } catch (e5) {} onGo('invoices'); }") > 0 && src.indexOf("' · the invoice charges the customer $' + fmt(t.charged) + ' for shipping'") > 0);
+check('screen: a "no supplier cost" row has "Link its supplier bill →" which opens Set-up already filtered to that product, beside the type-the-cost box', src.indexOf('>Link its supplier bill →</button>') > 0 && src.indexOf("function openSetupFor(name) { setFull(false); setFShow(null); setOpen(null); setNameQ(String(name || '')); setView('setup'); }") > 0 && src.indexOf('openSetupFor(t.product)') > 0);
+check('the Invoices screen listens for that hand-over (it is the same one the invoice pop-up’s Edit uses)', fs.readFileSync(path.join(root, 'src/components/AccountingInvoicesTab.jsx'), 'utf8').indexOf("window.addEventListener('nt-open-invoice-edit', onEvt);") > 0);
+
+// ── the pop-up: every line opens, down to the bank lines
+var ans = { ok: true, from: '2026-06-01', to: '2026-06-30', spending: { categories: [{ key: 'state_tax', label: 'State tax', kind: 'expense', count: 1, total: 53880.82 }, { key: 'payroll', label: 'Payroll', kind: 'expense', count: 1, total: 9000 }, { key: 'partner_fee', label: 'Partner fee', kind: 'expense', count: 1, total: 700 }, { key: 'utilities', label: 'Utilities', kind: 'expense', count: 1, total: 691.84 }, { key: 'vendor_payment', label: 'Vendor payment', kind: 'expense', count: 1, total: 5000 }],
+  uncategorized: { count: 2, total: 320 }, transfers: { total: 0 }, paid_through: [], party_funds: [],
+  rows: [{ id: 'x1', date: '2026-06-05', who: 'STATE COMPTROLLER', amount: 53880.82, category: 'state_tax' }, { id: 'x2', date: '2026-06-06', who: 'PAYROLL CO', amount: 9000, category: 'payroll' }, { id: 'x3', date: '2026-06-07', who: 'PARTNER', amount: 700, category: 'partner_fee' }, { id: 'x4', date: '2026-06-08', who: 'CITY POWER', amount: 691.84, category: 'utilities' }, { id: 'x5', date: '2026-06-09', who: 'MILL CO', amount: 5000, category: 'vendor_payment' }, { id: 'x6', date: '2026-06-10', who: 'UNKNOWN A', amount: 200, category: '' }, { id: 'x7', date: '2026-06-11', who: 'UNKNOWN B', amount: 120, category: '' }] } };
+var e = X.readExpenseAnswer(ans, { key: '2026-06', from: '2026-06-01', to: '2026-06-30' }, PS.rtmAdjust, PS.foldUnc);
+var row = P.blankPeriodRow('2026-06', 'Jun 2026'); run({ terms: 'CNF_SEPARATE' }).cells.forEach(function (c) { P.addPeriodCell(row, c); }); P.settlePeriodRow(row);
+var f = D.pnlFormula(row, e, false);
+check('formula: A, C, D and E each carry their categories (taxes included)', ['A · ', 'C · ', 'D · ', 'E · '].every(function (pfx) { var l = f.lines.filter(function (z) { return z.label.indexOf(pfx) === 0; })[0]; return l && Array.isArray(l.cats) && l.cats.length === 1; }) && f.lines.filter(function (z) { return z.label.indexOf('E · ') === 0; })[0].cats[0].cents === 5388082);
+check('formula NOT USED: uncategorized and supplier payments carry their categories; the sale lines waiting for a cost are marked to jump to the list; nothing is listed twice', f.not_used.filter(function (z) { return /Uncategorized/.test(z.label); })[0].cats.length === 1 && f.not_used.filter(function (z) { return /suppliers, truckers/.test(z.label); })[0].cats[0].key === 'vendor_payment' && f.not_used.filter(function (z) { return z.open_list === true; }).length >= 1 && f.not_used.map(function (z) { return z.label; }).filter(function (v, i, a) { return a.indexOf(v) !== i; }).length === 0, f.not_used.map(function (z) { return z.label; }));
+var picked = []; function picker(r) { return React.createElement('select', { 'data-line': r.id, onChange: function () { picked.push(r.id); } }); }
+var jumped = { n: 0 };
+var html = RS.renderToStaticMarkup(React.createElement(PnlFormula, { title: 'Jun 2026', formula: f, detail: e.detail, picker: picker, openAll: true, onShowOpen: function () { jumped.n++; }, catLabel: function (k) { return k; } }));
+check('rendered: E · Taxes opens to "State tax", and that opens to its bank line (STATE COMPTROLLER, $53,880.82) with the category menu on the line', html.indexOf('E · Taxes — click to see what is in it') > 0 && html.indexOf('▸ State tax') > 0 && html.indexOf('STATE COMPTROLLER') > 0 && html.indexOf('data-line="x1"') > 0 && html.split('$53,880.82').length - 1 >= 3);
+check('rendered: C and D open the same way (PARTNER, PAYROLL CO with their menus)', html.indexOf('C · Partner fee — click to see what is in it') > 0 && html.indexOf('PARTNER') > 0 && html.indexOf('D · Payroll — click to see what is in it') > 0 && html.indexOf('PAYROLL CO') > 0 && html.indexOf('data-line="x2"') > 0 && html.indexOf('data-line="x3"') > 0);
+check('rendered NOT USED: "Uncategorized expenses" opens to its two bank lines, each with the category menu — fixed right there', html.indexOf('Uncategorized expenses — click to see what is in it') > 0 && html.indexOf('UNKNOWN A') > 0 && html.indexOf('UNKNOWN B') > 0 && html.indexOf('data-line="x6"') > 0 && html.indexOf('data-line="x7"') > 0);
+check('rendered NOT USED: supplier payments open to their category and line (MILL CO)', html.indexOf('Paid to suppliers, truckers, brokers — click to see what is in it') > 0 && html.indexOf('MILL CO') > 0);
+function walk(el, fn) { if (!el || typeof el !== 'object') { return; } if (Array.isArray(el)) { el.forEach(function (x) { walk(x, fn); }); return; } fn(el); if (el.props) { walk(el.props.children, fn); } }
+function textOf(x) { var t = ''; (function g(y) { if (y === null || y === undefined || y === false) { return; } if (typeof y === 'string' || typeof y === 'number') { t += y; return; } if (Array.isArray(y)) { y.forEach(g); return; } if (y.props) { g(y.props.children); } })(x); return t; }
+var tree = PnlFormula({ title: 'Jun 2026', formula: f, detail: e.detail, picker: picker, onShowOpen: function () { jumped.n++; } }); var btn = null; walk(tree, function (el) { if (el.type === 'button' && textOf(el).indexOf('Show these lines and fix them') >= 0 && !btn) { btn = el; } });
+check('EXECUTED: "Show these lines and fix them →" on the waiting-for-a-cost line calls the jump to the period’s list', !!btn && (btn.props.onClick({ stopPropagation: function () {} }), jumped.n === 1));
+check('without the period’s detail (expenses not loaded) the pop-up still renders and says the lines are not loaded', RS.renderToStaticMarkup(React.createElement(PnlFormula, { title: 'Jun 2026', formula: f, detail: null, openAll: true })).indexOf('The lines behind it are not loaded.') > 0);
+check('screen: the pop-up is given the period’s own detail, the category menu and the jump', src.indexOf("picker={catPicker} onShowOpen={fr.key === 'total' ? null : function () { setFShow(null); setPOpen(fr.key); }}") > 0 && src.indexOf("return ee0 && ee0.status === 'ok' ? (ee0.detail || null) : null;") > 0);
+console.log('\nWE: ' + pass + ' passed, ' + failN + ' failed');
+if (failN) { process.exit(1); }

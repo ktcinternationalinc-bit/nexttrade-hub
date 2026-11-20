@@ -142,6 +142,7 @@ export function openTasks(cells, forceHidden) {
     var t = map[key]; if (!t) { t = map[key] = Object.assign({ key: key, lines: 0, sold_for: 0, invoices: [], _inv: {}, _seen: {} }, base); order.push(key); }
     if (t._seen[i]) { return; } t._seen[i] = true;
     t.lines++; t.sold_for += known(c.goods_revenue) ? Number(c.goods_revenue) : 0; lineSet[i] = true;
+    if (known(c.transport_revenue)) { t.charged = (t.charged || 0) + Number(c.transport_revenue); } // v55.83-WE — what the customer is charged for shipping on these lines
     var iv = String(c.invoice || ''); if (iv && !t._inv[iv]) { t._inv[iv] = true; t.invoices.push({ invoice: iv, invoice_id: c.invoice_id || null }); }
   }
   list.forEach(function (c, i) {
@@ -163,7 +164,7 @@ export function openTasks(cells, forceHidden) {
         if (!x[1]) { return; }
         if (x[2]) { var wb = (c.weight_blockers || []); var wn = wb.map(function (b) { return '“' + b.name + '”' + (b.invoice ? ' (invoice ' + b.invoice + ')' : (b.older ? ' (on an older invoice of this release)' : '')); }).join(', ');
           add('alloc:' + rel, { kind: 'not_shared', action: wb.length ? 'unit' : 'setup', release: rel, names: wb.map(function (b) { return b.name; }), blockers: wb, title: 'Release ' + rel + ' — its shipping cost is known, but cannot be shared between its sale lines', how: 'The trucking / freight figure is already there — do not type it again. It is shared by pounds, and ' + (wb.length ? wn + ' on this release has no unit, so its pounds are not known. Pick the unit here.' : 'a product on this release has no weight. Give that product its unit in Set-up.') }, c, i); return; }
-        add(x[0] + ':' + rel, { kind: x[0], action: 'type', part: x[0], release: rel, title: 'Release ' + rel + ' — no ' + x[0] + ' cost', how: 'There is no ' + (x[0] === 'trucking' ? 'trucking' : 'freight / shipping') + ' bill, no typed figure and no estimate for this release. Type the ' + x[0] + ' cost here — type 0 if there was none. A ' + x[0] + ' bill for this release replaces it when it arrives.' }, c, i);
+        add(x[0] + ':' + rel, { kind: x[0], action: 'type', part: x[0], release: rel, title: 'Release ' + rel + ' — no ' + x[0] + ' cost', how: 'This asks what the ' + (x[0] === 'trucking' ? 'trucking' : 'freight / shipping') + ' COST US (not what the invoice charges the customer). There is no bill, no typed figure and no estimate for this release. Type it here — 0 if there was none — or open the invoice: if the customer arranges the shipping, choose EXW there and this is no longer asked. A bill for this release replaces a typed figure when it arrives.' }, c, i);
       });
     }
     if (!lineSet[i] && (!known(c.goods_profit) || !known(c.transport_profit))) { add('other:' + inv, { kind: 'other', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — not complete', how: 'Something else on this invoice is missing. Open it to see what.' }, c, i); }

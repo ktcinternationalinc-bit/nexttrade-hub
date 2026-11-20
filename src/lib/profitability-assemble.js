@@ -268,6 +268,12 @@ export function assembleProfitability(d) {
   var invEst = invoiceEstimatesByRelease(engineInvoices.map(function (iv) { return { invoice_id: iv.id, invoice_number: iv.number, shipping_terms: iv.shipping_terms, shipping_cost_estimate: iv.shipping_cost_estimate, releases: iv.releases }; }), relPounds);
   (invEst.__unresolved || []).forEach(function (u) { flags.push({ kind: 'invoice_shipping_estimate_split_unresolved', invoice: u.invoice, releases: u.releases.map(function (k) { return relRaw[k] || k; }), amount: u.amount }); });
   delete invEst.__unresolved;
+  // v55.83-WE (Max, Nov 20: "i updated [it] to be EXW. trucking cost is no longer unknown if just exw. Means we don't cover any
+  // shipping ... it should know what the assumed thing is — it is 0") — a release whose invoices ALL say EXW on the invoice form,
+  // none of them charging shipping on a line: we pay no trucking and no freight. It is a known 0 (like the customer's own
+  // transport), used only when there is no bill, no typed figure, no warehouse figure and no combined amount for the release.
+  var relExw = {}; var relNotExw = {};
+  engineInvoices.forEach(function (iv) { (iv.releases || []).forEach(function (k) { if (iv.shipping_terms === 'EXW' && !iv.has_shipping_line) { relExw[k] = true; } else { relNotExw[k] = true; } }); });
   var whUsed = {}; var partsUsed = {};
   Object.keys(relKnown).forEach(function (rel) {
     var o = outbound[rel] || { actual: null, estimate: null, bills: [] };
@@ -283,6 +289,7 @@ export function assembleProfitability(d) {
         var wm = numOrNull(wRow['manual_' + name]); if (wm !== null) { return { amount: wm, kind: 'manual', from: 'typed correction (warehouse)' }; }
         var u = numOrNull(wRow[name + '_used']); if (u !== null) { return { amount: u, kind: wRow[name + '_kind'] === 'own_transport' ? 'own_transport' : 'estimate', from: wRow[name + '_kind'] === 'own_transport' ? 'customer’s own transport (Nextrade)' : 'Nextrade Shipping In Progress' }; }
       }
+      if (relExw[rel] && !relNotExw[rel] && (estimateOf[rel] === undefined || isNaN(Number(estimateOf[rel]))) && !(invEst[rel] && invEst[rel].amount !== null && invEst[rel].amount !== undefined)) { return { amount: 0, kind: 'own_transport', from: 'EXW on the invoice — the customer arranges the shipping (no cost to us)' }; }
       return null;
     }
     var t = part('trucking', 'trucking'); var f = part('freight', 'shipping');

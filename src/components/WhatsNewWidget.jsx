@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WE',
+    date: '2026-11-20',
+    title: 'P&L by period: EXW means no shipping cost, open items take you to the exact place, every figure opens',
+    items: [
+      { text: '**EXW no longer asks for a shipping cost.** When an invoice is set to EXW (the customer arranges the shipping) and it charges no shipping line, its trucking and freight count as 0 and it leaves the “What remains open” list. A real bill or a figure you typed still wins over that 0.' },
+      { text: '**Shipping rows are clearer.** They now say they ask what the shipping COST US, not what the invoice charges the customer, and show the amount the invoice charges. A new button “Open invoice … to set it” opens that invoice for editing, where the shipping terms and “Our shipping cost” box are at the top. You can still type the figure in the row.' },
+      { text: '**No supplier cost:** the row has a new button “Link its supplier bill” that opens Set-up already filtered to that product. You can still type the cost per pound in the row.' },
+      { text: '**Every line of the “ƒ how?” pop-up opens.** A, C · Partner fee, D · Payroll and E · Taxes each open to their categories, and each category opens to the bank lines behind it, where the category can be changed.' },
+      { text: '**“Not used in the figure” can be fixed right there.** Uncategorized expenses open to their bank lines with the category menu on each line. Supplier and trucker payments open to their lines. The RTM / NextTrade line opens the company table. Sale lines waiting for a cost have a button that jumps to the list where they are fixed.' },
+      { text: 'The RTM / NextTrade held amount is no longer listed twice in the pop-up.' },
+      { superAdminOnly: true, text: 'Technical: profitability-assemble.js gives a release whose invoices are all EXW on the form (no shipping line) a known 0 for a part with no bill, typed figure, warehouse figure or combined amount (kind own_transport). pnl-expense-detail.js pnlFormula adds cats to C, D, E and to the not-used lines; PnlFormula.jsx renders ExpenseDetail per category. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WC',
     date: '2026-11-20',
     title: 'Pending bank repair and clearer transaction search',
