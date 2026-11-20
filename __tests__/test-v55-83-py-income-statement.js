@@ -28,7 +28,7 @@ ok('2: transfers and Not-P&L money (loans, owner) stay OUT by construction; unca
   /Every transaction in the period is categorized/.test(ps));
 ok('3: the Accountant pack carries it as CSV #12 with the same warnings (12 CSVs total)',
   /tax-pack-12-income-statement-cash-basis-/.test(ps) &&
-  /WARNING: uncategorized deposits OUTSIDE this statement/.test(ps) &&
+  /WARNING: uncategorized deposits OUTSIDE this statement/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/tax-pack.js'), 'utf8')) && /incomeStatementCsv\(data\.spending\)/.test(ps) && // v55.83-WI — file 12 is built in src/lib/tax-pack.js
   /12 CSVs for/.test(ps));
 ok('4: the statement says what cash basis means and defers the basis choice to the accountant — no legal overreach',
   /income when received, expenses when paid/.test(ps) && /your accountant confirms which basis you file on/.test(ps));

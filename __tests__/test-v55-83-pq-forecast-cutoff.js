@@ -110,8 +110,8 @@ var pst2 = R('src/components/PeriodStatsTab.jsx');
 ok('7: 🧾 Accountant pack — 9 named CSVs (revenue invoiced/collected, open AR, bills entered/paid, open AP, spending by category + detail, monthly summary); uncategorized flagged, transfers marked not-deductible',
   /🧾 Accountant pack/.test(pst2) && /tax-pack-1-revenue-invoiced-/.test(pst2) &&
   /tax-pack-6-open-payables-/.test(pst2) && /tax-pack-9-monthly-summary-/.test(pst2) &&
-  /UNCATEGORIZED \(needs review before filing\)/.test(pst2) &&
-  /TRANSFERS BETWEEN OWN ACCOUNTS \(not deductible spending\)/.test(pst2));
+  /UNCATEGORIZED \(needs review before filing\)/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/tax-pack.js'), 'utf8')) && // v55.83-WI — files 7 / 8 are built in src/lib/tax-pack.js
+  /TRANSFERS BETWEEN OWN ACCOUNTS \(not deductible spending\)/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'src/lib/tax-pack.js'), 'utf8')) && /spendingByCategoryCsv\(data\.spending, KIND_LABELS\)/.test(pst2));
 
 // ── Max 05:11: dashboard vs Books consistency ──
 var ad = R('src/components/AccountingDashboard.jsx');
