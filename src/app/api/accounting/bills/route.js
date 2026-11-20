@@ -10,7 +10,8 @@
 //   open AR due (expected in) vs open bills (due out). Never guessed.
 // • Permissions: bills.view to read, bills.manage to write (super admin both).
 import { buildPaidThroughBlocks } from '../../../../lib/paid-through-blocks';
-import { partyFundsBreakdown, FUNDING_DESTINATIONS, fundingIdentity } from '../../../../lib/party-funds'; // v55.83-VY — the ONE funds calculation and identity rule // v55.83-SR
+import { FUNDING_DESTINATIONS, fundingIdentity } from '../../../../lib/party-funds'; // v55.83-VY — the ONE identity rule
+import { loadPartyFunds } from '../../../../lib/party-funds-server'; // v55.83-VY — reads the records and runs the ONE funds calculation // v55.83-SR
 import { periodAdjustments } from '../../../../lib/party-money'; // v55.83-TX
 import { NextResponse } from 'next/server';
 import { assertPermission } from '../../../../lib/server-permissions';
@@ -1967,31 +1968,10 @@ export async function POST(req) {
         // to a transfer of an earlier one). Read-only. null when it cannot be worked out — the screen then says so.
         var partyFunds = null;
         try {
-          var pfParties = await loadParties(db); var pfLines = []; var pfSeen = {};
-          var pfSel = 'id, date, posted_date, amount_abs, classification, third_party_payer, name, merchant_name, direction, transfer_group_id';
-          var pfA = await fetchAll(function () { return db.from('bank_transactions').select(pfSel).eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').not('third_party_payer', 'is', null).neq('pending', true).neq('review_status', 'duplicate').order('id', { ascending: true }); });
-          var pfOr = FUNDING_DESTINATIONS.map(function (d1) { return 'name.ilike.%' + d1.suffix + '%,merchant_name.ilike.%' + d1.suffix + '%'; }).join(',');
-          var pfB = await fetchAll(function () { return db.from('bank_transactions').select(pfSel).eq('wave_business_id', US_WAVE_BUSINESS_ID).eq('direction', 'out').is('third_party_payer', null).neq('pending', true).neq('review_status', 'duplicate').or(pfOr).order('id', { ascending: true }); });
-          pfA.concat(pfB).forEach(function (t7) {
-            if (pfSeen[t7.id]) { return; }
-            if (!t7.third_party_payer && t7.transfer_group_id) { return; } // a paired transfer between KTC's own accounts is never money sent to a company
-            pfSeen[t7.id] = true;
-            pfLines.push({ id: t7.id, date: t7.posted_date || t7.date, amount_abs: t7.amount_abs, third_party_payer: t7.third_party_payer, name: (t7.name || '') + (t7.merchant_name && t7.merchant_name !== t7.name ? ' ' + t7.merchant_name : ''), direction: 'out', classification: t7.classification });
-          });
-          var pfIds = pfLines.map(function (x7) { return x7.id; }); var pfReqs = [];
-          try {
-            for (var q7 = 0; q7 < pfIds.length; q7 += 200) {
-              var w7 = await db.from('wire_packages').select('*').in('funding_txn_id', pfIds.slice(q7, q7 + 200));
-              if (!w7.error) { pfReqs = pfReqs.concat(w7.data || []); }
-            }
-            var pkIds = pfReqs.map(function (w8) { return w8.id; }); var pkLines = [];
-            for (var q8 = 0; q8 < pkIds.length; q8 += 200) {
-              var l8 = await db.from('wire_package_lines').select('package_id, bill_id, amount, is_open').in('package_id', pkIds.slice(q8, q8 + 200));
-              if (!l8.error) { pkLines = pkLines.concat(l8.data || []); }
-            }
-            pfReqs = pfReqs.map(function (w9) { return { id: w9.id, status: w9.status, funding_txn_id: w9.funding_txn_id, fee_amount: w9.fee_amount, sent_date: w9.sent_date || w9.sent_at || null, lines: pkLines.filter(function (l9) { return l9.package_id === w9.id; }) }; });
-          } catch (eW7) { pfReqs = []; }
-          partyFunds = partyFundsBreakdown({ parties: pfParties, bankLines: pfLines, pays: LS.pays || [], bills: billNameById, requests: pfReqs, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
+          // the reading lives in src/lib/party-funds-server.js (run for real in the test): company lines by mark or destination text,
+          // wire packages by funding id OR attached bank line (Codex 13:37), each taken once
+          var pfLoaded = await loadPartyFunds(db, { fetchAll: fetchAll, businessId: US_WAVE_BUSINESS_ID, parties: await loadParties(db), pays: LS.pays || [], bills: billNameById, entries: (typeof pmE !== 'undefined' && pmE && pmE.data) || [], from: pFrom, to: pTo });
+          partyFunds = pfLoaded.funds;
           // the bill's own file, so the screen can open it (the storage rules decide who may)
           partyFunds.forEach(function (c7) { c7.transfers.forEach(function (t6) { ['lifetime_rows', 'as_of_rows'].forEach(function (k6) { (t6[k6] || []).forEach(function (r6) { var b6 = billNameById[r6.bill_id]; r6.attachment_path = (b6 && b6.attachment_path) || null; }); }); }); (c7.period.applied_rows || []).concat((c7.paid_without_a_transfer && c7.paid_without_a_transfer.period_rows) || []).forEach(function (r5) { var b5 = billNameById[r5.bill_id]; r5.attachment_path = (b5 && b5.attachment_path) || null; }); });
         } catch (ePf) { partyFunds = null; }
