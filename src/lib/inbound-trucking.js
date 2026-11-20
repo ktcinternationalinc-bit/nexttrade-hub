@@ -63,32 +63,43 @@ export function buildInboundTrucking(o) {
       // Codex 06:30 — the re-billed money is kept in three separate parts: inside these dates, permitted but outside these
       // dates, and older than the person may see. The older part is only a yes / no: its amount never leaves this function.
       if (!own && ti) {
-        var rb = rebilled[ti] || (rebilled[ti] = { in_cents: 0, out_cents: 0, hidden: false, in_label: '', out_label: '' });
+        var rb = rebilled[ti] || (rebilled[ti] = { in_cents: 0, out_cents: 0, hidden: false, in_label: '', out_label: '', count: 0 });
         var bd = txt(b.bill_date).substring(0, 10); var lab = txt(b.vendor_name) + ' bill ' + txt(b.bill_number);
         if (older(bd)) { rb.hidden = true; }
-        else if (inDates(bd, from, to)) { rb.in_cents += c; if (!rb.in_label) { rb.in_label = lab; } }
-        else { rb.out_cents += c; if (!rb.out_label) { rb.out_label = lab; } }
+        else if (inDates(bd, from, to)) { rb.count++; rb.in_cents += c; if (!rb.in_label) { rb.in_label = lab; } } // the count is of the lines the person may see
+        else { rb.count++; rb.out_cents += c; if (!rb.out_label) { rb.out_label = lab; } }
       }
       freight.push({ line_id: l.id, bill_id: b.id, vendor: txt(b.vendor_name), bill_number: txt(b.bill_number), bill_date: txt(b.bill_date).substring(0, 10), description: txt(l.description), cents: c, own: own, trucker_invoice: ti, bonded: isBondedLine(l), loads: loadNumbersIn(l.description) });
     });
   });
-  // the same Kronos invoice entered directly AND re-billed by a supplier is counted once (through the supplier's bill)
-  var notCounted = []; var counted = [];
+  // the same Kronos invoice entered directly AND re-billed by a supplier is counted once (through the supplier's bill).
+  // Codex 06:40 — reconciled per INVOICE, never per line: the direct bill's lines inside these dates are added up, that one
+  // total is compared once with the re-billed parts, and the outside / hidden figures are counted once per invoice.
+  var notCounted = []; var counted = []; var ncByInvoice = {};
   freight.forEach(function (f) {
     if (!inDates(f.bill_date, from, to)) { return; }
     if (f.own && f.trucker_invoice && rebilled[f.trucker_invoice]) {
-      var rb2 = rebilled[f.trucker_invoice]; var hasIn = rb2.in_cents !== 0; var rest = rb2.out_cents !== 0 || rb2.hidden;
-      f.replacement = hasIn ? (rest ? 'partial' : 'full') : 'outside';
-      f.replacement_in_report = hasIn; f.replacement_in_cents = rb2.in_cents; f.replacement_outside_cents = rb2.out_cents; f.replacement_hidden = rb2.hidden;
-      // the two amounts are compared only when every part may be seen; with a hidden part the comparison is not given at all
-      f.amount_differs = rb2.hidden ? null : (rb2.in_cents + rb2.out_cents) !== f.cents;
-      f.outside_cents = f.replacement === 'outside' ? f.cents : (f.replacement === 'partial' ? rb2.out_cents : 0);
-      f.why = f.replacement === 'full' ? 'counted once in this report, through ' + rb2.in_label
-        : (f.replacement === 'partial' ? 'only PART is counted in this report, through ' + rb2.in_label + '; the rest is re-billed ' + (rb2.out_cents !== 0 ? 'on ' + rb2.out_label + ', dated outside these dates' : 'on a bill that is not shown')
-          : 'NOT counted in this report: the same invoice is re-billed ' + (rb2.out_label ? 'on ' + rb2.out_label + ', which is dated outside these dates' : 'on a bill that is not shown'));
-      notCounted.push(f); return;
+      var e = ncByInvoice[f.trucker_invoice];
+      if (!e) { e = ncByInvoice[f.trucker_invoice] = { trucker_invoice: f.trucker_invoice, bill_id: f.bill_id, vendor: f.vendor, bill_number: f.bill_number, bill_date: f.bill_date, cents: 0, lines: [] }; notCounted.push(e); }
+      e.cents += f.cents; e.lines.push({ line_id: f.line_id, description: f.description, cents: f.cents });
+      return;
     }
     counted.push(f);
+  });
+  notCounted.forEach(function (f) {
+    var rb2 = rebilled[f.trucker_invoice]; var hasIn = rb2.in_cents !== 0; var rest = rb2.out_cents !== 0 || rb2.hidden;
+    f.line_id = 'inv:' + f.bill_id; f.line_count = f.lines.length;
+    f.replacement = hasIn ? (rest ? 'partial' : 'full') : 'outside';
+    f.replacement_in_report = hasIn; f.replacement_in_cents = rb2.in_cents; f.replacement_outside_cents = rb2.out_cents; f.replacement_hidden = rb2.hidden;
+    // the two totals are compared only when every part may be seen; with a hidden part the comparison is not given at all
+    f.amount_differs = rb2.hidden ? null : (rb2.in_cents + rb2.out_cents) !== f.cents;
+    f.outside_cents = f.replacement === 'outside' ? f.cents : (f.replacement === 'partial' ? rb2.out_cents : 0);
+    // more than one supplier line names this invoice: they are added up as parts of it. They could also be the same charge
+    // billed twice — this report cannot tell, so it says so instead of calling the cost verified.
+    f.several_rebills = rb2.count > 1;
+    f.why = f.replacement === 'full' ? 'counted once in this report, through ' + rb2.in_label
+      : (f.replacement === 'partial' ? 'only PART is counted in this report, through ' + rb2.in_label + '; the rest is re-billed ' + (rb2.out_cents !== 0 ? 'on ' + rb2.out_label + ', dated outside these dates' : 'on a bill that is not shown')
+        : 'NOT counted in this report: the same invoice is re-billed ' + (rb2.out_label ? 'on ' + rb2.out_label + ', which is dated outside these dates' : 'on a bill that is not shown'));
   });
 
   // 2) pounds received per load number
@@ -146,7 +157,7 @@ export function buildInboundTrucking(o) {
     totals: {
       all: all, regular: sum(matched.filter(function (L) { return !L.bonded; })), bonded: sum(matched.filter(function (L) { return L.bonded; })),
       open_loads: open.length, open_cents: total(open), unmatched_cents: total(unmatched), not_counted_cents: total(notCounted),
-      not_counted_outside_cents: notCounted.reduce(function (a, f) { return a + (f.outside_cents || 0); }, 0), not_counted_hidden: notCounted.filter(function (f) { return f.replacement_hidden; }).length,
+      not_counted_outside_cents: notCounted.reduce(function (a, f) { return a + (f.outside_cents || 0); }, 0), not_counted_hidden: notCounted.filter(function (f) { return f.replacement_hidden; }).length, several_rebills: notCounted.filter(function (f) { return f.several_rebills; }).length,
       tracked_cents: all.freight_cents + total(open) + total(unmatched)
     },
     standard_per_lb: INBOUND_ALLOWANCE_PER_LB, standard_cents: standardCents, difference_cents: all.freight_cents - standardCents,

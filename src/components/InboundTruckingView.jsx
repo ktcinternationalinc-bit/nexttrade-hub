@@ -81,8 +81,9 @@ export default function InboundTruckingView(props) {
       {r.unmatched_lines.map(function (f) { return <div key={f.line_id} className="text-[11px]">{f.vendor + ' · bill ' + f.bill_number + ' · ' + f.bill_date + ' · ' + usd(f.cents) + ' · ' + f.description + ' — ' + f.why}</div>; })}
     </div>}
     {(r.not_counted || []).length > 0 && <div className="mt-2 text-[11px]" style={{ color: SUB }}>
-      <b>Kronos invoices also charged on a supplier bill:</b> {r.not_counted.map(function (f) { return 'bill ' + f.bill_number + ' ' + usd(f.cents) + ' (' + f.why + (f.amount_differs === true ? '; the supplier charged ' + usd(f.replacement_in_cents + f.replacement_outside_cents) : '') + ')'; }).join(' · ')}
+      <b>Kronos invoices also charged on a supplier bill:</b> {r.not_counted.map(function (f) { return 'bill ' + f.bill_number + ' ' + usd(f.cents) + (f.line_count > 1 ? ' in ' + f.line_count + ' lines' : '') + ' (' + f.why + (f.amount_differs === true ? '; the supplier charged ' + usd(f.replacement_in_cents + f.replacement_outside_cents) : '') + ')'; }).join(' · ')}
       {t.not_counted_outside_cents > 0 && <div className="font-bold" style={{ color: '#b45309' }}>{usd(t.not_counted_outside_cents) + ' of this is not in this report’s figures — it is counted on bills dated outside these dates.'}</div>}
+      {t.several_rebills > 0 && <div style={{ color: '#b45309' }}>{t.several_rebills + ' of these are named on more than one supplier line. The lines are added up as parts of the invoice; if one is the same charge billed twice, this report cannot tell — check the supplier bills.'}</div>}
       {t.not_counted_hidden > 0 && <div style={{ color: SUB }}>{t.not_counted_hidden + ' of these are re-billed on a bill that is not shown; that amount is not given.'}</div>}
     </div>}
   </div>;

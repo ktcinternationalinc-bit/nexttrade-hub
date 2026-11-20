@@ -435,7 +435,9 @@ export default function ProfitabilityTab(props) {
           <tbody>{fx.rows.slice(0, 300).map(function (w, i) { return <tr key={i} style={{ borderTop: '1px solid ' + LINE, color: INK }}>
             <td className="px-2 py-1 font-bold">{w.invoice}</td><td className="px-2 py-1">{w.invoice_date}</td><td className="px-2 py-1">{w.customer}</td><td className="px-2 py-1">{w.product}</td><td className="px-2 py-1">{w.release || '—'}</td>
             <td className="px-2 py-1 text-right tabular-nums">{w.sold_for === null ? '—' : '$' + fmt(w.sold_for)}</td><td className="px-2 py-1 font-bold" style={{ color: '#b45309' }}>{w.missing_text}</td>
-            <td className="px-2 py-1 text-right"><button onClick={function (e) { e.stopPropagation(); goFix('invoice', w); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button></td>
+            <td className="px-2 py-1 text-right">{/* v55.83-VR (Max, Nov 20: "it just closes full screen but invoice never comes up") — the invoice itself opens on top, right here, also in full screen; the second button goes to its row in By invoice */}
+              {w.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(w.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}
+              <button onClick={function (e) { e.stopPropagation(); goFix('invoice', w); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></td>
           </tr>; })}</tbody></table></div>
         {fx.rows.length > 300 && <div className="text-[10px] mt-1" style={{ color: SUB }}>{'Showing the 300 biggest of ' + fx.rows.length + '.'}</div>}
       </div>;
