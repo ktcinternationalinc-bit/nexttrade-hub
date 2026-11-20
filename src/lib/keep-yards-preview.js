@@ -33,6 +33,7 @@ export function keepYardsPreview(input, o) {
     var k = nameKey(n); if (!k) { return; }
     var u = unitKey(unitOf[k]);
     if (u !== 'yd' && u !== 'lm') { skipped.push({ name: String(n), why: u ? 'it is sold by weight (' + u + '), not in yards' : 'it has no unit yet — pick yards first' }); return; }
+    if (opt.keep !== true && /head[\s-]*liner/i.test(String(n))) { skipped.push({ name: String(n), why: 'headliner is always kept in yards (rule)' }); return; }
     want[k] = opt.keep === true; listed.push({ name: String(n), unit: u, lines: 0, key: k });
   });
   if (!listed.length) { return { ok: false, error: skipped.length ? 'Nothing to switch: ' + skipped.map(function (s) { return '“' + s.name + '” — ' + s.why; }).join('; ') + '.' : 'Pick at least one description.', skipped: skipped }; }

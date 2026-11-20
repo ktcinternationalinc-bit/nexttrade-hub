@@ -87,7 +87,11 @@ export function assembleProfitability(d) {
       var nm = lineName(it);
       return { id: it.id, description: nm, qty: Number(it.quantity) || 0, unit: unitOfLine[it.id] || unitOfName[nameKey(nm)] || '', unit_price: Number(it.unit_price) || 0,
         amount: r2((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)), release_pounds: relPoundsOfLine[it.id] || null,
-        keep_unit: keepOfName[nameKey(nm)] === true, // v55.83-VX — kept in yards (the engine applies it only to a line sold in yards / linear metres)
+        // v55.83-VX — kept in yards (the engine applies it only to a line sold in yards / linear metres)
+        // v55.83-WG (Max, Nov 20: "For the headliner, since I'm buying it in yards, we're going to keep it as yards ... Forget about
+        // that conversion. The only thing we're going to convert is anything with PVC, PVC foam") — a HEADLINER line is always kept
+        // in yards, by rule (its product name or description says headliner), once the keep-in-yards columns exist.
+        keep_unit: keepOfName[nameKey(nm)] === true || (d.keep_unit_ready === true && isHeadlinerLine(it.wave_product_name, it.description)),
         headliner: isHeadlinerLine(it.wave_product_name, it.description), // v55.83-VQ — headliner = 1.25 lb per yard
         foam: isFoamLine(it.wave_product_name, it.description), foam_conflict: foamEvidenceConflict(it.wave_product_name, it.description), // v55.83-UZ — "anything with foam": product name or description
         transport: kindOf[nameKey(nm)] === 'transport' ? true : (kindOf[nameKey(nm)] === 'goods' ? false : undefined) };
@@ -457,7 +461,7 @@ export function assembleProfitability(d) {
   var sortRev = function (a, b) { return b.goods_revenue - a.goods_revenue; };
 
   // ── the lists a person works from to set things up ──
-  var invNames = {}; cells.forEach(function (c) { var k = nameKey(c.description); var o = invNames[k] || (invNames[k] = { key: k, name: String(c.description).trim(), lines: 0, qty: 0, invoiced: 0, unit: unitOfName[k] || '', keep_unit: keepOfName[k] === true, group_id: c.group_id, group: c.group_id ? c.product : null }); o.lines++; o.qty += c.orig_qty; o.invoiced = r2(o.invoiced + c.invoiced); });
+  var invNames = {}; cells.forEach(function (c) { var k = nameKey(c.description); var o = invNames[k] || (invNames[k] = { key: k, name: String(c.description).trim(), lines: 0, qty: 0, invoiced: 0, unit: unitOfName[k] || '', keep_unit: keepOfName[k] === true || (d.keep_unit_ready === true && isHeadlinerLine(String(c.description), '')), keep_rule: d.keep_unit_ready === true && isHeadlinerLine(String(c.description), ''), group_id: c.group_id, group: c.group_id ? c.product : null }); o.lines++; o.qty += c.orig_qty; o.invoiced = r2(o.invoiced + c.invoiced); });
   var billNames = {}; costLines.forEach(function (l) { var k = nameKey(l.description); if (!k) { return; } var o = billNames[k] || (billNames[k] = { key: k, name: String(l.description).trim(), lines: 0, qty: 0, cost: 0, units: {}, vendors: {}, last_date: '' }); o.lines++; o.qty += Number(l.qty) || 0; var cst = Number(l.cost_amount != null && l.cost_amount !== '' ? l.cost_amount : l.amount); if (cst > 0) { o.cost = r2(o.cost + cst); } o.units[billLineUnit(l) || '?'] = true; if (!unitKey(l.unit) && billLineUnit(l)) { o.unit_from_name = true; } if (billLineUnit(l)) { o.usable = (o.usable || 0) + 1; } o.vendors[l.vendor || '?'] = true; if (String(l.bill_date || '') > o.last_date) { o.last_date = String(l.bill_date || ''); } });
 
   return {

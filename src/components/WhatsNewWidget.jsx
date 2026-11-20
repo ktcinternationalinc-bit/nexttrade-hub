@@ -33,6 +33,17 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WG',
+    date: '2026-11-20',
+    title: 'Profitability: headliner is always kept in yards',
+    items: [
+      { text: '**Headliner stays in yards.** It is bought and sold in yards, so it is no longer converted to pounds. It is counted in yards, costed per yard from its supplier bills, and pays no inbound allowance. In Set-up its descriptions show “kept in yards — headliner rule”.' },
+      { text: 'PVC and PVC foam are still converted to pounds as before. Other yard goods keep the two buttons in Set-up.' },
+      { text: 'A headliner sale whose cost was typed by hand per pound now asks for the cost per yard.' },
+      { superAdminOnly: true, text: 'Technical: profitability-assemble.js sets keep_unit for a line whose product name or description says headliner when keep_unit_ready is true; invoice_names carry keep_rule; keepYardsPreview refuses switching a headliner name back. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WE',
     date: '2026-11-20',
     title: 'P&L by period: EXW means no shipping cost, open items take you to the exact place, every figure opens',

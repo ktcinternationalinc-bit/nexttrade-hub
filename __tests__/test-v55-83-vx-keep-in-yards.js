@@ -82,6 +82,20 @@ var hl = A.assembleProfitability(Object.assign({ date_from: '2026-01-01', date_t
 var hc = (hl.cells || []).filter(function (c) { return c.line_id === 'l1'; })[0];
 check('a headliner line kept in yards: 1,000 yd, shipping weight 1,250 lb (1.25 per yard) used only for sharing shipping, no allowance', hc.keep_unit === true && hc.sold_qty === 1000 && hc.pounds === 1250 && hc.inbound_allowance === 0, [hc.sold_qty, hc.pounds, hc.inbound_allowance]);
 
+// ── v55.83-WG — Max, 20 Nov: headliner is ALWAYS kept in yards (bought in yards); only PVC / PVC foam is converted to pounds
+function runH(o) { var opt = o || {}; var inp = input({});
+  inp.items = [{ id: 'l1', invoice_id: 'i1', description: 'Headliner BY YD', quantity: 1000, unit_price: 2 }, { id: 'l2', invoice_id: 'i1', description: 'PVC roll', quantity: 5000, unit_price: 1 }, { id: 'l3', invoice_id: 'i1', description: 'Foam PVC by yd', quantity: 100, unit_price: 3 }];
+  inp.nameUnits = [{ name_key: PR.nameKey('Headliner BY YD'), raw_name: 'Headliner BY YD', unit: 'yd', keep_unit: false }, { name_key: PR.nameKey('PVC roll'), raw_name: 'PVC roll', unit: 'lb' }, { name_key: PR.nameKey('Foam PVC by yd'), raw_name: 'Foam PVC by yd', unit: 'yd', keep_unit: false }];
+  inp.groupNames = inp.groupNames.concat([{ group_id: 'g1', source: 'invoice', name_key: PR.nameKey('Headliner BY YD'), raw_name: 'Headliner BY YD', active: true }]);
+  if (opt.notReady) { inp.keep_unit_ready = false; }
+  return A.assembleProfitability(Object.assign({ date_from: '2026-01-01', date_to: '' }, inp)); }
+var hR = runH({}); var hC = cellOf(hR, 'Headliner BY YD'); var fC = cellOf(hR, 'Foam PVC by yd');
+check('WG: a HEADLINER line is kept in yards by rule, with no switch set: 1,000 yd, cost per yard from the yard bill ($0.80 → $800), no inbound allowance; its shipping weight stays 1.25 lb per yard', hC.keep_unit === true && hC.sold_qty === 1000 && hC.base_cost === 800 && hC.inbound_allowance === 0 && hC.pounds === 1250, [hC.keep_unit, hC.sold_qty, hC.base_cost, hC.inbound_allowance, hC.pounds]);
+check('WG: PVC foam sold in yards is still CONVERTED to pounds (3 lb per yard) and pays the inbound allowance — only headliner changed', fC.keep_unit === false && fC.pounds === 300 && fC.inbound_allowance === 6, [fC.keep_unit, fC.pounds, fC.inbound_allowance]);
+check('WG: Set-up lists the headliner description as kept in yards by rule; the PVC foam one is not', (hR.invoice_names || []).filter(function (n) { return n.name === 'Headliner BY YD'; })[0].keep_rule === true && (hR.invoice_names || []).filter(function (n) { return n.name === 'Foam PVC by yd'; })[0].keep_rule === false && fs.readFileSync(path.join(root, 'src/components/ProfitabilityTab.jsx'), 'utf8').indexOf('kept in yards — headliner rule') > 0);
+check('WG: before the keep-in-yards columns exist the rule is off (headliner converted at 1.25 as before) — nothing changes without the database step', cellOf(runH({ notReady: true }), 'Headliner BY YD').keep_unit === false && cellOf(runH({ notReady: true }), 'Headliner BY YD').pounds === 1250);
+check('WG: a headliner description cannot be switched back to pounds through the preview (it says why)', K.keepYardsPreview(input({}), { names: ['Headliner BY YD'], keep: false }).ok === false);
+
 // ── route + loader + SQL
 var route = fs.readFileSync(path.join(root, 'src/app/api/accounting/profitability/route.js'), 'utf8');
 check('server: keep_preview and set_name_keep sit AFTER the edit-costs gate, refuse until the SQL was run, and the save is recorded in the audit trail', route.indexOf("if (action === 'keep_preview' || action === 'set_name_keep') {") > route.indexOf("var pe = await assertPermission(db, userId, 'pnl.edit_costs', req);") && route.indexOf('sql/v55-83-VX-keep-in-yards.sql') > 0 && route.indexOf("'pl_name_keep_unit_set'") > 0 && route.indexOf(".in('unit', ['yd', 'lm'])") > 0);
