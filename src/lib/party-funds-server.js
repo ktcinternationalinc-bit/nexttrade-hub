@@ -47,7 +47,7 @@ export async function loadPartyFunds(db, o) {
     var attachedTo = w.bank_transaction_id && isLine[w.bank_transaction_id] ? w.bank_transaction_id : null;
     var source = funded || (w.status === 'attached' ? attachedTo : null);
     if (!source) { return; } // an ordinary wire that is not sent yet reserves nothing; a package of another line is not ours
-    requests.push({ id: w.id, status: w.status, funding_txn_id: source, fee_amount: w.fee_amount, sent_date: w.sent_date || w.sent_at || w.attached_at || null, lines: pkLines.filter(function (x) { return String(x.package_id) === String(w.id); }) });
+    requests.push({ id: w.id, status: w.status, funding_txn_id: source, bank_transaction_id: w.bank_transaction_id || null, fee_amount: w.fee_amount, sent_date: w.sent_date || w.sent_at || w.attached_at || null, lines: pkLines.filter(function (x) { return String(x.package_id) === String(w.id); }) });
   });
   var funds = partyFundsBreakdown({ parties: o.parties, bankLines: lines, pays: o.pays || [], bills: o.bills || {}, requests: requests, entries: o.entries || [], from: o.from, to: o.to });
   return { funds: funds, lines: lines, requests: requests };
