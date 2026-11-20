@@ -11,7 +11,7 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, bucketsBetween, periodBreakdown, linesToFix } from '../lib/pnl-period';
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks } from '../lib/pnl-period';
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
 import { rtmAdjust, foldUnc } from './PeriodStatsTab'; // v55.83-VQ — the Income Statement's own real-cost rule (one copy) // v55.83-VL — P&L by period: periods and the breakdown of one period
@@ -426,9 +426,36 @@ export default function ProfitabilityTab(props) {
       // v55.83-VQ (Max: "what does this mean? how do I go and fix it?") — the lines behind every amber note, why, and where to fix
       var fx = linesToFix(cs, hidden);
       function goFix(where, row) { setFull(false); setOpen(null); if (where === 'invoice' && row) { setSearchQ(String(row.invoice || '')); setView('invoice'); if (row.invoice_id) { setOpen('invoice:' + row.invoice_id); } } else { setView(where === 'containers' ? 'containers' : (where === 'invoice' ? 'invoice' : 'setup')); } }
+      // v55.83-VS (Max, Nov 20: "MUCH more clarity on what to fix exactly ... user friendly to resolve and to update after resolved") —
+      // WHAT REMAINS OPEN: one row per thing to do. Shipping is typed right here (0 is a figure); saving reloads the report, so a
+      // resolved row leaves the list by itself.
+      var ot = openTasks(cs, hidden);
+      function taskAction(t) {
+        if (t.action === 'type') {
+          if (!canEdit) { return <span style={{ color: SUB }}>needs “P&L: Edit Product Costs”</span>; }
+          if (!data.part_estimates_ready) { return <button onClick={function (e) { e.stopPropagation(); goFix('containers', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>Open Containers →</button>; }
+          var tk = 'ot:' + t.key;
+          return <span className="flex gap-1 items-center" onClick={function (e) { e.stopPropagation(); }}>
+            <span>$</span><input value={draft[tk] === undefined ? '' : draft[tk]} onChange={function (e) { d(tk, e.target.value); }} placeholder={t.part + ' cost'} aria-label={t.part + ' cost for release ' + t.release} className="nt-light px-1.5 py-0.5 rounded text-[11px]" style={Object.assign({ width: 96 }, inp)} />
+            <button disabled={draft[tk] === undefined || String(draft[tk]).trim() === ''} onClick={function (e) { e.stopPropagation(); act({ action: 'set_part_estimate', release: t.release, part: t.part, amount: draft[tk] }, (t.part === 'trucking' ? 'Trucking' : 'Freight') + ' saved for ' + t.release + '. The list is refreshed.').then(function (ok) { if (ok) { var o = Object.assign({}, draft); delete o[tk]; setDraft(o); } }); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: (draft[tk] === undefined || String(draft[tk]).trim() === '') ? '#94a3b8' : '#047857', color: '#ffffff' }}>Save</button>
+          </span>;
+        }
+        if (t.action === 'open_invoice') { return <span>{t.invoice_id ? <button onClick={function (e) { e.stopPropagation(); setPeekId(t.invoice_id); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#1d4ed8', color: '#ffffff' }}>Open this invoice →</button> : null}<button onClick={function (e) { e.stopPropagation(); goFix('invoice', t); }} className="ml-1 px-2 py-0.5 rounded font-bold" style={{ background: '#ffffff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>its row in By invoice</button></span>; }
+        return <button onClick={function (e) { e.stopPropagation(); goFix('setup', null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#7c2d12', color: '#ffffff' }}>Open Set-up →</button>;
+      }
+      var openBox = ot.tasks.length === 0 ? null : <div className="mb-2 rounded-lg" style={{ background: '#ffffff', border: '1px solid #f59e0b' }}>
+        <div className="px-2 py-1.5 font-extrabold text-[12px]" style={{ background: '#fef3c7', color: '#92400e' }}>{'What remains open in ' + r.label + ': ' + ot.tasks.length + ' thing(s) to fix, covering ' + ot.lines + ' sale line(s). Fix one and it leaves this list.'}</div>
+        {ot.tasks.slice(0, 100).map(function (t, i) { return <div key={t.key} className="px-2 py-1.5 text-[11px] flex gap-2 items-start flex-wrap" style={{ borderTop: '1px solid ' + LINE, color: INK }}>
+          <span style={{ flex: '1 1 420px' }}><b>{(i + 1) + '. ' + t.title + '.'}</b>{' ' + t.how}<span style={{ color: SUB }}>{' — ' + t.lines + ' line(s), sold for $' + fmt(t.sold_for) + (t.invoices.length ? ' · invoice ' + t.invoices.slice(0, 6).map(function (x) { return x.invoice; }).join(', ') + (t.invoices.length > 6 ? ' +' + (t.invoices.length - 6) + ' more' : '') : '')}</span></span>
+          <span>{taskAction(t)}</span>
+        </div>; })}
+        {ot.tasks.length > 100 && <div className="px-2 py-1 text-[10px]" style={{ color: SUB }}>{'Showing the first 100 of ' + ot.tasks.length + '.'}</div>}
+        <div className="px-2 py-1 text-[10px]" style={{ color: SUB, borderTop: '1px solid ' + LINE }}>A figure that is already there — a bill, a typed figure or an estimate, also 0 — counts as known and is not listed. A bill for the release always replaces a typed figure or an estimate.</div>
+      </div>;
       var fixBox = fx.rows.length === 0 ? null : <div className="mb-3 rounded-lg p-2" style={{ background: '#fffbeb', border: '2px solid #f59e0b' }}>
         <div className="font-extrabold text-[12px]" style={{ color: '#92400e' }}>{'⚠ Lines to fix — ' + fx.rows.length + ' of ' + fx.total + ' sale lines in ' + r.label + ' are missing a cost, so their profit is not counted yet.'}</div>
-        <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>What is missing, and where to fix it:</div>
+        {openBox}
+        <div className="text-[11px] mb-1" style={{ color: '#92400e' }}>The same, line by line:</div>
         {fx.reasons.map(function (g) { return <div key={g.key} className="text-[11px] mb-1 flex gap-2 items-start flex-wrap" style={{ color: INK }}><span><b>{g.count + ' × ' + g.title + '.'}</b>{' ' + g.how}</span><button onClick={function (e) { e.stopPropagation(); goFix(g.go, null); }} className="px-2 py-0.5 rounded font-extrabold" style={{ background: '#b45309', color: '#ffffff' }}>{g.goLabel + ' →'}</button></div>; })}
         <div className="overflow-auto pl-scroll mt-1" style={{ maxHeight: 260, border: '1px solid ' + LINE, background: '#ffffff' }}><table className="w-full text-[11px]">
           <thead><tr style={{ background: '#fef3c7', color: '#92400e' }}>{['Invoice', 'Date', 'Customer', 'Product', 'Release', 'Sold for', 'What is missing', ''].map(function (h, i) { return <th key={i} className={'px-2 py-1 font-bold ' + (i === 5 ? 'text-right' : 'text-left')}>{h}</th>; })}</tr></thead>

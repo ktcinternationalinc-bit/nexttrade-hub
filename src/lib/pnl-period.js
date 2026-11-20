@@ -97,6 +97,38 @@ export function linesToFix(cells, forceHidden) {
   return { hidden: false, total: list.length, rows: rows, reasons: FIX.filter(function (f) { return count[f.key]; }).map(function (f) { return { key: f.key, title: f.title, how: f.how, go: f.go, goLabel: f.goLabel, count: count[f.key] }; }) };
 }
 
+// v55.83-VS (Max, Nov 20: "needs MUCH more clarity on what to fix exactly. manual is accepted unless bill overturns it. but needs
+// more user friendly to resolve and to update after resolved" · "it needs to be clear as to what remains open") — the same missing
+// figures as linesToFix, but as a short list of THINGS TO DO: one row per release (shipping), per product (weight / supplier cost)
+// or per invoice (no release number, terms). A shipping figure that exists — a bill, a typed figure or an estimate, also 0 — is
+// known and is never listed; only a part with nothing at all is open.
+export function openTasks(cells, forceHidden) {
+  var list = cells || [];
+  if (forceHidden === true || list.some(function (c) { return c.goods_profit === undefined || c.profit === undefined; })) { return { hidden: true, tasks: [], lines: 0 }; }
+  var map = {}; var order = []; var lineSet = {};
+  function add(key, base, c, i) {
+    var t = map[key]; if (!t) { t = map[key] = Object.assign({ key: key, lines: 0, sold_for: 0, invoices: [], _inv: {} }, base); order.push(key); }
+    t.lines++; t.sold_for += known(c.goods_revenue) ? Number(c.goods_revenue) : 0; lineSet[i] = true;
+    var iv = String(c.invoice || ''); if (iv && !t._inv[iv]) { t._inv[iv] = true; t.invoices.push({ invoice: iv, invoice_id: c.invoice_id || null }); }
+  }
+  list.forEach(function (c, i) {
+    var rel = String(c.release_raw || c.release || ''); var prod = String(c.product || c.description || '(no product name)'); var inv = String(c.invoice || '');
+    if (!known(c.pounds)) { add('pounds:' + prod, { kind: 'pounds', action: 'setup', product: prod, title: prod + ' — no weight', how: 'The unit of this product has no pounds, so nothing can be worked out per pound. In Set-up, give the product its unit (lb, kg, yd …).' }, c, i); }
+    else if (!known(c.base_cost)) { add('base_cost:' + prod, { kind: 'base_cost', action: 'setup', product: prod, title: prod + ' — no supplier cost', how: 'No supplier bill is linked to this product and no cost is typed for it. In Set-up, link the supplier bill line to the product, or type its cost per pound.' }, c, i); }
+    if (!known(c.transport_revenue)) { add('terms:' + inv, { kind: 'transport_revenue', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — shipping terms not known', how: 'It cannot be told how much of the price is shipping (for example a CNF price with no shipping amount). Open the invoice in By invoice and set its terms.' }, c, i); }
+    var noT = !known(c.trucking_cost); var noF = !known(c.freight_cost);
+    if ((noT || noF) && !rel) { add('norelease:' + inv, { kind: 'no_release', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — no release number', how: 'Without a release number its trucking and freight cannot be found. Open the invoice and put the release number on it. If it is a test invoice, void it.' }, c, i); }
+    else {
+      if (noT) { add('trucking:' + rel, { kind: 'trucking', action: 'type', part: 'trucking', release: rel, title: 'Release ' + rel + ' — no trucking cost', how: 'There is no trucking bill, no typed figure and no estimate for this release. Type the trucking cost here — type 0 if there was none. A trucking bill for this release replaces it when it arrives.' }, c, i); }
+      if (noF) { add('freight:' + rel, { kind: 'freight', action: 'type', part: 'freight', release: rel, title: 'Release ' + rel + ' — no freight cost', how: 'There is no freight / shipping bill, no typed figure and no estimate for this release. Type the freight cost here — type 0 if there was none. A freight bill for this release replaces it when it arrives.' }, c, i); }
+    }
+    if (!lineSet[i] && (!known(c.goods_profit) || !known(c.transport_profit))) { add('other:' + inv, { kind: 'other', action: 'open_invoice', invoice: inv, invoice_id: c.invoice_id || null, title: 'Invoice ' + inv + ' — not complete', how: 'Something else on this invoice is missing. Open it to see what.' }, c, i); }
+  });
+  var RANK = { trucking: 1, freight: 1, no_release: 2, base_cost: 3, pounds: 3, transport_revenue: 4, other: 5 };
+  var tasks = order.map(function (k) { var t = map[k]; delete t._inv; return t; }).sort(function (a, b) { return (RANK[a.kind] - RANK[b.kind]) || (b.sold_for - a.sold_for) || (a.key < b.key ? -1 : 1); });
+  return { hidden: false, tasks: tasks, lines: Object.keys(lineSet).length };
+}
+
 // v55.83-VQ (Codex 22:20) — EVERY period between two dates, also the ones with no sales (a month with rent and payroll but no
 // invoice is still a month of the P&L). [{ key, label }] in date order; empty when either date is missing or they are reversed.
 export function bucketsBetween(from, to, g) {

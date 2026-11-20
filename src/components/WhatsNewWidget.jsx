@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-VS',
+    date: '2026-11-20',
+    title: 'Profitability → P&L by period: a clear list of what remains open, fixed right there',
+    items: [
+      { text: '**“What remains open” list.** Click a period (or one of its amber notes). At the top there is now a short numbered list of things to fix — not line by line, but one row per thing: a release with no trucking cost, a release with no freight cost, an invoice with no release number, a product with no weight, a product with no supplier cost.' },
+      { text: '**Each row says exactly what to do**, how many sale lines and how much money it covers, and which invoices.' },
+      { text: '**Trucking and freight are typed right in the list.** Type the amount next to the release and press Save. Type 0 if there was none — 0 is a figure. The report refreshes and the row leaves the list.' },
+      { text: '**The rule, as before:** a bill for the release comes first, then a figure you typed, then the estimate. Any of these, also 0, counts as known. Only a release with none of them is listed as open, and a bill that arrives later replaces what was typed.' },
+      { text: 'An invoice with no release number cannot get a shipping cost, so it is listed with a button that opens the invoice. A product with no weight or no supplier cost has a button to Set-up.' },
+      { text: 'The line-by-line table is still there underneath.' },
+      { superAdminOnly: true, text: 'Technical: pnl-period.js openTasks(cells, forceHidden) groups the same missing figures as linesToFix into tasks keyed trucking:release, freight:release, norelease:invoice, pounds:product, base_cost:product, terms:invoice. ProfitabilityTab saves with the existing set_part_estimate action and reloads through act(). No server change.' }
+    ]
+  },
+  {
     version: 'v55.83-VR',
     date: '2026-11-20',
     title: 'Profitability → new “Inbound trucking (Kronos)” tracker',
