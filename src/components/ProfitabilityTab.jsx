@@ -11,7 +11,8 @@ import WarehouseShippingPanel from './WarehouseShippingPanel'; // v55.83-TG
 import { supabase } from '../lib/supabase'; // v55.83-TG
 import InvoicePeek from './InvoicePeek'; // v55.83-VG — view the invoice from this page (edit opens the Invoices screen)
 import { filterRowsBySearch } from '../lib/profitability-search'; // v55.83-VG — the search box
-import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow } from '../lib/pnl-period';
+import { bucketOf, bucketsBetween, periodBreakdown, linesToFix, openTasks, addPeriodCell, blankPeriodRow, settlePeriodRow, avgProfitPerUnit } from '../lib/pnl-period';
+import AvgProfitCell from './AvgProfitCell'; // v55.83-WK — average profit per unit, never from an unknown profit
 import CombinedShippingNote from './CombinedShippingNote'; // v55.83-VS — neutral note: a combined transportation cost is known, nothing to fix
 import InboundTruckingView from './InboundTruckingView'; // v55.83-VR — Kronos freight against pounds received (tracking only)
 import { expenseScope, expenseRequests, pendingRequests, loadExpensePeriods, totalExpenses, finalPnl, expensesOffReason } from '../lib/pnl-expenses'; // v55.83-VQ — expense columns and the final P&L per period
@@ -662,7 +663,7 @@ export default function ProfitabilityTab(props) {
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'goods_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{pct(r.goods_profit, r.goods_revenue)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{hidden ? '🔒' : (r.yards > 0 ? (r.pounds > 0 ? <span title="Profit per pound on the pound goods, per yard on the yard goods">{fmt4(r.gp_lb / 100 / r.pounds) + ' / lb'}<div style={{ color: '#1d4ed8' }}>{fmt4(r.gp_yd / 100 / r.yards) + ' / yd'}</div></span> : fmt4(r.goods_profit / 100 / r.yards) + ' / yd') : (r.pounds > 0 ? fmt4(r.goods_profit / 100 / r.pounds) : '—'))}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums"><AvgProfitCell avg={avgProfitPerUnit(r)} hidden={hidden} /></td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'transport_revenue')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'trucking_cost')}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{cell(r, 'freight_cost')}</td>
