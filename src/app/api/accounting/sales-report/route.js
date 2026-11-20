@@ -19,7 +19,7 @@ import { assertPermission } from '../../../../lib/server-permissions';
 import { createClient } from '@supabase/supabase-js';
 import { businessOfInvoice } from '../../../../lib/business-of';
 import { nameKey, toPounds, unitKey, isTransportLine, DEFAULT_UNIT_FACTORS, isFoamLine, foamFactors, weightFactorsFor } from '../../../../lib/profitability'; // v55.83-TE — merged names + pounds, the same rules as Profitability
-import { lineQuantity, blankQty, addQuantity, finishQuantity } from '../../../../lib/sales-units'; // v55.83-WL — yard goods stay in yards, as in Profitability
+import { lineQuantity, blankQty, addQuantity, finishQuantity, totalAverage } from '../../../../lib/sales-units'; // v55.83-WL — yard goods stay in yards, as in Profitability
 
 var API_BUILD_MARKER = 'v55.83-ON-sales-report';
 var PAGE = 1000; var MAX_ROWS = 20000;
@@ -205,6 +205,8 @@ export async function POST(req) {
       ok: true,
       totals: {
         product_revenue: r2(productRevenue), pounds: Math.round(poundsTotal), yards: Math.round(yardsTotal), pounds_revenue: r2(revLbTotal), yards_revenue: r2(revYdTotal), lines_without_unit: noUnitLines,
+        // v55.83-WM (Codex 22:26) — the totals' averages come from the UNROUNDED quantities, like every row; only the shown quantity is rounded
+        avg_price_per_lb: totalAverage(revLbTotal, poundsTotal, noUnitLines > 0), avg_price_per_yd: totalAverage(revYdTotal, yardsTotal, false),
         shipping_revenue: r2(shippingRevenue),
         grand_total: r2(productRevenue + shippingRevenue),
         invoices: Object.keys(usdInvoiceSet).length,

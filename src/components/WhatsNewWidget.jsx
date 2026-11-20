@@ -33,6 +33,15 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-WM',
+    date: '2026-11-20',
+    title: 'Sales Report: the top box average matches the rows',
+    items: [
+      { text: '**Sales Report:** the average per pound and per yard in the top box is now worked out from the exact quantity, the same way as each product row, so the two always agree. Before, the top box divided by the rounded quantity and could differ in the last decimals.' },
+      { superAdminOnly: true, text: 'Technical: sales-report totals carry avg_price_per_lb and avg_price_per_yd from unrounded quantities (sales-units.js totalAverage); the screen shows them. No SQL.' }
+    ]
+  },
+  {
     version: 'v55.83-WL',
     date: '2026-11-20',
     title: 'Sales Report: goods kept in yards are shown in yards',

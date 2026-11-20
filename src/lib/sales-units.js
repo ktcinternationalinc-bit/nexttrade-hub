@@ -34,6 +34,13 @@ export function finishQuantity(agg) {
     avg_price_per_yd: agg.yards > 0 ? Math.round(agg.rev_yd / agg.yards * 10000) / 10000 : null };
 }
 
+// v55.83-WM — an average of the whole report: revenue ÷ the UNROUNDED quantity, 4 decimals; null when there is no quantity or (for
+// pounds) a line has no unit. The same arithmetic as finishQuantity, so the top box and the rows agree.
+export function totalAverage(revenue, quantity, incomplete) {
+  var q = Number(quantity) || 0; if (!(q > 0) || incomplete === true) { return null; }
+  return Math.round((Number(revenue) || 0) / q * 10000) / 10000;
+}
+
 // Words for the screen (pure, so they are tested without a browser).
 function n0(v) { return Number(v || 0).toLocaleString('en-US'); }
 function d4(v) { return '$' + Number(v).toFixed(4); }
@@ -47,7 +54,10 @@ export function qtyAvgText(r) {
 // the top tile: { big, small, yards } from the report totals. The per-pound average divides the revenue of the POUND goods only.
 export function totalsText(tt) {
   var t = tt || {}; var yd = Number(t.yards) > 0; var lbRev = t.pounds_revenue != null ? Number(t.pounds_revenue) : Number(t.product_revenue) || 0;
-  var small = t.lines_without_unit ? t.lines_without_unit + ' line(s) have no unit set — no average per lb' : (Number(t.pounds) > 0 ? 'avg $' + (lbRev / t.pounds).toFixed(4) + ' / lb' : '');
+  // WM — the server's own averages (from unrounded quantities) when it sends them; the old arithmetic only for an older answer
+  var avgLb = t.avg_price_per_lb !== undefined ? t.avg_price_per_lb : (Number(t.pounds) > 0 ? lbRev / t.pounds : null);
+  var avgYd = t.avg_price_per_yd !== undefined ? t.avg_price_per_yd : (yd ? (Number(t.yards_revenue) || 0) / t.yards : null);
+  var small = t.lines_without_unit ? t.lines_without_unit + ' line(s) have no unit set — no average per lb' : (Number(t.pounds) > 0 && avgLb != null ? 'avg $' + Number(avgLb).toFixed(4) + ' / lb' : '');
   return { big: n0(t.pounds) + ' lb', small: small,
-    yards: yd ? n0(t.yards) + ' yd kept in yards · avg $' + ((Number(t.yards_revenue) || 0) / t.yards).toFixed(4) + ' / yd' : '' };
+    yards: yd ? n0(t.yards) + ' yd kept in yards · avg ' + (avgYd != null ? '$' + Number(avgYd).toFixed(4) : '—') + ' / yd' : '' };
 }
