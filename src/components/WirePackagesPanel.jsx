@@ -14,7 +14,6 @@ import { requestFit } from '../lib/wire-funding';
 import { wireBillsToShow, groupByVendor, groupTotals, tickGroup } from '../lib/wire-bill-tree'; // v55.83-VK — the company's bills as a tree
 import { requestCopyModel, requestCopyHtml } from '../lib/wire-request-print'; // v55.83-SQ — the two printable copies of a request // v55.83-SP — a request drawn from a transfer never goes over it
 import { supabase } from '../lib/supabase';
-import { hubFetch } from '../lib/hub-fetch'; // v55.83-WV — the signed-in person's token travels with every wire call
 import { todayET, fmtET } from '../lib/et-time';
 import { applyConfirmationAnswer, startConfirmationFile, confirmationSendProblem } from '../lib/wire-confirmation';
 import { PKG_STATUS_LABEL } from '../lib/wire-audit';

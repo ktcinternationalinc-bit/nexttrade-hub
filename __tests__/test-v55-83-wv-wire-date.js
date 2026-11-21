@@ -101,6 +101,10 @@ console.log('WV — the real wire date, editing it on past wires, reading the ba
   var row = (lst.packages || []).filter(function (p) { return p.id === id; })[0];
   check('the list carries BOTH dates apart: created in the Hub, and (not sent yet) only the planned wire date — no sent date', row && !!row.created_at && row.planned_send_date === '2026-07-13' && !row.sent_date, row);
 
+  // ── WQ (verified identity) covers the new actions too: without a valid sign-in both are refused before anything runs
+  var nt1 = await callRaw('u1', { action: 'set_wire_date', id: id, wire_date: '2026-07-20', _no_token: true });
+  var nt2 = await callRaw('u1', { action: 'read_confirmation', id: id, proof_path: 'pv/wire-' + id + '-1-confirmation.pdf', _no_token: true });
+  check('no valid sign-in → set_wire_date and read_confirmation refused (401), nothing changed, the AI not called', nt1._status === 401 && nt2._status === 401 && pk(id).planned_send_date === '2026-07-13' && aiCalls.length === 0, [nt1, nt2]);
   // ── reading the bank's confirmation
   var today = ET.todayET();
   var pathPdf = 'pv/wire-' + id + '-1-confirmation.pdf';
